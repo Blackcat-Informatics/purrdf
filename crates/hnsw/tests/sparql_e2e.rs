@@ -27,7 +27,9 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_hnsw::{Params, relation::HnswSpace};
-use purrdf_sparql_eval::{KnnGuard, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
+use purrdf_sparql_eval::{
+    ExtensionEnv, KnnGuard, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+};
 
 /// The caller-supplied predicate this host calls approximate retrieval by.
 const NEAREST: &str = "https://example.org/pf#nearest";
@@ -75,7 +77,8 @@ fn answer(registry: &PropertyFunctionRegistry, query: &str) -> Vec<Vec<Option<Te
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

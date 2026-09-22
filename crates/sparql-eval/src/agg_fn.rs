@@ -721,7 +721,7 @@ impl AggregateRegistry {
     /// use purrdf_core::{RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue};
     /// use purrdf_sparql_eval::{
     ///     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate,
-    ///     EvalError, NativeSparqlEngine, QueryOptions, Volatility,
+    ///     EvalError, ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
     /// };
     ///
     /// struct TotalAccumulator {
@@ -805,7 +805,8 @@ impl AggregateRegistry {
     ///             substitutions: &[],
     ///         },
     ///         QueryOptions {
-    ///             aggregates: &registry,
+    ///             env: &ExtensionEnv::over_aggregates(registry)
+    ///                 .expect("a registered aggregate declares cleanly"),
     ///             ..QueryOptions::EMPTY
     ///         },
     ///     )

@@ -64,8 +64,8 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
-    InternedOutcome, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
-    Volatility,
+    ExtensionEnv, InternedOutcome, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry,
+    QueryOptions, Volatility,
 };
 
 #[global_allocator]
@@ -943,9 +943,17 @@ fn relation_dataset() -> Arc<RdfDataset> {
     b.freeze().expect("freeze fixture")
 }
 
-fn with_relations(registry: &PropertyFunctionRegistry) -> QueryOptions<'_> {
+/// The extension environment `registry` describes, which is what a query text is
+/// read against: whether `rel:memberOf` is a data edge or a call is decided here,
+/// not by the text.
+fn relations_env(registry: &PropertyFunctionRegistry) -> ExtensionEnv {
+    ExtensionEnv::over_relations(registry.clone())
+        .expect("the fixture relation declares without panicking")
+}
+
+fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
-        property_functions: registry,
+        env,
         ..QueryOptions::EMPTY
     }
 }
@@ -985,6 +993,7 @@ fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_re
  {
     let engine = NativeSparqlEngine::new();
     let registry = relation_registry();
+    let env = relations_env(&registry);
     let ds = relation_dataset();
 
     // (a) Prepared with NO registry: the predicate parses as ordinary data, so the
@@ -993,7 +1002,7 @@ fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_re
         .prepare_execution(RELATION_QUERY, None, &[], QueryOptions::EMPTY)
         .expect("prepare with no registry parses as ordinary data");
 
-    let refused = engine.execute(&mut stale, &*ds, with_relations(&registry), |_| ());
+    let refused = engine.execute(&mut stale, &*ds, with_relations(&env), |_| ());
     let error = refused.expect_err(
         "a plan prepared with no registry must be refused when executed under one, not \
          silently evaluated as a graph scan over the ordinary triple pattern it was admitted \
@@ -1006,15 +1015,10 @@ fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_re
     // `graph_only_team`, which is what a silently-dropped registry would have
     // answered instead (see `relation_dataset`'s doc comment for the oracle).
     let mut matched = engine
-        .prepare_execution(RELATION_QUERY, None, &[], with_relations(&registry))
+        .prepare_execution(RELATION_QUERY, None, &[], with_relations(&env))
         .expect("prepare with the registry lowers the predicate to a call");
     let rows = engine
-        .execute(
-            &mut matched,
-            &*ds,
-            with_relations(&registry),
-            person_team_rows,
-        )
+        .execute(&mut matched, &*ds, with_relations(&env), person_team_rows)
         .expect("a plan and options that agree on the registry must execute");
     assert_eq!(
         rows,
@@ -1167,9 +1171,16 @@ fn product_registry() -> AggregateRegistry {
     registry
 }
 
-fn with_aggregates(registry: &AggregateRegistry) -> QueryOptions<'_> {
+/// The extension environment `registry` describes — the aggregate twin of
+/// [`relations_env`], and what a `Custom` aggregate IRI is admitted against.
+fn aggregates_env(registry: &AggregateRegistry) -> ExtensionEnv {
+    ExtensionEnv::over_aggregates(registry.clone())
+        .expect("the fixture aggregate declares without panicking")
+}
+
+fn with_aggregates(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
-        aggregates: registry,
+        env,
         ..QueryOptions::EMPTY
     }
 }
@@ -1225,14 +1236,16 @@ fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_bu
          reproduction of the declaration-only fingerprint gap"
     );
 
+    let env_a = aggregates_env(&registry_a);
+    let env_b = aggregates_env(&registry_b);
     let ds = aggregate_dataset();
     let query = agg_query();
 
     // (a) Prepared under registry A (SUM), executed under registry B (PRODUCT).
     let mut prepared = engine
-        .prepare_execution(&query, None, &[], with_aggregates(&registry_a))
+        .prepare_execution(&query, None, &[], with_aggregates(&env_a))
         .expect("registry A admits and arity-checks the call");
-    let refused = engine.execute(&mut prepared, &*ds, with_aggregates(&registry_b), |_| ());
+    let refused = engine.execute(&mut prepared, &*ds, with_aggregates(&env_b), |_| ());
     let error = refused.expect_err(
         "a plan prepared under registry A must be refused when executed under registry B, \
          never silently computed under B's different accumulator",
@@ -1241,10 +1254,10 @@ fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_bu
 
     // (b) The neighbour: the SAME registry instance at both prepare and execute.
     let mut matched = engine
-        .prepare_execution(&query, None, &[], with_aggregates(&registry_a))
+        .prepare_execution(&query, None, &[], with_aggregates(&env_a))
         .expect("registry A admits and arity-checks the call");
     let total = engine
-        .execute(&mut matched, &*ds, with_aggregates(&registry_a), total_cell)
+        .execute(&mut matched, &*ds, with_aggregates(&env_a), total_cell)
         .expect("the SAME registry instance must be accepted at execution");
     assert_eq!(total, 15, "1 + 2 + 2 + 10, never the PRODUCT's 40");
 }

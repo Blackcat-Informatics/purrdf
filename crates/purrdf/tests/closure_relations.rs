@@ -148,7 +148,8 @@ fn answer(
         },
         entailment,
         QueryOptions {
-            property_functions: registry,
+            env: &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
+                .expect("the fixture declarations read cleanly"),
             ..QueryOptions::EMPTY
         },
         relations,

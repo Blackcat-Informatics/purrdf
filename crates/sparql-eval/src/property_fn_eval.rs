@@ -1023,7 +1023,8 @@ mod tests {
                     substitutions: &[],
                 },
                 crate::engine::QueryOptions {
-                    property_functions: registry,
+                    env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                        .expect("the fixture declarations read cleanly"),
                     ..crate::engine::QueryOptions::EMPTY
                 },
             )
@@ -1780,18 +1781,24 @@ mod tests {
         // A CALLER-DECLARED namespace (not the registry-derived exact-IRI set) still
         // claims every IRI under it: a call whose specific IRI nothing supplies is
         // refused before evaluation.
-        let engine = NativeSparqlEngine::new().with_parser_options(crate::ParserOptions {
+        let env = crate::extension_env::ExtensionEnv::over_options(crate::ParserOptions {
             extension_fn_namespaces: vec![],
             property_fn_namespaces: vec![format!("{EX}pf/")],
             property_fn_iris: Vec::new(),
-        });
+        })
+        .expect("environment over declared parser options");
+        let engine = NativeSparqlEngine::new();
         let error = engine
-            .query(
+            .query_with_options_view(
                 &documents(),
                 SparqlRequest {
                     query: &format!("SELECT ?w WHERE {{ ?w <{PF_SPLIT}x> ?p }}"),
                     base_iri: None,
                     substitutions: &[],
+                },
+                crate::engine::QueryOptions {
+                    env: &env,
+                    ..crate::engine::QueryOptions::EMPTY
                 },
             )
             .expect_err("nothing is registered under the configured namespace");
@@ -1826,18 +1833,24 @@ mod tests {
 
     #[test]
     fn a_call_with_no_registry_at_all_is_the_unregistered_case() {
-        let engine = NativeSparqlEngine::new().with_parser_options(crate::ParserOptions {
+        let env = crate::extension_env::ExtensionEnv::over_options(crate::ParserOptions {
             extension_fn_namespaces: vec![],
             property_fn_namespaces: vec![format!("{EX}pf/")],
             property_fn_iris: Vec::new(),
-        });
+        })
+        .expect("environment over declared parser options");
+        let engine = NativeSparqlEngine::new();
         let error = engine
-            .query(
+            .query_with_options_view(
                 &documents(),
                 SparqlRequest {
                     query: &format!("SELECT ?w WHERE {{ ?w <{PF_SPLIT}> ?p }}"),
                     base_iri: None,
                     substitutions: &[],
+                },
+                crate::engine::QueryOptions {
+                    env: &env,
+                    ..crate::engine::QueryOptions::EMPTY
                 },
             )
             .expect_err("a configured namespace with nothing registered cannot evaluate");
@@ -2137,7 +2150,8 @@ mod tests {
                     substitutions: &[],
                 },
                 crate::QueryOptions {
-                    property_functions: registry,
+                    env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                        .expect("the fixture declarations read cleanly"),
                     ..crate::QueryOptions::EMPTY
                 },
                 &state,
@@ -2362,7 +2376,8 @@ mod tests {
                     &*dataset,
                     request(&query),
                     crate::engine::QueryOptions {
-                        property_functions: registry,
+                        env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                            .expect("the fixture declarations read cleanly"),
                         ..crate::engine::QueryOptions::EMPTY
                     },
                 )

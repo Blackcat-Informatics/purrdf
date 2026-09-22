@@ -104,6 +104,18 @@ pub enum ProductDimension {
     /// compiled its class-membership decisions against — does not match the one
     /// supplied for execution.
     ClassCatalog,
+    /// The parse configuration recorded at preparation — the extension-function and
+    /// relation NAMESPACES the writing host declared — is not the configuration
+    /// supplied for execution.
+    ///
+    /// A declared namespace decides which predicate IRIs are calls, exactly as a
+    /// registry's keys do, and it does so for IRIs no registry names. So a product
+    /// written under a declared relation namespace and restored under a host that
+    /// declares nothing would read every prefixed relation IRI in its shapes graph as
+    /// an ordinary data triple, match nothing, and report conformance — the same
+    /// silent-wrong-answer shape [`Self::PropertyFunctionRegistry`] exists to refuse,
+    /// reached through the other half of the same seam.
+    ParseConfiguration,
     /// The product declares a capability this build does not implement. The
     /// bytes are well formed; this build simply cannot honour what they ask for.
     ///
@@ -128,7 +140,7 @@ impl ProductDimension {
     /// Every admission dimension, in declaration order — the order in which a
     /// decoder checks them. Iterate this rather than hand-listing variants, so a
     /// new dimension reaches every consumer.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Magic,
         Self::FormatVersion,
         Self::StageId,
@@ -146,6 +158,7 @@ impl ProductDimension {
         Self::AggregateRegistry,
         Self::PropertyFunctionRegistry,
         Self::ClassCatalog,
+        Self::ParseConfiguration,
         Self::UnsupportedCapability,
         Self::DepthLimit,
         Self::Malformed,
@@ -180,6 +193,7 @@ impl ProductDimension {
             Self::AggregateRegistry => "aggregate-registry",
             Self::PropertyFunctionRegistry => "property-function-registry",
             Self::ClassCatalog => "class-catalog",
+            Self::ParseConfiguration => "parse-configuration",
             Self::UnsupportedCapability => "unsupported-capability",
             Self::DepthLimit => "depth-limit",
             Self::Malformed => "malformed",
@@ -314,9 +328,10 @@ mod tests {
                 ProductDimension::AggregateRegistry => 14,
                 ProductDimension::PropertyFunctionRegistry => 15,
                 ProductDimension::ClassCatalog => 16,
-                ProductDimension::UnsupportedCapability => 17,
-                ProductDimension::DepthLimit => 18,
-                ProductDimension::Malformed => 19,
+                ProductDimension::ParseConfiguration => 17,
+                ProductDimension::UnsupportedCapability => 18,
+                ProductDimension::DepthLimit => 19,
+                ProductDimension::Malformed => 20,
             };
             assert_eq!(
                 ProductDimension::ALL[declared_index],

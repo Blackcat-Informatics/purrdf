@@ -97,14 +97,17 @@ prose agrees with them. Run standalone, or as part of
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import re
 import string
 import sys
 import subprocess
 import tomllib
+from typing import Protocol
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
@@ -246,9 +249,31 @@ def _int(text: str) -> int:
     ungated. The word forms are `_SPELLED` read backwards, so there is one
     table rather than two that can fall out of step.
     """
-    cleaned = text.replace(",", "").replace(" ", "")
+    # EVERY SPACE SEPARATOR, BY CATEGORY, not the three that came to mind. Commas plus a
+    # hand-picked pair of spaces left U+00A0 -- the most common non-breaking thousands
+    # separator typography tooling emits -- and U+2009 raising a bare `ValueError`: a
+    # Python traceback out of `make check` rather than a diagnosis. That is the failure
+    # mode the previous comment here described and then reproduced one separator over, so
+    # the rule is the Unicode property now rather than a list.
+    cleaned = "".join(
+        character
+        for character in text.replace(",", "")
+        if unicodedata.category(character) != "Zs"
+    )
     spelled = _CARDINAL.get(cleaned.lower())
-    return spelled if spelled is not None else int(cleaned)
+    if spelled is not None:
+        return spelled
+    try:
+        return int(cleaned)
+    except ValueError:
+        # A DIAGNOSIS, NOT A TRACEBACK. A documented count this cannot parse is a gate
+        # failure that must name the text it choked on, because the alternative reads as
+        # the gate being broken rather than as a number nobody can check.
+        raise SystemExit(
+            f"check-doc-claims: cannot read {text!r} as a count. Separators are stripped "
+            f"by Unicode category, so this is neither digits nor a spelled cardinal -- "
+            f"fix the claim, or add its spelling to the cardinal table."
+        ) from None
 
 
 # A run of whitespace, and the one thing every arm of the entailment-overclaim ban does to
@@ -4043,7 +4068,14 @@ class Claim:
 
     def check(self) -> bool:
         text = _read(self.path)
-        matches = list(re.finditer(self.pattern, text))
+        # `re.MULTILINE`, so `^` and `$` mean what a pattern author writing a
+        # table row means by them. Without it they anchored the whole document, a
+        # line-anchored pattern silently matched nothing, and the failure read
+        # "expected exactly one match, found 0 — the row was reworded" — pointing
+        # the next author at the document when the fault was in the pattern. The
+        # first fix for that routed around it by anchoring on newlines instead,
+        # which left the trap in place for everyone else.
+        matches = list(re.finditer(self.pattern, text, re.MULTILINE))
         rel = self.path.relative_to(_REPO)
         # A capture group with no expected value is a number that LOOKS gated
         # and is not — the precise failure mode this whole script exists to
@@ -5129,6 +5161,113 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
         ),
     ]
     return problems, claims
+
+
+# The frozen WatDiv dataset's identity is pinned once, in ARTIFACTS, and restated
+# in prose in the benchmarks page. Two of those numbers are mechanically
+# checkable against the pin, and neither was: re-pinning the artifact would have
+# left the documentation publishing a stale digest and a stale size for bytes
+# nobody fetches, which is exactly the ungated-prose drift this script exists to
+# catch, on a page whose claim list simply did not name it.
+_BENCHMARKS = _REPO / "docs" / "BENCHMARKS.md"
+
+
+class _PinnedArtifact(Protocol):
+    """The two fields of an acquisition pin this gate reads.
+
+    Named rather than returned as `object`, so a caller reading `.size`/`.sha256`
+    type-checks instead of relying on the reader knowing what came back.
+    """
+
+    filename: str
+    sha256: str
+    size: int
+
+
+@lru_cache(maxsize=1)
+def _acquisition_module():
+    """Load scripts/benchmark-acquire.py once, so its pins have one reader here.
+
+    The cache is what makes "once" true. Without it this executed the whole acquisition
+    script at each of its two call sites, so there were two readers -- and "one reader" is
+    the reason the function exists, not a note about cost. The module is pure at import
+    today, so both executions agreed; the day it gains import-time state the two readers
+    could disagree and a documented number would be judged against a value the other
+    reader never saw. `lru_cache` is already used seven times in this file.
+    """
+    path = _REPO / "scripts" / "benchmark-acquire.py"
+    spec = importlib.util.spec_from_file_location("_benchmark_acquire", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"check-doc-claims: cannot load {path.relative_to(_REPO)}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _pinned_watdiv_artifact() -> "_PinnedArtifact":
+    """Read the pinned WatDiv dataset artifact out of the acquisition script."""
+    module = _acquisition_module()
+    for artifact in module.ARTIFACTS:
+        if artifact.filename.startswith("watdiv.") and artifact.filename.endswith(".tar.bz2"):
+            return artifact
+    raise SystemExit(
+        "check-doc-claims: scripts/benchmark-acquire.py pins no watdiv.*.tar.bz2 dataset, "
+        "so the size and digest documented in docs/BENCHMARKS.md state something no pin "
+        "backs. Either restore the pin or remove the documented rows."
+    )
+
+
+def watdiv_pin_claims() -> tuple[list[str], list[Claim]]:
+    """The documented size and SHA-256 of the frozen dataset, against the pin itself."""
+    artifact = _pinned_watdiv_artifact()
+    rel = _BENCHMARKS.relative_to(_REPO)
+    source = (
+        "the watdiv.*.tar.bz2 entry in scripts/benchmark-acquire.py's ARTIFACTS, which is "
+        "what the lane actually verifies every fetched byte against"
+    )
+
+    problems: list[str] = []
+    text = _read(_BENCHMARKS)
+    # The digest is a hex string rather than a count, so it cannot travel as a
+    # Claim (those compare integers). It is checked here in the same spirit.
+    digest_row = re.search(r"^\| SHA-256 \| `(?P<sha>[0-9a-f]{64})` \|$", text, re.M)
+    if digest_row is None:
+        problems.append(
+            f"{rel}: no '| SHA-256 | `<64 hex>` |' row for the frozen WatDiv dataset. The "
+            f"row was reworded or removed; update the pattern in "
+            f"scripts/check-doc-claims.py so the digest stays checked."
+        )
+    elif digest_row.group("sha") != artifact.sha256:
+        problems.append(
+            f"{rel}: the documented frozen-dataset SHA-256 is "
+            f"{digest_row.group('sha')}, but the pin is {artifact.sha256} ({source})"
+        )
+
+    rows_module = _acquisition_module()
+    scale = artifact.filename.removeprefix("watdiv.").removesuffix(".tar.bz2")
+    pinned_rows = rows_module.WATDIV_DATASET_ROWS.get(scale)
+    if pinned_rows is None:
+        problems.append(
+            f"{rel}: scripts/benchmark-acquire.py pins no extracted row count for WatDiv "
+            f"{scale}, so the documented triple count states something no pin backs"
+        )
+
+    return problems, [
+        Claim(
+            "the frozen WatDiv dataset's documented triple count",
+            _BENCHMARKS,
+            r"^\| Triples \| (?P<triples>[\d ,]+) \|$",
+            {"triples": pinned_rows or -1},
+            source,
+        ),
+        Claim(
+            "the frozen WatDiv dataset's documented size",
+            _BENCHMARKS,
+            r"^\| Size \| (?P<size>[\d ,]+) bytes \|$",
+            {"size": artifact.size},
+            source,
+        ),
+    ]
 
 
 def build_claims(
@@ -6284,6 +6423,8 @@ def main(argv: list[str]) -> int:
     # reach the rows below at all.
     governed_surfaces = load_sparql_surface_allocations("governed_per_focus_node")
     decomposition_problems, decomposition_claims = change_path_decomposition_claims()
+    watdiv_problems, watdiv_claims = watdiv_pin_claims()
+    problems.extend(watdiv_problems)
     problems.extend(decomposition_problems)
     # Two column identities per surface: the components against their total, and the
     # whole table against the stated baseline.
@@ -6311,6 +6452,7 @@ def main(argv: list[str]) -> int:
         + product_alloc_prose_claims(load_product_alloc_report())
         + change_path_pin_claims(load_change_path_pins())
         + decomposition_claims
+        + watdiv_claims
     ):
         claim.check()
         problems.extend(claim.failures)

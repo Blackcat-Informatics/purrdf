@@ -1005,12 +1005,27 @@ fn evaluate_shape_focus_nodes(
     focus_nodes: &[FocusNode],
     include_focus: impl Fn(&FocusNode) -> bool + Sync,
 ) -> Result<Vec<crate::report::ValidationResult>, String> {
+    // The function bodies, bound against the extension environment in force. Bound
+    // ONCE, here, above both the serial and the chunked branch, and installed by
+    // `Arc` clone afterwards — never re-bound per branch or per chunk. Two reasons,
+    // and both are correctness rather than cost:
+    //
+    // 1. A bind is where a body's predicate IRIs are classified as data or as calls.
+    //    Binding separately per chunk would let that classification depend on which
+    //    chunk asked, which is a scheduling-dependent verdict — the same class of
+    //    defect the relation snapshot below already exists to prevent.
+    // 2. A body that cannot be admitted (a declared-but-unregistered relation, a
+    //    chain no access mode serves) must fail before any focus node is visited, so
+    //    the message names the declaration rather than arriving mid-validation on
+    //    whichever row happened to reach it first.
+    let bound_functions = crate::sparql::bind_in_current_env(&shapes.functions)?;
+
     // One validation owns one ordered governor ledger. Letting focus workers charge that
     // shared state directly would make the first trip and its consumed vector depend on
     // rayon scheduling rather than focus order. Governed validation is therefore serial;
     // the ordinary path keeps the established deterministic chunk parallelism.
     if let Some(governors) = crate::sparql::current_governors() {
-        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&bound_functions));
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         let _governor_scope = crate::sparql::enter_governor_scope(governors);
         let mut out = Vec::new();
@@ -1038,16 +1053,29 @@ fn evaluate_shape_focus_nodes(
     // re-installed per chunk — otherwise a `sh:select` body whose predicate is a property
     // function would resolve on the sequential path and fail to resolve on the parallel
     // one, which is a scheduling-dependent verdict.
+    //
+    // The declared parser options are snapshotted for exactly the same reason and are
+    // exactly as load-bearing. They decide which predicate IRIs are calls for a whole
+    // NAMESPACE, so a worker that rebuilt its environment without them would read every
+    // declared-but-unregistered IRI as an ordinary triple where the orchestrating thread
+    // hard-errors on it — the same scheduling-dependent verdict the paragraph above
+    // exists to prevent, one declaration wider. Both snapshots are taken together
+    // because they are two halves of one environment: re-installing either without the
+    // other reconstructs an environment that never existed on the calling thread.
     let relations = crate::sparql::current_property_functions();
+    let parser_options = crate::sparql::current_parser_options();
     crate::parallel::try_map_chunks(
         focus_nodes,
         || {
             (
-                crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
+                crate::sparql::enter_function_scope(Arc::clone(&bound_functions)),
                 relations
                     .clone()
                     .map(crate::sparql::enter_property_function_scope),
                 crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates)),
+                parser_options
+                    .clone()
+                    .map(crate::sparql::enter_parser_options_scope),
             )
         },
         |_scopes, out, focus| {
@@ -1111,7 +1139,8 @@ where
     // This orchestration-thread scope covers target resolution; each focus chunk
     // installs the same SHACL-AF function and custom-aggregate registries on its
     // worker.
-    let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+    let _function_scope =
+        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut all_results = Vec::new();
 
@@ -1521,7 +1550,9 @@ impl PreparedValidator {
 
     fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, String> {
         let shapes = Arc::clone(&prepared.shapes);
-        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        let _function_scope = crate::sparql::enter_function_scope(
+            crate::sparql::bind_in_current_env(&shapes.functions)?,
+        );
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         data.prepare_class_membership();
         let bound = BoundShapes::bind(
@@ -4279,6 +4310,161 @@ mod tests {
         }
     }
 
+    /// A relation that records, on whichever thread it is invoked from, whether the
+    /// ambient declared parser options were in force there.
+    ///
+    /// This is the only deterministic way to observe the chunk fork's environment. An
+    /// outcome-level oracle cannot do it: rayon runs the orchestrating closure on a
+    /// pool thread that DOES carry the scope, so that thread steals chunks too, and a
+    /// single correctly-parsed chunk is enough to mask every wrongly-parsed one behind
+    /// an identical verdict. Asking the relation itself moves the question to the
+    /// thread that actually did the work.
+    #[derive(Debug)]
+    struct PfScopeProbe {
+        modes: [purrdf_sparql_eval::BindingPattern; 1],
+        /// Invocations that saw the declaration, and invocations that did not.
+        saw: Arc<std::sync::atomic::AtomicU64>,
+        missed: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    impl purrdf_sparql_eval::PropertyFunction for PfScopeProbe {
+        fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+            purrdf_sparql_eval::Volatility::Stable
+        }
+
+        fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            purrdf_sparql_eval::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &purrdf_sparql_eval::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+            let counter = if crate::sparql::current_parser_options().is_some() {
+                &self.saw
+            } else {
+                &self.missed
+            };
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Box::new(PfScopeProbeCursor))
+        }
+    }
+
+    struct PfScopeProbeCursor;
+
+    impl purrdf_sparql_eval::PfCursor for PfScopeProbeCursor {
+        fn next(
+            &mut self,
+        ) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+            Ok(None)
+        }
+    }
+
+    /// Every chunk worker evaluates under the SAME declared parser options as the
+    /// thread that dispatched it.
+    ///
+    /// The chunk fork re-installs the ambient scopes on each worker because a
+    /// thread-local is invisible from a forked thread. The declared parser options are
+    /// one of those scopes and are exactly as load-bearing as the relation registry
+    /// beside them: they decide which predicate IRIs are calls for a whole NAMESPACE.
+    /// A worker that rebuilt its environment without them would read a
+    /// declared-but-unregistered IRI as an ordinary triple where the dispatching thread
+    /// hard-errors on it — a verdict decided by how rayon happened to chunk the focus
+    /// nodes.
+    ///
+    /// The assertion is on the WORKER's view rather than on the report, because the
+    /// report cannot see it: the orchestrating closure runs on a pool thread that
+    /// carries the scope, so it steals chunks that parse correctly and one such chunk
+    /// masks every incorrect one. A probe relation answers from the thread that did
+    /// the work.
+    ///
+    /// A `sh:sparql` body is used deliberately. A `sh:SPARQLFunction` body is bound
+    /// ONCE on the dispatching thread before any chunk exists, so it carries its
+    /// environment with it and could not exhibit this however the scopes were
+    /// installed.
+    #[test]
+    fn every_chunk_worker_sees_the_declared_parser_options() {
+        use std::fmt::Write as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let mut data_nt = String::new();
+        for index in 0..64 {
+            write!(
+                data_nt,
+                "<http://example.org/ns#item{index}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n\
+                 <http://example.org/ns#item{index}> <http://example.org/ns#key> \"k{index}\" .\n"
+            )
+            .expect("writing to a String cannot fail");
+        }
+        // `?k` is bound by the preceding triple, which is what makes the relation's
+        // declared `bf` access mode feasible: the planner orders the call after the
+        // pattern that binds its subject.
+        let shapes_ttl = format!(
+            r#"{PREFIXES}
+            ex:ProbeShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:sparql [
+                    sh:select "SELECT $this WHERE {{ $this <http://example.org/ns#key> ?k . ?k <http://example.org/rel/probe> ?why }}" ;
+                ] .
+            "#
+        );
+        let data = load_data_nt(&data_nt);
+        let shapes = load_shapes_ttl(&shapes_ttl);
+
+        let saw = Arc::new(AtomicU64::new(0));
+        let missed = Arc::new(AtomicU64::new(0));
+        let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::default();
+        registry.register(
+            "http://example.org/rel/probe",
+            Arc::new(PfScopeProbe {
+                modes: [purrdf_sparql_eval::BindingPattern::from_code("bf")],
+                saw: Arc::clone(&saw),
+                missed: Arc::clone(&missed),
+            }),
+        );
+        let registry = Arc::new(registry);
+
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test pool must build")
+            .install(|| {
+                let _relations =
+                    crate::sparql::enter_property_function_scope(Arc::clone(&registry));
+                let _options = crate::sparql::enter_parser_options_scope(Arc::new(
+                    purrdf_sparql_algebra::ParserOptions {
+                        property_fn_namespaces: vec!["http://example.org/rel/".to_owned()],
+                        ..purrdf_sparql_algebra::ParserOptions::default()
+                    },
+                ));
+                let _guard = crate::parallel::force_scheduler_for_test(true, 1);
+                validate_dataset(&data, &shapes).expect("the registered relation resolves");
+            });
+
+        assert!(
+            saw.load(Ordering::Relaxed) > 0,
+            "the probe relation must actually have been invoked, or this proves nothing"
+        );
+        assert_eq!(
+            missed.load(Ordering::Relaxed),
+            0,
+            "{} invocation(s) ran on a thread that had lost the declared parser options, \
+             against {} that kept them: a focus node's parse configuration must not \
+             depend on which worker drew it",
+            missed.load(Ordering::Relaxed),
+            saw.load(Ordering::Relaxed),
+        );
+    }
+
     // ── custom aggregates: installability, correctness, and fork survival ──────
 
     /// The `AGG(<iri>, …)` IRI the custom-aggregate fixture below registers under.
@@ -4778,6 +4964,83 @@ mod tests {
         registry
     }
 
+    /// The SAME relation reached from a `sh:SPARQLFunction` BODY rather than from a
+    /// `sh:sparql` constraint, producing the identical verdict over the identical
+    /// data: `ex:v0` violates, every other node conforms.
+    ///
+    /// Identical outcome on purpose. The route-and-geometry matrix below asserts the
+    /// same numbers `pf_shapes_ttl`'s does, so a difference between the two is a
+    /// difference in which DOOR reached the relation and nothing else.
+    ///
+    /// The verdict is inverted through `sparql:equals … false` because an
+    /// `sh:expression` constraint reports the focus nodes whose expression is FALSE:
+    /// `ex:v0` is the flagged node, so `ex:isFlagged` is true for it, and the
+    /// comparison against `false` is what turns that into the one violation.
+    ///
+    /// # Why the body does the `ex:status` hop itself
+    ///
+    /// `PfFlagged` declares the `bf` access mode — subject BOUND, object free — and
+    /// the feasibility-ordering pass does not see a SUBSTITUTED parameter as a
+    /// binding. Passing the status value in as the argument would therefore leave
+    /// the call reachable only as `ff`, which this relation does not declare, and
+    /// the bind refuses it by name. Doing the hop inside the body binds `?status`
+    /// from a preceding triple pattern, which the analysis does see.
+    ///
+    /// That refusal is worth knowing about rather than merely working around: it is
+    /// the feasibility ordering a function body never used to get at all. The old
+    /// load-time parse produced unordered algebra, so the same fixture would have
+    /// failed per row, deep in an evaluation, against whichever row reached it
+    /// first — instead of once, at bind time, naming the relation and the modes it
+    /// declares.
+    fn pf_function_shapes_ttl() -> String {
+        format!(
+            r#"{PREFIXES}
+            @prefix sparql: <http://www.w3.org/ns/sparql#> .
+
+            ex:isFlagged a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:node ] ;
+                sh:ask """
+                    ASK {{
+                        ?node <http://example.org/ns#status> ?status .
+                        ?status <http://example.org/ns#pfFlagged> ?why
+                    }}
+                """ .
+
+            ex:PfFnShape a sh:NodeShape ;
+                sh:targetClass ex:Thing ;
+                sh:expression [
+                    sparql:equals ( [ ex:isFlagged ( sh:this ) ] false )
+                ] .
+            "#
+        )
+    }
+
+    /// A `sh:SPARQLFunction` body naming one IRI under `http://example.org/rel/`,
+    /// which nothing registers.
+    ///
+    /// Its own namespace, deliberately: declaring `ex:` would also capture `ex:status`
+    /// and the refusal would name whichever unregistered IRI the body mentions first,
+    /// which is a fact about the fixture rather than about the parity being asserted.
+    fn pf_unregistered_shapes_ttl() -> String {
+        format!(
+            r#"{PREFIXES}
+            @prefix sparql: <http://www.w3.org/ns/sparql#> .
+
+            ex:isMissing a sh:SPARQLFunction ;
+                sh:parameter [ sh:path ex:node ] ;
+                sh:ask """
+                    ASK {{ ?node <http://example.org/rel/neverRegistered> ?why }}
+                """ .
+
+            ex:MissingShape a sh:NodeShape ;
+                sh:targetClass ex:Thing ;
+                sh:expression [
+                    sparql:equals ( [ ex:isMissing ( sh:this ) ] false )
+                ] .
+            "#
+        )
+    }
+
     /// Shapes carrying a `sh:sparql` constraint whose body calls the `ex:pfFlagged`
     /// property function against each focus node's `ex:status` value.
     fn pf_shapes_ttl() -> String {
@@ -4920,6 +5183,180 @@ mod tests {
         }
     }
 
+    /// The relation reached from a `sh:SPARQLFunction` BODY resolves on every
+    /// prepared-validator route, at both scheduler geometries.
+    ///
+    /// The sibling of
+    /// `property_function_resolves_across_every_prepared_validator_route_when_the_caller_wraps_the_call`,
+    /// over the other door. That one covers a `sh:sparql` constraint, whose text the
+    /// engine re-parses per evaluation; this one covers a function body, which is
+    /// BOUND once per validation from the registry ambient at that moment. The two
+    /// reach the relation by different mechanisms, so "it works" on one says nothing
+    /// about the other — and the body was the one that could not reach a relation at
+    /// all.
+    ///
+    /// Both geometries matter because binding happens once, above the focus-chunk
+    /// loop, and the bound registry is shared into the chunks by `Arc`. A bind that
+    /// happened per chunk instead would make the data-versus-call classification
+    /// depend on which chunk asked, which is a scheduling-dependent verdict.
+    #[test]
+    fn property_function_resolves_from_a_function_body_across_every_route_and_geometry() {
+        let shapes = Arc::new(load_shapes_ttl(&pf_function_shapes_ttl()));
+        let above_n = crate::parallel::PARALLEL_MIN_FOCUS_NODES + 200;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test pool must build");
+        let v0 = NamedNode::new_unchecked("http://example.org/ns#v0").into_term();
+
+        for (label, n, bounded_focus_terms) in [
+            ("below-threshold", 10usize, vec![v0]),
+            ("above-threshold", above_n, all_v_terms(above_n)),
+        ] {
+            assert_eq!(
+                bounded_focus_terms.len() > crate::parallel::PARALLEL_MIN_FOCUS_NODES,
+                label == "above-threshold",
+                "{label}: the bounded routes' focus-node slice must cross \
+                 PARALLEL_MIN_FOCUS_NODES exactly when the label claims it does"
+            );
+            let data = load_data_nt(&pf_data_nt(n));
+            let projected =
+                pool.install(|| project_dataset(data.as_ref()).expect("projection must succeed"));
+            let prepared = pool.install(|| {
+                PreparedValidator::from_projected_dataset(
+                    Arc::clone(&projected),
+                    Arc::clone(&shapes),
+                )
+                .unwrap_or_else(|error| panic!("{label}: preparation must succeed: {error}"))
+            });
+
+            let whole = pool
+                .install(|| {
+                    let _scope = crate::sparql::enter_property_function_scope(Arc::new(
+                        pf_flagged_registry(),
+                    ));
+                    prepared.validate()
+                })
+                .unwrap_or_else(|error| panic!("{label}: validate: {error}"));
+            assert_eq!(
+                whole.results.len(),
+                1,
+                "{label}: validate: the function body reached the relation for exactly \
+                 the flagged node: {:?}",
+                whole.results
+            );
+            assert!(!whole.conforms, "{label}: validate");
+
+            let bounded = pool
+                .install(|| {
+                    let _scope = crate::sparql::enter_property_function_scope(Arc::new(
+                        pf_flagged_registry(),
+                    ));
+                    prepared.validate_focus_nodes(&bounded_focus_terms)
+                })
+                .unwrap_or_else(|error| panic!("{label}: validate_focus_nodes: {error}"));
+            assert_eq!(
+                bounded.results.len(),
+                1,
+                "{label}: validate_focus_nodes across a {}-node slice: {:?}",
+                bounded_focus_terms.len(),
+                bounded.results
+            );
+            assert!(!bounded.conforms, "{label}: validate_focus_nodes");
+
+            let bounded_ids_input = term_ids_for(&prepared, &bounded_focus_terms, label);
+            let bounded_ids = pool
+                .install(|| {
+                    let _scope = crate::sparql::enter_property_function_scope(Arc::new(
+                        pf_flagged_registry(),
+                    ));
+                    prepared.validate_focus_node_ids(&bounded_ids_input)
+                })
+                .unwrap_or_else(|error| panic!("{label}: validate_focus_node_ids: {error}"));
+            assert_eq!(
+                bounded_ids.results.len(),
+                1,
+                "{label}: validate_focus_node_ids across a {}-node slice: {:?}",
+                bounded_ids_input.len(),
+                bounded_ids.results
+            );
+            assert!(!bounded_ids.conforms, "{label}: validate_focus_node_ids");
+
+            // With NOTHING registered the same prepared validator answers the other
+            // way on every route: the body's predicate is an ordinary triple pattern,
+            // `ex:isFlagged` is false for every node, and the comparison against
+            // `false` conforms. The control that makes the three assertions above
+            // attributable to the relation rather than to the fixture.
+            let unwired = pool
+                .install(|| prepared.validate())
+                .unwrap_or_else(|error| panic!("{label}: unwired validate: {error}"));
+            assert!(
+                unwired.conforms,
+                "{label}: with no relation registered the body matches nothing and every \
+                 node conforms: {:?}",
+                unwired.results
+            );
+        }
+    }
+
+    /// A function body naming a relation IRI under a DECLARED namespace that nothing
+    /// registers fails identically at both geometries, and fails before any focus
+    /// node is visited.
+    ///
+    /// Late binding moved this whole error class from shapes-load time to validation
+    /// time, so the parity that used to be free has to be asserted: the bind happens
+    /// once, above the chunk loop, which is what makes the message name the
+    /// declaration rather than whichever row a worker happened to reach first.
+    #[test]
+    fn a_function_body_s_admission_failure_is_identical_across_geometries() {
+        let shapes = Arc::new(load_shapes_ttl(&pf_unregistered_shapes_ttl()));
+        let above_n = crate::parallel::PARALLEL_MIN_FOCUS_NODES + 200;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test pool must build");
+
+        let mut messages = Vec::new();
+        for (label, n) in [("below-threshold", 10usize), ("above-threshold", above_n)] {
+            let data = load_data_nt(&pf_data_nt(n));
+            let projected =
+                pool.install(|| project_dataset(data.as_ref()).expect("projection must succeed"));
+            let prepared = pool.install(|| {
+                PreparedValidator::from_projected_dataset(
+                    Arc::clone(&projected),
+                    Arc::clone(&shapes),
+                )
+                .unwrap_or_else(|error| panic!("{label}: preparation must succeed: {error}"))
+            });
+
+            let error = pool
+                .install(|| {
+                    // The namespace is DECLARED and the IRI under it is registered by
+                    // nobody, which is the condition: a declared namespace means an
+                    // unregistered IRI beneath it is a hard error rather than a
+                    // silent data triple.
+                    let _options = crate::sparql::enter_parser_options_scope(Arc::new(
+                        purrdf_sparql_algebra::ParserOptions {
+                            property_fn_namespaces: vec!["http://example.org/rel/".to_owned()],
+                            ..purrdf_sparql_algebra::ParserOptions::default()
+                        },
+                    ));
+                    prepared.validate()
+                })
+                .expect_err("an unregistered IRI under a declared namespace is refused");
+            assert!(
+                error.contains("neverRegistered"),
+                "{label}: the refusal names the offending IRI: {error}"
+            );
+            messages.push(error);
+        }
+        assert_eq!(
+            messages[0], messages[1],
+            "the failure is identical at both geometries; a message that differed would \
+             mean the bind happened somewhere a worker could reach first",
+        );
+    }
+
     #[test]
     fn complete_corpus_matches_across_scheduler_geometries() {
         use std::fs;
@@ -4934,7 +5371,7 @@ mod tests {
             })
             .collect();
         cases.sort();
-        assert_eq!(cases.len(), 70, "first-party corpus cardinality drifted");
+        assert_eq!(cases.len(), 71, "first-party corpus cardinality drifted");
 
         let geometries: Vec<_> = [(2, 1), (4, 7), (4, 64)]
             .into_iter()

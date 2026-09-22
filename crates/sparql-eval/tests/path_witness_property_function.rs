@@ -24,9 +24,9 @@ use purrdf_core::{
     SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    GovernedOutcome, MemoryRelation, NativeSparqlEngine, ParserOptions, PathDirection, PathGraph,
-    PathLimits, PathStep, PathWitnessRelation, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, ResourceDimension, ShortestPathWitnessRelation, TrippedGovernor,
+    ExtensionEnv, GovernedOutcome, MemoryRelation, NativeSparqlEngine, ParserOptions,
+    PathDirection, PathGraph, PathLimits, PathStep, PathWitnessRelation, PropertyFunctionRegistry,
+    QueryGovernors, QueryOptions, ResourceDimension, ShortestPathWitnessRelation, TrippedGovernor,
 };
 
 // ---------------------------------------------------------------------------
@@ -67,9 +67,11 @@ fn parser_options() -> ParserOptions {
     }
 }
 
-/// An engine that recognizes the caller IRIs at parse time.
+/// An engine, unconfigured: parse-time recognition of the caller IRIs now lives on the
+/// [`ExtensionEnv`] every call passes through [`QueryOptions::env`] (see [`env_of`]),
+/// never on the engine itself.
 fn engine() -> NativeSparqlEngine {
-    NativeSparqlEngine::new().with_parser_options(parser_options())
+    NativeSparqlEngine::new()
 }
 
 /// A fixture IRI under [`EX`].
@@ -195,7 +197,7 @@ impl Answers {
 fn run(
     data: &RdfDataset,
     query: &str,
-    registry: &PropertyFunctionRegistry,
+    registry: &ExtensionEnv,
 ) -> Result<Answers, purrdf_core::RdfDiagnostic> {
     let result = engine().query_with_options_view(
         data,
@@ -205,7 +207,7 @@ fn run(
             substitutions: &[],
         },
         QueryOptions {
-            property_functions: registry,
+            env: registry,
             ..QueryOptions::EMPTY
         },
     )?;
@@ -218,9 +220,22 @@ fn run(
     Ok(Answers { variables, rows })
 }
 
+/// The environment a fixture registry is interpreted in: [`parser_options`]'s exact-IRI
+/// declarations (the parse-time recognition [`engine`] used to carry) folded together
+/// with the fixture's relation registry, so an intentionally EMPTY registry (A5) still
+/// parses the caller IRI as a call rather than falling back to an ordinary triple pattern.
+fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
+    ExtensionEnv::new(
+        parser_options(),
+        relations,
+        purrdf_sparql_eval::AggregateRegistry::EMPTY,
+    )
+    .expect("the fixture declarations read cleanly")
+}
+
 /// Evaluate `query`, requiring it to succeed.
-fn solve(data: &RdfDataset, query: &str, registry: &PropertyFunctionRegistry) -> Answers {
-    run(data, query, registry).expect("the call resolves and evaluates")
+fn solve(data: &RdfDataset, query: &str, env: &ExtensionEnv) -> Answers {
+    run(data, query, env).expect("the call resolves and evaluates")
 }
 
 /// The `PREFIX` header every query below opens with.
@@ -259,7 +274,7 @@ fn distinct_column(rows: &[Vec<TermValue>], column: usize) -> Vec<TermValue> {
 fn a1_a_chain_binds_every_walk_hop_by_hop_through_the_query_surface() {
     let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
-    let registry = walk_registry(graph, limits(1, 3));
+    let registry = env_of(walk_registry(graph, limits(1, 3)));
 
     let answers = solve(
         &data,
@@ -549,7 +564,7 @@ fn a2_the_projection_matches_the_virtuoso_transitivity_reference() {
     let graph = snapshot(&data, &[("knows", PathDirection::Forward)]);
     // `t_max` is unstated in the documented SQL query; three hops is past the longest
     // walk the graph admits, so the envelope is not what bounds the answer.
-    let registry = walk_registry(graph, limits(1, 3));
+    let registry = env_of(walk_registry(graph, limits(1, 3)));
 
     // `where p1 = 1`, spelled as a FILTER on the seed exactly as the documented SPARQL
     // query spells its own seed restriction.
@@ -642,7 +657,7 @@ fn a5_an_unregistered_caller_iri_is_a_hard_failure_not_an_empty_answer() {
 
     // The parser recognizes the IRI (it is in `property_fn_iris`); the registry is empty.
     let empty = PropertyFunctionRegistry::new();
-    let result = run(&data, &query, &empty);
+    let result = run(&data, &query, &env_of(empty));
     assert!(
         result.is_err(),
         "a call with nothing to resolve against must NOT be a zero-row Ok: {result:?}"
@@ -693,7 +708,7 @@ fn a5_an_unregistered_caller_iri_is_a_hard_failure_not_an_empty_answer() {
 fn a7_a_cycle_terminates_at_its_closing_hop() {
     let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
-    let registry = walk_registry(graph, limits(1, 8));
+    let registry = env_of(walk_registry(graph, limits(1, 8)));
 
     let answers = solve(
         &data,
@@ -778,7 +793,7 @@ fn a8_a_triple_term_is_an_intermediate_node_of_a_walk() {
         &data,
         &[("p", PathDirection::Forward), ("q", PathDirection::Inverse)],
     );
-    let registry = walk_registry(graph, limits(1, 2));
+    let registry = env_of(walk_registry(graph, limits(1, 2)));
 
     let body = "SELECT ?end ?pathId ?len ?step ?node ?edge WHERE { \
                 SEED <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
@@ -906,6 +921,7 @@ fn a10_one_registry_serves_a_path_consumer_and_a_scored_retrieval_consumer() {
                 .expect("every row is two values wide"),
         ),
     );
+    let registry = env_of(registry);
 
     let answers = solve(
         &data,
@@ -954,6 +970,7 @@ fn a12_the_path_guard_hard_fails_and_its_firing_tracks_the_row_licence() {
         )),
     );
 
+    let registry = env_of(registry);
     let body = "SELECT ?end ?len ?step WHERE { \
                 ex:a <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) }";
 
@@ -1002,7 +1019,7 @@ fn a15_two_statements_joining_one_node_pair_are_two_witnesses() {
         &data,
         &[("p", PathDirection::Forward), ("q", PathDirection::Inverse)],
     );
-    let registry = walk_registry(graph, limits(1, 1));
+    let registry = env_of(walk_registry(graph, limits(1, 1)));
 
     let answers = solve(
         &data,
@@ -1043,7 +1060,7 @@ fn a16_the_endpoint_projection_agrees_with_p_plus_and_the_divergence_is_pinned()
     //     relation report that too — a strictly simple rule would omit it.
     let cyclic = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
     let graph = snapshot(&cyclic, &[("p", PathDirection::Forward)]);
-    let registry = walk_registry(graph, limits(1, 8));
+    let registry = env_of(walk_registry(graph, limits(1, 8)));
 
     let through_relation = solve(
         &cyclic,
@@ -1076,7 +1093,7 @@ fn a16_the_endpoint_projection_agrees_with_p_plus_and_the_divergence_is_pinned()
     //     this length a visible change rather than a silent one.
     let two_cycle = dataset(&[("a", "p", "b"), ("b", "p", "a")]);
     let two_graph = snapshot(&two_cycle, &[("p", PathDirection::Forward)]);
-    let two_registry = walk_registry(two_graph, limits(2, 2));
+    let two_registry = env_of(walk_registry(two_graph, limits(2, 2)));
 
     let grammar_exact = solve(
         &two_cycle,
@@ -1135,7 +1152,7 @@ fn a17_identifier_stability_is_pinned_for_iris_and_for_blank_nodes() {
 
     let ids_of = |data: &RdfDataset| {
         let graph = snapshot(data, &[("p", PathDirection::Forward)]);
-        let registry = walk_registry(graph, limits(1, 2));
+        let registry = env_of(walk_registry(graph, limits(1, 2)));
         let rows =
             solve(data, &query, &registry).project(&["end", "pathId", "len", "step", "node"]);
         (rows.clone(), distinct_column(&rows, 1))
@@ -1164,7 +1181,7 @@ fn a17_identifier_stability_is_pinned_for_iris_and_for_blank_nodes() {
     };
     let blank_ids = |data: &RdfDataset| -> Vec<TermValue> {
         let graph = snapshot(data, &[("p", PathDirection::Forward)]);
-        let registry = walk_registry(graph, limits(1, 2));
+        let registry = env_of(walk_registry(graph, limits(1, 2)));
         let rows =
             solve(data, &query, &registry).project(&["end", "pathId", "len", "step", "node"]);
         distinct_column(&rows, 1)
@@ -1225,7 +1242,7 @@ fn a18_a_hop_statement_joins_to_its_rdf12_annotation() {
     let data = builder.freeze().expect("the fixture freezes");
 
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
-    let registry = walk_registry(graph, limits(1, 2));
+    let registry = env_of(walk_registry(graph, limits(1, 2)));
 
     // The RDF 1.2 spelling, verified against this engine's passing conformance cases: a
     // reifier names a triple through `?reifier rdf:reifies <<( s p o )>>`, so a `?edge`
@@ -1292,6 +1309,7 @@ fn a19_the_expansion_budget_fails_a_fruitless_search_rather_than_answering_empty
         )),
     );
 
+    let registry = env_of(registry);
     let result = run(
         &data,
         &q("SELECT ?end WHERE { \
@@ -1356,7 +1374,7 @@ fn a20_a_step_over_rdf_reifies_walks_a_statement_to_its_reifier() {
         2,
         "both reifier bindings are edges of the snapshot"
     );
-    let registry = walk_registry(graph, limits(1, 1));
+    let registry = env_of(walk_registry(graph, limits(1, 1)));
 
     let answers = solve(
         &data,
@@ -1432,7 +1450,7 @@ fn a21_a_step_over_an_annotation_predicate_crosses_both_layers_in_one_walk() {
         2,
         "one annotation edge and one asserted edge, in one snapshot"
     );
-    let registry = walk_registry(graph, limits(1, 2));
+    let registry = env_of(walk_registry(graph, limits(1, 2)));
 
     let answers = solve(
         &data,
@@ -1494,7 +1512,7 @@ fn a22_a_step_alternative_the_dataset_never_mentions_still_leaves_a_usable_step(
         2,
         "the ex:broader edges, and only those"
     );
-    let registry = walk_registry(graph, limits(1, 2));
+    let registry = env_of(walk_registry(graph, limits(1, 2)));
 
     let answers = solve(
         &data,
@@ -1544,7 +1562,7 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
     // The very envelope the rest of this file uses: a generous guard, deliberately far
     // above what this graph could ever need.
-    let registry = walk_registry(graph, limits(1, 3));
+    let registry = env_of(walk_registry(graph, limits(1, 3)));
 
     let query = q("SELECT ?end ?len ?step ?node ?edge WHERE { \
                    ex:a <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
@@ -1558,7 +1576,7 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &registry,
+                env: &registry,
                 ..QueryOptions::EMPTY
             },
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(1_000),
@@ -1597,7 +1615,7 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
 fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
     let data = dataset(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "d")]);
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
-    let registry = walk_registry(graph, limits(1, 3));
+    let registry = env_of(walk_registry(graph, limits(1, 3)));
 
     let query = q("SELECT ?end ?len ?step ?node ?edge WHERE { \
                    ex:a <http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) \
@@ -1611,7 +1629,7 @@ fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &registry,
+                env: &registry,
                 ..QueryOptions::EMPTY
             },
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(10),
@@ -1727,7 +1745,7 @@ fn a24_the_shortest_witness_relation_matches_the_virtuoso_shortest_only_referenc
     let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
     // Four hops is well past the longest walk the graph admits, so the envelope is not
     // what suppresses the two-hop witnesses; the relation's question is.
-    let registry = shortest_registry(graph, limits(1, 4));
+    let registry = env_of(shortest_registry(graph, limits(1, 4)));
 
     let answers = solve(
         &data,

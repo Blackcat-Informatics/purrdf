@@ -1168,7 +1168,7 @@ impl QueryEngine {
                 &frozen,
                 sparql_request(sparql, base.as_deref()),
                 QueryOptions {
-                    aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+                    env: &aggregate_env(aggregates.as_ref())?,
                     ..QueryOptions::EMPTY
                 },
                 &governors,
@@ -1232,7 +1232,7 @@ impl QueryEngine {
             sparql_request(sparql, base.as_deref()),
             plan.entailment(),
             QueryOptions {
-                aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+                env: &aggregate_env(aggregates.as_ref())?,
                 ..QueryOptions::EMPTY
             },
             // This surface registers no relation at all, so there is none to re-derive over
@@ -1311,7 +1311,7 @@ impl QueryEngine {
                 &mut frozen,
                 sparql_request(sparql, base.as_deref()),
                 QueryOptions {
-                    aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+                    env: &aggregate_env(aggregates.as_ref())?,
                     ..QueryOptions::EMPTY
                 },
                 &governors,
@@ -1467,6 +1467,26 @@ fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> SparqlRequest<'
 /// `init`/`step`/`combine`/`finish` closure) is Rust-host-only and has no string-shaped
 /// surface at all — it cannot cross into JavaScript — and this crate does not attempt to
 /// expose it.
+/// The extension environment a query carrying `aggregates` is interpreted in.
+///
+/// One value rather than a loose registry, because whether a predicate IRI in a
+/// query text is a data edge or a relation call is decided by the environment the
+/// text is read against — and a door that takes the registries separately is a door
+/// that can forget one.
+///
+/// # Errors
+///
+/// A JS error if a registered aggregate's declaration methods panic: deriving the
+/// environment reads every declaration.
+fn aggregate_env(
+    aggregates: Option<&AggregateRegistry>,
+) -> Result<purrdf_sparql_eval::ExtensionEnv, JsError> {
+    purrdf_sparql_eval::ExtensionEnv::over_aggregates(
+        aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
+    )
+    .map_err(|e| JsError::new(&format!("extension environment: {e}")))
+}
+
 fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
     let namespace = namespace?;
     let mut registry = AggregateRegistry::new();

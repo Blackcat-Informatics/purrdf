@@ -1,0 +1,21 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+@prefix sparql: <http://www.w3.org/ns/sparql#> .
+
+# A sh:SPARQLFunction body that reaches a HOST-REGISTERED relation.
+#
+# The relation IRI below is registered by the corpus harness, which is the whole
+# point of this case: the body's predicate is a CALL, not a data edge, and the
+# only fact distinguishing the two focus nodes comes from the relation's rows.
+# Nothing in data.nt mentions the relation IRI at all, so if the call were lowered
+# to an ordinary triple pattern the body would match nothing, both nodes would
+# score the same, and this case's expected report would be the other one.
+ex:isFlagged
+    a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:node ; sh:nodeKind sh:IRI ] ;
+    sh:ask "ASK { ?node <http://example.org/corpus/rel/flagged> ?why }" .
+
+ex:FlagShape
+    a sh:NodeShape ;
+    sh:targetClass ex:C ;
+    sh:expression [ sparql:equals ( [ ex:isFlagged ( sh:this ) ] false ) ] .

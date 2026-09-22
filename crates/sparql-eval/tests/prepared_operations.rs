@@ -242,8 +242,10 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
         "http://example.org/relation",
         Arc::new(purrdf_sparql_eval::MemoryRelation::new(1, 1, vec![]).unwrap()),
     );
+    let relation_env = purrdf_sparql_eval::ExtensionEnv::over_relations(registry)
+        .expect("the fixture relation declares without panicking");
     let relation_options = QueryOptions {
-        property_functions: &registry,
+        env: &relation_env,
         ..QueryOptions::EMPTY
     };
     let admission_mismatched = engine

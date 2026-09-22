@@ -87,6 +87,11 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	cargo check --workspace --lib --tests --locked
 	python3 scripts/check-no-features.py
 	python3 scripts/check-toolchain-pin.py
+	python3 scripts/check-toolchain-pin.py --self-test
+	python3 scripts/check-gate-parity.py --self-test
+	python3 scripts/check-gate-parity.py
+	python3 scripts/check-stream-chunk.py --self-test
+	python3 scripts/check-stream-chunk.py
 	python3 scripts/check-build-profiles.py --self-test
 	python3 scripts/check-build-profiles.py
 	python3 scripts/check-iri-resolver-singleton.py
@@ -96,6 +101,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-python-binding-tests.py
 	python3 scripts/check-terminal-predicates.py --self-test
 	python3 scripts/check-terminal-predicates.py
+	python3 scripts/check-licenses.py --self-test
 	python3 scripts/check-licenses.py
 	python3 scripts/check-banned-deps.py --self-test
 	python3 scripts/check-banned-deps.py
@@ -115,6 +121,11 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-entailment-surface.py
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
+	python3 scripts/check-tracked-paths.py --self-test
+	python3 scripts/check-tracked-paths.py
+	python3 scripts/benchmark-acquire.py --self-test
+	python3 scripts/watdiv-queries.py --offline-self-test
+	python3 scripts/lubm-queries.py --offline-self-test
 	python3 crates/text/tests/reference/bm25f.py --check
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene

@@ -59,6 +59,29 @@
 //! | 8 | the custom-aggregate registry, + the implementation identity | `aggregate-registry` | [`AggregateRegistry`] |
 //! | 9 | the property-function registry, + the implementation identity | `property-function-registry` | [`PropertyFunctionRegistry`] |
 //! | 10 | the class catalog's digest | `class-catalog` | [`ClassCatalog`] |
+//! | 11 | the declared parser options: relation lists **sorted**, extension namespaces in **declaration order** | `parse-configuration` | [`ParseConfiguration`] |
+//!
+//! Row 11 is the OTHER half of the seam row 9 covers. A registry's keys decide
+//! which EXACT predicate IRIs are calls; a declared namespace decides it for a whole
+//! prefix, including IRIs no registry names — and an IRI under a declared namespace
+//! that no registry answers is a hard error rather than a silent data triple. So a
+//! product written under a declared relation namespace and restored under a host that
+//! declares nothing would read every prefixed relation IRI in its shapes graph as
+//! ordinary data, match nothing, and report conformance. Row 9 alone does not catch
+//! that: both hosts can hold the identical registry and still disagree about which
+//! predicates are calls.
+//!
+//! Its three lists are NOT folded alike, and that asymmetry is load-bearing. The two
+//! RELATION lists are sorted for the reason rows 2 and 5 are — recognition there is
+//! order-independent and nothing is stripped, so a declaration is a SET and two
+//! callers who declared the same namespaces in different order must not fail to open
+//! each other's products. `extension_fn_namespaces` is folded in DECLARATION ORDER,
+//! because its order is first-match-wins for prefix STRIPPING: with
+//! `["http://example.org/a/", "http://example.org/a/b/"]` the IRI
+//! `http://example.org/a/b/f` strips to `b/f`, and reversed it strips to `f` — two
+//! different function names for one IRI. Sorting it would encode both orders
+//! identically and admit a product into a host that resolves its extension-function
+//! calls differently, which is the very substitution this row exists to refuse.
 //!
 //! Rows 2 and 5 are sorted because both sources are maps whose *order* is not part
 //! of their meaning: `ParseProvenance::doc_prefixes` deliberately preserves the
@@ -192,11 +215,13 @@
 //! [`AggregateRegistry`]: ProductDimension::AggregateRegistry
 //! [`PropertyFunctionRegistry`]: ProductDimension::PropertyFunctionRegistry
 //! [`ClassCatalog`]: ProductDimension::ClassCatalog
+//! [`ParseConfiguration`]: ProductDimension::ParseConfiguration
 
 use ::purrdf::PackDigest;
 use purrdf_core::ContentDigest;
 use purrdf_core::artifact::identity::{Identity, IdentityMismatch};
 use purrdf_core::ir::pack::bits::write_varint;
+use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::user_fn::FnPopulation;
 use purrdf_sparql_eval::{
     AggregateRegistry, EvalError, PropertyFunctionRegistry, UserFunctionRegistry, agg_fn,
@@ -237,7 +262,7 @@ pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 /// One table drives both [`build_identity`] (which pushes in this order) and
 /// [`check_identity`] (which indexes by position), so the labels and the dimensions
 /// cannot drift apart into two hand-maintained lists.
-const COMPONENTS: [(&str, ProductDimension); 11] = [
+const COMPONENTS: [(&str, ProductDimension); 12] = [
     ("source-dataset", ProductDimension::DatasetIdentity),
     ("shapes-graph", ProductDimension::ShapesGraph),
     ("doc-prefixes", ProductDimension::Prefixes),
@@ -258,6 +283,7 @@ const COMPONENTS: [(&str, ProductDimension); 11] = [
         ProductDimension::PropertyFunctionRegistry,
     ),
     ("class-catalog", ProductDimension::ClassCatalog),
+    ("parse-configuration", ProductDimension::ParseConfiguration),
 ];
 
 /// The positions of the three HOST-supplied rows in [`COMPONENTS`]: the injected
@@ -404,6 +430,82 @@ fn encode_vocab(vocab: Option<&BoxRoleVocab>) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
+/// The declared parser options, encoded for row 11.
+///
+/// The two RELATION lists are SORTED and deduplicated before framing: recognition
+/// there is order-independent — an IRI is a property function iff it prefix-matches
+/// `property_fn_namespaces` or exactly matches `property_fn_iris`, and nothing is
+/// stripped — so order is not part of their meaning, and two callers who declared the
+/// same namespaces in a different order must open each other's products.
+///
+/// `extension_fn_namespaces` is NOT sorted, and that asymmetry is deliberate. Its
+/// order is first-match-wins for prefix STRIPPING, so the order is part of the
+/// meaning: with `["http://example.org/a/", "http://example.org/a/b/"]` the IRI
+/// `http://example.org/a/b/f` strips to `b/f`, and with the two entries reversed it
+/// strips to `f` — two different function names for one IRI. Sorting them would
+/// encode both orders identically, so a product prepared under one would be admitted
+/// under the other and its restored preparation would resolve extension-function
+/// calls differently from the environment it was written for. That is precisely the
+/// silent-wrong-answer this row exists to refuse, so this list is folded in
+/// DECLARATION order, deduplicated keeping the first occurrence (a later duplicate
+/// can never win a first-match, so dropping it changes no parse).
+///
+/// The lists are framed separately rather than concatenated, because the same string
+/// declared as an extension-function namespace and as a relation namespace configures
+/// two different seams.
+///
+/// The options are DESTRUCTURED rather than read field by field, and that is the
+/// load-bearing detail. This row exists to stop a product prepared under one parse
+/// configuration from restoring green under another, so a parse-affecting field added
+/// to `ParserOptions` later and not folded here would silently reopen exactly the hole
+/// the row was added to close — and nothing would fail. Destructuring makes the
+/// omission a compile error instead: a fourth field lands here as "missing structure
+/// field" before it can land in production as a wrong answer.
+fn encode_parser_options(options: &ParserOptions) -> Vec<u8> {
+    let ParserOptions {
+        extension_fn_namespaces,
+        property_fn_namespaces,
+        property_fn_iris,
+    } = options;
+    // Sized up front rather than grown. The three labels and three 8-byte counts are
+    // always written, even when every list is empty, so an empty configuration used to
+    // walk the doubling ladder from zero for a payload whose size is known before the
+    // loop starts -- allocations bought on the once-per-restore path for nothing. The
+    // reserve covers the fixed part; a host that actually declares namespaces grows
+    // past it, which is the case worth paying for.
+    const FIXED_PART: usize = 128;
+    let declared: usize = extension_fn_namespaces
+        .iter()
+        .chain(property_fn_namespaces)
+        .chain(property_fn_iris)
+        .map(|value| value.len() + 2)
+        .sum();
+    let mut out = Vec::with_capacity(FIXED_PART + declared);
+    // `true` = this list's order is part of its meaning and is preserved.
+    for (label, list, ordered) in [
+        ("extension-fn-namespaces", extension_fn_namespaces, true),
+        ("property-fn-namespaces", property_fn_namespaces, false),
+        ("property-fn-iris", property_fn_iris, false),
+    ] {
+        push_part(&mut out, label.as_bytes());
+        let mut values: Vec<&str> = list.iter().map(String::as_str).collect();
+        if ordered {
+            // Declaration order kept; only exact repeats dropped, first occurrence
+            // winning, because a later duplicate can never win a first-match.
+            let mut seen = std::collections::BTreeSet::new();
+            values.retain(|value| seen.insert(*value));
+        } else {
+            values.sort_unstable();
+            values.dedup();
+        }
+        push_part(&mut out, &(values.len() as u64).to_be_bytes());
+        for value in values {
+            push_part(&mut out, value.as_bytes());
+        }
+    }
+    out
+}
+
 // The class-catalog digest
 // ---------------------------------------------------------------------------
 
@@ -466,6 +568,7 @@ pub(crate) fn build_identity(
     dataset: &PackDigest,
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<Identity, ShapesProductError> {
@@ -473,6 +576,7 @@ pub(crate) fn build_identity(
         dataset.as_bytes().as_slice(),
         shapes,
         property_functions,
+        parser_options,
         implementation_identity,
         classes,
     )
@@ -548,6 +652,7 @@ pub(crate) fn check_restored_identity(
     declared: &Identity,
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<(), ShapesProductError> {
@@ -559,6 +664,7 @@ pub(crate) fn check_restored_identity(
         declared_dataset,
         shapes,
         property_functions,
+        parser_options,
         implementation_identity,
         classes,
     )?;
@@ -703,6 +809,7 @@ fn assemble(
     dataset: &[u8],
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<Identity, ShapesProductError> {
@@ -732,6 +839,7 @@ fn assemble(
         aggregates,
         relations,
         class_catalog_digest(classes).as_bytes().to_vec(),
+        encode_parser_options(parser_options),
     ];
 
     let mut identity = Identity::new();
@@ -883,6 +991,15 @@ fn fix_for(dimension: ProductDimension) -> &'static str {
              predicates are calls rather than ordinary triple patterns and the implementation \
              identity is what says which build of the native code stands behind them"
         }
+        ProductDimension::ParseConfiguration => {
+            "this product was prepared under a different parse configuration than the one \
+             supplied for its execution; declare the SAME extension-function and relation \
+             NAMESPACES on the executing host, because a declared namespace decides which \
+             predicate IRIs are calls for a whole prefix — including IRIs no registry names, \
+             where an unregistered one is a hard error rather than an ordinary data triple — so \
+             two hosts holding the identical registries can still disagree about which \
+             predicates are calls"
+        }
         ProductDimension::ClassCatalog => {
             "the class analysis this product carries is not the one its own identity pins, so the \
              analysis a restore would compile its class-membership decisions against is not the \
@@ -933,6 +1050,7 @@ mod tests {
     use crate::product::dataset::{certify_dataset, encode_dataset};
     use crate::product::error::ProductDimension;
     use crate::shapes::{Shapes, from_dataset_with_config_and_graph};
+    use purrdf_sparql_algebra::ParserOptions;
 
     // ── Fixtures (example.org, per the repository's fixture rule) ────────────────
 
@@ -1090,6 +1208,7 @@ mod tests {
             &digest_of(shapes),
             shapes,
             relations,
+            &ParserOptions::default(),
             implementation_identity,
             &catalog_of(shapes),
         )
@@ -1285,6 +1404,7 @@ mod tests {
                 "aggregate-registry",
                 "property-function-registry",
                 "class-catalog",
+                "parse-configuration",
             ],
             "the component order is part of the format; reordering breaks every product \
              already written",
@@ -1622,6 +1742,7 @@ mod tests {
             &digest_of(&shapes),
             &shapes,
             &PropertyFunctionRegistry::new(),
+            &ParserOptions::default(),
             &[],
             &stale,
         )

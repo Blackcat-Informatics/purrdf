@@ -81,7 +81,9 @@ it is why every row this lane reports carries its regime and its dataset.
 
 import argparse
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -98,6 +100,12 @@ DRAFT_NAMESPACE = "http://www.lehigh.edu/~zhp2/2004/0401/univ-bench.owl#"
 # The namespace the ontology Lehigh publishes today declares, and the one the UBA
 # generator stamps into its output when run with the matching `-onto`.
 PUBLISHED_NAMESPACE = "http://swat.cse.lehigh.edu/onto/univ-bench.owl#"
+
+# How many queries LUBM publishes. Named rather than typed at each use: it was inline
+# at two sites here and two more in the lane, four literals for one published fact.
+# The pin beside the artifact pins is the source of truth; `--offline-self-test`
+# asserts this constant still agrees with it.
+PUBLISHED_QUERIES = 14
 
 
 class Regime(NamedTuple):
@@ -309,15 +317,15 @@ def load(source: Path, namespace: str) -> list[Query]:
             "  grant, so they are fetched by digest at use time and never vendored here."
         )
     blocks = _split_blocks(source.read_text(encoding="utf-8"))
-    if len(blocks) != 14:
+    if len(blocks) != PUBLISHED_QUERIES:
         sys.exit(
-            f"FAIL: expected 14 LUBM queries in {source}, found {len(blocks)}.\n"
+            f"FAIL: expected {PUBLISHED_QUERIES} LUBM queries in {source}, found {len(blocks)}.\n"
             "  The pinned file changed shape; the digest pin and these rules must be "
             "re-checked together."
         )
     queries = [normalise(number, block, namespace) for number, block in blocks]
     seen = [query.number for query in queries]
-    if seen != list(range(1, 15)):
+    if seen != list(range(1, PUBLISHED_QUERIES + 1)):
         sys.exit(f"FAIL: LUBM queries are not 1..14 in order: {seen}")
     return queries
 
@@ -397,6 +405,127 @@ def provenance(queries: list[Query], namespace: str) -> str:
     return "\n".join(lines)
 
 
+# ── The offline half of the self-test ───────────────────────────────────────────
+#
+# `self_test()` reads the PUBLISHED file, which is fetched by digest at use time
+# and never vendored -- so it runs only inside `make lubm`, after a download, and
+# never in a gate. That left the splitter and the loader's refusals uncovered in
+# both directions. Everything below drives them over inline fixtures instead, so
+# it can live in `make check`.
+
+
+_PROSE_COMMENT_FIXTURE = """\
+# Query 11, 12 and 13 exercise transitivity and inverse properties. This line
+# OPENS with the same three words a delimiter does and is prose, which is the
+# whole point of the fixture: a splitter matching `# Query` loosely cuts here.
+# Query1
+SELECT ?X
+WHERE {?X rdf:type ub:GraduateStudent}
+# Query2
+SELECT ?X, ?Y
+WHERE {?X ub:memberOf ?Y}
+"""
+
+
+def offline_self_test() -> int:
+    """The fetch-free checks: the block splitter and the loader's refusals."""
+    ok = True
+
+    def check(condition: bool, label: str) -> None:
+        nonlocal ok
+        print(f"{'OK' if condition else 'SELF-TEST FAIL'}: {label}")
+        ok = ok and condition
+
+    def expect_exit(thunk, label: str, must_contain: list[str]) -> None:
+        nonlocal ok
+        try:
+            thunk()
+        except SystemExit as exc:
+            message = str(exc.code)
+            if not exc.code or isinstance(exc.code, int) and exc.code == 0:
+                print(f"SELF-TEST FAIL: {label} exited zero")
+                ok = False
+                return
+            missing = [needle for needle in must_contain if needle not in message]
+            if missing:
+                print(f"SELF-TEST FAIL: {label} did not say {missing}: {message}")
+                ok = False
+                return
+            print(f"OK: {label}")
+            return
+        print(f"SELF-TEST FAIL: {label} did not refuse at all")
+        ok = False
+
+    # THE DELIMITER SPLIT, PROVEN RATHER THAN ASSERTED. The published file opens
+    # with prose that contains the words "Query 11, 12 and 13". A splitter that
+    # matched `# Query` loosely would cut there and mis-number everything after
+    # it, so this fixture is built around exactly that sentence: the control line
+    # differs from the two real delimiters in the one way that matters, and the
+    # expected answer is two blocks numbered 1 and 2 -- never three, and never a
+    # block numbered 11.
+    blocks = _split_blocks(_PROSE_COMMENT_FIXTURE)
+    check(
+        [number for number, _ in blocks] == [1, 2],
+        f"prose naming 'Query 11, 12 and 13' does not split a block (got {[n for n, _ in blocks]})",
+    )
+    check(
+        _PROSE_COMMENT_FIXTURE.startswith("# Query 11, 12 and 13"),
+        "the fixture OPENS on the prose line the split must survive, not merely contains it",
+    )
+
+    # The valid neighbour for the comma rule: a pre-final projection list loses
+    # its commas, and the variables, their spelling and their ORDER survive.
+    projection = normalise(2, blocks[1][1], PUBLISHED_NAMESPACE)
+    head = projection.text.partition("WHERE")[0]
+    check("," not in head, f"projection commas are removed (got {head.strip()!r})")
+    # One exact expectation, not a disjunction. `findall` with no capture group
+    # returns whole matches, so `["X", "Y"]` was unreachable -- and a disjunction
+    # that tolerates two answers tolerates a regex whose meaning changed.
+    projected = re.findall(r"\?\w+", head)
+    check(
+        projected == ["?X", "?Y"],
+        f"the projection keeps both variables in order (got {projected})",
+    )
+
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        expect_exit(
+            lambda: load(root / "absent.txt", PUBLISHED_NAMESPACE),
+            "a queries file that is not in the cache is refused, naming the fetch step",
+            ["is not in the cache"],
+        )
+        short = root / "short.txt"
+        short.write_text(_PROSE_COMMENT_FIXTURE, encoding="utf-8")
+        expect_exit(
+            lambda: load(short, PUBLISHED_NAMESPACE),
+            "a file holding fewer than 14 queries is refused, naming the count",
+            ["expected 14 LUBM queries", "found 2"],
+        )
+
+
+    # The pin file is the single source of truth for this count. This script keeps its
+    # own constant so it runs standalone, and the self-test asserts the two agree --
+    # otherwise "one copy of the number" is two copies that happen to match today.
+    pinned = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "benchmark-acquire.py"), "--lubm-query-count"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pinned.returncode != 0:
+        print(f"SELF-TEST FAIL: could not read the pinned count: {pinned.stderr.strip()}")
+        ok = False
+    else:
+        check(
+            int(pinned.stdout.strip()) == PUBLISHED_QUERIES,
+            f"this script's PUBLISHED_QUERIES ({PUBLISHED_QUERIES}) equals the pinned count "
+            f"({pinned.stdout.strip()})",
+        )
+
+    print("OFFLINE SELF-TEST PASS" if ok else "OFFLINE SELF-TEST FAIL")
+    return 0 if ok else 1
+
+
 def self_test(namespace: str) -> int:
     """Check the rules against the pinned file, including what they must NOT touch."""
     ok = True
@@ -452,13 +581,18 @@ def self_test(namespace: str) -> int:
     # be exactly those the published file projects -- this is the check that a
     # "normalisation" did not quietly become a rewrite.
     published = _split_blocks(PUBLISHED.read_text(encoding="utf-8"))
+    projections_unchanged = True
     for (number, block), query in zip(published, queries, strict=True):
         before = re.findall(r"\?\w+", _strip_comments(block).partition("WHERE")[0])
         after = re.findall(r"\?\w+", query.text.partition("WHERE")[0])
         if before != after:
             print(f"SELF-TEST FAIL: Q{number} projection changed: {before} -> {after}")
-            ok = False
-    check(True, "every projection keeps its variables, spelling and order")
+            projections_unchanged = False
+    # This was `check(True, ...)`. The loop above set `ok` correctly so the exit
+    # status was right, but the REPORT printed OK on the very run where the loop
+    # had just printed SELF-TEST FAIL -- a self-test whose output contradicted
+    # itself, which is worse than one that stays quiet.
+    check(projections_unchanged, "every projection keeps its variables, spelling and order")
 
     # Every query carries a regime, and every regime names a CLI value the binary
     # actually offers (or none at all).
@@ -486,7 +620,15 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="directory to write .rq files into")
     parser.add_argument("--provenance", action="store_true", help="print the audit trail")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--offline-self-test",
+        action="store_true",
+        help="the fetch-free checks, suitable for a gate",
+    )
     args = parser.parse_args()
+
+    if args.offline_self_test:
+        return offline_self_test()
 
     if args.self_test:
         return self_test(args.namespace)

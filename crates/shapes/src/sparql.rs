@@ -18,14 +18,16 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use ::purrdf::TermValue;
 use ::purrdf::{DatasetView, FastMap, RdfDataset};
+use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
-    AggregateRegistry, GovernorState, InternedGoverned, InternedOutcome, InternedRequest,
-    InternedSolutions, NativeSparqlEngine, Prebinding, PreparedExecution, PropertyFunctionRegistry,
-    QueryOptions, ShaclPrebinding, UserFunctionRegistry, ValueAggregate, fold_values, order_values,
+    AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, InternedGoverned,
+    InternedOutcome, InternedRequest, InternedSolutions, NativeSparqlEngine, Prebinding,
+    PreparedExecution, PropertyFunctionRegistry, QueryOptions, ShaclPrebinding,
+    UserFunctionRegistry, ValueAggregate, fold_values, order_values,
 };
 
 use crate::report::{Severity, ValidationResult};
@@ -547,8 +549,18 @@ thread_local! {
     /// query plan cache memoizes each `sh:select`/`sh:SPARQLTarget` parse across the
     /// many focus-node calls of one validation (the oxigraph path kept a pre-parsed
     /// `PreparedSparqlQuery`; a fresh engine per call would re-parse every time — a
-    /// per-focus blowup on the whole-ontology conformance shapes). Each focus
-    /// worker reuses its own cache, keyed on `(base, query text)`.
+    /// per-focus blowup on the whole-ontology conformance shapes). Each focus worker
+    /// reuses its own cache.
+    ///
+    /// That cache is keyed on more than the query text, and the difference is
+    /// load-bearing rather than incidental: `PlanCache`'s key folds the base IRI, all
+    /// three `ParserOptions` lists, and both registry fingerprints. This comment used
+    /// to say `(base, query text)`, which would have made the cache a silent
+    /// wrong-answer channel of exactly the kind the extension environment exists to
+    /// close — a body parsed under one environment, served from the cache under
+    /// another, with its relation calls already lowered to ordinary triple patterns.
+    /// It was an under-description of the key, not a description of a narrower key;
+    /// the key has always folded the options.
     static SPARQL_ENGINE: NativeSparqlEngine = NativeSparqlEngine::new();
 
     /// The SHACL-AF function registry (`sh:SPARQLFunction`) in scope for the current
@@ -559,7 +571,21 @@ thread_local! {
     /// the same registry without shared mutation. Parallel FILTER workers inside
     /// the SPARQL engine do NOT read this — they receive the registry through
     /// `EvalCtx` (propagated in `fork_for_worker`).
-    static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
+    static CURRENT_FUNCTIONS: RefCell<Option<Arc<BoundFunctionRegistry>>> = const { RefCell::new(None) };
+
+    /// The base parser options in scope for the current validation, set by
+    /// [`enter_parser_options_scope`].
+    ///
+    /// The engine this module memoizes (`SPARQL_ENGINE`) is built once per thread and
+    /// never reconfigured, so before this existed its `parser_options` were
+    /// `ParserOptions::default()` for every SHACL query there has ever been — which
+    /// meant `extension_fn_namespaces` and `property_fn_namespaces` were permanently
+    /// EMPTY on this surface. A host could register a relation and have it resolve by
+    /// exact IRI, but could not declare a NAMESPACE of relations, and could not spell
+    /// an extension function in any SHACL construct at all. Carrying the options on
+    /// the environment instead of on the engine is what makes them per-validation
+    /// rather than per-thread.
+    static CURRENT_PARSER_OPTIONS: RefCell<Option<Arc<ParserOptions>>> = const { RefCell::new(None) };
 
     /// The property-function registry in scope for the current validation, set by
     /// [`enter_property_function_scope`]. [`run_query_view`] snapshots it into the
@@ -726,7 +752,7 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     bnode_mint_prefix: Option<&str>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    let scopes = AmbientScopes::snapshot();
+    let scopes = AmbientScopes::snapshot()?;
     let request = InternedRequest {
         query,
         base_iri: None,
@@ -796,36 +822,37 @@ fn certify_governed<R>(outcome: InternedGoverned<Result<R, String>>) -> Result<R
     }
 }
 
-/// An absent [`UserFunctionRegistry`] scope, as a place a `'static` borrow can name.
+/// An absent [`BoundFunctionRegistry`] scope, as a place a `'static` borrow can name.
 ///
 /// `static`, not a bare `&Registry::EMPTY` temporary: a `HashMap`-backed registry
 /// carries drop glue, which blocks Rust's rvalue static promotion for a reference
 /// that must outlive the statement that spells it.
-static EMPTY_FUNCTIONS: UserFunctionRegistry = UserFunctionRegistry::EMPTY;
-/// An absent [`PropertyFunctionRegistry`] scope. See [`EMPTY_FUNCTIONS`].
-static EMPTY_RELATIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
-/// An absent [`AggregateRegistry`] scope. See [`EMPTY_FUNCTIONS`].
-static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
+static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
 
-/// Every ambient thread-local scope a SHACL query runs under, read once.
+/// Every ambient scope a SHACL query runs under, read once.
 ///
-/// The four scopes are snapshotted (an `Arc` clone each) BEFORE evaluating, so no
+/// The scopes are snapshotted (an `Arc` clone each) BEFORE evaluating, so no
 /// `RefCell` borrow is held across the query: a `sh:sparql` body whose evaluation
 /// re-enters SHACL validation (a nested shape / SHACL-AF function) installs its own
 /// scopes via `borrow_mut`, which would panic ("already borrowed") if an outer
 /// immutable borrow were still live.
 ///
-/// A struct rather than four locals because there are now TWO doors onto the engine
+/// A struct rather than a handful of locals because there are now TWO doors onto the engine
 /// — the `&str` one and the prepared one — and the options they build must be the
 /// same options. Reading the scopes in one place is what makes that a fact about the
 /// type rather than a resemblance between two blocks.
+///
+/// The relation registry, the custom-aggregate registry and the parser options are
+/// not held separately here: they are three components of ONE value, the
+/// [`ExtensionEnv`] [`current_env`] derives and memoizes per thread, and a door that
+/// held them apart is a door that can forget one of them. See that module's
+/// documentation for why the separateness was the bug.
 struct AmbientScopes {
-    /// The SHACL-AF function table in scope, if a validation installed one.
-    functions: Option<Arc<UserFunctionRegistry>>,
-    /// The property-function registry in scope, if a validation installed one.
-    relations: Option<Arc<PropertyFunctionRegistry>>,
-    /// The custom-aggregate registry in scope, if a validation installed one.
-    aggregates: Option<Arc<AggregateRegistry>>,
+    /// The SHACL-AF function table in scope, if a validation installed one. Bound
+    /// against `env` already — see [`bind_in_current_env`].
+    functions: Option<Arc<BoundFunctionRegistry>>,
+    /// The extension environment this query's text is interpreted relative to.
+    env: Arc<ExtensionEnv>,
     /// The operation budget in force, if a validation installed one.
     governors: Option<Arc<GovernorState>>,
     /// The custom-function call depth, so a recursion that reaches SPARQL and comes
@@ -835,14 +862,23 @@ struct AmbientScopes {
 
 impl AmbientScopes {
     /// Read every scope in force on this thread.
-    fn snapshot() -> Self {
-        Self {
+    ///
+    /// Fallible where the rest of the snapshot is not, because deriving the
+    /// environment asks every registered relation and aggregate to describe itself
+    /// and a declaration that refuses is a configuration error rather than an empty
+    /// environment. It is reported here, in the wording the engine's own failures
+    /// carry, rather than swallowed into a run over a seam that was never wired.
+    ///
+    /// # Errors
+    ///
+    /// `Err(String)` if the extension environment cannot be derived.
+    fn snapshot() -> Result<Self, String> {
+        Ok(Self {
             functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
-            relations: current_property_functions(),
-            aggregates: current_aggregates(),
+            env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
             governors: current_governors(),
             call_depth: current_call_depth(),
-        }
+        })
     }
 
     /// The function registry this query resolves call-position IRIs against.
@@ -852,18 +888,8 @@ impl AmbientScopes {
     /// the SAME value for every purpose `QueryOptions` cares about (see
     /// `AggregateRegistry::EMPTY`'s docs), so there is no "empty but present" case to
     /// normalize away.
-    fn functions(&self) -> &UserFunctionRegistry {
+    fn functions(&self) -> &BoundFunctionRegistry {
         self.functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS)
-    }
-
-    /// The property-function registry this query's predicates resolve against.
-    fn relations(&self) -> &PropertyFunctionRegistry {
-        self.relations.as_deref().unwrap_or(&EMPTY_RELATIONS)
-    }
-
-    /// The custom-aggregate registry this query's `AGG(<iri>, …)` resolves against.
-    fn aggregates(&self) -> &AggregateRegistry {
-        self.aggregates.as_deref().unwrap_or(&EMPTY_AGGREGATES)
     }
 
     /// The [`QueryOptions`] a SHACL query over `dataset` runs under.
@@ -877,8 +903,7 @@ impl AmbientScopes {
         QueryOptions {
             prebinding,
             functions,
-            property_functions: self.relations(),
-            aggregates: self.aggregates(),
+            env: &self.env,
             bnode_mint_prefix,
             // The graph THIS query is reading, handed to any expression-bodied
             // function it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a
@@ -891,23 +916,22 @@ impl AmbientScopes {
         }
     }
 
-    /// The two registries a prepared plan's admission depends on, held so a handle
-    /// can tell whether it is still running under them.
+    /// The configuration a prepared plan's admission depends on, held so a handle
+    /// can tell whether it is still running under it.
     fn plan_configuration(&self) -> PlanConfiguration {
         PlanConfiguration {
-            relations: self.relations.clone(),
-            aggregates: self.aggregates.clone(),
+            env: Arc::clone(&self.env),
         }
     }
 }
 
-/// The registries a plan was ADMITTED under, kept beside the handle that holds it.
+/// The environment a plan was ADMITTED under, kept beside the handle that holds it.
 ///
-/// A prepared plan is only valid under the property-function and custom-aggregate
-/// registries it was prepared against: the registry is what decides which predicates
-/// are relation calls and what a `Custom` aggregate IRI resolves to, so the evaluator
-/// refuses — correctly — to run a plan under a registry that disagrees with the one
-/// it was admitted under.
+/// A prepared plan is only valid under the extension environment it was prepared
+/// against: the environment is what decides which predicates are relation calls,
+/// which table such a call resolves in, and what a `Custom` aggregate IRI resolves
+/// to, so the evaluator refuses — correctly — to run a plan under an environment
+/// that disagrees with the one it was admitted under.
 ///
 /// That refusal is the reason this exists. A handle cached per worker outlives the
 /// validation that minted it, and the next validation on that worker may install
@@ -917,23 +941,36 @@ impl AmbientScopes {
 /// configuration no longer matches is re-prepared rather than run — the refusal is
 /// avoided by making the claim true again, not by suppressing it.
 ///
-/// Compared by `Arc` identity rather than by value: a registry's contents are not
-/// cheaply comparable, and the `Arc` is held here, so the pointer cannot be an
+/// Compared by `Arc` identity rather than by value: an environment's registries are
+/// not cheaply comparable, and the `Arc` is held here, so the pointer cannot be an
 /// address a freed allocation has since handed to something else. Identity is
-/// conservative in the safe direction — two structurally equal registries at
-/// different addresses re-prepare, and answer identically.
+/// conservative in the safe direction — two structurally equal environments at
+/// different addresses re-prepare, and answer identically. That direction is the
+/// only one that matters here, because the evaluator's own guard compares
+/// content-derived FINGERPRINTS rather than identity: a re-preparation this misses
+/// would still be refused there, and a re-preparation this asks for needlessly
+/// costs a parse rather than an answer.
+///
+/// Comparing the environment rather than the registries separately also closes a
+/// gap: a change to the ambient parser options, which a registry-by-registry
+/// comparison could not see at all, now re-prepares. It is conservative in the
+/// other direction too — [`current_env`] memoizes ONE environment per thread, so a
+/// nested validation that installs different registries and then restores them
+/// leaves the outer validation building a fresh environment, and the handle
+/// re-prepares although nothing it depends on changed. That is the same
+/// re-preparation the cost note below describes, reached by one more route.
 ///
 /// # What that costs, measured
 ///
 /// One preparation per CHANGE of configuration, not one in total, because
 /// [`PREPARED_EXECUTIONS`] holds a single handle per (query text, parameter list)
 /// and a re-preparation replaces whatever was there. Two validations that share a
-/// query text and carry different registry `Arc`s therefore re-parse and re-admit
+/// query text and run under different environments therefore re-parse and re-admit
 /// that query on every alternation between them, and the replaced handle takes any
 /// per-run state it had accumulated with it — including
 /// `purrdf_sparql_eval`'s prebind memo, which is rebuilt from scratch afterwards.
 /// Every `PreparedShapes` binding carries its own aggregate-registry `Arc`, so
-/// "different registry `Arc`s" is the norm between two validators rather than an
+/// "different environments" is the norm between two validators rather than an
 /// unusual configuration.
 ///
 /// Batched use never notices: a validation runs its query once per focus node, so
@@ -943,27 +980,17 @@ impl AmbientScopes {
 /// body that re-enters validation produces. The cost there is a re-parse and
 /// re-admission per run, which is strictly larger than the memo state it also
 /// discards; a cache that kept one handle per configuration rather than one per
-/// query text would close both, at the price of holding more caller registries
+/// query text would close both, at the price of holding more caller environments
 /// alive than the one this holds today.
 struct PlanConfiguration {
-    /// The property-function registry in scope when the plan was admitted.
-    relations: Option<Arc<PropertyFunctionRegistry>>,
-    /// The custom-aggregate registry in scope when the plan was admitted.
-    aggregates: Option<Arc<AggregateRegistry>>,
+    /// The extension environment in scope when the plan was admitted.
+    env: Arc<ExtensionEnv>,
 }
 
 impl PlanConfiguration {
-    /// Whether `scopes` still names the registries this plan was admitted under.
+    /// Whether `scopes` still names the environment this plan was admitted under.
     fn still_current(&self, scopes: &AmbientScopes) -> bool {
-        fn same<T>(a: Option<&Arc<T>>, b: Option<&Arc<T>>) -> bool {
-            match (a, b) {
-                (None, None) => true,
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                _ => false,
-            }
-        }
-        same(self.relations.as_ref(), scopes.relations.as_ref())
-            && same(self.aggregates.as_ref(), scopes.aggregates.as_ref())
+        Arc::ptr_eq(&self.env, &scopes.env)
     }
 }
 
@@ -1040,8 +1067,7 @@ impl ShaclExecution {
         let options = QueryOptions {
             prebinding: ShaclPrebinding::None,
             functions: scopes.functions(),
-            property_functions: scopes.relations(),
-            aggregates: scopes.aggregates(),
+            env: &scopes.env,
             bnode_mint_prefix: None,
             focus_graph: None,
             call_depth: 0,
@@ -1134,8 +1160,9 @@ pub(crate) fn parameters_are_distinct(parameters: &[&str]) -> bool {
 ///
 /// # Errors
 ///
-/// `Err(String)` if evaluation fails, if a parameter is still unbound, or if the
-/// governed receipt says no conformance verdict may be computed from this run.
+/// `Err(String)` if the extension environment cannot be derived, if evaluation
+/// fails, if a parameter is still unbound, or if the governed receipt says no
+/// conformance verdict may be computed from this run.
 fn run_bound_view<D: DatasetView + Sync + FocusGraphSource, R>(
     dataset: &D,
     handle: &mut ShaclExecution,
@@ -1143,7 +1170,7 @@ fn run_bound_view<D: DatasetView + Sync + FocusGraphSource, R>(
     bnode_mint_prefix: Option<&str>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    let scopes = AmbientScopes::snapshot();
+    let scopes = AmbientScopes::snapshot()?;
     let options = scopes.options(dataset, prebind, bnode_mint_prefix);
 
     let Some(state) = scopes.governors.as_ref() else {
@@ -1316,10 +1343,11 @@ fn own_parameters(parameters: &[&str]) -> Box<[Box<str>]> {
 ///
 /// # Errors
 ///
-/// `Err(String)` if preparation fails, or whatever `body` returns. The handle is
-/// restored on BOTH paths: dropping it on the error path would silently turn every
-/// later run of that query into a fresh preparation, a performance defect no test
-/// asserting an ANSWER could see.
+/// `Err(String)` if the extension environment cannot be derived, if preparation
+/// fails, or whatever `body` returns. The handle is restored on BOTH paths:
+/// dropping it on the error path would silently turn every later run of that query
+/// into a fresh preparation, a performance defect no test asserting an ANSWER could
+/// see.
 pub(crate) fn with_cached_execution<R>(
     query: &str,
     parameters: &[&str],
@@ -1329,7 +1357,7 @@ pub(crate) fn with_cached_execution<R>(
         parameters_are_distinct(parameters),
         "a repeated parameter name must fall back to the `&str` door"
     );
-    let scopes = AmbientScopes::snapshot();
+    let scopes = AmbientScopes::snapshot()?;
     let mut handle = checkout_execution(query, parameters, &scopes)?;
     let outcome = body(&mut handle);
     restore_execution(query, parameters, handle);
@@ -1527,7 +1555,7 @@ pub(crate) fn run_bound_construct_with_shacl_prebinding_view<
 #[must_use]
 #[derive(Debug)]
 pub struct FunctionScope {
-    previous: Option<Arc<UserFunctionRegistry>>,
+    previous: Option<Arc<BoundFunctionRegistry>>,
     /// A thread-local restoration guard must be dropped on the thread where it
     /// was created; this marker makes that invariant compile-time enforced.
     _not_send: PhantomData<Rc<()>>,
@@ -1540,9 +1568,166 @@ impl Drop for FunctionScope {
     }
 }
 
+/// The extension environment the ambient scopes describe: the relation registry a
+/// lowered call resolves against and the aggregate registry a `Custom` aggregate is
+/// admitted against, with this crate's base parser options.
+///
+/// An absent scope and the canonical empty registry are the same value here for the
+/// same reason they are the same value in `run_query_view`'s options (this crate's
+/// internal query seam) — there is one spelling of "nothing registered", not two.
+///
+/// # Errors
+///
+/// A message if a registered relation's or aggregate's declaration methods panic.
+pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
+    thread_local! {
+        static CACHED_ENV: RefCell<Option<CachedEnv>> = const { RefCell::new(None) };
+    }
+
+    let relations = current_property_functions();
+    let aggregates = current_aggregates();
+    let options = current_parser_options();
+    let hit = CACHED_ENV.with(|slot| {
+        slot.borrow().as_ref().and_then(|cached| {
+            cached.matching(relations.as_ref(), aggregates.as_ref(), options.as_ref())
+        })
+    });
+    if let Some(env) = hit {
+        return Ok(env);
+    }
+
+    // The registries are cloned out of their `Arc`s rather than shared into the
+    // environment. A clone of either copies a map of `Arc<dyn …>` trait objects and
+    // preserves its `RegistryId`, so the environment resolves every call to the
+    // identical implementations the ambient scope holds — the clone is the same
+    // registry instance for every purpose a plan's identity cares about.
+    let env = Arc::new(
+        ExtensionEnv::new(
+            options
+                .as_deref()
+                .cloned()
+                .unwrap_or_else(ParserOptions::default),
+            relations
+                .as_deref()
+                .map_or_else(|| PropertyFunctionRegistry::EMPTY, Clone::clone),
+            aggregates
+                .as_deref()
+                .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+        )
+        .map_err(|e| format!("extension environment: {e}"))?,
+    );
+    CACHED_ENV.with(|slot| {
+        *slot.borrow_mut() = Some(CachedEnv {
+            relations,
+            aggregates,
+            options,
+            env: Arc::clone(&env),
+        });
+    });
+    Ok(env)
+}
+
+/// The environment [`current_env`] last built, alongside the exact registry handles
+/// it was built from.
+///
+/// Memoized because [`run_query_view`] asks once per query and a SHACL validation
+/// issues one query per focus node, while the ambient registries change once per
+/// validation at most. Building an environment clones both registries' maps and
+/// derives the parse configuration; doing that per focus node would put a per-node
+/// cost on the exact path the plan cache's reusable key buffer exists to keep
+/// allocation-free.
+struct CachedEnv {
+    relations: Option<Arc<PropertyFunctionRegistry>>,
+    aggregates: Option<Arc<AggregateRegistry>>,
+    options: Option<Arc<ParserOptions>>,
+    env: Arc<ExtensionEnv>,
+}
+
+impl CachedEnv {
+    /// This entry's environment, if it was built from exactly these two handles.
+    ///
+    /// Compared by [`Arc::ptr_eq`] rather than by content, and that is sound
+    /// precisely BECAUSE the entry holds the `Arc`s: a live strong reference keeps
+    /// each allocation alive, so an address cannot be recycled underneath the
+    /// comparison while the entry is cached — which is the hazard that makes pointer
+    /// identity unusable in general.
+    fn matching(
+        &self,
+        relations: Option<&Arc<PropertyFunctionRegistry>>,
+        aggregates: Option<&Arc<AggregateRegistry>>,
+        options: Option<&Arc<ParserOptions>>,
+    ) -> Option<Arc<ExtensionEnv>> {
+        fn same<T>(left: Option<&Arc<T>>, right: Option<&Arc<T>>) -> bool {
+            match (left, right) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+        }
+        (same(self.relations.as_ref(), relations)
+            && same(self.aggregates.as_ref(), aggregates)
+            && same(self.options.as_ref(), options))
+        .then(|| Arc::clone(&self.env))
+    }
+}
+
+/// Bind `functions`' SPARQL bodies against the extension environment currently in
+/// force — the only route from a parsed shapes graph's declarations to something
+/// the evaluator will accept.
+///
+/// Binding is deliberately NOT done at shapes-load time. A `Shapes` value is parsed
+/// once and validated many times, each validation under whatever relation registry
+/// its caller installed; there is no single parse of a body that is correct for all
+/// of them, and the parse that used to happen at load time was correct for none of
+/// them that used a relation. It happens here, where the declarations and the
+/// environment finally meet.
+///
+/// Repeated calls under the same environment are cheap rather than wasteful: the
+/// engine's plan cache is keyed on the body text and the environment's identity, so
+/// the second bind of a body is a cache hit and reuses the first bind's prepared,
+/// feasibility-ordered plan.
+///
+/// # Errors
+///
+/// A message naming the function whose body failed to parse or to admit — a body
+/// naming a declared-but-unregistered relation IRI, or one whose relation chain no
+/// declared access mode can serve, fails HERE, once, rather than per row during
+/// evaluation.
+pub fn bind_in_current_env(
+    functions: &UserFunctionRegistry,
+) -> Result<Arc<BoundFunctionRegistry>, String> {
+    // Nothing declared, nothing to bind — and an empty bound registry is compatible
+    // with every environment, because it bound no body and so cannot have bound one
+    // against the wrong one (see `BoundFunctionRegistry::EMPTY`).
+    //
+    // Taken BEFORE the environment is built, not after, and that is the whole point
+    // of the exit: constructing an environment computes two registry fingerprints
+    // and a content digest, and a shapes graph that declares no `sh:SPARQLFunction`
+    // — which is most of them — must not pay for a seam it does not use. One shared
+    // value rather than a fresh allocation per call, for the same reason every other
+    // canonical empty registry in this workspace is shared.
+    static EMPTY: LazyLock<Arc<BoundFunctionRegistry>> =
+        LazyLock::new(|| Arc::new(BoundFunctionRegistry::EMPTY));
+    if functions.is_empty() {
+        return Ok(Arc::clone(&EMPTY));
+    }
+    let env = current_env()?;
+    SPARQL_ENGINE
+        .with(|engine| engine.bind_functions(functions.clone(), &env))
+        .map(Arc::new)
+        .map_err(|e| e.to_string())
+}
+
 /// Install `registry` as the current SHACL-AF function table, returning a guard that
 /// restores the previous table when dropped.
-pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScope {
+///
+/// Takes a [`BoundFunctionRegistry`], not a [`UserFunctionRegistry`]: a function
+/// body is SPARQL, so which of its predicate IRIs are calls to registered relations
+/// is decided by the extension environment in force, and a registry that has not
+/// been bound to one has no answer to that question. Requiring the bound form here
+/// is what makes "installed but never bound" unrepresentable rather than a runtime
+/// check somebody has to remember. Use [`bind_in_current_env`] to get one.
+pub fn enter_function_scope(registry: Arc<BoundFunctionRegistry>) -> FunctionScope {
     let previous = CURRENT_FUNCTIONS.with(|slot| slot.borrow_mut().replace(registry));
     FunctionScope {
         previous,
@@ -1619,6 +1804,58 @@ pub fn enter_aggregate_scope(registry: Arc<AggregateRegistry>) -> AggregateScope
         previous,
         _not_send: PhantomData,
     }
+}
+
+/// An RAII scope that installs `options` as the base parser options for the duration
+/// of a validation, restoring the previous value on drop (so nested validations
+/// compose). The exact twin of [`AggregateScope`].
+#[must_use]
+#[derive(Debug)]
+pub struct ParserOptionsScope {
+    previous: Option<Arc<ParserOptions>>,
+    /// A thread-local restoration guard must be dropped on the thread where it
+    /// was created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for ParserOptionsScope {
+    fn drop(&mut self) {
+        let restore = self.previous.take();
+        CURRENT_PARSER_OPTIONS.with(|slot| *slot.borrow_mut() = restore);
+    }
+}
+
+/// Install `options` as the base parser options every SHACL SPARQL parse in this
+/// validation reads, returning a guard that restores the previous value when dropped.
+///
+/// This is how a host declares a NAMESPACE — of relations
+/// ([`ParserOptions::property_fn_namespaces`]) or of extension functions
+/// ([`ParserOptions::extension_fn_namespaces`]) — to the SHACL surface. Registering a
+/// relation is enough to have its exact IRI recognized; declaring a namespace is how a
+/// host says "every IRI under this prefix is a call, and one I have not registered is
+/// a hard error rather than a silent data triple".
+///
+/// The registry-derived exact IRIs and these caller-declared namespaces are UNIONED,
+/// never conflated — see
+/// [`ExtensionEnv::new`](purrdf_sparql_eval::ExtensionEnv::new) for why folding a
+/// registered IRI in as a prefix would hijack an unrelated, merely-same-prefixed data
+/// predicate.
+pub fn enter_parser_options_scope(options: Arc<ParserOptions>) -> ParserOptionsScope {
+    let previous = CURRENT_PARSER_OPTIONS.with(|slot| slot.borrow_mut().replace(options));
+    ParserOptionsScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+/// The base parser options installed on this thread, if a validation installed any.
+///
+/// An absent scope and [`ParserOptions::default`] are the same value for every
+/// purpose a parse cares about — neither declares a namespace — so there is one
+/// spelling of "nothing declared, not two.
+#[must_use]
+pub fn current_parser_options() -> Option<Arc<ParserOptions>> {
+    CURRENT_PARSER_OPTIONS.with(|slot| slot.borrow().clone())
 }
 
 /// The custom-aggregate table installed on this thread, if a validation installed

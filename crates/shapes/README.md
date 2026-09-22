@@ -11,7 +11,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-shapes.svg)](https://crates.io/crates/purrdf-shapes)
 [![docs.rs](https://docs.rs/purrdf-shapes/badge.svg)](https://docs.rs/purrdf-shapes)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 > **An LLM output is a claim, not a truth.**
@@ -776,8 +776,6 @@ Related crates:
 
 ---
 
-## License and copyright
-
 ## Reusing a parsed shapes graph
 
 `Shapes` retains the frozen `Arc<RdfDataset>` it was parsed from, and
@@ -789,11 +787,14 @@ The accessor returns a borrow rather than a clone so the caller decides whether
 to pay for retention; `Arc::clone(shapes.dataset())` keeps the dataset alive
 independently of the `Shapes` value.
 
+## License and copyright
+
 Copyright © 2026 Blackcat Informatics® Inc.
 
 This crate is licensed under **MIT OR Apache-2.0 OR MulanPSL-2.0** — see
-[`LICENSE-MIT`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
-and
+[`LICENSE-MIT`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT),
 [`LICENSE-APACHE`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+and
+[`LICENSE-MULAN`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
 in the repository root. Separate proprietary/commercial terms are available;
 contact `licensing@blackcatinformatics.ca`.

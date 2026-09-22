@@ -170,6 +170,52 @@ def test_a_relation_iri_with_no_relation_configured_answers_the_graphs_own_tripl
     assert _pairs(store.query(SELECT_MEMBERS)) == {_DROPPED_ROW}
 
 
+FN_NS = "http://example.org/fn/"
+UNKNOWN_CALL = f"ASK {{ FILTER(<{FN_NS}nope>(1)) }}"
+PARSE_CODE = "native-sparql-query-parse"
+
+
+def test_prepare_honours_the_declared_extension_namespace_and_still_admits_a_query_without_it() -> (
+    None
+):
+    """`extension_namespaces` is PARSE configuration, and `prepare` is a parse.
+
+    The relation tests above cover the registry axis; this covers the other half of
+    what decides what a query text MEANS. A declared extension namespace buys a
+    stricter, earlier reading — an unknown local name in that namespace becomes a
+    parse error instead of an unevaluable function — and that reading has to reach
+    `prepare`, which is where the parse happens, or the keyword is accepted and
+    dropped.
+
+    The two diagnostic CODES are the whole oracle, and they are why this can fail:
+    both readings raise `ValueError` carrying a message, so "it raised" is satisfied
+    equally by a dropped keyword. Only the code says which reading ran. This mirrors
+    `test_engine_configuration.py`'s oracle for the same axis on `Store.query`, so
+    the claim is that the two doors read a query text the same way — not that this
+    door raises something.
+    """
+    store = purrdf.Store()
+
+    # Undeclared: the IRI is an ordinary custom function, so the text PARSES and
+    # `prepare` admits it. (Evaluation is what would object; that is `query`'s
+    # graded behaviour and is unchanged.)
+    store.prepare(UNKNOWN_CALL)
+
+    # Declared: the same text is refused at PARSE time, by name.
+    with pytest.raises(ValueError) as refused:
+        store.prepare(UNKNOWN_CALL, extension_namespaces=[FN_NS])
+    message = str(refused.value)
+    assert PARSE_CODE in message, (
+        f"a declared namespace must move the refusal to parse time: {message}"
+    )
+    assert f"{FN_NS}nope" in message, "…and the refusal must name the function"
+
+    # The neighbouring VALID case: declaring the namespace must not refuse a query
+    # that never mentions it — and the handle must still run and answer.
+    prepared = store.prepare("ASK { ?s ?p ?o }", extension_namespaces=[FN_NS])
+    assert bool(prepared.run()) is False
+
+
 def _first(solutions) -> purrdf.NamedNode:
     """The first column of the single solution in `solutions`."""
     assert len(solutions) == 1, f"expected exactly one solution, got {len(solutions)}"

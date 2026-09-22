@@ -32,15 +32,16 @@ use std::sync::Arc;
 
 use purrdf_core::TermValue;
 use purrdf_sparql_eval::{
-    AggregateRegistry, InternedOutcome, NativeSparqlEngine, PreparedExecution,
-    PropertyFunctionRegistry, StandpointPredicates,
+    AggregateRegistry, ExtensionEnv, InternedOutcome, NativeSparqlEngine, ParserOptions,
+    PreparedExecution, PropertyFunctionRegistry, StandpointPredicates,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use super::PyStore;
-use super::query::{borrowed_options, materialize_results};
+use super::env::extension_env;
+use super::query::materialize_results;
 use super::term::{extract_term, rdf_term_to_value};
 
 /// A SPARQL query parsed and admitted once, run many times with different bindings.
@@ -60,26 +61,32 @@ pub(crate) struct PyPreparedQuery {
     /// store has advanced since `prepare` would make that use case impossible,
     /// which would be satisfying the feature by refusing it.
     store: Py<PyStore>,
-    /// The property-function registry `execution`'s plan was admitted under —
-    /// `None` when `prepare` declared none.
+    /// The extension environment `execution`'s plan was admitted under: the parse
+    /// configuration `Store.prepare`'s `extension_namespaces` /
+    /// `property_fn_namespaces` declared, the relation registry its `relations` /
+    /// `relations_from_graph` / `path_relations` built, and the custom-aggregate
+    /// registry its `aggregate_namespace` built.
     ///
     /// **Load-bearing, not incidental.** `execution` was parsed and admitted against
-    /// this exact registry's identity (`Store.prepare`'s `relations` /
-    /// `relations_from_graph` / `path_relations`): a plan admitted with no registry
-    /// in scope already lowered a registered relation's predicate to an ORDINARY
-    /// triple pattern, so [`run`](Self::run) must hand the engine this SAME registry
-    /// back rather than, say, `PropertyFunctionRegistry::EMPTY` — otherwise the
-    /// engine's own `check_plan_matches_relations` guard (which compares a
-    /// content-derived fingerprint, not object identity) refuses the run rather than
-    /// silently answering short.
-    property_functions: Option<PropertyFunctionRegistry>,
-    /// The custom-aggregate registry `execution`'s plan was admitted under — the
-    /// exact twin of [`Self::property_functions`], for a `Custom` aggregate call
-    /// admitted (its arity checked) against this registry at prepare time.
-    aggregates: Option<AggregateRegistry>,
+    /// this exact environment: a plan admitted with no relation registry in scope
+    /// already lowered a registered relation's predicate to an ORDINARY triple
+    /// pattern, so [`run`](Self::run) must hand the engine this SAME environment back
+    /// rather than, say, `ExtensionEnv::empty()` — otherwise the engine's own
+    /// `check_prepared_registries_unchanged` guard (which compares content-derived
+    /// fingerprints, not object identity) refuses the run rather than silently
+    /// answering short.
+    ///
+    /// It is the ENVIRONMENT that is held, not the registries it was assembled from,
+    /// and that is what makes "prepare and run cannot disagree" a fact about this
+    /// field rather than a resemblance between two call sites: there is one value,
+    /// derived once by [`extension_env`], and both the admission and every run read
+    /// it. A second derivation at run time would be a second answer to "what does
+    /// this query text mean", which is the shape of the defect the environment type
+    /// exists to remove.
+    env: ExtensionEnv,
     /// The `(according_to, sharpens)` predicate table `Store.prepare` was given.
     ///
-    /// Unlike the two registries above, this is not *admission* configuration — it is
+    /// Unlike the environment above, this is not *admission* configuration — it is
     /// read at EVALUATION time, off the engine, by `heldIn` and loss-aware
     /// `CONSTRUCT` (see [`purrdf_sparql_eval::NativeSparqlEngine::with_standpoint_predicates`]).
     /// [`run`](Self::run) builds a fresh engine per call (see its own doc comment for
@@ -148,11 +155,16 @@ impl PyPreparedQuery {
             store.freeze_snapshot(py)?
         };
 
-        // Built from direct field accesses (not through a `&self` method) so this
-        // borrow of `property_functions` / `aggregates` stays disjoint from the
-        // `&mut self.execution` borrow just below — both are held live across the
-        // `py.detach` call.
-        let options = borrowed_options(self.property_functions.as_ref(), self.aggregates.as_ref());
+        // Built from a direct field access (not through a `&self` method) so this
+        // borrow of `env` stays disjoint from the `&mut self.execution` borrow just
+        // below — both are held live across the `py.detach` call.
+        //
+        // The environment is the one `prepare` admitted this plan under, read back
+        // rather than re-derived: see [`PyPreparedQuery::env`].
+        let options = purrdf_sparql_eval::QueryOptions {
+            env: &self.env,
+            ..purrdf_sparql_eval::QueryOptions::EMPTY
+        };
         let standpoint_predicates = self.standpoint_predicates.clone();
         let execution = &mut self.execution;
         // The engine is built HERE rather than held, because it is deliberately
@@ -163,11 +175,10 @@ impl PyPreparedQuery {
         // up is the join-order memo between runs, which is a plan-shaped hint rather
         // than the plan.
         //
-        // `options` carries the SAME property-function and custom-aggregate
-        // registries `execution`'s plan was admitted under (see
-        // `PyPreparedQuery::property_functions` / `::aggregates`); running under a
-        // different pair is what the engine's own `check_plan_matches_relations`
-        // guard inside `execute` refuses. `standpoint_predicates` is reapplied to
+        // `options` carries the SAME extension environment `execution`'s plan was
+        // admitted under (see `PyPreparedQuery::env`); running under a different one
+        // is what the engine's own `check_prepared_registries_unchanged` guard
+        // inside `execute` refuses. `standpoint_predicates` is reapplied to
         // this fresh engine for the same reason — it is read at evaluation time, off
         // the engine, not admitted into the plan.
         let result = py.detach(move || {
@@ -224,31 +235,54 @@ fn materialize_interned<D: purrdf_core::DatasetView + Sync>(
     }
 }
 
-/// Build a prepared query admitted against `property_functions` / `aggregates` —
-/// the SAME registries [`PyPreparedQuery::run`] must later evaluate under, which is
-/// why both are stored on the returned object rather than dropped once admission
-/// succeeds. `store` is the owning `Store`, held so `run` can re-read its CURRENT
-/// contents on every call rather than a one-time snapshot (see
-/// [`PyPreparedQuery::store`]).
+/// Build a prepared query admitted against the environment `parser_options`,
+/// `property_functions` and `aggregates` describe — the SAME environment
+/// [`PyPreparedQuery::run`] must later evaluate under, which is why it is stored on
+/// the returned object rather than dropped once admission succeeds. `store` is the
+/// owning `Store`, held so `run` can re-read its CURRENT contents on every call
+/// rather than a one-time snapshot (see [`PyPreparedQuery::store`]).
+///
+/// The environment is assembled by [`extension_env`] — the one place on this seam
+/// where a caller's three optional configuration axes become the value a query text
+/// is interpreted relative to, shared with `Store.query`, `MutableDataset`'s query
+/// and update entries, and the governed doors. Admission and every run read the ONE
+/// value this builds, so there is no second assembly for them to drift apart on.
+///
+/// # Errors
+///
+/// A `ValueError` if the environment cannot be derived, or if the query does not
+/// parse or admit under it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every configuration axis `Store.prepare` accepts is named explicitly"
+)]
 pub(super) fn prepare(
     store: Py<PyStore>,
     engine: &NativeSparqlEngine,
     query: &str,
     parameters: &[String],
-    property_functions: Option<PropertyFunctionRegistry>,
-    aggregates: Option<AggregateRegistry>,
+    parser_options: ParserOptions,
+    property_functions: Option<&PropertyFunctionRegistry>,
+    aggregates: Option<&AggregateRegistry>,
     standpoint_predicates: Option<(String, String)>,
 ) -> PyResult<PyPreparedQuery> {
     let borrowed: Vec<&str> = parameters.iter().map(String::as_str).collect();
-    let options = borrowed_options(property_functions.as_ref(), aggregates.as_ref());
+    let env = extension_env(parser_options, property_functions, aggregates)?;
     let execution = engine
-        .prepare_execution(query, None, &borrowed, options)
+        .prepare_execution(
+            query,
+            None,
+            &borrowed,
+            purrdf_sparql_eval::QueryOptions {
+                env: &env,
+                ..purrdf_sparql_eval::QueryOptions::EMPTY
+            },
+        )
         .map_err(|e| PyValueError::new_err(format!("query preparation failed: {e}")))?;
     Ok(PyPreparedQuery {
         execution,
         store,
-        property_functions,
-        aggregates,
+        env,
         standpoint_predicates,
     })
 }

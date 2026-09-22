@@ -65,15 +65,21 @@ pub(crate) fn run(
     // `QueryOptions::EMPTY` for every axis but `aggregates` and `property_functions`: the
     // CLI wires no SHACL-AF function table.
     // `static`, not a bare `&AggregateRegistry::EMPTY` temporary: `query_options` below
-    // outlives this statement, and a `HashMap`-backed registry's drop glue blocks Rust's
-    // rvalue static promotion for a reference that must live that long.
-    static EMPTY_AGGREGATES: purrdf_sparql_eval::AggregateRegistry =
-        purrdf_sparql_eval::AggregateRegistry::EMPTY;
-    static EMPTY_RELATIONS: purrdf_sparql_eval::PropertyFunctionRegistry =
-        purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY;
+    // outlives this statement, so the environment is a named local rather than a
+    // temporary: it owns the derived parse configuration the options borrow.
+    let env = purrdf_sparql_eval::ExtensionEnv::over(
+        relations.as_ref().map_or_else(
+            || purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY,
+            Clone::clone,
+        ),
+        aggregates.as_ref().map_or_else(
+            || purrdf_sparql_eval::AggregateRegistry::EMPTY,
+            Clone::clone,
+        ),
+    )
+    .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
     let query_options = QueryOptions {
-        aggregates: aggregates.as_ref().unwrap_or(&EMPTY_AGGREGATES),
-        property_functions: relations.as_ref().unwrap_or(&EMPTY_RELATIONS),
+        env: &env,
         ..QueryOptions::EMPTY
     };
 

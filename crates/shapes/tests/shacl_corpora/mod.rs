@@ -47,6 +47,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf::RdfDataset;
 use purrdf_shapes::data::{GraphFilter, native_quads};
@@ -77,7 +78,7 @@ pub(crate) const W3C_TOTAL_CASES: usize = 129;
 /// Asserted rather than merely non-empty so a removed or renamed corpus
 /// directory fails fast instead of silently reducing coverage. Bump this when
 /// adding a case.
-pub(crate) const FIRST_PARTY_TOTAL_CASES: usize = 70;
+pub(crate) const FIRST_PARTY_TOTAL_CASES: usize = 71;
 
 // ── Vocabulary ────────────────────────────────────────────────────────────────
 
@@ -536,4 +537,91 @@ pub(crate) fn first_party_cases() -> Vec<FirstPartyCase> {
             expected_report_path: dir.join("expected-report.nt"),
         })
         .collect()
+}
+
+// ── The corpus relation ───────────────────────────────────────────────────────
+
+/// The ONE relation IRI the first-party corpus may reach, registered by every
+/// harness that grades the corpus.
+///
+/// Its own namespace, distinct from the `example.org/ns#` the cases use for data, so
+/// no case can name it by accident and every case that names it means to.
+pub(crate) const CORPUS_REL: &str = "http://example.org/corpus/rel/flagged";
+
+/// The one row the corpus relation answers with: `ex:flagged` is flagged.
+///
+/// This is the only place that fact exists. No case's `data.nt` mentions
+/// [`CORPUS_REL`], so a case whose expected report depends on this row is a case that
+/// can only pass if the call really resolved — which is what makes a relation case
+/// gradeable in a frozen corpus at all. A body whose call was lowered to an ordinary
+/// triple pattern would match nothing and score every focus node the same.
+#[derive(Debug)]
+pub(crate) struct CorpusRelation {
+    modes: [purrdf_sparql_eval::BindingPattern; 1],
+    opens: Arc<AtomicU64>,
+}
+
+#[derive(Debug)]
+struct CorpusCursor {
+    rows: std::vec::IntoIter<purrdf_sparql_eval::PfRow>,
+}
+
+impl purrdf_sparql_eval::PfCursor for CorpusCursor {
+    fn next(&mut self) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+        Ok(self.rows.next())
+    }
+}
+
+impl purrdf_sparql_eval::PropertyFunction for CorpusRelation {
+    fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+        purrdf_sparql_eval::Volatility::Stable
+    }
+
+    fn arity(&self) -> purrdf_sparql_eval::PfArity {
+        purrdf_sparql_eval::PfArity::new(1, 1)
+    }
+
+    fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+        &self.modes
+    }
+
+    fn rows_per_invocation(&self, _mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+        1
+    }
+
+    fn open(
+        &self,
+        _args: &purrdf_sparql_eval::PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+        self.opens.fetch_add(1, Ordering::Relaxed);
+        let rows = vec![vec![
+            purrdf_core::TermValue::iri("http://example.org/ns#flagged"),
+            purrdf_core::TermValue::iri("http://example.org/ns#yes"),
+        ]];
+        Ok(Box::new(CorpusCursor {
+            rows: rows.into_iter(),
+        }))
+    }
+}
+
+/// The corpus relation registry, plus the counter that says whether it was reached.
+///
+/// Every harness grading the corpus installs this, so the three of them cannot be
+/// validating the same cases under different environments — which they were, before a
+/// case existed that could tell.
+pub(crate) fn corpus_relations() -> (
+    Arc<purrdf_sparql_eval::PropertyFunctionRegistry>,
+    Arc<AtomicU64>,
+) {
+    let opens = Arc::new(AtomicU64::new(0));
+    let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::new();
+    registry.register(
+        CORPUS_REL.to_owned(),
+        Arc::new(CorpusRelation {
+            modes: [purrdf_sparql_eval::BindingPattern::from_code("ff")],
+            opens: Arc::clone(&opens),
+        }),
+    );
+    (Arc::new(registry), opens)
 }

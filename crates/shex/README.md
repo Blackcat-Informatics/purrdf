@@ -13,7 +13,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-shex.svg)](https://crates.io/crates/purrdf-shex)
 [![docs.rs](https://docs.rs/purrdf-shex/badge.svg)](https://docs.rs/purrdf-shex)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 PurRDF's native **ShEx 2.1** engine: the schema layer and the shape-map
@@ -91,9 +91,8 @@ follows the workspace `rust-version` (currently 1.96, stable toolchain only).
 
 ## License
 
-Licensed under either of
+Licensed under any one of the following, at your option:
 
-- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
 - [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
-
-at your option.
+- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)

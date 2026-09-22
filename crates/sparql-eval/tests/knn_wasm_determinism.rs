@@ -59,8 +59,8 @@ use purrdf_core::{
     TermValue, VectorDtype,
 };
 use purrdf_sparql_eval::{
-    EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, NativeSparqlEngine, PropertyFunctionRegistry,
-    QueryOptions,
+    EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, KnnGuard, NativeSparqlEngine,
+    PropertyFunctionRegistry, QueryOptions,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -224,6 +224,8 @@ fn answer() -> Vec<(String, String)> {
     builder.push_quad(s, p, o, None);
     let dataset = builder.freeze().expect("freeze fixture");
 
+    let env =
+        ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly");
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
             &dataset,
@@ -233,7 +235,7 @@ fn answer() -> Vec<(String, String)> {
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &relations,
+                env: &env,
                 ..QueryOptions::EMPTY
             },
         )

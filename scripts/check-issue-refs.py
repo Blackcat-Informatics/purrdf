@@ -656,7 +656,7 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     for rel in sorted(part for part in out.split("\0") if part):
         suffix = Path(rel).suffix
         if suffix not in (
-            ".rs", ".md", ".toml", ".py", ".pyi", ".yaml", ".yml", *RDF_SUFFIXES
+            ".rs", ".md", ".toml", ".py", ".pyi", ".sh", ".yaml", ".yml", *RDF_SUFFIXES
         ):
             continue
         if _is_vendored_payload(rel):
@@ -678,6 +678,15 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
             # `crates/*/corpus/` holds the first-party conformance corpora, whose
             # comments, `mf:name` strings and fixture IRIs were unguarded entirely.
             if not _is_first_party_rdf_text(segments):
+                continue
+        elif suffix == ".sh":
+            # `.sh` WAS NOT SCANNED AT ALL, and the three benchmark lanes plus every
+            # release and hygiene shell script live here. The omission was invisible in
+            # the worst way: a change consisting almost entirely of shell prose reported
+            # this gate clean, and a commit message then credited the registry with
+            # absorbing two phrases the registry had never been shown. Same scope as
+            # `.py` -- these are the maintenance scripts this lint most wants to cover.
+            if top not in PY_SCAN_DIRS:
                 continue
         elif suffix in (".py", ".pyi"):
             # `.pyi` is SHIPPED: it is the PEP 561 stub inside every published wheel,
@@ -1287,6 +1296,103 @@ def scan_python(src: str) -> list[tuple[int, int, str, str, str]]:
     )
 
 
+def shell_comments(src: str) -> list[tuple[int, int, str]]:
+    """Extract shell ``#`` comments as ``(start_line, start_col, text)``.
+
+    A ``#`` opens a comment at line start or after whitespace, and not inside a quoted
+    word. ``${#var}`` is safe without a special case: the ``#`` there follows ``{``.
+
+    QUOTE STATE IS PER LINE, deliberately, and the benchmark lanes are why. Each of them
+    passes a multi-line Python program as one single-quoted argument to ``python3 -c``,
+    and that program carries its own ``#`` comments -- real first-party prose, several
+    paragraphs of it. A lexer tracking quotes across lines would treat every one of those
+    as string data and scan none of them, which reproduces the omission this whole
+    scanner exists to fix, one level down.
+
+    The stated cost used to be "a ``#`` inside a single-line quoted string being read as
+    a comment", and that does not happen: quote state IS tracked within a line, so
+    ``echo "see # 28"`` yields no comment (measured). The real cost is the CONTINUATION
+    line of a multi-line quoted string, where the opening quote is out of view -- and
+    that is the mechanism making embedded-Python scanning work, not a defect to remove.
+    A false positive there needs the text to carry a token or a process phrase, and the
+    hit is reported with its line; the opposite failure, a surface inspected by nothing,
+    is the one that stayed hidden through this whole change.
+    """
+    comments: list[tuple[int, int, str]] = []
+
+    for line_no, line in enumerate(src.splitlines(), start=1):
+        n = len(line)
+        i = 0
+        quote: str | None = None
+        # The quotes a backtick substitution interrupted, innermost last.
+        pending: list[str | None] = []
+        while i < n:
+            c = line[i]
+            if quote == "'":
+                # Single quotes take no escapes in shell: the next `'` always closes.
+                if c == "'":
+                    quote = None
+                i += 1
+                continue
+            if quote == '"':
+                if c == "\\":
+                    i += 2
+                    continue
+                # A BACKTICK INSIDE DOUBLE QUOTES OPENS COMMAND SUBSTITUTION, and code in
+                # that substitution can carry a comment. A STACK, not a toggle: the first
+                # attempt set `quote = None` and nothing restored the double quote at the
+                # CLOSING backtick, so every later quote on the line toggled the wrong way.
+                # That produced a false negative (`echo "A`date`B"  # fixes #NNN` became
+                # invisible -- the exact hiding place this scanner exists to close) and a
+                # false positive (`echo "A`date` # data"` reported a comment that is not
+                # one). Both demonstrated; neither was caught, because the neighbour that
+                # would have caught them was claimed in a commit message and never written.
+                if c == "`":
+                    pending.append(quote)
+                    quote = None
+                    i += 1
+                    continue
+                if c == '"':
+                    quote = None
+                i += 1
+                continue
+            # AN ESCAPE AT TOP LEVEL. The quoted arms handled `\\` and this one did not, so
+            # `echo \\" ok  # tracked at <URL>` set the quote state for the rest of the line
+            # and the real comment was never reached -- and inside a substitution the phantom
+            # quote inverted `pending`, so the closing backtick opened a new one. Four cases
+            # were hidden; all four are now reported.
+            if c == "\\":
+                i += 2
+                continue
+            if c == "`" and pending:
+                # The closing backtick of a substitution that began inside a quote.
+                quote = pending.pop()
+                i += 1
+                continue
+            if c in "\"'":
+                quote = c
+                i += 1
+                continue
+            # A `#` opens a comment at the start of a WORD, which is more than "after
+            # whitespace": `;#`, `|#`, `&&#`, `(#`, `<#` and a backtick all open one --
+            # the backtick was missed when this list was first written down and presented
+            # as complete. Verified against bash 5.3. No occurrence in the tree today,
+            # so this was a latent false-negative surface rather than a live miss; but the
+            # docstring stated the wrong law, and a scanner is only as good as its lexing.
+            # (YAML's own scanner below keeps "after whitespace", which IS its rule.)
+            if c == "#" and (i == 0 or line[i - 1] in " \t;|&()<>`"):
+                comments.append((line_no, i + 1, line[i:]))
+                break
+            i += 1
+
+    return comments
+
+
+def scan_shell(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in shell source text."""
+    return scan_comments(shell_comments(src))
+
+
 def yaml_comments(src: str) -> list[tuple[int, int, str]]:
     """Extract YAML ``#`` comments as ``(start_line, start_col, text)``.
 
@@ -1459,6 +1565,11 @@ def scan_source(suffix: str, src: str) -> list[tuple[int, int, str, str, str]]:
         # `.pyi` is SHIPPED (the PEP 561 stub inside every published wheel), which is
         # why it is enumerated at all.
         return scan_python(src)
+    if suffix == ".sh":
+        # Shell was enumerated by nothing at all, in a repository whose three benchmark
+        # lanes, release scripts and hygiene scripts are shell. See `shell_comments` for
+        # why its quote state is per line rather than per file.
+        return scan_shell(src)
     if suffix in (".yaml", ".yml"):
         return scan_yaml(src)
     raise SystemExit(
@@ -1527,6 +1638,68 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         ".ttl",
         f"<{_SHIPPED_URL}> a ex:Case .\n",
         _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # THE HOLE THAT SHIPPED FOR SHELL: `.sh` was enumerated by nothing, in a
+        # repository whose three benchmark lanes, release scripts and hygiene scripts
+        # are all shell. A change consisting almost entirely of shell prose reported
+        # this gate clean over every line of it.
+        "an issue URL in a shell comment",
+        ".sh",
+        f"set -euo pipefail\n# tracked at {_SHIPPED_URL}\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # And inside an embedded Python block, which is how these lanes are written: a
+        # multi-line program passed as ONE single-quoted argument. A lexer tracking
+        # quote state across lines reads all of that as string data and scans none of
+        # it -- the same omission one level down.
+        "an issue URL in a comment inside an embedded python3 -c program",
+        ".sh",
+        "python3 -c '\nimport sys\n# tracked at " + _SHIPPED_URL + "\nprint(1)\n'\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # Inside a backtick command substitution, itself inside double quotes. The
+        # word-start list was written down and presented as complete and had missed this;
+        # adding the backtick to that list changed nothing, because the lexer never left
+        # the quoted state.
+        "an issue URL in a comment inside a backtick substitution",
+        ".sh",
+        'echo "A`# tracked at ' + _SHIPPED_URL + '`B"\n',
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # THE NEIGHBOUR THE LAST COMMIT CLAIMED AND NEVER WROTE, which is exactly why the
+        # backtick fix shipped inverting quote parity for the rest of the line. A comment
+        # AFTER a closed substitution must still be seen.
+        "an issue URL after a closed backtick substitution on the same line",
+        ".sh",
+        'echo "A`date`B"  # tracked at ' + _SHIPPED_URL + "\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # And its mirror: a `#` that is DATA inside the quoted string must stay silent.
+        # The first backtick fix reported this as a comment.
+        "a hash inside a quoted string following a substitution",
+        ".sh",
+        'echo "A`date` # this is data, not a comment"\n',
+        None,
+    ),
+    (
+        # A single-quoted `#` is data too, and no case covered it.
+        "a hash inside a single-quoted string",
+        ".sh",
+        "echo 'a # b'\n",
+        None,
+    ),
+    (
+        # THE NEIGHBOUR: ordinary shell must not be flagged. `${#array[@]}` is a length,
+        # a `#` inside a quoted word is data, and a URL with no issue path is just a URL.
+        "ordinary shell with a length expansion, a quoted hash and a plain URL",
+        ".sh",
+        'n="${#files[@]}"\nsep="#"\necho "see https://example.org/docs/guide"\n',
+        None,
     ),
     (
         "an issue URL in a SPARQL comment",

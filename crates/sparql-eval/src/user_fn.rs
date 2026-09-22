@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Dynamic, host-injected user functions — of two kinds under one IRI namespace.
+//! Dynamic, host-injected user functions â of two kinds under one IRI namespace.
 //!
 //! A call-position IRI that is under no configured extension-function namespace
 //! (so not the closed, parse-time-resolved `PurrdfFn` set) is lowered by the
 //! parser to [`Function::Custom`](purrdf_sparql_algebra::Function::Custom) and
-//! resolved at eval time against a caller-injected [`UserFunctionRegistry`] — the
+//! resolved at eval time against a caller-injected [`UserFunctionRegistry`] â the
 //! open counterpart to `PurrdfFn` dispatch. The registry holds two independent
 //! kinds keyed by IRI, hard-failing on a cross-kind collision so an IRI is
 //! unambiguously one kind or the other:
 //!
-//! - **SHACL-AF SPARQL-bodied** ([`UserFunction`]) — declared by a shapes graph as
+//! - **SHACL-AF SPARQL-bodied** ([`UserFunction`]) â declared by a shapes graph as
 //!   an IRI typed `sh:SPARQLFunction` with ordered `sh:parameter`s, an optional
 //!   `sh:returnType`, and a `sh:select`/`sh:ask` body. This kind is pure data
 //!   (parsed body + parameter metadata); executing a call binds the arguments to
@@ -21,7 +21,7 @@
 //!   free of engine coupling.
 //!
 //! - **Native (host-Rust closure)** ([`NativeFunction`], registered via
-//!   [`UserFunctionRegistry::register_native`]) — a `Send + Sync` closure over the
+//!   [`UserFunctionRegistry::register_native`]) â a `Send + Sync` closure over the
 //!   already-evaluated argument values (see [`NativeFnBody`]) for scoring
 //!   predicates whose bodies cannot be expressed in SPARQL (e.g. an external-index
 //!   read). It carries a declared [`Arity`] (fail-fast checked before the closure
@@ -30,22 +30,22 @@
 //!   [`EvalCtx`] and so cannot re-enter the evaluator.
 //!
 //! - **Dataset-aware (expression-bodied)** ([`ExprFunction`], registered via
-//!   [`UserFunctionRegistry::register_expr`]) — a `Send + Sync` closure that, unlike
+//!   [`UserFunctionRegistry::register_expr`]) â a `Send + Sync` closure that, unlike
 //!   the native kind, is handed the GRAPH the calling query is running over plus the
 //!   current call depth, through [`ExprFnCall`]. It exists for the SHACL 1.2 SPARQL
-//!   Extensions §7 "Declaring SPARQL Functions based on Node Expressions" seam, where
+//!   Extensions Â§7 "Declaring SPARQL Functions based on Node Expressions" seam, where
 //!   the body is a node expression evaluated against a focus graph rather than a
 //!   SPARQL query. See [`ExprFnCall::focus_graph`] for why the graph is a concrete
 //!   [`Arc<RdfDataset>`] rather than the context's own `D: DatasetView` (which is not
-//!   object-safe — it carries an associated `Id` type), and `eval_expr_function` for
+//!   object-safe â it carries an associated `Id` type), and `eval_expr_function` for
 //!   the re-entrancy bound.
 //!
 //! # One error channel across all three kinds
 //!
 //! Every kind reports "this call has no value for this solution" the same way:
-//! `Ok(None)`, the SPARQL expression error of §17.2. `Err` is reserved for a hard
+//! `Ok(None)`, the SPARQL expression error of Â§17.2. `Err` is reserved for a hard
 //! failure that aborts the whole query. That uniformity is load-bearing rather than
-//! tidy — a seam without the `Ok(None)` exit forces a per-solution domain refusal
+//! tidy â a seam without the `Ok(None)` exit forces a per-solution domain refusal
 //! (a malformed literal, an out-of-range index, a type mismatch) onto `Err`, which
 //! aborts a query the specification says should merely drop a row or leave a
 //! variable unbound. See [`NativeFnBody`] for the specification text and for why
@@ -56,21 +56,21 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
-use purrdf_sparql_algebra::Query;
 
 use crate::DetHashMap;
 use crate::error::EvalError;
 use crate::eval::{
     EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
 };
-use crate::registry_id::append_framed_part;
+use crate::registry_id::{RegistryId, append_framed_part};
+use crate::witness::RelationWitness;
 
 /// The result form of a function body: a `sh:select` returns the first projected
 /// value of the first solution; a `sh:ask` returns an `xsd:boolean`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserFnBody {
     /// A `sh:select` body: the return value is the first projected variable of the
-    /// first solution row (empty result ⇒ no value).
+    /// first solution row (empty result â no value).
     Select,
     /// A `sh:ask` body: the return value is the `xsd:boolean` of the ASK.
     Ask,
@@ -147,16 +147,39 @@ pub struct UserFnParam {
 }
 
 /// A declared SHACL-AF SPARQL-based function: its ordered parameters, the count of
-/// leading required (non-`sh:optional`) parameters, the parsed body, and the
+/// leading required (non-`sh:optional`) parameters, the body's **text**, and the
 /// return-value constraint.
+///
+/// # Why the body is text and not algebra
+///
+/// A body is SPARQL like any other SPARQL, so whether a predicate IRI inside it is a
+/// data edge or a call to a registered relation is decided by the
+/// [`ExtensionEnv`](crate::extension_env::ExtensionEnv) in force â not by the text,
+/// and not by whoever happened to parse it first.
+///
+/// This field held an `Arc<Query>` and that was the defect. A declaration is read
+/// once, at shapes-load time, while the relation registry is a call-scoped table
+/// installed per validation; a body frozen to algebra at load time was therefore
+/// frozen under whatever options the loader had, which was none. A registered
+/// relation IRI in a body lowered to an ordinary triple pattern, matched the base
+/// graph, found nothing, and the validation reported conformance â with no
+/// diagnostic, because a bare IRI in predicate position is a perfectly legal triple
+/// pattern and nothing at parse time could know otherwise.
+///
+/// Keeping the text is what makes the body bindable later, and binding it later is
+/// the only correct time: the same declaration may be validated many times under
+/// different environments, so there is no single parse that is right for all of
+/// them. [`BoundFunctionRegistry`] is a registry whose every body has been bound to
+/// one environment, and it is the only form the evaluator accepts.
 #[derive(Debug, Clone)]
 pub struct UserFunction {
     /// The parameters in call order.
     pub params: Vec<UserFnParam>,
     /// The number of leading required parameters (arity is `[required, params.len()]`).
     pub required: usize,
-    /// The parsed `sh:select`/`sh:ask` body.
-    pub body: Arc<Query>,
+    /// The `sh:select`/`sh:ask` body's SPARQL text, prefix header included, exactly
+    /// as the declaration spelled it. See the type's docs for why this is text.
+    pub body: Arc<str>,
     /// Whether the body is a SELECT or an ASK.
     pub kind: UserFnBody,
     /// The `sh:returnType` constraint on the produced value, if declared.
@@ -171,22 +194,22 @@ pub struct UserFunction {
 /// A body returns one of exactly three things, and picking the wrong one is a
 /// specification violation rather than a matter of taste:
 ///
-/// * `Ok(Some(value))` — the function's value for this call.
-/// * `Ok(None)` — a SPARQL **expression error**: the arguments are the wrong type,
+/// * `Ok(Some(value))` â the function's value for this call.
+/// * `Ok(None)` â a SPARQL **expression error**: the arguments are the wrong type,
 ///   or the operation is undefined on them, so *this call* has no value. It is
-///   scoped to the one solution being evaluated. SPARQL 1.1 §17.2 puts extension
-///   functions squarely in this channel — "Functions invoked with an argument of
-///   the wrong type will produce a type error" — and the enclosing operator then
-///   decides the outcome: a `FILTER` **drops that solution** (§17 "FILTERs
+///   scoped to the one solution being evaluated. SPARQL 1.1 Â§17.2 puts extension
+///   functions squarely in this channel â "Functions invoked with an argument of
+///   the wrong type will produce a type error" â and the enclosing operator then
+///   decides the outcome: a `FILTER` **drops that solution** (Â§17 "FILTERs
 ///   eliminate any solutions that, when substituted into the expression, either
 ///   result in an effective boolean value of false or produce an error"), while a
-///   `BIND`/`SELECT`-expression **leaves the variable unbound** (§10 "If the
+///   `BIND`/`SELECT`-expression **leaves the variable unbound** (Â§10 "If the
 ///   evaluation of the expression produces an error, the variable remains unbound
-///   for that solution but the query evaluation continues"; algebra §18.5
-///   `Extend(μ, var, expr) = μ if var not in dom(μ) and expr(μ) is an error`).
-///   Those are two different outcomes from one signal, and the evaluator — not the
-///   host closure — is what knows which context the call sits in.
-/// * `Err(_)` — a **hard failure that aborts the whole query**, for a condition no
+///   for that solution but the query evaluation continues"; algebra Â§18.5
+///   `Extend(Î¼, var, expr) = Î¼ if var not in dom(Î¼) and expr(Î¼) is an error`).
+///   Those are two different outcomes from one signal, and the evaluator â not the
+///   host closure â is what knows which context the call sits in.
+/// * `Err(_)` â a **hard failure that aborts the whole query**, for a condition no
 ///   per-solution outcome can honestly express: the host's wiring is unusable, or
 ///   the function is registered but not implemented. `Ok(None)` there would be a
 ///   silent wrong answer, because a dropped row and an unbound variable are
@@ -196,7 +219,7 @@ pub struct UserFunction {
 /// way: the two seams differ in what the evaluator *hands* a body (see
 /// [`ExprFnCall`]), never in how a body reports that it has no value. A seam with
 /// no `Ok(None)` exit forces every domain refusal onto `Err`, which turns one bad
-/// literal in one row into a failed query — so there is no lossy variant of this
+/// literal in one row into a failed query â so there is no lossy variant of this
 /// type to pick by accident.
 ///
 /// The arguments arrive as a slice of **borrows** (`&[&TermValue]`): every value
@@ -206,7 +229,7 @@ pub struct UserFunction {
 /// per-row scoring hot path this seam exists to serve. A closure that needs to
 /// retain a value past the call clones it itself.
 ///
-/// Unlike a [`UserFunction`]'s SPARQL body, this takes **no [`EvalCtx`]** — it
+/// Unlike a [`UserFunction`]'s SPARQL body, this takes **no [`EvalCtx`]** â it
 /// therefore cannot re-enter the evaluator, so there is no recursion/re-entrancy
 /// boundary to bound (the SPARQL-bodied path's `MAX_UDF_DEPTH` guard does not
 /// apply here). When a function is declared non-[`Volatile`](Volatility::Volatile)
@@ -229,18 +252,25 @@ pub type NativeFnBody =
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ExprFnCall<'a> {
+    /// Where a body that re-enters the evaluator deposits what the relations it
+    /// invoked attested — see [`ExprFnCall::record_relations`].
+    ///
+    /// Private, and written only through that method: a witness is evidence about
+    /// this call, so a body may ADD to it and must not be able to read, replace or
+    /// clear what another call recorded.
+    relations: &'a core::cell::RefCell<RelationWitness>,
     /// The call-position IRI the function was reached through.
     pub iri: &'a str,
     /// The already-evaluated argument values in call order; a `None` cell is an
     /// unbound argument.
     pub args: &'a [Option<TermValue>],
-    /// The graph the calling query is running over — the specification's
+    /// The graph the calling query is running over â the specification's
     /// `focusGraph`.
     ///
     /// A concrete `Arc<RdfDataset>` rather than the evaluation context's own
     /// `D: DatasetView`: `DatasetView` carries an associated `Id` type, so `&dyn
     /// DatasetView` is not a legal type and the generic view cannot be erased behind
-    /// a trait object. The frozen dataset IS the erased handle — every backend that
+    /// a trait object. The frozen dataset IS the erased handle â every backend that
     /// can supply a focus graph supplies exactly this, and one that cannot supplies
     /// none, in which case the call never reaches a body at all (see
     /// `eval_expr_function`).
@@ -264,11 +294,11 @@ pub struct ExprFnCall<'a> {
 /// [`ExprFnCall`]).
 ///
 /// `Ok(None)` is the SPARQL "expression error / no value" result, exactly as it is
-/// for [`NativeFnBody`] — see that type's "three exits" section for the specification
+/// for [`NativeFnBody`] â see that type's "three exits" section for the specification
 /// text and for why the *enclosing operator*, not the body, decides whether that
 /// becomes a dropped solution or an unbound variable. `Err` is a hard failure that
 /// aborts the query. A body that cannot evaluate something MUST take one of those two
-/// exits — never a value it did not compute.
+/// exits â never a value it did not compute.
 ///
 /// The two body types differ ONLY in what they are handed ([`ExprFnCall`] adds the
 /// focus graph and the call depth; [`NativeFnBody`] sees values alone and carries a
@@ -277,6 +307,30 @@ pub struct ExprFnCall<'a> {
 /// per-solution error semantics.
 pub type ExprFnBody =
     Arc<dyn Fn(&ExprFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
+
+impl ExprFnCall<'_> {
+    /// Record what the relations this body invoked attested, so it reaches the
+    /// CALLING query's receipt.
+    ///
+    /// A body is free to re-enter the evaluator — that is what distinguishes this
+    /// seam from the native one, whose closure gets no context and cannot. But a
+    /// nested run produces its OWN governed outcome, and everything that outcome
+    /// learned about the relations behind it dies with it unless it is handed back
+    /// here. A relation that really served this query and told nobody is
+    /// indistinguishable from one that was never asked, which is the failure this
+    /// workspace's witness channel exists to prevent — and the SPARQL-bodied door
+    /// already closes it (`eval_user_function` merges its child's witness on both of
+    /// its exits). This is the same channel for the door that re-enters through a
+    /// fresh evaluation rather than through a child context.
+    ///
+    /// Additive, and order-free in the way a witness is: [`RelationWitness::merge`]
+    /// is commutative and associative, so a body making several nested runs may call
+    /// this once per run in any order. A body that never re-enters the evaluator
+    /// never calls it and pays nothing for its existence.
+    pub fn record_relations(&self, witness: RelationWitness) {
+        self.relations.borrow_mut().merge(witness);
+    }
+}
 
 /// A registered dataset-aware function: its closure body plus its declared arity.
 ///
@@ -299,12 +353,12 @@ impl core::fmt::Debug for ExprFunction {
     }
 }
 
-/// A native function's determinism class — the volatility axis of its descriptor
+/// A native function's determinism class â the volatility axis of its descriptor
 /// (after PostgreSQL's `provolatile`).
 ///
 /// The fork-join parallel-evaluation gate is this enum's sole consumer:
 /// [`Volatile`](Self::Volatile) pins the call to sequential evaluation;
-/// [`Stable`](Self::Stable) (deterministic *within one query* — e.g. a frozen
+/// [`Stable`](Self::Stable) (deterministic *within one query* â e.g. a frozen
 /// external-index read, or pure math over its arguments) may run across workers.
 /// There is deliberately no bool-typed "purity" flag: the three-way Postgres
 /// vocabulary (`IMMUTABLE`/`STABLE`/`VOLATILE`) is honest about the difference
@@ -312,7 +366,7 @@ impl core::fmt::Debug for ExprFunction {
 /// frozen-index read is the latter, not the former.
 ///
 /// `#[non_exhaustive]`: a finer class (e.g. `Immutable`, for a future
-/// const-folding pass) is addable without a breaking change — no dead variant is
+/// const-folding pass) is addable without a breaking change â no dead variant is
 /// carried now.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
@@ -327,7 +381,7 @@ pub enum Volatility {
 }
 
 impl Volatility {
-    /// A stable diagnostic label for this determinism class — shared by the
+    /// A stable diagnostic label for this determinism class â shared by the
     /// property-function registry fingerprint (`crate::property_fn_plan::registry_fingerprint`)
     /// and every receipt that renders a [`PfDescriptor`](crate::property_fn::PfDescriptor),
     /// so both name the same class in the same words.
@@ -362,7 +416,7 @@ impl Arity {
     /// Whether `count` arguments satisfies this declared arity.
     ///
     /// `pub(crate)` rather than private: `crate::property_fn_plan`'s prepare-time
-    /// walk checks a custom aggregate's supplied `AGG(<iri>, args…)` argument
+    /// walk checks a custom aggregate's supplied `AGG(<iri>, argsâ¦)` argument
     /// count against its registered [`CustomAggregate`](crate::agg_fn::CustomAggregate)'s
     /// declared [`Arity`] the same way this module checks a native function's.
     pub(crate) fn accepts(self, count: usize) -> bool {
@@ -373,7 +427,7 @@ impl Arity {
         }
     }
 
-    /// A stable, machine-facing encoding of this arity —
+    /// A stable, machine-facing encoding of this arity â
     /// deliberately INDEPENDENT of [`Display for Arity`](#impl-Display-for-Arity)
     /// just below, which exists only for human-facing diagnostics and is free to
     /// change wording (pluralization, punctuation, phrasing) without that being a
@@ -383,7 +437,7 @@ impl Arity {
     /// identity. A load-bearing `Display` impl would mean a purely cosmetic
     /// wording edit silently invalidates every previously-prepared plan's cache
     /// key (or worse, two DIFFERENT arities that happen to render the same
-    /// diagnostic words would collide) — this encoding exists so that can never
+    /// diagnostic words would collide) â this encoding exists so that can never
     /// happen: it is a variant tag plus its numeric fields, with no wording to
     /// drift.
     pub(crate) fn stable_encoding(self) -> String {
@@ -396,7 +450,7 @@ impl Arity {
 }
 
 impl core::fmt::Display for Arity {
-    /// Human-facing wording only — NOT part of any stable fingerprint or cache-key
+    /// Human-facing wording only â NOT part of any stable fingerprint or cache-key
     /// encoding. See `Arity::stable_encoding`, which
     /// `crate::agg_fn::registry_fingerprint` uses instead, for the encoding that
     /// IS load-bearing; this impl is free to change wording at any time.
@@ -432,8 +486,8 @@ impl core::fmt::Debug for NativeFunction {
 }
 
 /// A caller-injected table of user functions, keyed by function IRI. Holds two
-/// independent kinds under two separate tables — SHACL-AF SPARQL-bodied
-/// ([`UserFunction`]) and native Rust-closure ([`NativeFunction`]) — sharing one
+/// independent kinds under two separate tables â SHACL-AF SPARQL-bodied
+/// ([`UserFunction`]) and native Rust-closure ([`NativeFunction`]) â sharing one
 /// IRI namespace: [`Self::insert`]/[`Self::register_native`] hard-fail on a
 /// cross-kind collision (see their docs) so an IRI is unambiguously one kind or
 /// the other, never silently shadowed. Built once per shapes graph / host
@@ -473,17 +527,17 @@ impl UserFunctionRegistry {
         Self::default()
     }
 
-    /// The canonical empty registry — the non-optional "no scalar functions
+    /// The canonical empty registry â the non-optional "no scalar functions
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::functions`],
     /// [`crate::eval::EvalCtx::user_functions`](crate::eval::EvalCtx),
     /// `crate::parallel::SafetyRegistries::functions`) now uses in place of the
     /// old `Option::None` spelling. Unlike
     /// [`crate::agg_fn::AggregateRegistry::EMPTY`]/[`crate::property_fn::PropertyFunctionRegistry::EMPTY`],
-    /// this type carries no `RegistryId` (`crate::registry_id::RegistryId`) — a
+    /// this type carries no `RegistryId` (`crate::registry_id::RegistryId`) â a
     /// SHACL-AF/native function registry is never checked for plan identity (see
     /// `crate::engine`'s note on why `QueryOptions::functions` is deliberately
-    /// excluded from `check_plan_matches_relations`) — so there is no identity
+    /// excluded from `check_plan_matches_relations`) â so there is no identity
     /// question for this constant to answer either way.
     pub const EMPTY: Self = Self {
         fns: DetHashMap::with_hasher(crate::DetHasher::new()),
@@ -497,7 +551,7 @@ impl UserFunctionRegistry {
     /// # Panics
     ///
     /// Panics if `iri` is already registered as a [`NativeFunction`] or an
-    /// [`ExprFunction`] — one IRI cannot be two kinds at once (a host
+    /// [`ExprFunction`] â one IRI cannot be two kinds at once (a host
     /// misconfiguration, caught at registration time rather than silently shadowing
     /// one kind with another). Re-registering the same IRI with another
     /// SPARQL-bodied function is unaffected ("last write wins").
@@ -518,7 +572,7 @@ impl UserFunctionRegistry {
     /// declared calling `arity`. A later registration of the same IRI as another
     /// expression-bodied function replaces the earlier one ("last write wins").
     ///
-    /// This is the registration seam SHACL 1.2 SPARQL Extensions §7.3 "Evaluation of
+    /// This is the registration seam SHACL 1.2 SPARQL Extensions Â§7.3 "Evaluation of
     /// Custom SPARQL Functions" asks an engine to use: "SPARQL engines SHOULD
     /// register a function for any SHACL instance of `sh:ListParameterExpressionFunction`
     /// from any provided shapes graph."
@@ -526,7 +580,7 @@ impl UserFunctionRegistry {
     /// # Panics
     ///
     /// Panics if `iri` is already registered as a SPARQL-bodied [`UserFunction`] or
-    /// a [`NativeFunction`] — see [`Self::insert`]'s panic doc for the rationale
+    /// a [`NativeFunction`] â see [`Self::insert`]'s panic doc for the rationale
     /// (symmetric guard).
     pub fn register_expr(&mut self, iri: impl Into<String>, arity: Arity, body: ExprFnBody) {
         let iri = iri.into();
@@ -547,7 +601,7 @@ impl UserFunctionRegistry {
     /// earlier one ("last write wins").
     ///
     /// The body reports a per-solution refusal as `Ok(None)` and a query-fatal one
-    /// as `Err` — the SAME channel [`Self::register_expr`]'s body carries, and the
+    /// as `Err` â the SAME channel [`Self::register_expr`]'s body carries, and the
     /// reason a domain error here drops a row or leaves a variable unbound instead
     /// of aborting the query. See [`NativeFnBody`] for the three exits and the
     /// specification text behind them; the choice between this seam and
@@ -558,7 +612,7 @@ impl UserFunctionRegistry {
     /// # Panics
     ///
     /// Panics if `iri` is already registered as a SPARQL-bodied [`UserFunction`] or
-    /// an [`ExprFunction`] — see [`Self::insert`]'s panic doc for the rationale
+    /// an [`ExprFunction`] â see [`Self::insert`]'s panic doc for the rationale
     /// (symmetric guard).
     pub fn register_native(
         &mut self,
@@ -624,6 +678,201 @@ impl UserFunctionRegistry {
     pub fn len(&self) -> usize {
         self.fns.len() + self.native.len() + self.exprs.len()
     }
+
+    /// The registered SPARQL-bodied functions, as `(iri, function)` pairs â what
+    /// [`crate::engine::NativeSparqlEngine::bind_functions`] walks to prepare each
+    /// body. Native and expression-bodied functions are not included: neither has
+    /// a SPARQL body, so neither has anything to bind.
+    pub(crate) fn sparql_bodied(&self) -> impl Iterator<Item = (&String, &UserFunction)> {
+        self.fns.iter()
+    }
+
+    /// Every SPARQL-bodied function's IRI and body TEXT, for a caller that wants to
+    /// know what a body says without evaluating it — a pre-flight report on which of
+    /// its predicate IRIs an environment would make calls of.
+    ///
+    /// Sorted by IRI, so a report over it is a pure function of the registry's
+    /// contents rather than of its insertion order.
+    pub fn sparql_bodied_texts(&self) -> Vec<(String, Arc<str>)> {
+        let mut out: Vec<(String, Arc<str>)> = self
+            .fns
+            .iter()
+            .map(|(iri, func)| (iri.clone(), Arc::clone(&func.body)))
+            .collect();
+        out.sort_by(|left, right| left.0.cmp(&right.0));
+        out
+    }
+}
+
+/// A [`UserFunctionRegistry`] whose every SPARQL body has been parsed and
+/// feasibility-ordered against one [`ExtensionEnv`](crate::extension_env::ExtensionEnv).
+///
+/// # Why this is a separate type rather than a flag
+///
+/// The evaluator accepts only this type. That is the whole mechanism: an unbound
+/// registry cannot reach `eval_user_function` (the crate-internal evaluator) at
+/// all, so there is no
+/// missing-body arm to write, no "not bound yet" error to raise, and no runtime
+/// check to forget. A state that cannot be represented cannot be mishandled, and
+/// refusing it at runtime would have been the weaker structure â it would still
+/// have compiled, still have type-checked, and still have been reachable from every
+/// call site nobody remembered to update.
+///
+/// It also makes the compiler produce the list of call sites. Changing the type
+/// [`crate::engine::QueryOptions::functions`] accepts turns "find every place a
+/// function registry is installed" from a grep, which can be wrong, into a build
+/// error, which cannot.
+///
+/// # What it binds, and what it leaves alone
+///
+/// Only the SPARQL-bodied table is bound. Native and expression-bodied functions
+/// are Rust closures with no SPARQL body and nothing to parse, so they pass through
+/// untouched â they are reachable through this type exactly as before.
+pub struct BoundFunctionRegistry {
+    /// The declarations: parameters, arity, return constraints, body text, and the
+    /// native and expression tables verbatim.
+    inner: UserFunctionRegistry,
+    /// One prepared, feasibility-ordered body per SPARQL-bodied function.
+    bodies: DetHashMap<String, Arc<crate::engine::PreparedQuery>>,
+    /// The environment every body above was bound against â compared per call, and
+    /// cheap to compare because it is one integer (see [`RegistryId`]).
+    env: RegistryId,
+}
+
+impl core::fmt::Debug for BoundFunctionRegistry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // The prepared bodies are listed by IRI (sorted, for deterministic output)
+        // rather than by algebra: a `PreparedQuery` renders to pages of pattern tree
+        // that tell a reader nothing about which functions are bound, which is the
+        // question this impl exists to answer.
+        let mut bound: Vec<&str> = self.bodies.keys().map(String::as_str).collect();
+        bound.sort_unstable();
+        f.debug_struct("BoundFunctionRegistry")
+            .field("declarations", &self.inner)
+            .field("bound_bodies", &bound)
+            .field("env", &self.env)
+            .finish()
+    }
+}
+
+impl BoundFunctionRegistry {
+    /// The canonical bound-but-empty registry: nothing declared, so nothing to
+    /// bind, so it is trivially bound against every environment.
+    ///
+    /// This is the one "no functions" value, exactly as
+    /// [`UserFunctionRegistry::EMPTY`] was before it â no `Option`, no
+    /// absent-versus-present-but-empty pair. Its environment is
+    /// [`RegistryId::EMPTY`], which every environment check treats as
+    /// universally compatible, because a registry with no bodies cannot have bound
+    /// any of them to the wrong environment.
+    pub const EMPTY: Self = Self {
+        inner: UserFunctionRegistry::EMPTY,
+        bodies: DetHashMap::with_hasher(crate::DetHasher::new()),
+        env: RegistryId::EMPTY,
+    };
+
+    /// Assemble a bound registry from declarations and their prepared bodies â the
+    /// tail of [`crate::engine::NativeSparqlEngine::bind_functions`], which is the
+    /// only way to reach it.
+    pub(crate) fn from_prepared(
+        inner: UserFunctionRegistry,
+        bodies: DetHashMap<String, Arc<crate::engine::PreparedQuery>>,
+        env: RegistryId,
+    ) -> Self {
+        Self { inner, bodies, env }
+    }
+
+    /// Resolve a call-position IRI to its declaration and its bound body.
+    ///
+    /// Both halves come back together because both are needed and neither is
+    /// meaningful alone: the declaration supplies the parameters the arguments bind
+    /// to, and the prepared body is what the call evaluates.
+    #[must_use]
+    pub fn resolve(
+        &self,
+        iri: &str,
+    ) -> Option<(&UserFunction, &Arc<crate::engine::PreparedQuery>)> {
+        let func = self.inner.resolve(iri)?;
+        let body = self.bodies.get(iri)?;
+        Some((func, body))
+    }
+
+    /// Resolve a call-position IRI to its declared native function, if any.
+    #[must_use]
+    pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
+        self.inner.resolve_native(iri)
+    }
+
+    /// Resolve a call-position IRI to its declared dataset-aware
+    /// (expression-bodied) function, if any.
+    #[must_use]
+    pub fn resolve_expr(&self, iri: &str) -> Option<&ExprFunction> {
+        self.inner.resolve_expr(iri)
+    }
+
+    /// Whether a registered expression-bodied function requires an owned focus graph.
+    #[must_use]
+    pub fn requires_focus_graph(&self) -> bool {
+        self.inner.requires_focus_graph()
+    }
+
+    /// Whether the registry holds no functions of any kind.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// The number of declared functions across all three kinds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// The declarations this was bound from, for a caller that needs the
+    /// unbound view (a content fingerprint, a product writer).
+    #[must_use]
+    pub fn declarations(&self) -> &UserFunctionRegistry {
+        &self.inner
+    }
+
+    /// The identity of the environment every body here was bound against.
+    ///
+    /// [`RegistryId::EMPTY`] means "no bodies, compatible with anything" â see
+    /// [`Self::EMPTY`].
+    #[must_use]
+    pub fn env_id(&self) -> RegistryId {
+        self.env
+    }
+
+    /// Bind `registry` against the canonical empty environment, through the
+    /// production path.
+    ///
+    /// Test-only, and deliberately routed through
+    /// [`crate::engine::NativeSparqlEngine::bind_functions`] rather than
+    /// [`Self::from_prepared`]: a fixture that hand-assembled a bound registry
+    /// would prove the evaluator works on bodies the production loader can never
+    /// produce. Binding against the empty environment is the right default for a
+    /// fixture that names no relation — a fixture that DOES name one must bind
+    /// against an environment that holds it, which is the whole point.
+    #[cfg(test)]
+    pub(crate) fn bound_for_test(registry: UserFunctionRegistry) -> Self {
+        crate::engine::NativeSparqlEngine::new()
+            .bind_functions(registry, crate::extension_env::ExtensionEnv::empty())
+            .expect("fixture bodies parse and admit against the empty environment")
+    }
+
+    /// Whether this registry's bodies may be evaluated under `env`.
+    ///
+    /// A registry with no SPARQL bodies is compatible with every environment,
+    /// because it bound nothing and so cannot have bound anything wrongly.
+    /// Otherwise the environments must be the SAME INSTANCE, not merely equal in
+    /// content: two environments can declare identically and still resolve the same
+    /// IRI to different relation implementations, which is precisely the
+    /// distinction [`RegistryId`] exists to draw.
+    #[must_use]
+    pub fn admits(&self, env: &crate::extension_env::ExtensionEnv) -> bool {
+        self.bodies.is_empty() || self.env == env.id()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -638,30 +887,30 @@ impl UserFunctionRegistry {
 ///
 /// - **`fns`** (SPARQL-bodied, via [`UserFunctionRegistry::insert`]) is filled by the
 ///   SHACL shapes parser from every `sh:SPARQLFunction`/`sh:Function` node in the
-///   shapes graph. Each entry is pure data — ordered parameters, required count,
-///   parsed body, return constraint — read out of that graph. → [`Declared`](Self::Declared).
+///   shapes graph. Each entry is pure data â ordered parameters, required count,
+///   parsed body, return constraint â read out of that graph. â [`Declared`](Self::Declared).
 ///
 /// - **`exprs`** (expression-bodied, via [`UserFunctionRegistry::register_expr`])
 ///   holds `Arc<dyn Fn>` closures, and that is exactly why the split cannot be made
 ///   on "is the body a closure". The ONLY producer of these entries is the shapes
 ///   parser itself: it mints one closure per `sh:ListParameterExpressionFunction`
 ///   declared IN the shapes graph, capturing nothing but that parsed declaration
-///   (SHACL 1.2 SPARQL Extensions §7.3 asks an engine to register exactly this
+///   (SHACL 1.2 SPARQL Extensions Â§7.3 asks an engine to register exactly this
 ///   class). Their existence and their declared arity are functions of the graph's
 ///   content, so a consumer re-parsing the same graph rebuilds them with no host
-///   cooperation whatsoever. → [`Declared`](Self::Declared).
+///   cooperation whatsoever. â [`Declared`](Self::Declared).
 ///
 /// - **`native`** (via [`UserFunctionRegistry::register_native`]) holds `Arc<dyn Fn>`
-///   closures that no shapes graph can describe and no parser path ever writes — a
+///   closures that no shapes graph can describe and no parser path ever writes â a
 ///   host hands them in directly (the geospatial function table is the motivating
 ///   caller). Nothing but host wiring can reproduce one.
-///   → [`Injected`](Self::Injected).
+///   â [`Injected`](Self::Injected).
 ///
 /// # Why this is a structural partition and not a heuristic
 ///
-/// The three maps are separate fields with disjoint insertion paths — `insert`,
+/// The three maps are separate fields with disjoint insertion paths â `insert`,
 /// `register_expr` and `register_native` each write exactly one of them and no other
-/// code reaches their contents — and the cross-kind collision guards on all three
+/// code reaches their contents â and the cross-kind collision guards on all three
 /// mean one IRI lives in exactly one map. So "which population is this entry in" is
 /// read off the data structure, never inferred from the entry's shape.
 ///
@@ -671,7 +920,7 @@ impl UserFunctionRegistry {
 /// necessarily contains the parser's own `exprs` closures. If those were counted as
 /// host-injected, the consumer's requirement check would demand that its host supply
 /// entries the parser is about to create anyway, and a perfectly valid restore would
-/// be refused — the mirror of a silent drop, and the harder of the two to notice,
+/// be refused â the mirror of a silent drop, and the harder of the two to notice,
 /// because a refusal reads as correct strictness and every test still passes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FnPopulation {
@@ -686,7 +935,7 @@ pub enum FnPopulation {
 }
 
 impl FnPopulation {
-    /// A stable, machine-facing label for this population — folded into the
+    /// A stable, machine-facing label for this population â folded into the
     /// fingerprint so the two populations of one registry can never digest alike.
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -697,7 +946,7 @@ impl FnPopulation {
     }
 }
 
-/// The domain separator every user-function content fingerprint opens with — see
+/// The domain separator every user-function content fingerprint opens with â see
 /// `crate::property_fn_plan`'s constant of the same name for why each registry kind
 /// needs its own.
 const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/user-function-registry";
@@ -709,8 +958,8 @@ const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/user-function-registry";
 /// # Why this registry gets two digests where the others get one
 ///
 /// [`UserFunctionRegistry`] carries no
-/// `RegistryId` (`crate::registry_id::RegistryId`) at all — a function registry is
-/// not part of a prepared plan's in-process identity — so unlike
+/// `RegistryId` (`crate::registry_id::RegistryId`) at all â a function registry is
+/// not part of a prepared plan's in-process identity â so unlike
 /// `crate::property_fn_plan::content_fingerprint` and
 /// `crate::agg_fn::content_fingerprint` this is not the instance-free twin of an
 /// existing fingerprint. It exists for the other half of the same job: an artifact
@@ -730,17 +979,36 @@ const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/user-function-registry";
 ///
 /// # What it binds, and what it deliberately does not
 ///
-/// Declarations only. The `Arc<dyn Fn>` body of an expression-bodied or native
-/// function has no content to digest, and a SPARQL-bodied function's parsed body is
-/// deliberately not folded either: the only stable byte form available for it is the
-/// algebra serializer's rendering, and making that load-bearing would turn a cosmetic
-/// wording change in an unrelated module into a silent invalidation of every
-/// persisted artifact (the same trap `Arity::stable_encoding` exists to avoid for
-/// `Display`). The binding that DOES cover bodies is the shapes graph itself: every
-/// [`Declared`](FnPopulation::Declared) entry is a function of that graph's content,
-/// so a caller pairs this digest with the graph's own content digest and gets both
-/// halves. A caller must not read a [`Declared`](FnPopulation::Declared) match alone
-/// as proof that two registries' function bodies agree.
+/// Declarations **and SPARQL body text**. The `Arc<dyn Fn>` body of an
+/// expression-bodied or native function has no content to digest and is still not
+/// folded; a SPARQL-bodied function's body now is.
+///
+/// It was not, while the body was stored as parsed algebra: the only stable byte
+/// form available for algebra is the serializer's rendering, and making that
+/// load-bearing would turn a cosmetic wording change in an unrelated module into a
+/// silent invalidation of every persisted artifact (the trap
+/// `Arity::stable_encoding` exists to avoid for `Display`). That objection was
+/// sound, and it is answered rather than overruled: [`UserFunction::body`] is now
+/// the declaration's own SPARQL **text**, which no serializer can reword.
+///
+/// Folding it closes a real hole. Two registries whose functions declared identical
+/// parameters, arities and return types but carried DIFFERENT bodies digested
+/// identically, so a persisted artifact bound to one would open against the other.
+///
+/// The text is canonical with respect to prefix order by construction: the shapes
+/// parser builds a body's `PREFIX` header from a `BTreeMap`, so the same logical
+/// prefix map always renders the same lines in the same order however the caller
+/// assembled it. That matters because this digest is a prepared product's identity
+/// row: an order-sensitive fold here would refuse a valid restore, which is the
+/// mirror of the defect and just as silent.
+///
+/// What it still does not bind is the ENVIRONMENT a body was later bound against.
+/// That is deliberate and load-bearing: a [`Declared`](FnPopulation::Declared) entry
+/// must stay rebuildable at restore from the shapes graph alone, with no host
+/// cooperation, and folding the host's relation-registry identity in here would make
+/// a consumer's recomputed digest depend on wiring it has not installed yet —
+/// refusing a valid restore for the second time. The environment is identified
+/// separately, by the artifact that actually needs to state it as a requirement.
 ///
 /// # Errors
 ///
@@ -780,6 +1048,10 @@ pub fn content_fingerprint(
                     "body-form",
                     body_form_label(func.kind).as_bytes(),
                 );
+                // The body's own text. Two functions that declare identically but
+                // compute differently must not share an identity; before the body
+                // was text there was no stable byte form to say so with.
+                append_framed_part(&mut bytes, "body", func.body.as_bytes());
                 append_constraint(&mut bytes, "return", &func.return_constraint);
             }
             for (iri, func) in iri_sorted(&functions.exprs) {
@@ -800,7 +1072,7 @@ pub fn content_fingerprint(
     Ok(ContentDigest::of(&bytes))
 }
 
-/// One registry map's entries in IRI order — the fingerprint reads this rather than
+/// One registry map's entries in IRI order â the fingerprint reads this rather than
 /// the map's iteration order, exactly as
 /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)
 /// does, so the digest is a function of the registry's contents and not of the order
@@ -841,7 +1113,7 @@ fn append_optional_part(out: &mut Vec<u8>, label: &str, value: Option<&[u8]>) {
     }
 }
 
-/// A stable, machine-facing label for a `sh:nodeKind` constraint — deliberately
+/// A stable, machine-facing label for a `sh:nodeKind` constraint â deliberately
 /// independent of [`Debug`], which is free to change wording.
 const fn node_kind_label(kind: NodeKind) -> &'static str {
     match kind {
@@ -854,7 +1126,7 @@ const fn node_kind_label(kind: NodeKind) -> &'static str {
     }
 }
 
-/// A stable, machine-facing label for a function body's result form — same rationale
+/// A stable, machine-facing label for a function body's result form â same rationale
 /// as [`node_kind_label`].
 const fn body_form_label(kind: UserFnBody) -> &'static str {
     match kind {
@@ -900,6 +1172,7 @@ fn matches_node_kind(value: &TermValue, nk: NodeKind) -> bool {
 /// function failure.
 pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     func: &UserFunction,
+    body: &crate::engine::PreparedQuery,
     iri: &str,
     args: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
@@ -915,7 +1188,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 
     // Bind each supplied argument to its parameter variable, type-checking as we go.
     // A mandatory parameter with an unbound (`None`) argument yields no result node
-    // (SHACL-AF §5.2/§9.5): the function is not evaluated at all. An unbound OPTIONAL
+    // (SHACL-AF Â§5.2/Â§9.5): the function is not evaluated at all. An unbound OPTIONAL
     // argument simply leaves that parameter variable unbound (pre-binding semantics).
     let mut substitutions: Vec<(String, TermValue)> = Vec::with_capacity(args.len());
     for (idx, (arg, param)) in args.iter().zip(&func.params).enumerate() {
@@ -932,7 +1205,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     }
 
     // The `user-function-invocation` charge point. Charged once per invocation that
-    // actually reaches a body — an arity or type-constraint refusal above evaluated
+    // actually reaches a body â an arity or type-constraint refusal above evaluated
     // nothing, and charging for work that never happened would make the schedule a
     // description of the query text rather than of the execution. A function body's own
     // evaluation then charges through the shared state, so a query cannot evade its
@@ -946,8 +1219,14 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     let Some(mut child) = ctx.child_for_user_fn()? else {
         return Ok(None);
     };
+    // The body's algebra, as bound against the environment in force â already
+    // parsed with the relation registry's exact IRIs in `property_fn_iris`, and
+    // already feasibility-ordered against those relations' declared access modes.
+    // Both of those were missing while this was a load-time parse: a relation call
+    // was an ordinary triple pattern, and a body that needed reordering failed per
+    // row rather than being ordered once.
     let substituted = crate::substitute::apply_substitutions(
-        (*func.body).clone(),
+        body.query().clone(),
         crate::substitute::Prebindings::Owned(&substitutions),
     )
     .map_err(|d| EvalError::function(d.to_string()))?;
@@ -959,7 +1238,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
             // partial answer can report `false` where the truth is `true`, and a `SELECT`
             // body can report a different first row. The trip is recorded on the shared
             // expression barrier, which makes the operator that owns the calling
-            // expression withhold every row it produced — the same treatment an `EXISTS`
+            // expression withhold every row it produced â the same treatment an `EXISTS`
             // gets, for the same reason.
             child.expression_barrier.record(certificate.tripped());
             ctx.bnode_counter = child.bnode_counter;
@@ -1012,10 +1291,10 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     ctx.constructed.append(&mut child.constructed);
     // And the body's relation attestations: a SHACL-AF function body is SPARQL like any
     // other and may invoke a registered relation, so what that relation attested belongs
-    // on the CALLING query's receipt — there is no second receipt for a function body.
+    // on the CALLING query's receipt â there is no second receipt for a function body.
     ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
 
-    // `sh:returnType` is informational (SHACL-AF §5.3): it documents/casts the
+    // `sh:returnType` is informational (SHACL-AF Â§5.3): it documents/casts the
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
     // runtime datatype constraint would spuriously reject IRI/blank-node returns,
     // so it is retained on `UserFunction` for callers but NOT enforced here.
@@ -1035,7 +1314,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 ///
 /// A closure that answers `Ok(None)` has raised a SPARQL expression error for this
 /// one solution; it is propagated verbatim (never promoted to `Err`) so the
-/// enclosing operator applies the outcome its own context calls for — `FILTER`
+/// enclosing operator applies the outcome its own context calls for â `FILTER`
 /// drops the solution, `BIND`/`SELECT`-expression leaves the variable unbound. See
 /// [`NativeFnBody`]'s "three exits" for the specification text.
 ///
@@ -1043,7 +1322,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 ///
 /// [`EvalError::Function`] on an arity violation, on a panic inside the closure
 /// (converted to a fixed, payload-free error so the message is identical
-/// regardless of which worker thread panicked — mirrors the `native-codec-panic`
+/// regardless of which worker thread panicked â mirrors the `native-codec-panic`
 /// guard in `purrdf_rdf::native_codecs::parse`), or propagated straight through
 /// from the closure's own `Err`. An arity violation stays hard on purpose: the call
 /// as written cannot be evaluated at all, which is a defect in the query text
@@ -1068,7 +1347,7 @@ pub(crate) fn eval_native_function(
     if args.iter().any(Option::is_none) {
         return Ok(None);
     }
-    // Lend the closure borrows into the caller's argument buffer — no per-call
+    // Lend the closure borrows into the caller's argument buffer â no per-call
     // deep clone of the (heap-string-owning) TermValues on the scoring hot path.
     let values: Vec<&TermValue> = args
         .iter()
@@ -1096,7 +1375,7 @@ pub(crate) fn eval_native_function(
 ///
 /// A [`NativeFunction`] is a pure function of its argument values, so the evaluator
 /// hands it nothing else. An expression-bodied function is a SHACL node expression,
-/// and `evalExpr(expr, focusGraph, focusNode, scope)` is a function OF a graph — so
+/// and `evalExpr(expr, focusGraph, focusNode, scope)` is a function OF a graph â so
 /// the graph must travel with the call, and a call that has no graph to evaluate
 /// against cannot be answered at all.
 ///
@@ -1107,7 +1386,7 @@ pub(crate) fn eval_native_function(
 ///   call is a hard [`EvalError::Function`], never `Ok(None)`. `Ok(None)` is SPARQL's
 ///   "this expression had an error, treat the value as unbound", and using it here
 ///   would make a function that could not be evaluated indistinguishable from one
-///   that evaluated to nothing — a silent wrong answer.
+///   that evaluated to nothing â a silent wrong answer.
 /// * **Re-entrancy.** A node-expression body can call back into query evaluation,
 ///   which can call this function again. The chain is bounded by the SAME
 ///   [`MAX_UDF_DEPTH`](crate::eval::MAX_UDF_DEPTH) ceiling the SPARQL-bodied path
@@ -1126,7 +1405,7 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     func: &ExprFunction,
     iri: &str,
     args: &[Option<TermValue>],
-    ctx: &EvalCtx<'_, D>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<TermValue>, EvalError> {
     if !func.arity.accepts(args.len()) {
         return Err(EvalError::function(format!(
@@ -1149,7 +1428,9 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
             crate::eval::MAX_UDF_DEPTH
         )));
     }
+    let relations = core::cell::RefCell::new(RelationWitness::default());
     let call = ExprFnCall {
+        relations: &relations,
         iri,
         args,
         focus_graph,
@@ -1158,12 +1439,24 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // The same `catch_unwind` contract the native path documents: a panicking host
     // closure must not abort a worker or surface nondeterministically, and the
     // message is fixed and payload-free so it does not depend on which thread ran.
-    match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
+    let result = match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
         Ok(inner_result) => inner_result,
         Err(_) => Err(EvalError::function(format!(
             "expression-bodied function <{iri}> panicked"
         ))),
+    };
+
+    // Whatever the body recorded reaches the caller's receipt, and it does so on
+    // EVERY exit — including the error and panic ones. A relation that served this
+    // query really served it; whether the body then failed to produce a value is a
+    // fact about the body, not about the index that answered. Dropping the
+    // attestation because the call errored would be the silent-drop this channel
+    // exists to prevent, arriving through the failure path instead of the happy one.
+    let witness = relations.into_inner();
+    if !witness.is_empty() {
+        ctx.absorb_worker_witnesses([witness]);
     }
+    result
 }
 
 #[cfg(test)]
@@ -1176,7 +1469,6 @@ mod tests {
         RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlRequest, SparqlResult,
         TermValue, TrippedGovernor,
     };
-    use purrdf_sparql_algebra::SparqlParser;
 
     use crate::{
         GovernedOutcome, GovernorState, NativeSparqlEngine, PartialAnswers, QueryGovernors,
@@ -1248,7 +1540,7 @@ mod tests {
         UserFunction {
             params: Vec::new(),
             required: 0,
-            body: parse("SELECT (1 AS ?result) WHERE {}"),
+            body: body_text("SELECT (1 AS ?result) WHERE {}"),
             kind: UserFnBody::Select,
             return_constraint: TypeConstraint::default(),
         }
@@ -1273,7 +1565,7 @@ mod tests {
     }
 
     /// A native closure returning `xsd:double` `NaN` for a non-positive argument
-    /// and `arg / 5.0` otherwise — used to exercise `ORDER BY`'s handling of
+    /// and `arg / 5.0` otherwise â used to exercise `ORDER BY`'s handling of
     /// `NaN` scores.
     fn nan_score_native_body() -> NativeFnBody {
         Arc::new(|args: &[&TermValue]| {
@@ -1330,7 +1622,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1347,12 +1639,12 @@ mod tests {
         }
     }
 
-    fn parse(body: &str) -> Arc<Query> {
-        Arc::new(
-            SparqlParser::new()
-                .parse_query(body)
-                .expect("parse function body"),
-        )
+    /// A fixture body, stored the way a real declaration stores one: as text.
+    /// Parsing happens at bind time, against the environment in force — there is
+    /// no parse a fixture could do here that would be the right one for every
+    /// environment the fixture is later bound against.
+    fn body_text(body: &str) -> Arc<str> {
+        Arc::from(body)
     }
 
     fn int_param(var: &str) -> UserFnParam {
@@ -1439,7 +1731,7 @@ mod tests {
             UserFunction {
                 params: declared,
                 required,
-                body: parse(body),
+                body: body_text(body),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -1455,7 +1747,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1666,7 +1958,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse("SELECT ((?n + 1) AS ?result) WHERE {}"),
+                body: body_text("SELECT ((?n + 1) AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -1682,7 +1974,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1708,7 +2000,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse("ASK { FILTER(?n / 2 = FLOOR(?n / 2)) }"),
+                body: body_text("ASK { FILTER(?n / 2 = FLOOR(?n / 2)) }"),
                 kind: UserFnBody::Ask,
                 return_constraint: TypeConstraint::default(),
             },
@@ -1725,7 +2017,7 @@ mod tests {
                         substitutions: &[],
                     },
                     QueryOptions {
-                        functions: &registry,
+                        functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                         ..QueryOptions::EMPTY
                     },
                 )
@@ -1742,7 +2034,7 @@ mod tests {
         assert_eq!(run(5), "false");
     }
 
-    /// SHACL-AF §5.2/§9.5: a call missing a mandatory argument yields no result
+    /// SHACL-AF Â§5.2/Â§9.5: a call missing a mandatory argument yields no result
     /// node. The body here ignores its parameter and always succeeds, so only the
     /// mandatory-argument guard (not an unbound `?n`) can suppress the value.
     #[test]
@@ -1753,7 +2045,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse("ASK {}"),
+                body: body_text("ASK {}"),
                 kind: UserFnBody::Ask,
                 return_constraint: TypeConstraint::default(),
             },
@@ -1770,7 +2062,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1796,7 +2088,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse("SELECT ((?n + 1) AS ?result) WHERE {}"),
+                body: body_text("SELECT ((?n + 1) AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -1813,7 +2105,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1837,7 +2129,7 @@ mod tests {
             UserFunction {
                 params: vec![],
                 required: 0,
-                body: parse("SELECT (RAND() AS ?result) WHERE {}"),
+                body: body_text("SELECT (RAND() AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -1853,7 +2145,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1886,7 +2178,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1912,7 +2204,7 @@ mod tests {
                     },
                 }],
                 required: 1,
-                body: parse("SELECT ((?n) AS ?result) WHERE {}"),
+                body: body_text("SELECT ((?n) AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -1929,7 +2221,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1950,7 +2242,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse("SELECT ((?n + 1) AS ?a) ((?n + 2) AS ?b) WHERE {}"),
+                body: body_text("SELECT ((?n + 1) AS ?a) ((?n + 2) AS ?b) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -1966,7 +2258,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -1982,13 +2274,13 @@ mod tests {
     #[test]
     fn unbounded_recursion_fails_closed() {
         let mut registry = UserFunctionRegistry::new();
-        // loop(?n) calls loop(?n) — a non-terminating self-recursion.
+        // loop(?n) calls loop(?n) â a non-terminating self-recursion.
         registry.insert(
             EX_LOOP,
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse(&format!("SELECT ((<{EX_LOOP}>(?n)) AS ?result) WHERE {{}}")),
+                body: body_text(&format!("SELECT ((<{EX_LOOP}>(?n)) AS ?result) WHERE {{}}")),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -2004,7 +2296,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2017,19 +2309,28 @@ mod tests {
 
     #[test]
     fn fuel_exhaustion_at_the_invocation_boundary_is_an_expression_trip() {
-        let function = UserFunction {
-            params: Vec::new(),
-            required: 0,
-            body: parse("SELECT (1 AS ?result) WHERE {}"),
-            kind: UserFnBody::Select,
-            return_constraint: TypeConstraint::default(),
-        };
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(
+            EX_INC,
+            UserFunction {
+                params: Vec::new(),
+                required: 0,
+                body: body_text("SELECT (1 AS ?result) WHERE {}"),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        // Bound through the production path, so the body this test evaluates is the
+        // body a real declaration would have produced rather than one hand-built
+        // from algebra the loader can never emit.
+        let registry = BoundFunctionRegistry::bound_for_test(registry);
+        let (function, body) = registry.resolve(EX_INC).expect("the fixture is registered");
         let dataset = empty_dataset();
         let governors = QueryGovernors::UNBOUNDED.with_fuel(0);
         let state = Arc::new(GovernorState::new(&governors));
         let mut ctx = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
 
-        let value = eval_user_function(&function, EX_INC, &[], &mut ctx)
+        let value = eval_user_function(function, body, EX_INC, &[], &mut ctx)
             .expect("a governor trip is not a function error");
         assert_eq!(value, None, "the refused body produces no expression value");
         let expected = TrippedGovernor::Budget {
@@ -2049,7 +2350,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse(&format!("SELECT ((<{EX_LOOP}>(?n)) AS ?result) WHERE {{}}")),
+                body: body_text(&format!("SELECT ((<{EX_LOOP}>(?n)) AS ?result) WHERE {{}}")),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -2066,7 +2367,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
                 &state,
@@ -2090,7 +2391,7 @@ mod tests {
         assert_eq!(barrier.operator(), "Extend");
     }
 
-    /// `sh:returnType` is informational (SHACL-AF §5.3) and MAY be a class IRI, so
+    /// `sh:returnType` is informational (SHACL-AF Â§5.3) and MAY be a class IRI, so
     /// it is NOT enforced at runtime: a function returning an IRI is accepted even
     /// when its declared return type is a class rather than a literal datatype.
     /// (The pre-fix code enforced it as a datatype and wrongly hard-failed this.)
@@ -2103,7 +2404,7 @@ mod tests {
                 params: vec![int_param("n")],
                 required: 1,
                 // Returns an IRI; declared return type is a class (rdfs:Resource).
-                body: parse("SELECT (<http://example.org/ns#thing> AS ?result) WHERE {}"),
+                body: body_text("SELECT (<http://example.org/ns#thing> AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint {
                     datatype: Some("http://www.w3.org/2000/01/rdf-schema#Resource".to_owned()),
@@ -2122,7 +2423,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2161,7 +2462,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2179,7 +2480,7 @@ mod tests {
     }
 
     /// A dataset-aware function is handed the graph the query is running over, and
-    /// can answer FROM it — the capability that distinguishes it from the native
+    /// can answer FROM it â the capability that distinguishes it from the native
     /// kind, which sees only argument values.
     #[test]
     fn expr_function_receives_the_query_s_focus_graph() {
@@ -2207,7 +2508,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     focus_graph: Some(&ds),
                     ..QueryOptions::EMPTY
                 },
@@ -2252,7 +2553,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2261,7 +2562,7 @@ mod tests {
     }
 
     /// The call depth seeded on the query reaches the callee, and the ceiling is
-    /// enforced before the body runs — so a callee that re-enters the evaluator with
+    /// enforced before the body runs â so a callee that re-enters the evaluator with
     /// its own depth cannot recurse without bound.
     #[test]
     fn expr_function_depth_is_seeded_and_bounded() {
@@ -2287,7 +2588,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     focus_graph: Some(&ds),
                     call_depth,
                     ..QueryOptions::EMPTY
@@ -2326,8 +2627,8 @@ mod tests {
     /// A native closure answering `xsd:boolean` `true` for an even argument and
     /// raising a SPARQL expression error (`Ok(None)`) for an odd one.
     ///
-    /// The odd case is a *domain* refusal — the argument is a perfectly good
-    /// integer the function has no answer for — which is precisely the shape
+    /// The odd case is a *domain* refusal â the argument is a perfectly good
+    /// integer the function has no answer for â which is precisely the shape
     /// [`NativeFnBody`] reserves `Ok(None)` for.
     fn even_only_native_body() -> NativeFnBody {
         Arc::new(|args: &[&TermValue]| {
@@ -2360,7 +2661,7 @@ mod tests {
     /// A native closure's `Ok(None)` inside a `FILTER` **drops that solution** and
     /// leaves every other one alone.
     ///
-    /// SPARQL 1.1 §17: "FILTERs eliminate any solutions that, when substituted into
+    /// SPARQL 1.1 Â§17: "FILTERs eliminate any solutions that, when substituted into
     /// the expression, either result in an effective boolean value of false or
     /// produce an error." A seam that had to spell this refusal as `Err` would fail
     /// the whole query on the first odd row, answering nothing.
@@ -2392,12 +2693,12 @@ mod tests {
     }
 
     /// The same `Ok(None)`, in a `BIND`, **leaves the variable unbound** and keeps
-    /// the row — the other of the two outcomes one signal has to be able to produce.
+    /// the row â the other of the two outcomes one signal has to be able to produce.
     ///
-    /// SPARQL 1.1 §10: "If the evaluation of the expression produces an error, the
+    /// SPARQL 1.1 Â§10: "If the evaluation of the expression produces an error, the
     /// variable remains unbound for that solution but the query evaluation
-    /// continues"; algebra §18.5, `Extend(μ, var, expr) = μ if var not in dom(μ) and
-    /// expr(μ) is an error`. The host closure does not and cannot know which of the
+    /// continues"; algebra Â§18.5, `Extend(Î¼, var, expr) = Î¼ if var not in dom(Î¼) and
+    /// expr(Î¼) is an error`. The host closure does not and cannot know which of the
     /// two contexts it was called from, which is exactly why the decision belongs to
     /// the evaluator and the body reports only that it has no value.
     #[test]
@@ -2417,7 +2718,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2448,7 +2749,7 @@ mod tests {
                 ("3".to_owned(), None),
                 ("4".to_owned(), Some("true".to_owned())),
             ],
-            "all four rows survive the BIND and only the odd ones' ?e is unbound — the same \
+            "all four rows survive the BIND and only the odd ones' ?e is unbound â the same \
              signal that emptied two rows out of the FILTER above"
         );
     }
@@ -2479,7 +2780,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2495,7 +2796,7 @@ mod tests {
     }
 
     /// A panic inside a native closure is caught and converted to a clean,
-    /// deterministic [`EvalError::Function`] — the query fails cleanly rather than
+    /// deterministic [`EvalError::Function`] â the query fails cleanly rather than
     /// aborting the test process.
     #[test]
     fn native_function_panic_is_a_clean_error() {
@@ -2523,7 +2824,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2566,7 +2867,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2602,7 +2903,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2630,7 +2931,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse("SELECT ((?n) AS ?result) WHERE {}"),
+                body: body_text("SELECT ((?n) AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -2660,7 +2961,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse("SELECT ((?n) AS ?result) WHERE {}"),
+                body: body_text("SELECT ((?n) AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -2678,7 +2979,7 @@ mod tests {
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: parse("SELECT ((?n + 1) AS ?result) WHERE {}"),
+                body: body_text("SELECT ((?n + 1) AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
@@ -2704,7 +3005,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: &registry,
+                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -2726,10 +3027,10 @@ mod tests {
         }
     }
 
-    // ── engine-level push-down determinism ──────────────────────────────────
+    // ââ engine-level push-down determinism ââââââââââââââââââââââââââââââââââ
 
     /// `FILTER(<score>(?v) > 0.5)` over a `Stable` native scorer returns exactly
-    /// the subjects whose score exceeds the threshold — the native call is
+    /// the subjects whose score exceeds the threshold â the native call is
     /// correctly pushed down into the FILTER predicate.
     #[test]
     fn native_score_in_filter_pushes_down() {
@@ -2757,7 +3058,7 @@ mod tests {
     }
 
     /// `ORDER BY DESC(<score>(?v))` yields the correct score-descending order and
-    /// is reproducible across two runs — the `Stable` native fn is deterministic
+    /// is reproducible across two runs â the `Stable` native fn is deterministic
     /// under the evaluator's ordering path.
     #[test]
     fn native_score_in_order_by_is_deterministic() {
@@ -2796,7 +3097,7 @@ mod tests {
     /// is dropped for having an incomparable/NaN key) and the row order is
     /// identical across two runs. SPARQL's ORDER BY total order over the
     /// `xsd:double` value space already gives `NaN` a fixed (deterministic,
-    /// syntactic-fallback) slot — see `total_order` in `modifier.rs` — so
+    /// syntactic-fallback) slot â see `total_order` in `modifier.rs` â so
     /// this test documents that guarantee for a native-fn-derived score rather
     /// than surfacing a latent bug.
     #[test]
@@ -2846,7 +3147,7 @@ mod tests {
 
     /// FILTER over a `Stable` native scorer, over a dataset large enough to
     /// cross [`crate::parallel::PARALLEL_MIN_ROWS`], returns exactly the
-    /// expected rows — proving the native fn is safely usable on the fork-join
+    /// expected rows â proving the native fn is safely usable on the fork-join
     /// parallel path at scale (same answer as the sequential semantics).
     #[test]
     fn native_score_filter_over_parallel_threshold() {
@@ -2887,11 +3188,11 @@ mod content_fingerprint_tests {
     use std::sync::Arc;
 
     use purrdf_core::TermValue;
-    use purrdf_sparql_algebra::{Query, SparqlParser};
 
     use super::{
-        Arity, ExprFnCall, FnPopulation, NodeKind, TypeConstraint, UserFnBody, UserFnParam,
-        UserFunction, UserFunctionRegistry, Volatility, content_fingerprint,
+        Arity, BoundFunctionRegistry, ExprFnCall, FnPopulation, NodeKind, TypeConstraint,
+        UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
+        content_fingerprint,
     };
 
     const EX_FN: &str = "http://example.org/ns#fn";
@@ -2900,12 +3201,12 @@ mod content_fingerprint_tests {
     const EX_EXPR: &str = "http://example.org/ns#expr";
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
-    fn parse(body: &str) -> Arc<Query> {
-        Arc::new(
-            SparqlParser::new()
-                .parse_query(body)
-                .expect("parse function body"),
-        )
+    /// A fixture body, stored the way a real declaration stores one: as text.
+    /// Parsing happens at bind time, against the environment in force — there is
+    /// no parse a fixture could do here that would be the right one for every
+    /// environment the fixture is later bound against.
+    fn body_text(body: &str) -> Arc<str> {
+        Arc::from(body)
     }
 
     /// A SPARQL-bodied function with `required` leading required parameters out of
@@ -2919,13 +3220,13 @@ mod content_fingerprint_tests {
                 })
                 .collect(),
             required,
-            body: parse("SELECT (1 AS ?result) WHERE {}"),
+            body: body_text("SELECT (1 AS ?result) WHERE {}"),
             kind: UserFnBody::Select,
             return_constraint: TypeConstraint::default(),
         }
     }
 
-    /// A native closure that answers nothing — these fixtures exist to be DECLARED.
+    /// A native closure that answers nothing â these fixtures exist to be DECLARED.
     fn null_native() -> super::NativeFnBody {
         Arc::new(|_args: &[&TermValue]| Ok(None))
     }
@@ -2936,7 +3237,7 @@ mod content_fingerprint_tests {
         Arc::new(|_call: &ExprFnCall<'_>| Ok(None))
     }
 
-    /// A registry holding a single SPARQL-bodied function — the declared population.
+    /// A registry holding a single SPARQL-bodied function â the declared population.
     fn declared_only() -> UserFunctionRegistry {
         let mut registry = UserFunctionRegistry::new();
         registry.insert(EX_FN, sparql_bodied(1, 1));
@@ -2946,7 +3247,7 @@ mod content_fingerprint_tests {
     /// Two independently built registries with equal declarations agree.
     ///
     /// This registry type carries no instance id at all, so there is no
-    /// instance-bearing twin to contrast against here — the contrast that proves the
+    /// instance-bearing twin to contrast against here â the contrast that proves the
     /// content tier earns its keep lives in `crate::property_fn_plan` and
     /// `crate::agg_fn`, which do have one.
     #[test]
@@ -3024,7 +3325,7 @@ mod content_fingerprint_tests {
     }
 
     /// A declared parameter's type constraint reaches the digest, and an ABSENT
-    /// constraint stays distinguishable from a present one — the presence byte
+    /// constraint stays distinguishable from a present one â the presence byte
     /// `append_optional_part` always emits is what guarantees that.
     #[test]
     fn content_fingerprint_separates_parameter_constraints() {
@@ -3067,8 +3368,8 @@ mod content_fingerprint_tests {
 
     /// The partition, end to end.
     ///
-    /// A registry holding BOTH populations must yield two different digests, and —
-    /// the half that matters most — the `Declared` digest must be UNCHANGED by adding
+    /// A registry holding BOTH populations must yield two different digests, and â
+    /// the half that matters most â the `Declared` digest must be UNCHANGED by adding
     /// an injected native. A consumer rebuilds the declared half by re-parsing the
     /// shapes graph; if a host's own native registrations leaked into that digest, a
     /// perfectly valid restore would be refused for a reason the consumer could never
@@ -3107,7 +3408,7 @@ mod content_fingerprint_tests {
     /// The parser-created `exprs` entries belong to the DECLARED population, not the
     /// injected one, even though their bodies are `Arc<dyn Fn>` closures exactly like
     /// a native's. Registering one must move the declared digest and leave the
-    /// injected digest alone — the exact opposite of a native registration.
+    /// injected digest alone â the exact opposite of a native registration.
     #[test]
     fn content_fingerprint_counts_expression_bodied_as_declared() {
         let base = declared_only();
@@ -3129,7 +3430,7 @@ mod content_fingerprint_tests {
         );
     }
 
-    /// Both populations of an empty registry are pinned — these are the values a
+    /// Both populations of an empty registry are pinned â these are the values a
     /// consumer computes for a registry it never received, and they must differ from
     /// each other so an empty declared half is never mistaken for an empty injected
     /// one.
@@ -3157,6 +3458,65 @@ mod content_fingerprint_tests {
             empty_injected.to_hex(),
             "895304d147d2ab36372ed70cb611cdfa25b621ce374b655bd06b77a708da405b",
             "the empty injected-population digest is a persisted constant"
+        );
+    }
+
+    /// Two functions that declare identically and compute differently must not
+    /// share an identity. While the body was parsed algebra there was no stable
+    /// byte form to say so with, so they digested the same and a persisted artifact
+    /// bound to one would open against the other.
+    #[test]
+    fn the_declared_digest_separates_two_identical_declarations_with_different_bodies() {
+        let one = {
+            let mut registry = UserFunctionRegistry::new();
+            registry.insert(EX_FN, sparql_bodied(1, 1));
+            registry
+        };
+        let other = {
+            let mut registry = UserFunctionRegistry::new();
+            let mut func = sparql_bodied(1, 1);
+            func.body = body_text("SELECT (2 AS ?result) WHERE {}");
+            registry.insert(EX_FN, func);
+            registry
+        };
+        assert_ne!(
+            content_fingerprint(&one, FnPopulation::Declared).expect("ok"),
+            content_fingerprint(&other, FnPopulation::Declared).expect("ok"),
+            "identical parameters, arity and return type; different body"
+        );
+    }
+
+    /// The neighbouring valid case, which is the one an over-refusal would break:
+    /// the same declaration built twice must still digest identically, or a restore
+    /// that should succeed would be refused.
+    #[test]
+    fn the_declared_digest_is_stable_across_two_identical_builds() {
+        let build = || {
+            let mut registry = UserFunctionRegistry::new();
+            registry.insert(EX_FN, sparql_bodied(1, 1));
+            registry
+        };
+        assert_eq!(
+            content_fingerprint(&build(), FnPopulation::Declared).expect("ok"),
+            content_fingerprint(&build(), FnPopulation::Declared).expect("ok"),
+        );
+    }
+
+    /// The `Declared` half must stay rebuildable from the shapes graph alone. It is
+    /// a pure function of the declarations, so BINDING a registry — which is where
+    /// a host's own relation registry enters the picture — cannot move it. Were the
+    /// environment folded in here, a consumer recomputing this digest before wiring
+    /// its relations would compute a different value and refuse a valid restore.
+    #[test]
+    fn binding_does_not_move_the_declared_digest() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(EX_FN, sparql_bodied(1, 1));
+        let before = content_fingerprint(&registry, FnPopulation::Declared).expect("ok");
+        let bound = BoundFunctionRegistry::bound_for_test(registry);
+        assert_eq!(
+            content_fingerprint(bound.declarations(), FnPopulation::Declared).expect("ok"),
+            before,
+            "a host's wiring is not part of what a shapes graph declares"
         );
     }
 }

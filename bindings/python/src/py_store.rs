@@ -51,6 +51,7 @@
 //!   mechanical import swap rather than a rewrite of ~150 call sites.
 
 mod canon;
+mod env;
 mod io;
 mod mutable;
 mod prepared;

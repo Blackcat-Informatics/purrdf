@@ -368,7 +368,8 @@ fn linked_custom_function_recursion_resolves() {
                 substitutions: &[],
             },
             QueryOptions {
-                functions: &shapes.functions,
+                functions: &crate::sparql::bind_in_current_env(&shapes.functions)
+                    .expect("the fixture's bodies parse and admit"),
                 focus_graph: Some(&data),
                 ..QueryOptions::EMPTY
             },

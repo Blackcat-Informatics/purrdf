@@ -13,7 +13,8 @@ use purrdf_core::{
     TermValue,
 };
 use purrdf_sparql_eval::{
-    FallibleSparqlError, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+    ExtensionEnv, FallibleSparqlError, MemoryRelation, NativeSparqlEngine,
+    PropertyFunctionRegistry, QueryOptions,
 };
 
 type CompleteSolutions = (Vec<String>, Vec<Vec<Option<TermValue>>>, PagedQueryEvidence);
@@ -753,8 +754,10 @@ fn query_fallible_view_dispatches_a_registered_relation_with_options() {
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     let engine = NativeSparqlEngine::new();
     let registry = pair_relation();
+    let env =
+        ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly");
     let options = QueryOptions {
-        property_functions: &registry,
+        env: &env,
         ..QueryOptions::EMPTY
     };
 
@@ -782,8 +785,10 @@ fn query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_ma
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     let engine = NativeSparqlEngine::new();
     let registry = pair_relation();
+    let env =
+        ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly");
     let options = QueryOptions {
-        property_functions: &registry,
+        env: &env,
         ..QueryOptions::EMPTY
     };
 

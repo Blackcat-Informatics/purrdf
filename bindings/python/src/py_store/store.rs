@@ -14,6 +14,7 @@
 //! `_store_capsule` hands `purrdf_shapes` / `purrdf_validate` a stable
 //! `Arc<RdfDataset>` snapshot under the `c"purrdf-validation-dataset"` capsule name.
 
+use super::env::extension_env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -29,9 +30,9 @@ use super::io::{
 };
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
-    PyUpdateOutcome, borrowed_options, build_aggregates, build_engine, build_relations,
-    collect_relations, materialize_entailment_outcome, materialize_outcome, materialize_results,
-    materialize_update_outcome, registry_over, run_governed,
+    PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
+    engine_parser_options, materialize_entailment_outcome, materialize_outcome,
+    materialize_results, materialize_update_outcome, registry_over, run_governed,
 };
 use super::term::{
     PyQuad, PyVariable, extract_graph_name, extract_term, rdf_term_to_value,
@@ -257,6 +258,7 @@ impl PyStore {
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
             let aggregates = build_aggregates(aggregate_namespace);
+            let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
                 .query_with_options_view(
@@ -266,7 +268,14 @@ impl PyStore {
                         base_iri: None,
                         substitutions: &subs,
                     },
-                    borrowed_options(registry.as_ref(), aggregates.as_ref()),
+                    purrdf_sparql_eval::QueryOptions {
+                        env: &extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?,
+                        ..purrdf_sparql_eval::QueryOptions::EMPTY
+                    },
                 )
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
         })?;
@@ -359,6 +368,12 @@ impl PyStore {
             standpoint_predicates,
         };
         let parameters = parameters.unwrap_or_default();
+        // Read off `config` BEFORE `build_engine` consumes it, exactly as `query`
+        // does: the namespace declarations are parse configuration, they belong to
+        // the extension environment rather than to the engine, and the environment
+        // this call admits the plan against is the one every later `run` evaluates
+        // under — so it is derived once, here, and carried.
+        let parser_options = engine_parser_options(&config);
         // A cheap owning handle to THIS store, taken under the GIL, for `run` to
         // re-read on every call (see `Self::prepare`'s doc comment and
         // `super::prepared::PyPreparedQuery::store`) — distinct from `guard` below,
@@ -383,8 +398,9 @@ impl PyStore {
                 &engine,
                 query,
                 &parameters,
-                registry,
-                aggregates,
+                parser_options,
+                registry.as_ref(),
+                aggregates.as_ref(),
                 standpoint_for_run,
             )
         });
@@ -486,6 +502,7 @@ impl PyStore {
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
             let aggregates = build_aggregates(aggregate_namespace);
+            let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
                 .query_governed(
@@ -496,12 +513,11 @@ impl PyStore {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -618,6 +634,7 @@ impl PyStore {
             } else {
                 ClosureRelations::rebuilt_by(&rebuild)
             };
+            let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             let aggregates = build_aggregates(aggregate_namespace);
             query_with_entailment_governed(
@@ -630,12 +647,7 @@ impl PyStore {
                 },
                 plan.entailment(),
                 purrdf_sparql_eval::QueryOptions {
-                    property_functions: registry
-                        .as_ref()
-                        .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                    aggregates: aggregates
-                        .as_ref()
-                        .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                    env: &extension_env(parser_options, registry.as_ref(), aggregates.as_ref())?,
                     ..purrdf_sparql_eval::QueryOptions::EMPTY
                 },
                 &relations,
@@ -696,6 +708,7 @@ impl PyStore {
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
             let aggregates = build_aggregates(aggregate_namespace);
+            let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
                 .update_with_options(
@@ -706,12 +719,11 @@ impl PyStore {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
@@ -800,6 +812,7 @@ impl PyStore {
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
             let aggregates = build_aggregates(aggregate_namespace);
+            let parser_options = engine_parser_options(&config);
             let outcome = build_engine(config)
                 .update_governed(
                     &mut dataset,
@@ -809,12 +822,11 @@ impl PyStore {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,

@@ -31,6 +31,18 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# THE CHUNK SIZE IS NOT DEFINED HERE. Six copies lived under two names across five
+# files, two of them already drifted -- one to a quarter of the shared size and one
+# to a sixty-fourth. Every chunk size produces a correct digest, so nothing reported
+# it. (The comment that stood here claimed this file was "the last 1 MiB holdout
+# after those were unified", which was false in both halves: this file was at 4 MiB
+# already, and two sites in `scale-corpus.sh` were still below it.) The number
+# now lives in `scripts/lane_chunk.py` and nothing restates it. The path insert is
+# explicit rather than relying on `sys.path[0]`, because this module is also loaded
+# by `check-doc-claims.py` through importlib, where `sys.path[0]` is the caller's.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lane_chunk import STREAM_CHUNK_BYTES, fsync_path  # noqa: E402  # pyright: ignore[reportMissingImports]
+
 PINNED_COMMIT = "ecfa596d50b0578d1a28df8f9c76bdafe7069ec6"
 EXPORT_URL = (
     "https://raw.githubusercontent.com/cnschema/cnSchema/"
@@ -48,7 +60,7 @@ CACHE = REPO_ROOT / "target" / "cnschema-probe"
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
+        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -101,6 +113,13 @@ def _download_verified(dest: Path) -> bool:
             tmp.write_bytes(response.read())
         if sha256_of(tmp) != SOURCE_SHA256:
             return False
+        # Durable before the rename, matching `scripts/benchmark-acquire.py`. `os.replace`
+        # is atomic with respect to other processes; it says nothing about a power loss
+        # between the write and the rename reaching the disk, and the outcome there is a
+        # file at the pinned artifact's real name whose contents were never the verified
+        # bytes. This is the same law as the sibling's, in the same shape, because this is
+        # the same kind of file: a pinned byte, not a cache that can be rescraped.
+        fsync_path(tmp)
         os.replace(tmp, dest)
         return True
     finally:

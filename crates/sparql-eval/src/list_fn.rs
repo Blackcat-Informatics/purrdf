@@ -842,7 +842,7 @@ mod tests {
 
     // ── constructing functions: listSlice / listConcat ───────────────────────
 
-    use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult, TermRef};
+    use purrdf_core::{SparqlRequest, SparqlResult, TermRef};
 
     use crate::engine::NativeSparqlEngine;
 
@@ -896,14 +896,20 @@ mod tests {
         ds: &Arc<RdfDataset>,
         query: &str,
     ) -> (Vec<Vec<Option<TermValue>>>, Arc<RdfDataset>) {
-        let engine = NativeSparqlEngine::new().with_parser_options(ext_options());
+        let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
+            .expect("environment over declared parser options");
+        let engine = NativeSparqlEngine::new();
         let res = engine
-            .query(
+            .query_with_options_view(
                 ds,
                 SparqlRequest {
                     query,
                     base_iri: None,
                     substitutions: &[],
+                },
+                QueryOptions {
+                    env: &env,
+                    ..QueryOptions::EMPTY
                 },
             )
             .expect("query");
@@ -915,14 +921,20 @@ mod tests {
 
     /// Run a CONSTRUCT and return its output graph.
     fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> Arc<RdfDataset> {
-        let engine = NativeSparqlEngine::new().with_parser_options(ext_options());
+        let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
+            .expect("environment over declared parser options");
+        let engine = NativeSparqlEngine::new();
         match engine
-            .query(
+            .query_with_options_view(
                 ds,
                 SparqlRequest {
                     query,
                     base_iri: None,
                     substitutions: &[],
+                },
+                QueryOptions {
+                    env: &env,
+                    ..QueryOptions::EMPTY
                 },
             )
             .expect("query")
@@ -1116,7 +1128,9 @@ mod tests {
         ds: &Arc<RdfDataset>,
         query: &str,
     ) -> (Vec<String>, Arc<RdfDataset>) {
-        let engine = NativeSparqlEngine::new().with_parser_options(ext_options());
+        let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
+            .expect("environment over declared parser options");
+        let engine = NativeSparqlEngine::new();
         engine
             .query_interned_view(
                 ds.as_ref(),
@@ -1125,7 +1139,10 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                QueryOptions {
+                    env: &env,
+                    ..QueryOptions::EMPTY
+                },
                 |outcome| match outcome {
                     InternedOutcome::Solutions(solutions) => {
                         let heads = solutions

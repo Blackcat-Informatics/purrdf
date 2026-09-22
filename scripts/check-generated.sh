@@ -18,7 +18,11 @@ case "$mode" in
 esac
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-tmp="$(mktemp -d)"
+# The scratch lives beside the build output, not under $TMPDIR: this gate
+# generates into it across a `cargo` build that may take minutes, and /tmp is
+# not a place a directory survives that reliably. See scripts/build-scratch.sh.
+. "$(dirname "${BASH_SOURCE[0]}")/build-scratch.sh"
+tmp="$(build_scratch_dir check-generated)"
 trap 'rm -rf "$tmp"' EXIT
 
 cd "$repo"

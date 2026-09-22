@@ -69,7 +69,7 @@ use purrdf_core::{
     SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+    ExtensionEnv, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
 };
 
 /// The fixture namespace (AGENTS.md: test fixtures live under `example.org`, no
@@ -374,7 +374,7 @@ fn run(ds: &Arc<RdfDataset>, query_body: &str) -> SparqlResult {
 fn run_with_registry(
     ds: &Arc<RdfDataset>,
     query_body: &str,
-    registry: &PropertyFunctionRegistry,
+    registry: &ExtensionEnv,
 ) -> SparqlResult {
     let text = format!("{PFX}{query_body}");
     NativeSparqlEngine::new()
@@ -382,7 +382,7 @@ fn run_with_registry(
             &**ds,
             request(&text),
             QueryOptions {
-                property_functions: registry,
+                env: registry,
                 ..QueryOptions::EMPTY
             },
         )
@@ -1065,7 +1065,7 @@ fn exists_graph_iri_name_with_correlated_body() {
 /// `crate::exists_admission_gate`'s `probe_would_diverge_on_property_function`
 /// documents as the reason a bare call is unconditionally inadmissible in the
 /// first place.
-fn pf_registry() -> PropertyFunctionRegistry {
+fn pf_registry() -> ExtensionEnv {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         iri("pf"),
@@ -1081,7 +1081,7 @@ fn pf_registry() -> PropertyFunctionRegistry {
             .expect("fixture: one row, two values wide"),
         ),
     );
-    registry
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
 #[test]

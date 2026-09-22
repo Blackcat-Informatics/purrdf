@@ -9,7 +9,11 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-tmp="$(mktemp -d)"
+# The scratch lives beside the build output, not under $TMPDIR: this gate
+# generates into it across a `cargo` build that may take minutes, and /tmp is
+# not a place a directory survives that reliably. See scripts/build-scratch.sh.
+. "$(dirname "${BASH_SOURCE[0]}")/build-scratch.sh"
+tmp="$(build_scratch_dir obographs-oracle)"
 trap 'rm -rf "${tmp}"' EXIT
 
 cargo run --quiet --locked -p purrdf-rdf --example write_obographs_oracle_fixture -- \

@@ -13,8 +13,8 @@ use purrdf_sparql_algebra::{
 use purrdf_sparql_eval::eval::{EvalCtx, eval, evaluate_query};
 use purrdf_sparql_eval::governor::GovernorState;
 use purrdf_sparql_eval::{
-    EvalError, InProcessServiceResolver, MemoryRelation, NativeSparqlEngine, PreparedQuery,
-    PropertyFunctionRegistry, QueryGovernors, QueryOptions,
+    EvalError, ExtensionEnv, InProcessServiceResolver, MemoryRelation, NativeSparqlEngine,
+    PreparedQuery, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
 };
 
 fn ask(pattern: GraphPattern) -> Query {
@@ -172,8 +172,10 @@ fn service_silent_cannot_hide_forwarding_hazards_in_aggregate_sort_keys() {
         "http://example.org/relation",
         Arc::new(MemoryRelation::new(1, 1, vec![]).unwrap()),
     );
+    let env =
+        ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly");
     let options = QueryOptions {
-        property_functions: &relations,
+        env: &env,
         ..QueryOptions::EMPTY
     };
     for (key, expected) in [

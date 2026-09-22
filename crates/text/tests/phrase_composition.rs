@@ -23,7 +23,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
-use purrdf_sparql_eval::{NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
+use purrdf_sparql_eval::{
+    ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+};
 use purrdf_text::{
     GraphSelector, TermOccurrenceRelation, TextIndex, TextIndexConfig, TextSearchRelation,
 };
@@ -162,7 +164,8 @@ fn answer(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: relations,
+                env: &ExtensionEnv::over_relations(relations.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -328,7 +331,8 @@ fn a_multi_term_needle_is_refused_rather_than_narrowed() {
             substitutions: &[],
         },
         QueryOptions {
-            property_functions: &registry(&index),
+            env: &ExtensionEnv::over_relations(registry(&index))
+                .expect("the fixture declarations read cleanly"),
             ..QueryOptions::EMPTY
         },
     );

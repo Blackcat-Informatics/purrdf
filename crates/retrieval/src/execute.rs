@@ -216,7 +216,7 @@ use std::collections::{HashMap, VecDeque};
 
 use purrdf_core::{DatasetView, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, GovernedOutcome, NativeSparqlEngine, PfAttestation,
+    CandidateDomains, DomainTag, ExtensionEnv, GovernedOutcome, NativeSparqlEngine, PfAttestation,
     PropertyFunctionRegistry, QueryGovernors, QueryOptions, RegistryId, RelationWitness,
     ServiceLevel,
 };
@@ -482,6 +482,21 @@ pub enum ExecutionError {
         /// What moved, named at the position it moved in.
         reason: String,
     },
+    /// A registered relation's declaration methods panicked while the execution
+    /// environment was being derived from the caller's registry.
+    ///
+    /// Derivation reads every registered relation's declaration — that is how the
+    /// parser learns which predicate IRIs are calls — so a relation whose `describe`
+    /// panics makes the environment underivable. It is a refusal rather than a
+    /// fallback to an empty environment, because an empty environment would lower
+    /// every one of this bundle's relation calls to an ordinary triple pattern and
+    /// answer over the base graph: a silently narrower read, which is exactly the
+    /// outcome the rest of this type exists to prevent.
+    #[error("the execution environment could not be derived from the registry: {reason}")]
+    EnvironmentNotDerivable {
+        /// The registry's own failure, propagated unchanged.
+        reason: String,
+    },
 }
 
 /// A concrete ranked stream of `(rank, candidate, block)` rows.
@@ -703,8 +718,17 @@ pub async fn execute<D: DatasetView + Sync>(
     // one it is run under, because a plan prepared without one has already
     // lowered every relation's predicate to an ordinary triple pattern. One
     // spelling, called twice, so the two sites cannot drift apart.
+    // The environment is built ONCE, here, and both the prepare and the evaluation
+    // borrow it: an environment derives the parse configuration and the registry
+    // fingerprints the plan cache keys on, and rebuilding it per unit would pay that
+    // derivation once per unit for a value that cannot change inside one execution.
+    let env = ExtensionEnv::over_relations(registry.clone()).map_err(|e| {
+        ExecutionError::EnvironmentNotDerivable {
+            reason: e.to_string(),
+        }
+    })?;
     let options = || QueryOptions {
-        property_functions: registry,
+        env: &env,
         ..QueryOptions::EMPTY
     };
 

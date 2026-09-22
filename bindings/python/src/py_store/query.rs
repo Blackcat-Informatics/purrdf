@@ -117,19 +117,38 @@ pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
         property_fn_namespaces,
         standpoint_predicates,
     } = config;
+    // The namespace declarations do NOT live here: they are parse configuration, and
+    // parse configuration lives on the extension environment. See
+    // [`engine_parser_options`], which is what every call site hands to
+    // [`extension_env`](super::env::extension_env).
+    let _ = (extension_namespaces, property_fn_namespaces);
     let mut engine = NativeSparqlEngine::new();
-    if extension_namespaces.is_some() || property_fn_namespaces.is_some() {
-        engine = engine.with_parser_options(ParserOptions {
-            extension_fn_namespaces: extension_namespaces.unwrap_or_default(),
-            property_fn_namespaces: property_fn_namespaces.unwrap_or_default(),
-            property_fn_iris: Vec::new(),
-        });
-    }
     if let Some((according_to, sharpens)) = standpoint_predicates {
         engine =
             engine.with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
     }
     engine
+}
+
+/// The caller's declared parse configuration, as [`ParserOptions`].
+///
+/// Split out of [`build_engine`] because it does not belong to the engine. A
+/// namespace declaration decides which predicate IRIs are calls and which function
+/// IRIs may be spelled, which is a property of the environment a query is read
+/// against, not of the machine that evaluates it. Every call site reads this and
+/// hands it to [`extension_env`](super::env::extension_env), so a Python caller's
+/// `extension_namespaces` / `property_fn_namespaces` reach the same parse the
+/// relations do.
+///
+/// [`ParserOptions::property_fn_iris`] is left empty on purpose: the exact-IRI
+/// recognition set is derived from the registry the call is evaluated under,
+/// one-to-one, so it cannot disagree with the relations actually injected.
+pub(super) fn engine_parser_options(config: &EngineConfig) -> ParserOptions {
+    ParserOptions {
+        extension_fn_namespaces: config.extension_namespaces.clone().unwrap_or_default(),
+        property_fn_namespaces: config.property_fn_namespaces.clone().unwrap_or_default(),
+        property_fn_iris: Vec::new(),
+    }
 }
 
 /// One caller-declared property-function relation, converted out of Python **before**
@@ -664,36 +683,6 @@ pub(super) fn build_aggregates(namespace: Option<String>) -> Option<AggregateReg
     let mut registry = AggregateRegistry::new();
     registry.register_statistical_aggregates(&namespace);
     Some(registry)
-}
-
-/// Assemble the [`purrdf_sparql_eval::QueryOptions`] a call evaluates under from the two
-/// optional registries [`build_relations`] and [`build_aggregates`] produced, falling
-/// back to each registry's own `EMPTY` — never a second "no registry" spelling — exactly
-/// as every other options-carrying entry point on this seam does.
-///
-/// Shared by [`super::store::PyStore::query`] and the prepare/run pair in
-/// [`super::prepared`] so the two cannot drift apart on how a registry pair becomes the
-/// options an evaluation actually runs under: a prepared plan's registry IDENTITY is
-/// exactly what [`purrdf_sparql_eval`]'s `check_plan_matches_relations` compares at run
-/// time, so the run must build `QueryOptions` the identical way prepare did.
-pub(super) fn borrowed_options<'a>(
-    property_functions: Option<&'a PropertyFunctionRegistry>,
-    aggregates: Option<&'a AggregateRegistry>,
-) -> purrdf_sparql_eval::QueryOptions<'a> {
-    // The fallback references are read off `QueryOptions::EMPTY` itself rather than
-    // written as `&PropertyFunctionRegistry::EMPTY` / `&AggregateRegistry::EMPTY`
-    // here: those registries own a `HashMap` (drop glue), so a fresh borrow of the
-    // const in a function body is an ordinary temporary scoped to this call, not a
-    // promoted `'static` one — and this function must RETURN a reference that
-    // outlives it. `QueryOptions::EMPTY` was built the promotable way, as another
-    // `const`'s initializer, so copying its (`Copy`) reference fields out keeps
-    // their genuine `'static` lifetime.
-    let empty = purrdf_sparql_eval::QueryOptions::EMPTY;
-    purrdf_sparql_eval::QueryOptions {
-        property_functions: property_functions.unwrap_or(empty.property_functions),
-        aggregates: aggregates.unwrap_or(empty.aggregates),
-        ..empty
-    }
 }
 
 /// SELECT results, materialized. Mirrors the oxigraph Python `QuerySolutions`.

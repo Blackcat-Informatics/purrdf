@@ -578,7 +578,6 @@ pub fn run(
                 property_fn_iris: Vec::new(),
             };
             let engine = NativeSparqlEngine::new()
-                .with_parser_options(parser_options.clone())
                 .with_standpoint_predicates(StandpointPredicates::new(
                     format!("{EXT_NS}accordingTo"),
                     format!("{EXT_NS}sharpens"),
@@ -616,10 +615,23 @@ pub fn run(
             // fixtures happen to spell no `REL_NS` predicate today, but the registry
             // costs nothing to carry and keeps the two branches from silently
             // disagreeing about which predicates are calls.
-            let empty_aggregates = purrdf_sparql_eval::AggregateRegistry::EMPTY;
+            // The declared parser options AND both registries together, as the one
+            // environment the text is read against — folded into a single
+            // `ExtensionEnv::new` call (rather than `ExtensionEnv::over`, which would
+            // silently drop `parser_options`) so the EXT_NS/REL_NS namespace
+            // declaration above and the registries below can never disagree about
+            // which predicates are calls.
+            let env = purrdf_sparql_eval::ExtensionEnv::new(
+                parser_options.clone(),
+                harness_relations().clone(),
+                aggregates.as_ref().map_or_else(
+                    || purrdf_sparql_eval::AggregateRegistry::EMPTY,
+                    Clone::clone,
+                ),
+            )
+            .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))?;
             let options = QueryOptions {
-                property_functions: harness_relations(),
-                aggregates: aggregates.as_ref().unwrap_or(&empty_aggregates),
+                env: &env,
                 ..QueryOptions::EMPTY
             };
             let result = match remote {
@@ -634,18 +646,27 @@ pub fn run(
             // Apply the `ut:request` update to the pre-state dataset; the mutated
             // dataset is diffed against the expected post-state in `compare`.
             let mut dataset = build_dataset(&case.base, &case.data, &case.graph_data)?;
-            let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
+            let env = purrdf_sparql_eval::ExtensionEnv::over_options(ParserOptions {
                 extension_fn_namespaces: vec![EXT_NS.to_owned()],
                 property_fn_namespaces: vec![REL_NS.to_owned()],
                 property_fn_iris: Vec::new(),
-            });
+            })
+            .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))?;
+            let engine = NativeSparqlEngine::new();
             let request = SparqlRequest {
                 query: &query_text,
                 base_iri: Some(&case.base),
                 substitutions: &[],
             };
             engine
-                .update(&mut dataset, request)
+                .update_with_options(
+                    &mut dataset,
+                    request,
+                    QueryOptions {
+                        env: &env,
+                        ..QueryOptions::EMPTY
+                    },
+                )
                 .map_err(|e| format!("apply update {}: {e}", case.iri))?;
             Ok(RunOutcome::Update(dataset))
         }

@@ -36,17 +36,34 @@
 #     licensing posture this tree can take;
 #   * patching would require a Java compiler, and the artifact ships prebuilt
 #     `classes/` precisely so that a JRE is enough;
-#   * a rename is checkable -- the lane counts what it renamed and fails if the
-#     count is not what the generator said it wrote.
+#   * a rename is checkable -- the lane refuses to leave a single backslash-named
+#     stray behind, so a pathology that changes shape (some files misplaced and
+#     some not) is caught rather than half-converted.
+#
+# The lane does NOT check the renamed count against a count parsed out of the
+# generator's own output: UBA's file count is not a closed form of `-univ` (the
+# department count per university is itself generated), and nothing here has
+# established the format of what it prints. What IS checked is that the corpus
+# exists, that it has bytes, that no stray remains, and that every file found was
+# converted -- see step 5's `converted == owl_count`.
 #
 # Each run generates inside its own directory (`<arena>/work`), so the misplaced
-# files land in that run's own arena and concurrent runs cannot collide.
+# files land in that run's own arena rather than in a shared parent. That is a
+# statement about WHERE the strays go, NOT about concurrent safety: the arena is
+# derived from `LUBM_OUT` alone, so two runs with default knobs share it and every
+# step below begins by wiping it. Two runs at once want two arenas.
 #
 # DETERMINISM, AND THE ONE PLACE IT WAS NOT FREE
 # ==============================================
 #
 # UBA takes `-index` and `-seed`, and the same pair reproduces the datasets used in
-# the LUBM papers. The conversion needed one fix to inherit that: every generated
+# the LUBM papers. THAT IS CHECKED, not assumed: the pinned `Generator.class`
+# references `java.util.ArrayList` and `java.util.Random` and no hash-ordered
+# collection at all, so its output carries no iteration-order dependence -- and
+# `java.util.Random` is specified, not implementation-defined. Together with JEP 400
+# fixing `file.encoding` to UTF-8 from JDK 18 (and LUBM content being ASCII either
+# way), that makes generation independent of the JDK it runs on, which is why the
+# JDK is NOT among the inputs the corpus digest names. The conversion needed one fix to inherit that: every generated
 # file opens with `<owl:Ontology rdf:about="">`, an EMPTY RELATIVE IRI, which
 # resolves against the document base. Left to default, that base is the input file's
 # own `file://` path -- so the converted N-Quads embedded the scratch directory and
@@ -89,12 +106,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/lane-common.sh"
 UNIVERSITIES="${LUBM_UNIVERSITIES:-1}"
 SEED="${LUBM_SEED:-0}"
 INDEX="${LUBM_INDEX:-0}"
-ONTO="${LUBM_ONTO:-http://swat.cse.lehigh.edu/onto/univ-bench.owl}"
+readonly LUBM_DEFAULT_ONTO="http://swat.cse.lehigh.edu/onto/univ-bench.owl"
+ONTO="${LUBM_ONTO:-${LUBM_DEFAULT_ONTO}}"
 # example.org is RFC 2606's reserved documentation domain and this repository's own
 # fixture convention. It is a placeholder for the corpus's publication IRI, which a
 # locally generated corpus does not have -- not a claim that anything is published
 # there. An operator who publishes a corpus sets this to where it actually lives.
-DOC_BASE="${LUBM_DOC_BASE:-http://example.org/lubm/}"
+readonly LUBM_DEFAULT_DOC_BASE="http://example.org/lubm/"
+DOC_BASE="${LUBM_DOC_BASE:-${LUBM_DEFAULT_DOC_BASE}}"
 ENTAIL_SLICE="${LUBM_ENTAIL_SLICE:-3000}"
 OUT="${LUBM_OUT:-target/lubm}"
 BIN="${LUBM_BIN:-}"
@@ -160,21 +179,12 @@ step() {
   echo "=== $* ==="
 }
 
-require_uint() {
-  local name="$1" value="$2"
-  [[ "${value}" =~ ^[0-9]+$ ]] ||
-    die "${name} must be a decimal unsigned integer (got '${value}')"
-}
-
-require_positive() {
-  require_uint "$1" "$2"
-  [[ "$2" != "0" ]] || die "$1 must be positive (got '$2')"
-}
-
-require_positive LUBM_UNIVERSITIES "${UNIVERSITIES}"
-require_positive LUBM_ENTAIL_SLICE "${ENTAIL_SLICE}"
-require_uint LUBM_SEED "${SEED}"
-require_uint LUBM_INDEX "${INDEX}"
+# Validated AND normalised by the shared implementation, so `LUBM_SEED=007`
+# cannot reach the report as one label while the generator reads another.
+lane_require_positive LUBM_UNIVERSITIES UNIVERSITIES
+lane_require_positive LUBM_ENTAIL_SLICE ENTAIL_SLICE
+lane_require_uint LUBM_SEED SEED
+lane_require_uint LUBM_INDEX INDEX
 [[ "${DOC_BASE}" == *://* ]] ||
   die "LUBM_DOC_BASE must be an absolute IRI (got '${DOC_BASE}')"
 [[ "${ONTO}" == *://* ]] || die "LUBM_ONTO must be an absolute IRI (got '${ONTO}')"
@@ -213,6 +223,19 @@ validate_purrdf_bin() {
     "A binary that says nothing is not the purrdf CLI, and this lane records what it
   printed beside every number in the report as the provenance of that number."
   PURRDF_VERSION="${LANE_PROBE_OUT}"
+  # THE PIN-KEY SUFFIX HAS ONE DEFINITION, and it is not here. This used to be
+  # `${PURRDF_VERSION// /-}` in each lane while the self-test built the same suffix
+  # from `Cargo.toml` -- three constructions, none compared. A release adding a git
+  # hash or a second banner line would make every version-keyed pin unreachable, and
+  # an unreachable pin reads as "no pin for this binary" and exits 0. One environment
+  # change, every pin silently off. Asking for the suffix also validates the shape:
+  # the derivation refuses anything that is not `<name> <semver>` by name.
+  PURRDF_PIN_SUFFIX="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --pin-version-suffix "${PURRDF_VERSION}")" ||
+    die "the binary reported a version line no pin key can be built from:
+  '${PURRDF_VERSION}'
+  Every version-keyed pin would be unreachable, which a lane reports as 'no pin
+  recorded' and exits 0 on -- so this is refused rather than carried."
 
   # One triple, in the reserved documentation domain this repository's fixtures
   # use. It exercises the same `--from rdfxml --to nquads --base` path step 5
@@ -273,13 +296,20 @@ now_ms() {
 # ── 1. Artifacts ────────────────────────────────────────────────────────────────
 
 step "1/7 artifacts (pinned, fetched by digest, never vendored)"
+# `GeneratorLinuxFix.zip` is deliberately NOT among these. It is pinned in
+# benchmark-acquire.py because the licensing analysis needs it on the record --
+# it is a modified copy of the GPL UBA source and carries the same header -- but
+# this lane fixes the output after generation rather than patching
+# Generator.java, precisely so that a JRE is enough and no copyleft source is
+# compiled. Nothing here has ever unzipped it, so fetching it was a network
+# round-trip for a GPL artifact with no consumer.
 python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-  --only uba1.7.zip GeneratorLinuxFix.zip queries-sparql.txt univ-bench.owl ||
+  --only uba1.7.zip queries-sparql.txt univ-bench.owl ||
   die "artifact acquisition failed -- nothing downstream can be trusted, stopping"
 
 for required in uba1.7.zip univ-bench.owl queries-sparql.txt; do
-  [[ -f "${CACHE}/${required}" ]] ||
-    die "${required} is missing from ${CACHE} after acquisition reported success"
+  require_nonempty_file "${CACHE}/${required}" \
+    "${required}, which acquisition reported it had cached,"
 done
 
 # ── 2. The purrdf binary ────────────────────────────────────────────────────────
@@ -308,6 +338,32 @@ unzip -q -o "${CACHE}/uba1.7.zip" -d "${UBA}" || die "could not unpack uba1.7.zi
 GENERATOR_CLASS="${UBA}/classes/edu/lehigh/swat/bench/uba/Generator.class"
 [[ -f "${GENERATOR_CLASS}" ]] ||
   die "uba1.7.zip did not contain prebuilt classes/ -- this lane does not compile Java"
+
+# AND THE CLAIM THAT EXCLUDES THE JDK FROM THE DIGEST'S INPUTS IS EXECUTED.
+#
+# The header of this file says the generator's determinism "IS CHECKED, not assumed",
+# on the ground that this class references only `ArrayList` and `Random` and no
+# hash-ordered collection -- and that is what licenses leaving the JDK out of the seven
+# inputs the corpus digest names. The file was used for exactly one thing: `-f`. The
+# examination had happened once, in a shell, and was written down as a check.
+#
+# It is two lines here, needs no JDK, and the artifact is SHA-256-pinned so the answer
+# is stable. `strings` over the constant pool is enough: a class cannot use a type it
+# does not name there.
+generator_collections="$(strings "${GENERATOR_CLASS}" | grep -oE 'java/util/[A-Za-z]+' | sort -u)"
+grep -qx 'java/util/Random' <<<"${generator_collections}" ||
+  die "the pinned Generator.class does not reference java.util.Random.
+  The corpus digest names five knobs, the collation and the binary as its inputs, and
+  excludes the JDK on the ground that this generator's output carries no iteration-order
+  or implementation-defined dependence. That ground no longer holds, so the digest's
+  enumeration is wrong -- not the generator."
+if grep -qE 'java/util/(Hash|Tree|Concurrent|Linked)' <<<"${generator_collections}"; then
+  die "the pinned Generator.class references a hash- or tree-ordered collection:
+$(sed 's/^/    /' <<<"${generator_collections}")
+  The corpus digest excludes the JDK from its named inputs because this generator was
+  examined and found to use only ArrayList and Random. A hash-ordered collection can
+  make output depend on the JVM, so the exclusion would be unfounded."
+fi
 echo "generator classes: ${UBA}/classes"
 
 # ── 4. Generate ─────────────────────────────────────────────────────────────────
@@ -318,39 +374,116 @@ rm -rf "${ARENA}"
 WORK="${ARENA}/work"
 mkdir_checked "${WORK}"
 
+# THE LOG IS OPENED FIRST, THROUGH A CHECKED WRITE, so the observer is the write.
+#
+# Two earlier versions got this wrong. The first blamed the generator whenever the run
+# failed, including when the redirect could not be opened -- pointing the operator at a
+# file that did not exist. The second tested `-f` on the log, which cannot tell "the
+# redirect failed" from "java failed" and reports stale bytes from an earlier run as this
+# run's output. The third captured the subshell's stderr, which does not help either:
+# when bash cannot open a stdout redirect it reports that on ITS OWN stderr before the
+# command runs, so the capture is empty and the guard falls through to blaming the
+# generator anyway. Verified by running it.
+#
+# THE LOG IS OPENED ONCE, ON ITS OWN DESCRIPTOR, and the generator inherits it.
+#
+# Three earlier attempts at this got it wrong in three different ways, all of them the
+# same mistake: asserting which party a failure belonged to instead of arranging for the
+# answer to be knowable. `-f` on the log cannot distinguish a write that failed from one
+# that never happened. Capturing the subshell's stderr cannot see a redirect failure,
+# because bash reports THAT on its own stderr, outside the capture. And pre-creating the
+# log with `write_checked` and then appending left the claim "a later non-zero status is
+# the generator's" false: a failed `>>` -- the log removed between the two steps, the
+# filesystem filling -- yields status 1, and the lane then named the generator as the
+# cause and pointed at a file that might not exist. Demonstrated:
+# `gs=0; (echo hi) >>/nonexistent/log 2>&1 || gs=$?` sets `gs=1`.
+#
+# Opening the descriptor first makes the claim TRUE rather than asserted. The only
+# redirect left at the command is `>&` on an already-open descriptor, which cannot fail
+# for a filesystem reason -- so a non-zero status after it really is the generator's.
+# `exec {fd}>` also truncates, which is what was wanted all along: with the log
+# pre-created and then appended to, a re-run inside one arena could add to stale bytes.
+gen_log="${ARENA}/generator.stdout"
+exec {gen_log_fd}>"${gen_log}" ||
+  die "cannot open the generator's log at '${gen_log}' (under LUBM_OUT='${OUT}').
+  The generator was not started, so nothing about it has been measured."
 gen_start="$(now_ms)"
+generator_status=0
 (
   cd "${WORK}"
   java -cp "${UBA}/classes" edu.lehigh.swat.bench.uba.Generator \
     -univ "${UNIVERSITIES}" -index "${INDEX}" -seed "${SEED}" -onto "${ONTO}"
-) >"${ARENA}/generator.stdout" 2>&1 ||
-  die "the UBA generator failed; its output is in ${ARENA}/generator.stdout"
+) >&"${gen_log_fd}" 2>&1 || generator_status=$?
+exec {gen_log_fd}>&-
+((generator_status == 0)) ||
+  die "the UBA generator exited ${generator_status}; its output is in
+  ${gen_log}"
 gen_ms=$(($(now_ms) - gen_start))
 
 # The Windows-separator pathology: the files are in ARENA, named `work\NAME`.
-# Move each one to the name it was trying to have. The count is checked against
-# what actually appeared, and a run that produced nothing is a hard failure rather
-# than an empty dataset that converts cleanly and answers every query 0.
+# Move each one to the name it was trying to have.
 renamed=0
 shopt -s nullglob
 for stray in "${ARENA}/work\\"*; do
   base="${stray##*work\\}"
-  mv -- "${stray}" "${WORK}/${base}"
+  mv -- "${stray}" "${WORK}/${base}" ||
+    die "could not move the backslash-named stray '${stray}' to '${WORK}/${base}'
+  (under LUBM_OUT='${OUT}'). The generator wrote it and this lane must rename it; a
+  partially renamed corpus would be converted as though it were whole."
   renamed=$((renamed + 1))
 done
 shopt -u nullglob
 
-((renamed > 0)) ||
-  die "the generator wrote no files under ${ARENA} -- the Linux path pathology may have changed shape"
+# A ZERO RENAME COUNT IS NOT A FAILURE, and refusing it was an over-refusal that
+# would have rejected a PERFECT corpus. `renamed == 0` is what a FIXED generator
+# looks like -- a future upstream release, a platform that splits the backslash, or
+# an operator running a patched build. In every one of those cases the files land
+# in `WORK` correctly named and there is nothing to rename, which the guard below
+# confirms directly. The load-bearing question is whether a corpus exists, never
+# how it got its names.
+#
+# What the pathology changing shape WOULD look like is output this lane does not
+# recognise: a different wrong prefix, or some files placed correctly and others
+# misplaced under a name the loop above does not match. Re-globbing `work\*` would
+# not find that -- the loop just moved every one of those, so that glob is empty by
+# construction and testing it would prove only that the loop ran.
+#
+# What distinguishes the cases is what is LEFT in the arena. After a recognised
+# run it holds exactly the work directory and the generator's captured output;
+# anything else is output placed somewhere this lane has not accounted for, and
+# converting only the part it did recognise would report a fraction of LUBM as
+# LUBM.
+shopt -s nullglob dotglob
+unaccounted=()
+for entry in "${ARENA}"/*; do
+  case "${entry}" in
+    "${WORK}" | "${ARENA}/generator.stdout") continue ;;
+    *) unaccounted+=("${entry##*/}") ;;
+  esac
+done
+shopt -u nullglob dotglob
+((${#unaccounted[@]} == 0)) ||
+  die "after renaming ${renamed} stray file(s), ${ARENA} still holds entries this lane
+  does not account for: ${unaccounted[*]}
+  The Linux path pathology has changed shape. Converting only the files that were
+  recognised would report a fraction of LUBM under LUBM's name."
 
-owl_count=$(find "${WORK}" -maxdepth 1 -name '*.owl' | wc -l)
-((owl_count > 0)) || die "no .owl files after renaming ${renamed} stray file(s)"
-owl_bytes=$(find "${WORK}" -maxdepth 1 -name '*.owl' -printf '%s\n' | awk '{t+=$1} END {print t+0}')
+owl_count=$(find "${WORK}" -maxdepth 1 -type f -name '*.owl' | wc -l)
+((owl_count > 0)) ||
+  die "the generator produced no .owl files in ${WORK} (${renamed} stray file(s) were
+  renamed out of ${ARENA}). There is no corpus to convert, and an empty one converts
+  cleanly and answers every one of the 14 queries 0."
+owl_bytes=$(find "${WORK}" -maxdepth 1 -type f -name '*.owl' -printf '%s\n' | awk '{t+=$1} END {print t+0}')
 ((owl_bytes > 0)) ||
   die "the generator wrote ${owl_count} .owl file(s) totalling zero bytes; there is
   no corpus to convert and nothing downstream would be measuring LUBM"
 echo "generated ${owl_count} RDF/XML file(s), ${owl_bytes} bytes, in ${gen_ms} ms"
-echo "renamed ${renamed} backslash-named file(s) out of the parent directory"
+if ((renamed > 0)); then
+  echo "renamed ${renamed} backslash-named file(s) out of the parent directory"
+else
+  echo "renamed 0 files: the generator named its output correctly, so the Linux path"
+  echo "  pathology did not occur on this run"
+fi
 
 # ── 5. Convert RDF/XML -> N-Quads through purrdf itself ─────────────────────────
 
@@ -387,18 +520,20 @@ while IFS= read -r owl; do
   # failure names the file rather than the whole dataset.
   require_nonempty_file "${NQ}/${name}.nq" "the N-Quads conversion of ${name}"
   converted=$((converted + 1))
-done < <(find "${WORK}" -maxdepth 1 -name '*.owl' | sort)
+done < <(find "${WORK}" -maxdepth 1 -type f -name '*.owl' | sort)
 conv_ms=$(($(now_ms) - conv_start))
 
 ((converted == owl_count)) ||
   die "converted ${converted} of ${owl_count} files; refusing to report a partial dataset"
 
 DATA="${ARENA_ROOT}/lubm-data.nq"
-# `sort` fixes the concatenation order so the dataset is byte-reproducible. LUBM's
-# instance data contains no blank nodes, so concatenating separately converted
-# files cannot collide labels -- a property this lane checks below rather than
-# assumes.
-mapfile -t nq_files < <(find "${NQ}" -maxdepth 1 -name '*.nq' | sort)
+# `sort` fixes the concatenation order so the dataset is byte-reproducible -- but
+# only because `lane-common.sh` pins `LC_ALL=C`, which makes that sort bytewise.
+# An unpinned collation reorders `University0_1.owl` against `University0_10.owl`
+# and silently rewrites the digest published below. LUBM's instance data contains
+# no blank nodes, so concatenating separately converted files cannot collide
+# labels -- a property this lane checks below rather than assumes.
+mapfile -t nq_files < <(find "${NQ}" -maxdepth 1 -type f -name '*.nq' | sort)
 ((${#nq_files[@]} > 0)) ||
   die "no .nq files under ${NQ} after ${converted} conversion(s) reported success"
 write_checked "${DATA}" "the concatenated LUBM dataset" cat "${nq_files[@]}"
@@ -460,16 +595,82 @@ lane_require_nquads "${ONTO_NQ}" "the converted univ-bench ontology"
   runs about twice the input), so this is not a conversion of that corpus — it is a
   fraction of one. No digest is published for it and no query is run against it."
 
-data_sha=$(python3 -c '
-import hashlib, sys
-print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
-' "${DATA}")
+# The SHARED digest, not a fourth inline copy. This lane had grown its own with a
+# different chunk size from the helper introduced to end exactly that -- the drift
+# the helper was justified by, committed in the same branch that added it.
+data_sha="$(lane_sha256_file "${DATA}")"
 
 echo "data:     ${data_rows} rows, ${data_bytes} bytes, converted in ${conv_ms} ms"
 echo "ontology: ${onto_rows} rows"
 echo "sha256(lubm-data.nq) = ${data_sha}"
-echo "  ^ this digest is the determinism check: the same LUBM_UNIVERSITIES/INDEX/SEED"
-echo "    and the same LUBM_DOC_BASE must reproduce it byte for byte."
+# ASSERTED AT THE DEFAULT KNOBS. This digest is a deterministic function of
+# LUBM_UNIVERSITIES, LUBM_INDEX, LUBM_SEED, LUBM_ONTO, LUBM_DOC_BASE and the
+# collation the lane pins -- so at the defaults it is a CONSTANT, and printing a
+# constant under "the determinism check" without checking it is the missed refusal
+# this lane preaches about. At any other knob setting it is a different corpus and no
+# pin exists, which the else-branch says rather than silently skipping.
+#
+# LUBM_ONTO BELONGS IN THIS LIST AND WAS MISSING FROM IT, which made the guard an
+# OVER-REFUSAL: the generator stamps the `-onto` IRI into every document it writes
+# (`xmlns:ub=` and `owl:imports rdf:resource=` in UBA's own OwlWriter), and N-Quads
+# expands it into every type and property IRI of the corpus this digest is taken
+# over. So a legal `LUBM_ONTO=http://example.org/onto/univ-bench.owl` with everything
+# else default produced a legitimately different corpus, matched this guard anyway,
+# failed the pin, and died naming "generation, conversion, or the concatenation
+# order" -- none of which had changed. That is precisely the unnamed-input-to-a-
+# published-digest defect these lanes exist to refuse, reproduced by its own repair.
+if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" &&
+  "${ONTO}" == "${LUBM_DEFAULT_ONTO}" && "${DOC_BASE}" == "${LUBM_DEFAULT_DOC_BASE}" ]]; then
+  # THE BINARY IS AN INPUT TOO, so it is part of the key. These bytes are the
+  # purrdf serializer's output, so a pin recorded with one version says nothing
+  # about another -- and a missing pin for a new version is information, not a
+  # failure, which is why this branches on the lookup instead of dying on it.
+  #
+  # `2>/dev/null` used to stand here, and it made "no pin for this binary" and "the
+  # lookup crashed or the flag was renamed" one observable -- both a silent skip, and a
+  # skip is indistinguishable from a pass. The lookup exits 2 for "recorded nowhere" and
+  # anything else is itself broken, so only the first is branched on.
+  corpus_pin_key="lubm.1.0.seed0.corpus.sha256.${PURRDF_PIN_SUFFIX}"
+  corpus_pin_found=0
+  lane_lookup_pin "${REPO_ROOT}" "${corpus_pin_key}" && corpus_pin_found=1
+  expected_corpus="${LANE_PIN_VALUE}"
+  if ((corpus_pin_found == 1)); then
+
+    [[ "${data_sha}" == "${expected_corpus}" ]] ||
+      die "the converted LUBM corpus does not match the pin recorded for these knobs
+  and this binary.
+  expected ${expected_corpus}
+  found    ${data_sha}
+  key      ${corpus_pin_key}
+  Every knob this lane names is at its default, the generator is pinned by digest,
+  and the pin was taken with this same binary version -- so generation, conversion
+  or the concatenation order changed. No number is published for a corpus that is
+  not the pinned one."
+    echo "  ^ and it matches the pin recorded for LUBM(1, 0) seed 0 with ${PURRDF_VERSION}."
+  else
+    echo "  ^ NOT checked against a pin: no corpus pin is recorded for ${PURRDF_VERSION}."
+    echo "    These bytes are this binary's serializer output, so a pin taken with"
+    echo "    another version does not apply to them."
+  fi
+else
+  # NAME THE KNOB THAT DIFFERS, and its value. "At least one knob" out of five sends
+  # an operator to read the source to find out which; the sibling lane names both the
+  # knob and the value it carried, and this is the same diagnostic.
+  differing=()
+  [[ "${UNIVERSITIES}" == "1" ]] || differing+=("LUBM_UNIVERSITIES=${UNIVERSITIES}")
+  [[ "${INDEX}" == "0" ]] || differing+=("LUBM_INDEX=${INDEX}")
+  [[ "${SEED}" == "0" ]] || differing+=("LUBM_SEED=${SEED}")
+  [[ "${ONTO}" == "${LUBM_DEFAULT_ONTO}" ]] || differing+=("LUBM_ONTO=${ONTO}")
+  [[ "${DOC_BASE}" == "${LUBM_DEFAULT_DOC_BASE}" ]] || differing+=("LUBM_DOC_BASE=${DOC_BASE}")
+  echo "  ^ NOT checked against a pin: ${differing[*]} is not at its default, so this is"
+  echo "    a different corpus and no pin is recorded for it."
+fi
+echo "  ^ this digest is the determinism check, and it has SEVEN inputs. Five are knobs:"
+echo "    LUBM_UNIVERSITIES, LUBM_INDEX, LUBM_SEED, LUBM_ONTO (the generator stamps it"
+echo "    into every document) and LUBM_DOC_BASE. The sixth is collation, pinned to"
+echo "    LC_ALL=C by the lane rather than by the caller. The seventh is the BINARY:"
+echo "    these bytes are its serializer's output, so ${PURRDF_VERSION} is part of the"
+echo "    pin key. Any input a lane does not name is a free variable."
 
 # ── 6. Normalise the queries ────────────────────────────────────────────────────
 
@@ -481,7 +682,50 @@ python3 "${REPO_ROOT}/scripts/lubm-queries.py" --self-test ||
   die "the query normaliser failed its own self-test"
 python3 "${REPO_ROOT}/scripts/lubm-queries.py" --namespace "${NAMESPACE}" --out "${QUERIES}" ||
   die "could not normalise the LUBM queries"
+
+# A NORMALISER REPORTING SUCCESS IS NOT 14 QUERIES, and the artifacts it names
+# are not evidence until they are checked for being artifacts. The report below
+# counts what it executed; without these, the denominator it counts against was a
+# typed literal and a partial query set would have read as "executed 3 of 14".
+# ONE COPY OF THE NUMBER, read from the pin file, as the sibling lane already does.
+EXPECTED_QUERIES="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --lubm-query-count)" ||
+  die "could not read the pinned LUBM published-query count"
+lane_require_query_count "${QUERIES}" "${EXPECTED_QUERIES}" "LUBM_OUT='${OUT}'"
+require_nonempty_file "${QUERIES}/regimes.tsv" "the per-query entailment regime index"
+require_nonempty_file "${QUERIES}/provenance.txt" "the query normalisation record"
+
+# The digest is the reproducibility handle for the query set AND the tripwire that
+# makes a concurrent run visible: this directory is deleted at the top of this
+# step, so a second run sharing LUBM_OUT rewrites it underneath the loop below.
+queries_sha="$(lane_query_set_digest "${QUERIES}")"
+verify_query_set() {
+  lane_verify_query_set "${QUERIES}" "${queries_sha}" "$1" "LUBM_OUT='${OUT}'"
+}
+
 echo "provenance: ${QUERIES}/provenance.txt"
+echo "sha256(queries) = ${queries_sha}"
+
+# ASSERTED, not printed -- but only at the knob it depends on. The normalisation is
+# a pure function of the pinned queries file and the target namespace, so at the
+# default namespace the digest is a constant and printing it instead of checking it
+# would be a known value left unchecked. A non-default namespace is a different
+# query set, and asserting the default's digest against it would be an
+# over-refusal, so that case says what it is doing instead.
+if [[ "${ONTO}" == "${LUBM_DEFAULT_ONTO}" ]]; then
+  expected_queries="$(lane_require_pin "${REPO_ROOT}" lubm.queries.sha256 \
+    "query-set pin for the default LUBM namespace")"
+  [[ "${queries_sha}" == "${expected_queries}" ]] ||
+    die "the normalised LUBM query set does not match its recorded pin.
+  expected ${expected_queries}
+  found    ${queries_sha}
+  The queries file matched its own digest, so the NORMALISATION changed. Every row
+  below would be answered over a different query set than the one these rules were
+  reviewed against."
+  echo "  ^ matches the recorded pin for the default namespace"
+else
+  echo "  ^ NOT checked against a pin: LUBM_ONTO is not the default, so this is a"
+  echo "    different query set and no pin is recorded for it."
+fi
 
 # ── 7. Run the queries ──────────────────────────────────────────────────────────
 
@@ -527,17 +771,45 @@ run_query() {
   local -a flags=(--data "${dataset}" --results-format json)
   [[ "${regime}" == "-" ]] || flags+=(--entailment "${regime}")
 
-  local start stop out rc
+  # STDERR IS NOT RESULTS. Merging the two meant a binary that exits 0 while
+  # writing anything at all to stderr -- a notice, a warning, a future governor
+  # line -- prepended non-JSON to well-formed output, the parse failed, and the
+  # lane reported "its results were not parseable SPARQL JSON". The results were
+  # fine. That is a diagnosis the lane had not established, about the binary
+  # under test, which is the misdiagnosis class the lane tests exist to stop.
+  # READ THE QUERY BEFORE MEASURING, AND CHECK THAT THE READ WORKED. Inlining
+  # `$(cat ...)` into the invocation put the read inside the `set +e` window, so a
+  # read that failed -- a mode changed between the guard above and this line, a
+  # filesystem error -- yielded the empty string, the engine was handed an empty
+  # query, and its usage complaint became this lane's diagnosis. The guard cannot
+  # close that window by itself; only checking the read can.
+  local query_text
+  query_text="$(cat "${query_file}")" ||
+    die "could not read ${query_file} at the moment ${LANE} was about to run it.
+  The engine has not been asked and is not at fault: an unread query becomes an
+  empty query string, and the engine's complaint about that would be reported here
+  as though the corpus or the binary were wrong."
+  [[ -n "${query_text}" ]] ||
+    die "${query_file} read as empty at the moment it was to be run, although it
+  passed the non-empty check moments earlier. Something is changing the arena
+  underneath this run."
+
+  local start stop out rc errfile
+  errfile="${LANE_TMP}/query.err"
+  lane_reset_capture "${errfile}"
   start="$(now_ms)"
   set +e
-  out="$("${BIN}" query "${flags[@]}" "$(cat "${query_file}")" 2>&1)"
+  out="$("${BIN}" query "${flags[@]}" "${query_text}" 2>"${errfile}")"
   rc=$?
   set -e
   stop="$(now_ms)"
 
+  local said
+  said="$(lane_capture_stderr "${errfile}")"
+
   if ((rc != 0)); then
     printf 'CANNOT-EXECUTE\t-\t%s\t%s\n' "$((stop - start))" \
-      "$(printf '%s' "${out}" | head -1)"
+      "${said:-the binary exited ${rc} without saying anything}"
     return
   fi
 
@@ -558,7 +830,7 @@ else:
 
   if [[ -z "${count}" ]]; then
     printf 'BAD-RESULTS\t-\t%s\t%s\n' "$((stop - start))" \
-      "the engine exited 0 but its results were not parseable SPARQL JSON"
+      "the engine exited 0 but its stdout was not parseable SPARQL JSON${said:+; it also wrote: ${said}}"
     return
   fi
   printf 'OK\t%s\t%s\t-\n' "${count}" "$((stop - start))"
@@ -605,8 +877,19 @@ resolve_regime() {
   REGIME_RUNG["${regime}"]="none"
 }
 
+# The regimes to probe are DERIVED from the query set rather than listed here. A
+# hardcoded triple is a second source of truth beside `lubm-queries.py`'s regime
+# table, whose own self-test admits every CLI regime the binary offers: retagging
+# one query to a regime not in this list is an edit that passes that self-test and
+# then dies in this loop with a bare `REGIME_NOTE[...]: unbound variable`, naming
+# neither the lane nor the knob nor the query.
+mapfile -t probe_regimes < <(tail -n +2 "${QUERIES}/regimes.tsv" | cut -f3 | sort -u)
+((${#probe_regimes[@]} > 0)) ||
+  die "${QUERIES}/regimes.tsv names no entailment regimes; the normaliser wrote an
+  index this lane cannot probe against."
+
 echo "probing each regime's closure against the dataset ladder:"
-for regime in "-" rdfs owl-rl; do
+for regime in "${probe_regimes[@]}"; do
   resolve_regime "${regime}"
 done
 
@@ -619,7 +902,27 @@ query_total_ms=0
 executed=0
 unexecuted=0
 nonempty=0
+# COUNTING EXECUTIONS IS NOT COUNTING COMPARABLE ANSWERS. A row answered on a rung
+# below 'full' is, by this lane's own rule below, NOT the published LUBM answer --
+# it is an answer over a strict subset. A reader who quotes "14 of 14, not executed
+# 0" from the summary concludes the workload was demonstrated; if eleven of those
+# ran on a slice, almost none of it is comparable to anything published. So the
+# summary carries the number that decides that, rather than leaving it to be
+# reconstructed from fourteen table rows.
+comparable=0
 declare -a NOTES=()
+declare -A ANSWERED=()
+
+# THE THIRD CALL SITE, which the sibling had and this lane did not. The shared law is
+# that the query set is re-verified BEFORE the first query, on a missing file, and
+# after the last; this lane had only the last two, and the unguarded window is its
+# most expensive phase -- three ladder rungs built by `cat` over the whole corpus and
+# a probe query per regime, including an owl-rl closure over a hundred thousand
+# triples. A concurrent run sharing LUBM_OUT rewrites all fourteen `.rq` files in that
+# window, so every file is PRESENT, the per-file guard passes, and the substituted set
+# is measured and printed row by row -- with the mismatch surfacing only after the
+# table. A law that holds in one lane and not its sibling is not a law.
+verify_query_set "between normalisation and the first query"
 
 while IFS=$'\t' read -r id regime cli file; do
   [[ "${id}" != "id" ]] || continue
@@ -628,10 +931,18 @@ while IFS=$'\t' read -r id regime cli file; do
   if [[ -z "${dataset}" ]]; then
     printf '%-4s %-36s %-8s %-9s %-15s %8s %8s\n' \
       "${id}" "${regime}" "${cli}" "-" "CANNOT-EXECUTE" "-" "-"
-    NOTES+=("${id}: no rung of the ladder could close ${cli} -- ${REGIME_NOTE[${cli}]}")
+    NOTES+=("${id}: no rung of the ladder could close ${cli} -- ${REGIME_NOTE[${cli}]:-no rung was probed for regime '${cli}'}")
     unexecuted=$((unexecuted + 1))
     continue
   fi
+  # A missing file is almost always a concurrent run having just deleted this
+  # directory, so ask that question FIRST: it gives the real diagnosis instead of
+  # a filename that vanished for no stated reason.
+  [[ -f "${QUERIES}/${file}" ]] || verify_query_set "while ${id} was about to run"
+  # Then the artifact itself, on EVERY iteration rather than only when it is
+  # missing: present-but-unreadable and present-but-empty both reach `cat` and
+  # both become an empty query the engine is then blamed for rejecting.
+  lane_require_query_file "${QUERIES}/${file}" "${id}" "LUBM_OUT='${OUT}'"
   result="$(run_query "${QUERIES}/${file}" "${dataset}" "${cli}")"
   status="$(printf '%s' "${result}" | cut -f1)"
   rows="$(printf '%s' "${result}" | cut -f2)"
@@ -641,6 +952,10 @@ while IFS=$'\t' read -r id regime cli file; do
     "${id}" "${regime}" "${cli}" "${rung}" "${status}" "${rows}" "${ms}"
   if [[ "${status}" == "OK" ]]; then
     executed=$((executed + 1))
+    if [[ "${rung}" == "full" ]]; then
+      comparable=$((comparable + 1))
+      ANSWERED["${id}"]="${rows}"
+    fi
     query_total_ms=$((query_total_ms + ms))
     ((rows == 0)) || nonempty=$((nonempty + 1))
   else
@@ -649,7 +964,25 @@ while IFS=$'\t' read -r id regime cli file; do
   fi
 done <"${QUERIES}/regimes.tsv"
 
+# The rows above are one measurement only if they were all answered over the same
+# query set, and only if they are all of it. Both are checked after the fact,
+# because that is what proves it rather than assumes it.
+verify_query_set "while the 14 queries were running"
+query_total=$((executed + unexecuted))
+((query_total == EXPECTED_QUERIES)) ||
+  die "read ${query_total} row(s) from ${QUERIES}/regimes.tsv, not ${EXPECTED_QUERIES}.
+  The ${EXPECTED_QUERIES} .rq files were written and counted, so the index that drives
+  this loop disagrees with them. No SUMMARY is printed for a run that measured part of the workload under
+  the whole workload's name."
+
 echo ""
+if ((comparable == 0)); then
+  echo "NOT ONE ROW ABOVE IS COMPARABLE TO A PUBLISHED LUBM ANSWER: every query that"
+  echo "  executed did so on a rung BELOW 'full', which is a strict subset of the"
+  echo "  corpus. The rows say the regimes WORK and what they cost on this machine."
+  echo "  They are not results for LUBM(${UNIVERSITIES}, ${INDEX})."
+  echo ""
+fi
 if ((${#NOTES[@]} > 0)); then
   echo "QUERIES THAT DID NOT EXECUTE, and exactly why:"
   for note in "${NOTES[@]}"; do
@@ -673,19 +1006,54 @@ fi
 # nothing is a run over something that is not LUBM. (A zero on an individual
 # query is a real answer and always reported as one: Q2 is legitimately 0, and a
 # rung below 'full' legitimately answers 0 for individuals outside its subset.)
+# THE BROADEST DIAGNOSIS RUNS FIRST, or the narrow one answers for it in the state
+# the broad one was written for. `ANSWERED["Q1"]` is recorded for a query that
+# executed and matched nothing -- a zero is a real answer -- so with the oracle
+# ahead of this guard, a wholly vacuous corpus at the default knobs died on "Q1
+# answered 0 rows; LUBM publishes 4 ... the corpus or the conversion is wrong",
+# and the paragraph below, which names the dataset, the normalisation and the
+# conversion as suspects and explains why zero everywhere is not a fast run, was
+# unreachable at the only knobs whose wording it applies to. The same ordering
+# defect was found and fixed in the sibling lane; it is the same law, so it is
+# recorded in `docs/design/purrdf-bench-lane-laws.md` rather than in one lane.
 ((nonempty > 0)) ||
   die "all ${executed} queries executed and every one matched zero rows.
   That is vacuous, not fast: Q1 and Q14 are answered without entailment over the
   full ${data_rows}-row dataset and have matching individuals in any real LUBM
   corpus. Suspect the conversion, the dataset, or the query normalisation."
 
+# LUBM PUBLISHES ANSWERS FOR Q1 AND Q14, and they are the only oracle this lane
+# has: both need NO entailment, so both run on the full corpus, and at the default
+# knobs their counts are constants of LUBM(1, 0) seed 0. `nonempty > 0` -- one
+# non-zero row anywhere among fourteen -- would let a conversion bug that halved
+# either one pass silently. Checked only at the default corpus, because at any
+# other scale or seed these are not the published numbers.
+if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" ]]; then
+  for oracle in Q1 Q14; do
+    want="$(lane_require_pin "${REPO_ROOT}" "lubm.1.0.seed0.rows.${oracle}" \
+      "published LUBM answer for ${oracle}")"
+    got="${ANSWERED[${oracle}]:-}"
+    [[ -n "${got}" ]] ||
+      die "${oracle} did not execute on the full rung, so LUBM's own published answer
+  for it could not be checked. It needs no entailment, so nothing should prevent it."
+    ((got == want)) ||
+      die "${oracle} answered ${got} rows over LUBM(1, 0) seed 0; LUBM publishes ${want}.
+  This query needs no entailment and runs over the full corpus, so the corpus or the
+  conversion is wrong -- not the regime, and not the engine's inference."
+  done
+  echo "oracle: Q1 and Q14 match LUBM's published answers for LUBM(1, 0)"
+fi
+
 cat <<REPORT
 SUMMARY
+  binary             ${BIN} (${PURRDF_VERSION})
   dataset            LUBM(${UNIVERSITIES}, ${INDEX}) seed=${SEED}
   generated          ${owl_count} RDF/XML file(s), ${owl_bytes} bytes, ${gen_ms} ms
   converted          ${data_rows} rows, ${data_bytes} bytes, ${conv_ms} ms
   sha256             ${data_sha}
-  queries executed   ${executed} of 14 (${query_total_ms} ms total)
+  queries sha256     ${queries_sha}
+  queries executed   ${executed} of ${query_total} (${query_total_ms} ms total)
+  comparable rows    ${comparable} of ${query_total} (answered on rung 'full')
   matched nothing    $((executed - nonempty))
   not executed       ${unexecuted}
 
@@ -702,10 +1070,13 @@ HOW TO READ THIS
   say the regime WORKS and what it costs; they are not comparable against a number
   published for LUBM(${UNIVERSITIES}, ${INDEX}). Only 'full' rows are.
 
-  A rung below 'full' appears when materializing that regime's closure passes a
-  FIXED internal ceiling that no command-line flag raises. The probe lines above
-  print the observed and permitted counts verbatim, so the limit is visible rather
-  than inferred from a missing row.
+  A rung below 'full' appears when the 'full' attempt did not succeed. The usual
+  cause is materializing that regime's closure passing a FIXED internal ceiling
+  that no command-line flag raises, and the probe lines above carry whatever the
+  engine said in full -- including the observed and permitted counts when that is
+  the cause -- so the reason is read rather than inferred from a missing row. Any
+  non-zero exit demotes the rung, so read the probe line rather than assuming the
+  ceiling.
 
   This lane is report-only. Nothing here is a gate and no number here is asserted.
 

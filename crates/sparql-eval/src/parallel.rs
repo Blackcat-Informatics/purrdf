@@ -1605,11 +1605,7 @@ mod tests {
         crate::user_fn::UserFunction {
             params: Vec::new(),
             required: 0,
-            body: std::sync::Arc::new(
-                purrdf_sparql_algebra::SparqlParser::new()
-                    .parse_query("SELECT (1 AS ?result) WHERE {}")
-                    .expect("parse trivial function body"),
-            ),
+            body: std::sync::Arc::from("SELECT (1 AS ?result) WHERE {}"),
             kind: crate::user_fn::UserFnBody::Select,
             return_constraint: crate::user_fn::TypeConstraint::default(),
         }
