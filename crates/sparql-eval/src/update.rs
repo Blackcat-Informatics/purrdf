@@ -512,6 +512,10 @@ fn delete_insert(
         pattern,
         cfg.options.property_functions(),
         cfg.options.aggregates(),
+        // An UPDATE's `WHERE` is evaluated as written, with no substitution channel to
+        // promise anything through, so nothing is assumed bound that the pattern does
+        // not bind itself.
+        &crate::DetHashSet::default(),
     )
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);

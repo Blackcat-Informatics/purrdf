@@ -323,6 +323,26 @@
 //! written once. What [`StratumUnit`] carries is the answer — how far its read could
 //! reach — so [`execute`](crate::execute) reads the ending off the unit in hand rather
 //! than re-deriving it from a registry three stages away.
+//!
+//! # The exclusion lookup renders no depth at all
+//!
+//! Everything above is about the **streaming** text, and none of it changes. The
+//! second text a capable stratum compiles to
+//! ([`RenderedQuery::exclusion_text`]) leaves the depth position a free
+//! variable, because it is asking a different question. A depth is an offer — how many
+//! rows to rank — and a producer handed one answers *is this candidate among your best
+//! n*, whose absences are not exclusions: a candidate at rank `n + 1` is one the stream
+//! will still name, and a consumer that read its absence as an exclusion would refuse
+//! the fused read as a contradiction. There is no number that renders the right
+//! question here, so no number is rendered.
+//!
+//! The candidate goes the other way. It is left as the one variable a caller binds per
+//! lookup, and it is **declared** to the prepare rather than merely substituted into it
+//! — [`execute`](crate::execute) prepares the lookup through
+//! [`prepare_query_with_parameters`](purrdf_sparql_eval::NativeSparqlEngine::prepare_query_with_parameters)
+//! — so the feasibility pass sees the candidate bound and the depth free, and admits the
+//! call in the producer's membership mode rather than in its ranked one. That pairing is
+//! the whole of what makes a lookup against a self-bounding producer a lookup.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -518,12 +538,27 @@ impl RenderedQuery {
     /// *observed* rather than truncated into looking conforming — the same probe
     /// row [`Self::text`]'s own bound carries, for the same reason.
     ///
-    /// # The depth argument, where the producer takes one
+    /// # The depth argument, where the producer takes one: left FREE
     ///
-    /// Rendered as one. A self-bounding producer is being asked about a single
-    /// candidate, so the deepest read that can answer the question is one row,
-    /// and handing it the plan's depth would ask a generator for a ranking
-    /// nobody is going to read.
+    /// Rendered as a variable nothing binds, which is the whole of what makes a
+    /// lookup against a self-bounding producer a lookup.
+    ///
+    /// A depth is an *offer* — how many rows to rank — and a producer that
+    /// receives one answers the ranked question, `is this candidate among your
+    /// best n`. That question's absences are not exclusions: a candidate at rank
+    /// n+1 is one the stream will still name, and a consumer that read its
+    /// absence as an exclusion would refuse the fused read as a contradiction.
+    /// Rendering any number here — one included — would ask that question, and
+    /// the number chosen would only decide how often the wrong answer happened.
+    ///
+    /// Left free, the call binds the candidate and the request and nothing else,
+    /// which is a different point of the producer's mode lattice and the one a
+    /// declared membership basis is admitted against. The producer answers *do
+    /// you hold this term at all*, and every row a ranking of any depth could
+    /// have named is a row that answer finds.
+    ///
+    /// The streaming text ([`Self::text`]) is untouched by this: it still renders
+    /// the depth the plan derived, because it really is asking for a ranking.
     fn exclusion_text(&self) -> String {
         let subject_len = self.subject.len();
         let render_at = |position: usize, argument: &UnitArgument| -> String {
@@ -532,7 +567,9 @@ impl RenderedQuery {
             }
             match argument {
                 UnitArgument::Placed(text) => text.clone(),
-                UnitArgument::Depth { datatype } => render::typed_literal("1", datatype),
+                // The same spelling `render_slots` gives a free slot, so the one
+                // naming convention covers both and no two positions can collide.
+                UnitArgument::Depth { .. } => format!("?c{position}"),
             }
         };
         let subject_text = self
@@ -2036,5 +2073,62 @@ fn unrenderable(binding: &ProducerBinding, error: &RenderError) -> AdmissionErro
         Err(invalid) => AdmissionError::MalformedPlan {
             reason: format!("plan binds invalid producer IRI {invalid}"),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CANDIDATE_NAME, RenderedQuery, UnitArgument};
+    use crate::admission::ProbedDepth;
+
+    /// A four-position call shaped like the two shipped vector producers': the candidate
+    /// at 0, a constant seed at 1, the producer's depth at 2, and a free projection at 3.
+    fn self_bounding() -> RenderedQuery {
+        RenderedQuery {
+            producer: "https://example.org/pf/neighbours".to_owned(),
+            subject: vec![UnitArgument::Placed("?c0".to_owned())],
+            object: vec![
+                UnitArgument::Placed("<https://example.org/d/seed>".to_owned()),
+                UnitArgument::Depth {
+                    datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                },
+                UnitArgument::Placed("?c3".to_owned()),
+            ],
+            candidate: 0,
+            block: None,
+        }
+    }
+
+    /// **The streaming text renders the depth and the exclusion text does not.**
+    ///
+    /// The pair is asserted together because either half alone is satisfied by a defect
+    /// the other catches. A lookup that carried a depth would ask the producer *is this
+    /// candidate among your best n*, whose absences are not exclusions; a streaming read
+    /// that stopped carrying one would stop bounding itself. The two texts are the two
+    /// questions, and the depth is the whole of what distinguishes them.
+    #[test]
+    fn only_the_streaming_text_renders_a_depth() {
+        let rendered = self_bounding();
+        let depth = ProbedDepth::checked(7).expect("seven is a probeable depth");
+        let streaming = rendered.text(depth, Some(64));
+        assert!(
+            streaming.contains("\"8\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+            "the streaming read is handed the depth plus its probe row: {streaming}"
+        );
+
+        let lookup = rendered.exclusion_text();
+        assert!(
+            !lookup.contains("XMLSchema#integer"),
+            "no number belongs in the depth position of a lookup: {lookup}"
+        );
+        assert!(
+            lookup.contains("?c2"),
+            "the depth position is left free, under the same spelling `render_slots` gives \
+             any free slot: {lookup}"
+        );
+        assert!(
+            lookup.contains(&format!("?{CANDIDATE_NAME}")),
+            "and the candidate is the one variable a caller binds per lookup: {lookup}"
+        );
     }
 }

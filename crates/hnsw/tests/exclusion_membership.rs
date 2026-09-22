@@ -17,13 +17,13 @@
 //! exact however lossy the search is, and refusing it on the completeness axis would throw
 //! away a provably exact answer. Both directions are asserted here.
 //!
-//! The relation nevertheless declares no basis, and the reason is the other fact this
-//! file pins: the membership question is a **different access pattern** — the count left
-//! free — and an exclusion lookup cannot arrive in it. The lookup is this producer's own
-//! call with the candidate supplied at run time, so it is admitted with the candidate
-//! still free, under the general mode, with the count bound. The question is answerable
-//! and is answered; it is not deliverable. So what is tested below is the capability, in
-//! full, and the honest declaration beside it.
+//! The relation declares that basis, and the other fact this file pins is what makes the
+//! declaration honest: the membership question is a **different access pattern** — the
+//! count left free — and an exclusion lookup arrives in it rather than in the ranked one.
+//! A lookup admitted with the count bound would be answered by `is this candidate among
+//! your best n`, whose absences are not exclusions, so the two patterns are kept apart
+//! here: the count-bound call still cuts at `k`, the count-free call is the point lookup,
+//! and neither is a second reading of the other.
 //!
 //! Fixtures use `example.org` throughout; every IRI below is fixture configuration, never
 //! a minted vocabulary.
@@ -153,23 +153,20 @@ fn report(observed: &HnswObservations) -> String {
 // ---------------------------------------------------------------------------
 
 /// **A lossy producer is refused a `Search` basis, is admitted a `Membership` one, and
-/// declares neither — because a lookup cannot reach the mode that answers it.**
+/// declares exactly that.**
 ///
 /// Three registrations, all executed, because the interesting fact is that the middle one
 /// succeeds. Keying the refusal on the completeness axis would reject `Membership` too,
 /// and that would reject a provably exact answer: a term the matrix holds no row for is a
 /// term no beam reaches at any `ef`. The registry does not make that mistake.
 ///
-/// What the relation nevertheless declares is [`ExclusionBasis::Unavailable`], and the
-/// reason is not this axis at all. An exclusion lookup is this producer's own call with
-/// the candidate substituted at run time, so the plan is admitted with the candidate FREE
-/// — under the general mode, which binds the depth — and reaches the relation in the same
-/// binding pattern an ordinary ranked call does. The membership mode below answers the
-/// lookup's question; nothing can deliver the lookup to it. Asserting the registry's
-/// verdict and the relation's own choice side by side is what keeps those two facts from
-/// being read as one.
+/// The relation's own declaration is read off the declaration rather than assumed, and it
+/// is `Membership` — the same verdict the registry gives, arrived at independently. The
+/// two are asserted side by side because they are two facts, not one: what a producer may
+/// declare and what it does declare are different questions, and a test that checked only
+/// the registry would pass over a relation that declared nothing at all.
 #[test]
-fn a_membership_basis_would_be_admitted_and_a_search_one_refused() {
+fn a_membership_basis_is_declared_and_admitted_and_a_search_one_refused() {
     let relation = HnswRelation::new(space());
     let declared = declaration(&relation);
 
@@ -184,16 +181,16 @@ fn a_membership_basis_would_be_admitted_and_a_search_one_refused() {
     // What it actually declares, and why — see this test's own docs.
     assert_eq!(
         declared.exclusion,
-        ExclusionBasis::Unavailable,
-        "a basis this producer cannot be asked in the mode that answers it would be a \
-         promise kept by the ranked question, whose absences are not exclusions"
+        ExclusionBasis::Membership,
+        "an absence in this producer's term universe is exact however lossy its beam is, \
+         and a lookup reaches the mode that answers it"
     );
 
-    // The valid neighbour, executed: were the lookup deliverable, the lossy producer's
-    // membership basis is what the registry would admit. This is the case a
-    // completeness-keyed refusal would have rejected.
-    let mut membership = declaration(&relation);
-    membership.exclusion = ExclusionBasis::Membership;
+    // The valid neighbour, executed: the lossy producer's OWN membership basis is what
+    // the registry admits. This is the case a completeness-keyed refusal would have
+    // rejected, and the declaration is the relation's rather than one this test wrote.
+    let membership = declaration(&relation);
+    assert_eq!(membership.exclusion, ExclusionBasis::Membership);
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(PREDICATE, Arc::new(HnswRelation::new(space())), membership);
     assert!(registry.resolve(PREDICATE).is_some());

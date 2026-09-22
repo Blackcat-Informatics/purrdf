@@ -114,10 +114,27 @@ impl core::fmt::Display for PlanError {
     }
 }
 
+/// The promised-parameter set [`plan_query`] and [`plan_where_pattern`] take, built
+/// from the names a prepare declared.
+///
+/// Derived here rather than at each caller so "a declared parameter" has one spelling:
+/// the name without its sigil, exactly as `crate::substitute::apply_substitutions`
+/// reads it off a substitution pair.
+pub(crate) fn parameter_set(names: &[String]) -> DetHashSet<Variable> {
+    names.iter().map(Variable::new).collect()
+}
+
 /// Rewrite every property-function chain in `query` into a feasible order.
 ///
 /// The query is returned unchanged — and no work is done at all — when it carries no
 /// call node, which is every query on a host that has not configured the seam.
+///
+/// `parameters` are the variables an execution has PROMISED to supply through the
+/// substitution channel. They are treated as bound where the substitution really binds
+/// them — see [`plan_where_pattern`] — so a call whose argument is one of them is
+/// admitted in the access pattern it will actually be invoked in rather than in the
+/// all-free one the text alone shows. An empty set is the ordinary prepare, where
+/// nothing is promised and nothing is assumed.
 ///
 /// # Errors
 ///
@@ -132,6 +149,7 @@ pub(crate) fn plan_query(
     query: &Query,
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>,
 ) -> Result<Option<Query>, PlanError> {
     let pattern = match query {
         Query::Select { pattern, .. }
@@ -139,7 +157,7 @@ pub(crate) fn plan_query(
         | Query::Construct { pattern, .. }
         | Query::Describe { pattern, .. } => pattern,
     };
-    let Some(planned) = plan_where_pattern(pattern, relations, agg_registry)? else {
+    let Some(planned) = plan_where_pattern(pattern, relations, agg_registry, parameters)? else {
         return Ok(None);
     };
     let mut planned_query = query.clone();
@@ -164,6 +182,18 @@ pub(crate) fn plan_query(
 /// node, so a caller can keep evaluating its own borrowed `pattern` rather than a
 /// clone that happens to match it.
 ///
+/// # Where a promised parameter counts as bound
+///
+/// `parameters` names the variables an execution will supply through the substitution
+/// channel, and they are seeded exactly where that channel binds them.
+/// `crate::substitute::apply_substitutions` joins a single-row `VALUES` at the **core
+/// `WHERE` pattern** — the first node beneath the solution-modifier wrappers
+/// `Query::map_core_pattern` descends — so that is where they enter the bound set here,
+/// and the descent below follows the same wrapper list rather than a second reading of
+/// it. Above the core they are carried down unspent; a sub-`SELECT` the substitution
+/// does not reach still empties its scope, because a variable of that name inside it is
+/// a different variable and nothing will bind it.
+///
 /// # Errors
 ///
 /// A [`PlanError`] tagged [`PlanSeam::PropertyFunction`] for an unregistered predicate
@@ -175,6 +205,7 @@ pub(crate) fn plan_where_pattern(
     pattern: &GraphPattern,
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>,
 ) -> Result<Option<GraphPattern>, PlanError> {
     // Either hazard alone must still run the walk: a query with a `Custom`
     // aggregate and no property-function call would otherwise skip this pass
@@ -187,7 +218,7 @@ pub(crate) fn plan_where_pattern(
     // execution envelope before cloning or traversing an admitted call chain.
     crate::governor::soundness::validate_graph_pattern_depth(pattern)
         .map_err(PlanError::property_function)?;
-    plan_pattern(pattern, relations, agg_registry, &DetHashSet::default()).map(Some)
+    plan_pattern(pattern, relations, agg_registry, parameters, parameters).map(Some)
 }
 
 // ---------------------------------------------------------------------------
@@ -210,11 +241,19 @@ struct Atom<'a> {
 ///
 /// `outer` is the set of variables CERTAINLY bound by the enclosing context — see
 /// [`collect_certainly_bound`] for what earns a variable a place in it.
+///
+/// `seed` is the promised-parameter set still travelling down towards the core `WHERE`
+/// pattern, and it is non-empty only while this node is one of the solution-modifier
+/// wrappers a substitution descends through. It exists for exactly one arm — a
+/// sub-`SELECT`'s scope reset — because that is the only place along that descent where
+/// `outer` is discarded, and the outermost projection is on the descent rather than
+/// inside a scope of its own. See [`plan_where_pattern`].
 fn plan_pattern(
     pattern: &GraphPattern,
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
+    seed: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, PlanError> {
     // Compiler-produced algebra may be a bare call, without the parser's Lateral
     // wrapper. Apply the same admission as a chain member before cloning it.
@@ -240,7 +279,7 @@ fn plan_pattern(
     if collect_chain(pattern, &mut atoms) && atoms.iter().any(|atom| atom.call.is_some()) {
         return order_chain(atoms, relations, agg_registry, outer);
     }
-    map_children(pattern, relations, agg_registry, outer)
+    map_children(pattern, relations, agg_registry, outer, seed)
 }
 
 /// Peel the chain spine, pushing its atoms in TEXTUAL order (base first).
@@ -360,7 +399,16 @@ fn order_chain(
     // variables atoms `0..i` bound, matching the set it was chosen against above.
     let mut chain: Option<GraphPattern> = None;
     for ((pattern, call), scope) in ordered.into_iter().zip(is_call).zip(bound_before) {
-        let planned = plan_pattern(pattern, relations, agg_registry, &scope)?;
+        // A chain member is at or below the core `WHERE` pattern, so any promised
+        // parameter is already inside `scope`; there is no further projection for a
+        // seed to survive.
+        let planned = plan_pattern(
+            pattern,
+            relations,
+            agg_registry,
+            &scope,
+            &DetHashSet::default(),
+        )?;
         chain = Some(match chain {
             None => planned,
             Some(left) => {
@@ -544,9 +592,25 @@ fn map_children(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
+    seed: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, PlanError> {
+    // Two recursions, because a child is either ON the descent a substitution takes to
+    // the core `WHERE` pattern or it is not, and only the former may keep the promised
+    // parameters alive across a projection. `descend` is used by exactly the wrappers
+    // `Query::map_core_pattern` descends; every other child takes `recurse`, which
+    // spends the seed. See [`plan_pattern`].
     let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>| {
-        plan_pattern(child, relations, agg_registry, outer).map(Box::new)
+        plan_pattern(
+            child,
+            relations,
+            agg_registry,
+            outer,
+            &DetHashSet::default(),
+        )
+        .map(Box::new)
+    };
+    let descend = |child: &GraphPattern, outer: &DetHashSet<Variable>| {
+        plan_pattern(child, relations, agg_registry, outer, seed).map(Box::new)
     };
     Ok(match pattern {
         GraphPattern::Bgp { .. }
@@ -613,7 +677,7 @@ fn map_children(
             collect_certainly_bound(inner, &mut scope);
             GraphPattern::Filter {
                 expr: plan_expression(expr, relations, agg_registry, &scope)?,
-                inner: recurse(inner, outer)?,
+                inner: descend(inner, outer)?,
             }
         }
         GraphPattern::Extend {
@@ -624,7 +688,7 @@ fn map_children(
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
             GraphPattern::Extend {
-                inner: recurse(inner, outer)?,
+                inner: descend(inner, outer)?,
                 variable: variable.clone(),
                 expression: plan_expression(expression, relations, agg_registry, &scope)?,
             }
@@ -638,7 +702,7 @@ fn map_children(
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
             GraphPattern::Unfold {
-                inner: recurse(inner, outer)?,
+                inner: descend(inner, outer)?,
                 expression: plan_expression(expression, relations, agg_registry, &scope)?,
                 element: element.clone(),
                 companion: companion.clone(),
@@ -652,7 +716,7 @@ fn map_children(
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
             GraphPattern::OrderBy {
-                inner: recurse(inner, outer)?,
+                inner: descend(inner, outer)?,
                 expression: expression
                     .iter()
                     .map(|order| {
@@ -675,23 +739,28 @@ fn map_children(
             }
         }
         // A sub-`SELECT` is its own scope: a variable bound outside it is not visible
-        // inside, so the correlation set is emptied on the way in.
+        // inside, so the correlation set is emptied on the way in — emptied to `seed`,
+        // which is the empty set everywhere a substitution does not reach, and the
+        // promised parameters on the one descent where it does. The projection a
+        // caller's own `SELECT` produces sits on that descent, so a parameter survives
+        // it; a sub-`SELECT` reached through any other node does not, and there the
+        // reset is total exactly as before.
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: recurse(inner, &DetHashSet::default())?,
+            inner: descend(inner, seed)?,
             variables: variables.clone(),
         },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: recurse(inner, outer)?,
+            inner: descend(inner, outer)?,
         },
         GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: recurse(inner, outer)?,
+            inner: descend(inner, outer)?,
         },
         GraphPattern::Slice {
             inner,
             start,
             length,
         } => GraphPattern::Slice {
-            inner: recurse(inner, outer)?,
+            inner: descend(inner, outer)?,
             start: *start,
             length: *length,
         },
@@ -703,7 +772,7 @@ fn map_children(
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
             GraphPattern::Group {
-                inner: recurse(inner, outer)?,
+                inner: descend(inner, outer)?,
                 variables: variables.clone(),
                 aggregates: aggregates
                     .iter()
@@ -752,11 +821,15 @@ fn plan_expression(
     Ok(match expr {
         // A correlated `EXISTS` sees its enclosing group's bindings, so `outer` carries
         // straight in: that is what lets a relation inside one be invoked bound.
+        // A substitution's seed lands at the enclosing group's core, never inside the
+        // `EXISTS` body's own pattern, so no seed travels in here: what a promised
+        // parameter contributes is already in `outer`.
         Expression::Exists(pattern) => Expression::Exists(Box::new(plan_pattern(
             pattern,
             relations,
             agg_registry,
             outer,
+            &DetHashSet::default(),
         )?)),
         Expression::Or(a, b) => Expression::Or(sub(a)?, sub(b)?),
         Expression::And(a, b) => Expression::And(sub(a)?, sub(b)?),

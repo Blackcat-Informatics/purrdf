@@ -156,10 +156,11 @@ const KNN_MODE: &str = "fbbf";
 /// [`KNN_MODE`] binds the count while this leaves it free — so this is a genuinely
 /// new declared capability, with its own point
 /// [`PropertyFunction::rows_per_invocation`]. It is the question an
-/// [`ExclusionBasis::Membership`] lookup asks, and this relation answers it; what it
-/// cannot do is *receive* one, because the lookup is prepared with the candidate still
-/// free and is therefore admitted under [`KNN_MODE`] with the count bound. See
-/// [`PropertyFunction::open`] and the `exclusion` field of the ranked declaration.
+/// [`ExclusionBasis::Membership`] lookup asks, this relation answers it, and a lookup
+/// really does arrive in it: the consumer renders the exclusion call with the count free
+/// and declares the candidate to the prepare, so the admission pass matches THIS pattern
+/// rather than [`KNN_MODE`]. See [`PropertyFunction::open`] and the `exclusion` field of
+/// the ranked declaration.
 ///
 /// [`PropertyFunctionRegistry::register_ranked`]: crate::PropertyFunctionRegistry::register_ranked
 const KNN_MEMBERSHIP_MODE: &str = "bbff";
@@ -1110,34 +1111,36 @@ impl EmbeddingKnnRelation {
             // `CandidateDomains::Unrestricted`; see
             // `RankedDeclaration::block_position`.
             block_position: None,
-            // NO exclusion lookup is offered here, and the reason is structural
-            // rather than a gap in this relation.
+            // An exclusion from this producer is a fact about its own TERM
+            // UNIVERSE — the space holds a row for this term, or it holds none —
+            // which is what `Membership` means and the only thing a point lookup
+            // can honestly say.
             //
-            // An exclusion lookup is this producer's OWN call with the candidate
-            // supplied through the evaluator's substitution channel. The plan is
-            // prepared once per stratum and the candidate is substituted per
-            // lookup, so the pattern the admission pass sees has the candidate
-            // FREE and the call is admitted under the general mode — which binds
-            // the depth. The invocation therefore reaches this relation with the
-            // depth bound, in exactly the binding pattern an ordinary ranked call
-            // arrives in, and there is no signal by which the two can be told
-            // apart.
+            // It is emphatically not the ranked question. `is this candidate among
+            // your best n` has absences that are not exclusions: a candidate
+            // outside the best n is one this producer may still name at rank n,
+            // and a consumer that read that absence as an exclusion would refuse
+            // the fused read as a contradiction the first time the stream named
+            // it. Those two questions are two points of this relation's mode
+            // lattice, and which one an invocation asks is decided by the count —
+            // see `KNN_MEMBERSHIP_MODE` and [`Self::open`].
             //
-            // So a declared basis here would be answered by the ranked question:
-            // `is this candidate among your best n`. Its absences are not
-            // exclusions — a candidate outside the best n is one this producer
-            // may still name at rank n — and a consumer that read them as
-            // exclusions would refuse the fused read as a contradiction the first
-            // time one arrived.
+            // What makes the basis deliverable is that a lookup arrives in the
+            // membership mode. The consumer renders the lookup with the count left
+            // FREE and declares the candidate a prepare parameter, so the
+            // admission pass sees `KNN_MEMBERSHIP_MODE` rather than the general
+            // one, and the invocation reaches this relation as the point lookup it
+            // was admitted as. The promise that the candidate really will be
+            // supplied is enforced where the execution begins; a plan that
+            // declared it and did not supply it is refused rather than run with
+            // the position free.
             //
-            // `KNN_MEMBERSHIP_MODE` is the question a basis would need, and this
-            // relation serves it: a caller who leaves the count free gets the
-            // membership answer, and `row_of` decides it without ranking
-            // anything. What is missing is a way for the lookup to ARRIVE in that
-            // mode — the count must be free at PREPARE time, and the candidate is
-            // only bound at RUN time — and that is a seam this crate does not
-            // own. Until it exists, `Unavailable` is the true statement.
-            exclusion: ExclusionBasis::Unavailable,
+            // The lookup is exact however the search behaves — a term the space
+            // holds no row for is a term no ranking can name — and it costs one
+            // binary search over canonical term order, with no vector read and no
+            // distance compared against any other row. `KnnObservations` counts
+            // both halves, so that is measured rather than argued.
+            exclusion: ExclusionBasis::Membership,
             mandatory: false,
         }
     }
@@ -1167,9 +1170,10 @@ impl PropertyFunction for EmbeddingKnnRelation {
     /// declared. What it adds is the point lookup [`Self::open`] documents — *do you
     /// hold this term at all* — with the row bound [`Self::rows_per_invocation`]
     /// reports for it. That is the question an
-    /// [`ExclusionBasis::Membership`] lookup asks, and this relation answers it; why
-    /// the ranked declaration nevertheless offers no basis is a fact about how a
-    /// lookup is prepared rather than about this mode, and is recorded on that field.
+    /// [`ExclusionBasis::Membership`] lookup asks, this relation answers it, and the
+    /// ranked declaration offers the basis on that footing: a lookup is rendered with
+    /// the count free and the candidate declared to the prepare, so it is admitted
+    /// against THIS pattern rather than against the one beside it.
     ///
     /// Adding it takes nothing away from the pattern beside it. A count-bound call
     /// keeps its `k` cut, because the two shapes are two points of the lattice and

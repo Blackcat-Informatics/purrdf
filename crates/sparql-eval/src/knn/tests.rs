@@ -1975,20 +1975,19 @@ fn membership_universe() -> Vec<TermValue> {
         .collect()
 }
 
-/// **A membership basis would be admitted from this producer whatever its fidelity, and
-/// the relation declares none anyway.**
+/// **A membership basis is what this producer declares, and the registry admits it
+/// whatever the host's fidelity says.**
 ///
-/// The registry's half of the rule is what matters here: a basis about a producer's own
-/// term universe is exact however lossy the host says its corpus coverage is, so keying
-/// that admission on completeness would reject a provably exact answer. Both fidelities
-/// are registered for real.
-///
-/// The relation's own choice is [`ExclusionBasis::Unavailable`], for a reason that has
-/// nothing to do with this axis: an exclusion lookup is prepared with the candidate still
-/// free and is therefore admitted under [`KNN_MODE`], with the count bound — the ranked
-/// question — so the membership mode that answers the lookup's question cannot receive it.
+/// Two facts, asserted together because each without the other leaves the interesting
+/// one unstated. The relation's own declaration is [`ExclusionBasis::Membership`], and
+/// it does not move with the fidelity the host passes in, because an exclusion here is a
+/// fact about the space's term universe rather than about how much of the corpus that
+/// space covers. And the registry's half of the rule is that such a basis is admitted
+/// from a producer declared lossy as readily as from an exact one — keying that
+/// admission on completeness would reject a provably exact answer. Both fidelities are
+/// registered for real.
 #[test]
-fn a_membership_basis_would_be_admitted_from_either_fidelity() {
+fn a_membership_basis_is_declared_and_admitted_from_either_fidelity() {
     let relation = EmbeddingKnnRelation::new(Arc::new(membership_space()));
     let declare = |fidelity: RankFidelity| {
         relation.ranked_declaration(
@@ -2008,14 +2007,14 @@ fn a_membership_basis_would_be_admitted_from_either_fidelity() {
 
     // What the relation declares, and it does not move with the host's fidelity.
     for fidelity in [RankFidelity::EXACT, sampled.clone()] {
-        assert_eq!(declare(fidelity).exclusion, ExclusionBasis::Unavailable);
+        assert_eq!(declare(fidelity).exclusion, ExclusionBasis::Membership);
     }
 
-    // And what the registry would admit if a lookup could reach the mode that answers it:
-    // membership, from BOTH — which is the refusal that must not exist.
+    // And what the registry admits, from BOTH — which is the refusal that must not
+    // exist. The declaration is the relation's own, not a field the test set.
     for fidelity in [RankFidelity::EXACT, sampled] {
-        let mut declaration = declare(fidelity);
-        declaration.exclusion = ExclusionBasis::Membership;
+        let declaration = declare(fidelity);
+        assert_eq!(declaration.exclusion, ExclusionBasis::Membership);
         let mut registry = crate::PropertyFunctionRegistry::new();
         registry.register_ranked(
             "https://example.org/pf/nearest",

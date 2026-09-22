@@ -207,7 +207,7 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         state: Option<&Arc<GovernorState>>,
     ) -> Result<ValidatedRdfDatasetBuilder, GraphBuildError> {
-        self.admit_construct(dataset, prepared, options, state)?;
+        self.admit_construct(dataset, prepared, substitutions, options, state)?;
         let query = if substitutions.is_empty() {
             Cow::Borrowed(&prepared.query)
         } else {
@@ -246,10 +246,15 @@ impl NativeSparqlEngine {
         &self,
         dataset: &D,
         prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
         options: QueryOptions<'_>,
         state: Option<&Arc<GovernorState>>,
     ) -> Result<(), GraphBuildError> {
-        check_plan_matches_relations(prepared, options)?;
+        check_plan_matches_relations(
+            prepared,
+            options,
+            crate::substitute::Prebindings::Owned(substitutions),
+        )?;
         if !matches!(prepared.query, Query::Construct { .. }) {
             return Err(RdfDiagnostic::error(
                 "native-sparql-construct",

@@ -407,33 +407,51 @@ the bound beside it is the one you will be held to.
 There is a second condition, and it is the one that decides whether a basis is
 declarable at all: **the lookup must arrive in the mode that answers it.** An
 exclusion lookup is your own call with the candidate supplied through the
-evaluator's substitution channel, and the plan is prepared once per stratum —
-so the pattern the admission pass sees has the candidate *free*, and the call is
-admitted under your general mode. Whatever that mode binds, your relation
-receives bound.
+evaluator's substitution channel, and the plan is prepared once per stratum. The
+candidate is therefore a *variable* at the moment the call is admitted, and
+whatever mode that admission selects is the mode your relation is invoked in.
 
-For the lexical relation that is harmless: its general mode leaves every
-position but the needle free, so a candidate-bound call has one meaning and
-`bbffff` is what it arrives in. For a producer that declares a
-`DepthPlacement` it is decisive. The depth is bound in the general mode, so the
-lookup reaches the relation with the depth bound — in exactly the binding
-pattern an ordinary ranked call arrives in — and the relation has no signal by
-which to tell the two apart. Its answer to the lookup is therefore its answer to
-*is this candidate among your best n*, whose absences are **not** exclusions: a
-candidate outside the best n is one the producer may still name at rank n, and a
-consumer that read that absence as an exclusion would refuse the fused read as
-`ExclusionContradicted` the first time one arrived.
+For the lexical relation this is settled by its general mode alone: `fbffff`
+leaves every position but the needle free, so a candidate-bound call has one
+meaning and `bbffff` is what it arrives in. For a producer that declares a
+`DepthPlacement` it is not, and the difference is decisive. If the lookup were
+rendered the way the ranked read is, the depth would be bound, and the pattern
+reaching the relation would be exactly the pattern an ordinary ranked call
+arrives in — with no signal by which to tell the two apart. The answer would then
+be the answer to *is this candidate among your best n*, whose absences are **not**
+exclusions: a candidate outside the best n is one the producer may still name at
+rank n, and a consumer that read that absence as an exclusion would refuse the
+fused read as `ExclusionContradicted` the first time one arrived.
 
-So: a producer that takes its depth as an argument declares
-`ExclusionBasis::Unavailable` today, however cheaply it could answer the
-membership question if it were asked it. Both shipped vector relations are in
-exactly that position — they declare the count-free membership mode `bbff`, they
-answer it by a binary search over their term universe with no ranking at all, and
-they still declare no basis, because nothing can deliver a lookup to that mode.
-Closing the gap needs a seam this document does not have: a way to tell the
-admission pass which variables a prepared plan will have substituted, so the
-depth can be left free in the lookup's text without making the plan
-unpreparable.
+Two things together keep that from happening, and a producer with a depth
+placement should know both, because its basis rests on them.
+
+**The exclusion unit renders no depth.** [`compile`] leaves the depth position a
+free variable in the lookup's text — and *only* in the lookup's text; the
+streaming unit still carries the depth the plan derived. A depth is an offer, and
+a lookup is not asking for an offer to be filled.
+
+**The candidate is declared to the prepare, not merely substituted.** The
+consumer prepares the lookup through
+[`prepare_query_with_parameters`](purrdf_sparql_eval::NativeSparqlEngine::prepare_query_with_parameters),
+naming the candidate variable, and the feasibility pass treats it as bound at the
+point the substitution really binds it. So the admission pass sees the
+candidate-bound, depth-free pattern, and that is the mode your relation receives.
+The declaration is **enforced**: a plan admitted on it is refused, by name, if an
+execution does not supply the parameter — because running it with the position
+free would invoke a relation in a mode nobody declared, which is the whole thing
+the promise was traded for.
+
+Both shipped vector relations sit on exactly that footing. Each declares the
+count-free membership mode `bbff` beside its general `fbbf`, each answers it by a
+binary search over its own term universe with no ranking, no vector read and no
+graph traversal, and each declares `ExclusionBasis::Membership`. For the
+approximate one that basis is admitted *despite* an unconditionally
+`Completeness::Lossy` declaration, and deliberately so: a term the matrix holds
+no row for is a term no beam reaches at any `ef`, so the verdict is a fact about
+the matrix rather than about what the search found. `ExclusionBasis::Search` is
+still refused from it, because there "not found" and "not present" really do
+differ.
 
 Declaring several modes also decides which row bound your read is held to, because that
 bound is a function of the mode — see

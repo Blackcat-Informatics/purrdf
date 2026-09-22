@@ -84,6 +84,17 @@ pub struct PreparedQuery {
     /// `check_plan_matches_relations`, which now checks this alongside
     /// [`Self::relations`].
     aggregates: String,
+    /// The variable names an execution of this plan **must** supply through the
+    /// substitution channel, sorted and deduplicated. Empty for every ordinary
+    /// prepare, which promises nothing.
+    ///
+    /// This is a promise the plan was ADMITTED on, not a hint: the feasibility pass
+    /// treated each of these as bound, so a call reached by one of them may have been
+    /// admitted in an access pattern the query text alone does not show. Running the
+    /// plan without supplying one would therefore invoke a relation in a mode it never
+    /// declared, with the argument free — which is why
+    /// [`check_plan_matches_relations`] refuses it by name rather than evaluating it.
+    parameters: Vec<String>,
     memory: PlanCharge,
 }
 
@@ -114,7 +125,12 @@ impl PreparedQuery {
         options: QueryOptions<'_>,
         memory: &PlanMemoryObserver,
     ) -> Result<Self, RdfDiagnostic> {
-        let planned = admit_algebra(&query, options.property_functions(), options.aggregates())?;
+        let planned = admit_algebra(
+            &query,
+            options.property_functions(),
+            options.aggregates(),
+            &[],
+        )?;
         let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions())
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
         let aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
@@ -123,6 +139,7 @@ impl PreparedQuery {
             planned.unwrap_or(query),
             relations,
             aggregates,
+            Vec::new(),
             memory,
         ))
     }
@@ -131,15 +148,33 @@ impl PreparedQuery {
         query: Query,
         relations: String,
         aggregates: String,
+        parameters: Vec<String>,
         memory: &PlanMemoryObserver,
     ) -> Self {
-        let bytes = plan_payload_bytes(&query, relations.capacity(), aggregates.capacity());
+        let bytes = plan_payload_bytes(
+            &query,
+            relations.capacity(),
+            aggregates.capacity(),
+            &parameters,
+        );
         Self {
             query,
             relations,
             aggregates,
+            parameters,
             memory: PlanCharge::new(memory, bytes),
         }
+    }
+
+    /// The variable names an execution of this plan must supply, sorted and
+    /// deduplicated — empty for a plan that declared none.
+    ///
+    /// A caller reads this to find out what a plan it was handed still needs; the
+    /// engine reads it to refuse an execution that did not supply one. See
+    /// [`NativeSparqlEngine::prepare_query_with_parameters`].
+    #[must_use]
+    pub fn parameters(&self) -> &[String] {
+        &self.parameters
     }
 
     /// Conservative current payload charge, including caller changes to the algebra.
@@ -151,6 +186,7 @@ impl PreparedQuery {
             &self.query,
             self.relations.capacity(),
             self.aggregates.capacity(),
+            &self.parameters,
         )
     }
 
@@ -165,6 +201,7 @@ fn plan_payload_bytes(
     query: &Query,
     relations_capacity: usize,
     aggregates_capacity: usize,
+    parameters: &[String],
 ) -> usize {
     size_of::<PreparedQuery>()
         .saturating_add(
@@ -174,26 +211,60 @@ fn plan_payload_bytes(
         )
         .saturating_add(relations_capacity)
         .saturating_add(aggregates_capacity)
+        .saturating_add(parameters.len().saturating_mul(size_of::<String>()))
+        .saturating_add(
+            parameters
+                .iter()
+                .fold(0_usize, |total, name| total.saturating_add(name.capacity())),
+        )
 }
 
 fn admit_algebra(
     query: &Query,
     relations: &crate::property_fn::PropertyFunctionRegistry,
     aggregates: &crate::agg_fn::AggregateRegistry,
+    parameters: &[String],
 ) -> Result<Option<Query>, RdfDiagnostic> {
     query
         .validate()
         .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))?;
-    crate::property_fn_plan::plan_query(query, relations, aggregates)
-        .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
+    crate::property_fn_plan::plan_query(
+        query,
+        relations,
+        aggregates,
+        &crate::property_fn_plan::parameter_set(parameters),
+    )
+    .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
+}
+
+/// The declared-parameter list a prepare retains, from the names a caller supplied:
+/// sorted and deduplicated.
+///
+/// Both normalizations are load-bearing rather than tidiness. The list joins the plan
+/// cache key, so two callers spelling the same promise in two orders — or one of them
+/// twice — must reach the same entry rather than two entries holding identical plans.
+/// And the list is what an execution's refusal names, so a duplicate would report the
+/// same missing parameter twice.
+fn declared_parameters(names: &[&str]) -> Vec<String> {
+    let mut declared: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+    declared.sort_unstable();
+    declared.dedup();
+    declared
 }
 
 /// A parse-memoizing cache keyed on `(base IRI, extension-function namespace set,
 /// property-function namespace set, property-function exact-IRI set,
-/// property-function registry fingerprint, query text)`.
+/// property-function registry fingerprint, declared parameters, query text)`.
 ///
-/// The last two are there because a cached entry is not merely a parse: a query
-/// carrying a property-function call is also **feasibility-ordered** against the
+/// The declared parameters are there for the same reason the fingerprints are, one step
+/// further on: a plan admitted on the promise that `?x` will be substituted
+/// ([`NativeSparqlEngine::prepare_query_with_parameters`]) may have ordered — or
+/// admitted at all — a call the same text without that promise cannot serve. A key
+/// without them would hand a caller who promises nothing a plan that only runs when a
+/// promise is kept.
+///
+/// The registry fingerprints are there because a cached entry is not merely a parse: a
+/// query carrying a property-function call is also **feasibility-ordered** against the
 /// registry's declarations before it is stored (the feasibility-ordering pass). Two
 /// differently-configured registries can order the same text differently, so a key
 /// without the registry's fingerprint would hand the second host the first host's plan.
@@ -353,6 +424,7 @@ impl PlanCache {
             aggregates,
             &fingerprint,
             &agg_fingerprint,
+            &[],
         )
     }
 
@@ -378,6 +450,26 @@ impl PlanCache {
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        self.prepare_in_env_with_parameters(query, base_iri, env, &[])
+    }
+
+    /// [`Self::prepare_in_env`], admitting the query on the caller's promise that
+    /// every name in `parameters` will be supplied through the substitution channel
+    /// at execution.
+    ///
+    /// See [`NativeSparqlEngine::prepare_query_with_parameters`] for what the promise
+    /// buys, what it costs, and how it is enforced.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::prepare_with_relations`].
+    pub fn prepare_in_env_with_parameters(
+        &mut self,
+        query: &str,
+        base_iri: Option<&str>,
+        env: &crate::extension_env::ExtensionEnv,
+        parameters: &[&str],
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         self.prepare_keyed(
             query,
             base_iri,
@@ -386,6 +478,7 @@ impl PlanCache {
             env.aggregates(),
             env.relations_fingerprint(),
             env.aggregates_fingerprint(),
+            &declared_parameters(parameters),
         )
     }
 
@@ -412,6 +505,7 @@ impl PlanCache {
         aggregates: &crate::agg_fn::AggregateRegistry,
         fingerprint: &str,
         agg_fingerprint: &str,
+        parameters: &[String],
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         // The key is built into the cache's own reusable buffer and probed as a
         // borrowed slice, so a hit costs no allocation at all. The buffer is moved
@@ -427,6 +521,7 @@ impl PlanCache {
             options,
             fingerprint,
             agg_fingerprint,
+            parameters,
         );
         if let Some(prepared) = self.entries.get(scratch.as_slice()) {
             self.key_scratch = scratch;
@@ -443,11 +538,12 @@ impl PlanCache {
         let parsed = parser
             .parse_query_with(query, options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
-        let planned = admit_algebra(&parsed, relations, aggregates)?;
+        let planned = admit_algebra(&parsed, relations, aggregates, parameters)?;
         let prepared = Arc::new(PreparedQuery::admitted(
             planned.unwrap_or(parsed),
             fingerprint.to_owned(),
             agg_fingerprint.to_owned(),
+            parameters.to_vec(),
             &self.memory,
         ));
         let bytes = key
@@ -479,6 +575,7 @@ fn plan_cache_key_into(
     options: &ParserOptions,
     relations: &str,
     aggregates: &str,
+    parameters: &[String],
 ) {
     fn length(out: &mut Vec<u8>, value: usize) {
         out.extend_from_slice(&(value as u64).to_le_bytes());
@@ -492,7 +589,7 @@ fn plan_cache_key_into(
         &options.property_fn_namespaces,
         &options.property_fn_iris,
     ];
-    let mut capacity = 1 + 7 * size_of::<u64>();
+    let mut capacity = 1 + 8 * size_of::<u64>();
     for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
         capacity += value.len();
     }
@@ -500,6 +597,9 @@ fn plan_cache_key_into(
         for value in list {
             capacity += size_of::<u64>() + value.len();
         }
+    }
+    for value in parameters {
+        capacity += size_of::<u64>() + value.len();
     }
     // A no-op once the buffer has seen a key this size, which is the steady state.
     out.reserve(capacity);
@@ -510,6 +610,15 @@ fn plan_cache_key_into(
         for value in list {
             field(out, value);
         }
+    }
+    // The declared parameters join the key for the reason the registry fingerprints
+    // do: the same text under a different promise is admitted differently. A plan
+    // prepared on the promise that `?x` is supplied may have ordered — or admitted at
+    // all — a call the same text without that promise cannot serve, so a key without
+    // them would hand the second caller the first caller's plan.
+    length(out, parameters.len());
+    for value in parameters {
+        field(out, value);
     }
     for value in [relations, aggregates, query] {
         field(out, value);
@@ -677,6 +786,60 @@ impl NativeSparqlEngine {
         self.prepare_for(query, base_iri, options.env)
     }
 
+    /// [`Self::prepare_query_with_options`], admitted on the caller's **declaration**
+    /// that every name in `parameters` will be supplied through the substitution
+    /// channel when the plan is run.
+    ///
+    /// # What the declaration is for
+    ///
+    /// A property-function call is admitted HERE, at prepare, in the access pattern
+    /// the query text shows — a position is bound when its term is a constant or a
+    /// variable an earlier atom binds, and free otherwise. A caller that prepares once
+    /// and then runs the plan many times, substituting a different term for the same
+    /// variable each time, is in a bind that no reading of the text can resolve: the
+    /// variable is free in the text and bound in every execution. Admitted as free, the
+    /// call is matched against the relation's general mode, and the relation is then
+    /// handed a bound argument in a pattern it never declared — which is a different
+    /// question from the one it declared an answer to.
+    ///
+    /// Naming those variables here closes that gap. They enter the feasibility pass as
+    /// bound, at the point the substitution really binds them (the core `WHERE`
+    /// pattern), so the call is admitted in the pattern it is actually invoked in, and
+    /// a relation that declares a mode for that pattern answers the question that
+    /// pattern asks.
+    ///
+    /// # The declaration is enforced, because otherwise it would be unsound
+    ///
+    /// A plan admitted on this promise is refused at execution unless every name is
+    /// supplied — see [`Self::query_prepared_governed_view`] and every other prepared
+    /// entry, which all check it before any evaluation. The refusal names the
+    /// parameter that was missing. Running such a plan with the variable left free
+    /// would invoke a relation in a mode nobody declared, and that is exactly what the
+    /// promise was traded for.
+    ///
+    /// The plan is cached under a key that includes the declaration, so it can never be
+    /// confused with the same text prepared without one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if a
+    /// property-function call cannot be admitted against the registry — including one
+    /// that is infeasible even with the declared parameters treated as bound.
+    pub fn prepare_query_with_parameters(
+        &self,
+        query: &str,
+        base_iri: Option<&str>,
+        options: QueryOptions<'_>,
+        parameters: &[&str],
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        self.cache.borrow_mut().prepare_in_env_with_parameters(
+            query,
+            base_iri,
+            options.env,
+            parameters,
+        )
+    }
+
     /// Evaluate a plan returned by [`Self::prepare_query`] or
     /// [`Self::prepare_query_with_options`].
     ///
@@ -722,7 +885,7 @@ impl NativeSparqlEngine {
         substitutions: &[(String, TermValue)],
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        check_plan_matches_relations(prepared, options)?;
+        check_plan_matches_relations(prepared, options, Prebindings::Owned(substitutions))?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -772,7 +935,7 @@ impl NativeSparqlEngine {
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
             (|| {
-                check_plan_matches_relations(prepared, options)?;
+                check_plan_matches_relations(prepared, options, Prebindings::Owned(substitutions))?;
                 let ctx = self.eval_ctx(dataset);
                 let mut ctx = apply_query_options(ctx, options)?;
                 let outcome = match options.prebinding {
@@ -963,7 +1126,7 @@ impl NativeSparqlEngine {
         source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        check_plan_matches_relations(prepared, options)?;
+        check_plan_matches_relations(prepared, options, Prebindings::Owned(substitutions))?;
         // `prepared.relations` is the registry fingerprint computed once at prepare and
         // just validated against `options.property_functions()` above — reused rather than
         // re-derived, so this receipt's identity and the plan cache's key never disagree.
@@ -2003,7 +2166,11 @@ impl NativeSparqlEngine {
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
         let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
-        check_plan_matches_relations(&prepared, options)?;
+        check_plan_matches_relations(
+            &prepared,
+            options,
+            Prebindings::Borrowed(request.substitutions),
+        )?;
         let identity = relation_identity(&prepared, options.property_functions())?;
         if let Some(refused) = self.admit_refusal(
             dataset,
@@ -2438,10 +2605,67 @@ impl Default for QueryOptions<'_> {
 /// `native-sparql-aggregate-function`) when either identity differs, or when a relation or
 /// an aggregate panics while its declaration is read to compute the supplied registry's
 /// fingerprint.
+/// Hold an execution to the declaration its plan was admitted on: every name in
+/// [`PreparedQuery::parameters`] must appear in `substitutions`.
+///
+/// # Why this is a refusal and not a shrug
+///
+/// [`NativeSparqlEngine::prepare_query_with_parameters`] admits a call in the access
+/// pattern the promised substitution produces — a position the text leaves free is
+/// treated as bound, and the relation's declaration is read for THAT pattern. An
+/// execution that then leaves the variable free invokes the relation in a pattern it
+/// may never have declared, asking it a question it did not offer an answer to. Nothing
+/// downstream can notice: the relation receives a free argument, answers whatever its
+/// general mode answers, and the rows look like rows. So the check belongs here, at the
+/// gate every prepared execution passes through, and it names the parameter rather than
+/// reporting that something was wrong.
+///
+/// The ordinary plan declares nothing and this returns immediately, having read one
+/// length.
+///
+/// # Errors
+///
+/// An [`RdfDiagnostic`] (`native-sparql-prepared-parameter`) naming the first missing
+/// parameter in the plan's own sorted order, so the same omission reports the same way
+/// on every run.
+fn check_parameters_supplied(
+    prepared: &PreparedQuery,
+    substitutions: Prebindings<'_>,
+) -> Result<(), RdfDiagnostic> {
+    if prepared.parameters.is_empty() {
+        return Ok(());
+    }
+    // Linear in the product on purpose: a declaration is the handful of variables one
+    // prepared lookup substitutes per call, and a set would cost an allocation per
+    // execution to avoid a comparison that never runs more than a few times — the same
+    // trade `crate::substitute::has_repeated_variable` makes over the same list.
+    let Some(missing) = prepared.parameters.iter().find(|declared| {
+        !substitutions
+            .iter()
+            .any(|(supplied, _)| supplied == *declared)
+    }) else {
+        return Ok(());
+    };
+    let declared = prepared.parameters.join(", ");
+    Err(RdfDiagnostic::error(
+        "native-sparql-prepared-parameter",
+        format!(
+            "this plan was prepared on the declaration that [{declared}] would be supplied as \
+             substitutions, and `{missing}` was not supplied; the declaration is what admitted \
+             its property-function calls in the access pattern a bound `{missing}` produces, so \
+             running it without one would invoke a relation in a mode nobody declared. Supply \
+             every declared parameter, or prepare the query with \
+             `NativeSparqlEngine::prepare_query_with_options`, which declares none"
+        ),
+    ))
+}
+
 fn check_plan_matches_relations(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
+    substitutions: Prebindings<'_>,
 ) -> Result<(), RdfDiagnostic> {
+    check_parameters_supplied(prepared, substitutions)?;
     prepared
         .query
         .validate()
@@ -2459,6 +2683,12 @@ fn check_plan_matches_relations(
         &prepared.query,
         options.property_functions(),
         options.aggregates(),
+        // The plan's OWN declaration, not the caller's substitutions: this re-plan
+        // asks whether the admitted algebra is still the algebra this registry
+        // produces, and it was produced under that declaration. Replanning without it
+        // would either refuse a plan that is perfectly sound or order it differently
+        // and report the difference as a plan that needs replanning.
+        &crate::property_fn_plan::parameter_set(&prepared.parameters),
     )
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     if planned
@@ -4891,7 +5121,8 @@ mod tests {
             .expect("parses under no registry at all");
 
         assert!(
-            check_plan_matches_relations(&prepared, QueryOptions::EMPTY).is_ok(),
+            check_plan_matches_relations(&prepared, QueryOptions::EMPTY, Prebindings::Owned(&[]))
+                .is_ok(),
             "a plan prepared registry-free must match QueryOptions::EMPTY"
         );
 
@@ -4908,7 +5139,8 @@ mod tests {
                     )
                     .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
-                }
+                },
+                Prebindings::Owned(&[])
             )
             .is_ok(),
             "an independently constructed EMPTY registry must be interchangeable with EMPTY"
@@ -4931,7 +5163,8 @@ mod tests {
                     )
                     .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
-                }
+                },
+                Prebindings::Owned(&[])
             )
             .is_err(),
             "plan identity must still refuse a genuinely different, non-empty registry"

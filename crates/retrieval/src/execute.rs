@@ -1035,9 +1035,25 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         // failure exactly as a ranking text that will not prepare is: reported
         // here and contributing no stream, rather than carried to a lookup that
         // fails once per candidate at read time.
+        //
+        // The candidate is DECLARED to the prepare, not merely substituted at run
+        // time. A lookup is one prepared plan run once per candidate, so the
+        // admission pass sees `?candidate` as a free variable unless it is told
+        // otherwise — and for a producer that takes a depth, a free candidate beside
+        // a free depth is a call no mode serves at all, while a free candidate beside
+        // a BOUND depth is the ranked question whose absences are not exclusions.
+        // Declaring it here is what puts the call in the candidate-bound mode a
+        // membership basis is admitted against. The declaration is enforced at
+        // execution: the same name is supplied for every lookup, and a plan that
+        // declared it and did not supply it is refused rather than run free.
         let exclusion = match unit.exclusion_sparql() {
             None => None,
-            Some(text) => match engine.prepare_query_with_options(&text, None, options()) {
+            Some(text) => match engine.prepare_query_with_parameters(
+                &text,
+                None,
+                options(),
+                &[CANDIDATE_NAME],
+            ) {
                 Ok(prepared) => Some(prepared),
                 Err(diagnostic) => {
                     statuses.insert(
