@@ -707,10 +707,10 @@ fn validate_constraint_under_declared_namespace(
 /// else. The identical IRI, in the identical host, under the identical declaration,
 /// hard-errored in one construct and conformed green in the other.
 ///
-/// That is issue #348's own shape — a wired, named relation silently becoming a data
-/// edge under a green report — surviving at a sibling door, which is why the fix was
-/// to delete the engine's parse configuration rather than to add the environment to
-/// one more call.
+/// That is this file's own headline defect wearing a different construct — a wired,
+/// named relation silently becoming a data edge under a green report — surviving at a
+/// sibling door, which is why the fix was to delete the engine's parse configuration
+/// rather than to add the environment to one more call.
 #[test]
 fn a_declared_namespace_reaches_a_sparql_constraint_body() {
     let (relations, opens) = registry();
