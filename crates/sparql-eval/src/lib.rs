@@ -201,7 +201,7 @@ pub use purrdf_sparql_algebra::ParserOptions;
 // row / arity types its calls speak in, the registry evaluation resolves a predicate
 // IRI against, and the in-memory reference relation. Re-exported so a host wires a
 // relation into the engine without naming the module path.
-pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
+pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, KnnObservations, Ranked};
 pub use property_fn::{
     AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DomainTag, DuplicatePolicy,
     ExclusionBasis, IndexGeneration, MemoryRelation, OrderFidelity, PfArgs, PfArity, PfAttestation,

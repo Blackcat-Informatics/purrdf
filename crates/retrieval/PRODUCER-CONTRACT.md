@@ -383,12 +383,12 @@ An index-informed producer can therefore declare many modes precisely because it
 indices serve binding directions a scan cannot, and a relation that can serve
 everything declares exactly one all-free mode that subsumes every pattern of its
 arity. Neither shipped producer takes that latitude, and both are right not to:
-the lexical search relation's general mode is `fbffff` and the nearest-neighbour
-relation declares exactly one (`fbbf`), because each has an input position it
-genuinely cannot enumerate — it retrieves documents for a needle and cannot
-enumerate needles for a document. Declaring narrowly is the honest move when the
-index really is directional. Declaring broadly is the honest move when it is not.
-Neither is a default.
+the lexical search relation's general mode is `fbffff` and both nearest-neighbour
+relations' is `fbbf`, because each has an input position it genuinely cannot
+enumerate — it retrieves documents for a needle and cannot enumerate needles for
+a document, and it retrieves neighbours for a seed and cannot enumerate seeds.
+Declaring narrowly is the honest move when the index really is directional.
+Declaring broadly is the honest move when it is not. Neither is a default.
 
 The lexical search relation declares a *second* mode, `bbffff`, and it is worth
 reading for what it is not. It widens nothing — `fbffff` already subsumes it, so
@@ -403,6 +403,37 @@ lookup, and do not declare one when it is a scan the engine's equality filter
 happens to narrow — see
 [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound) for why
 the bound beside it is the one you will be held to.
+
+There is a second condition, and it is the one that decides whether a basis is
+declarable at all: **the lookup must arrive in the mode that answers it.** An
+exclusion lookup is your own call with the candidate supplied through the
+evaluator's substitution channel, and the plan is prepared once per stratum —
+so the pattern the admission pass sees has the candidate *free*, and the call is
+admitted under your general mode. Whatever that mode binds, your relation
+receives bound.
+
+For the lexical relation that is harmless: its general mode leaves every
+position but the needle free, so a candidate-bound call has one meaning and
+`bbffff` is what it arrives in. For a producer that declares a
+`DepthPlacement` it is decisive. The depth is bound in the general mode, so the
+lookup reaches the relation with the depth bound — in exactly the binding
+pattern an ordinary ranked call arrives in — and the relation has no signal by
+which to tell the two apart. Its answer to the lookup is therefore its answer to
+*is this candidate among your best n*, whose absences are **not** exclusions: a
+candidate outside the best n is one the producer may still name at rank n, and a
+consumer that read that absence as an exclusion would refuse the fused read as
+`ExclusionContradicted` the first time one arrived.
+
+So: a producer that takes its depth as an argument declares
+`ExclusionBasis::Unavailable` today, however cheaply it could answer the
+membership question if it were asked it. Both shipped vector relations are in
+exactly that position — they declare the count-free membership mode `bbff`, they
+answer it by a binary search over their term universe with no ranking at all, and
+they still declare no basis, because nothing can deliver a lookup to that mode.
+Closing the gap needs a seam this document does not have: a way to tell the
+admission pass which variables a prepared plan will have substituted, so the
+depth can be left free in the lookup's text without making the plan
+unpreparable.
 
 Declaring several modes also decides which row bound your read is held to, because that
 bound is a function of the mode — see

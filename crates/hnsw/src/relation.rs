@@ -46,9 +46,17 @@
 //! | 2 | `k` | **in**: how many neighbours to retrieve |
 //! | 3 | `?distance` | **out**: the distance, as `xsd:double` |
 //!
-//! The one declared mode is `fbbf`: positions 1 and 2 are inputs this relation cannot
+//! The general declared mode is `fbbf`: positions 1 and 2 are inputs this relation cannot
 //! enumerate. Rows are emitted in rank order, nearest first, under the shared exact path's
 //! [`Ranked`] order `(distance, row)`.
+//!
+//! A second mode, `bbff`, is declared beside it: the neighbour and the seed bound, the
+//! count **free**. It is a genuinely new capability rather than a narrowing — `fbbf` binds
+//! the count it leaves free, so `fbbf` does not subsume it — and it asks a different
+//! question: *do you hold this term at all*, answered by [`HnswSpace::row_of`] without
+//! entering the beam. A count-BOUND call keeps its `k` cut exactly as before: the two are
+//! two points of the lattice, and the invocation's own pattern decides which was asked.
+//! See [`PropertyFunction::open`].
 //!
 //! # Work accounting
 //!
@@ -58,6 +66,7 @@
 //! work and is charged none, and the count resets only when the engine takes it.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{
@@ -81,8 +90,32 @@ const HNSW_QUERY: usize = 1;
 const HNSW_COUNT: usize = 2;
 /// The `?distance` position: the retrieved term's distance from the query.
 const HNSW_DISTANCE: usize = 3;
-/// The one access pattern [`HnswRelation`] declares.
+/// The general access pattern [`HnswRelation`] declares: the seed and the neighbour
+/// count are the two positions it cannot enumerate, and the two it projects are free.
 const HNSW_MODE: &str = "fbbf";
+/// The **membership** access pattern [`HnswRelation`] declares beside [`HNSW_MODE`]:
+/// the neighbour and the seed bound, and the neighbour count **free**.
+///
+/// The free count is the whole of what distinguishes the two questions, and it is
+/// deliberately a *different mode* rather than a second reading of [`HNSW_MODE`]:
+///
+/// * with the count **bound**, `?neighbour ex:knn (?query k ?distance)` asks *is this
+///   term among the `k` this beam offers*. That invocation is subsumed by
+///   [`HNSW_MODE`] and always was, and it means exactly what it has always meant.
+/// * with the count **free** it asks *do you hold this term at all* — a question `k`
+///   is no part of, answered by [`HnswSpace::row_of`] alone.
+///
+/// One binding pattern cannot mean both without silently changing the answer to
+/// somebody's query, so the lattice separates them. [`HNSW_MODE`] does **not** subsume
+/// this pattern — subsumption is `bound(declared) ⊆ bound(invocation)`, and
+/// [`HNSW_MODE`] binds the count that this leaves free — so this is a genuinely new
+/// declared capability, with its own point
+/// [`PropertyFunction::rows_per_invocation`]. It is the question an
+/// [`ExclusionBasis::Membership`] lookup asks, and this relation answers it; what it
+/// cannot do is *receive* one, because the lookup is prepared with the candidate still
+/// free and is therefore admitted under [`HNSW_MODE`] with the count bound. See
+/// [`PropertyFunction::open`] and the `exclusion` field of the ranked declaration.
+const HNSW_MEMBERSHIP_MODE: &str = "bbff";
 
 /// `xsd:double`, the datatype every emitted distance carries.
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
@@ -406,9 +439,92 @@ fn check_distinct_terms(terms: &[TermValue]) -> Result<(), EvalError> {
 pub struct HnswRelation {
     /// The space every invocation searches.
     space: Arc<HnswSpace>,
-    /// The single declared mode, materialized once so [`PropertyFunction::modes`] can
+    /// The declared modes, materialized once so [`PropertyFunction::modes`] can
     /// hand out a slice.
-    modes: [BindingPattern; 1],
+    modes: [BindingPattern; 2],
+    /// What this relation's invocations actually did, counted rather than inferred.
+    /// Shared with every clone, so a host that cloned the relation into a registry
+    /// still reads the counts of the invocations that registry served.
+    observations: Arc<HnswObservations>,
+}
+
+/// What [`HnswRelation`]'s invocations actually did, counted at the two places the
+/// difference between a point lookup and a beam search is decided.
+///
+/// This exists because "a candidate-bound call does not traverse the graph" is a claim
+/// about *work*, and the only honest evidence for a claim about work is a count of the
+/// work. Timing is not evidence: a fixture small enough to run in a test is small enough
+/// that traversing it and not traversing it take the same measurable time, so a timing
+/// assertion would pass over an implementation that walks every layer and one that does
+/// not.
+///
+/// Every counter is monotone for the life of the relation and is never reset here. A
+/// caller that wants a delta reads the value before and after, which is the reading that
+/// composes: a reset would race with any other invocation of a relation the registry may
+/// run across workers.
+///
+/// # Not part of any identity
+///
+/// Nothing here reaches a row, a distance, an ordering or a generation. Two relations
+/// over the same space answer identically whatever these say, so the counts are an
+/// observation about one process's execution rather than a fact about the index — which
+/// is why they live on the relation and not on [`HnswSpace`], whose generation folds
+/// everything that decides an answer.
+#[derive(Debug, Default)]
+pub struct HnswObservations {
+    /// Candidate-bound invocations answered by a row lookup.
+    membership_lookups: AtomicU64,
+    /// Invocations that entered the beam.
+    searches: AtomicU64,
+    /// Graph nodes the beam examined — one distance evaluation each.
+    graph_candidates: AtomicU64,
+    /// Distance evaluations the membership path performed.
+    membership_distances: AtomicU64,
+}
+
+impl HnswObservations {
+    /// How many **membership lookups** this relation has performed.
+    ///
+    /// One lookup is one candidate-bound invocation, answered by [`HnswSpace::row_of`] —
+    /// a binary search over the space's canonical term order, with no float in it
+    /// anywhere. Exactly one is performed per candidate-bound invocation, and nothing
+    /// else performs any.
+    #[must_use]
+    pub fn membership_lookups(&self) -> u64 {
+        self.membership_lookups.load(Ordering::Relaxed)
+    }
+
+    /// How many invocations have **entered the beam** — that is, have asked
+    /// [`HnswIndex::search_rows_work`] to traverse the graph at all.
+    ///
+    /// Zero is the load-bearing value: an invocation that never entered the beam visited
+    /// no node, consulted no layer and claimed no rank, whatever the graph holds. This
+    /// relation has exactly one call site into the traversal and it increments this
+    /// counter, so a zero here is not an inference about how much searching happened; it
+    /// is the statement that none did.
+    #[must_use]
+    pub fn searches(&self) -> u64 {
+        self.searches.load(Ordering::Relaxed)
+    }
+
+    /// How many **graph nodes** the searches examined, which is how many distances they
+    /// computed.
+    #[must_use]
+    pub fn graph_candidates(&self) -> u64 {
+        self.graph_candidates.load(Ordering::Relaxed)
+    }
+
+    /// How many distances the **membership path** computed.
+    ///
+    /// Zero for a candidate the space does not hold — that answer is settled by the term
+    /// order alone and no vector is ever read — and one for a candidate it does, which
+    /// is the single pairwise evaluation the emitted row's `?distance` position needs.
+    /// Never more, whatever `k` the call carried and however wide the beam is, because a
+    /// call that names its own candidate traverses nothing.
+    #[must_use]
+    pub fn membership_distances(&self) -> u64 {
+        self.membership_distances.load(Ordering::Relaxed)
+    }
 }
 
 impl HnswRelation {
@@ -417,8 +533,24 @@ impl HnswRelation {
     pub fn new(space: Arc<HnswSpace>) -> Self {
         Self {
             space,
-            modes: [BindingPattern::from_code(HNSW_MODE)],
+            modes: [
+                BindingPattern::from_code(HNSW_MODE),
+                BindingPattern::from_code(HNSW_MEMBERSHIP_MODE),
+            ],
+            observations: Arc::new(HnswObservations::default()),
         }
+    }
+
+    /// What this relation's invocations have actually done.
+    ///
+    /// Handed back as a shared handle rather than a snapshot so a host can keep reading
+    /// after the relation itself has been moved into a registry, which is the only
+    /// arrangement in which the interesting question — did the exclusion lookups this
+    /// producer served traverse anything — can be asked at all. See
+    /// [`HnswObservations`].
+    #[must_use]
+    pub fn observations(&self) -> Arc<HnswObservations> {
+        Arc::clone(&self.observations)
     }
 
     /// The `?neighbour` position: the retrieved term, and the ranked candidate.
@@ -560,11 +692,33 @@ impl HnswRelation {
             // `CandidateDomains::Unrestricted`; see
             // `RankedDeclaration::block_position`.
             block_position: None,
-            // No exclusion lookup is offered here. This relation declares no
-            // access mode that binds the candidate with a point row bound, so
-            // the registry would refuse any other value — and a basis declared
-            // without the mode behind it would promise a lookup that becomes a
-            // scan. `Unavailable` is the true statement, not a placeholder.
+            // NO exclusion lookup is offered here, and the reason is structural
+            // rather than a gap in this relation.
+            //
+            // An exclusion lookup is this producer's OWN call with the candidate
+            // supplied through the evaluator's substitution channel. The plan is
+            // prepared once per stratum and the candidate is substituted per
+            // lookup, so the pattern the admission pass sees has the candidate
+            // FREE and the call is admitted under the general mode — which binds
+            // the depth. The invocation therefore reaches this relation with the
+            // depth bound, in exactly the binding pattern an ordinary ranked call
+            // arrives in, and there is no signal by which the two can be told
+            // apart.
+            //
+            // So a declared basis here would be answered by the ranked question:
+            // `is this candidate among your best n`. Its absences are not
+            // exclusions — a candidate outside the best n is one this producer
+            // may still name at rank n — and a consumer that read them as
+            // exclusions would refuse the fused read as a contradiction the first
+            // time one arrived.
+            //
+            // `HNSW_MEMBERSHIP_MODE` is the question a basis would need, and this
+            // relation serves it: a caller who leaves the count free gets the
+            // membership answer, and `row_of` decides it without ranking
+            // anything. What is missing is a way for the lookup to ARRIVE in that
+            // mode — the count must be free at PREPARE time, and the candidate is
+            // only bound at RUN time — and that is a seam this crate does not
+            // own. Until it exists, `Unavailable` is the true statement.
             exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         }
@@ -586,6 +740,28 @@ impl PropertyFunction for HnswRelation {
         PfArity::new(1, 3)
     }
 
+    /// Two modes, answering two different questions.
+    ///
+    /// `fbbf` is the ranked capability: the seed and the count are the two positions
+    /// this relation cannot enumerate, and it projects the other two. It subsumes every
+    /// access pattern of this arity that binds both inputs, so a bound `?neighbour`
+    /// beside a bound count — *is this term among the `k` this beam offers* — is
+    /// feasible under it and means what it has always meant.
+    ///
+    /// `bbff` is the **membership** capability, and it is a genuinely new one rather
+    /// than a narrowing: subsumption is `bound(declared) ⊆ bound(invocation)`, and
+    /// `fbbf` binds the count that this pattern leaves free, so `fbbf` does not subsume
+    /// it and an invocation of this shape was infeasible before it was declared. What
+    /// it adds is the point lookup [`Self::open`] documents — *do you hold this term at
+    /// all* — with the row bound [`Self::rows_per_invocation`] reports for it. That is
+    /// the question an [`ExclusionBasis::Membership`] lookup asks, and this relation
+    /// answers it; why the ranked declaration nevertheless offers no basis is a fact
+    /// about how a lookup is prepared rather than about this mode, and is recorded on
+    /// that field.
+    ///
+    /// Adding it takes nothing away from the pattern beside it. A count-bound call
+    /// keeps its `k` cut, because the two shapes are two points of the lattice and the
+    /// invocation's own pattern decides which question was asked.
     fn modes(&self) -> &[BindingPattern] {
         &self.modes
     }
@@ -627,6 +803,52 @@ impl PropertyFunction for HnswRelation {
         }
     }
 
+    /// Begin one approximate nearest-neighbour invocation.
+    ///
+    /// # A free `k` asks a different question, and is answered by membership
+    ///
+    /// The **count** decides which of two questions an invocation is, and nothing else
+    /// does.
+    ///
+    /// With `k` **bound** — every invocation `HNSW_MODE` subsumes, which is every
+    /// invocation that was feasible before `HNSW_MEMBERSHIP_MODE` existed — the call
+    /// means what it has always meant: traverse the graph and offer the `k` the beam
+    /// reached, filtering `?neighbour` and `?distance` afterwards. A bound `?neighbour`
+    /// is therefore still *is this term among the `k` this beam offers*, and a term the
+    /// offer leaves out is still an empty answer that is no evidence of absence.
+    /// Nothing on this path changed when the membership mode was declared, and nothing
+    /// may: it is a public query surface, and a producer that quietly answered a wider
+    /// question here would change the rows of a query nobody edited.
+    ///
+    /// With `k` **free** and `?neighbour` bound — `HNSW_MEMBERSHIP_MODE`, a pattern
+    /// `HNSW_MODE` does not subsume and which was infeasible until it was declared —
+    /// the call asks *do you hold this term at all*. That is the question
+    /// [`ExclusionBasis::Membership`] declares, and `k` is no part of it: there is one
+    /// candidate and no offer to size. It is answered by [`HnswSpace::row_of`] — a
+    /// binary search over canonical term order, with no vector read, no node visited and
+    /// no rank claimed — and the answer is one row where the space holds the term and
+    /// none where it does not. [`HnswObservations`] counts both halves, so "the graph
+    /// was not traversed" is an observation a test reads rather than an inference from a
+    /// timing.
+    ///
+    /// The membership answer is **exact however lossy the beam is**, which is the whole
+    /// reason this relation can declare a basis at all: a term the matrix holds no row
+    /// for is a term no traversal can reach at any `ef`, in any layer, from any entry
+    /// point.
+    ///
+    /// Splitting the two is what makes the exclusion lookup sound. A lookup is rendered
+    /// as this call with the candidate bound, so a producer that answered it by
+    /// traversing would report an absence for a term it is about to name at rank five,
+    /// and a consumer that believed it would refuse the fused read as a contradiction. A
+    /// membership answer cannot contradict a row, because every row a search can name is
+    /// a row this lookup finds.
+    ///
+    /// The emitted `?distance` is the true one: a single pairwise evaluation through
+    /// [`HnswIndex::row_distance`], which is the same [`Kernel`] over the same components
+    /// and norms a traversal binds its query with, so it is bit-identical to the value
+    /// the beam would have produced for that pair. What a point lookup cannot produce is
+    /// a *rank* — one plus the number of rows nearer the seed is a fact about every other
+    /// row — and this relation does not claim one.
     fn open(
         &self,
         args: &PfArgs<'_>,
@@ -643,33 +865,65 @@ impl PropertyFunction for HnswRelation {
         let Some(query) = args.get(HNSW_QUERY) else {
             return Err(EvalError::function(format!(
                 "the query term at position {HNSW_QUERY} is free; this relation retrieves \
-                 the neighbours of a seed and cannot enumerate seeds, which is why its only \
-                 declared mode is `{HNSW_MODE}`"
+                 the neighbours of a seed and cannot enumerate seeds, which is why both of \
+                 its declared modes — `{HNSW_MODE}` and `{HNSW_MEMBERSHIP_MODE}` — demand it"
             )));
         };
-        let Some(count) = args.get(HNSW_COUNT) else {
-            return Err(EvalError::function(format!(
-                "the neighbour count at position {HNSW_COUNT} is free; how many neighbours \
-                 to retrieve is a question this relation is asked, not one it answers"
-            )));
-        };
-        let k = neighbour_count(count, self.space.guard())?;
         let query_row = self.space.row_of(query);
 
-        let post_selection_filtered =
-            args.get(HNSW_NEIGHBOUR).is_some() || args.get(HNSW_DISTANCE).is_some();
-        let select_k = if post_selection_filtered {
-            k
-        } else {
-            ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
+        // THE COUNT DECIDES WHICH QUESTION THIS IS, and nothing else does. A bound count
+        // is the ranked read this relation has always performed, down to the `k` cut on a
+        // bound `?neighbour`; a free count is the membership lookup. Branching on the
+        // candidate instead would make one binding pattern mean two questions and would
+        // silently widen the answer to `?n ex:knn (?q k ?d)` — a query nobody edited.
+        let (answer, count_term) = match args.get(HNSW_COUNT) {
+            Some(count) => {
+                let k = neighbour_count(count, self.space.guard())?;
+                // `?neighbour` and `?distance` are both filtered AFTER the ranking, so the
+                // ceiling is withheld from the selection when either is bound: pushing it
+                // down would rank a prefix, let the cursor filter it, and report fewer
+                // rows than the engine asked for as an exhausted answer.
+                let post_selection_filtered =
+                    args.get(HNSW_NEIGHBOUR).is_some() || args.get(HNSW_DISTANCE).is_some();
+                let select_k = if post_selection_filtered {
+                    k
+                } else {
+                    ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
+                };
+                (
+                    Answer::Search {
+                        query_row,
+                        select_k,
+                    },
+                    count.clone(),
+                )
+            }
+            None => {
+                let Some(candidate) = args.get(HNSW_NEIGHBOUR) else {
+                    return Err(EvalError::function(format!(
+                        "the neighbour count at position {HNSW_COUNT} is free and so is the \
+                         neighbour at position {HNSW_NEIGHBOUR}; how many neighbours to \
+                         retrieve is a question this relation is asked, not one it answers, \
+                         so the only call it serves without a count is the membership lookup \
+                         `{HNSW_MEMBERSHIP_MODE}`, which names the one term it is about"
+                    )));
+                };
+                self.observations
+                    .membership_lookups
+                    .fetch_add(1, Ordering::Relaxed);
+                (
+                    Answer::Membership(query_row.zip(self.space.row_of(candidate))),
+                    universe_size(self.space.row_count()),
+                )
+            }
         };
 
         Ok(Box::new(HnswCursor {
             space: Arc::clone(&self.space),
-            query_row,
-            select_k,
+            observations: Arc::clone(&self.observations),
+            answer,
             query_term: query.clone(),
-            count_term: count.clone(),
+            count_term,
             bound: args.flattened().map(<Option<&TermValue>>::cloned).collect(),
             ranked: None,
             at: 0,
@@ -677,6 +931,29 @@ impl PropertyFunction for HnswRelation {
             unreported_work: 0,
         }))
     }
+}
+
+/// The value the count position carries in a **membership** answer: the number of rows
+/// the space holds, as an `xsd:integer`.
+///
+/// # Why the position needs a value at all, and why this is the one
+///
+/// A [`PfRow`] carries a value for every flattened position, so a mode that leaves the
+/// count free must still fill it. In [`HNSW_MODE`] that position is an *input* — the
+/// request — and is echoed back verbatim. In [`HNSW_MEMBERSHIP_MODE`] there is no request
+/// to echo: the caller asked *do you hold this term*, a question no `k` is part of.
+///
+/// So under that mode the position is an **output**, and what it outputs is a fact about
+/// the producer rather than a request it was never given: the size of its term universe.
+/// That is exactly the quantity a membership answer is about — the lookup says *this term
+/// is one of my rows*, and this says *how many rows there are* — it is single-valued, so
+/// the mode's declared row bound of one is exact, and it costs a length read.
+///
+/// It is emphatically **not** a fabricated `k`. Inventing a request the caller did not
+/// make would put a claim about rank into a row that traversed nothing, which is the one
+/// thing a point lookup must never do.
+fn universe_size(rows: usize) -> TermValue {
+    TermValue::typed_literal(rows.to_string(), XSD_INTEGER)
 }
 
 /// Read `k` off the invocation's neighbour-count argument.
@@ -729,14 +1006,37 @@ fn neighbour_count(value: &TermValue, guard: KnnGuard) -> Result<usize, EvalErro
 
 /// The cursor [`HnswRelation::open`] returns: the ranked neighbours, filtered on every
 /// bound position, cut at the engine's licence, and reporting the search's work.
+/// What one invocation is going to do, decided in [`HnswRelation::open`] from the access
+/// pattern it arrived in.
+///
+/// Two shapes rather than one with an optional field, because they are two different
+/// questions: one traverses a graph for a neighbourhood and the other asks whether a
+/// named term has a row at all. Naming them apart is what makes "the beam was not
+/// entered" a branch a reader can see rather than a condition buried in a selection size.
+#[derive(Debug)]
+enum Answer {
+    /// Rank the seed's neighbourhood: the offer of candidates.
+    Search {
+        /// The seed's row, or `None` when the space does not hold the seed term.
+        query_row: Option<usize>,
+        /// How many neighbours the ranking retains.
+        select_k: usize,
+    },
+    /// Answer *do you hold this candidate*: the seed's row and the candidate's row, or
+    /// `None` when the space holds no row for one of them — which is equally an
+    /// exclusion, because a search from a seed with no row names nothing at all.
+    Membership(Option<(usize, usize)>),
+}
+
 #[derive(Debug)]
 struct HnswCursor {
     /// The space being searched.
     space: Arc<HnswSpace>,
-    /// The seed's row, or `None` when the space does not hold the seed term.
-    query_row: Option<usize>,
-    /// How many neighbours the ranking retains.
-    select_k: usize,
+    /// The relation's counters, so the work this cursor does is observable from the
+    /// relation a host still holds after moving it into a registry.
+    observations: Arc<HnswObservations>,
+    /// What this invocation is going to do.
+    answer: Answer,
     /// The seed term, echoed verbatim into position 1 of every row.
     query_term: TermValue,
     /// The neighbour count, echoed verbatim into position 2 of every row.
@@ -754,22 +1054,52 @@ struct HnswCursor {
 }
 
 impl HnswCursor {
-    /// Run the search if it has not run yet, recording the candidates it examined.
+    /// Produce this invocation's rows if they have not been produced yet, recording the
+    /// candidates it examined.
     ///
     /// Laziness is what makes "no rows wanted" and "no work done" the same statement: the
     /// engine checks its ceiling before the first pull, so a call with an exhausted ceiling
     /// never reaches this function and is charged nothing.
+    ///
+    /// The **only** call site of [`HnswIndex::search_rows_work`] in this relation, which
+    /// is what makes [`HnswObservations::searches`] a measurement rather than an estimate:
+    /// an invocation that did not come through this branch traversed nothing, because
+    /// there is no other way for it to have done so.
     fn ensure_ranked(&mut self) -> Result<(), EvalError> {
         if self.ranked.is_some() {
             return Ok(());
         }
-        let (ranked, work) = match self.query_row {
-            Some(row) => self
-                .space
-                .index
-                .search_rows_work(row, self.select_k)
-                .map_err(|e| EvalError::data(format!("the HNSW search failed: {e}")))?,
-            None => (Vec::new(), 0),
+        let (ranked, work) = match self.answer {
+            Answer::Search {
+                query_row: Some(row),
+                select_k,
+            } => {
+                self.observations.searches.fetch_add(1, Ordering::Relaxed);
+                let (ranked, work) = self
+                    .space
+                    .index
+                    .search_rows_work(row, select_k)
+                    .map_err(|e| EvalError::data(format!("the HNSW search failed: {e}")))?;
+                self.observations
+                    .graph_candidates
+                    .fetch_add(work, Ordering::Relaxed);
+                (ranked, work)
+            }
+            Answer::Search {
+                query_row: None, ..
+            }
+            | Answer::Membership(None) => (Vec::new(), 0),
+            // One pairwise evaluation, charged as the one candidate it examined. No node
+            // is visited and no layer is consulted.
+            Answer::Membership(Some((query_row, row))) => {
+                self.observations
+                    .membership_distances
+                    .fetch_add(1, Ordering::Relaxed);
+                let distance = self.space.index.row_distance(query_row, row).map_err(|e| {
+                    EvalError::data(format!("the HNSW membership lookup failed: {e}"))
+                })?;
+                (vec![Ranked { distance, row }], 1)
+            }
         };
         self.unreported_work = self.unreported_work.saturating_add(work);
         self.ranked = Some(ranked);
