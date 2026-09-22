@@ -441,3 +441,83 @@ fn relations_only(opens: Arc<AtomicU64>) -> PropertyFunctionRegistry {
     );
     registry
 }
+
+// ── Bound once per (text, environment) ─────────────────────────────────────────
+
+/// A function body is PARSED once per (body text, environment), not once per bind.
+///
+/// Binding is cheap to repeat on purpose: it goes through the engine's own plan
+/// cache, keyed on the body text and the environment's identity. That is what makes
+/// it safe for `purrdf-shapes` to bind at each of several validation entry points
+/// rather than having to thread one bound registry through all of them — the second
+/// bind of a body is a cache HIT and reuses the first's prepared, feasibility-ordered
+/// plan.
+///
+/// Asserted on the cache's own production counters rather than on a test-only probe.
+/// A `#[cfg(test)]` counter would be conditional behaviour compiled differently in
+/// test and production, which is the thing this workspace refuses everywhere else;
+/// and a counter that merely correlated with binding today would stop correlating the
+/// moment anything else touched the same path.
+#[test]
+fn a_body_is_parsed_once_per_text_and_environment() {
+    let (relations, _) = relations();
+    let engine = NativeSparqlEngine::new();
+    let env = ExtensionEnv::over_relations(relations).expect("the declarations read cleanly");
+
+    let before = engine.plan_cache_stats();
+    engine
+        .bind_functions(functions(REL), &env)
+        .expect("the body parses and admits");
+    let first = engine.plan_cache_stats();
+    assert_eq!(
+        first.misses - before.misses,
+        1,
+        "the first bind parses the body exactly once"
+    );
+
+    // Bind AGAIN, same text, same environment.
+    engine
+        .bind_functions(functions(REL), &env)
+        .expect("the body parses and admits");
+    let second = engine.plan_cache_stats();
+    assert_eq!(
+        second.misses, first.misses,
+        "the second bind parsed nothing: same text, same environment, cache hit"
+    );
+    assert_eq!(
+        second.hits - first.hits,
+        1,
+        "and it was served from the cache rather than skipped"
+    );
+}
+
+/// A DIFFERENT environment is a different key, so the same text is parsed again.
+///
+/// The other half of the invariant above, and the one that makes it correct rather
+/// than merely cheap: if the environment were not part of the key, the second bind
+/// would reuse a plan in which the relation IRI is an ordinary triple pattern — the
+/// defect this whole branch exists to fix, arriving through the cache.
+#[test]
+fn a_different_environment_reparses_the_same_body() {
+    let (relations, _) = relations();
+    let engine = NativeSparqlEngine::new();
+
+    let wired = ExtensionEnv::over_relations(relations).expect("the declarations read cleanly");
+    engine
+        .bind_functions(functions(REL), &wired)
+        .expect("the body parses and admits");
+    let after_wired = engine.plan_cache_stats();
+
+    // The SAME body text, against an environment that registers nothing.
+    engine
+        .bind_functions(functions(REL), ExtensionEnv::empty())
+        .expect("the body parses and admits");
+    let after_bare = engine.plan_cache_stats();
+    assert_eq!(
+        after_bare.misses - after_wired.misses,
+        1,
+        "a different environment is a different cache key, so the text is parsed again; \
+         reusing the first plan would mean the relation call had silently become an \
+         ordinary triple pattern"
+    );
+}

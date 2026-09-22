@@ -246,7 +246,7 @@ pub use service::{
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::{GraphResolveRequest, GraphResolver};
 pub use user_fn::{
-    Arity, BindStamp, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody,
+    Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody,
     NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,
     UserFunctionRegistry, Volatility,
 };

@@ -301,11 +301,26 @@ impl ShapesProfile {
     /// at the boundary. A host that spells two different builds with one identity
     /// has told the binding they are the same build.
     ///
-    /// What the profile genuinely excludes is the one binding no shapes graph can
-    /// describe: a product of this profile is prepared against the EMPTY
-    /// property-function registry, because `sh:sparql` bodies that call host
-    /// relations depend on wiring the shapes graph cannot state and a product
-    /// therefore cannot carry.
+    /// # What the profile does NOT exclude
+    ///
+    /// Host relations, and a declared parse configuration. This doc once said a
+    /// product of this profile is prepared against the EMPTY property-function
+    /// registry, because a `sh:sparql` body calling a host relation depends on wiring
+    /// the shapes graph cannot state and a product therefore cannot carry.
+    ///
+    /// The premise was that the binding could not be STATED. It can: a product binds
+    /// the environment it was prepared against, and
+    /// [`PreparedShapes::to_product_for_host`] is how a host that wired a relation or
+    /// declared a namespace says which. What a shapes graph can describe was never
+    /// the question — the identity rows exist precisely for the bindings it cannot.
+    ///
+    /// The refusal a caller still meets is unchanged and is not about this profile: a
+    /// product written with [`PreparedShapes::to_product`] was prepared against
+    /// nothing, so restoring it under a host that wired a relation is a genuine
+    /// disagreement and is refused on
+    /// [`ProductDimension::PropertyFunctionRegistry`] — or on
+    /// [`ProductDimension::ParseConfiguration`] for a declared namespace. That is a
+    /// fact about which writer a caller used, not a capability this profile lacks.
     pub const CORE: Self = Self {
         id: identity::PROFILE_ID,
     };
@@ -816,7 +831,35 @@ impl PreparedShapes {
     /// model nests past the codec's ceiling; [`ProductDimension::Malformed`] when
     /// the model is internally inconsistent.
     pub fn to_product(&self, profile: &ShapesProfile) -> Result<Vec<u8>, ShapesProductError> {
-        self.to_product_bound(profile, &[])
+        self.to_product_bound(profile, &HostBindings::empty())
+    }
+
+    /// Write this preparation out as a prepared product bound to the FULL host
+    /// environment it was prepared against: its registries, its declared parse
+    /// configuration, and the build identity of the implementations behind them.
+    ///
+    /// The entry point for a host whose shapes graph reads through a relation. A
+    /// product written with [`to_product`](Self::to_product) binds the EMPTY relation
+    /// registry and the parse configuration that declares nothing, so restoring it
+    /// under a host that wired either is refused — correctly, because the product was
+    /// not prepared against them. This says what the product WAS prepared against, so
+    /// the restore check has something true to compare.
+    ///
+    /// The same `host` value goes to [`ShapesProduct::admit`] on the restore side.
+    /// That symmetry is the point: one value states the environment on both sides of
+    /// the boundary, so a writer and a reader cannot describe it differently.
+    ///
+    /// # Errors
+    ///
+    /// Every dimension [`to_product`](Self::to_product) refuses on, plus
+    /// [`ProductDimension::UnsupportedCapability`] when `host` injects implementations
+    /// it supplies no identity for.
+    pub fn to_product_for_host(
+        &self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+    ) -> Result<Vec<u8>, ShapesProductError> {
+        self.to_product_bound(profile, host)
     }
 
     /// Write this preparation out as a prepared product, binding it to the build of
@@ -854,7 +897,15 @@ impl PreparedShapes {
                  `to_product`, which states that no host implementations are bound at all",
             ));
         }
-        self.to_product_bound(profile, implementation_identity)
+        self.to_product_bound(
+            profile,
+            &HostBindings::without_declarations(
+                &EMPTY_FUNCTIONS,
+                &EMPTY_AGGREGATES,
+                &EMPTY_PROPERTY_FUNCTIONS,
+                implementation_identity,
+            ),
+        )
     }
 
     /// The ONE writer, with the implementation identity as its only variable.
@@ -869,8 +920,9 @@ impl PreparedShapes {
     fn to_product_bound(
         &self,
         profile: &ShapesProfile,
-        implementation_identity: &[u8],
+        host: &HostBindings<'_>,
     ) -> Result<Vec<u8>, ShapesProductError> {
+        let implementation_identity = host.implementation_identity();
         if profile.id() != identity::PROFILE_ID {
             return Err(ShapesProductError::new(
                 ProductDimension::Profile,
@@ -901,7 +953,7 @@ impl PreparedShapes {
         // well formed and the preparation is representable; what this writer cannot
         // honour is a binding whose host half is unfalsifiable.
         if implementation_identity.is_empty()
-            && !identity::injected_population_is_empty(shapes, &EMPTY_PROPERTY_FUNCTIONS)?
+            && !identity::injected_population_is_empty(shapes, host.property_functions())?
         {
             return Err(ShapesProductError::new(
                 ProductDimension::UnsupportedCapability,
@@ -927,17 +979,18 @@ impl PreparedShapes {
         // one canonicalization in the whole codec that is not on a cold path, and it
         // is here because a product cannot state an identity it has not established.
         let digest = dataset::certify_dataset(&dataset_bytes)?;
+        // The product binds the environment it was PREPARED against, which is
+        // whatever the writer's host states. `to_product` passes the empty host, so a
+        // product written that way still binds the empty relation registry and the
+        // parse configuration that declares nothing — and restoring it under a host
+        // that wired either is still refused, because that product really was not
+        // prepared against them. `to_product_for_host` is how a host that DID wire
+        // them says so, giving the restore check something true to compare.
         let identity = identity::build_identity(
             &digest,
             shapes,
-            // The CORE profile binds the empty property-function registry: host
-            // relations are wiring no shapes graph can describe. See
-            // `ShapesProfile::CORE`.
-            &EMPTY_PROPERTY_FUNCTIONS,
-            // The CORE profile declares no namespace either, for the same reason it
-            // binds the empty relation registry: a declaration is host wiring no
-            // shapes graph can describe.
-            &EMPTY_PARSER_OPTIONS,
+            host.property_functions(),
+            host.parser_options(),
             implementation_identity,
             &classes,
         )?;

@@ -2493,9 +2493,20 @@ impl Default for QueryOptions<'_> {
 /// executed under registry B, for either registry.
 ///
 /// The function-registry pair ([`QueryOptions::functions`]) is deliberately NOT checked
-/// here: a mismatched `UserFunctionRegistry` has no analogous silent-wrong-answer channel
-/// — `Function::Custom` is resolved dynamically at evaluation time (never at parse time,
-/// unlike a property-function predicate or a `Custom` aggregate's admission), so an
+/// here, and the reason needs one distinction it did not used to need. This doc once
+/// said `Function::Custom` is resolved dynamically at evaluation time and NEVER at
+/// parse time; half of that is no longer true. A SPARQL-bodied function's body is now
+/// parsed and feasibility-ordered against an extension environment BEFORE evaluation
+/// begins, and the bound registry carries the identity of the environment it was bound
+/// against — so that half is parse-time-bound and is checked there, per call, against
+/// [`QueryOptions::env`].
+///
+/// What remains dynamic, and is what this paragraph is about, is
+/// EXPRESSION-POSITION dispatch: a mismatched `UserFunctionRegistry` has no analogous
+/// silent-wrong-answer channel because a call-position `Function::Custom` IRI is
+/// looked up while an expression is being evaluated (unlike a property-function
+/// predicate or a `Custom` aggregate's admission, both of which happen at parse
+/// time), so an
 /// IRI unknown to the supplied registry fails LOUDLY there (an XSD-cast attempt or a typed
 /// "undefined function" error), and a resolved-but-different-under-registry-B function
 /// call is exactly the risk every caller of [`QueryOptions`] already accepts by supplying

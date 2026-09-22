@@ -54,7 +54,6 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
 
@@ -705,39 +704,6 @@ impl UserFunctionRegistry {
     }
 }
 
-/// Which bind produced a [`BoundFunctionRegistry`].
-///
-/// A process-lifetime counter, minted once per successful bind. It exists so a
-/// caller can *observe* that a validation bound its function bodies once and then
-/// reused that result, rather than re-binding per focus chunk or per constraint
-/// evaluation â a regression that would be invisible in a report and expensive in a
-/// validation that issues one query per focus node.
-///
-/// Like [`RegistryId`] it is process-local and must never be persisted; unlike
-/// [`RegistryId`] it identifies an *event* rather than a value, so two binds of the
-/// same registry against the same environment carry different stamps. That is the
-/// point: equal stamps prove reuse, and nothing else does.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct BindStamp(u64);
-
-impl BindStamp {
-    /// The stamp [`BoundFunctionRegistry::EMPTY`] carries. Reserved: [`Self::fresh`]
-    /// starts at `1`, so `0` can never name a real bind.
-    pub(crate) const EMPTY: Self = Self(0);
-
-    pub(crate) fn fresh() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// The raw counter value, for a caller asserting that two observations came
-    /// from the same bind.
-    #[must_use]
-    pub const fn as_u64(self) -> u64 {
-        self.0
-    }
-}
-
 /// A [`UserFunctionRegistry`] whose every SPARQL body has been parsed and
 /// feasibility-ordered against one [`ExtensionEnv`](crate::extension_env::ExtensionEnv).
 ///
@@ -770,7 +736,6 @@ pub struct BoundFunctionRegistry {
     /// The environment every body above was bound against â compared per call, and
     /// cheap to compare because it is one integer (see [`RegistryId`]).
     env: RegistryId,
-    stamp: BindStamp,
 }
 
 impl core::fmt::Debug for BoundFunctionRegistry {
@@ -785,7 +750,6 @@ impl core::fmt::Debug for BoundFunctionRegistry {
             .field("declarations", &self.inner)
             .field("bound_bodies", &bound)
             .field("env", &self.env)
-            .field("stamp", &self.stamp)
             .finish()
     }
 }
@@ -804,7 +768,6 @@ impl BoundFunctionRegistry {
         inner: UserFunctionRegistry::EMPTY,
         bodies: DetHashMap::with_hasher(crate::DetHasher::new()),
         env: RegistryId::EMPTY,
-        stamp: BindStamp::EMPTY,
     };
 
     /// Assemble a bound registry from declarations and their prepared bodies â the
@@ -815,12 +778,7 @@ impl BoundFunctionRegistry {
         bodies: DetHashMap<String, Arc<crate::engine::PreparedQuery>>,
         env: RegistryId,
     ) -> Self {
-        Self {
-            inner,
-            bodies,
-            env,
-            stamp: BindStamp::fresh(),
-        }
+        Self { inner, bodies, env }
     }
 
     /// Resolve a call-position IRI to its declaration and its bound body.
@@ -883,12 +841,6 @@ impl BoundFunctionRegistry {
     #[must_use]
     pub fn env_id(&self) -> RegistryId {
         self.env
-    }
-
-    /// Which bind produced this registry â see [`BindStamp`].
-    #[must_use]
-    pub fn bind_stamp(&self) -> BindStamp {
-        self.stamp
     }
 
     /// Bind `registry` against the canonical empty environment, through the

@@ -506,8 +506,18 @@ thread_local! {
     /// query plan cache memoizes each `sh:select`/`sh:SPARQLTarget` parse across the
     /// many focus-node calls of one validation (the oxigraph path kept a pre-parsed
     /// `PreparedSparqlQuery`; a fresh engine per call would re-parse every time — a
-    /// per-focus blowup on the whole-ontology conformance shapes). Each focus
-    /// worker reuses its own cache, keyed on `(base, query text)`.
+    /// per-focus blowup on the whole-ontology conformance shapes). Each focus worker
+    /// reuses its own cache.
+    ///
+    /// That cache is keyed on more than the query text, and the difference is
+    /// load-bearing rather than incidental: `PlanCache`'s key folds the base IRI, all
+    /// three `ParserOptions` lists, and both registry fingerprints. This comment used
+    /// to say `(base, query text)`, which would have made the cache a silent
+    /// wrong-answer channel of exactly the kind the extension environment exists to
+    /// close — a body parsed under one environment, served from the cache under
+    /// another, with its relation calls already lowered to ordinary triple patterns.
+    /// It was an under-description of the key, not a description of a narrower key;
+    /// the key has always folded the options.
     static SPARQL_ENGINE: NativeSparqlEngine = NativeSparqlEngine::new();
 
     /// The SHACL-AF function registry (`sh:SPARQLFunction`) in scope for the current
