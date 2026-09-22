@@ -1490,7 +1490,7 @@ fn warm_every_worker_fallback(fixture: &FallbackFixture) {
 /// `N` and at `2N` — pinned here because, before this test, nothing measured
 /// it at all.**
 ///
-/// F3: `prepare_execution` refuses a repeated parameter name, so every
+/// `prepare_execution` refuses a repeated parameter name, so every
 /// prepared call site asks `parameters_are_distinct` first and routes a
 /// repeated name back to this door. A custom component can produce one
 /// without any contrivance — see [`ASK_FALLBACK_SHAPES`] — so this lane is
