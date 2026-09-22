@@ -1940,3 +1940,46 @@ fn the_measured_table_is_what_it_was() {
         "three configurations must measure three different things"
     );
 }
+
+/// The finality licence has one spelling, and the promise it is *not* keeps its
+/// own.
+///
+/// Three questions — whether a candidate is final, what its upper bound is, and
+/// what its score interval is — are one question about whether a stream may
+/// still name it. The engine's own comments say the licence must be taken in
+/// all of them or none, because a candidate certified under one reading and
+/// bounded under another is a score whose interval describes a different read
+/// than the certification did. A licence spelled once per site is three chances
+/// to disagree, and the disagreement is silent: each site still compiles, and
+/// each still passes every test that exercises only the other two.
+///
+/// `pull` reads the same declaration for the opposite purpose — refusing a
+/// stream that names a candidate its own declaration put out of reach — and
+/// that enforcement must not inherit the licence. Merging them would report a
+/// stream contradicting an *observation* as having broken its *declaration*,
+/// blaming the wrong promise and naming a witness that never made it. So the
+/// split is pinned here, in both directions, rather than left to a comment.
+#[test]
+fn the_finality_licence_is_spelled_once_and_enforcement_keeps_its_own() {
+    const SOURCE: &str = include_str!("../src/fusion_stream.rs");
+
+    assert_eq!(
+        SOURCE.matches("fn may_still_name").count(),
+        1,
+        "the licence is one function, so there is one place for it to grow"
+    );
+    assert_eq!(
+        SOURCE.matches("self.may_still_name(").count(),
+        3,
+        "finality, the upper bound and the score interval all take the licence, \
+         and a site that stopped taking it would be reading a different question"
+    );
+    assert_eq!(
+        SOURCE.matches("self.could_name(").count(),
+        3,
+        "the raw declaration predicate is read exactly three times: once by the \
+         licence, and twice by the two enforcement sites in `pull` that refuse a \
+         broken domain promise. A fourth reading is either a licence that \
+         bypassed `may_still_name` or an enforcement that should have"
+    );
+}

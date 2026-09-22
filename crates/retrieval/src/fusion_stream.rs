@@ -2613,8 +2613,37 @@ impl<S: RankedStream> FusionStream<S> {
         self.heads.iter().enumerate().all(|(index, head)| {
             head.is_none()
                 || state.seen_streams.contains(&index)
-                || !self.could_name(index, &state.seen_streams)
+                || !self.may_still_name(index, state)
         })
+    }
+
+    /// Whether stream `index` may still name the candidate `state` describes.
+    ///
+    /// # This is the licence, and it is spelled once
+    ///
+    /// [`Self::is_final`], [`Self::upper_bound`] and [`Self::score_interval`] ask
+    /// one question — may this stream still add to this candidate — and the
+    /// answer must be the same in all three or the certification argument and
+    /// the interval it reports describe different reads. So they ask it here
+    /// rather than each deciding for itself; three spellings would be three
+    /// chances to disagree about one question.
+    ///
+    /// # Why this is not [`Self::could_name`], which it currently only calls
+    ///
+    /// The same predicate is read for a second, opposite purpose: `pull` uses
+    /// [`Self::could_name`] to refuse a stream that names a candidate its own
+    /// declaration put out of reach
+    /// ([`ProtocolError::OutsideDeclaredDomain`](crate::ProtocolError::OutsideDeclaredDomain)).
+    /// That is enforcement of a promise, not a licence to skip waiting, and the
+    /// two must not be merged even though they agree today. A licence may grow
+    /// on evidence the declaration never carried — an observation about one
+    /// candidate rather than a promise about a whole block — and such evidence
+    /// retires a stream's claim without making a row that arrives anyway a
+    /// *domain* violation. Folding the two would report a stream that
+    /// contradicted an observation as having broken its declaration, which
+    /// blames the wrong promise and names the wrong witness.
+    fn may_still_name(&self, index: usize, state: &CandidateState) -> bool {
+        self.could_name(index, &state.seen_streams)
     }
 
     /// Whether stream `index` could still name a candidate that the streams in
@@ -2693,8 +2722,10 @@ impl<S: RankedStream> FusionStream<S> {
             // The same licence `upper_bound` and `is_final` take, and it must be
             // taken here too: a stream that provably cannot name `x` withheld
             // nothing from it, so charging it would bound the answer by a
-            // contribution that was never possible.
-            if !self.could_name(index, &state.seen_streams) {
+            // contribution that was never possible. All three read it from
+            // `may_still_name`, which is what makes "the same licence" a fact
+            // rather than a comment.
+            if !self.may_still_name(index, state) {
                 continue;
             }
             let residual = if self.is_degraded(index) {
@@ -2815,7 +2846,7 @@ impl<S: RankedStream> FusionStream<S> {
             if state.seen_streams.contains(&index) {
                 continue;
             }
-            if !self.could_name(index, &state.seen_streams) {
+            if !self.may_still_name(index, state) {
                 continue;
             }
             if let Some(head) = head {
