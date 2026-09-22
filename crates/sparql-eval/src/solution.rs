@@ -298,8 +298,8 @@ impl VarSchema {
     /// one.
     ///
     /// Every insert charges its estimated retained size — the stored
-    /// request's columns plus the layout's own — to
-    /// [`crate::plan_memory::interner_memory_observer`], and a cap-triggered
+    /// request's columns plus the layout's own — to the crate's internal
+    /// per-worker interner memory observer, and a cap-triggered
     /// clear credits the whole table back, so this per-worker table is no longer
     /// memory a deployment's `CacheLimits` cannot see.
     pub fn interned(vars: &[Variable]) -> Arc<Self> {
