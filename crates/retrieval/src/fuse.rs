@@ -255,7 +255,9 @@ impl<T> fmt::Debug for FusionResult<T> {
 /// weight; [`FusionError::PlanIdMismatch`] when two streams name different
 /// pinned plans; [`FusionError::ReadBoundMismatch`] when a stream was planned for
 /// a different bound than `top_k`; [`FusionError::Protocol`] when a stream violates the input
-/// protocol; [`FusionError::Overflow`] when a checked sum leaves the fixed-point
+/// protocol, including a contract that pairs a search exclusion with a lossy search
+/// ([`ProtocolError::SearchExclusionFromLossySearch`](crate::ProtocolError::SearchExclusionFromLossySearch),
+/// refused before any row is pulled); [`FusionError::Overflow`] when a checked sum leaves the fixed-point
 /// range; [`FusionError::MaxContributionsExceeded`] when a candidate is
 /// contributed to more times than there are strata, which this entry point's
 /// own duplicate-stratum refusal makes unreachable from a conforming stream.
@@ -313,7 +315,7 @@ where
     }
     let pinned = if unpinned { None } else { pinned };
 
-    let mut fusion = FusionStream::new(streams, profile.clone());
+    let mut fusion = FusionStream::new(streams, profile.clone())?;
     if let Some(plan_id) = pinned {
         fusion = fusion.with_plan_id(plan_id);
     }

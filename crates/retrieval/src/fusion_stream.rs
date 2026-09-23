@@ -35,7 +35,10 @@
 //! ([`RankedStream::exclusion`]). An `Excluded` answer retires that stream's
 //! claim on that one candidate, which is the case the declaration structurally
 //! cannot reach: two producers over one block, both declaring the truth, whose
-//! results never overlap.
+//! results never overlap. It retires the claim on what *this read* will assign;
+//! where the index behind the stream attested it was short, the score interval
+//! keeps charging the documents it is missing, because "I hold no entry for it"
+//! is exactly what each of them would say.
 //!
 //! The membership test is therefore asked of the streams that can name `x` and
 //! skipped for the streams that provably cannot — by promise or by answer, and
@@ -630,6 +633,11 @@ pub enum ScoreInterval {
         /// short index — contributes its rank-one contribution instead, because
         /// a row it never found could have been due at any rank, including the
         /// first.
+        ///
+        /// A stream that answered `Excluded` for this candidate is skipped like
+        /// one whose domains rule it out, with one exception: an index attested
+        /// short still contributes its rank-one residual, because its "I hold
+        /// no entry for it" is exactly what a document it is missing would say.
         deficit: Fixed,
         /// How much a degraded stratum could have OVER-contributed to this row.
         ///
@@ -1668,6 +1676,18 @@ struct Degradation {
     /// asked. At least one entry is `true` — a fusion with none holds no
     /// [`Degradation`] at all.
     degraded: Vec<bool>,
+    /// Whether the index behind each stream attested it was short
+    /// ([`ServiceLevel::Incomplete`]) — the half of `degraded` an exclusion
+    /// lookup cannot discharge.
+    ///
+    /// Held apart from `degraded` because the two halves answer an `Excluded`
+    /// differently. A lossy *search* over a whole index misses rows the index
+    /// holds, so the index's own "I hold no entry for it" settles what the
+    /// search could have missed for that candidate. A *short index* misses
+    /// documents it does not hold, and "I hold no entry for it" is exactly the
+    /// statement those documents make — so it settles nothing about them. See
+    /// [`FusionStream::score_interval`].
+    short: Vec<bool>,
     /// The contribution each stream would award a rank-one row, or `None` where
     /// the profile's arithmetic refused to produce one.
     ///
@@ -1898,8 +1918,17 @@ impl<S: RankedStream> FusionStream<S> {
     /// that for its caller, reading the identity off the streams themselves
     /// through [`RankedStream::plan_id`]. No stream is pulled until the first
     /// [`next`](Self::next) call.
-    #[must_use]
-    pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::SearchExclusionFromLossySearch`] when a stream's
+    /// contract declares [`ExclusionBasis::Search`] beside a lossy search. This
+    /// is the one place every stream passes through on its way to being asked a
+    /// lookup, so it is where the pairing is refused for all of them — a stream
+    /// built from a registered declaration was already refused at registration
+    /// by the same predicate, [`ExclusionBasis::is_exact_under`], and one a
+    /// caller assembled by hand is refused here, before a row is pulled.
+    pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Result<Self, FusionError> {
         let count = streams.len();
         // One read of each contract, both terms taken from it. Asking twice
         // would let a stream answer differently the second time and leave the
@@ -1908,6 +1937,23 @@ impl<S: RankedStream> FusionStream<S> {
             .iter()
             .map(|(_, stream)| stream.contract())
             .collect();
+        // Checked before anything is derived from the declarations: an
+        // `Excluded` from a lossy search would retire a residual this engine is
+        // otherwise bound to charge, so the declaration that licenses asking for
+        // one is refused rather than believed.
+        for ((stratum, _), contract) in streams.iter().zip(&contracts) {
+            if !contract.exclusion.is_exact_under(&contract.fidelity) {
+                return Err(ProtocolError::SearchExclusionFromLossySearch {
+                    stratum: stratum.as_str().to_owned(),
+                    evidence: contract
+                        .fidelity
+                        .evidence()
+                        .next()
+                        .map_or_else(String::new, |evidence| evidence.as_ref().to_owned()),
+                }
+                .into());
+            }
+        }
         let seen_items = contracts
             .iter()
             .map(|contract| match contract.duplicates {
@@ -1969,13 +2015,16 @@ impl<S: RankedStream> FusionStream<S> {
         // undegraded streams every term they feed is zero, so an ordinary
         // exhaustive fusion carries none of this rather than a table of
         // falsehoods and unread numbers.
-        let degraded: Vec<bool> = (0..count)
-            .map(|index| {
-                fidelities[index].may_omit()
-                    || attestations
-                        .get(&streams[index].0)
-                        .is_some_and(|a| matches!(a.service, ServiceLevel::Incomplete { .. }))
+        let short: Vec<bool> = streams
+            .iter()
+            .map(|(stratum, _)| {
+                attestations
+                    .get(stratum)
+                    .is_some_and(|a| matches!(a.service, ServiceLevel::Incomplete { .. }))
             })
+            .collect();
+        let degraded: Vec<bool> = (0..count)
+            .map(|index| fidelities[index].may_omit() || short[index])
             .collect();
         let degradation = degraded.contains(&true).then(|| {
             // First entry wins, which is what the `position` scan this replaces
@@ -1986,6 +2035,7 @@ impl<S: RankedStream> FusionStream<S> {
             }
             Box::new(Degradation {
                 degraded,
+                short,
                 // The refusal is *recorded* rather than carried: see
                 // `Degradation::rank_one` for why a stored error would be the
                 // wrong error.
@@ -1996,7 +2046,7 @@ impl<S: RankedStream> FusionStream<S> {
                 stratum_index,
             })
         });
-        Self {
+        Ok(Self {
             streams,
             profile,
             plan_id: None,
@@ -2021,7 +2071,7 @@ impl<S: RankedStream> FusionStream<S> {
             emitted: EmittedTable::default(),
             threshold: Fixed::ZERO,
             last_row_won_a_tie: false,
-        }
+        })
     }
 
     /// Attach the pinned plan identity these streams came from.
@@ -2889,12 +2939,16 @@ impl<S: RankedStream> FusionStream<S> {
     ///
     /// # This is the licence, and it is spelled once
     ///
-    /// [`Self::is_final`], [`Self::upper_bound`] and [`Self::score_interval`] ask
-    /// one question — may this stream still add to this candidate — and the
-    /// answer must be the same in all three or the certification argument and
-    /// the interval it reports describe different reads. So they ask it here
-    /// rather than each deciding for itself; three spellings would be three
-    /// chances to disagree about one question.
+    /// [`Self::is_final`], [`Self::upper_bound`] and [`Self::observe_exclusions`]
+    /// ask one question — may this stream still add to this candidate *in this
+    /// read* — and the answer must be the same in all of them or the
+    /// certification argument describes a different read from the one that was
+    /// performed. So they ask it here rather than each deciding for itself.
+    /// [`Self::score_interval`] asks it too, through
+    /// [`Self::may_have_withheld`], which is this predicate narrowed in exactly
+    /// one case — an exclusion from an index attested short — because the
+    /// interval bounds the score the corpus would have assigned rather than the
+    /// one this read did, and that case is where the two part.
     ///
     /// # Why this is not [`Self::could_name`], which it currently only calls
     ///
@@ -2927,6 +2981,46 @@ impl<S: RankedStream> FusionStream<S> {
     /// nothing left to add here.
     fn may_still_name(&self, index: usize, state: &CandidateState) -> bool {
         self.could_name(index, &state.seen_streams) && !state.excluded.contains(&index)
+    }
+
+    /// Whether stream `index` may have withheld something from the *true* score
+    /// of the candidate `state` describes — the licence
+    /// [`Self::score_interval`] charges a deficit under.
+    ///
+    /// # Why this is not [`Self::may_still_name`]
+    ///
+    /// The two ask about different scores. [`Self::may_still_name`] asks about
+    /// the score *this read* will assign: may the stream still hand this
+    /// candidate a row. [`Self::is_final`] and [`Self::upper_bound`] ask that,
+    /// and an `Excluded` answers it for every producer that gives one — the
+    /// stream said it will not name the candidate, and a row that arrives anyway
+    /// is refused as [`ProtocolError::ExclusionContradicted`]. The interval asks
+    /// about the score the *corpus* would have assigned, and there the two
+    /// halves of a degradation answer an `Excluded` differently:
+    ///
+    /// * **A lossy search over a whole index.** The rows it can miss are rows
+    ///   the index holds. A membership answer — "I hold no entry for it" — is a
+    ///   fact about that index, so it settles the candidate for every search
+    ///   over it, lossy or exhaustive, and the rank-one residual is discharged.
+    ///   (A *search* basis from a lossy search is refused in [`Self::new`]; it
+    ///   never reaches here.)
+    /// * **An index attested short.** The documents it is missing are documents
+    ///   it does not hold, and "I hold no entry for it" is exactly what each of
+    ///   them would say. The answer is true and silent about the one thing the
+    ///   residual stands for, so the residual stays charged — whatever the basis,
+    ///   because a complete search over a short index is short by the same
+    ///   documents.
+    ///
+    /// The declarative half ([`Self::could_name`]) discharges in both cases: a
+    /// domain is a promise about which blocks the producer's corpus reaches, not
+    /// about which of its documents are loaded, so a candidate outside it is
+    /// outside every document the producer could be missing.
+    ///
+    /// Where no stream attested a short index this is exactly
+    /// [`Self::may_still_name`].
+    fn may_have_withheld(&self, index: usize, state: &CandidateState) -> bool {
+        self.could_name(index, &state.seen_streams)
+            && (!state.excluded.contains(&index) || self.is_attested_short(index))
     }
 
     /// Ask the streams that are blocking finality whether they will ever name
@@ -3172,13 +3266,12 @@ impl<S: RankedStream> FusionStream<S> {
             if state.seen_streams.contains(&index) {
                 continue;
             }
-            // The same licence `upper_bound` and `is_final` take, and it must be
-            // taken here too: a stream that provably cannot name `x` withheld
+            // A stream that provably cannot name `x` in the whole corpus withheld
             // nothing from it, so charging it would bound the answer by a
-            // contribution that was never possible. All three read it from
-            // `may_still_name`, which is what makes "the same licence" a fact
-            // rather than a comment.
-            if !self.may_still_name(index, state) {
+            // contribution that was never possible. That is `may_still_name`
+            // with one narrowing, spelled in `may_have_withheld`: an exclusion
+            // from an attested-short index does not discharge the charge.
+            if !self.may_have_withheld(index, state) {
                 continue;
             }
             let residual = if self.is_degraded(index) {
@@ -3239,6 +3332,17 @@ impl<S: RankedStream> FusionStream<S> {
         self.degradation
             .as_ref()
             .is_some_and(|degradation| degradation.degraded[index])
+    }
+
+    /// Whether the index behind stream `index` attested it was short.
+    ///
+    /// The half of [`Self::is_degraded`] an exclusion lookup cannot discharge;
+    /// see [`Degradation::short`] and [`Self::may_have_withheld`]. Decided in
+    /// [`Self::new`] and read here, like its neighbour.
+    fn is_attested_short(&self, index: usize) -> bool {
+        self.degradation
+            .as_ref()
+            .is_some_and(|degradation| degradation.short[index])
     }
 
     /// The contribution stream `index` would award a rank-one row.

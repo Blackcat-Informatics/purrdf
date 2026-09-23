@@ -2719,24 +2719,33 @@ fn the_measured_table_is_what_it_was() {
     );
 }
 
-/// The finality licence has one spelling, and the promise it is *not* keeps its
-/// own.
+/// The finality licence has one spelling, its one narrowing has one spelling,
+/// and the promise it is *not* keeps its own.
 ///
 /// Three questions — whether a candidate is final, what its upper bound is, and
-/// what its score interval is — are one question about whether a stream may
-/// still name it. The engine's own comments say the licence must be taken in
-/// all of them or none, because a candidate certified under one reading and
-/// bounded under another is a score whose interval describes a different read
-/// than the certification did. A licence spelled once per site is three chances
-/// to disagree, and the disagreement is silent: each site still compiles, and
-/// each still passes every test that exercises only the other two.
+/// which streams the exclusion phase should ask — are one question about
+/// whether a stream may still name it *in this read*. The engine's own comments
+/// say the licence must be taken in all of them or none, because a candidate
+/// certified under one reading and bounded under another is a candidate whose
+/// certification describes a different read from the one performed. A licence
+/// spelled once per site is several chances to disagree, and the disagreement
+/// is silent: each site still compiles, and each still passes every test that
+/// exercises only the others.
+///
+/// The score interval asks a neighbouring question — may the stream have
+/// withheld something from the score the *corpus* would have assigned — and the
+/// two part in exactly one case: an exclusion from an index attested short,
+/// which is true of the read and silent about the documents the index is
+/// missing. That narrowing is its own function, spelled once, so the interval
+/// cannot drift back onto the read's licence and nothing else can drift onto
+/// the interval's.
 ///
 /// `pull` reads the same declaration for the opposite purpose — refusing a
 /// stream that names a candidate its own declaration put out of reach — and
-/// that enforcement must not inherit the licence. Merging them would report a
-/// stream contradicting an *observation* as having broken its *declaration*,
+/// that enforcement must not inherit either licence. Merging them would report
+/// a stream contradicting an *observation* as having broken its *declaration*,
 /// blaming the wrong promise and naming a witness that never made it. So the
-/// split is pinned here, in both directions, rather than left to a comment.
+/// split is pinned here, in every direction, rather than left to a comment.
 #[test]
 fn the_finality_licence_is_spelled_once_and_enforcement_keeps_its_own() {
     const SOURCE: &str = include_str!("../src/fusion_stream.rs");
@@ -2747,36 +2756,47 @@ fn the_finality_licence_is_spelled_once_and_enforcement_keeps_its_own() {
         "the licence is one function, so there is one place for it to grow"
     );
     assert_eq!(
+        SOURCE.matches("fn may_have_withheld").count(),
+        1,
+        "and so is the interval's narrowing of it"
+    );
+    assert_eq!(
         SOURCE.matches("self.may_still_name(").count(),
-        5,
-        "finality, the upper bound and the score interval take the licence, and \
-         the exclusion-lookup phase takes it twice — once to choose which \
-         streams are blocking a candidate and once at the moment of asking, \
-         because an answer recorded earlier in the same phase can have settled \
-         the candidate in between. A site that stopped taking it would be \
-         reading a different question"
+        4,
+        "finality and the upper bound take the licence, and the exclusion-lookup \
+         phase takes it twice — once to choose which streams are blocking a \
+         candidate and once at the moment of asking, because an answer recorded \
+         earlier in the same phase can have settled the candidate in between. A \
+         site that stopped taking it would be reading a different question"
+    );
+    assert_eq!(
+        SOURCE.matches("self.may_have_withheld(").count(),
+        1,
+        "the score interval, and only the score interval, takes the narrowed \
+         licence: it bounds the corpus's score, where an attested-short index's \
+         exclusion settles nothing about the documents it is missing"
     );
     assert_eq!(
         SOURCE.matches("self.could_name(").count(),
-        4,
-        "the raw declaration predicate is read exactly four times: once by the \
-         licence, twice by the two enforcement sites in `pull` that refuse a \
-         broken domain promise, and once by the verdict check that refuses a \
-         producer calling a candidate possible when its own declared domains \
-         cannot reach it. All three of the latter are ENFORCEMENT — they blame a \
-         declaration — which is exactly why none of them may take the licence: a \
+        5,
+        "the raw declaration predicate is read exactly five times: once by each \
+         of the two licences, twice by the two enforcement sites in `pull` that \
+         refuse a broken domain promise, and once by the verdict check that \
+         refuses a producer calling a candidate possible when its own declared \
+         domains cannot reach it. The last three are ENFORCEMENT — they blame a \
+         declaration — which is exactly why none of them may take a licence: a \
          licence narrowed by an observation would report a broken observation as \
-         a broken declaration. A fifth reading is either a licence that bypassed \
-         `may_still_name` or an enforcement that should have"
+         a broken declaration. A sixth reading is either a licence that bypassed \
+         both functions or an enforcement that should have"
     );
     assert_eq!(
         SOURCE.matches("state.excluded.contains(").count(),
-        2,
-        "the observational half of the licence is read once by `may_still_name` \
-         and once by the frontier arm of `pull` that refuses a stream naming a \
-         candidate it excluded. The certified-candidate arm reads the emitted \
-         record's own copy instead, because a certified candidate no longer has \
-         a `CandidateState` to read"
+        3,
+        "the observational half is read once by each licence and once by the \
+         frontier arm of `pull` that refuses a stream naming a candidate it \
+         excluded. The certified-candidate arm reads the emitted record's own \
+         copy instead, because a certified candidate no longer has a \
+         `CandidateState` to read"
     );
 }
 

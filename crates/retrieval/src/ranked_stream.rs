@@ -1042,6 +1042,33 @@ pub enum ProtocolError {
     #[error("stream was asked for an exclusion verdict but declares no exclusion basis")]
     ExclusionUnavailable,
 
+    /// A stream declared [`ExclusionBasis::Search`] beside a
+    /// [`Completeness::Lossy`](crate::Completeness::Lossy) search.
+    ///
+    /// Refused when the stream is handed to
+    /// [`FusionStream::new`](crate::FusionStream::new), before a row is pulled or
+    /// a lookup asked. A lossy search that did not find a candidate has not said
+    /// the candidate is absent, so honouring its `Excluded` would retire the very
+    /// residual the loss earns and certify a score the missing rows could still
+    /// raise. The registry refuses the same pairing when a producer is registered
+    /// ([`ExclusionBasis::is_exact_under`] is the one predicate both read); this
+    /// is the refusal for a stream that never went through a registry.
+    ///
+    /// The stratum names the stream and the evidence is the producer's own,
+    /// verbatim, so a host can see which declaration made the search lossy.
+    #[error(
+        "stream for stratum {stratum} declares an exclusion basis of search beside a lossy search \
+         ({evidence}); a search that may miss rows cannot say a candidate is absent. Declare \
+         ExclusionBasis::Membership if the answer is about the producer's own term universe, or \
+         ExclusionBasis::Unavailable"
+    )]
+    SearchExclusionFromLossySearch {
+        /// The stratum the stream was tagged with when it was handed to fusion.
+        stratum: String,
+        /// The producer's own completeness evidence, verbatim.
+        evidence: String,
+    },
+
     /// The read behind a stream failed after the consumer had started merging its
     /// rows, or failed in a way that invalidates the whole run.
     ///

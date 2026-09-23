@@ -622,15 +622,26 @@ pub enum ExclusionBasis {
     /// the *order* it would have named things in. So a lossy producer's
     /// membership answer is as sound as an exhaustive one's, and refusing it on
     /// completeness grounds would throw away a provably exact answer.
+    ///
+    /// It is exact about the universe the index *holds*, and that is all. An
+    /// index that attests [`ServiceLevel::Incomplete`] has said its universe is
+    /// short of the corpus — a shard offline, a rebuild half done — so "I hold
+    /// no entry for it" from such an index is true and still says nothing about
+    /// whether the corpus holds one. A consumer may stop waiting for the stream
+    /// to name the candidate, because it will not, and must keep charging the
+    /// missing documents to the candidate's score, because the answer is silent
+    /// about exactly them.
     Membership,
     /// An exclusion means *my search did not find it*.
     ///
     /// Exact only where the search is complete, which is why
     /// [`PropertyFunctionRegistry::register_ranked`] refuses this variant from a
-    /// producer that declared [`Completeness::Lossy`]. For such a producer "not
-    /// found" and "not present" are different facts, and the gap between them is
-    /// already charged as the score interval's residual by the consumer rather
-    /// than silently converted into a certainty here.
+    /// producer that declared [`Completeness::Lossy`], and a fusion consumer
+    /// refuses it again from a stream handed to it directly (see
+    /// [`Self::is_exact_under`]). For such a producer "not found" and "not
+    /// present" are different facts, and the gap between them is charged as the
+    /// score interval's residual by the consumer rather than silently converted
+    /// into a certainty here.
     Search,
 }
 
@@ -652,6 +663,29 @@ impl ExclusionBasis {
     #[must_use]
     pub const fn is_declared(self) -> bool {
         !matches!(self, Self::Unavailable)
+    }
+
+    /// Whether an `Excluded` answer under this basis is an exact fact about a
+    /// producer whose search has `fidelity`.
+    ///
+    /// False for exactly one pairing: [`Self::Search`] from a producer that
+    /// declared [`Completeness::Lossy`], where "my search did not find it" and
+    /// "it is not there" are different facts. [`Self::Membership`] is exact
+    /// whatever the search dropped, and [`Self::Unavailable`] answers nothing and
+    /// so claims nothing.
+    ///
+    /// # One predicate, read at both places the pairing is refused
+    ///
+    /// [`PropertyFunctionRegistry::register_ranked`] refuses the pairing at
+    /// registration, where the declaration is authored and a host can be told
+    /// which basis it meant. A fusion consumer refuses it again when it is handed
+    /// a stream, because a stream assembled by hand never passed through a
+    /// registry, and the fusion is the party that would act on the answer. Both
+    /// ask this, so the two refusals cannot come to disagree about which
+    /// pairings are sound.
+    #[must_use]
+    pub const fn is_exact_under(self, fidelity: &RankFidelity) -> bool {
+        !matches!(self, Self::Search) || !fidelity.may_omit()
     }
 }
 
@@ -2445,9 +2479,7 @@ fn validate_exclusion(
          honest statement that this producer answers no such lookup",
         decl.candidate_position
     );
-    if decl.exclusion == ExclusionBasis::Search
-        && let Completeness::Lossy { .. } = decl.fidelity.completeness
-    {
+    if !decl.exclusion.is_exact_under(&decl.fidelity) {
         panic!(
             "ranked declaration for <{iri}> declares an exclusion basis of search while declaring \
              its completeness lossy; a lossy search that did not find a candidate has not said \

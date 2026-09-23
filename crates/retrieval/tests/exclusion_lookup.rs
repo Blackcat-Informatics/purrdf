@@ -35,15 +35,16 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, ExclusionBasis,
-    ExclusionVerdict, Fixed, FusionError, FusionProfile, Iri, OrderFidelity, ProducerReceipt,
-    ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream, RowBlock, StreamContract, Term,
-    TopK, contribution_under, fuse,
+    ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile, FusionStream, FusionTrailer,
+    IndexGeneration, Iri, OrderFidelity, PfAttestation, ProducerReceipt, ProtocolError, RECIP_K,
+    RankFidelity, RankedRow, RankedStream, RowBlock, ScoreInterval, ServiceLevel, StreamContract,
+    Term, TopK, contribution_under, fuse,
 };
 use purrdf_sparql_eval::{
     BindingPattern, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
@@ -203,6 +204,9 @@ fn register(
     registry
 }
 
+/// Serialises every swap of the process-wide panic hook in this binary.
+static HOOK_LOCK: Mutex<()> = Mutex::new(());
+
 /// The panic message [`register`] raised, or `None` where it did not panic.
 ///
 /// The registration is run for real either way, so an "admitted" result below is
@@ -212,6 +216,16 @@ fn refusal(
     completeness: Completeness,
     mode: CandidateMode,
 ) -> Option<String> {
+    // The panic hook is process-wide and the test harness runs tests on
+    // several threads, so two unsynchronised swaps can interleave — one call
+    // restoring the silent hook the other installed — and leave every later
+    // panic in the binary unreported. The lock makes each take/set/restore
+    // triple atomic with respect to every other caller of this helper. A
+    // poisoned lock only means an earlier holder panicked, which is what this
+    // helper catches, so the guard is taken back rather than propagated.
+    let _hook = HOOK_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // The registry is built inside the closure and dropped with it, so nothing
     // observed after a panic was mutated by one.
     let previous = std::panic::take_hook();
@@ -394,6 +408,9 @@ struct ScriptedStream {
     /// How many lookups this stream was asked, so a test can show the mechanism
     /// really ran.
     asked: u64,
+    /// What the index behind this stream attests, announced before the first
+    /// row and settled unchanged at the stop.
+    attested: PfAttestation,
 }
 
 impl ScriptedStream {
@@ -405,7 +422,19 @@ impl ScriptedStream {
             verdicts: BTreeMap::new(),
             failing: None,
             asked: 0,
+            attested: PfAttestation::UNDECLARED,
         }
+    }
+
+    /// The same stream over an index that attests it was short.
+    fn attesting_short(mut self) -> Self {
+        self.attested = PfAttestation {
+            generation: IndexGeneration::Undeclared,
+            service: ServiceLevel::Incomplete {
+                reason: "fixture shard offline".to_owned(),
+            },
+        };
+        self
     }
 
     fn excluding(mut self, candidates: &[&str]) -> Self {
@@ -440,6 +469,10 @@ impl RankedStream for ScriptedStream {
 
     fn contract(&self) -> StreamContract {
         self.contract.clone()
+    }
+
+    fn attestation(&self) -> PfAttestation {
+        self.attested.clone()
     }
 
     async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
@@ -749,5 +782,365 @@ fn a_stream_that_declares_no_basis_is_not_asked_and_refuses_if_it_is() {
         asked.asked, 1,
         "and the ask really reached it, so the refusal above is the stream's \
          own and not a filter in front of it"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 3. What an `Excluded` may discharge, and which declarations may say it.
+// ---------------------------------------------------------------------------
+
+/// One fixture stream's rows over `SHARED`, each carrying the contribution `weight` earns at
+/// its rank under this file's decay.
+fn weighted_rows(items: &[&str], weight: Fixed) -> Vec<RankedRow<Term>> {
+    items
+        .iter()
+        .zip(1..)
+        .map(|(item, rank)| {
+            RankedRow::new(
+                rank,
+                contribution_under(decay(), weight, rank)
+                    .expect("fixture contributions are in range"),
+                term(item),
+                RowBlock::Declared(tag(SHARED)),
+            )
+        })
+        .collect()
+}
+
+/// The weight of the left, exhaustive stratum in the residual fixture.
+///
+/// Four times the right one's, so the two rows the left stratum ranks are
+/// separated from each other by less than one rank-one contribution of the
+/// right stratum and from everything the right stratum can offer an unnamed
+/// candidate by more. That is the configuration in which a residual the right
+/// stratum still owes is the whole difference between a certain prefix and an
+/// uncertain one.
+fn left_weight() -> Fixed {
+    Fixed::from_integer(4).expect("four is representable")
+}
+
+fn weighted_profile() -> FusionProfile {
+    let [left, right] = strata();
+    FusionProfile::with_decay(
+        [(left, left_weight()), (right, Fixed::ONE)]
+            .into_iter()
+            .collect(),
+        decay(),
+    )
+    .expect("the fixture profile is valid")
+}
+
+/// A lossy-but-faithful fidelity: the approximate-index case.
+fn lossy_fidelity() -> RankFidelity {
+    RankFidelity {
+        completeness: lossy(),
+        order: OrderFidelity::Faithful,
+    }
+}
+
+/// How the right stratum's index and search are declared, and what it answers.
+struct Right {
+    fidelity: RankFidelity,
+    short: bool,
+    basis: ExclusionBasis,
+}
+
+/// The residual fixture's two streams.
+///
+/// The left stratum is exhaustive and ranks `i` then `b`. The right stratum
+/// names neither: it ranks eight other candidates in the same block, and when
+/// asked about `i` or `b` it answers `Excluded` (where it declared a basis to
+/// answer under). Everything that differs between the tests below is the
+/// right stratum's declaration.
+fn residual_streams(right: Right) -> Vec<(Iri, ScriptedStream)> {
+    let [left_iri, right_iri] = strata();
+    let left = ScriptedStream::new(
+        contract(
+            CandidateDomains::within([tag(SHARED)]),
+            ExclusionBasis::Unavailable,
+        ),
+        weighted_rows(&["i", "b"], left_weight()),
+    );
+    let mut right_stream = ScriptedStream::new(
+        StreamContract::new(
+            DuplicatePolicy::Unique,
+            right.fidelity,
+            CandidateDomains::within([tag(SHARED)]),
+            right.basis,
+        ),
+        weighted_rows(
+            &["y1", "y2", "y3", "y4", "y5", "y6", "y7", "y8"],
+            Fixed::ONE,
+        ),
+    )
+    .excluding(&["i", "b"]);
+    if right.short {
+        right_stream = right_stream.attesting_short();
+    }
+    vec![(left_iri, left), (right_iri, right_stream)]
+}
+
+/// Drive a fusion built through [`FusionStream::new`] — the seam every stream
+/// passes through — for two rows, and read its trailer.
+fn drive(
+    streams: Vec<(Iri, ScriptedStream)>,
+) -> Result<(Vec<FusedRow>, FusionTrailer), FusionError> {
+    let mut fusion = FusionStream::new(streams, weighted_profile())?;
+    let mut rows = Vec::new();
+    while rows.len() < 2 {
+        let Some(row) = block_on(fusion.next())? else {
+            break;
+        };
+        rows.push(row);
+    }
+    let trailer = block_on(fusion.trailer())?;
+    Ok((rows, trailer))
+}
+
+/// The right stratum's rank-one contribution: the most any row it failed to
+/// name could have been worth.
+fn right_rank_one() -> Fixed {
+    contribution_under(decay(), Fixed::ONE, 1).expect("in range")
+}
+
+fn entities(rows: &[FusedRow]) -> Vec<String> {
+    rows.iter()
+        .map(|row| row.entity.as_str().to_owned())
+        .collect()
+}
+
+fn deficits(rows: &[FusedRow]) -> Vec<Fixed> {
+    rows.iter()
+        .map(|row| match row.interval {
+            ScoreInterval::Bounded { deficit, .. } => deficit,
+            ScoreInterval::Unbounded { .. } => panic!("no stratum here perturbs its order"),
+        })
+        .collect()
+}
+
+/// `(ranks pulled, lookups asked)` of the right stratum.
+fn right_read(trailer: &FusionTrailer) -> (u64, u64) {
+    let resolution = trailer.resolution[&strata()[1]];
+    (resolution.ranks_pulled, resolution.exclusion_lookups)
+}
+
+/// **An index attested short does not discharge the residual by excluding a
+/// candidate.**
+///
+/// The right stratum's index attests it was short — a shard offline — and
+/// answers `Excluded` for `i` and `b` on a membership basis. That answer is
+/// true of the index: it holds no entry for either. It is also exactly what the
+/// offline shard would say about a document it holds, so it says nothing about
+/// whether `b` sits in that shard at the right stratum's first rank. If it
+/// does, `b`'s true score is its fused score plus the right stratum's rank-one
+/// contribution, which is more than `i`'s — so "the first row keeps its place"
+/// is not established, and a certain prefix of one or more would be a false
+/// claim about the answer.
+///
+/// The exclusion is still honoured for what it does establish: the stream will
+/// not name either candidate in this read, so the fusion stops reading it early
+/// — the same shortened read the membership answer buys a whole index — and
+/// only the interval keeps the charge.
+///
+/// The control is the same short index answering no lookup at all, which must
+/// report the identical intervals: the lookup may change how far the stream
+/// was read, and nothing about what the missing documents could be worth.
+#[test]
+fn an_attested_short_index_excluding_a_candidate_still_owes_it_the_residual() {
+    let (rows, trailer) = drive(residual_streams(Right {
+        fidelity: RankFidelity::EXACT,
+        short: true,
+        basis: ExclusionBasis::Membership,
+    }))
+    .expect("a membership basis over an exhaustive search is admissible");
+    assert_eq!(
+        entities(&rows),
+        [term("i").as_str(), term("b").as_str()],
+        "the answer ranks the left stratum's two candidates"
+    );
+
+    // The witness the interval must admit: `b` in the offline shard at rank one.
+    let b_if_missing = rows[1]
+        .score
+        .checked_add(right_rank_one())
+        .expect("in range");
+    assert!(
+        b_if_missing > rows[0].score,
+        "the fixture is the one that matters: a document the short index is \
+         missing could lift `b` above `i` ({b_if_missing:?} vs {:?})",
+        rows[0].score
+    );
+    assert_eq!(
+        deficits(&rows),
+        [right_rank_one(), right_rank_one()],
+        "each row still owes the short stratum its rank-one residual: the \
+         exclusion is silent about the documents the index is missing"
+    );
+    assert_eq!(
+        trailer.certain_prefix(&rows),
+        0,
+        "and `i`'s first place is not certain, because `b` could out-score it"
+    );
+
+    let (pulled, asked) = right_read(&trailer);
+    let (control, control_rows) = {
+        let (control_rows, control_trailer) = drive(residual_streams(Right {
+            fidelity: RankFidelity::EXACT,
+            short: true,
+            basis: ExclusionBasis::Unavailable,
+        }))
+        .expect("the control fuses");
+        (right_read(&control_trailer), control_rows)
+    };
+    assert!(
+        asked > 0 && pulled < control.0,
+        "the exclusion was asked and still shortened the read ({pulled} ranks \
+         with {asked} lookups, against {} without a lookup)",
+        control.0
+    );
+    assert_eq!(
+        (entities(&rows), deficits(&rows)),
+        (entities(&control_rows), deficits(&control_rows)),
+        "and the intervals are exactly those of the same short index answering \
+         no lookup at all"
+    );
+}
+
+/// **A lossy search over a whole index discharges the residual by a membership
+/// exclusion — and the read is shorter for it.**
+///
+/// The valid neighbour of the test above, differing in one declaration: the
+/// right stratum's index is whole and its *search* is lossy. A membership
+/// answer is then a fact about everything the search could have missed, since
+/// every row it could miss is a row the index holds — so `i` and `b` owe it
+/// nothing, and both rows are certain.
+///
+/// The oracle distinguishes honoured from dropped on both axes. Against the
+/// same stream answering no lookup, the residual falls from the rank-one
+/// contribution to zero and the certain prefix rises from none to both rows;
+/// and the right stratum is read strictly less deep.
+#[test]
+fn a_lossy_search_excluding_by_membership_discharges_the_residual() {
+    let (rows, trailer) = drive(residual_streams(Right {
+        fidelity: lossy_fidelity(),
+        short: false,
+        basis: ExclusionBasis::Membership,
+    }))
+    .expect("a membership basis is admissible from a lossy search");
+    let (control_rows, control_trailer) = drive(residual_streams(Right {
+        fidelity: lossy_fidelity(),
+        short: false,
+        basis: ExclusionBasis::Unavailable,
+    }))
+    .expect("the control fuses");
+
+    assert_eq!(
+        entities(&rows),
+        entities(&control_rows),
+        "one answer, two reads"
+    );
+    assert_eq!(
+        deficits(&control_rows),
+        [right_rank_one(), right_rank_one()],
+        "without a lookup the lossy stratum is owed its rank-one residual"
+    );
+    assert_eq!(
+        deficits(&rows),
+        [Fixed::ZERO, Fixed::ZERO],
+        "with a membership exclusion it is owed nothing"
+    );
+    assert_eq!(control_trailer.certain_prefix(&control_rows), 0);
+    assert_eq!(
+        trailer.certain_prefix(&rows),
+        2,
+        "so both rows are certain where, without the answer, neither was"
+    );
+
+    let (pulled, asked) = right_read(&trailer);
+    let (control_pulled, control_asked) = right_read(&control_trailer);
+    assert_eq!(control_asked, 0);
+    assert!(
+        asked > 0 && pulled < control_pulled,
+        "the exclusion shortened the read: {pulled} ranks with {asked} lookups, \
+         against {control_pulled} without"
+    );
+}
+
+/// **A hand-built stream pairing a search basis with a lossy search is refused
+/// when it is handed to fusion.**
+///
+/// The registry refuses this pairing at registration, but a stream a caller
+/// assembles itself never meets a registry — and the fusion is the party that
+/// would act on the answer. Honoured, this stream's `Excluded` for `i` and `b`
+/// would discharge the residual its own lossy search earns, exactly as the
+/// membership answer does above, from a search that may simply not have looked.
+/// So [`FusionStream::new`] refuses it by name before a row is pulled, and
+/// [`fuse`] surfaces the same refusal.
+///
+/// Two neighbours, each differing in one term and each executed through the
+/// same constructor, with an oracle that shows the answer was *used*: a search
+/// basis over an exhaustive search, and a membership basis over the lossy one.
+#[test]
+fn a_search_basis_over_a_lossy_search_is_refused_at_fusion() {
+    let expected = ProtocolError::SearchExclusionFromLossySearch {
+        stratum: ex("stratum/right"),
+        evidence: "approximate: beam search; recall unmeasured above 10^6".to_owned(),
+    };
+    let lossy_search = || {
+        residual_streams(Right {
+            fidelity: lossy_fidelity(),
+            short: false,
+            basis: ExclusionBasis::Search,
+        })
+    };
+    match drive(lossy_search()) {
+        Err(FusionError::Protocol(error)) => assert_eq!(*error, expected),
+        other => panic!("expected the pairing refused at construction, got {other:?}"),
+    }
+    match block_on(fuse::<ScriptedStream, Term>(
+        lossy_search(),
+        &weighted_profile(),
+        TopK::new(2),
+    )) {
+        Err(FusionError::Protocol(error)) => assert_eq!(*error, expected),
+        other => panic!("expected fuse to surface the same refusal, got {other:?}"),
+    }
+
+    // A search basis over an exhaustive search: admitted, asked, and used.
+    let (rows, trailer) = drive(residual_streams(Right {
+        fidelity: RankFidelity::EXACT,
+        short: false,
+        basis: ExclusionBasis::Search,
+    }))
+    .expect("a complete search's `not found` is `not present`");
+    let (_, control_trailer) = drive(residual_streams(Right {
+        fidelity: RankFidelity::EXACT,
+        short: false,
+        basis: ExclusionBasis::Unavailable,
+    }))
+    .expect("the control fuses");
+    let (pulled, asked) = right_read(&trailer);
+    let (control_pulled, _) = right_read(&control_trailer);
+    assert!(
+        asked > 0 && pulled < control_pulled,
+        "the exhaustive search's exclusions shortened the read: {pulled} ranks \
+         with {asked} lookups, against {control_pulled} without"
+    );
+    assert_eq!(entities(&rows), [term("i").as_str(), term("b").as_str()]);
+    assert_eq!(deficits(&rows), [Fixed::ZERO, Fixed::ZERO]);
+
+    // A membership basis over the lossy search: admitted, asked, and used.
+    let (rows, trailer) = drive(residual_streams(Right {
+        fidelity: lossy_fidelity(),
+        short: false,
+        basis: ExclusionBasis::Membership,
+    }))
+    .expect("membership is exact however lossy the search");
+    let (pulled, asked) = right_read(&trailer);
+    assert!(asked > 0 && pulled < control_pulled);
+    assert_eq!(
+        deficits(&rows),
+        [Fixed::ZERO, Fixed::ZERO],
+        "and its exclusions discharged the lossy residual they are exact about"
     );
 }

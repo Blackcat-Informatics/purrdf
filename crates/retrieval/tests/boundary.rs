@@ -1760,7 +1760,8 @@ fn prefix_reader_incomplete_evidence() {
         ),
     ];
 
-    let mut fusion = FusionStream::new(streams, profile);
+    let mut fusion =
+        FusionStream::new(streams, profile).expect("the fixture contracts are admissible");
     let first = block_on(fusion.next())
         .expect("fusion pulls")
         .expect("a certified row");

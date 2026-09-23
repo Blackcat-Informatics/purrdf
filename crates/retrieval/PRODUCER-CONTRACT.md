@@ -1040,6 +1040,16 @@ or [`ScoreExactness::Estimated`] naming the responsible strata on each side.
 `FusedRow::interval` carries the size of each for one row. The rows are returned
 either way, because a short index still produced real rows in a real order.
 
+**An exclusion does not retire that charge.** A short index that answers an
+exclusion lookup `Excluded` is telling the truth about what it holds, and fusion
+believes it for what it establishes: the stream will not name the candidate, so
+the read need not wait for it. It is not believed about the missing shard, because
+"I hold no entry for it" is exactly what every document in that shard would say.
+The candidate's interval keeps the short stratum's rank-one contribution whatever
+basis the answer was given under. An index that is whole behind a lossy *search*
+is the opposite case: a membership answer covers every row that search could have
+missed, so there it discharges the charge.
+
 ## A15 — Declare candidate domains, and never name a candidate outside them
 
 **The obligation.**
