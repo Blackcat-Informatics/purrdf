@@ -358,7 +358,7 @@ use std::ops::Range;
 
 use purrdf_sparql_algebra::{
     BlankNode, GraphPattern, NamedNodePattern, ParserOptions, PropertyFunctionCall, Query,
-    SparqlParser, TermPattern, TriplePattern, Variable, pattern_to_select_query,
+    QueryDataset, SparqlParser, TermPattern, TriplePattern, Variable, pattern_to_select_query,
 };
 use purrdf_sparql_eval::{
     BindingPattern, CallReadShape, CandidateDomains, ColumnSource, ExclusionBasis, PfDescriptor,
@@ -2131,31 +2131,35 @@ fn supplied_exclusion_texts(
 ///
 /// Where patterns of the text bind the call's other positions before it is invoked —
 /// a needle read out of the data, a `VALUES` row, a `BIND` —
-/// ([`ColumnSource::driving_patterns`]), the lookup keeps them: the call cannot be
+/// ([`ColumnSource::driving_pattern`]), the lookup keeps them: the call cannot be
 /// invoked without those inputs, and blanking them asks it in a mode it never
 /// declared. The lookup is
 ///
 /// ```text
-/// SELECT ?candidate ?in… WHERE {
-///   { SELECT DISTINCT ?in… WHERE { driving patterns } }
+/// SELECT ?candidate ?in… [the text's dataset clause] WHERE {
+///   { SELECT DISTINCT ?in… WHERE { driving pattern } }
 ///   call, the candidate the parameter, the inputs by name, every other position blank
 /// }
 /// ```
 ///
 /// and it answers `Excluded` only when no row comes back. That is sound: every
 /// solution of the text naming a candidate `c` is one in which the call, invoked with
-/// the inputs the text bound, emitted `c`, and that solution satisfies every driving
-/// pattern — each is a conjunct of the call's join — so the inputs it bound are among
-/// the rows of the sub-`SELECT`. So if the call, invoked once per such row with `c`
-/// bound, emits `c` for none of them, no solution of the text names `c`. Every row of
-/// the sub-`SELECT` must fail, not one: a candidate one needle binding excludes and
-/// another names is a candidate the text names. The sub-`SELECT` projects the inputs
-/// only, so a pattern that also constrains the candidate is read as the wider set of
-/// inputs it binds for any candidate — a looser question, never a wrong one — and it
-/// is `DISTINCT`, so each binding of the inputs is one invocation and the declared
-/// point bound holds per row of it: a conforming producer answers each with at most
-/// one row, the text projects the candidate and the inputs, and two identical rows are
-/// one invocation answering twice.
+/// the inputs the text bound, emitted `c`; the driving pattern is implied by the text
+/// — every solution of the text, restricted to the inputs, is a solution of it
+/// restricted to them, read under the same dataset clause (the rule and its proof
+/// are [`ColumnSource::driving_pattern`]'s) — so the inputs that solution bound are
+/// among the rows of the sub-`SELECT`. So if the call, invoked once per such row with
+/// `c` bound, emits `c` for none of them, no solution of the text names `c`. Every
+/// row of the sub-`SELECT` must fail, not one: a candidate one needle binding excludes
+/// and another names is a candidate the text names. And where the sub-`SELECT` has no
+/// row at all, neither does the text invoke the call: no candidate is one it names,
+/// and the lookup answers `Excluded` having invoked nothing. The sub-`SELECT` projects
+/// the inputs only, so a pattern that also constrains the candidate is read as the
+/// wider set of inputs it binds for any candidate — a looser question, never a wrong
+/// one — and it is `DISTINCT`, so each binding of the inputs is one invocation and the
+/// declared point bound holds per row of it: a conforming producer answers each with
+/// at most one row, the text projects the candidate and the inputs, and two identical
+/// rows are one invocation answering twice.
 fn qualifying_lookup(
     source: &ColumnSource<'_>,
     registry: &PropertyFunctionRegistry,
@@ -2340,26 +2344,12 @@ fn driven_lookup(
     inputs: &[&Variable],
 ) -> LookupText {
     let source_var = source.variable();
+    // Built by the shape, which knows how the text evaluates each pattern before the
+    // call — which conjuncts are independent and which are evaluated with earlier
+    // rows in hand — and rebuilds them the same way.
     let driving = source
-        .driving_patterns()
-        .iter()
+        .driving_pattern()
         .cloned()
-        .reduce(|left, right| {
-            // The atoms are re-attached as the planner attached them: a call through
-            // a `Lateral`, because it is invoked with the rows before it, and
-            // anything else through a `Join`.
-            if matches!(right, GraphPattern::PropertyFunction(_)) {
-                GraphPattern::Lateral {
-                    left: Box::new(left),
-                    right: Box::new(right),
-                }
-            } else {
-                GraphPattern::Join {
-                    left: Box::new(left),
-                    right: Box::new(right),
-                }
-            }
-        })
         .unwrap_or(GraphPattern::Bgp { patterns: vec![] });
     let driving_text = pattern_to_select_query(&driving);
     let mut nested: Vec<(bool, &str)> = Vec::new();
@@ -2470,10 +2460,25 @@ fn driven_lookup(
         inner: Box::new(projected),
     };
     LookupText {
-        text: pattern_to_select_query(&lookup),
+        text: with_dataset(pattern_to_select_query(&lookup), source.dataset()),
         parameter,
         driven: true,
     }
+}
+
+/// `text`, a `SELECT` this module wrote, reading `dataset`: the clause written between
+/// its projection and its `WHERE`, where the grammar puts it.
+///
+/// A driven lookup reads its driving patterns out of the data, and the text read them
+/// under its own dataset clause: read under any other dataset they bind other inputs.
+/// The call itself is handed no graph, so an undriven lookup needs none. The
+/// projection this module writes is variables alone, so the first ` WHERE {` is the
+/// query's own.
+fn with_dataset(text: String, dataset: &QueryDataset) -> String {
+    if dataset.default.is_empty() && dataset.named.is_empty() {
+        return text;
+    }
+    text.replacen(" WHERE {", &format!(" {dataset}WHERE {{"), 1)
 }
 
 /// `triple` as a driven lookup writes it: the candidate's variable is the parameter

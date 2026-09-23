@@ -1060,7 +1060,7 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// Collect EVERY variable `pattern` mentions anywhere — triple/path terms,
 /// `VALUES` columns, `GRAPH`/`SERVICE` names, property-function arguments, every
 /// expression position, and every variable a construct itself INTRODUCES
-/// (`BIND`/`GROUP BY`/a projection list). Used ONLY by [`expr_vars`]'s widened
+/// (`BIND`/`GROUP BY`/a projection list). Used by [`expr_vars`]'s widened
 /// `Expression::Exists` arm (a nested `EXISTS`'s Values-Insertion substitution
 /// reaches its inner's LEAF positions too, not just its own expression
 /// positions — see that arm's doc and [`expr_vars`]'s own "Relationship to
@@ -1068,6 +1068,11 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// the SEPARATE, independent walk [`crate::governor::soundness::analyze_pattern`]
 /// runs — via [`crate::eval::PreparedExists::build`] — for the [`exists`] decision
 /// site's own correlation test; this function's output never feeds that decision).
+///
+/// Also read by the call-read shape (`crate::property_fn_eval`), which needs
+/// every variable a `LATERAL` injection could reach in a pattern: a superset is
+/// what that reader's soundness rests on, so the widening below is exactly right
+/// there too.
 ///
 /// # Diverges from `analyze_pattern`'s `free_vars` at exactly one point
 ///
@@ -1080,7 +1085,7 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// `pattern_all_vars(P)` is always a SUPERSET of (or equal to)
 /// `analyze_pattern(P).free_vars` for the same `P` — see [`expr_vars`]'s doc for
 /// why that one-directional divergence is safe for this walk's actual consumer.
-fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     use purrdf_sparql_algebra::NamedNodePattern;
 
     match pattern {

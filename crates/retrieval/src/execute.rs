@@ -1010,6 +1010,17 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
         // not name. The lookup is one call with constant arguments, so its witness
         // is read under the rule a compiled unit's is — one relation, one
         // generation — and a witness that breaks it is the same refusal.
+        // A driven lookup whose driving pattern binds no input at all invoked its call
+        // not once, so nothing attested — and nothing needed to. The driving pattern
+        // is implied by the text, so the text binds no input either and never
+        // invokes the call: no candidate is one it names. That is a verdict about
+        // the dataset the ranking read, which this lookup read too, and about no
+        // index generation. An undriven lookup always invokes its call, so an empty
+        // witness there stays the refusal below; so does an empty witness beside a
+        // row, which no invocation produced.
+        if driven && rows == 0 && witness.is_empty() {
+            return Ok(ExclusionVerdict::Excluded);
+        }
         let moved = |reason: String| ProtocolError::ExclusionAttestationMoved {
             stratum: stratum.as_str().to_owned(),
             reason,

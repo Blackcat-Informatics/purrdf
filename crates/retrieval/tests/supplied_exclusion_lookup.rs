@@ -24,7 +24,9 @@
 //! in that one operator is admitted and answers its lookups. A `UNION` whose every
 //! branch draws the candidate from a call is admitted and asks every branch; a call
 //! whose needle the text reads out of the data — over the real text relation — keeps
-//! that pattern in its lookup. And every admitted shape is run twice, with its
+//! that pattern in its lookup, as the text evaluates it: a needle a `LATERAL` picks
+//! through its left operand's variables stays correlated, and one read in a `GRAPH`
+//! or under a dataset clause is read there. And every admitted shape is run twice, with its
 //! lookups and as a full read with none, to one answer.
 //!
 //! Fixtures use `example.org` throughout; every IRI is fixture configuration.
@@ -2080,6 +2082,74 @@ fn a_union_of_calls_asks_every_branch_and_answers_as_the_full_read() {
 /// allowed to. Each shape that asks lookups is pinned as asking them — and pulling
 /// fewer ranks than the oracle — so the comparison is between a shortened read and a
 /// full one, not two full reads.
+/// The differential list's needles bound inside a `LATERAL` over `?y`, and the
+/// uncorrelated neighbour: `(name, text, whether the shortened read asks lookups)`.
+///
+/// Four pick the needle through `?y` — a `FILTER` over it, one disjoining it with a
+/// constant, a `FILTER EXISTS` over it — so read on its own, cut from the left
+/// operand, each picks no needle at all: `?y` unbound, `?q = ?y` an error.
+fn lateral_needle_shapes() -> Vec<(&'static str, Text<'static>, bool)> {
+    vec![
+        (
+            "a LATERAL picking a VALUES needle by a FILTER disjoining the left's variable",
+            Box::new(move |p: &str| {
+                lateral_needle(
+                    p,
+                    "VALUES ?q { \"lazy dog\"@en \"quick brown fox\"@en } FILTER(?q = ?y || ?q = \
+                 \"nothing\"@en)",
+                )
+            }),
+            true,
+        ),
+        (
+            "a LATERAL whose needle a FILTER disjoining the left's variable keeps",
+            Box::new(move |p: &str| {
+                lateral_needle(
+                    p,
+                    "BIND(\"quick brown fox\"@en AS ?q) FILTER(?q = ?y || ?q = \"lazy dog\"@en)",
+                )
+            }),
+            true,
+        ),
+        (
+            "a LATERAL picking its needle by a FILTER over the left's variable",
+            Box::new(move |p: &str| {
+                lateral_needle(
+                    p,
+                    "VALUES ?q { \"quick brown fox\"@en \"lazy dog\"@en } FILTER(?q = ?y)",
+                )
+            }),
+            true,
+        ),
+        (
+            "a LATERAL picking its needle by a FILTER EXISTS over the left's variable",
+            Box::new(move |p: &str| {
+                lateral_needle(
+                    p,
+                    "VALUES ?q { \"quick brown fox\"@en \"lazy dog\"@en } FILTER EXISTS { \
+                 FILTER(?q = ?y) }",
+                )
+            }),
+            true,
+        ),
+        (
+            "an uncorrelated LATERAL binding the needle",
+            Box::new(move |p: &str| lateral_needle(p, "VALUES ?q { \"quick brown fox\"@en }")),
+            true,
+        ),
+    ]
+}
+
+/// `VALUES ?y { "quick brown fox"@en } LATERAL { lateral }` and then the call, its
+/// needle `?q`: a needle the `LATERAL` binds, over no data at all.
+fn lateral_needle(predicate: &str, lateral: &str) -> String {
+    format!(
+        "SELECT ?candidate WHERE {{ VALUES ?y {{ \"quick brown fox\"@en }} LATERAL {{ {lateral} }} \
+         ( ?candidate ) <{}> ( ?q ) }}",
+        producer_iri(predicate)
+    )
+}
+
 #[test]
 fn every_admitted_supplied_shape_answers_with_its_lookups_as_the_full_read_without() {
     let own = |predicate: &str| {
@@ -2099,7 +2169,7 @@ fn every_admitted_supplied_shape_answers_with_its_lookups_as_the_full_read_witho
     let call = |predicate: &str, variable: &str| call_binding(predicate, variable);
     let select = |body: String| format!("SELECT ?candidate WHERE {{ {body} }}");
     // (name, text, whether the shortened read asks lookups)
-    let shapes: Vec<(&str, Text<'_>, bool)> = vec![
+    let mut shapes: Vec<(&str, Text<'_>, bool)> = vec![
         ("one call", Box::new(one_call), true),
         (
             "a renaming projection",
@@ -2216,6 +2286,7 @@ fn every_admitted_supplied_shape_answers_with_its_lookups_as_the_full_read_witho
             true,
         ),
     ];
+    shapes.extend(lateral_needle_shapes());
     for (name, text, asks) in &shapes {
         let looked_up = measured(
             ExclusionBasis::Membership,
@@ -2263,6 +2334,42 @@ fn every_admitted_supplied_shape_answers_with_its_lookups_as_the_full_read_witho
                 "{name}: a stream that runs out needs no verdict"
             );
         }
+    }
+    // The lateral needles again, over producers naming the same candidates: there a
+    // lookup excluding a candidate the other stream names is a verdict the fusion
+    // reads — the certified answer and its exactness move with it — so a driving
+    // pattern binding fewer needles than the text binds cannot pass unseen.
+    for (name, text, _) in &lateral_needle_shapes() {
+        let looked_up = measure_shaped(
+            ExclusionBasis::Membership,
+            None,
+            Some(text),
+            ReadSchedule::OnDemand,
+            INTERSECTING,
+        )
+        .unwrap_or_else(|error| panic!("{name}, shared candidates: fuses with lookups: {error:?}"));
+        let full = measure_shaped(
+            ExclusionBasis::Unavailable,
+            None,
+            Some(text),
+            ReadSchedule::Materialised,
+            INTERSECTING,
+        )
+        .unwrap_or_else(|error| panic!("{name}, shared candidates: fuses without: {error:?}"));
+        assert_eq!(
+            answer(&looked_up),
+            answer(&full),
+            "{name}, shared candidates: the full read's answer"
+        );
+        assert_eq!(
+            looked_up.trailer.exactness, full.trailer.exactness,
+            "{name}, shared candidates: as exactly"
+        );
+        assert!(
+            looked_up.fused_lookups().values().any(|&count| count > 0),
+            "{name}, shared candidates: a lookup was asked: {:?}",
+            looked_up.fused_lookups()
+        );
     }
 }
 
@@ -2318,11 +2425,27 @@ mod text_relation {
 
     /// Both sides' documents, and `<config> ex:needle "alpha beta"`.
     pub(super) fn dataset() -> Arc<RdfDataset> {
+        dataset_with(&[])
+    }
+
+    /// [`dataset`], and `(subject, predicate, literal, graph)` quads beside it.
+    pub(super) fn dataset_with(extra: &[(&str, &str, &str, Option<&str>)]) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         let config = builder.intern_iri(&ex("config"));
         let needle = builder.intern_iri(&ex("needle"));
         let value = builder.intern_literal(RdfLiteral::simple(NEEDLE));
         builder.push_quad(config, needle, value, None);
+        for (subject, predicate, object, graph) in extra {
+            let subject = builder.intern_iri(&ex(subject));
+            let predicate = builder.intern_iri(&ex(predicate));
+            let object = if object.starts_with('<') {
+                builder.intern_iri(&ex(object.trim_start_matches('<').trim_end_matches('>')))
+            } else {
+                builder.intern_literal(RdfLiteral::simple(*object))
+            };
+            let graph = graph.map(|graph| builder.intern_iri(&ex(graph)));
+            builder.push_quad(subject, predicate, object, graph);
+        }
         for (side, (_, predicate, _, _)) in sides().iter().enumerate() {
             let predicate = builder.intern_iri(predicate);
             for (subject, text) in rows(side) {
@@ -2441,8 +2564,64 @@ mod text_relation {
         text: Option<&dyn Fn(&str) -> String>,
         schedule: ReadSchedule,
     ) -> Result<TextRun, FusionError> {
-        let dataset = dataset();
-        let (registry, observed) = registry(&dataset, basis);
+        run_over(&dataset(), basis, text, schedule)
+    }
+
+    /// Execute `text` for both strata over `dataset`, each declaring membership, on
+    /// demand, and ask the right stratum's stream about each of `probes` before
+    /// reading it to its end: the verdicts, the candidates it named, and the
+    /// membership tests the right relation performed.
+    pub(super) fn asked_right(
+        dataset: &Arc<RdfDataset>,
+        text: &dyn Fn(&str) -> String,
+        probes: &[String],
+    ) -> (Vec<Result<ExclusionVerdict, String>>, Vec<String>, u64) {
+        let (registry, observed) = registry(dataset, ExclusionBasis::Membership);
+        let mut bundle = compiled(&registry);
+        for (unit, (_, _, producer, _)) in bundle.units.iter_mut().zip(sides()) {
+            *unit = StratumUnit::new(
+                unit.stratum.clone(),
+                text(&producer),
+                unit.contract.clone(),
+                unit.depth(),
+                unit.declared_rows(),
+            )
+            .expect("the text is admitted at construction");
+        }
+        let ExecutionResult { mut streams, .. } = block_on(execute_within(
+            &bundle,
+            &registry,
+            &**dataset,
+            ReadSchedule::OnDemand,
+        ))
+        .expect("the bundle runs");
+        let [_, right] = strata();
+        let stream = streams
+            .iter_mut()
+            .find(|stream| stream.stratum == right)
+            .expect("the right stratum runs");
+        let verdicts = probes
+            .iter()
+            .map(|probe| {
+                block_on(stream.stream.exclusion(&Term::new(probe.clone())))
+                    .map_err(|error| format!("{error:?}"))
+            })
+            .collect();
+        let mut held = Vec::new();
+        while let Some((_, term, _)) = block_on(stream.stream.next()).expect("it reads") {
+            held.push(term.as_str().to_owned());
+        }
+        (verdicts, held, observed[1].membership_lookups())
+    }
+
+    /// [`run`], over `dataset`.
+    pub(super) fn run_over(
+        dataset: &Arc<RdfDataset>,
+        basis: ExclusionBasis,
+        text: Option<&dyn Fn(&str) -> String>,
+        schedule: ReadSchedule,
+    ) -> Result<TextRun, FusionError> {
+        let (registry, observed) = registry(dataset, basis);
         let mut bundle = compiled(&registry);
         if let Some(text) = text {
             for (unit, (_, _, producer, _)) in bundle.units.iter_mut().zip(sides()) {
@@ -2458,7 +2637,7 @@ mod text_relation {
         }
         let profile = profile();
         let ExecutionResult { streams, statuses } =
-            block_on(execute_within(&bundle, &registry, &*dataset, schedule))
+            block_on(execute_within(&bundle, &registry, &**dataset, schedule))
                 .expect("the bundle runs");
         let mut adapters = Vec::new();
         for stream in streams {
@@ -2791,6 +2970,384 @@ fn a_needle_from_values_or_bind_drives_its_lookup_as_the_data_needle_does() {
 }
 
 // ---------------------------------------------------------------------------
+// A needle a LATERAL reads: the driving pattern is the text's, correlation and all.
+// ---------------------------------------------------------------------------
+
+/// The data the correlated-needle texts read, beside the text relation's documents:
+/// `<x> ex:p <y>`; `<y>`'s needle `"zulu yankee"`, which reaches the right index's
+/// `a…` documents and no left one; `<y0>`'s and `<y2>`'s needle the stratum needle;
+/// `<config2>`'s needle the stratum needle in the default graph but `"zulu yankee"`
+/// in `<g1>`.
+fn correlated_dataset() -> Arc<RdfDataset> {
+    text_relation::dataset_with(&[
+        ("x", "p", "<y>", None),
+        ("y", "needle", "zulu yankee", None),
+        ("y0", "needle", text_relation::NEEDLE, None),
+        ("y2", "needle", text_relation::NEEDLE, None),
+        ("config2", "needle", text_relation::NEEDLE, None),
+        ("config2", "needle", "zulu yankee", Some("g1")),
+    ])
+}
+
+/// The right stratum's text: `<x> ex:p ?y LATERAL { lateral }` and then the call,
+/// its needle `?q`. The left stratum's is always its constant needle, so the right
+/// stratum's text is the only thing a run varies.
+fn correlated(producer: &str, lateral: &str) -> String {
+    if producer.ends_with("text-left") {
+        return format!(
+            "SELECT ?candidate WHERE {{ ?candidate <{producer}> ( \"{}\" ?score ?rank ?lang \
+             ?matched ) }}",
+            text_relation::NEEDLE
+        );
+    }
+    format!(
+        "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ {lateral} }} ?candidate \
+         <{producer}> ( ?q ?score ?rank ?lang ?matched ) }}",
+        ex("x"),
+        ex("p")
+    )
+}
+
+/// [`correlated`], the right stratum's text written in full by `right`.
+fn right_only(producer: &str, right: impl Fn(&str) -> String) -> String {
+    if producer.ends_with("text-left") {
+        correlated(producer, "")
+    } else {
+        right(producer)
+    }
+}
+
+/// One row of [`correlated_needles`].
+type CorrelatedNeedle = (&'static str, Text<'static>, i128, [u64; 2], [u64; 2]);
+
+/// `(name, text, the fused score of <a1>, the lookups each stratum's fusion asks,
+/// the membership tests each stratum's relation performs)` for every text whose
+/// needle is read through a `LATERAL`, a `GRAPH` or a dataset clause.
+///
+/// `<a1>` leads every answer. Its score is the observing oracle: it carries the right
+/// stratum's contribution only where the right stratum's needles include
+/// `"zulu yankee"` — the text's own needle set — and a lookup driven by any other set
+/// excluded it there, leaving the left stratum's `16393442622` alone. The texts
+/// binding both needles score it `22566282128`, the others `32522474880`.
+fn correlated_needles() -> Vec<CorrelatedNeedle> {
+    let needle = || ex("needle");
+    vec![
+        (
+            "a VALUES row the LATERAL picks by a FILTER over the left's variable",
+            Box::new(move |producer: &str| {
+                correlated(
+                    producer,
+                    &format!(
+                        "VALUES ?z {{ <{}> <{}> }} ?z <{}> ?q FILTER(?z = ?y || ?z = <{}>)",
+                        ex("y0"),
+                        ex("y"),
+                        needle(),
+                        ex("y0")
+                    ),
+                )
+            }),
+            22_566_282_128,
+            [99, 100],
+            [0, 400],
+        ),
+        (
+            "a FILTER disjoining the left's variable with a constant",
+            Box::new(move |producer: &str| {
+                correlated(
+                    producer,
+                    &format!(
+                        "?z <{}> ?q FILTER(?z = ?y || ?z = <{}>)",
+                        needle(),
+                        ex("y2")
+                    ),
+                )
+            }),
+            22_566_282_128,
+            [99, 100],
+            [0, 400],
+        ),
+        (
+            "a FILTER over the left's variable",
+            Box::new(move |producer: &str| {
+                correlated(producer, &format!("?z <{}> ?q FILTER(?z = ?y)", needle()))
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
+            "a FILTER EXISTS correlated through the left's variable",
+            Box::new(move |producer: &str| {
+                correlated(
+                    producer,
+                    &format!(
+                        "?z <{0}> ?q FILTER EXISTS {{ ?z <{0}> ?q FILTER(?z = ?y) }}",
+                        needle()
+                    ),
+                )
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
+            "an uncorrelated LATERAL",
+            Box::new(move |producer: &str| {
+                correlated(
+                    producer,
+                    &format!("?z <{}> ?q FILTER(?z = <{}>)", needle(), ex("y")),
+                )
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
+            "a correlated group inside the LATERAL, with the call",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ {{ ?z <{}> ?q \
+                         FILTER(?z = ?y) }} ?candidate <{producer}> ( ?q ?score ?rank ?lang \
+                         ?matched ) }} }}",
+                        ex("x"),
+                        ex("p"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
+            "a needle read in a named GRAPH",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate WHERE {{ GRAPH <{}> {{ <{}> <{}> ?q . ?candidate \
+                         <{producer}> ( ?q ?score ?rank ?lang ?matched ) }} }}",
+                        ex("g1"),
+                        ex("config2"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
+            "a needle read under a FROM clause",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate FROM <{}> WHERE {{ <{}> <{}> ?q . ?candidate \
+                         <{producer}> ( ?q ?score ?rank ?lang ?matched ) }}",
+                        ex("g1"),
+                        ex("config2"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+    ]
+}
+
+/// **A needle read through a `LATERAL` drives its lookup with the pattern the text
+/// wrote — correlated where the text is — so the lookups answer what the full read
+/// answers, as exactly.**
+///
+/// Each text reads the right stratum's needle through a `LATERAL` over `<x> ex:p ?y`,
+/// and the correlated ones pick it through `?y`: a `FILTER` comparing against it, one
+/// disjoining it with a constant, a `FILTER EXISTS` correlated through it, a `VALUES`
+/// row picked by a `FILTER` over it. Read on their own, cut away from the left
+/// operand, those patterns answer a different relation — `?y` unbound, `?z = ?y` an
+/// error — which binds only `"alpha beta"`, or nothing, where the text binds
+/// `"zulu yankee"` too. A lookup driven by that relation excluded `<a1>` from the
+/// right stratum, which names it: a certified answer missing the right stratum's
+/// contribution, or a failed request. Here each `LATERAL` is kept whole in the
+/// lookup's driving pattern, and each text is run twice — with its lookups, read on
+/// demand, and declaring no basis, read in full — to one answer, as exactly.
+///
+/// The neighbours: an uncorrelated `LATERAL`, still admitted and answering the same;
+/// a correlated group inside the `LATERAL`'s right operand beside the call, whose
+/// frame is rebuilt inside a `LATERAL` of the frame above it; a needle read in a
+/// named `GRAPH`, and one read under a `FROM` clause, each of which reads
+/// `"zulu yankee"` where the default graph holds `"alpha beta"` — the lookup reads
+/// them in that graph, under that clause. The answer is the observing oracle: every
+/// correlated text's right stratum names `<a1>` through `"zulu yankee"`, which the
+/// full read's answer carries, and a lookup driven by the default graph's needle, or
+/// by none, would have excluded it.
+#[test]
+fn a_needle_read_through_a_lateral_drives_its_lookup_with_the_text_s_own_pattern() {
+    use text_relation::run_over;
+
+    let dataset = correlated_dataset();
+    let [left, right] = strata();
+    let per_stratum = |[on_left, on_right]: [u64; 2]| {
+        BTreeMap::from([(left.clone(), on_left), (right.clone(), on_right)])
+    };
+    for (name, text, first, lookups, membership) in correlated_needles() {
+        let looked_up = run_over(
+            &dataset,
+            ExclusionBasis::Membership,
+            Some(&text),
+            ReadSchedule::OnDemand,
+        )
+        .unwrap_or_else(|error| panic!("{name}: fuses with its lookups: {error:?}"));
+        let full = run_over(
+            &dataset,
+            ExclusionBasis::Unavailable,
+            Some(&text),
+            ReadSchedule::Materialised,
+        )
+        .unwrap_or_else(|error| panic!("{name}: fuses without lookups: {error:?}"));
+        assert!(
+            looked_up
+                .statuses
+                .values()
+                .all(|status| !matches!(status, ProducerStatus::ExecutionFailed { .. })),
+            "{name}: both strata read: {:?}",
+            looked_up.statuses
+        );
+        assert_eq!(
+            looked_up.answer, full.answer,
+            "{name}: the full read's answer"
+        );
+        assert_eq!(looked_up.exactness, full.exactness, "{name}: as exactly");
+        assert_eq!(
+            looked_up.answer.first(),
+            Some(&(format!("<{}>", ex("a1")), Fixed::from_raw(first))),
+            "{name}: <a1> leads, carrying what the right stratum's own needles name"
+        );
+        assert_eq!(
+            full.fused_lookups,
+            both(0),
+            "{name}: the oracle asks nothing"
+        );
+        assert_eq!(
+            looked_up.fused_lookups,
+            per_stratum(lookups),
+            "{name}: the lookups each stratum asks"
+        );
+        assert_eq!(
+            looked_up.membership_lookups,
+            per_stratum(membership),
+            "{name}: the membership tests each relation performs"
+        );
+    }
+}
+
+/// **A driving pattern that binds no input at all excludes every candidate, having
+/// invoked nothing — and the answer is the full read's.**
+///
+/// `<x> ex:p ?y LATERAL { ?z ex:needle ?q FILTER(?z = ?y && ?z = <y0>) }` binds no
+/// needle: `?y` is `<y>`. So the text never invokes the right stratum's call, its
+/// stream names nothing, and neither does the lookup's driving sub-`SELECT` bind a
+/// needle to invoke the call with. The call attests nothing, because it ran not once
+/// — and that is the proof, not a failure to attest: no binding of the text's inputs
+/// exists, so no candidate is one the text names. Asked directly, before its stream
+/// is read, the stratum answers `Excluded` for a candidate of either index and for
+/// the one its correlated neighbour names, with no membership test run.
+///
+/// The neighbour differs in one constant, `?z = <y>`, and binds `"zulu yankee"`: its
+/// stream names `<a1>`, which it answers `Possible`, and `<b1>` — a right-index
+/// document the needle does not reach — `Excluded`, each by a membership test. And
+/// the empty text, fused with its lookups, answers what it answers read in full with
+/// none, as exactly.
+#[test]
+fn a_driving_pattern_binding_no_input_excludes_every_candidate_and_answers_the_full_read() {
+    use text_relation::{asked_right, run_over};
+
+    let dataset = correlated_dataset();
+    let picking = |constant: &'static str| {
+        move |producer: &str| {
+            correlated(
+                producer,
+                &format!(
+                    "?z <{}> ?q FILTER(?z = ?y && ?z = <{}>)",
+                    ex("needle"),
+                    ex(constant)
+                ),
+            )
+        }
+    };
+    let probes: Vec<String> = ["a1", "b1", "a13"]
+        .into_iter()
+        .map(|subject| format!("<{}>", ex(subject)))
+        .collect();
+
+    let (verdicts, held, membership) = asked_right(&dataset, &picking("y0"), &probes);
+    assert_eq!(
+        held,
+        Vec::<String>::new(),
+        "the text binds no needle and names nothing"
+    );
+    assert_eq!(
+        verdicts,
+        vec![Ok(ExclusionVerdict::Excluded); 3],
+        "every candidate excluded, none refused"
+    );
+    assert_eq!(membership, 0, "the call was invoked not once");
+
+    let (verdicts, held, membership) = asked_right(&dataset, &picking("y"), &probes);
+    assert_eq!(
+        held.len(),
+        100,
+        "the neighbour names every document its needle reaches"
+    );
+    assert!(held.contains(&probes[0]) && !held.contains(&probes[1]));
+    assert_eq!(
+        verdicts,
+        vec![
+            Ok(ExclusionVerdict::Possible),
+            Ok(ExclusionVerdict::Excluded),
+            Ok(ExclusionVerdict::Possible)
+        ],
+        "the neighbour's lookups answer from its needle"
+    );
+    assert_eq!(
+        membership, 6,
+        "one membership test per needle term, per candidate asked"
+    );
+
+    let empty = picking("y0");
+    let looked_up = run_over(
+        &dataset,
+        ExclusionBasis::Membership,
+        Some(&empty),
+        ReadSchedule::OnDemand,
+    )
+    .expect("the empty text fuses with its lookups");
+    let full = run_over(
+        &dataset,
+        ExclusionBasis::Unavailable,
+        Some(&empty),
+        ReadSchedule::Materialised,
+    )
+    .expect("the empty text fuses without lookups");
+    assert_eq!(looked_up.answer, full.answer, "the full read's answer");
+    assert_eq!(looked_up.exactness, full.exactness, "as exactly");
+    assert_eq!(
+        looked_up.answer.first(),
+        Some(&(format!("<{}>", ex("a1")), Fixed::from_raw(16_393_442_622))),
+        "the left stratum's alone: the right names nothing"
+    );
+    assert!(
+        looked_up
+            .statuses
+            .values()
+            .all(|status| !matches!(status, ProducerStatus::ExecutionFailed { .. })),
+        "{:?}",
+        looked_up.statuses
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Soundness over data: no verdict excludes a candidate the stream names.
 // ---------------------------------------------------------------------------
 
@@ -2817,6 +3374,18 @@ fn tagged_dataset() -> Arc<RdfDataset> {
     builder.push_quad(intruder, tag, value, None);
     builder.push_quad(intruder, tag, value, Some(graph));
     builder.freeze().expect("the fixture dataset is valid")
+}
+
+/// `<left/entity000003> data:alias ?y LATERAL { lateral }` and then the call, its
+/// needle `?q`, over [`tagged_dataset`]: `?y` is the intruder.
+fn aliased_needle(predicate: &str, lateral: &str) -> String {
+    format!(
+        "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ {lateral} }} ( ?candidate ) <{}> ( \
+         ?q ) }}",
+        ex("left/entity000003"),
+        ex("data/alias"),
+        producer_iri(predicate)
+    )
 }
 
 /// What a shape of the soundness sweep does when a basis is declared over it.
@@ -3085,6 +3654,56 @@ fn no_admitted_shape_excludes_a_candidate_its_stream_names() {
                     "SELECT ?candidate WHERE {{ {} }} GROUP BY (?hit AS ?candidate)",
                     call(p, "hit")
                 )
+            }),
+            Sweep::Runs,
+        ),
+        // A needle a `LATERAL` over the fourth candidate's alias picks through the
+        // left's `?y` — the intruder — and the uncorrelated neighbour.
+        (
+            "LATERAL: a VALUES row picked by a FILTER disjoining the left's variable",
+            Box::new(|p: &str| {
+                aliased_needle(
+                    p,
+                    &format!(
+                        "VALUES ?z {{ <{0}> <{intruder}> }} ?z <{tag}> ?q FILTER(?z = ?y || ?z = <{0}>)",
+                        ex("left/entity000399")
+                    ),
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "LATERAL: a FILTER disjoining the left's variable",
+            Box::new(|p: &str| {
+                aliased_needle(
+                    p,
+                    &format!(
+                        "?z <{tag}> ?q FILTER(?z = ?y || ?z = <{}>)",
+                        ex("left/entity000399")
+                    ),
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "LATERAL: a FILTER over the left's variable",
+            Box::new(|p: &str| aliased_needle(p, &format!("?z <{tag}> ?q FILTER(?z = ?y)"))),
+            Sweep::Runs,
+        ),
+        (
+            "LATERAL: a FILTER EXISTS over the left's variable",
+            Box::new(|p: &str| {
+                aliased_needle(
+                    p,
+                    &format!("?z <{tag}> ?q FILTER EXISTS {{ ?z <{tag}> ?q FILTER(?z = ?y) }}"),
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "LATERAL: uncorrelated",
+            Box::new(|p: &str| {
+                aliased_needle(p, &format!("?z <{tag}> ?q FILTER(?z = <{intruder}>)"))
             }),
             Sweep::Runs,
         ),

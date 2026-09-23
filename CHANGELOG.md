@@ -60,7 +60,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   each of whose branches binds it from a call. `PreparedQuery::call_read_shape` (new,
   beside `CallReadShape`, `CallReadRefusal` and `ColumnSource`) describes which calls
   those are (`CallReadShape::sources_of`: alternatives, one per `UNION` branch, each a
-  set of calls with the patterns that drive each) and whether the query is one call
+  set of calls with the pattern that drives each) and whether the query is one call
   read on demand (`CallReadShape::read_on_demand`, which `is_call_read` asks). A node
   rebinding a variable its operand bound replaces that column's sources rather than
   adding a second column beside them. One lookup is derived per call whose ranked
@@ -68,6 +68,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   position is the parameter and a declared depth position is freed; where patterns
   before the call bind its inputs — a needle read out of the data — the lookup keeps
   them, as a `DISTINCT` sub-select, and invokes the call once per binding of them.
+  They are kept as the text evaluates them (`ColumnSource::driving_pattern`), so the
+  bindings are never fewer than the text's: a `LATERAL` whose right operand is not a
+  call stays one pattern with its left, a `LATERAL` inside another's right operand is
+  re-attached through a `LATERAL` of it, a pattern in a `GRAPH` is read in it, the
+  lookup carries the text's dataset clause, and a pattern reading a variable a
+  sub-select has injected from outside it is left out. A sub-select binding no input
+  at all answers `Excluded` for every candidate without invoking the call.
   The stream answers `Excluded` only when every alternative excludes the candidate —
   an alternative excluding it when any of its lookups finds no row — each lookup held
   to the attestation the stratum's read pinned. A stratum with an alternative none of
