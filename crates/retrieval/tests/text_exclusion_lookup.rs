@@ -45,7 +45,7 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionVerdict, Fixed,
     FusedRow, FusionProfile, Iri, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics,
@@ -192,6 +192,36 @@ fn rows(side: Side) -> Vec<(String, String)> {
     out
 }
 
+/// What kind of term the documents' subjects are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Subjects {
+    /// Every subject is the IRI [`rows`] names.
+    Iri,
+    /// Every subject is a blank node labelled with that IRI's last segment — the
+    /// same documents, the same texts, the same disjointness, with only the term
+    /// kind changed. A text index names whatever subject its literals hang off, and
+    /// a blank node is as ordinary a subject as an IRI.
+    Blank,
+}
+
+impl Subjects {
+    /// How a candidate of this kind whose local name is `local` is written as a
+    /// fused-answer [`Term`]: `<iri>` or `_:label`.
+    fn term(self, local: &str) -> String {
+        match self {
+            Self::Iri => format!("<{}>", ex(local)),
+            Self::Blank => format!("_:{local}"),
+        }
+    }
+}
+
+/// The local name of a [`rows`] subject: the segment after the fixture base.
+fn local(subject: &str) -> &str {
+    subject
+        .strip_prefix(&ex(""))
+        .expect("every fixture subject is under the fixture base")
+}
+
 /// The dataset every stage runs against: both sides' rows, each under its own
 /// predicate, in the default graph.
 ///
@@ -199,11 +229,19 @@ fn rows(side: Side) -> Vec<(String, String)> {
 /// ranked producer answers from its own index — but it is the dataset the indexes
 /// were built from, which is the wiring a host actually has.
 fn dataset() -> Arc<RdfDataset> {
+    dataset_of(Subjects::Iri)
+}
+
+/// [`dataset`], with its subjects of the given kind.
+fn dataset_of(subjects: Subjects) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     for side in SIDES {
         let predicate = builder.intern_iri(&side.predicate());
         for (subject, text) in rows(side) {
-            let subject = builder.intern_iri(&subject);
+            let subject = match subjects {
+                Subjects::Iri => builder.intern_iri(&subject),
+                Subjects::Blank => builder.intern_blank(local(&subject), BlankScope::DEFAULT),
+            };
             let object = builder.intern_literal(RdfLiteral::simple(&text));
             builder.push_quad(subject, predicate, object, None);
         }
@@ -649,6 +687,63 @@ fn a_declared_basis_shortens_a_real_text_read_without_moving_the_answer() {
     }
 }
 
+/// **A fused read whose candidates are blank nodes gets its lookups answered, and
+/// answers exactly what the undeclared-lookup control answers.**
+///
+/// The same differential as
+/// [`a_declared_basis_shortens_a_real_text_read_without_moving_the_answer`], over
+/// the same documents with blank-node subjects. Every candidate either stream names
+/// is then a blank node, so every lookup fusion asks binds a blank node into the
+/// producer's call. The control declares no basis and is never asked, so it
+/// answers whether or not a blank node can be looked up; the declared run answers
+/// only if every one of its lookups does, because a failed lookup fails the whole
+/// request rather than answering `Possible`.
+#[test]
+fn a_fused_read_over_blank_node_candidates_is_answered_by_its_lookups() {
+    let dataset = dataset_of(Subjects::Blank);
+    let control = measure(&dataset, ExclusionBasis::Unavailable);
+    let asked = measure(&dataset, ExclusionBasis::Membership);
+    let report = format!("{}; {}", control.report("control"), asked.report("asked"));
+
+    assert_eq!(
+        asked.answer, control.answer,
+        "a lookup about a blank-node candidate must not move the answer — {report}"
+    );
+    assert_eq!(
+        asked.answer.len(),
+        usize::try_from(TOP_K.get()).expect("the bound is small"),
+        "the fixture must actually fill the bound — {report}"
+    );
+    assert!(
+        asked
+            .answer
+            .iter()
+            .all(|(candidate, ..)| candidate.as_str().starts_with("_:")),
+        "every fused candidate is a blank node, so every lookup asked about one — {report}"
+    );
+    assert!(
+        asked.fused_lookups > 0 && asked.ranks_pulled < control.ranks_pulled,
+        "fusion asked about blank-node candidates and the answers shortened the read — \
+         {report}"
+    );
+    assert!(
+        asked.candidate_bound.iter().sum::<u64>() >= asked.fused_lookups,
+        "every lookup reached a relation with its blank-node candidate bound — {report}"
+    );
+    assert!(
+        asked.membership_lookups[1] > 0,
+        "the right index holds a non-matching document for every left blank node, so \
+         its lookups searched it — {report}"
+    );
+    for (at, side) in SIDES.into_iter().enumerate() {
+        assert_eq!(
+            asked.rankings[at], asked.candidate_free[at],
+            "{side:?}: no lookup entered the ranker — {report}"
+        );
+    }
+    assert_eq!(control.candidate_bound, [0, 0], "{report}");
+}
+
 // ---------------------------------------------------------------------------
 // One lookup, one point read
 // ---------------------------------------------------------------------------
@@ -690,7 +785,28 @@ fn stream_for<'s, 'd>(
 /// one, and none may serve more than one row.
 #[test]
 fn an_exclusion_lookup_is_one_bound_invocation_serving_at_most_one_row() {
-    let dataset = dataset();
+    point_reads(Subjects::Iri);
+}
+
+/// **A blank-node candidate is looked up exactly as an IRI one is: one bound
+/// invocation, at most its one row served.**
+///
+/// The same three cases as
+/// [`an_exclusion_lookup_is_one_bound_invocation_serving_at_most_one_row`], over the
+/// same documents with blank-node subjects. The first two candidates are bound by the
+/// dataset id their ranking read resolved; the third, which no ranking read named, is
+/// decoded from its `_:label` and bound by value. The producer serves only a bound
+/// candidate for a lookup, so a candidate that did not reach its call bound would be
+/// counted as a free invocation — or refused, failing the lookup — rather than
+/// answered.
+#[test]
+fn a_blank_node_candidate_is_one_bound_invocation_serving_at_most_one_row() {
+    point_reads(Subjects::Blank);
+}
+
+/// The body of the two point-read tests, over subjects of the given kind.
+fn point_reads(subjects: Subjects) {
+    let dataset = dataset_of(subjects);
     let (registry, recorders) = registry(&dataset, ExclusionBasis::Membership);
     let statistics = fixture_statistics();
     let profile = fixture_profile();
@@ -715,14 +831,17 @@ fn an_exclusion_lookup_is_one_bound_invocation_serving_at_most_one_row() {
     };
     let left_first = first(Side::Left);
     let right_first = first(Side::Right);
+    let own = |side: Side| {
+        let written = subjects.term(side.prefix());
+        // The term of a candidate whose local name starts with the side's prefix:
+        // everything but the closing `>` an IRI is written with.
+        written.strip_suffix('>').unwrap_or(&written).to_owned()
+    };
     assert!(
-        left_first
-            .as_str()
-            .starts_with(&format!("<{}", ex(Side::Left.prefix())))
-            && right_first
-                .as_str()
-                .starts_with(&format!("<{}", ex(Side::Right.prefix()))),
-        "each stratum ranks its own side's documents first: {left_first} / {right_first}"
+        left_first.as_str().starts_with(&own(Side::Left))
+            && right_first.as_str().starts_with(&own(Side::Right)),
+        "each stratum ranks its own side's documents first, as {subjects:?} terms: \
+         {left_first} / {right_first}"
     );
     let stream = &mut stream_for(&mut execution.streams, Side::Right).stream;
 
@@ -741,7 +860,7 @@ fn an_exclusion_lookup_is_one_bound_invocation_serving_at_most_one_row() {
             "a candidate the right stratum ranked itself",
         ),
         (
-            Term::new(format!("<{}>", ex("never-ranked"))),
+            Term::new(subjects.term("never-ranked")),
             ExclusionVerdict::Excluded,
             0,
             "a candidate no ranking read of this execution named",
@@ -756,7 +875,7 @@ fn an_exclusion_lookup_is_one_bound_invocation_serving_at_most_one_row() {
         let answered = block_on(stream.exclusion(&candidate)).expect("the lookup answers");
 
         let report = format!(
-            "{case}: bound invocations +{}, free invocations +{}, rows served bound +{}, \
+            "{subjects:?} {case}: bound invocations +{}, free invocations +{}, rows served bound +{}, \
              rows served free +{}",
             right.candidate_bound() - bound_before,
             right.candidate_free() - free_before,

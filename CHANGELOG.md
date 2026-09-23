@@ -76,6 +76,26 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   call written after another atom — so a relation is invoked in the bound mode it
   declared for that argument rather than scanned and filtered by a join.
 
+- **sparql-eval:** a prepared-execution parameter bound to a blank node — through
+  `bind_id` or by value — never reached a property-function call's arguments, so a
+  relation serving only the bound mode refused the run, and a fused retrieval whose
+  exclusion lookup was asked about a blank-node candidate failed the whole request. A
+  blank node is still never written into a pattern, where it would be an anonymous
+  variable; the call is instead driven by a one-row `VALUES` carrying the bound blank
+  node as the term it is, so the relation is invoked with that argument bound.
+
+- **sparql-eval, shapes:** a SHACL constraint body could not call a relation that
+  serves only a bound `$this` from an `OPTIONAL` arm, a sub-`SELECT` beside another
+  atom, or an `EXISTS` below the top of its pattern. The SHACL pre-binding rewrite
+  binds `$this` in every call, but the execution was admitted as though it bound
+  `$this` only where the ordinary rewrite does, so the constraint was refused before
+  it ran, whatever kind of term the focus node was. A blank-node focus node also never
+  reached those calls at run time. A prepared execution is now admitted under the
+  rewrite its runs apply (`QueryOptions::prebinding` at prepare), and SHACL prepares
+  its handles that way. A handle admitted for the SHACL rewrite refuses to run under
+  the ordinary one. The SHACL rewrite now passes a blank-node or quoted-triple value
+  to every call through a one-row `VALUES`, so the relation receives it bound.
+
 - **cli:** a failed write could unlink a symlinked output path, destroying the link
   and leaving the half-written bytes in its target — the exact loss the guard's own
   comment described preventing. The guard asked the descriptor, which `File::create`

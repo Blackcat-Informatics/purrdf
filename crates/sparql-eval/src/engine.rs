@@ -120,6 +120,7 @@ impl PreparedQuery {
             options.property_functions(),
             options.aggregates(),
             &crate::DetHashSet::default(),
+            ShaclPrebinding::None,
         )?;
         let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions())
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
@@ -234,11 +235,12 @@ fn admit_algebra(
     relations: &crate::property_fn::PropertyFunctionRegistry,
     aggregates: &crate::agg_fn::AggregateRegistry,
     parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
+    reach: ShaclPrebinding,
 ) -> Result<Option<Query>, RdfDiagnostic> {
     query
         .validate()
         .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))?;
-    crate::property_fn_plan::plan_query(query, relations, aggregates, parameters)
+    crate::property_fn_plan::plan_query(query, relations, aggregates, parameters, reach)
         .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
 }
 
@@ -252,6 +254,8 @@ fn admit_algebra(
 /// property-function call the same text prepared with no parameters cannot serve. A
 /// key without them would hand a caller that binds nothing a plan that is only sound
 /// when every parameter is bound. Every entry but `prepare_execution` declares none.
+/// The rewrite the parameters were admitted under is in the key beside them, because
+/// the SHACL pre-binding rewrite reaches calls the ordinary one does not.
 ///
 /// The registry fingerprints are there because a cached entry is not merely a parse: a query
 /// carrying a property-function call is also **feasibility-ordered** against the
@@ -415,6 +419,7 @@ impl PlanCache {
             &fingerprint,
             &agg_fingerprint,
             &[],
+            ShaclPrebinding::None,
         )
     }
 
@@ -440,7 +445,7 @@ impl PlanCache {
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_execution_plan(query, base_iri, env, &[])
+        self.prepare_execution_plan(query, base_iri, env, &[], ShaclPrebinding::None)
     }
 
     /// [`Self::prepare_in_env`] for a prepared execution that will bind every name in
@@ -458,6 +463,7 @@ impl PlanCache {
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
         parameters: &[&str],
+        reach: ShaclPrebinding,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         debug_assert!(
             parameters.windows(2).all(|pair| pair[0] < pair[1]),
@@ -472,6 +478,7 @@ impl PlanCache {
             env.relations_fingerprint(),
             env.aggregates_fingerprint(),
             parameters,
+            reach,
         )
     }
 
@@ -499,6 +506,7 @@ impl PlanCache {
         fingerprint: &str,
         agg_fingerprint: &str,
         parameters: &[&str],
+        reach: ShaclPrebinding,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         // The key is built into the cache's own reusable buffer and probed as a
         // borrowed slice, so a hit costs no allocation at all. The buffer is moved
@@ -515,6 +523,7 @@ impl PlanCache {
             fingerprint,
             agg_fingerprint,
             parameters,
+            reach,
         );
         if let Some(prepared) = self.entries.get(scratch.as_slice()) {
             self.key_scratch = scratch;
@@ -536,6 +545,7 @@ impl PlanCache {
             relations,
             aggregates,
             &crate::property_fn_plan::parameter_set(parameters),
+            reach,
         )?;
         let prepared = Arc::new(PreparedQuery::admitted(
             planned.unwrap_or(parsed),
@@ -573,6 +583,7 @@ fn plan_cache_key_into(
     relations: &str,
     aggregates: &str,
     parameters: &[&str],
+    reach: ShaclPrebinding,
 ) {
     fn length(out: &mut Vec<u8>, value: usize) {
         out.extend_from_slice(&(value as u64).to_le_bytes());
@@ -586,7 +597,7 @@ fn plan_cache_key_into(
         &options.property_fn_namespaces,
         &options.property_fn_iris,
     ];
-    let mut capacity = 1 + 8 * size_of::<u64>();
+    let mut capacity = 2 + 8 * size_of::<u64>();
     for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
         capacity += value.len();
     }
@@ -614,6 +625,14 @@ fn plan_cache_key_into(
     for value in parameters {
         field(out, value);
     }
+    // Which rewrite the declared parameters were admitted under, for the same reason:
+    // the SHACL pre-binding rewrite reaches calls the ordinary one does not, so it
+    // admits calls the ordinary one cannot serve. Only meaningful with parameters, and
+    // written regardless so the key has one layout.
+    out.push(match reach {
+        ShaclPrebinding::Applied => 1,
+        ShaclPrebinding::None => 0,
+    });
     for value in [relations, aggregates, query] {
         field(out, value);
     }
@@ -825,7 +844,12 @@ impl NativeSparqlEngine {
         substitutions: &[(String, TermValue)],
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
+        check_plan_matches_relations(
+            prepared,
+            options,
+            &crate::DetHashSet::default(),
+            ShaclPrebinding::None,
+        )?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -875,7 +899,12 @@ impl NativeSparqlEngine {
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
             (|| {
-                check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
+                check_plan_matches_relations(
+                    prepared,
+                    options,
+                    &crate::DetHashSet::default(),
+                    ShaclPrebinding::None,
+                )?;
                 let ctx = self.eval_ctx(dataset);
                 let mut ctx = apply_query_options(ctx, options)?;
                 let outcome = match options.prebinding {
@@ -1066,7 +1095,12 @@ impl NativeSparqlEngine {
         source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
+        check_plan_matches_relations(
+            prepared,
+            options,
+            &crate::DetHashSet::default(),
+            ShaclPrebinding::None,
+        )?;
         // `prepared.relations` is the registry fingerprint computed once at prepare and
         // just validated against `options.property_functions()` above — reused rather than
         // re-derived, so this receipt's identity and the plan cache's key never disagree.
@@ -2056,6 +2090,13 @@ impl NativeSparqlEngine {
     /// nested sub-`SELECT` — the parameter is free as far as the call can tell, and it
     /// is admitted as free.
     ///
+    /// `options.prebinding` names the rewrite the runs will apply, and it moves that
+    /// boundary. Under [`ShaclPrebinding::Applied`] a parameter is bound in EVERY
+    /// property-function call, an `OPTIONAL` arm, a sub-`SELECT` and an `EXISTS` body
+    /// included, so every call is admitted with it bound; such an execution then
+    /// refuses a run under [`ShaclPrebinding::None`], whose narrower reach would invoke
+    /// some of those calls free. An execution prepared under `None` runs under either.
+    ///
     /// # Errors
     ///
     /// [`RdfDiagnostic`] if `query` does not parse or is refused admission, or if
@@ -2104,6 +2145,7 @@ impl NativeSparqlEngine {
             base_iri,
             options.env,
             &declared,
+            options.prebinding,
         )?;
         // The whole admission check, run ONCE here rather than on every run of this
         // execution: the algebra soundness walk, the feasibility replanning walk,
@@ -2118,9 +2160,11 @@ impl NativeSparqlEngine {
             &prepared,
             options,
             &crate::property_fn_plan::parameter_set(&declared),
+            options.prebinding,
         )?;
         Ok(PreparedExecution::new(
             prepared,
+            options.prebinding,
             parameters
                 .iter()
                 .map(|name| crate::substitute::interned_variable(name))
@@ -2415,7 +2459,12 @@ impl NativeSparqlEngine {
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
         let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
-        check_plan_matches_relations(&prepared, options, &crate::DetHashSet::default())?;
+        check_plan_matches_relations(
+            &prepared,
+            options,
+            &crate::DetHashSet::default(),
+            ShaclPrebinding::None,
+        )?;
         let identity = relation_identity(&prepared, options.property_functions())?;
         if let Some(refused) = self.admit_refusal(
             dataset,
@@ -2861,9 +2910,10 @@ fn check_plan_matches_relations(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
     parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
+    reach: ShaclPrebinding,
 ) -> Result<(), RdfDiagnostic> {
     check_plan_soundness(prepared)?;
-    check_plan_matches_registries(prepared, options, parameters)
+    check_plan_matches_registries(prepared, options, parameters, reach)
 }
 
 /// A prepared execution's per-run admission check: the registries have not changed
@@ -2999,12 +3049,14 @@ fn check_plan_matches_registries(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
     parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
+    reach: ShaclPrebinding,
 ) -> Result<(), RdfDiagnostic> {
     let planned = crate::property_fn_plan::plan_query(
         &prepared.query,
         options.property_functions(),
         options.aggregates(),
         parameters,
+        reach,
     )
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     if planned
@@ -6006,7 +6058,8 @@ mod tests {
             check_plan_matches_relations(
                 &prepared,
                 QueryOptions::EMPTY,
-                &crate::DetHashSet::default()
+                &crate::DetHashSet::default(),
+                ShaclPrebinding::None
             )
             .is_ok(),
             "a plan prepared registry-free must match QueryOptions::EMPTY"
@@ -6026,7 +6079,8 @@ mod tests {
                     .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
-                &crate::DetHashSet::default()
+                &crate::DetHashSet::default(),
+                ShaclPrebinding::None
             )
             .is_ok(),
             "an independently constructed EMPTY registry must be interchangeable with EMPTY"
@@ -6050,7 +6104,8 @@ mod tests {
                     .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
-                &crate::DetHashSet::default()
+                &crate::DetHashSet::default(),
+                ShaclPrebinding::None
             )
             .is_err(),
             "plan identity must still refuse a genuinely different, non-empty registry"

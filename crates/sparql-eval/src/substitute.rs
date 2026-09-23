@@ -462,7 +462,10 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 /// non-distinguished VARIABLE (SPARQL 1.2 §4.1.4), not a request to match a
 /// particular dataset blank, so writing one into a triple pattern would widen the
 /// match to every term rather than narrow it to the focus node. Blank-node focus
-/// nodes keep the `VALUES`-join path, which interns the blank as the term it is.
+/// nodes keep the `VALUES`-join path, which interns the blank as the term it is. A
+/// property-function call that names one as an argument is driven by a one-row
+/// `VALUES` of its own instead, so the relation is still invoked with that argument
+/// bound — see [`drive_call_arguments`].
 fn push_probe_constants(core: &mut GraphPattern, probes: &[(Variable, GroundTerm)]) {
     if probes.is_empty() {
         return;
@@ -525,6 +528,9 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
             {
                 probe_term_pattern(argument, probes, &mut probed);
             }
+            // A value the pattern cannot carry — a blank node — is driven into the
+            // call instead; see [`drive_call_arguments`].
+            drive_call_arguments(pattern, probes, Unwritable::InPattern);
             restore_probed_bindings(pattern, &probed, probes, at_core_root);
         }
         GraphPattern::Extend {
@@ -571,6 +577,11 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
         // call in a join would demote it to the generic correlated path, where those
         // bindings arrive free. Any other right operand keeps its correlated
         // re-evaluation untouched.
+        //
+        // A value the pattern cannot carry — a blank node — reaches the call through
+        // that same per-row drive: the left operand is joined with a one-row `VALUES`
+        // binding it, so every left row hands the call its term as a bound argument.
+        // See [`drive_call_arguments`].
         GraphPattern::Lateral { left, right } => {
             push_probes(left, probes, false);
             let mut probed = Vec::new();
@@ -583,7 +594,178 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
                     probe_term_pattern(argument, probes, &mut probed);
                 }
             }
+            drive_call_arguments(pattern, probes, Unwritable::InPattern);
             restore_probed_bindings(pattern, &probed, probes, at_core_root);
+        }
+        _ => {}
+    }
+}
+
+/// Which pre-bound values a rewrite cannot WRITE into a property-function argument
+/// and must therefore DRIVE into it — see [`drive_call_arguments`].
+#[derive(Clone, Copy, Debug)]
+enum Unwritable {
+    /// The pushdown's rule: every value [`term_pattern_from_ground`] refuses — a blank
+    /// node, or a quoted triple with one inside it.
+    InPattern,
+    /// The SHACL walk's rule, which is [`substitute_in_term_pattern`]'s: every value
+    /// with no expression form — a blank node or any quoted triple.
+    InArgument,
+}
+
+impl Unwritable {
+    /// Whether `ground` is a value this rule cannot write, and so must drive.
+    fn holds(self, ground: &GroundTerm) -> bool {
+        match self {
+            Self::InPattern => term_pattern_from_ground(ground).is_none(),
+            Self::InArgument => match Pushability::of(ground) {
+                Pushability::Iri(_) | Pushability::Literal(_) => false,
+                Pushability::QuotedTriple(_) | Pushability::SeedOnly => true,
+            },
+        }
+    }
+}
+
+/// The indices into `probes` of the pre-bound variables `call` names in an argument
+/// that `rule` cannot write there, less any `already` binds.
+///
+/// Such a value has no spelling the rewrite may write — a blank node in a query is an
+/// anonymous variable — so the variable stays in place, and on its own the call would
+/// then be invoked with that position FREE. A variable nested inside a quoted-triple
+/// argument counts too: the drive binds the variable, wherever the argument mentions
+/// it.
+fn driven_arguments(
+    call: &purrdf_sparql_algebra::PropertyFunctionCall,
+    probes: &[(Variable, GroundTerm)],
+    rule: Unwritable,
+    already: Option<&GraphPattern>,
+) -> Vec<usize> {
+    fn visit(
+        term: &TermPattern,
+        probes: &[(Variable, GroundTerm)],
+        rule: Unwritable,
+        already: Option<&GraphPattern>,
+        driven: &mut Vec<usize>,
+    ) {
+        match term {
+            TermPattern::Variable(var) => {
+                if let Some(index) = probes.iter().position(|(candidate, _)| candidate == var)
+                    && rule.holds(&probes[index].1)
+                    && !driven.contains(&index)
+                    && !already.is_some_and(|left| drives(left, var))
+                {
+                    driven.push(index);
+                }
+            }
+            TermPattern::Triple(triple) => {
+                visit(&triple.subject, probes, rule, already, driven);
+                visit(&triple.object, probes, rule, already, driven);
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+    let mut driven = Vec::new();
+    for argument in call.subject_args.iter().chain(call.object_args.iter()) {
+        visit(argument, probes, rule, already, &mut driven);
+    }
+    driven
+}
+
+/// Whether `left` — a `Lateral`'s left operand — is already a driver for `var`: the
+/// one-row `VALUES` [`drive_call_arguments`] builds, alone or joined onto the operand.
+///
+/// This is what makes the drive idempotent. The SHACL rewrite runs the pushdown and
+/// then its own walk, and both drive calls; a call the pushdown already drove is
+/// recognized here rather than wrapped twice.
+fn drives(left: &GraphPattern, var: &Variable) -> bool {
+    let driver = match left {
+        GraphPattern::Join { left, .. } => &**left,
+        other => other,
+    };
+    matches!(
+        driver,
+        GraphPattern::Values { variables, bindings }
+            if bindings.len() == 1 && variables.contains(var)
+    )
+}
+
+/// A one-row `VALUES` binding the probes at `driven`.
+fn seed_row(driven: &[usize], probes: &[(Variable, GroundTerm)]) -> GraphPattern {
+    GraphPattern::Values {
+        variables: driven.iter().map(|&i| probes[i].0.clone()).collect(),
+        bindings: vec![driven.iter().map(|&i| Some(probes[i].1.clone())).collect()],
+    }
+}
+
+/// Drive every pre-bound value `rule` cannot write into the property-function call at
+/// `pattern` — a stand-alone call, or a `Lateral` whose right operand is one — so the
+/// relation is invoked with that argument BOUND.
+///
+/// A call's arguments are invocation inputs, and a relation that serves only the bound
+/// mode refuses a free one. A prepared execution admitted the call on the promise that
+/// its parameter is bound there (`crate::property_fn_plan`'s `Promise`), so leaving
+/// the position free would turn that admission into a refusal on every run bound to,
+/// say, a blank node.
+///
+/// The distinction the rewrite draws is kept exactly. A blank node written into the
+/// query text is a non-distinguished variable, and is never written there by this
+/// rewrite. A blank node BOUND as a value is a term identity — the dataset's own blank
+/// node — and the evaluator already has a door that carries it as one: a call that is
+/// the DIRECT right operand of a `Lateral` is driven per left row with that row in
+/// hand, and a blank node in the row is handed to the relation as a bound argument.
+/// The `VALUES` row interns the value as the term it is, which is how the seed itself
+/// already binds a blank node. So:
+///
+/// * a stand-alone call becomes the right operand of a `Lateral` over a one-row
+///   `VALUES` binding the driven values;
+/// * a call that is already a `Lateral`'s right operand keeps that position — wrapping
+///   it would demote it to the generic correlated path, where such bindings arrive
+///   free — and the one-row `VALUES` is joined onto its left operand instead, so every
+///   left row carries the values in.
+///
+/// Sound for the same reason the pushdown is: joining the one-row `var = b` onto the
+/// call keeps exactly the call's rows that bind `var` to `b`, and a call driven with
+/// `var = b` produces exactly those rows. In a scope the seed does not reach — the
+/// SHACL walk's `OPTIONAL` arms, unprojected sub-`SELECT`s and `EXISTS` bodies — it
+/// binds `var` to `b` in the call's own group, which is what writing the value there
+/// would have done had it a spelling. The variable is still in the call, so its
+/// column survives and needs no restoring `VALUES`.
+///
+/// Idempotent: a value the left operand already drives is not driven again (see
+/// [`drives`]), so the SHACL walk passing over a call the pushdown already drove
+/// leaves it as it is.
+fn drive_call_arguments(
+    pattern: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    rule: Unwritable,
+) {
+    match pattern {
+        GraphPattern::PropertyFunction(call) => {
+            let driven = driven_arguments(call, probes, rule, None);
+            if driven.is_empty() {
+                return;
+            }
+            let seed = seed_row(&driven, probes);
+            purrdf_sparql_algebra::substitute::take_and_replace(pattern, |call| {
+                GraphPattern::Lateral {
+                    left: Box::new(seed),
+                    right: Box::new(call),
+                }
+            });
+        }
+        GraphPattern::Lateral { left, right } => {
+            let GraphPattern::PropertyFunction(call) = &**right else {
+                return;
+            };
+            let driven = driven_arguments(call, probes, rule, Some(left));
+            if driven.is_empty() {
+                return;
+            }
+            let seed = seed_row(&driven, probes);
+            purrdf_sparql_algebra::substitute::take_and_replace(left, |left| GraphPattern::Join {
+                left: Box::new(seed),
+                right: Box::new(left),
+            });
         }
         _ => {}
     }
@@ -696,17 +878,20 @@ fn probe_term_pattern(
 ///   nested [`Self::SeedOnly`] anywhere inside it takes the WHOLE triple out of the
 ///   pushdown rather than only that one position.
 /// * [`Self::SeedOnly`] — a blank node, and this is the load-bearing rule of the
-///   whole classification. **A blank node is seed-bound only and is never pushed into
-///   a pattern.** A blank node written into a query pattern is a NON-DISTINGUISHED
-///   VARIABLE (SPARQL 1.2 §4.1.4), not a request to match one particular dataset
-///   blank — so pushing one would WIDEN the match to every term in that position
-///   where every other class narrows it, turning a pre-binding into its own opposite.
-///   The consequence is that the pushed-constant set and the seed set are genuinely
-///   DIFFERENT sets: the seed carries every pre-binding, the pushdown carries only
-///   those the pattern can narrow on, and a blank-node focus node is bound by exactly
-///   one of the two halves. [`probe_term_pattern`] therefore records no probed index
-///   for one either, so no restoring `VALUES` is emitted for a column no leaf ever
-///   consumed.
+///   whole classification. **A blank node is bound only through `VALUES` rows and is
+///   never written into a pattern.** A blank node written into a query pattern is a
+///   NON-DISTINGUISHED VARIABLE (SPARQL 1.2 §4.1.4), not a request to match one
+///   particular dataset blank — so pushing one would WIDEN the match to every term in
+///   that position where every other class narrows it, turning a pre-binding into its
+///   own opposite. The consequence is that the pushed-constant set and the seed set
+///   are genuinely DIFFERENT sets: the seed carries every pre-binding, the pushdown
+///   carries only those the pattern can narrow on. A property-function call that names
+///   a blank-node pre-binding as an argument is the one leaf that still needs it
+///   BOUND, and it gets it through a `VALUES` row too — the one-row driver
+///   [`drive_call_arguments`] puts on the call's left, which hands the relation
+///   the dataset's blank node as the term it is. [`probe_term_pattern`] records no
+///   probed index for a blank, so no restoring `VALUES` is emitted for a column no
+///   leaf ever consumed.
 ///
 /// # Why it borrows
 ///
@@ -722,7 +907,8 @@ enum Pushability<'a> {
     Literal(&'a Literal),
     /// A quoted triple: a matched pattern position, component-wise, and nothing else.
     QuotedTriple(&'a GroundTriple),
-    /// A blank node: bound by the `VALUES` seed and by nothing else.
+    /// A blank node: bound through `VALUES` rows — the seed, and a property-function
+    /// call's driver — and never written into a pattern.
     SeedOnly,
 }
 
@@ -775,7 +961,9 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
 ///
 /// recursing into nested graph patterns (`EXISTS`, `GRAPH`, sub-queries, etc.).
 /// Blank-node and quoted-triple values are deliberately left unsubstituted in
-/// expression positions; the VALUES-join binds them.
+/// expression positions; the VALUES-join binds them. In a property-function call's
+/// arguments they are driven in instead, wherever the call is, so the relation is
+/// invoked with them bound — see `drive_call_arguments`.
 ///
 /// Returns a diagnostic on the same error conditions as [`apply_substitutions`].
 pub(crate) fn apply_shacl_prebinding(
@@ -928,11 +1116,22 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
         // the pushdown at an `OPTIONAL`'s or a `MINUS`'s right arm does not arise here.
         // See `crate::enf`'s "The SHACL pre-binding fork".
         GraphPattern::Join { left, right }
-        | GraphPattern::Lateral { left, right }
         | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
             substitute_in_graph_pattern(left, expr_subs);
             substitute_in_graph_pattern(right, expr_subs);
+        }
+        // A call that is a `Lateral`'s right operand is substituted in place and never
+        // walked as a stand-alone call: that position is what hands it its left rows,
+        // and the drive below keeps it there.
+        GraphPattern::Lateral { left, right } => {
+            substitute_in_graph_pattern(left, expr_subs);
+            if let GraphPattern::PropertyFunction(call) = &mut **right {
+                substitute_in_call(call, expr_subs);
+                drive_call_arguments(pattern, &expr_subs.0, Unwritable::InArgument);
+            } else {
+                substitute_in_graph_pattern(right, expr_subs);
+            }
         }
         GraphPattern::LeftJoin {
             left,
@@ -984,16 +1183,14 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
         // expression positions are. The VALUES-join rewrite alone would not reach an
         // occurrence inside a sub-`SELECT` that does not project the pre-bound variable,
         // because that inner variable is a separate scope the join cannot correlate
-        // with. IRI and literal values substitute; blank-node and quoted-triple values
-        // pass through to the VALUES join, exactly as in expression positions.
+        // with. IRI and literal values substitute. A blank-node or quoted-triple value
+        // has no constant spelling here, and the `VALUES` seed does not reach this
+        // scope either, so it is DRIVEN into the call through a one-row `VALUES` of its
+        // own — see [`drive_call_arguments`] — and the relation is invoked with it
+        // bound, exactly as with an IRI.
         GraphPattern::PropertyFunction(call) => {
-            for term in call
-                .subject_args
-                .iter_mut()
-                .chain(call.object_args.iter_mut())
-            {
-                substitute_in_term_pattern(term, expr_subs);
-            }
+            substitute_in_call(call, expr_subs);
+            drive_call_arguments(pattern, &expr_subs.0, Unwritable::InArgument);
         }
         GraphPattern::Group {
             inner, aggregates, ..
@@ -1012,6 +1209,20 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
     }
 }
 
+/// Substitute every argument of `call` — see [`substitute_in_term_pattern`].
+fn substitute_in_call(
+    call: &mut purrdf_sparql_algebra::PropertyFunctionCall,
+    expr_subs: &ExprSubs,
+) {
+    for term in call
+        .subject_args
+        .iter_mut()
+        .chain(call.object_args.iter_mut())
+    {
+        substitute_in_term_pattern(term, expr_subs);
+    }
+}
+
 /// Replace a pre-bound variable in a property-function argument position with its
 /// constant term.
 ///
@@ -1020,8 +1231,8 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
 /// admitted by [`term_pattern_from_ground`]: a property function's arguments are
 /// invocation INPUTS, evaluated per row like a function call's, rather than terms
 /// matched against the graph. A value with no expression form therefore has nothing
-/// to be substituted with here and rides the `VALUES` join instead, exactly as in an
-/// ordinary expression position. A non-variable argument is already a constant and
+/// to be substituted with here, and is driven into the call instead — see
+/// [`drive_call_arguments`]. A non-variable argument is already a constant and
 /// passes through unchanged.
 fn substitute_in_term_pattern(term: &mut TermPattern, expr_subs: &ExprSubs) {
     let TermPattern::Variable(var) = term else {
@@ -1412,7 +1623,8 @@ mod tests {
                 false,
                 false,
             ),
-            // The load-bearing row: a blank node is seed-bound and nothing else.
+            // The load-bearing row: a blank node is written into no position; it is
+            // bound through `VALUES` rows alone.
             ("blank", false, false, false, false),
         ];
 

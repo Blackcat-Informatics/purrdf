@@ -134,6 +134,16 @@ pub struct PreparedExecution {
     pub(crate) prepared: Arc<PreparedQuery>,
     /// The declared parameters, interned once, in declaration order.
     pub(crate) parameters: Box<[Variable]>,
+    /// The rewrite the parameters were admitted under — `QueryOptions::prebinding`
+    /// at prepare.
+    ///
+    /// Under [`ShaclPrebinding::Applied`] a call anywhere in the query is admitted with
+    /// the parameters bound, because the SHACL pre-binding rewrite binds them in every
+    /// call. The ordinary rewrite reaches fewer calls, so a run under it would invoke
+    /// some of those calls with a parameter free; [`Self::substituted`] refuses that
+    /// run instead. The other direction is sound — the SHACL rewrite reaches every
+    /// call the ordinary one does — and is allowed.
+    admitted_under: ShaclPrebinding,
     /// The current value of each parameter, positionally. `None` until bound;
     /// running with any parameter still `None` is refused rather than defaulted.
     ///
@@ -341,11 +351,16 @@ impl PreparedExecution {
     /// [`NativeSparqlEngine::prepare_execution`](crate::NativeSparqlEngine::prepare_execution)
     /// is the only door: it is what refuses a repeated parameter name and what runs
     /// the admission whose result this value then carries.
-    pub(crate) fn new(prepared: Arc<PreparedQuery>, parameters: Box<[Variable]>) -> Self {
+    pub(crate) fn new(
+        prepared: Arc<PreparedQuery>,
+        admitted_under: ShaclPrebinding,
+        parameters: Box<[Variable]>,
+    ) -> Self {
         let values = vec![None; parameters.len()];
         Self {
             prepared,
             parameters,
+            admitted_under,
             values,
             probes: Vec::new(),
             memo: None,
@@ -669,6 +684,7 @@ impl PreparedExecution {
         let Self {
             prepared,
             parameters,
+            admitted_under,
             values,
             probes,
             memo,
@@ -679,6 +695,18 @@ impl PreparedExecution {
             // decided about here.
             workspace: _,
         } = self;
+        if *admitted_under == ShaclPrebinding::Applied
+            && lane != ShaclPrebinding::Applied
+            && !parameters.is_empty()
+        {
+            return Err(RdfDiagnostic::error(
+                "native-sparql-execution-parameter",
+                "this execution was prepared under the SHACL pre-binding rewrite, which \
+                 binds its parameters in every property-function call; the ordinary \
+                 rewrite this run asked for does not reach them all, so a call admitted \
+                 as bound would be invoked free",
+            ));
+        }
         crate::substitute::build_probes_into(
             probes,
             crate::substitute::Prebindings::Paired(parameters, values),

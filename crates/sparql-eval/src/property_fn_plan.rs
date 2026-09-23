@@ -44,6 +44,7 @@ use purrdf_sparql_algebra::{
 use crate::DetHashSet;
 use crate::agg_fn::{AggregateRegistry, ScalarvalKind, ScalarvalSpec};
 use crate::convert::literal_to_value;
+use crate::engine::ShaclPrebinding;
 use crate::error::EvalError;
 use crate::expr::xsd_of;
 use crate::modifier::is_numeric_xsd;
@@ -151,6 +152,7 @@ pub(crate) fn plan_query(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
+    reach: ShaclPrebinding,
 ) -> Result<Option<Query>, PlanError> {
     let pattern = match query {
         Query::Select { pattern, .. }
@@ -158,7 +160,8 @@ pub(crate) fn plan_query(
         | Query::Construct { pattern, .. }
         | Query::Describe { pattern, .. } => pattern,
     };
-    let Some(planned) = plan_where_pattern(pattern, relations, agg_registry, parameters)? else {
+    let Some(planned) = plan_where_pattern(pattern, relations, agg_registry, parameters, reach)?
+    else {
         return Ok(None);
     };
     let mut planned_query = query.clone();
@@ -187,8 +190,10 @@ pub(crate) fn plan_query(
 ///
 /// `parameters` names the variables a prepared execution binds on every run, and each
 /// counts as bound exactly where a run's rewrite really binds it — see [`Promise`] for
-/// the two places that is, and why a call anywhere else is admitted as though the
-/// parameter were free.
+/// the two places that is under the ordinary rewrite, and why a call anywhere else is
+/// admitted as though the parameter were free. `reach` names the rewrite every run
+/// applies: under [`ShaclPrebinding::Applied`] a parameter reaches every
+/// property-function call in the query ([`Promise::Everywhere`]).
 ///
 /// # Errors
 ///
@@ -202,6 +207,7 @@ pub(crate) fn plan_where_pattern(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
+    reach: ShaclPrebinding,
 ) -> Result<Option<GraphPattern>, PlanError> {
     // Either hazard alone must still run the walk: a query with a `Custom`
     // aggregate and no property-function call would otherwise skip this pass
@@ -219,7 +225,7 @@ pub(crate) fn plan_where_pattern(
         relations,
         agg_registry,
         &DetHashSet::default(),
-        Promise::descent(parameters),
+        Promise::descent(parameters, reach),
     )
     .map(Some)
 }
@@ -248,6 +254,9 @@ pub(crate) fn plan_where_pattern(
 ///   Admitting it as though it were bound would exchange a refusal at prepare for a
 ///   refusal on every run.
 ///
+/// A run under the SHACL pre-binding rewrite reaches further: it binds a parameter in
+/// every call in the query, and that is [`Self::Everywhere`].
+///
 /// Neither half extends `outer`, which stays the set of variables the pattern ITSELF
 /// certainly binds: a promise is consulted only where a call is admitted, and only
 /// where it holds.
@@ -260,15 +269,44 @@ enum Promise<'a> {
     Descent(&'a DetHashSet<Variable>),
     /// At or below the core, at a position the pushdown writes these into.
     Pushed(&'a DetHashSet<Variable>),
+    /// Anywhere in the query, because the run applies the SHACL pre-binding rewrite.
+    ///
+    /// That rewrite (`crate::substitute::apply_shacl_probes`) is the pushdown and the
+    /// seed PLUS a walk with no boundary: it writes an IRI or literal parameter into
+    /// every property-function argument that names it — an `OPTIONAL`'s or a
+    /// `MINUS`'s right arm, a sub-`SELECT` that does not project it, an `EXISTS` body
+    /// below the core — and drives every other value (a blank node, a quoted triple)
+    /// into the same calls through a one-row `VALUES`. So under that rewrite a call
+    /// ANYWHERE receives the parameter bound, and admitting it as free would refuse,
+    /// at prepare, a call every run would have served.
+    ///
+    /// Only sound behind an execution that refuses to run under the ordinary
+    /// rewrite, whose reach is narrower — which
+    /// [`PreparedExecution`](crate::PreparedExecution) does for a plan admitted
+    /// under this promise.
+    Everywhere(&'a DetHashSet<Variable>),
 }
 
 impl<'a> Promise<'a> {
-    /// The promise a plan starts from: `parameters` on the descent, or nothing.
-    fn descent(parameters: &'a DetHashSet<Variable>) -> Self {
+    /// The promise a plan starts from: `parameters` on the descent, or everywhere
+    /// when the run applies the SHACL pre-binding rewrite, or nothing.
+    fn descent(parameters: &'a DetHashSet<Variable>, reach: ShaclPrebinding) -> Self {
         if parameters.is_empty() {
             Self::None
         } else {
-            Self::Descent(parameters)
+            match reach {
+                ShaclPrebinding::Applied => Self::Everywhere(parameters),
+                ShaclPrebinding::None => Self::Descent(parameters),
+            }
+        }
+    }
+
+    /// The promise at a position the pushdown does not write into: nothing, unless
+    /// the SHACL pre-binding rewrite reaches it anyway.
+    const fn beyond_pushdown(self) -> Self {
+        match self {
+            Self::Everywhere(_) => self,
+            Self::None | Self::Descent(_) | Self::Pushed(_) => Self::None,
         }
     }
 
@@ -287,14 +325,14 @@ impl<'a> Promise<'a> {
     const fn in_rows(self) -> Option<&'a DetHashSet<Variable>> {
         match self {
             Self::Descent(parameters) => Some(parameters),
-            Self::None | Self::Pushed(_) => None,
+            Self::None | Self::Pushed(_) | Self::Everywhere(_) => None,
         }
     }
 
     /// The parameters a call admitted at this node may count as bound.
     const fn for_calls(self) -> Option<&'a DetHashSet<Variable>> {
         match self {
-            Self::Pushed(parameters) => Some(parameters),
+            Self::Pushed(parameters) | Self::Everywhere(parameters) => Some(parameters),
             Self::None | Self::Descent(_) => None,
         }
     }
@@ -708,7 +746,7 @@ fn map_children(
     // the core, only the wrappers the pushdown descends pass on what it writes. See
     // [`Promise`].
     let wrapped = match promise {
-        Promise::Descent(_) => promise,
+        Promise::Descent(_) | Promise::Everywhere(_) => promise,
         Promise::None | Promise::Pushed(_) => Promise::None,
     };
     // The node itself, when it is not a wrapper: the core if the descent is still
@@ -737,7 +775,7 @@ fn map_children(
             collect_certainly_bound(left, &mut inner);
             GraphPattern::Lateral {
                 left: recurse(left, outer, here)?,
-                right: recurse(right, &inner, Promise::None)?,
+                right: recurse(right, &inner, promise.beyond_pushdown())?,
             }
         }
         // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated independently
@@ -757,16 +795,24 @@ fn map_children(
             collect_certainly_bound(right, &mut condition_scope);
             GraphPattern::LeftJoin {
                 left: recurse(left, outer, here)?,
-                right: recurse(right, outer, Promise::None)?,
+                right: recurse(right, outer, promise.beyond_pushdown())?,
                 expression: expression
                     .as_ref()
-                    .map(|expr| plan_expression(expr, relations, agg_registry, &condition_scope))
+                    .map(|expr| {
+                        plan_expression(
+                            expr,
+                            relations,
+                            agg_registry,
+                            &condition_scope,
+                            promise.beyond_pushdown(),
+                        )
+                    })
                     .transpose()?,
             }
         }
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
             left: recurse(left, outer, here)?,
-            right: recurse(right, outer, Promise::None)?,
+            right: recurse(right, outer, promise.beyond_pushdown())?,
         },
         // A `UNION` branch cannot rely on its sibling.
         GraphPattern::Union { left, right } => GraphPattern::Union {
@@ -782,7 +828,13 @@ fn map_children(
             collect_certainly_bound(inner, &mut scope);
             with_rows(&mut scope, promise);
             GraphPattern::Filter {
-                expr: plan_expression(expr, relations, agg_registry, &scope)?,
+                expr: plan_expression(
+                    expr,
+                    relations,
+                    agg_registry,
+                    &scope,
+                    promise.beyond_pushdown(),
+                )?,
                 // The pushdown descends a `FILTER` beneath the core as well as above it.
                 inner: recurse(inner, outer, promise)?,
             }
@@ -812,7 +864,13 @@ fn map_children(
             GraphPattern::Extend {
                 inner: recurse(inner, outer, into)?,
                 variable: variable.clone(),
-                expression: plan_expression(expression, relations, agg_registry, &scope)?,
+                expression: plan_expression(
+                    expression,
+                    relations,
+                    agg_registry,
+                    &scope,
+                    promise.beyond_pushdown(),
+                )?,
             }
         }
         GraphPattern::Unfold {
@@ -826,7 +884,13 @@ fn map_children(
             with_rows(&mut scope, promise);
             GraphPattern::Unfold {
                 inner: recurse(inner, outer, wrapped)?,
-                expression: plan_expression(expression, relations, agg_registry, &scope)?,
+                expression: plan_expression(
+                    expression,
+                    relations,
+                    agg_registry,
+                    &scope,
+                    promise.beyond_pushdown(),
+                )?,
                 element: element.clone(),
                 companion: companion.clone(),
             }
@@ -850,12 +914,14 @@ fn map_children(
                                 relations,
                                 agg_registry,
                                 &scope,
+                                promise.beyond_pushdown(),
                             )?),
                             OrderExpression::Desc(expr) => OrderExpression::Desc(plan_expression(
                                 expr,
                                 relations,
                                 agg_registry,
                                 &scope,
+                                promise.beyond_pushdown(),
                             )?),
                         })
                     })
@@ -902,7 +968,13 @@ fn map_children(
                     .map(|(variable, aggregate)| {
                         Ok((
                             variable.clone(),
-                            plan_aggregate(aggregate, relations, agg_registry, &scope)?,
+                            plan_aggregate(
+                                aggregate,
+                                relations,
+                                agg_registry,
+                                &scope,
+                                promise.beyond_pushdown(),
+                            )?,
                         ))
                     })
                     .collect::<Result<Vec<_>, PlanError>>()?,
@@ -929,6 +1001,7 @@ fn plan_expression(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
+    promise: Promise<'_>,
 ) -> Result<Expression, PlanError> {
     // Either hazard alone must still walk `expr` — see `plan_where_pattern`'s
     // identical widening for the same reason: an `EXISTS` whose inner `GROUP BY`
@@ -939,20 +1012,23 @@ fn plan_expression(
     {
         return Ok(expr.clone());
     }
-    let sub =
-        |expr: &Expression| plan_expression(expr, relations, agg_registry, outer).map(Box::new);
+    let sub = |expr: &Expression| {
+        plan_expression(expr, relations, agg_registry, outer, promise).map(Box::new)
+    };
     Ok(match expr {
         // A correlated `EXISTS` sees its enclosing group's bindings, so `outer` carries
         // straight in: that is what lets a relation inside one be invoked bound. A
         // prepared execution's parameters are in `outer` here exactly when the rows the
         // expression is evaluated over carry them (see [`Promise::in_rows`]); the
-        // pushdown never writes into an `EXISTS` body, so nothing more is promised.
+        // pushdown never writes into an `EXISTS` body, so nothing more is promised —
+        // unless the SHACL pre-binding rewrite runs, which binds them in every call
+        // everywhere (see [`Promise::Everywhere`]).
         Expression::Exists(pattern) => Expression::Exists(Box::new(plan_pattern(
             pattern,
             relations,
             agg_registry,
             outer,
-            Promise::None,
+            promise.beyond_pushdown(),
         )?)),
         Expression::Or(a, b) => Expression::Or(sub(a)?, sub(b)?),
         Expression::And(a, b) => Expression::And(sub(a)?, sub(b)?),
@@ -974,19 +1050,19 @@ fn plan_expression(
             sub(needle)?,
             haystack
                 .iter()
-                .map(|item| plan_expression(item, relations, agg_registry, outer))
+                .map(|item| plan_expression(item, relations, agg_registry, outer, promise))
                 .collect::<Result<Vec<_>, PlanError>>()?,
         ),
         Expression::Coalesce(items) => Expression::Coalesce(
             items
                 .iter()
-                .map(|item| plan_expression(item, relations, agg_registry, outer))
+                .map(|item| plan_expression(item, relations, agg_registry, outer, promise))
                 .collect::<Result<Vec<_>, PlanError>>()?,
         ),
         Expression::FunctionCall(function, args) => Expression::FunctionCall(
             function.clone(),
             args.iter()
-                .map(|arg| plan_expression(arg, relations, agg_registry, outer))
+                .map(|arg| plan_expression(arg, relations, agg_registry, outer, promise))
                 .collect::<Result<Vec<_>, PlanError>>()?,
         ),
         Expression::NamedNode(_)
@@ -1018,6 +1094,7 @@ fn plan_aggregate(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
+    promise: Promise<'_>,
 ) -> Result<AggregateExpression, PlanError> {
     if let AggregateFunction::Custom(iri) = aggregate.function() {
         let iri_str = iri.as_str();
@@ -1043,7 +1120,7 @@ fn plan_aggregate(
     let args = aggregate
         .args()
         .iter()
-        .map(|e| plan_expression(e, relations, agg_registry, outer))
+        .map(|e| plan_expression(e, relations, agg_registry, outer, promise))
         .collect::<Result<Vec<_>, PlanError>>()?;
     // A `FOLD`'s own sort keys are per-row expressions read from the same
     // solutions its arguments are, so they must be planned too: a property
@@ -1052,7 +1129,7 @@ fn plan_aggregate(
     let order_by = aggregate
         .order_by()
         .iter()
-        .map(|order| plan_order_expression(order, relations, agg_registry, outer))
+        .map(|order| plan_order_expression(order, relations, agg_registry, outer, promise))
         .collect::<Result<Vec<_>, PlanError>>()?;
     // `plan_expression` rewrites each argument in place and never changes the
     // argument COUNT, and planning a sort key never removes one, so this can
@@ -1075,14 +1152,23 @@ fn plan_order_expression(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
+    promise: Promise<'_>,
 ) -> Result<OrderExpression, PlanError> {
     Ok(match order {
-        OrderExpression::Asc(expr) => {
-            OrderExpression::Asc(plan_expression(expr, relations, agg_registry, outer)?)
-        }
-        OrderExpression::Desc(expr) => {
-            OrderExpression::Desc(plan_expression(expr, relations, agg_registry, outer)?)
-        }
+        OrderExpression::Asc(expr) => OrderExpression::Asc(plan_expression(
+            expr,
+            relations,
+            agg_registry,
+            outer,
+            promise,
+        )?),
+        OrderExpression::Desc(expr) => OrderExpression::Desc(plan_expression(
+            expr,
+            relations,
+            agg_registry,
+            outer,
+            promise,
+        )?),
     })
 }
 

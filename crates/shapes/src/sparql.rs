@@ -1057,15 +1057,27 @@ impl ShaclExecution {
             .map_err(|e| e.to_string())
     }
 
-    /// Prepare `query` with `parameters` under the registries in `scopes`.
-    fn prepare(query: &str, parameters: &[&str], scopes: &AmbientScopes) -> Result<Self, String> {
+    /// Prepare `query` with `parameters` under the registries in `scopes`, for runs
+    /// under the `lane` rewrite.
+    ///
+    /// The lane is part of the preparation, not only of the run: the SHACL pre-binding
+    /// rewrite binds a parameter in every property-function call in the query — an
+    /// `OPTIONAL` arm, an unprojected sub-`SELECT`, an `EXISTS` body — so a plan
+    /// prepared for it admits calls there with the parameter bound. A handle prepared
+    /// for one lane is only ever run under that lane.
+    fn prepare(
+        query: &str,
+        parameters: &[&str],
+        lane: ShaclPrebinding,
+        scopes: &AmbientScopes,
+    ) -> Result<Self, String> {
         debug_assert!(
             parameters_are_distinct(parameters),
             "a repeated parameter name has no single slot to bind and must fall back to the \
              `&str` door, which keeps a per-variable path for it"
         );
         let options = QueryOptions {
-            prebinding: ShaclPrebinding::None,
+            prebinding: lane,
             functions: scopes.functions(),
             env: &scopes.env,
             bnode_mint_prefix: None,
@@ -1210,16 +1222,20 @@ struct CachedExecution {
     /// The parameter names, in bind order. Owned, because the caller's names can be
     /// borrowed from text the caller itself minted.
     parameters: Box<[Box<str>]>,
+    /// The rewrite the handle was prepared for — see [`ShaclExecution::prepare`].
+    lane: ShaclPrebinding,
     /// The handle, or `None` while a run holds it — see [`checkout_execution`].
     handle: Option<ShaclExecution>,
 }
 
 impl CachedExecution {
-    /// Whether this entry was prepared with exactly `parameters`, in order.
+    /// Whether this entry was prepared with exactly `parameters`, in order, for
+    /// `lane`.
     ///
     /// Compared against the BORROWED names, so a hit allocates nothing.
-    fn declares(&self, parameters: &[&str]) -> bool {
-        self.parameters.len() == parameters.len()
+    fn declares(&self, parameters: &[&str], lane: ShaclPrebinding) -> bool {
+        self.lane == lane
+            && self.parameters.len() == parameters.len()
             && self
                 .parameters
                 .iter()
@@ -1263,22 +1279,23 @@ thread_local! {
 fn checkout_execution(
     query: &str,
     parameters: &[&str],
+    lane: ShaclPrebinding,
     scopes: &AmbientScopes,
 ) -> Result<ShaclExecution, String> {
     let cached = PREPARED_EXECUTIONS.with(|cache| {
         cache.borrow_mut().get_mut(query).and_then(|entries| {
             entries
                 .iter_mut()
-                .find(|entry| entry.declares(parameters))
+                .find(|entry| entry.declares(parameters, lane))
                 .and_then(|entry| entry.handle.take())
         })
     });
     let Some(mut handle) = cached else {
         // A fresh preparation starts with every slot `None` already.
-        return ShaclExecution::prepare(query, parameters, scopes);
+        return ShaclExecution::prepare(query, parameters, lane, scopes);
     };
     if !handle.prepared_under.still_current(scopes) {
-        return ShaclExecution::prepare(query, parameters, scopes);
+        return ShaclExecution::prepare(query, parameters, lane, scopes);
     }
     // Every slot back to unbound, HERE, before the caller writes any of them. This is
     // what stops one focus node's term being answered for the next: a cached handle
@@ -1298,15 +1315,24 @@ fn checkout_execution(
 ///
 /// Restoring into an existing slot allocates nothing; only a genuinely new
 /// `(query, parameters)` pair owns its key.
-fn restore_execution(query: &str, parameters: &[&str], handle: ShaclExecution) {
+fn restore_execution(
+    query: &str,
+    parameters: &[&str],
+    lane: ShaclPrebinding,
+    handle: ShaclExecution,
+) {
     PREPARED_EXECUTIONS.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(entries) = cache.get_mut(query) {
-            if let Some(entry) = entries.iter_mut().find(|entry| entry.declares(parameters)) {
+            if let Some(entry) = entries
+                .iter_mut()
+                .find(|entry| entry.declares(parameters, lane))
+            {
                 entry.handle = Some(handle);
             } else {
                 entries.push(CachedExecution {
                     parameters: own_parameters(parameters),
+                    lane,
                     handle: Some(handle),
                 });
             }
@@ -1319,6 +1345,7 @@ fn restore_execution(query: &str, parameters: &[&str], handle: ShaclExecution) {
             Box::from(query),
             vec![CachedExecution {
                 parameters: own_parameters(parameters),
+                lane,
                 handle: Some(handle),
             }],
         );
@@ -1351,6 +1378,7 @@ fn own_parameters(parameters: &[&str]) -> Box<[Box<str>]> {
 pub(crate) fn with_cached_execution<R>(
     query: &str,
     parameters: &[&str],
+    lane: ShaclPrebinding,
     body: impl FnOnce(&mut ShaclExecution) -> Result<R, String>,
 ) -> Result<R, String> {
     debug_assert!(
@@ -1358,9 +1386,9 @@ pub(crate) fn with_cached_execution<R>(
         "a repeated parameter name must fall back to the `&str` door"
     );
     let scopes = AmbientScopes::snapshot()?;
-    let mut handle = checkout_execution(query, parameters, &scopes)?;
+    let mut handle = checkout_execution(query, parameters, lane, &scopes)?;
     let outcome = body(&mut handle);
-    restore_execution(query, parameters, handle);
+    restore_execution(query, parameters, lane, handle);
     outcome
 }
 
@@ -1383,7 +1411,7 @@ fn run_cached_prepared_view<D: DatasetView + Sync + FocusGraphSource, R>(
     bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    with_cached_execution(query, parameters, |handle| {
+    with_cached_execution(query, parameters, prebind, |handle| {
         bind(handle)?;
         run_bound_view(dataset, handle, prebind, bnode_mint_prefix, visit)
     })
@@ -3151,7 +3179,7 @@ mod tests {
         let _scope = enter_property_function_scope(registry);
         let dataset = dataset_from_ntriples(&[]);
         let query = format!("ASK {{ ?this <{STILL_CURRENT_REL}> ?why }}");
-        with_cached_execution(&query, &["this"], |execution| {
+        with_cached_execution(&query, &["this"], ShaclPrebinding::Applied, |execution| {
             execution.bind(0, TermValue::Iri(focus.to_owned()))?;
             run_bound_ask_with_shacl_prebinding_view(&dataset, execution)
         })

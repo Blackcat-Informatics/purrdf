@@ -36,7 +36,7 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_sparql_eval::{
     BindingPattern, EvalError, ExtensionEnv, InternedOutcome, NativeSparqlEngine, PfArgs, PfArity,
     PfCursor, PfRow, PreparedExecution, PropertyFunction, PropertyFunctionRegistry, QueryOptions,
-    Volatility,
+    ShaclPrebinding, Volatility,
 };
 
 /// The predicate **this fixture** calls the relation by.
@@ -620,4 +620,350 @@ fn a_call_is_admitted_against_what_its_evaluation_hands_it() {
         1
     );
     assert_eq!(relation.bound_invocations(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// A parameter bound to a dataset blank node
+// ---------------------------------------------------------------------------
+
+/// The predicate **this fixture** calls the blank-accepting relation by.
+const OWNS: &str = "https://example.org/pf/owns";
+
+/// A one-in, one-out relation, declared `bf` only, whose subjects are blank nodes.
+///
+/// Each subject it knows owns one distinct literal, keyed by the blank node's label, so
+/// the row an invocation answers with says WHICH blank node it was handed — an oracle
+/// that tells "bound to this blank" from "bound to another blank" and from "invoked
+/// free". A free subject is refused rather than enumerated, so a run that reached the
+/// relation with the parameter free fails instead of answering.
+#[derive(Debug)]
+struct Owns {
+    modes: [BindingPattern; 1],
+    /// Every subject label an invocation was handed, in order.
+    seen: std::sync::Mutex<Vec<String>>,
+}
+
+impl Owns {
+    fn new() -> Self {
+        Self {
+            modes: [BindingPattern::from_code(RELATED_MODE)],
+            seen: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().expect("unpoisoned").clone()
+    }
+
+    /// The literal `label` owns, or `None` for a blank node this relation holds nothing
+    /// for.
+    fn owned(label: &str) -> Option<&'static str> {
+        match label {
+            "b1" => Some("owned by the first"),
+            "b2" => Some("owned by the second"),
+            _ => None,
+        }
+    }
+}
+
+impl PropertyFunction for Owns {
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        PfArity::new(1, 1)
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        &self.modes
+    }
+
+    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+        1
+    }
+
+    fn open(
+        &self,
+        args: &PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        let Some(subject) = args.get(0) else {
+            return Err(EvalError::function(
+                "the subject at position 0 is free; this relation is declared `bf` and cannot \
+                 enumerate subjects"
+                    .to_owned(),
+            ));
+        };
+        let TermValue::Blank { label, .. } = subject else {
+            return Err(EvalError::function(format!(
+                "the subject at position 0 is {subject:?}, not a blank node"
+            )));
+        };
+        self.seen.lock().expect("unpoisoned").push(label.clone());
+        let row = Self::owned(label)
+            .map(|owned| -> PfRow { vec![subject.clone(), TermValue::simple_literal(owned)] });
+        Ok(Box::new(OneRow { row }))
+    }
+}
+
+/// Two blank subjects, each with one `LINKED` triple, so the dataset holds both blank
+/// nodes as terms and a data atom over `LINKED` yields two rows.
+fn blank_dataset() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri(LINKED);
+    for (label, object) in [("b1", "o1"), ("b2", "o2")] {
+        let subject = builder.intern_blank(label, purrdf_core::BlankScope::DEFAULT);
+        let object = builder.intern_iri(&format!("https://example.org/d/{object}"));
+        builder.push_quad(subject, predicate, object, None);
+    }
+    builder.freeze().expect("the fixture dataset freezes")
+}
+
+/// The dataset's own id for the blank node `label`, through the only value-to-id door a
+/// dataset view has, so the id handed to `bind_id` is the dataset's and not invented.
+fn blank_id(dataset: &RdfDataset, label: &str) -> purrdf_core::TermId {
+    dataset
+        .term_id_by_value(&TermValue::blank(label))
+        .expect("the fixture dataset holds the blank node")
+}
+
+/// Run `execution` and render column `column` of every answer row.
+fn answers(
+    engine: &NativeSparqlEngine,
+    execution: &mut PreparedExecution,
+    dataset: &RdfDataset,
+    options: QueryOptions<'_>,
+    column: usize,
+) -> Result<Vec<String>, purrdf_core::RdfDiagnostic> {
+    engine.execute(execution, dataset, options, |outcome| match outcome {
+        InternedOutcome::Solutions(solutions) => solutions
+            .rows()
+            .iter()
+            .map(|row| format!("{:?}", solutions.cell(row, column)))
+            .collect(),
+        InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => {
+            panic!("a SELECT answers with solutions")
+        }
+    })
+}
+
+/// **A declared parameter bound to a dataset blank node reaches the call bound — through
+/// the id door and through the value door — and each blank node answers with its own
+/// row.**
+///
+/// A blank node written into a query PATTERN is an anonymous variable, which is why the
+/// rewrite never writes a blank value into a matched position. A bound VALUE that is a
+/// dataset blank node is a term identity instead, and a call's argument is an invocation
+/// input: the relation must be handed that blank node, bound, exactly as it is handed an
+/// IRI. The relation below serves only a bound subject and answers per blank node, so
+/// every run tells three outcomes apart — refused (invoked free), the first blank's
+/// row, and the second blank's row.
+///
+/// Two shapes are run: the call alone, and the call after a data atom that does not
+/// mention the parameter (the right operand of a `LATERAL`, driven once per data row).
+/// In both, the parameter is bound only by the run, never by the text.
+///
+/// The neighbouring refusal is executed too: the same text prepared WITHOUT the
+/// declaration is refused at prepare, naming the one mode it could not serve.
+#[test]
+fn a_parameter_bound_to_a_dataset_blank_node_reaches_the_call_bound() {
+    let relation = Arc::new(Owns::new());
+    let registered: Arc<dyn PropertyFunction> = Arc::<Owns>::clone(&relation);
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(OWNS, registered);
+    let engine = NativeSparqlEngine::new();
+    let env = environment(&registry);
+    let options = QueryOptions {
+        env: &env,
+        ..QueryOptions::EMPTY
+    };
+    let dataset = blank_dataset();
+
+    let alone = format!("SELECT ?x WHERE {{ ( ?subject ) <{OWNS}> ( ?x ) }}");
+    let after_atom =
+        format!("SELECT ?x ?o WHERE {{ ?s <{LINKED}> ?o . ( ?subject ) <{OWNS}> ( ?x ) }}");
+
+    let refused = engine
+        .prepare_execution(&alone, None, &[], options)
+        .expect_err("undeclared, the subject is free and no declared mode serves it");
+    assert_eq!(refused.code, "native-sparql-property-function", "{refused}");
+    assert!(refused.to_string().contains(RELATED_MODE), "{refused}");
+
+    for (text, rows_per_run) in [(&alone, 1), (&after_atom, 2)] {
+        let mut execution = engine
+            .prepare_execution(text, None, &["subject"], options)
+            .expect("the declared parameter makes the call feasible");
+        let slot = execution.slot("subject").expect("declared");
+        for (label, owned) in [
+            ("b1", "owned by the first"),
+            ("b2", "owned by the second"),
+            ("b1", "owned by the first"),
+        ] {
+            for door in ["id", "value"] {
+                let before = relation.seen().len();
+                match door {
+                    "id" => execution
+                        .bind_id(slot, &*dataset, blank_id(&dataset, label))
+                        .expect("the id door binds a blank node"),
+                    _ => execution
+                        .bind(slot, TermValue::blank(label))
+                        .expect("the value door binds a blank node"),
+                }
+                let answered = answers(&engine, &mut execution, &dataset, options, 0)
+                    .unwrap_or_else(|diagnostic| {
+                        panic!(
+                            "{text} bound to _:{label} through the {door} door must run with \
+                             the call's subject bound: {diagnostic}"
+                        )
+                    });
+                assert_eq!(
+                    answered.len(),
+                    rows_per_run,
+                    "{text}, _:{label}, {door} door: {answered:?}"
+                );
+                assert!(
+                    answered.iter().all(|cell| cell.contains(owned)),
+                    "{text}, _:{label}, {door} door: every row is the one _:{label} owns, \
+                     and no other blank's: {answered:?}"
+                );
+                assert_eq!(
+                    relation.seen()[before..],
+                    vec![label.to_owned(); rows_per_run],
+                    "{text}, _:{label}, {door} door: one invocation per row that drives the \
+                     call, each handed exactly that blank node"
+                );
+            }
+        }
+    }
+}
+
+/// **A blank node the dataset does not hold is bound, reaches the call, and answers
+/// nothing — rather than being refused or answered as another blank.**
+///
+/// The value door takes a term with no dataset behind it. The relation holds nothing
+/// for `_:b9`, so the honest answer is zero rows from exactly one bound invocation;
+/// the neighbouring `_:b2` through the same handle answers its own row, so the empty
+/// answer is not the handle having stopped answering.
+#[test]
+fn a_blank_node_the_dataset_does_not_hold_is_still_bound_into_the_call() {
+    let relation = Arc::new(Owns::new());
+    let registered: Arc<dyn PropertyFunction> = Arc::<Owns>::clone(&relation);
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(OWNS, registered);
+    let engine = NativeSparqlEngine::new();
+    let env = environment(&registry);
+    let options = QueryOptions {
+        env: &env,
+        ..QueryOptions::EMPTY
+    };
+    let dataset = blank_dataset();
+    let text = format!("SELECT ?x WHERE {{ ( ?subject ) <{OWNS}> ( ?x ) }}");
+    let mut execution = engine
+        .prepare_execution(&text, None, &["subject"], options)
+        .expect("the declared parameter makes the call feasible");
+
+    execution
+        .bind_named("subject", TermValue::blank("b9"))
+        .expect("declared");
+    let answered = answers(&engine, &mut execution, &dataset, options, 0)
+        .expect("a blank node the dataset does not hold is still bound into the call");
+    assert!(answered.is_empty(), "{answered:?}");
+    assert_eq!(relation.seen(), ["b9".to_owned()]);
+
+    execution
+        .bind_named("subject", TermValue::blank("b2"))
+        .expect("declared");
+    let answered = answers(&engine, &mut execution, &dataset, options, 0)
+        .expect("the neighbouring held blank node answers");
+    assert_eq!(answered.len(), 1, "{answered:?}");
+    assert!(answered[0].contains("owned by the second"), "{answered:?}");
+    assert_eq!(relation.seen(), ["b9".to_owned(), "b2".to_owned()]);
+}
+
+// ---------------------------------------------------------------------------
+// Admitted under the SHACL pre-binding rewrite
+// ---------------------------------------------------------------------------
+
+/// **Prepared for the SHACL pre-binding rewrite, a call in an `OPTIONAL` arm is admitted
+/// with the parameter bound and invoked bound — for a blank node too — and the handle
+/// refuses to run under the ordinary rewrite, which would invoke it free.**
+///
+/// The SHACL rewrite binds a parameter in every property-function call in the query,
+/// an `OPTIONAL`'s right arm included; the ordinary rewrite stops at that arm. So the
+/// same text is refused when prepared for the ordinary rewrite (it would be invoked
+/// free on every run) and admitted when prepared for the SHACL one. Every run then
+/// answers with the row the bound blank node owns, and a different blank node answers
+/// differently. The handle's one refusal is executed beside its neighbours: run under
+/// the ordinary rewrite it is refused, by the parameter code; run under the SHACL one
+/// it answers; and a handle prepared for the ordinary rewrite still runs under the
+/// SHACL one, whose reach contains it.
+#[test]
+fn a_call_in_an_optional_arm_is_bound_under_the_shacl_rewrite_and_only_there() {
+    let relation = Arc::new(Owns::new());
+    let registered: Arc<dyn PropertyFunction> = Arc::<Owns>::clone(&relation);
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(OWNS, registered);
+    let engine = NativeSparqlEngine::new();
+    let env = environment(&registry);
+    let ordinary = QueryOptions {
+        env: &env,
+        ..QueryOptions::EMPTY
+    };
+    let shacl = QueryOptions {
+        prebinding: ShaclPrebinding::Applied,
+        ..ordinary
+    };
+    let dataset = blank_dataset();
+    let text = format!("SELECT ?x WHERE {{ OPTIONAL {{ ( ?subject ) <{OWNS}> ( ?x ) }} }}");
+
+    let refused = engine
+        .prepare_execution(&text, None, &["subject"], ordinary)
+        .expect_err("the ordinary rewrite does not bind a parameter inside an OPTIONAL arm");
+    assert_eq!(refused.code, "native-sparql-property-function", "{refused}");
+    assert!(refused.to_string().contains(RELATED_MODE), "{refused}");
+
+    let mut execution = engine
+        .prepare_execution(&text, None, &["subject"], shacl)
+        .expect("the SHACL rewrite binds the parameter in the OPTIONAL arm's call");
+    let slot = execution.slot("subject").expect("declared");
+    for (label, owned) in [
+        ("b1", "owned by the first"),
+        ("b2", "owned by the second"),
+        ("b1", "owned by the first"),
+    ] {
+        execution
+            .bind_id(slot, &*dataset, blank_id(&dataset, label))
+            .expect("the id door binds a blank node");
+        let answered = answers(&engine, &mut execution, &dataset, shacl, 0)
+            .unwrap_or_else(|diagnostic| panic!("_:{label} under the SHACL rewrite: {diagnostic}"));
+        assert_eq!(answered.len(), 1, "_:{label}: {answered:?}");
+        assert!(answered[0].contains(owned), "_:{label}: {answered:?}");
+        assert_eq!(relation.seen().last(), Some(&label.to_owned()));
+    }
+    let invoked = relation.seen().len();
+
+    let wrong_lane = answers(&engine, &mut execution, &dataset, ordinary, 0)
+        .expect_err("a handle admitted for the SHACL rewrite does not run under the other one");
+    assert_eq!(
+        wrong_lane.code, "native-sparql-execution-parameter",
+        "{wrong_lane}"
+    );
+    assert_eq!(
+        relation.seen().len(),
+        invoked,
+        "the refused run never reached the relation"
+    );
+
+    let core = format!("SELECT ?x WHERE {{ ( ?subject ) <{OWNS}> ( ?x ) }}");
+    let mut plain = engine
+        .prepare_execution(&core, None, &["subject"], ordinary)
+        .expect("a call at the core is bound under the ordinary rewrite");
+    plain
+        .bind(0, TermValue::blank("b2"))
+        .expect("the value door binds a blank node");
+    let answered = answers(&engine, &mut plain, &dataset, shacl, 0)
+        .expect("a handle prepared for the ordinary rewrite runs under the SHACL one");
+    assert_eq!(answered.len(), 1, "{answered:?}");
+    assert!(answered[0].contains("owned by the second"), "{answered:?}");
 }
