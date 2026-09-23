@@ -882,6 +882,23 @@ fn main() {
             colliding,
         );
     }
+    // The same weight, drained. Thirty-two rows certify inside the early, short
+    // plateaus; past rank 940 every contribution is zero, so a drain holds the
+    // whole remaining universe in the frontier until every stream is exhausted
+    // and then emits it row by row. That is the one place in this grid where the
+    // frontier is as wide as the streams, and the peak here is expected to follow
+    // the stream length. Every total stays under `PULL_BUDGET` at three pulls per
+    // candidate, so each row reports a complete drain.
+    println!("[fusion_frontier_alloc] --- collided regime (weight 1e-9), drained ---");
+    for total in [1_000_u64, 4_000, 16_000] {
+        let rows = usize::try_from(total).expect("the grid's totals fit a usize");
+        phase_at_weight(
+            &format!("strata=3 rows={total} stream={total} collided drained"),
+            total,
+            rows,
+            colliding,
+        );
+    }
     // Disjoint strata, each producer declaring the block it draws from. This is
     // the configuration the reading bound is about: `pulled` should stay flat
     // as the streams grow by three orders of magnitude, where without a

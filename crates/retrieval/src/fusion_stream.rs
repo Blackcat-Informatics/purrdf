@@ -119,7 +119,9 @@
 //! That one grows with every row a stream emits, duplicated per stream; this
 //! one grows with the rows the *fusion* returns, once for all strata together.
 
+use core::borrow::Borrow;
 use core::fmt;
+use core::ops::Bound;
 use std::collections::{BTreeMap, BTreeSet, HashMap, btree_map};
 
 use purrdf_sparql_eval::{
@@ -1646,11 +1648,13 @@ struct CandidateState {
     /// The budget's memory. A producer's answer about one candidate is a
     /// standing fact — its term universe does not change while its own rows are
     /// being read — so asking twice would be paying twice for one answer, and
-    /// the loop below revisits the same frontier candidate on every pass. With
-    /// this, each (candidate, stream) pair costs at most one lookup for the
+    /// the same frontier candidate is a candidate for a lookup on every pass.
+    /// With this, each (candidate, stream) pair costs at most one lookup for the
     /// whole read; without it the cost is that pair times the number of passes,
     /// which is quadratic in exactly the configuration the mechanism exists to
-    /// make cheap.
+    /// make cheap. It is also what retires the pair from selection's own
+    /// bookkeeping: a stream asked about a candidate leaves that candidate's
+    /// `pending` set ([`Signature`]), so a pass never reads it again.
     ///
     /// A superset of [`Self::excluded`] rather than a partition with it: the
     /// answer and the fact that an answer was received are different questions,
@@ -1706,6 +1710,251 @@ impl CandidateState {
             .map(|(_, rank, _)| *rank)
             .min()
             .unwrap_or(u64::MAX)
+    }
+}
+
+/// A set of stream indexes, held as a bitset so a signature is compared and
+/// ordered without allocating.
+///
+/// Every set one fusion builds has the same width — the number of streams it
+/// was handed — so every set one fusion builds is the same variant, and the
+/// derived order is a total order over them. Sixty-four streams or fewer, which
+/// is every fusion a profile of distinct strata describes in practice, fit one
+/// word inline; a wider fusion pays one small allocation per set and is ordered
+/// word by word, which is still a fixed order independent of any hashing.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum StreamSet {
+    /// At most sixty-four streams: bit `i` is stream `i`.
+    Narrow(u64),
+    /// More than sixty-four: word `i / 64`, bit `i % 64`.
+    Wide(Box<[u64]>),
+}
+
+impl StreamSet {
+    /// The empty set over `width` streams.
+    fn empty(width: usize) -> Self {
+        if width <= 64 {
+            Self::Narrow(0)
+        } else {
+            Self::Wide(vec![0; width.div_ceil(64)].into_boxed_slice())
+        }
+    }
+
+    fn insert(&mut self, index: usize) {
+        match self {
+            Self::Narrow(word) => *word |= 1 << index,
+            Self::Wide(words) => words[index / 64] |= 1 << (index % 64),
+        }
+    }
+
+    fn contains(&self, index: usize) -> bool {
+        match self {
+            Self::Narrow(word) => word & (1 << index) != 0,
+            Self::Wide(words) => words[index / 64] & (1 << (index % 64)) != 0,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Narrow(word) => *word == 0,
+            Self::Wide(words) => words.iter().all(|word| *word == 0),
+        }
+    }
+
+    /// Whether the two sets share a stream. Both are built over one fusion's
+    /// width, so a mixed pair never arises; it is answered `false` rather than
+    /// by a panic, because a disjointness claim about sets that share nothing
+    /// by construction is the true one.
+    fn intersects(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Narrow(left), Self::Narrow(right)) => left & right != 0,
+            (Self::Wide(left), Self::Wide(right)) => {
+                left.iter().zip(right.iter()).any(|(l, r)| l & r != 0)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Which streams a frontier candidate is still waiting on, as a pure function
+/// of its own state and the declarations — the key [`SelectionIndex`] groups
+/// candidates under.
+///
+/// Neither half mentions whether a stream is still open. That is deliberate:
+/// streams close for every candidate at once, and a key that moved when they did
+/// would have to re-file the whole frontier. Open-ness is instead intersected
+/// in at the moment a question is asked, once per group rather than once per
+/// candidate.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Signature {
+    /// The streams that have not named this candidate and are still licensed
+    /// to ([`FusionStream::may_still_name`]).
+    ///
+    /// Intersected with the open streams it is exactly what
+    /// [`FusionStream::is_final`] and [`FusionStream::upper_bound`] range over:
+    /// a candidate is final when the intersection is empty, and `U(x)` is
+    /// `L(x)` plus the heads of the streams in it.
+    reach: StreamSet,
+    /// The streams in `reach` that declared an exclusion basis and have not yet
+    /// been asked about this candidate — the pairs
+    /// [`FusionStream::observe_exclusions`] may still pay a lookup for.
+    pending: StreamSet,
+}
+
+/// A frontier candidate's place in the declared emission order: score
+/// descending, then best rank ascending, then canonical term bytes ascending.
+///
+/// The order is [`FusionStream::is_better`], spelled as an [`Ord`] so an
+/// ordered set can hold it. It is total because the term is unique within the
+/// frontier.
+#[derive(Clone, Debug)]
+struct RankKey {
+    score: Fixed,
+    best_rank: u64,
+    id: CandidateId,
+}
+
+/// A [`RankKey`] read through borrowed parts, so a key can be found in — and
+/// taken out of — an ordered set without cloning the term it carries.
+trait RankOrder {
+    fn score(&self) -> Fixed;
+    fn best_rank(&self) -> u64;
+    fn term(&self) -> &str;
+}
+
+/// The one comparison both [`RankKey`] and its borrowed probe are ordered by,
+/// so the set's order and the lookup's order cannot drift apart.
+fn rank_order(left: &dyn RankOrder, right: &dyn RankOrder) -> core::cmp::Ordering {
+    right
+        .score()
+        .cmp(&left.score())
+        .then_with(|| left.best_rank().cmp(&right.best_rank()))
+        .then_with(|| left.term().cmp(right.term()))
+}
+
+impl RankOrder for RankKey {
+    fn score(&self) -> Fixed {
+        self.score
+    }
+    fn best_rank(&self) -> u64 {
+        self.best_rank
+    }
+    fn term(&self) -> &str {
+        self.id.as_str()
+    }
+}
+
+/// A lookup key for a [`RankKey`], borrowing the term rather than owning it.
+struct RankProbe<'a> {
+    score: Fixed,
+    best_rank: u64,
+    term: &'a str,
+}
+
+impl RankOrder for RankProbe<'_> {
+    fn score(&self) -> Fixed {
+        self.score
+    }
+    fn best_rank(&self) -> u64 {
+        self.best_rank
+    }
+    fn term(&self) -> &str {
+        self.term
+    }
+}
+
+impl PartialEq for RankKey {
+    fn eq(&self, other: &Self) -> bool {
+        rank_order(self, other).is_eq()
+    }
+}
+
+impl Eq for RankKey {}
+
+impl PartialOrd for RankKey {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RankKey {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        rank_order(self, other)
+    }
+}
+
+impl<'a> Borrow<dyn RankOrder + 'a> for RankKey {
+    fn borrow(&self) -> &(dyn RankOrder + 'a) {
+        self
+    }
+}
+
+impl PartialEq for dyn RankOrder + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        rank_order(self, other).is_eq()
+    }
+}
+
+impl Eq for dyn RankOrder + '_ {}
+
+impl PartialOrd for dyn RankOrder + '_ {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for dyn RankOrder + '_ {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        rank_order(self, other)
+    }
+}
+
+/// The frontier again, filed so selection never walks it.
+///
+/// Every frontier candidate appears here exactly once, under its current
+/// [`Signature`] and in [`RankKey`] order within it. Written at the three places
+/// a candidate's state changes — [`FusionStream::pull`] (a contribution and a
+/// namer), [`FusionStream::observe_exclusions`] (an answer) and
+/// [`FusionStream::next`] (an emission) — and nowhere else.
+///
+/// # Why grouping by signature is enough
+///
+/// Two questions are asked of the frontier on every pass of the row loop, and
+/// both are about extremes. *Which final candidate comes first?* — final is a
+/// signature whose `reach` meets no open stream, and within one group the first
+/// key is the best. *How high can any unfinished candidate still climb?* — every
+/// member of one group adds the heads of the same streams to its score, so the
+/// group's best score bounds all of them. Each pass therefore reads one key per
+/// group instead of one state per candidate, and the heads moving on every pull
+/// moves no key at all.
+///
+/// # What it costs
+///
+/// One [`RankKey`] per frontier candidate — its score, its best rank and a copy
+/// of its term — plus one signature per distinct group. The term is cloned once,
+/// when the candidate enters the frontier, and is moved rather than cloned on
+/// every later re-filing. The number of groups is bounded by the number of
+/// distinct (`reach`, `pending`) pairs, which is at most the frontier's size and
+/// at most `3^streams`, and is a handful for every fixture this crate carries.
+#[derive(Debug, Default)]
+struct SelectionIndex {
+    groups: BTreeMap<Signature, BTreeSet<RankKey>>,
+}
+
+impl SelectionIndex {
+    fn insert(&mut self, signature: Signature, key: RankKey) {
+        self.groups.entry(signature).or_default().insert(key);
+    }
+
+    /// Take the key `probe` names out of the `signature` group, dropping the
+    /// group once it is empty so a pass never visits a group with no members.
+    fn take(&mut self, signature: &Signature, probe: &RankProbe<'_>) -> Option<RankKey> {
+        let members = self.groups.get_mut(signature)?;
+        let key = members.take(probe as &dyn RankOrder)?;
+        if members.is_empty() {
+            self.groups.remove(signature);
+        }
+        Some(key)
     }
 }
 
@@ -1996,6 +2245,18 @@ pub struct FusionStream<S: RankedStream> {
     degradation: Option<Box<Degradation>>,
     statuses: BTreeMap<Iri, ProducerStatus>,
     frontier: BTreeMap<CandidateId, CandidateState>,
+    /// The frontier filed by what selection asks of it, so a pass of the row
+    /// loop reads one key per group rather than one state per candidate. See
+    /// [`SelectionIndex`].
+    selection: SelectionIndex,
+    /// How many index groups, index keys and frontier states selection has
+    /// read over this fusion's life: the work [`Self::select_emittable`],
+    /// [`Self::observe_exclusions`] and the tie scan in [`Self::next`] did.
+    ///
+    /// A count and not a time, so it is exact on any machine and is what this
+    /// module's tests hold the selection cost to. It changes nothing a caller
+    /// is answered, and is surfaced only through this type's `Debug`.
+    selection_visits: u64,
     /// Every candidate that has left the frontier by being certified, and the
     /// streams that named it while it was there.
     ///
@@ -2038,6 +2299,7 @@ impl<S: RankedStream> fmt::Debug for FusionStream<S> {
             .field("strata", &strata)
             .field("profile", &self.profile)
             .field("frontier_len", &self.frontier.len())
+            .field("selection_visits", &self.selection_visits)
             .field("threshold", &self.threshold)
             .finish_non_exhaustive()
     }
@@ -2207,6 +2469,8 @@ impl<S: RankedStream> FusionStream<S> {
             degradation,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
+            selection: SelectionIndex::default(),
+            selection_visits: 0,
             emitted: EmittedTable::default(),
             threshold: Fixed::ZERO,
             last_row_won_a_tie: false,
@@ -2242,23 +2506,26 @@ impl<S: RankedStream> FusionStream<S> {
             // computing it first costs nothing and asking with it in hand is what
             // keeps a candidate that cannot win from being looked up at all.
             self.observe_exclusions().await?;
-            if let Some(id) = self.select_emittable()? {
+            let mut visits = 0;
+            let selected = self.select_emittable(&mut visits);
+            self.selection_visits += visits;
+            if let Some(id) = selected? {
                 let state = self.frontier.remove(&id).ok_or_else(|| {
                     FusionError::MalformedProfile(
                         "selected candidate vanished from the frontier".to_owned(),
                     )
                 })?;
+                self.unfile(&id, &state)?;
                 // Whether this row won its place on score or on the tie-break.
-                // Scanned here rather than counted inside `select_emittable`,
-                // because that pass filters an exactly-tied rival out as
-                // dominated — `outranks` settles a tie by the declared order —
-                // so the loser is already gone by the time a best is chosen. A
-                // rival must be final to have been a real contender: one that
-                // can still gain rank is not yet tied with anything.
-                self.last_row_won_a_tie = self
-                    .frontier
-                    .values()
-                    .any(|rival| rival.lower_bound == state.lower_bound && self.is_final(rival));
+                // Asked here rather than inside `select_emittable`, because that
+                // pass settles an exactly-tied rival by the declared order —
+                // `outranks` does — so the loser is never a contender by the time
+                // a best is chosen. A rival must be final to have been a real
+                // contender: one that can still gain rank is not yet tied with
+                // anything.
+                let mut visits = 0;
+                self.last_row_won_a_tie = self.has_final_rival_at(state.lower_bound, &mut visits);
+                self.selection_visits += visits;
                 // The candidate leaves the frontier here and nowhere else, so
                 // this is the only place the record of its emission can be
                 // written. `seen_streams` is **moved** out of a state that is
@@ -3220,28 +3487,10 @@ impl<S: RankedStream> FusionStream<S> {
             return Ok(());
         }
         // Built at `&self`, over facts this pass has already settled.
-        let mut wanted: Vec<(CandidateId, usize)> = Vec::new();
-        for (id, state) in &self.frontier {
-            if self.is_final(state) {
-                continue;
-            }
-            if self.upper_bound(state)? <= self.threshold {
-                continue;
-            }
-            for index in 0..self.streams.len() {
-                if !self.exclusion_bases[index].is_declared() {
-                    continue;
-                }
-                if self.heads[index].is_none() || state.seen_streams.contains(&index) {
-                    continue;
-                }
-                if state.asked.contains(&index) || !self.may_still_name(index, state) {
-                    continue;
-                }
-                wanted.push((id.clone(), index));
-            }
-        }
-        for (id, index) in wanted {
+        let mut visits = 0;
+        let wanted = self.wanted_exclusions(&mut visits);
+        self.selection_visits += visits;
+        for (id, index) in wanted? {
             // Re-read at the moment of asking rather than trusting the selection
             // pass. An earlier answer in this very loop can have settled the
             // candidate — two streams blocking it, the first of them excluding it
@@ -3263,6 +3512,9 @@ impl<S: RankedStream> FusionStream<S> {
             // the frontier exactly as it found it — the discipline every other
             // refusal in this engine keeps.
             self.check_verdict_against_declaration(index, &id, verdict)?;
+            // The signature the candidate is filed under before the answer is
+            // recorded, so it can be re-filed under the one the answer leaves.
+            let before = self.frontier.get(&id).map(|state| self.signature(state));
             let Some(state) = self.frontier.get_mut(&id) else {
                 // Unreachable on this pass: nothing between the collection above
                 // and here removes a frontier entry. Answered as a no-op rather
@@ -3275,8 +3527,76 @@ impl<S: RankedStream> FusionStream<S> {
                 state.excluded.insert(index);
             }
             self.exclusion_lookups[index] += 1;
+            if let Some(before) = before {
+                self.refile(&id, &before)?;
+            }
         }
         Ok(())
+    }
+
+    /// The (candidate, stream) pairs [`Self::observe_exclusions`] will ask
+    /// about on this pass, in frontier order and then stream order.
+    ///
+    /// Exactly the pairs a walk of the whole frontier selects — not final,
+    /// `U(x) > T`, and the stream open, not yet a namer, still licensed, basis
+    /// declared, not yet asked — read off [`SelectionIndex`] instead. A group
+    /// whose `pending` streams are all closed is skipped whole; within a group
+    /// that has one open, members are read best score first and the read stops
+    /// at the first whose `U(x)` does not clear `T`, because every member of a
+    /// group adds the same heads and the rest can only score lower. What is read
+    /// is therefore what is asked, plus one key per group, and a pair once asked
+    /// leaves `pending` for good.
+    ///
+    /// The order is re-established by sorting the (small) selection, because
+    /// the lookups are calls into producers and the order they arrive in is
+    /// something a producer can observe.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::Overflow`] exactly when the walk it replaces would have
+    /// refused: that walk computed `U(x)` for every candidate that is not final,
+    /// and since every contribution is non-negative, some member of a group
+    /// overflows precisely when its best-scoring member does.
+    fn wanted_exclusions(
+        &self,
+        visits: &mut u64,
+    ) -> Result<Vec<(CandidateId, usize)>, FusionError> {
+        let open = self.open_streams();
+        let mut wanted: Vec<(CandidateId, usize)> = Vec::new();
+        for (signature, members) in &self.selection.groups {
+            *visits += 1;
+            if !signature.reach.intersects(&open) {
+                continue;
+            }
+            let heads = self.heads_within(&signature.reach)?;
+            let Some(first) = members.first() else {
+                continue;
+            };
+            first
+                .score
+                .checked_add(heads)
+                .map_err(|_| FusionError::Overflow)?;
+            if !signature.pending.intersects(&open) {
+                continue;
+            }
+            for member in members {
+                *visits += 1;
+                let reach = member
+                    .score
+                    .checked_add(heads)
+                    .map_err(|_| FusionError::Overflow)?;
+                if reach <= self.threshold {
+                    break;
+                }
+                for index in 0..self.streams.len() {
+                    if signature.pending.contains(index) && open.contains(index) {
+                        wanted.push((member.id.clone(), index));
+                    }
+                }
+            }
+        }
+        wanted.sort_unstable();
+        Ok(wanted)
     }
 
     /// Hold one exclusion verdict against the declaration its producer made at
@@ -3642,13 +3962,110 @@ impl<S: RankedStream> FusionStream<S> {
     /// over strata that disagree symmetrically produces exact ties routinely —
     /// one candidate at ranks 1 and 2, another at 2 and 1, sum to the same value
     /// — and the cost is the bounded frontier this type exists to provide.
-    fn select_emittable(&self) -> Result<Option<CandidateId>, FusionError> {
+    ///
+    /// # Only one candidate can ever be the answer
+    ///
+    /// A final candidate's `U` is its `L`: every stream that could still add to
+    /// it is closed. So a final rival outranks a final candidate exactly when it
+    /// comes first in the declared order ([`Self::outranks`]'s equal case, and
+    /// its strict cases, collapse to [`Self::is_better`]). The best final
+    /// candidate `x*` therefore dominates every other final one, and is itself
+    /// dominated only by a candidate that is **not** final with `U(y) >= L(x*)`
+    /// — [`Self::outranks`] waits on an unfinished rival that can reach a tie.
+    /// The answer is `x*` when it clears the threshold and no unfinished `U`
+    /// reaches it, and nothing otherwise: the same answer the pairwise
+    /// definition gives, asked as two extremes.
+    ///
+    /// Both extremes are read off [`SelectionIndex`], one key per group, so a
+    /// pass costs the number of groups and not the frontier's width. A walk of
+    /// the frontier on every pass is what this replaces, and it is quadratic in
+    /// exactly the configuration it cannot avoid: a plateau of equal
+    /// contributions, where no final candidate clears the threshold and the
+    /// frontier grows by one candidate per pull until the plateau ends.
+    ///
+    /// # The one case answered by the walk
+    ///
+    /// Where some unfinished candidate's `U` leaves the fixed-point range, the
+    /// pairwise walk ([`Self::select_emittable_by_scan`]) answers instead,
+    /// because whether it refuses depends on the order it meets that candidate
+    /// in, and that order is part of the answer. Every contribution is at most
+    /// half its stratum's weight and a profile's ceiling must fit, so the range
+    /// is only left by a hand-built stream set that repeats a stratum at weights
+    /// near its top.
+    fn select_emittable(&self, visits: &mut u64) -> Result<Option<CandidateId>, FusionError> {
+        if self.frontier.is_empty() {
+            return Ok(None);
+        }
+        let open = self.open_streams();
+        let mut best: Option<&RankKey> = None;
+        for (signature, members) in &self.selection.groups {
+            *visits += 1;
+            if signature.reach.intersects(&open) {
+                continue;
+            }
+            if let Some(first) = members.first()
+                && best.is_none_or(|incumbent| first < incumbent)
+            {
+                best = Some(first);
+            }
+        }
+        let Some(best) = best else {
+            return Ok(None);
+        };
+        if open.is_empty() {
+            return Ok(Some(best.id.clone()));
+        }
+        if best.score <= self.threshold {
+            return Ok(None);
+        }
+        let mut ceiling: Option<Fixed> = None;
+        for (signature, members) in &self.selection.groups {
+            *visits += 1;
+            if !signature.reach.intersects(&open) {
+                continue;
+            }
+            let Some(first) = members.first() else {
+                continue;
+            };
+            let reach = self.heads_within(&signature.reach).and_then(|heads| {
+                first
+                    .score
+                    .checked_add(heads)
+                    .map_err(|_| FusionError::Overflow)
+            });
+            let Ok(reach) = reach else {
+                return self.select_emittable_by_scan(visits);
+            };
+            if ceiling.is_none_or(|highest| reach > highest) {
+                ceiling = Some(reach);
+            }
+        }
+        if ceiling.is_some_and(|highest| highest >= best.score) {
+            return Ok(None);
+        }
+        Ok(Some(best.id.clone()))
+    }
+
+    /// [`Self::select_emittable`] by its pairwise definition: every final
+    /// candidate above the threshold, checked against every rival with
+    /// [`Self::outranks`], the survivors ordered by [`Self::is_better`].
+    ///
+    /// Quadratic in the frontier on every pass, and kept for the one case whose
+    /// answer is the order of this walk: an unfinished rival whose `U` leaves the
+    /// fixed-point range, which this refuses or not according to whether it
+    /// meets that rival before a dominating one. See
+    /// [`Self::select_emittable`].
+    fn select_emittable_by_scan(
+        &self,
+        visits: &mut u64,
+    ) -> Result<Option<CandidateId>, FusionError> {
         if self.frontier.is_empty() {
             return Ok(None);
         }
         let active = self.heads.iter().any(Option::is_some);
         let mut best: Option<CandidateId> = None;
         for (id, state) in &self.frontier {
+            *visits += 1;
             if !self.is_final(state) {
                 continue;
             }
@@ -3658,6 +4075,7 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 let mut dominated = false;
                 for (other_id, other) in &self.frontier {
+                    *visits += 1;
                     if other_id == id {
                         continue;
                     }
@@ -3681,6 +4099,133 @@ impl<S: RankedStream> FusionStream<S> {
             }
         }
         Ok(best)
+    }
+
+    /// Whether any final frontier candidate scores exactly `score`.
+    ///
+    /// The question [`Self::next`] asks of the rivals a just-emitted row left
+    /// behind. A final candidate's group is one whose `reach` meets no open
+    /// stream, and within a group the first key at or after `score` is the
+    /// best-placed one scoring at most `score`, so one ordered lookup per final
+    /// group answers it.
+    fn has_final_rival_at(&self, score: Fixed, visits: &mut u64) -> bool {
+        let open = self.open_streams();
+        let probe = RankProbe {
+            score,
+            best_rank: 0,
+            term: "",
+        };
+        let from: &dyn RankOrder = &probe;
+        self.selection.groups.iter().any(|(signature, members)| {
+            *visits += 1;
+            !signature.reach.intersects(&open)
+                && members
+                    .range::<dyn RankOrder, _>((Bound::Included(from), Bound::Unbounded))
+                    .next()
+                    .is_some_and(|rival| rival.score == score)
+        })
+    }
+
+    /// The streams whose head is still open.
+    fn open_streams(&self) -> StreamSet {
+        let mut open = StreamSet::empty(self.streams.len());
+        for (index, head) in self.heads.iter().enumerate() {
+            if head.is_some() {
+                open.insert(index);
+            }
+        }
+        open
+    }
+
+    /// The summed contribution of the open heads of the streams in `reach`:
+    /// what [`Self::upper_bound`] adds to `L(x)` for a candidate whose
+    /// signature's `reach` this is, summed in the same stream order.
+    fn heads_within(&self, reach: &StreamSet) -> Result<Fixed, FusionError> {
+        let mut sum = Fixed::ZERO;
+        for (index, head) in self.heads.iter().enumerate() {
+            if !reach.contains(index) {
+                continue;
+            }
+            if let Some(head) = head {
+                sum = sum
+                    .checked_add(head.contribution)
+                    .map_err(|_| FusionError::Overflow)?;
+            }
+        }
+        Ok(sum)
+    }
+
+    /// The [`Signature`] `state` is filed under: which streams it still waits
+    /// on, and which of those may still be asked about it.
+    ///
+    /// Spelled with [`Self::may_still_name`], the one licence
+    /// [`Self::is_final`] and [`Self::upper_bound`] ask, so the index and the
+    /// definitions it replaces cannot disagree about a candidate.
+    fn signature(&self, state: &CandidateState) -> Signature {
+        let width = self.streams.len();
+        let mut reach = StreamSet::empty(width);
+        let mut pending = StreamSet::empty(width);
+        for index in 0..width {
+            if state.seen_streams.contains(&index) || !self.may_still_name(index, state) {
+                continue;
+            }
+            reach.insert(index);
+            if self.exclusion_bases[index].is_declared() && !state.asked.contains(&index) {
+                pending.insert(index);
+            }
+        }
+        Signature { reach, pending }
+    }
+
+    /// The refusal for an index that has lost track of a frontier candidate.
+    ///
+    /// Unreachable: every frontier write files its candidate in the same call.
+    /// Answered as the engine-invariant error the frontier's own vanished
+    /// candidate is, rather than by a panic.
+    fn unfiled(id: &CandidateId) -> FusionError {
+        FusionError::MalformedProfile(format!(
+            "frontier candidate {} is missing from the selection index",
+            id.as_str()
+        ))
+    }
+
+    /// Take the candidate `state` describes out of [`SelectionIndex`], as it
+    /// leaves the frontier.
+    fn unfile(&mut self, id: &CandidateId, state: &CandidateState) -> Result<(), FusionError> {
+        let signature = self.signature(state);
+        let probe = RankProbe {
+            score: state.lower_bound,
+            best_rank: state.best_rank(),
+            term: id.as_str(),
+        };
+        self.selection
+            .take(&signature, &probe)
+            .map(drop)
+            .ok_or_else(|| Self::unfiled(id))
+    }
+
+    /// Re-file `id`, filed under `before`, under the signature its state now
+    /// has. Its score and best rank are unchanged — only an answer, not a row,
+    /// moved it — so its key moves between groups as it is.
+    fn refile(&mut self, id: &CandidateId, before: &Signature) -> Result<(), FusionError> {
+        let Some(state) = self.frontier.get(id) else {
+            return Ok(());
+        };
+        let after = self.signature(state);
+        if after == *before {
+            return Ok(());
+        }
+        let probe = RankProbe {
+            score: state.lower_bound,
+            best_rank: state.best_rank(),
+            term: id.as_str(),
+        };
+        let key = self
+            .selection
+            .take(before, &probe)
+            .ok_or_else(|| Self::unfiled(id))?;
+        self.selection.insert(after, key);
+        Ok(())
     }
 
     /// The blocks stream `index` declared, rendered in canonical order for a
@@ -4140,6 +4685,40 @@ impl<S: RankedStream> FusionStream<S> {
                 max: self.profile.max_contributions(),
             });
         }
+        // The last refusal, asked before anything is written so a refused row
+        // leaves the frontier and its index exactly as it found them.
+        //
+        // The stratum is named here for the same reason it is named at the
+        // post-emission site: one refusal, one meaning, and a consumer that
+        // cannot tell which of the two places caught the repeat also does not
+        // have to.
+        if existing.is_some_and(|state| state.seen_streams.contains(&index)) {
+            return Err(ProtocolError::DuplicateItem {
+                item: head.item.as_str().to_owned(),
+                stratum: stratum.as_str().to_owned(),
+            }
+            .into());
+        }
+        // The candidate's key in the selection index, taken out now and filed
+        // again below under the state this row leaves it in. A candidate already
+        // in the frontier gives back the term its key already owns, so a row
+        // naming it clones nothing; a new candidate's term is cloned here, once
+        // for its whole stay, because the index and the frontier each hold one.
+        let indexed = match existing {
+            Some(state) => {
+                let signature = self.signature(state);
+                let probe = RankProbe {
+                    score: state.lower_bound,
+                    best_rank: state.best_rank(),
+                    term: head.item.as_str(),
+                };
+                self.selection
+                    .take(&signature, &probe)
+                    .ok_or_else(|| Self::unfiled(&head.item))?
+                    .id
+            }
+            None => head.item.clone(),
+        };
         match self.frontier.entry(head.item) {
             btree_map::Entry::Vacant(vacant) => {
                 // A candidate nobody has contributed to yet cannot collide, so
@@ -4157,25 +4736,10 @@ impl<S: RankedStream> FusionStream<S> {
                 state.block = placement;
             }
             btree_map::Entry::Occupied(mut occupied) => {
-                if !occupied.get_mut().seen_streams.insert(index) {
-                    // Refused before anything is written, so the frontier is
-                    // left exactly as it was found — the same discipline the
-                    // two profile bounds above keep.
-                    //
-                    // The stratum is named here for the same reason it is named
-                    // at the post-emission site: one refusal, one meaning, and
-                    // a consumer that cannot tell which of the two places
-                    // caught the repeat also does not have to. The item is read
-                    // off the occupied entry's key rather than off `head`,
-                    // because the frontier took ownership of the term when this
-                    // row's predecessor put it there.
-                    return Err(ProtocolError::DuplicateItem {
-                        item: occupied.key().as_str().to_owned(),
-                        stratum: stratum.as_str().to_owned(),
-                    }
-                    .into());
-                }
                 let state = occupied.get_mut();
+                // A new namer by construction: the repeat was refused above,
+                // before the index was touched.
+                state.seen_streams.insert(index);
                 state.lower_bound = lower_bound;
                 state
                     .contributions
@@ -4189,8 +4753,516 @@ impl<S: RankedStream> FusionStream<S> {
                 }
             }
         }
+        let state = self
+            .frontier
+            .get(&indexed)
+            .ok_or_else(|| Self::unfiled(&indexed))?;
+        let signature = self.signature(state);
+        let key = RankKey {
+            score: state.lower_bound,
+            best_rank: state.best_rank(),
+            id: indexed,
+        };
+        self.selection.insert(signature, key);
 
         self.heads[index] = self.fetch(index).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Selection read off [`SelectionIndex`] against the pairwise definition it
+    //! replaces, pass by pass, and the work it does counted rather than timed.
+
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::task::{Context, Poll, Waker};
+
+    use purrdf_sparql_eval::{
+        CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, RankFidelity,
+    };
+    use purrdf_text::Fixed;
+
+    use super::{FusedRow, FusionStream, RankOrder, RankProbe};
+    use crate::error::FusionError;
+    use crate::fusion_profile::{DecayRule, FusionProfile};
+    use crate::iri::{Iri, Term};
+    use crate::ranked_stream::{
+        ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock,
+        StreamContract,
+    };
+    use crate::reciprocal_rank::contribution;
+
+    /// The smoothing constant every fixture here fuses under.
+    const K: u32 = 60;
+
+    /// A weight of `10^-9`, at which adjacent ranks share a contribution from
+    /// the first pair and every rank past 940 contributes exactly zero — the
+    /// plateau regime, and past rank 940 one plateau as long as the streams.
+    const COLLIDING: Fixed = Fixed::from_raw(1_000);
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut context = Context::from_waker(Waker::noop());
+        let mut future = Box::pin(future);
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => output,
+            Poll::Pending => panic!("the fixture streams are synchronous and never pend"),
+        }
+    }
+
+    fn stratum(index: usize) -> Iri {
+        Iri::parse(&format!("http://example.org/stratum/{index}"))
+            .expect("the fixture IRIs are valid")
+    }
+
+    fn block(name: &str) -> DomainTag {
+        DomainTag::parse(&format!("http://example.org/block/{name}"))
+            .expect("the fixture tag is valid")
+    }
+
+    /// A stream over a fixed universe, emitted in the given order.
+    struct Listed {
+        items: Vec<Term>,
+        holds: BTreeSet<Term>,
+        emitted: usize,
+        weight: Fixed,
+        k: u32,
+        domains: CandidateDomains,
+        /// The block every row is drawn from, where the stream declared one.
+        drawn_from: Option<DomainTag>,
+        basis: ExclusionBasis,
+    }
+
+    impl Listed {
+        fn new(items: Vec<Term>, weight: Fixed) -> Self {
+            let holds = items.iter().cloned().collect();
+            Self {
+                items,
+                holds,
+                emitted: 0,
+                weight,
+                k: K,
+                domains: CandidateDomains::Unrestricted,
+                drawn_from: None,
+                basis: ExclusionBasis::Unavailable,
+            }
+        }
+
+        /// The same stream declaring that it draws every row from block `name`.
+        fn declaring(mut self, name: &str) -> Self {
+            self.domains = CandidateDomains::within([block(name)]);
+            self.drawn_from = Some(block(name));
+            self
+        }
+
+        /// The same stream declaring the shared block and answering lookups
+        /// from the universe it holds.
+        fn answering(mut self) -> Self {
+            self = self.declaring("shared");
+            self.basis = ExclusionBasis::Membership;
+            self
+        }
+    }
+
+    // The trait's methods are `async`; this fixture's body is synchronous.
+    #[allow(clippy::unused_async_trait_impl)]
+    impl RankedStream for Listed {
+        type Item = Term;
+
+        async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
+            let Some(item) = self.items.get(self.emitted).cloned() else {
+                return Ok(None);
+            };
+            self.emitted += 1;
+            let rank = u64::try_from(self.emitted).expect("the fixture is small");
+            let value = contribution(self.weight, rank, self.k).expect("the contribution fits");
+            let drawn_from = self
+                .drawn_from
+                .clone()
+                .map_or(RowBlock::Undeclared, RowBlock::Declared);
+            Ok(Some(RankedRow::new(rank, value, item, drawn_from)))
+        }
+
+        async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
+            Ok(ProducerReceipt::Exhausted {
+                rows_emitted: u64::try_from(self.emitted).expect("the fixture is small"),
+            })
+        }
+
+        fn contract(&self) -> StreamContract {
+            StreamContract::new(
+                DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
+                self.domains.clone(),
+                self.basis,
+            )
+        }
+
+        async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+            if !self.basis.is_declared() {
+                return Err(ProtocolError::ExclusionUnavailable);
+            }
+            Ok(if self.holds.contains(candidate) {
+                ExclusionVerdict::Possible
+            } else {
+                ExclusionVerdict::Excluded
+            })
+        }
+    }
+
+    fn candidate(index: u64) -> Term {
+        Term::new(format!("http://example.org/candidate/{index:08}"))
+    }
+
+    /// Three strata over one universe of `total`, each permuting it within
+    /// blocks of four — identity, block reversal, rotation by half a block — so
+    /// every candidate is confirmed by every stratum within one block of ranks.
+    fn permuted(total: u64, weight: Fixed) -> FusionStream<Listed> {
+        let streams = (0..3)
+            .map(|stream| {
+                let items = (0..total)
+                    .map(|index| {
+                        let offset = index % 4;
+                        let permuted = match stream {
+                            0 => offset,
+                            1 => 3 - offset,
+                            _ => (offset + 2) % 4,
+                        };
+                        candidate(index - offset + permuted)
+                    })
+                    .collect();
+                (stratum(stream), Listed::new(items, weight))
+            })
+            .collect();
+        fusion(streams, weight)
+    }
+
+    /// Two strata, the second swapping every adjacent pair, so the candidates of
+    /// each pair sit at ranks one and two apart in opposite orders and score
+    /// exactly alike: the tie-break decides every row.
+    fn tied(total: u64, weight: Fixed) -> FusionStream<Listed> {
+        let straight = (0..total).map(candidate).collect();
+        let swapped = (0..total).map(|index| candidate(index ^ 1)).collect();
+        fusion(
+            vec![
+                (stratum(0), Listed::new(straight, weight)),
+                (stratum(1), Listed::new(swapped, weight)),
+            ],
+            weight,
+        )
+    }
+
+    /// Three strata over one declared block whose universes overlap only in
+    /// part — everything, the evens reversed, the multiples of three — each
+    /// answering lookups, plus an unrestricted stratum that answers none. The
+    /// shape where finality is settled by answers, both `Excluded` and
+    /// `Possible`, and where a signature moves on an answer rather than a row.
+    fn answering(total: u64, weight: Fixed) -> FusionStream<Listed> {
+        let everything: Vec<Term> = (0..total).map(candidate).collect();
+        let evens: Vec<Term> = (0..total)
+            .rev()
+            .filter(|index| index % 2 == 0)
+            .map(candidate)
+            .collect();
+        let thirds: Vec<Term> = (0..total)
+            .filter(|index| index % 3 == 0)
+            .map(candidate)
+            .collect();
+        let sparse: Vec<Term> = (0..total)
+            .filter(|index| index % 5 == 0)
+            .map(candidate)
+            .collect();
+        fusion(
+            vec![
+                (stratum(0), Listed::new(everything, weight).answering()),
+                (stratum(1), Listed::new(evens, weight).answering()),
+                (stratum(2), Listed::new(thirds, weight).answering()),
+                (stratum(3), Listed::new(sparse, weight)),
+            ],
+            weight,
+        )
+    }
+
+    fn fusion(streams: Vec<(Iri, Listed)>, weight: Fixed) -> FusionStream<Listed> {
+        let weights: BTreeMap<Iri, Fixed> = streams
+            .iter()
+            .map(|(iri, _)| (iri.clone(), weight))
+            .collect();
+        let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+            .expect("the fixture profile is valid");
+        FusionStream::new(streams, profile)
+    }
+
+    /// Every frontier candidate is filed exactly once, under the signature and
+    /// the key its state has now.
+    fn assert_filed(fusion: &FusionStream<Listed>) {
+        let filed: usize = fusion.selection.groups.values().map(BTreeSet::len).sum();
+        assert_eq!(filed, fusion.frontier.len(), "the index holds the frontier");
+        for (id, state) in &fusion.frontier {
+            let probe = RankProbe {
+                score: state.lower_bound,
+                best_rank: state.best_rank(),
+                term: id.as_str(),
+            };
+            let signature = fusion.signature(state);
+            assert!(
+                fusion
+                    .selection
+                    .groups
+                    .get(&signature)
+                    .is_some_and(|members| members.contains(&probe as &dyn RankOrder)),
+                "{} is not filed under its current signature and key",
+                id.as_str()
+            );
+        }
+    }
+
+    /// A differential case: its label, how to build it, and whether it must
+    /// see a row settled by the tie-break and a lookup answered.
+    type Case = (&'static str, fn() -> FusionStream<Listed>, bool, bool);
+
+    /// Drain `fusion` one pass of the row loop at a time, holding the indexed
+    /// selection to the pairwise one before every step, and count the rows that
+    /// won their place on the tie-break.
+    fn drain_checked(fusion: &mut FusionStream<Listed>) -> (Vec<FusedRow>, usize) {
+        let mut rows = Vec::new();
+        let mut tie_wins = 0;
+        block_on(fusion.ensure_initialized()).expect("the fixture obeys the protocol");
+        loop {
+            assert_filed(fusion);
+            fusion.threshold = fusion.compute_threshold().expect("the fixture fits");
+            block_on(fusion.observe_exclusions()).expect("the fixture answers lookups");
+            assert_filed(fusion);
+            let mut visits = 0;
+            let indexed = fusion
+                .select_emittable(&mut visits)
+                .expect("the fixture fits");
+            let scanned = fusion
+                .select_emittable_by_scan(&mut visits)
+                .expect("the fixture fits");
+            assert_eq!(indexed, scanned, "the index chose a different candidate");
+            if indexed.is_some() {
+                let row = block_on(fusion.next())
+                    .expect("the fixture obeys the protocol")
+                    .expect("a selected candidate is emitted");
+                assert_eq!(Some(&row.entity), indexed.as_ref());
+                let rival = fusion
+                    .frontier
+                    .values()
+                    .any(|rival| rival.lower_bound == row.score && fusion.is_final(rival));
+                assert_eq!(
+                    fusion.last_row_won_a_tie, rival,
+                    "the tie flag disagrees with a scan of the rivals"
+                );
+                tie_wins += usize::from(rival);
+                rows.push(row);
+                continue;
+            }
+            match fusion.best_head_index() {
+                Some(index) => {
+                    block_on(fusion.pull(index)).expect("the fixture obeys the protocol");
+                }
+                None => {
+                    assert!(
+                        block_on(fusion.next())
+                            .expect("the fixture obeys the protocol")
+                            .is_none()
+                    );
+                    return (rows, tie_wins);
+                }
+            }
+        }
+    }
+
+    fn drain(fusion: &mut FusionStream<Listed>) -> Vec<FusedRow> {
+        let mut rows = Vec::new();
+        while let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") {
+            rows.push(row);
+        }
+        rows
+    }
+
+    /// The indexed selection picks what the pairwise definition picks on every
+    /// pass, over plateaus, exact ties and answered lookups — and a fusion
+    /// driven through `next` alone emits the same rows as one driven pass by
+    /// pass.
+    #[test]
+    fn the_index_selects_what_the_pairwise_definition_selects() {
+        // Each case names what it must exercise, so a fixture that stopped
+        // reaching its regime fails here instead of passing vacuously: ties the
+        // tie-break had to settle, and lookups answered.
+        let cases: [Case; 6] = [
+            (
+                "collided, past the zero plateau",
+                || permuted(1_200, COLLIDING),
+                true,
+                false,
+            ),
+            ("unit weight", || permuted(400, Fixed::ONE), false, false),
+            (
+                "exact ties, unit weight",
+                || tied(300, Fixed::ONE),
+                true,
+                false,
+            ),
+            ("exact ties, collided", || tied(300, COLLIDING), true, false),
+            (
+                "answered lookups, unit weight",
+                || answering(300, Fixed::ONE),
+                false,
+                true,
+            ),
+            (
+                "answered lookups, collided",
+                || answering(300, COLLIDING),
+                true,
+                true,
+            ),
+        ];
+        for (label, build, ties, lookups) in cases {
+            let mut stepped = build();
+            let (checked, tie_wins) = drain_checked(&mut stepped);
+            let mut plain = build();
+            let drained = drain(&mut plain);
+            assert!(!drained.is_empty(), "{label}: the fixture emitted nothing");
+            assert_eq!(
+                checked, drained,
+                "{label}: the two drives emitted different rows"
+            );
+            assert_eq!(
+                stepped.exclusion_lookups, plain.exclusion_lookups,
+                "{label}: the two drives paid for different lookups"
+            );
+            assert!(
+                !ties || tie_wins > 0,
+                "{label}: no row was settled by the tie-break"
+            );
+            let asked: u64 = plain.exclusion_lookups.iter().sum();
+            assert!(!lookups || asked > 0, "{label}: no lookup was answered");
+        }
+    }
+
+    /// The selection work a drain of the collided fixture does, and the rows it
+    /// emits.
+    fn collided_drain_work(total: u64) -> (u64, usize) {
+        let mut fusion = permuted(total, COLLIDING);
+        let rows = drain(&mut fusion).len();
+        (fusion.selection_visits, rows)
+    }
+
+    /// **Selection costs a bounded amount per pass, not the frontier's width.**
+    ///
+    /// Past rank 940 the collided fixture contributes zero everywhere, so no
+    /// candidate clears the threshold until every stream is exhausted: the
+    /// frontier grows by one candidate per pull, to the length of the streams,
+    /// and every row is then emitted from a frontier of that width. A walk of
+    /// the frontier on every pass — which is what selection was — reads
+    /// `Θ(total²)` states over the drain: 4,819,757 at 2,000 and 150,985,757 at
+    /// 8,000, a factor of 31 for a factor of 4.
+    ///
+    /// Read off the index, the bound is derived rather than fitted. No stream
+    /// here declares a basis, so every signature has an empty `pending` and one
+    /// of the `2^3` possible `reach` sets: at most eight groups. A pass reads
+    /// each group at most twice — once for the best final candidate, once for
+    /// the highest unfinished ceiling — and an emission reads each once more
+    /// for the tie flag. A drain makes `3 * total` pulls and `total` emissions,
+    /// each one pass, plus the pass that finds nothing left:
+    /// `16 * (4 * total + 1) + 8 * total = 72 * total + 16`.
+    #[test]
+    fn selection_work_is_linear_in_a_plateau_as_long_as_the_streams() {
+        let (short_work, short_rows) = collided_drain_work(2_000);
+        let (long_work, long_rows) = collided_drain_work(8_000);
+        assert_eq!(short_rows, 2_000, "the short drain emits every candidate");
+        assert_eq!(long_rows, 8_000, "the long drain emits every candidate");
+        for (total, work) in [(2_000_u64, short_work), (8_000, long_work)] {
+            assert!(
+                work <= 72 * total + 16,
+                "selection read {work} entries draining {total} candidates, past the \
+                 derived bound of {}",
+                72 * total + 16
+            );
+        }
+        // And the shape, independently of the constant: four times the input
+        // may cost four times the work plus the fixed early plateaus, and a
+        // frontier walk's sixteen-fold (or worse) growth is far outside it.
+        assert!(
+            long_work < 8 * short_work,
+            "selection work grew from {short_work} to {long_work} for four times the input"
+        );
+    }
+
+    /// One stratum at the top of the range, handed to five streams, and read
+    /// to the moment three final candidates tie above the threshold while one
+    /// unfinished candidate's `U` leaves the fixed-point range and another's
+    /// merely reaches the tie. `first` and `second` are the terms of those two,
+    /// which decide the order the pairwise walk meets them in.
+    fn beyond_the_range(first: &str, second: &str) -> FusionStream<Listed> {
+        let huge = Fixed::from_raw(i128::MAX);
+        let only = Iri::parse("http://example.org/stratum/only").expect("the fixture IRI is valid");
+        let listed = |items: &[&str]| {
+            let mut stream = Listed::new(items.iter().map(|item| Term::new(*item)).collect(), huge);
+            stream.k = 1;
+            stream
+        };
+        let streams = vec![
+            // Names the overflowing candidate and ends, so every stream below
+            // may still name it and none of their heads is its own.
+            (only.clone(), listed(&[first])),
+            // Names the reaching candidate and ends; the stream after it shares
+            // the block and stays open, so the candidate is not final.
+            (only.clone(), listed(&[second]).declaring("b")),
+            (only.clone(), listed(&["e-1", "e-2"]).declaring("b")),
+            (only.clone(), listed(&["c-1", "c-2"]).declaring("c")),
+            (only.clone(), listed(&["d-1"]).declaring("d")),
+        ];
+        let profile = FusionProfile::with_decay(
+            BTreeMap::from([(only, huge)]),
+            DecayRule::ReciprocalRank { k: 1 },
+        )
+        .expect("one stratum at the top of the range is a valid profile");
+        let mut fusion = FusionStream::new(streams, profile);
+        block_on(fusion.ensure_initialized()).expect("the fixture obeys the protocol");
+        for _ in 0..5 {
+            let index = fusion.best_head_index().expect("a stream is still open");
+            block_on(fusion.pull(index)).expect("the fixture obeys the protocol");
+        }
+        fusion.threshold = fusion.compute_threshold().expect("the threshold fits");
+        fusion
+    }
+
+    /// **Where an upper bound leaves the range, the walk's answer is the answer.**
+    ///
+    /// The pairwise walk refuses when it computes an unrepresentable `U` before
+    /// it meets a rival that dominates, and answers "nothing yet" when it meets
+    /// the dominating rival first — so whether a fusion refuses depends on the
+    /// terms' order. Both orders are run: the reaching candidate first, where
+    /// the walk answers `None` and a selection that refused on sight would be an
+    /// over-refusal; and the overflowing one first, where the walk refuses.
+    #[test]
+    fn an_upper_bound_beyond_the_range_is_answered_as_the_walk_answers_it() {
+        let quiet = beyond_the_range("z-overflows", "a-reaches");
+        let mut visits = 0;
+        let scanned = quiet.select_emittable_by_scan(&mut visits);
+        let indexed = quiet.select_emittable(&mut visits);
+        assert!(
+            matches!(scanned, Ok(None)),
+            "the walk meets the dominating rival first and waits; got {scanned:?}"
+        );
+        assert!(
+            matches!(indexed, Ok(None)),
+            "the index must wait exactly as the walk does; got {indexed:?}"
+        );
+
+        let loud = beyond_the_range("a-overflows", "z-reaches");
+        let scanned = loud.select_emittable_by_scan(&mut visits);
+        let indexed = loud.select_emittable(&mut visits);
+        assert!(
+            matches!(scanned, Err(FusionError::Overflow)),
+            "the walk meets the unrepresentable bound first; got {scanned:?}"
+        );
+        assert!(
+            matches!(indexed, Err(FusionError::Overflow)),
+            "the index must refuse exactly as the walk does; got {indexed:?}"
+        );
     }
 }
