@@ -227,12 +227,13 @@ impl RankedStream for MockStream {
         self.contract.clone()
     }
 
-    /// This stream declares no exclusion basis, so being asked for a verdict is
-    /// the disagreement [`ProtocolError::ExclusionUnavailable`] names rather
-    /// than a question it could answer. Fusion never asks it; a hand-written
-    /// caller that did would be told so.
     /// Answer out of this producer's own universe, where the fixture gave it
-    /// one, and refuse where it did not.
+    /// one via [`MockStream::holding`], and refuse with
+    /// [`ProtocolError::ExclusionUnavailable`] where it did not. A fixture that
+    /// calls `holding` is expected to also declare
+    /// [`ExclusionBasis::Membership`] via [`MockStream::declaring`]; one that
+    /// does neither keeps the honest [`ExclusionBasis::Unavailable`] default,
+    /// and fusion never asks it for a verdict.
     ///
     /// The refusal is not a fallback: a producer that declared no basis is never
     /// asked, so reaching it means a consumer asked a stream it was not licensed

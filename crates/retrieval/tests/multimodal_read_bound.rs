@@ -2902,8 +2902,8 @@ fn the_engine_reads_within_a_pinned_factor_of_the_certificate() {
             })
             .sum();
 
-        let cert = certificate(&instance);
-        let cert_total: u64 = cert
+        let prefix_depths = certificate(&instance);
+        let prefix_depth_total: u64 = prefix_depths
             .iter()
             .map(|depth| u64::try_from(*depth).expect("generated depths fit"))
             .sum();
@@ -2911,14 +2911,14 @@ fn the_engine_reads_within_a_pinned_factor_of_the_certificate() {
         // A certificate of zero would make the ratio meaningless, and an answer
         // of `k` rows cannot be entailed by no rows at all.
         assert!(
-            cert_total > 0,
+            prefix_depth_total > 0,
             "{}: the certificate reads nothing, which cannot entail an answer",
             instance.name
         );
         assert!(
-            engine <= CERTIFICATE_FACTOR * cert_total,
+            engine <= CERTIFICATE_FACTOR * prefix_depth_total,
             "{}: the engine pulled {engine} ranks against a certificate of \
-             {cert_total} ({cert:?}), which is past the pinned factor of \
+             {prefix_depth_total} ({prefix_depths:?}), which is past the pinned factor of \
              {CERTIFICATE_FACTOR}",
             instance.name
         );
@@ -2926,21 +2926,21 @@ fn the_engine_reads_within_a_pinned_factor_of_the_certificate() {
         // And the certificate really is a certificate: reading it reproduces the
         // answer, and every strictly shallower prefix does not.
         assert_eq!(
-            answer_of(&cert_fuse(&instance, &cert)),
+            answer_of(&cert_fuse(&instance, &prefix_depths)),
             answer_of(&run),
             "{}: the certificate must reproduce the answer it certifies",
             instance.name
         );
-        for (index, depth) in cert.iter().enumerate() {
+        for (index, depth) in prefix_depths.iter().enumerate() {
             if *depth == 0 {
                 continue;
             }
-            let mut shallower = cert.clone();
+            let mut shallower = prefix_depths.clone();
             shallower[index] -= 1;
             assert_ne!(
                 answer_of(&cert_fuse(&instance, &shallower)),
                 answer_of(&run),
-                "{}: {shallower:?} already entails the answer, so {cert:?} is \
+                "{}: {shallower:?} already entails the answer, so {prefix_depths:?} is \
                  not the certificate",
                 instance.name
             );
