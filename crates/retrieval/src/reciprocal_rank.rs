@@ -420,7 +420,7 @@ impl ClassWidth {
 ///
 /// [`MonotoneDepth`]'s sibling in shape, and a saturating quantity for the same
 /// reason: a plan records a per-stratum depth as a `u32`, so a head rank past
-/// [`MAX_DEPTH`] is not a rank any read could reach, and handing back
+/// `MAX_DEPTH` is not a rank any read could reach, and handing back
 /// `u32::MAX` as though it were a measured crossing invites a caller to log it,
 /// plot it, or budget for it. A crossing no expressible rank delivers is not an
 /// enormous crossing; it is the absence of one.

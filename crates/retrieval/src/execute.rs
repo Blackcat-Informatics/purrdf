@@ -313,7 +313,7 @@ use crate::iri::{Iri, Term};
 use crate::ranked_stream::{
     ExclusionVerdict, ProducerReceipt, ProtocolError, RowBlock, StreamContract,
 };
-use crate::render::{candidate_lexical, decode_term};
+use crate::render::{RenderError, candidate_lexical, decode_term};
 
 /// One stratum's ranked rows, tagged with the pinned plan they descend from and
 /// the contract its producer declared them under.
@@ -1040,7 +1040,7 @@ impl<'d> RankedStreamImpl<'d> {
     /// The stream answers no exclusion lookup. That is the honest state for a
     /// caller-built stream: an exclusion verdict is a measurement against a
     /// dataset, and this constructor is handed rows rather than a dataset to
-    /// take one from. [`attach_exclusion`](Self::attach_exclusion) is where
+    /// take one from. `attach_exclusion` is where
     /// [`execute`] attaches the prepared lookup it compiled.
     #[must_use]
     pub fn new(rows: Vec<(u64, Term, RowBlock)>, ending: StreamEnding) -> Self {
@@ -2104,7 +2104,10 @@ impl CandidateColumns {
             None => self.entailed.clone(),
             Some(column) => row_block(row.get(column).and_then(Option::as_ref), rank)?,
         };
-        Ok((rank, term_candidate(value), block))
+        let candidate = term_candidate(value).map_err(|error| {
+            format!("the projected ?{CANDIDATE_NAME} column in row {rank} names no term: {error}")
+        })?;
+        Ok((rank, candidate, block))
     }
 
     /// The candidate cell of `row`, when it is bound.
@@ -2320,15 +2323,20 @@ fn row_block(value: Option<&TermValue>, rank: u64) -> Result<RowBlock, String> {
 /// placement, where a caller actually tries it, and the decoder reads `_:label`
 /// back either way. Refusing here would discard every other row in the stratum
 /// over one answer the layer merely declined to write down.
-fn term_candidate(value: &TermValue) -> Term {
-    Term::new(candidate_lexical(value))
+///
+/// A literal no concrete syntax can spell — a base direction with no language tag,
+/// or a tag that is not a `LANGTAG` — is refused: it is not well-formed RDF, and
+/// dropping the tag or direction to write it would name the plain literal of the
+/// same lexical form instead, a different term.
+fn term_candidate(value: &TermValue) -> Result<Term, RenderError> {
+    candidate_lexical(value).map(Term::new)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use purrdf_core::TermValue;
+    use purrdf_core::{RdfTextDirection, TermValue};
     use purrdf_sparql_eval::{
         BindingPattern, CandidateDomains, DomainTag, IndexGeneration, PfAttestation,
         RelationWitness, ServiceLevel,
@@ -2358,7 +2366,7 @@ mod tests {
                 o: Box::new(TermValue::simple_literal("o")),
             },
         ] {
-            let candidate = term_candidate(&value);
+            let candidate = term_candidate(&value).expect("the fixture value is well-formed");
             assert_eq!(
                 decode_term(candidate.as_str()),
                 Ok(value),
@@ -2367,7 +2375,9 @@ mod tests {
             );
         }
         assert_eq!(
-            term_candidate(&TermValue::iri("http://example.org/doc")).as_str(),
+            term_candidate(&TermValue::iri("http://example.org/doc"))
+                .expect("an IRI is well-formed")
+                .as_str(),
             "<http://example.org/doc>",
             "an IRI candidate is legible, not an encoding of one"
         );
@@ -2413,6 +2423,92 @@ mod tests {
             Ok(TermValue::blank("b0")),
             "and the decoder reads the label back, so nothing is lost"
         );
+    }
+
+    /// A literal no concrete syntax can spell is refused rather than written without
+    /// its tag, which would name the plain literal of the same lexical form — a
+    /// different term. Its well-formed neighbours, a tagged and a directional
+    /// literal, and a blank node nested in a triple term, are all named and read
+    /// back to the value they came from.
+    #[test]
+    fn an_unspellable_literal_is_refused_and_its_well_formed_neighbours_are_named() {
+        let malformed_tag = TermValue::Literal {
+            lexical_form: "chat".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            language: Some("en_us".to_owned()),
+            direction: None,
+        };
+        let untagged_direction = TermValue::Literal {
+            lexical_form: "chat".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: None,
+            direction: Some(RdfTextDirection::Rtl),
+        };
+        for (value, nested) in [
+            (&malformed_tag, false),
+            (&untagged_direction, false),
+            (&malformed_tag, true),
+        ] {
+            let value = if nested {
+                TermValue::Triple {
+                    s: Box::new(TermValue::blank("b0")),
+                    p: Box::new(TermValue::iri("http://example.org/p")),
+                    o: Box::new(value.clone()),
+                }
+            } else {
+                value.clone()
+            };
+            let refused = rank_candidates(
+                &variables(),
+                &[vec![Some(value.clone())]],
+                &CandidateDomains::Unrestricted,
+            )
+            .expect_err("an unspellable literal is refused, not misnamed");
+            assert!(
+                refused.contains("row 1 names no term"),
+                "the refusal names the row: {refused}"
+            );
+        }
+
+        let tagged = TermValue::lang_literal("chat", "en-us");
+        let directional = TermValue::Literal {
+            lexical_form: "chat".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        };
+        let nested_blank = TermValue::Triple {
+            s: Box::new(TermValue::blank("b0")),
+            p: Box::new(TermValue::iri("http://example.org/p")),
+            o: Box::new(tagged.clone()),
+        };
+        let ranked = rank_candidates(
+            &variables(),
+            &[
+                vec![Some(tagged.clone())],
+                vec![Some(directional.clone())],
+                vec![Some(nested_blank.clone())],
+            ],
+            &CandidateDomains::Unrestricted,
+        )
+        .expect("well-formed literals and a nested blank node are named");
+        let named: Vec<&str> = ranked.iter().map(|(_, term, _)| term.as_str()).collect();
+        assert_eq!(
+            named,
+            vec![
+                "\"chat\"@en-us",
+                "\"chat\"@ar--rtl",
+                "<<( _:b0 <http://example.org/p> \"chat\"@en-us )>>",
+            ],
+            "each well-formed value keeps its tag, its direction and its nested blank"
+        );
+        for (text, value) in named.iter().zip([tagged, directional, nested_blank]) {
+            assert_eq!(
+                decode_term(text),
+                Ok(value),
+                "{text} reads back to its value"
+            );
+        }
     }
 
     #[test]

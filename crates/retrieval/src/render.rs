@@ -140,9 +140,10 @@ pub(crate) fn sparql_term(value: &TermValue) -> Result<String, RenderError> {
 /// it is rendered every time the unit's text is asked for.
 pub(crate) fn typed_literal(lexical_form: &str, datatype: &str) -> String {
     let mut out = String::with_capacity(lexical_form.len() + datatype.len() + 6);
-    // Infallible for this shape: `write_literal` refuses only a direction without a
-    // tag and a malformed tag, and neither is supplied.
-    let _ = write_literal(lexical_form, datatype, None, None, &mut out);
+    // `write_literal` refuses only a direction without a tag and a malformed tag,
+    // and neither is supplied, so an error here is a broken invariant, not a value.
+    write_literal(lexical_form, datatype, None, None, &mut out)
+        .expect("a literal with no tag and no direction always renders");
     out
 }
 
@@ -203,43 +204,49 @@ fn lexical_size_hint(value: &TermValue) -> usize {
 /// genuinely cannot do is seed a *later* request, since its label is
 /// dataset-local; that is refused where it happens, at placement, rather than
 /// pre-emptively here.
-pub(crate) fn candidate_lexical(value: &TermValue) -> String {
+///
+/// # Errors
+///
+/// A literal with a base direction and no language tag, or with a tag that is not
+/// a `LANGTAG`: see [`write_candidate`].
+pub(crate) fn candidate_lexical(value: &TermValue) -> Result<String, RenderError> {
     // Sized up front: this runs once per row every stratum emits.
     let mut out = String::with_capacity(lexical_size_hint(value));
-    if let TermValue::Blank { label, .. } = value {
-        out.push_str("_:");
-        out.push_str(label);
-        return out;
-    }
-    // Every non-blank arm is infallible, and a blank nested inside a triple term
-    // is written by the same rule rather than refused.
-    if write_term(value, &mut out).is_err() {
-        out.clear();
-        write_candidate(value, &mut out);
-    }
-    out
+    write_candidate(value, &mut out)?;
+    Ok(out)
 }
 
-/// Append `value`'s result-naming form to `out`, spelling blank nodes.
-fn write_candidate(value: &TermValue, out: &mut String) {
+/// Append `value`'s result-naming form to `out`, spelling blank nodes at every
+/// depth, a blank nested inside a triple term included.
+///
+/// Every other term is written by [`write_term`], the writer [`sparql_term`] uses,
+/// so a blank-free value names the same bytes on both paths.
+///
+/// # Errors
+///
+/// [`RenderError::DirectionWithoutLanguage`] and
+/// [`RenderError::MalformedLanguageTag`] for a literal no concrete syntax can
+/// spell. Such a literal is not well-formed RDF; writing it without its tag or
+/// direction would name a *different* term — one that collides with the plain
+/// literal of the same lexical form — so it is refused rather than misnamed.
+fn write_candidate(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
     match value {
         TermValue::Blank { label, .. } => {
             out.push_str("_:");
             out.push_str(label);
+            Ok(())
         }
         TermValue::Triple { s, p, o } => {
             out.push_str("<<( ");
-            write_candidate(s, out);
+            write_candidate(s, out)?;
             out.push(' ');
-            write_candidate(p, out);
+            write_candidate(p, out)?;
             out.push(' ');
-            write_candidate(o, out);
+            write_candidate(o, out)?;
             out.push_str(" )>>");
+            Ok(())
         }
-        other => {
-            // Infallible for IRIs and literals: `write_term` only refuses blanks.
-            let _ = write_term(other, out);
-        }
+        other => write_term(other, out),
     }
 }
 
@@ -350,9 +357,9 @@ fn write_literal_escaped(value: &str, out: &mut String) {
 fn write_u_escape(ch: char, out: &mut String) {
     let code_point = ch as u32;
     if code_point <= 0xFFFF {
-        let _ = write!(out, "\\u{code_point:04X}");
+        write!(out, "\\u{code_point:04X}").expect("writing to a String cannot fail");
     } else {
-        let _ = write!(out, "\\U{code_point:08X}");
+        write!(out, "\\U{code_point:08X}").expect("writing to a String cannot fail");
     }
 }
 
@@ -705,18 +712,16 @@ impl<'a> Cursor<'a> {
 pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> String {
     let mut out = String::new();
     for (stratum, measured) in resolution {
-        // `write!` into a `String` cannot fail; the `Result` is discarded here
-        // rather than unwrapped so a formatting error can never abort a caller's
-        // process over a report.
-        let _ = write!(out, "{stratum}");
+        write!(out, "{stratum}").expect("writing to a String cannot fail");
         // The counters, and their names, come from the trailer's one reading of
         // its own fields — the same one every binding renders — so this text
         // cannot carry a different set of counters from any other surface.
         for counter in measured.counters() {
-            let _ = match counter.reading {
+            match counter.reading {
                 CounterReading::Number(value) => write!(out, " {}={value}", counter.name),
                 CounterReading::Absent { word } => write!(out, " {}={word}", counter.name),
-            };
+            }
+            .expect("writing to a String cannot fail");
         }
         out.push('\n');
     }

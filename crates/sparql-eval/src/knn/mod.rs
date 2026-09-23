@@ -1062,7 +1062,7 @@ impl KnnObservations {
     }
 
     /// How many invocations have **entered the exhaustive scan** — that is, have
-    /// asked [`EmbeddingSpace::search`] for a ranking at all.
+    /// asked `EmbeddingSpace::search` for a ranking at all.
     ///
     /// Zero is the load-bearing value: an invocation that never entered the scan
     /// never compared a distance against another row and never claimed a rank,
@@ -1410,7 +1410,7 @@ impl PropertyFunction for EmbeddingKnnRelation {
     /// search can name is a row this lookup finds.
     ///
     /// The emitted `?distance` is the true one: a single pairwise evaluation through
-    /// [`EmbeddingSpace::row_distance`], which is the same [`Kernel`] over the same
+    /// `EmbeddingSpace::row_distance`, which is the same [`Kernel`] over the same
     /// components and norms the scan uses, so it is bit-identical to the value a scan
     /// would have produced for that pair. What a point lookup cannot produce is a
     /// *rank* — one plus the number of rows nearer the seed is a fact about every other

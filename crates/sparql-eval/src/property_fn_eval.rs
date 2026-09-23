@@ -775,7 +775,7 @@ fn unify_term(arg: &Arg, value: &TermValue, values: &mut [Option<TermValue>]) ->
 /// A query that is exactly one property-function call, read one solution at a time as
 /// its consumer asks, with the invocation held open between reads.
 ///
-/// [`eval_call_over`] drains an invocation into a bag before the first row leaves it,
+/// `eval_call_over` drains an invocation into a bag before the first row leaves it,
 /// because a node of the algebra hands its parent a bag. A consumer that stops reading
 /// as soon as it has what it needs — a fused top-`k`, whose stopping rank is not
 /// knowable until it has stopped — pays for every row the bag held and it never read.

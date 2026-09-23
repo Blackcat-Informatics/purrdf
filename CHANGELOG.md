@@ -32,6 +32,106 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   output buffer are the same six characters and a gate that refuses both teaches
   authors to route around it.
 
+- **retrieval:** exclusion lookups. A producer's `RankedDeclaration` and a stream's
+  `StreamContract` carry an `ExclusionBasis` — `Unavailable`, or `Membership`: an
+  exclusion is a fact about the producer's own index, which holds no entry through
+  which the request could reach the candidate — and fusion may ask a stream whose
+  contract declares a basis about one candidate through `RankedStream::exclusion`.
+  `ExclusionVerdict::Excluded` makes the candidate final at once, so two strata that
+  share a block but never name the same candidate stop at the threshold crossing
+  instead of draining; `Possible` claims nothing. A lookup that fails is
+  `ProtocolError::ExclusionLookupFailed` and fails the request rather than reading as
+  `Possible`; a stream that names a candidate it excluded is
+  `ProtocolError::ExclusionContradicted`; a stream asked while declaring no basis
+  answers `ProtocolError::ExclusionUnavailable`. Each lookup is answered through the
+  witnessed prepared lane and must stand behind exactly the attestation — generation
+  and service level — the stratum's read pinned, or the request fails with
+  `ProtocolError::ExclusionAttestationMoved` naming both sides. An exclusion from an
+  index that attested itself incomplete settles only what the stream will name: the
+  residual the missing documents owe the candidate's score is still charged. `execute`
+  prepares each stratum's lookup once, binds each candidate by the dataset id its read
+  found it under, and hands the lookup back inside the stream; a stratum whose lookup
+  will not prepare is that stratum's `ExecutionFailed` status. A unit built from a
+  caller-supplied query cannot declare a basis (`UnitError::ExclusionNotRenderable`),
+  and registration refuses a declared basis on a relation with no candidate-bound
+  access mode whose row bound is one. `FusionTrailer::exclusion_bases` records each
+  stream's basis, and `FusionTrailer::evidence_id` now also covers which strata
+  answered lookups; an answer that asked none keeps its evidence id byte for byte.
+
+- **retrieval:** an on-demand read schedule. `execute_within(compiled, registry,
+  dataset, ReadSchedule)` runs a bundle as `execute` does under
+  `ReadSchedule::Materialised`, or under `ReadSchedule::OnDemand` holds each unit
+  whose prepared text is one property-function call under row-for-row operators
+  open as a single invocation and produces a row each time its stream is pulled.
+  `search` reads on demand, so every stratum is read exactly once, as far as its
+  fusion pulls it — plus the probe row one past the planned depth where the read
+  gets that far — and a consumer that stops at the sixth rank of a four-hundred-row
+  plan has caused six rows to be produced. A text of any other shape (a join, a
+  `FILTER`, an `ORDER BY`, a dataset clause) is materialised under either schedule,
+  and a caller's own single-call text that runs out ends `SuppliedQueryEnded` under
+  both. The receipt is taken when the fusion stops: `RankedStream::settle` returns a
+  `ReadSettlement` (the attestation, rows materialised and rows emitted the read
+  stands behind), and a read whose generation or service level moved between the
+  open and the stop is refused as `ProtocolError::AttestationMoved`. A read that
+  fails after its first row has been merged fails the request as
+  `ProtocolError::ReadFailed`, naming the stratum, the rows already handed out and
+  the producer's reason; a failure before the first row stays that stratum's
+  `ExecutionFailed` status.
+  `RankedStreamImpl` gains `exclusion`, `settle`, `rows_materialised` and
+  `rows_emitted`.
+
+- **retrieval:** what a read cost, on the answer. `StratumResolution` gains
+  `exclusion_lookups` and `rows_materialised` (the rows the stratum's read produced,
+  probe row included; `None` only for a stream with no read behind it), and
+  `StratumResolution::counters` names every counter once, in a fixed order, as
+  `ObservedCounter`s whose `CounterReading` is a number or a word for an absent value.
+  `observed_resolution` renders a trailer's resolution map from those counters, one
+  line per stratum. `PlannedResolution::sharing_weights` lists the weights of every
+  stratum whose declared blocks meet a stratum's own, and `crossing_rank_at` and
+  `threshold_at` answer, from the plan alone, the head rank at which a candidate
+  first beats the threshold those sharers impose (`CrossingRank`), through the same
+  arithmetic fusion uses. A weight at or below zero is refused as
+  `FusionError::NonPositiveCrossingWeight`. `ExclusionBasis` is re-exported from
+  `purrdf-retrieval`.
+
+- **sparql-eval:** `NativeSparqlEngine::open_call_cursor` opens a prepared `SELECT`
+  over the default dataset that is one property-function call under nothing but
+  projections, `OFFSET`-free `LIMIT`s and variable-renaming `BIND`s as a `CallCursor`
+  read one solution per `next_row`, with the same registry admission, arguments,
+  declared-mode check, row licence, width check and unification the governed lane
+  applies; `CallCursor::settle` returns the relation witness of the
+  rows actually produced. `PreparedQuery::is_call_read` answers whether a plan has
+  that shape without opening anything. `NativeSparqlEngine::execute_witnessed` runs a
+  `PreparedExecution` and returns the run's `RelationWitness` beside the answer, so a
+  relation's declared shortfall is reported rather than refused.
+
+- **sparql-eval, text, hnsw:** membership answers. `TextSearchRelation`,
+  `EmbeddingKnnRelation` and `HnswRelation` declare `ExclusionBasis::Membership`
+  and a candidate-bound access mode with a row bound of one, answered by a binary
+  search over the index's own terms: a document with no posting under any needle
+  term, or a term with no vector row, is excluded without ranking, computing a
+  distance or visiting a graph node. A held candidate still ranks through the one
+  scoring path, and the vector relations' emitted distance is bit-identical to the
+  one a scan or beam would give. `SearchObservations`, `KnnObservations` and
+  `HnswObservations` (each relation's `observations()`) count lookups, rankings,
+  scans, distances and graph candidates. `EmbeddingSpace::from_vectors` builds an
+  exact kNN space from a host's `(term, vector)` rows with every check
+  `from_artifact` makes and a content-addressed generation of its own, and
+  `HnswIndex::row_distance` gives one pairwise distance.
+
+- **python:** `retrieval.plan`, `compile` and `search` accept `hnsw_producers=` and
+  `knn_producers=` beside `text_producers`: an approximate or an exact
+  nearest-neighbour producer over the host's own `(iri, vector)` rows, with a
+  metric, a guard, domains and an attestation, seeded by an `("entity", "<iri>")`
+  request term. The three maps form one registry; a stratum or producer IRI claimed
+  twice across them raises `ValueError` naming both. Every producer registers with
+  the exclusion basis its relation declares, and there is no position to assert or
+  withdraw one. The answer's `"observed_resolution"` entries carry
+  `"exclusion_lookups"` and `"rows_materialised"`, its `"exclusion_bases"` maps each
+  stratum to `"unavailable"` or `"membership"`, a compiled answer's planned
+  resolution carries `"sharing_weights"`, and `retrieval.crossing_rank_at` computes
+  a crossing rank from raw weights.
+
 ### Measured
 
 Peak allocator bytes, from the deterministic counting allocator rather than timings.
@@ -95,6 +195,30 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   its handles that way. A handle admitted for the SHACL rewrite refuses to run under
   the ordinary one. The SHACL rewrite now passes a blank-node or quoted-triple value
   to every call through a one-row `VALUES`, so the relation receives it bound.
+
+- **retrieval:** a fused top-`k` narrowed its read depth for a whole request or not
+  at all, so one stratum declaring allowed duplicates, or one intersecting pair
+  anywhere in the request, made every stratum read at the maximum depth — including
+  a stratum whose declared blocks met no other's. The depth is now licensed per
+  stratum: a unique stratum whose blocks meet no other surviving stratum's keeps its
+  prefix of `k`, whatever the others declare.
+
+- **retrieval:** a candidate literal carrying a language tag that is not a
+  `LANGTAG`, or a base direction with no tag, was named without its tag or
+  direction — the spelling of a different term, the plain literal of the same
+  lexical form. Such a literal is not well-formed RDF; it is now refused, naming the
+  row, as a failure of the stratum read that produced it. Tagged, directional and
+  nested-blank-node candidates are named and read back as before.
+
+- **text:** a search invocation with its document bound declared a row bound of one
+  and then ranked every partition that document appears in. It now answers whether
+  the document holds a posting under any needle term by binary searches over the
+  term dictionary and that term's postings, and ranks only a document that does.
+
+- **hnsw:** `HnswSpace::from_index` ignored its guard's candidate bound, which it is
+  documented to refuse at construction. A space with more rows than
+  `max_candidates` is now refused with `EvalError::Config`; a bound equal to the row
+  count is still admitted.
 
 - **cli:** a failed write could unlink a symlinked output path, destroying the link
   and leaving the half-written bytes in its target — the exact loss the guard's own
@@ -1495,6 +1619,26 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   built by this one and must be re-planned.
 
 ### Changed
+
+- **BREAKING** **retrieval, sparql-eval:** `RankedStream` gains a required
+  `exclusion(&mut self, candidate: &Term)` method, and defaulted `rows_materialised`
+  and `settle` methods; a hand-written stream that declares no basis answers
+  `exclusion` with `ProtocolError::ExclusionUnavailable`. `StreamContract::new` takes
+  the stream's `ExclusionBasis` as a fourth argument and `StreamContract` carries it
+  as `exclusion`, and `RankedDeclaration` gains the required field `exclusion`: there
+  is no default, because `Unavailable` would discard a capability a producer has and
+  `Membership` would claim one it may not. The basis joins the ranked declaration's
+  canonical description, so the registry content fingerprint moves and a plan pinned
+  against a registry built before this change must be re-planned.
+
+- **BREAKING** **retrieval:** a stream now carries its prepared exclusion lookup and a
+  borrow of the dataset, so `RankedStreamImpl`, `StratumStream`, `ExecutionResult`
+  and `RankedStreamAdapter` gain a lifetime parameter and `execute` returns an
+  `ExecutionResult<'d>` borrowing its dataset. `StratumResolution` gains the public
+  fields `exclusion_lookups` and `rows_materialised`, `FusionTrailer` gains
+  `exclusion_bases`, and `PlannedResolution` gains `sharing_weights`, so none of
+  them can be built by struct literal from an older field list; `PlannedResolution`
+  is no longer `Copy`, and `PlannedResolution::fully_separated` takes `&self`.
 
 - **BREAKING** **retrieval:** The read bound moved into `RetrievalRequest`, so a
   bounded answer costs a bounded *read*. `RetrievalRequest` gains a `bound` field

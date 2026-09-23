@@ -551,7 +551,7 @@ pub struct StratumResolution {
     /// random access: one prepared point query against the same producer,
     /// answering *do you hold this one* rather than *what is next*. Adding them
     /// together would report a stratum as having been read deeper than it was
-    /// and would break [`FusionStream::finish`]'s receipt check, which measures
+    /// and would break `FusionStream::finish`'s receipt check, which measures
     /// the producer's own declared row count against the rows fusion pulled.
     ///
     /// Zero for every stratum whose producer declared

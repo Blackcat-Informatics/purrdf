@@ -120,7 +120,8 @@ pub fn encode_embedding(embedding: &[f32]) -> String {
         }
         // Reading the bit pattern is not arithmetic on the float, and formatting
         // an integer as hex is not arithmetic at all.
-        let _ = write!(out, "{:0COMPONENT_DIGITS$X}", component.to_bits());
+        write!(out, "{:0COMPONENT_DIGITS$X}", component.to_bits())
+            .expect("writing to a String cannot fail");
     }
     out
 }
