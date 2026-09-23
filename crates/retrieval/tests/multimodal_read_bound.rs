@@ -379,10 +379,10 @@ const UNDECLARED_BLOCKS_DISJOINT_RESULTS_WITH_LOOKUPS: Configuration = Configura
 ///
 /// Every lookup therefore answers `Possible`: the candidate a stream names
 /// first, the other holds and names last. No candidate becomes final until the
-/// other stream reaches it, which is the premise the plan's stopping rank rests
-/// on, broken by the rows and invisible to the plan. It is constructed on purpose
-/// so that a read which goes past the plan's prediction is shown to go on in the
-/// same read rather than assumed to.
+/// other stream reaches it, which is the premise `PlannedResolution`'s stopping
+/// rank rests on, broken by the rows and invisible to the plan. It is
+/// constructed on purpose so that a read which goes past `PlannedResolution`'s
+/// prediction is shown to go on in the same read rather than assumed to.
 const SHARED_BLOCK_REVERSED_RESULTS_WITH_LOOKUPS: Configuration = Configuration {
     name: "shared_block_reversed_results_with_lookups",
     blocks: Blocks::Shared,
@@ -1123,7 +1123,7 @@ impl Measured {
 /// `search`, and measure what that run cost.
 ///
 /// Two of the seven measurements are not on the answer `search` returns — the
-/// depth is the plan's and the `LIMIT` is the compiled unit's — so a plan and a
+/// depth is the planned depth and the `LIMIT` is the compiled unit's — so a plan and a
 /// bundle are built here as well, and read for those two numbers alone. Both
 /// stages are pure functions of the request, the registry and the statistics, so
 /// the plan read here is the plan `search` runs; and neither stage opens a

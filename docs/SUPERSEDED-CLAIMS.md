@@ -419,7 +419,7 @@ by `on_demand_receipt::an_index_that_moves_under_the_read_is_refused_when_the_re
 and `on_demand_receipt::a_forged_announcement_is_refused_at_the_settlement_and_the_true_one_is_admitted`,
 each beside its admitted neighbour; and by
 `multimodal_read_bound::a_stopping_rank_the_rows_overrun_is_read_past_in_the_same_read`,
-which reads past the plan's own prediction and pays for the planned total once.
+which reads past the compiled plan's own prediction and pays for the planned total once.
 
 ### The evaluator exposes no cursor, and incremental enumeration is separate, larger work
 

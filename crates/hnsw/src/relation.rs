@@ -1081,7 +1081,7 @@ impl HnswCursor {
     ///
     /// The **only** call site of [`HnswIndex::search_rows_work`] in this relation, which
     /// is what makes [`HnswObservations::searches`] a measurement rather than an estimate:
-    /// an invocation that did not come through this branch traversed nothing, because
+    /// an invocation that did not call `ensure_ranked` traversed nothing, because
     /// there is no other way for it to have done so.
     fn ensure_ranked(&mut self) -> Result<(), EvalError> {
         if self.ranked.is_some() {

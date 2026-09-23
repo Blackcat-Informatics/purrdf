@@ -693,7 +693,7 @@ async fn read_to_its_end(mut stream: RankedStreamImpl<'_>) -> ProducerStatus {
 /// Everything in a [`SearchResult`] that is a fact about the *read* rather than
 /// about the plan behind it. The fields the plan and the waist supply —
 /// the unserved terms, the planned resolution, the profile identity — are not
-/// here, because they are the plan's and the waist's rather than the read's.
+/// here, because they are the compiled plan's and the waist's rather than the read's.
 struct Attempt {
     /// The fused rows, in the profile's declared final order.
     rows: Vec<FusedRow>,

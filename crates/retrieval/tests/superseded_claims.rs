@@ -101,7 +101,7 @@ fn flatten(document: &str) -> String {
     words.join(" ")
 }
 
-/// The reversals this branch recorded, each keyed by its ledger entry.
+/// The recorded reversals, each keyed by its ledger entry.
 fn reversals() -> Vec<Reversal> {
     vec![
         Reversal {

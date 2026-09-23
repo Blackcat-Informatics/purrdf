@@ -1661,7 +1661,7 @@ impl KnnCursor {
     ///
     /// The **only** call site of [`EmbeddingSpace::search`] in this relation, which is
     /// what makes [`KnnObservations::scans`] a measurement rather than an estimate: an
-    /// invocation that did not come through this branch did not scan anything, because
+    /// invocation that did not call `ensure_ranked` did not scan anything, because
     /// there is no other way for it to have done so.
     fn ensure_ranked(&mut self) -> Result<(), EvalError> {
         if self.ranked.is_some() {
