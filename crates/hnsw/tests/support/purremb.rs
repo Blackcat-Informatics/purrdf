@@ -14,6 +14,8 @@
 // uses every helper; an unused-here helper is used there.
 #![allow(dead_code, unreachable_pub)]
 
+use purrdf_core::IndexGuardView;
+use purrdf_core::distance::Arithmetic;
 use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
     CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
@@ -67,6 +69,8 @@ pub struct Fixture {
     pub row_targets: Vec<TargetId>,
     /// The PURREMB role this artifact's projection puts the index in.
     pub use_role: purrdf_core::IndexUseRole,
+    /// The guard contract the committed index was folded under.
+    pub guard_contract: IndexGuardContract,
 }
 
 impl Fixture {
@@ -85,6 +89,32 @@ impl Fixture {
     /// vectors the artifact stores. Equal values are the ordinary full-width case.
     #[must_use]
     pub fn with_prefix(rows: usize, dims: usize, prefix: usize, params: Params) -> Self {
+        Self::assemble(rows, dims, prefix, params, HnswIndex::build, guard::load)
+    }
+
+    /// The fixture whose committed index is built under the reassociated arithmetic, so its
+    /// guard names the reassociated implementation and the dispatch path of this process.
+    #[must_use]
+    pub fn new_reassociated(rows: usize, dims: usize, params: Params) -> Self {
+        Self::assemble(
+            rows,
+            dims,
+            dims,
+            params,
+            HnswIndex::build_reassociated,
+            guard::load_reassociated,
+        )
+    }
+
+    /// The two-pass construction, with the index built by `build` and read back by `load`.
+    fn assemble<A: Arithmetic>(
+        rows: usize,
+        dims: usize,
+        prefix: usize,
+        params: Params,
+        build_index: fn(VectorMatrix, &DistanceMetric, Params) -> purrdf_hnsw::Result<HnswIndex<A>>,
+        load: fn(&IndexGuardView<'_>, VectorMatrix) -> purrdf_hnsw::Result<HnswIndex<A>>,
+    ) -> Self {
         assert!(rows > 0 && dims > 0, "the fixture shape is nonempty");
         assert!(
             prefix > 0 && prefix <= dims,
@@ -104,10 +134,11 @@ impl Fixture {
         let matrix = guard::read_effective_matrix(&effective).expect("the matrix reads");
         let coordinates =
             guard::coordinates(&view, target_set, vector_space).expect("the coordinates derive");
-        let index = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)
+        let index = build_index(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)
             .expect("the HNSW fixture builds");
         let image = index.canonical_image();
         let role = guard::use_role(&effective);
+        let guard_contract = guard::guard_contract_for(&index, role);
         let derived =
             guard::derived_index(coordinates, &index, role).expect("the derived index folds");
         let bytes = build(&context, vec![derived.clone()]);
@@ -115,7 +146,7 @@ impl Fixture {
         let mut committed = EmbeddingView::from_bytes(&bytes).expect("the indexed artifact opens");
         verify_embedding(&mut committed).expect("the indexed artifact verifies");
         let selected = guard::select(&committed).expect("exactly one HNSW guard");
-        let _ = guard::load(&selected, matrix.clone()).expect("the payload decodes");
+        let _ = load(&selected, matrix.clone()).expect("the payload decodes");
 
         let row_targets = context.target_set.targets.clone();
         let terms = (0..rows)
@@ -136,6 +167,7 @@ impl Fixture {
             terms,
             row_targets,
             use_role: role,
+            guard_contract,
         }
     }
 
@@ -178,6 +210,13 @@ impl Fixture {
         })
     }
 
+    /// The artifact whose HNSW guard carries `identity` as its implementation, every other
+    /// field -- parameters, loss contract, role, payload -- the fixture's own.
+    #[must_use]
+    pub fn with_implementation(&self, identity: ArtifactIdentity) -> Vec<u8> {
+        self.with_guard_contract(|contract| contract.implementation = identity)
+    }
+
     /// The artifact whose HNSW guard declares a loss contract that transforms vectors.
     ///
     /// PURREMB requires an encoding and parameters alongside that claim, so both are supplied
@@ -202,7 +241,7 @@ impl Fixture {
     /// ONLY difference between the two artifacts: a refusal observed over the result cannot be
     /// firing for something else the rebuild happened to change.
     fn with_guard_contract(&self, mutate: impl FnOnce(&mut IndexGuardContract)) -> Vec<u8> {
-        let mut contract = guard::guard_contract(self.params, self.use_role);
+        let mut contract = self.guard_contract.clone();
         assert_eq!(
             self.rebuild(&contract),
             self.bytes,

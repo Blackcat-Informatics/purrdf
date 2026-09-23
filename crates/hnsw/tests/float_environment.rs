@@ -230,3 +230,76 @@ fn every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_def
         3
     );
 }
+
+#[test]
+fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the_default() {
+    // The reassociated index hard-fails exactly as its exact sibling does: the same named
+    // refusal from every entry point, and the same answers once the register is restored.
+    let fixture = purremb::Fixture::new_reassociated(40, 20, params());
+    let matrix = fixture.matrix.clone();
+    let index =
+        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
+            .expect("builds in the default environment");
+    let image = index.canonical_image();
+    let query = matrix.row_to_vec(3);
+    let mut view = purrdf_core::EmbeddingView::from_bytes(&fixture.bytes).expect("opens");
+    purrdf_core::verify_embedding(&mut view).expect("verifies");
+    let selected = guard::select(&view).expect("one HNSW guard");
+    let open = || {
+        HnswSpace::from_artifact_reassociated(
+            &fixture.bytes,
+            fixture.target_set,
+            fixture.vector_space,
+            fixture.bindings(),
+            KnnGuard::new(64, 8).expect("valid"),
+        )
+    };
+
+    {
+        let flushed = Flushed::new();
+        let build = HnswIndex::build_reassociated(
+            matrix.clone(),
+            &DistanceMetric::SquaredEuclidean,
+            params(),
+        );
+        let decode = HnswIndex::decode_reassociated(matrix.clone(), &image);
+        let verify = index.verify_rebuild();
+        let rows = index.search_rows(3, 4);
+        let vector = index.search_vector(&query, 4);
+        let guard_verify = guard::verify_rebuild(&selected, &matrix, &params());
+        let space = open();
+        drop(flushed);
+
+        assert!(is_ftz(&build.expect_err("build refuses")), "build");
+        assert!(is_ftz(&decode.expect_err("decode refuses")), "decode");
+        assert!(
+            is_ftz(&verify.expect_err("rebuild refuses")),
+            "verify_rebuild"
+        );
+        assert!(is_ftz(&rows.expect_err("search refuses")), "search_rows");
+        assert!(
+            is_ftz(&vector.expect_err("search refuses")),
+            "search_vector"
+        );
+        assert!(
+            is_ftz(&guard_verify.expect_err("refuses")),
+            "guard::verify_rebuild"
+        );
+        assert!(
+            is_ftz_eval(&space.expect_err("refuses")),
+            "HnswSpace::from_artifact_reassociated keeps the named variant"
+        );
+    }
+
+    assert!(
+        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
+            .is_ok()
+    );
+    let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image).expect("decodes");
+    assert_eq!(decoded.canonical_image(), image);
+    assert!(index.verify_rebuild().expect("rebuilds"));
+    assert_eq!(index.search_rows(3, 4).expect("searches").len(), 4);
+    assert_eq!(index.search_vector(&query, 4).expect("searches").len(), 4);
+    assert!(guard::verify_rebuild(&selected, &matrix, &params()).expect("verifies"));
+    assert!(open().is_ok());
+}

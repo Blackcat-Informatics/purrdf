@@ -54,7 +54,7 @@ use std::collections::BTreeSet;
 
 use rayon::prelude::*;
 
-use purrdf_core::distance::{Exact, Resolved};
+use purrdf_core::distance::{Arithmetic, Resolved};
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
 use crate::error::{HnswError, Result};
@@ -63,7 +63,7 @@ use crate::level::{level_cap, level_from_index};
 use crate::params::Params;
 use crate::search::{DistanceCache, Query, Visited, greedy_descend, norm_of, search_layer};
 use crate::select::select_neighbors;
-use crate::{HnswIndex, resolve_exact};
+use crate::{Compiled, HnswIndex, resolve_recorded};
 
 /// One node's proposal: per layer, the selected neighbours in rank order.
 type NodeProposal = Vec<(u32, Vec<Ranked>)>;
@@ -90,7 +90,18 @@ struct Round<'a> {
     params: &'a Params,
 }
 
-/// Build an index over `matrix` under `kernel` and `params`.
+/// Build an index over `matrix` under `kernel` and `params`, with a fixed round size, or
+/// the capped doubling schedule when `batch` is `None`.
+///
+/// Every distance runs under arithmetic `A`, resolved on the calling thread; the path it
+/// resolves is the one the image records. The graph is built by `compiled`'s build walk,
+/// the copy this crate compiled for `A`, which is also the copy every later rebuild
+/// verification runs.
+///
+/// `batch = Some(1)` is a plain serial insertion: each node proposes against the graph
+/// that already holds every row below it. It exists so the determinism suite can observe
+/// that the round structure is load-bearing — within-round isolation produces a different
+/// graph — rather than asserting the property against a second identical build.
 ///
 /// # Errors
 ///
@@ -99,25 +110,18 @@ struct Round<'a> {
 /// a norm and a row's is zero; [`HnswError::NonFiniteDistance`] if a kernel result leaves
 /// the finite range; [`HnswError::FloatEnvironment`] if the calling thread, or a worker
 /// thread the build runs on, is not in the IEEE environment the arithmetic defines.
-pub(crate) fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Result<HnswIndex> {
-    build_with_batch(matrix, kernel, params, None)
-}
-
-/// Build with a fixed round size, or the capped doubling schedule when `batch` is `None`.
-///
-/// `batch = Some(1)` is a plain serial insertion: each node proposes against the graph
-/// that already holds every row below it. It exists so the determinism suite can observe
-/// that the round structure is load-bearing — within-round isolation produces a different
-/// graph — rather than asserting the property against a second identical build.
-pub(crate) fn build_with_batch(
+pub(crate) fn build_with_batch<A: Arithmetic>(
     matrix: VectorMatrix,
     kernel: Kernel,
     params: Params,
     batch: Option<usize>,
-) -> Result<HnswIndex> {
-    let arithmetic = resolve_exact()?;
-    let (graph, norms) = build_graph(&matrix, arithmetic, kernel, params, batch)?;
-    Ok(HnswIndex::new(matrix, kernel, params, graph, norms))
+    compiled: Compiled<A>,
+) -> Result<HnswIndex<A>> {
+    let arithmetic = A::resolve()?;
+    let (graph, norms) = (compiled.build_graph)(&matrix, arithmetic, kernel, params, batch)?;
+    Ok(HnswIndex::new(
+        matrix, kernel, params, graph, norms, arithmetic, compiled,
+    ))
 }
 
 /// The graph and per-row norms for `matrix`, without taking ownership of it.
@@ -130,10 +134,11 @@ pub(crate) fn build_with_batch(
 ///
 /// Every distance runs under `arithmetic`, resolved on the calling thread; each worker of
 /// the parallel proposal phase resolves again on its own thread, because the float
-/// environment is a per-thread property.
-pub(crate) fn build_graph(
+/// environment is a per-thread property, and must resolve the same dispatch path, because
+/// the image records one.
+pub(crate) fn build_graph<A: Arithmetic>(
     matrix: &VectorMatrix,
-    arithmetic: Resolved<Exact>,
+    arithmetic: Resolved<A>,
     kernel: Kernel,
     params: Params,
     batch: Option<usize>,
@@ -181,7 +186,7 @@ pub(crate) fn build_graph(
                 norms: &norms,
                 params: &params,
             };
-            let edges = propose_round(&round, &batch_rows, &levels)?;
+            let edges = propose_round(&round, arithmetic, &batch_rows, &levels)?;
             graph.commit(edges, &params);
         }
         start = end;
@@ -222,10 +227,10 @@ pub(crate) fn build_graph(
 ///
 /// Determinism: the orphan order, the host preference, and the eviction choice are all
 /// total functions of the graph, so the repaired graph is a pure function of the build.
-fn repair_connectivity(
+fn repair_connectivity<A: Arithmetic>(
     graph: &mut Graph,
     matrix: &VectorMatrix,
-    arithmetic: Resolved<Exact>,
+    arithmetic: Resolved<A>,
     kernel: Kernel,
     norms: &[f64],
     params: &Params,
@@ -359,14 +364,21 @@ pub(crate) fn compute_norms(matrix: &VectorMatrix, kernel: Kernel) -> Result<Vec
 /// order and the flattening below is deterministic regardless of which worker ran which
 /// row. The shared [`DistanceCache`] is the only cross-worker state and affects nothing
 /// but how often a distance is recomputed.
-fn propose_round(round: &Round<'_>, batch: &[usize], levels: &[u32]) -> Result<Vec<Edge>> {
+fn propose_round<A: Arithmetic>(
+    round: &Round<'_>,
+    arithmetic: Resolved<A>,
+    batch: &[usize],
+    levels: &[u32],
+) -> Result<Vec<Edge>> {
     let node_count = round.frozen.node_count();
+    let recorded = arithmetic.image_code();
     let results: Vec<Result<NodeProposal>> = batch
         .par_iter()
         .map_init(
             // Resolved per worker: the float environment belongs to the thread that runs
-            // the proposal, not to the one that started the build.
-            || (Visited::new(node_count), resolve_exact()),
+            // the proposal, not to the one that started the build. The worker must land on
+            // the path the build resolved, since the image records that one.
+            || (Visited::new(node_count), resolve_recorded::<A>(recorded)),
             |(visited, arithmetic), &node| {
                 let arithmetic = arithmetic.clone()?;
                 propose_node(round, arithmetic, visited, node, levels[node])
@@ -402,9 +414,9 @@ fn propose_round(round: &Round<'_>, batch: &[usize], levels: &[u32]) -> Result<V
 }
 
 /// The proposed links for one node: per layer, the selected neighbours in rank order.
-fn propose_node(
+fn propose_node<A: Arithmetic>(
     round: &Round<'_>,
-    arithmetic: Resolved<Exact>,
+    arithmetic: Resolved<A>,
     visited: &mut Visited,
     node: usize,
     node_level: u32,
@@ -467,6 +479,11 @@ fn propose_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::distance::Exact;
+
+    fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Result<HnswIndex> {
+        build_with_batch(matrix, kernel, params, None, Compiled::<Exact>::here())
+    }
 
     fn fixture(rows: usize, dims: usize) -> VectorMatrix {
         let mut state = 0x1234_5678_9abc_def0_u64;

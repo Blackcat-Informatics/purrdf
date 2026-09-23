@@ -84,7 +84,9 @@
 //!   node_count u64
 //!   max_level  u32
 //!   arithmetic u32       the distance arithmetic's image code: 1 = Exact
-//!                        (binary64-lane16-tree-v1); 0 is refused
+//!                        (binary64-lane16-tree-v1); 2..=7 = Reassociated
+//!                        (binary64-reassociated-v1) on the dispatch path the
+//!                        build ran; 0 is refused
 //!   entry      u64       row, or u64::MAX for an empty graph
 //! node records, in ascending row order:
 //!   row        u64       must equal the record's position
@@ -116,9 +118,29 @@
 //! identity's digest binds the law every recorded distance was computed under. The
 //! [`loss_contract`] does not change with it: an arithmetic decides how distances are
 //! rounded, not what vectors are stored, and PURREMB requires `loss_encoding: None` for
-//! a non-transforming index.
+//! a non-transforming index. The choice is recorded where it does change something --
+//! the image header's arithmetic field, the implementation identifier and the evidence
+//! revision -- rather than in a loss contract that would then claim a transform no
+//! vector underwent.
+//!
+//! # Two published implementations, one per arithmetic
+//!
+//! The profile publishes one implementation per [`Arithmetic`], and each is derived from
+//! that arithmetic's constants rather than written out beside it:
+//!
+//! | arithmetic | identifier | evidence revision | image codes |
+//! |---|---|---|---|
+//! | [`Exact`] | [`IMPLEMENTATION_ID`] | [`LOSS_EVIDENCE`] | `Exact::IMAGE_CODES` (`1`) |
+//! | [`Reassociated`] | [`IMPLEMENTATION_ID_REASSOCIATED`] | [`loss_evidence_reassociated`] of the path | that path's one code (`2`..=`7`) |
+//!
+//! The exact arithmetic returns the same bits on every path, so it has one revision and
+//! one code. The reassociated arithmetic's bits depend on the dispatch path, so its
+//! evidence names the path and each path is its own revision, bound to the one code an
+//! image built on that path records. [`crate::guard::validate_guard`] accepts exactly
+//! these rows; an identifier carrying another row's revision, or a payload recording a
+//! code its guard's revision does not name, is a profile failure.
 
-use purrdf_core::distance::{Arithmetic, Exact};
+use purrdf_core::distance::{Arithmetic, Exact, Path, Reassociated};
 use purrdf_core::{ArtifactIdentity, ArtifactIdentityKind, ContentDigest, IndexLossContract};
 
 use crate::error::{HnswError, Result};
@@ -129,6 +151,13 @@ use crate::params::Params;
 /// The same string as [`crate::IMPLEMENTATION_ID`]; re-exported through this module so a
 /// consumer that reads the profile does not have to hop between modules.
 pub use crate::IMPLEMENTATION_ID;
+
+/// The stable identifier of the HNSW implementation whose distances are computed under
+/// the [`Reassociated`] arithmetic.
+///
+/// The same string as [`crate::IMPLEMENTATION_ID_REASSOCIATED`], re-exported beside
+/// [`IMPLEMENTATION_ID`].
+pub use crate::IMPLEMENTATION_ID_REASSOCIATED;
 
 /// The stable identifier of the canonical parameter encoding.
 pub const PARAMETER_ENCODING: &str =
@@ -142,6 +171,145 @@ pub const IMPLEMENTATION_MEDIA_TYPE: &str =
 pub const LOSS_EVIDENCE: &str = "approximate: recall measured against the exact oracle on \
      synthetic corpora up to 50,000 rows, and UNMEASURED at the 10^6 scale this index exists \
      for; an offer of candidates is never a proof of absence";
+
+/// The sentence a reassociated evidence revision closes with.
+///
+/// Its own sentence, after the arithmetic's evidence, because it states a different
+/// fact: not how the numbers may differ, but who can reproduce the image they built.
+const REASSOCIATED_REPRODUCIBILITY: &str =
+    "Its canonical image is reproducible only by a build running the same dispatch path.";
+
+/// The approximation evidence of an index whose distances are computed under the
+/// [`Reassociated`] arithmetic along `path`: [`LOSS_EVIDENCE`], then the arithmetic's
+/// own evidence for the path, then the reproducibility sentence.
+///
+/// It is carried as that implementation's revision, so a guard over a reassociated index
+/// publishes, in the artifact, both what the graph does not promise and what its last
+/// bits do not.
+#[must_use]
+pub fn loss_evidence_reassociated(path: Path) -> String {
+    loss_evidence_for::<Reassociated>(path)
+}
+
+/// The approximation evidence of an index computed under arithmetic `A` along `path`.
+///
+/// [`LOSS_EVIDENCE`] for an arithmetic whose bits are the same on every path (it has no
+/// evidence of its own); otherwise [`LOSS_EVIDENCE`], `"; "`, the arithmetic's evidence
+/// along `path`, and the sentence saying that the canonical image is reproducible only on
+/// that path.
+#[must_use]
+pub fn loss_evidence_for<A: Arithmetic>(path: Path) -> String {
+    A::evidence(path).map_or_else(
+        || LOSS_EVIDENCE.to_owned(),
+        |evidence| format!("{LOSS_EVIDENCE}; {evidence}. {REASSOCIATED_REPRODUCIBILITY}"),
+    )
+}
+
+/// The implementation identifier of the index whose distances arithmetic `A` computes.
+///
+/// # Panics
+///
+/// Never: `Arithmetic` is sealed, and every implementation of it is a row of the table
+/// this reads.
+#[must_use]
+pub fn implementation_id_for<A: Arithmetic>() -> &'static str {
+    IMPLEMENTATIONS
+        .iter()
+        .find(|(law, _)| *law == A::ID)
+        .map_or_else(
+            || unreachable!("{} is an arithmetic this profile publishes", A::ID),
+            |(_, identifier)| *identifier,
+        )
+}
+
+/// The implementation identifier each arithmetic's index publishes, by law.
+const IMPLEMENTATIONS: [(&str, &str); 2] = [
+    (Exact::ID, IMPLEMENTATION_ID),
+    (Reassociated::ID, IMPLEMENTATION_ID_REASSOCIATED),
+];
+
+/// Every dispatch path an arithmetic resolves to, so the published rows can be derived
+/// from each arithmetic's own `image_code`.
+///
+/// A path added to `purrdf_core::distance::Path` and missing here would leave a code
+/// with no published row; `every_image_code_has_a_published_row` compares the codes
+/// gathered here with each arithmetic's `IMAGE_CODES`.
+pub(crate) const PATHS: [Path; 8] = [
+    Path::Portable,
+    Path::Avx2,
+    Path::Sse2,
+    Path::Avx2Fma,
+    Path::Avx512f,
+    Path::Neon,
+    Path::WasmSimd128,
+    Path::WasmScalar,
+];
+
+/// One implementation this profile publishes: its identifier, the law it computes
+/// under, the evidence revision it binds, and the image codes a payload under it may
+/// record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Published {
+    /// The implementation identifier.
+    pub implementation: &'static str,
+    /// The arithmetic's stable identifier.
+    pub arithmetic: &'static str,
+    /// The evidence revision the identity carries.
+    pub revision: String,
+    /// The image codes a payload under this row records, ascending.
+    pub codes: Vec<u32>,
+}
+
+/// Every implementation this profile publishes, derived from [`Exact`] and
+/// [`Reassociated`]: one row per distinct evidence revision of each.
+pub(crate) fn published() -> Vec<Published> {
+    let mut rows = Vec::new();
+    publish::<Exact>(&mut rows);
+    publish::<Reassociated>(&mut rows);
+    rows
+}
+
+/// Append arithmetic `A`'s rows: its paths grouped by the revision each publishes.
+fn publish<A: Arithmetic>(rows: &mut Vec<Published>) {
+    for path in PATHS {
+        let Some(code) = A::image_code(path) else {
+            continue;
+        };
+        let revision = loss_evidence_for::<A>(path);
+        match rows
+            .iter_mut()
+            .find(|row| row.arithmetic == A::ID && row.revision == revision)
+        {
+            Some(row) => {
+                if !row.codes.contains(&code) {
+                    row.codes.push(code);
+                    row.codes.sort_unstable();
+                }
+            }
+            None => rows.push(Published {
+                implementation: implementation_id_for::<A>(),
+                arithmetic: A::ID,
+                revision,
+                codes: vec![code],
+            }),
+        }
+    }
+}
+
+/// A human label for an image arithmetic code: the law, and for a code that names a
+/// dispatch path, the path.
+pub(crate) fn path_label(code: u32) -> String {
+    if Exact::IMAGE_CODES.contains(&code) {
+        return Exact::ID.to_owned();
+    }
+    PATHS
+        .iter()
+        .find(|path| Reassociated::image_code(**path) == Some(code))
+        .map_or_else(
+            || "a code no arithmetic of this build defines".to_owned(),
+            |path| format!("{} along {path}", Reassociated::ID),
+        )
+}
 
 /// The parameter block's tag for `M`.
 pub const PARAM_M: u16 = 1;
@@ -163,11 +331,12 @@ const WIRE_U64: u8 = 4;
 /// The critical-field flag bit.
 const FLAG_CRITICAL: u8 = 1;
 
-/// The implementation identity this profile binds into every guard.
+/// The implementation identity this profile binds into every guard over an exact index.
 ///
 /// The digest is a domain-separated SHA-256 over the profile declaration, and the revision
 /// bytes are [`LOSS_EVIDENCE`] — so the guard digest commits the approximation statement
-/// and not merely the algorithm name.
+/// and not merely the algorithm name. [`implementation_for`] is the same identity for
+/// either arithmetic.
 ///
 /// # Panics
 ///
@@ -175,17 +344,32 @@ const FLAG_CRITICAL: u8 = 1;
 /// constants rule out; callers cannot reach a panic.
 #[must_use]
 pub fn implementation() -> ArtifactIdentity {
+    implementation_for::<Exact>(Path::Portable)
+}
+
+/// The implementation identity of an index computed under arithmetic `A` along `path`:
+/// [`implementation_id_for`], the digest of [`profile_declaration_for`], and
+/// [`loss_evidence_for`] as the revision.
+///
+/// `path` decides nothing for an arithmetic whose bits are the same on every path.
+///
+/// # Panics
+///
+/// Panics only if the profile declaration is malformed, which the compile-time constants
+/// rule out; callers cannot reach a panic.
+#[must_use]
+pub fn implementation_for<A: Arithmetic>(path: Path) -> ArtifactIdentity {
     ArtifactIdentity::new(
-        IMPLEMENTATION_ID,
+        implementation_id_for::<A>(),
         IMPLEMENTATION_MEDIA_TYPE,
-        ContentDigest::of(profile_declaration().as_bytes()),
-        Some(LOSS_EVIDENCE.as_bytes().to_vec()),
+        ContentDigest::of(profile_declaration_for::<A>(path).as_bytes()),
+        Some(loss_evidence_for::<A>(path).into_bytes()),
         ArtifactIdentityKind::Single,
     )
     .expect("the HNSW profile declaration is static and valid")
 }
 
-/// The exact bytes whose SHA-256 is the implementation identity's digest.
+/// The exact bytes whose SHA-256 is the exact index's implementation identity digest.
 ///
 /// A stable, human-readable declaration rather than a serialized struct: it has no host
 /// layout and no trailing version-dependent representation, so the digest is a function of
@@ -193,20 +377,35 @@ pub fn implementation() -> ArtifactIdentity {
 /// the recorded distances were folded under as well as the algorithm.
 #[must_use]
 pub fn profile_declaration() -> String {
+    profile_declaration_for::<Exact>(Path::Portable)
+}
+
+/// The profile declaration of an index computed under arithmetic `A` along `path`.
+///
+/// Folds `A::ID`, the implementation identifier and the evidence revision, so two
+/// arithmetics -- and, for a reassociated index, two dispatch paths -- declare two
+/// different profiles with two different digests.
+#[must_use]
+pub fn profile_declaration_for<A: Arithmetic>(path: Path) -> String {
     format!(
-        "{IMPLEMENTATION_ID}\n{PARAMETER_ENCODING}\n{}\n{}\narithmetic={}\n{LOSS_EVIDENCE}",
+        "{}\n{PARAMETER_ENCODING}\n{}\n{}\narithmetic={}\n{}",
+        implementation_id_for::<A>(),
         crate::INDEX_MEDIA_TYPE,
         "approximate=true;transforms_vectors=false",
-        Exact::ID
+        A::ID,
+        loss_evidence_for::<A>(path)
     )
 }
 
-/// The loss contract every HNSW guard carries.
+/// The loss contract every HNSW guard carries, under either arithmetic.
 ///
 /// Approximate (PURREMB's loss contract writes the `approximate = true` field itself) and
 /// non-transforming: an HNSW graph stores no vectors, so no quantization contract applies
 /// and `loss_encoding`/`loss_parameters` are absent, exactly as rdf-core requires for
-/// `transforms_vectors == false`.
+/// `transforms_vectors == false`. The arithmetic is not a transform: it decides how a
+/// distance is rounded and changes no stored vector, so a reassociated index carries the
+/// same contract and records its arithmetic in the image field and the implementation
+/// identity instead.
 #[must_use]
 pub const fn loss_contract() -> IndexLossContract {
     IndexLossContract {
@@ -447,6 +646,94 @@ mod tests {
         assert_eq!(lines[3], "approximate=true;transforms_vectors=false");
         assert_eq!(lines[5], LOSS_EVIDENCE);
         assert_eq!(PAYLOAD_VERSION, 2);
+    }
+
+    #[test]
+    fn the_reassociated_evidence_is_pinned() {
+        // Literal, so a change to any of its three parts is a visible edit of an
+        // artifact-bound sentence and not a silent consequence of one.
+        assert_eq!(
+            loss_evidence_reassociated(Path::Avx2Fma),
+            "approximate: recall measured against the exact oracle on synthetic corpora up \
+             to 50,000 rows, and UNMEASURED at the 10^6 scale this index exists for; an offer \
+             of candidates is never a proof of absence; reassociated binary64 arithmetic: \
+             distance sums are reassociated and may be contracted to fused multiply-add along \
+             the avx2+fma dispatch path of this build, so results may differ in the last bits \
+             from the exact arithmetic and between dispatch paths or builds, the sign of a \
+             zero result is unspecified, and near-ties may order differently. Its canonical \
+             image is reproducible only by a build running the same dispatch path."
+        );
+        for path in PATHS {
+            let Some(evidence) = Reassociated::evidence(path) else {
+                panic!("the reassociated arithmetic names its evidence along {path}");
+            };
+            assert_eq!(
+                loss_evidence_reassociated(path),
+                format!("{LOSS_EVIDENCE}; {evidence}. {REASSOCIATED_REPRODUCIBILITY}")
+            );
+        }
+        // The neighbour: the exact arithmetic has no evidence, so its revision is the
+        // profile's sentence alone.
+        assert_eq!(loss_evidence_for::<Exact>(Path::Portable), LOSS_EVIDENCE);
+    }
+
+    #[test]
+    fn every_image_code_has_a_published_row() {
+        let rows = published();
+        for (law, codes) in [
+            (Exact::ID, Exact::IMAGE_CODES),
+            (Reassociated::ID, Reassociated::IMAGE_CODES),
+        ] {
+            let mut gathered: Vec<u32> = rows
+                .iter()
+                .filter(|row| row.arithmetic == law)
+                .flat_map(|row| row.codes.iter().copied())
+                .collect();
+            gathered.sort_unstable();
+            assert_eq!(gathered, codes, "{law}: a code with no published row");
+        }
+        let exact: Vec<&Published> = rows
+            .iter()
+            .filter(|row| row.arithmetic == Exact::ID)
+            .collect();
+        assert_eq!(
+            exact.len(),
+            1,
+            "the exact arithmetic publishes one revision"
+        );
+        assert_eq!(exact[0].implementation, IMPLEMENTATION_ID);
+        assert_eq!(exact[0].revision, LOSS_EVIDENCE);
+        for row in rows.iter().filter(|row| row.arithmetic == Reassociated::ID) {
+            assert_eq!(row.implementation, IMPLEMENTATION_ID_REASSOCIATED);
+            assert_eq!(row.codes.len(), 1, "a reassociated revision names one path");
+        }
+        let revisions: std::collections::BTreeSet<&str> =
+            rows.iter().map(|row| row.revision.as_str()).collect();
+        assert_eq!(revisions.len(), rows.len(), "no two rows share a revision");
+    }
+
+    #[test]
+    fn the_reassociated_declaration_binds_its_arithmetic_and_path() {
+        let declaration = profile_declaration_for::<Reassociated>(Path::Sse2);
+        let lines: Vec<&str> = declaration.lines().collect();
+        assert_eq!(lines.len(), 6);
+        assert_eq!(lines[0], IMPLEMENTATION_ID_REASSOCIATED);
+        assert_eq!(lines[4], "arithmetic=binary64-reassociated-v1");
+        assert_eq!(lines[5], loss_evidence_reassociated(Path::Sse2));
+        // Two paths are two profiles, and neither is the exact one.
+        assert_ne!(
+            declaration,
+            profile_declaration_for::<Reassociated>(Path::Avx2Fma)
+        );
+        assert_ne!(
+            implementation_for::<Reassociated>(Path::Sse2).digest,
+            implementation().digest
+        );
+        assert_eq!(implementation_id_for::<Exact>(), IMPLEMENTATION_ID);
+        assert_eq!(
+            implementation_id_for::<Reassociated>(),
+            IMPLEMENTATION_ID_REASSOCIATED
+        );
     }
 
     #[test]

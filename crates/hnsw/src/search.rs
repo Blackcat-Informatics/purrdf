@@ -18,14 +18,16 @@
 //!   on it — a cache hit and a recomputation return the same bits — so it is
 //!   digest-neutral by construction; it exists only to stop the build evaluating a pair
 //!   it already knows.
-//! * [`Query`] binds the query row, its norm, the resolved exact arithmetic and the
-//!   cache into the one closure every distance in a search goes through, so no call site
-//!   can accidentally rank by a differently-computed number.
+//! * [`Query`] binds the query row, its norm, the resolved arithmetic and the cache into
+//!   the one closure every distance in a search goes through, so no call site can
+//!   accidentally rank by a differently-computed number. The arithmetic is a type
+//!   parameter: an exact search and a reassociated one are two compilations of this
+//!   module, and neither can reach the other's kernels.
 //!
 //! # Expansion is one batch per node
 //!
 //! Expanding a node scores every unvisited neighbour it links to. Those neighbours are
-//! collected first and scored by **one** call to the exact batch kernel
+//! collected first and scored by **one** call to the arithmetic's batch kernel
 //! (`distances_indexed`), with the query held across the batch and the dispatch path
 //! already resolved, and only then admitted to the beam one at a time in adjacency order.
 //! Scoring cannot depend on admission, so batching changes nothing but how often the
@@ -37,7 +39,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 
-use purrdf_core::distance::{Exact, Resolved};
+use purrdf_core::distance::{Arithmetic, Resolved};
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
 use crate::error::{HnswError, Result};
@@ -157,11 +159,11 @@ impl DistanceCache {
 /// of the matrix. That is the general case: an embedding search takes free text, embeds it,
 /// and asks for the neighbours of a vector that was never stored. Searching from a stored
 /// row is the special case, where the slice happens to be `matrix.row(seed)`.
-pub(crate) struct Query<'a> {
+pub(crate) struct Query<'a, A: Arithmetic> {
     matrix: &'a VectorMatrix,
     kernel: Kernel,
-    /// The exact arithmetic, resolved for the thread running this search.
-    arithmetic: Resolved<Exact>,
+    /// The arithmetic, resolved for the thread running this search.
+    arithmetic: Resolved<A>,
     norms: &'a [f64],
     cache: &'a DistanceCache,
     /// What every candidate is ranked against.
@@ -182,7 +184,7 @@ enum Target<'a> {
     Row(usize),
 }
 
-impl<'a> Query<'a> {
+impl<'a, A: Arithmetic> Query<'a, A> {
     /// Bind an arbitrary vector as the search's query.
     ///
     /// `vector` must have the matrix's dimension; the caller validates that once rather than
@@ -190,7 +192,7 @@ impl<'a> Query<'a> {
     pub(crate) fn from_vector(
         matrix: &'a VectorMatrix,
         kernel: Kernel,
-        arithmetic: Resolved<Exact>,
+        arithmetic: Resolved<A>,
         norms: &'a [f64],
         cache: &'a DistanceCache,
         vector: &'a [f64],
@@ -218,7 +220,7 @@ impl<'a> Query<'a> {
     pub(crate) fn new(
         matrix: &'a VectorMatrix,
         kernel: Kernel,
-        arithmetic: Resolved<Exact>,
+        arithmetic: Resolved<A>,
         norms: &'a [f64],
         cache: &'a DistanceCache,
         query_row: usize,
@@ -369,9 +371,9 @@ pub(crate) fn norm_of(norms: &[f64], row: usize) -> f64 {
 /// Returns the node reached and its distance. Each layer is hill-climbed until no
 /// neighbour improves, which is the `ef = 1` special case of the beam. `from_layer` must
 /// not be below `to_layer`; if it is, the entry is returned unchanged.
-pub(crate) fn greedy_descend(
+pub(crate) fn greedy_descend<A: Arithmetic>(
     graph: &Graph,
-    query: &Query<'_>,
+    query: &Query<'_, A>,
     entry: usize,
     from_layer: u32,
     to_layer: u32,
@@ -419,9 +421,9 @@ pub(crate) fn greedy_descend(
 /// `entry_points` must all exist at `layer`. The returned vector is strictly sorted by
 /// [`Ranked`] (`(distance, row)`), so its first `n` entries are the `n` nearest of the
 /// explored set for every `n`.
-pub(crate) fn search_layer(
+pub(crate) fn search_layer<A: Arithmetic>(
     graph: &Graph,
-    query: &Query<'_>,
+    query: &Query<'_, A>,
     visited: &mut Visited,
     entry_points: &[usize],
     layer: u32,
@@ -487,7 +489,7 @@ pub(crate) fn search_layer(
 mod tests {
     use super::*;
     use crate::params::Params;
-    use purrdf_core::distance::Arithmetic;
+    use purrdf_core::distance::Exact;
 
     fn exact() -> Resolved<Exact> {
         Exact::resolve().expect("the test thread runs the default float environment")

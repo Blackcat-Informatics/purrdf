@@ -34,7 +34,10 @@
 //! moved and why. If native and wasm DISAGREE, the portability guarantee has broken and
 //! the digest is the least interesting part of the problem.
 
+use purrdf_core::DistanceMetric;
+use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_hnsw::determinism::{CORPUS_ROWS, corpus_len, digest, digest_serial};
+use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, level::splitmix64};
 use rayon::ThreadPoolBuilder;
 
 /// The pinned digest of the profile-rule build.
@@ -114,5 +117,44 @@ fn the_digest_is_not_vacuous() {
     assert_ne!(
         GOLDEN_DIGEST, 0xcbf2_9ce4_8422_2325,
         "the golden must differ from FNV-1a's unfolded offset basis"
+    );
+}
+
+/// The control for the reassociated surface: adding a second arithmetic moved nothing the
+/// exact index publishes. The pinned exact digest still holds, and it holds beside a
+/// reassociated build of the same shape whose image differs from the exact one in the
+/// header's arithmetic field -- so this control can tell the exact image from the fast one,
+/// and a reassociated arithmetic leaking into the exact build would move the digest.
+#[test]
+fn exact_image_golden_unchanged_by_reassociated_surface() {
+    assert_eq!(
+        digest(),
+        GOLDEN_DIGEST,
+        "the exact index's canonical image moved; the reassociated surface must leave it \
+         byte for byte where it was"
+    );
+
+    let mut state = 0x5eed_f00d_7e57_0001_u64;
+    let data: Vec<f64> = (0..64 * 96)
+        .map(|_| {
+            state = splitmix64(state);
+            ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+        })
+        .collect();
+    let matrix = VectorMatrix::new(64, 96, data).expect("a valid matrix");
+    let params = Params::new(8, 16, 32, 8).expect("valid parameters");
+    let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)
+        .expect("builds");
+    let fast = HnswIndex::build_reassociated(matrix, &DistanceMetric::SquaredEuclidean, params)
+        .expect("builds");
+    let (exact_image, fast_image) = (exact.canonical_image(), fast.canonical_image());
+    let code = |image: &[u8]| u32::from_le_bytes(image[60..64].try_into().expect("four bytes"));
+    assert_eq!(code(&exact_image), Exact::IMAGE_CODE);
+    assert!(Reassociated::IMAGE_CODES.contains(&code(&fast_image)));
+    assert_ne!(exact_image, fast_image);
+    assert_eq!(
+        exact_image[..60],
+        fast_image[..60],
+        "the header before the arithmetic field is the same identity"
     );
 }

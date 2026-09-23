@@ -44,8 +44,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::{Arithmetic, Reassociated};
 use purrdf_hnsw::level::splitmix64;
-use purrdf_hnsw::{HnswIndex, IMPLEMENTATION_ID, INDEX_MEDIA_TYPE, Params, VectorMatrix, profile};
+use purrdf_hnsw::{
+    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params,
+    VectorMatrix, profile,
+};
 use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
 use std::fmt::Write as _;
 
@@ -255,12 +259,37 @@ struct Run {
     offered: u64,
 }
 
+/// The distance the index must report for a `(query, row)` pair: the shared kernel under
+/// the index's own arithmetic.
+type Oracle<'a> = &'a dyn Fn(&[f64], f64, &[f64], f64) -> f64;
+
+/// The exact kernel, as the exact index's oracle.
+fn exact_oracle(query: &[f64], query_norm: f64, row: &[f64], row_norm: f64) -> f64 {
+    KERNEL
+        .distance(query, query_norm, row, row_norm)
+        .expect("the fixture is finite and the kernel keeps it so")
+}
+
 /// Search one `(fixture, ef, k)` regime exhaustively and return its receipt entry.
 ///
 /// Every returned row is compared to the exact oracle's distance for that pair, the offer's
 /// order is checked against the shared `Ranked` total order, and recall is the fraction of
 /// the exact `k` nearest that was offered.
 fn run_regime(fixture: &Fixture, index: &HnswIndex, norms: &[f64], ef: usize, k: usize) -> Run {
+    run_regime_under(fixture, index, norms, ef, k, &exact_oracle)
+}
+
+/// [`run_regime`] for an index under any arithmetic, whose reported distances must equal
+/// `oracle`'s bits. Recall is always counted against the EXACT top-`k`: the approximation
+/// is graded against the exact answer whatever arithmetic the index ranks under.
+fn run_regime_under<A: Arithmetic>(
+    fixture: &Fixture,
+    index: &HnswIndex<A>,
+    norms: &[f64],
+    ef: usize,
+    k: usize,
+    oracle: Oracle<'_>,
+) -> Run {
     let params = index.params();
     let rows = fixture.matrix.rows();
     let mut observations = Vec::with_capacity(rows);
@@ -296,19 +325,18 @@ fn run_regime(fixture: &Fixture, index: &HnswIndex, norms: &[f64], ef: usize, k:
                 fixture.name,
                 scored.row
             );
-            let exact_distance = KERNEL
-                .distance(
-                    fixture.matrix.row(query),
-                    norms[query],
-                    fixture.matrix.row(scored.row),
-                    norms[scored.row],
-                )
-                .expect("the fixture is finite and the kernel keeps it so");
+            let exact_distance = oracle(
+                fixture.matrix.row(query),
+                norms[query],
+                fixture.matrix.row(scored.row),
+                norms[scored.row],
+            );
             assert_eq!(
                 scored.distance.to_bits(),
                 exact_distance.to_bits(),
                 "{}: ef={ef} k={k} query={query} row={} — the index reported {:#x} but the \
-                 exact kernel computes {:#x}; a second distance implementation has drifted",
+                 shared kernel computes {:#x} under the index's arithmetic; a second \
+                 distance implementation has drifted",
                 fixture.name,
                 scored.row,
                 scored.distance.to_bits(),
@@ -369,10 +397,10 @@ fn run_regime(fixture: &Fixture, index: &HnswIndex, norms: &[f64], ef: usize, k:
     let run = json!({
         "fixture": fixture.name,
         "index_identity": {
-            "implementation": IMPLEMENTATION_ID,
+            "implementation": profile::implementation_id_for::<A>(),
             "parameter_encoding": profile::PARAMETER_ENCODING,
             "payload_media_type": INDEX_MEDIA_TYPE,
-            "loss_evidence": profile::LOSS_EVIDENCE,
+            "loss_evidence": profile::loss_evidence_for::<A>(index.arithmetic().path()),
             "canonical_image_digest": format!("{digest:016x}"),
         },
         "metric": "squared-euclidean",
@@ -412,13 +440,18 @@ fn receipt_dir() -> PathBuf {
 
 /// A receipt document: the schema, the profile, and every run.
 fn receipt(name: &str, runs: &[Value]) -> Value {
+    receipt_for(name, IMPLEMENTATION_ID, profile::LOSS_EVIDENCE, runs)
+}
+
+/// A receipt document for the implementation `implementation` publishing `evidence`.
+fn receipt_for(name: &str, implementation: &str, evidence: &str, runs: &[Value]) -> Value {
     json!({
         "schema": "purrdf-hnsw-conformance-receipt-v1",
         "receipt": name,
-        "implementation": IMPLEMENTATION_ID,
+        "implementation": implementation,
         "parameter_encoding": profile::PARAMETER_ENCODING,
         "payload_media_type": INDEX_MEDIA_TYPE,
-        "loss_evidence": profile::LOSS_EVIDENCE,
+        "loss_evidence": evidence,
         "runs": runs,
     })
 }
@@ -440,6 +473,11 @@ fn emit(name: &str, document: &Value) -> PathBuf {
 
 /// Read a receipt back and assert the schema every run must carry.
 fn reread(path: &Path) -> Value {
+    reread_for(path, IMPLEMENTATION_ID)
+}
+
+/// [`reread`] for a receipt of the implementation `implementation`.
+fn reread_for(path: &Path, implementation: &str) -> Value {
     let text = std::fs::read_to_string(path).expect("the emitted receipt reads back");
     let value: Value = serde_json::from_str(&text).expect("the emitted receipt is valid JSON");
     let runs = value["runs"]
@@ -454,7 +492,7 @@ fn reread(path: &Path) -> Value {
         );
         assert_eq!(
             run["index_identity"]["implementation"],
-            json!(IMPLEMENTATION_ID)
+            json!(implementation)
         );
         assert!(
             run["index_identity"]["canonical_image_digest"].is_string(),
@@ -599,17 +637,25 @@ const RECALL_GOLDEN: [(&str, usize, usize, u64, u64); 96] = [
     ("boundary-1d-16x1", 3, 10, 16, 16),
 ];
 
-/// The gate: the whole family, every regime, every result against the exact oracle.
-#[test]
-fn every_result_is_compared_to_the_exact_oracle() {
-    let fixtures = family();
-    let regimes = [
+/// The four regimes the gate grades, in [`RECALL_GOLDEN`]'s ordinal order.
+fn regimes() -> [Params; 4] {
+    [
         params(4, 8, 16, 1),
         params(4, 8, 16, 4),
         params(4, 8, 16, 16),
         params(2, 2, 2, 1),
-    ];
-    let ks = [1_usize, 5, 10];
+    ]
+}
+
+/// The `k` values the gate grades, in [`RECALL_GOLDEN`]'s order.
+const KS: [usize; 3] = [1, 5, 10];
+
+/// The gate: the whole family, every regime, every result against the exact oracle.
+#[test]
+fn every_result_is_compared_to_the_exact_oracle() {
+    let fixtures = family();
+    let regimes = regimes();
+    let ks = KS;
     let mut runs = Vec::new();
     let mut missed_anywhere = false;
     let mut measured: Vec<(&str, usize, usize, u64, u64)> = Vec::new();
@@ -784,4 +830,100 @@ fn tied_distances_break_by_row_in_both_paths() {
         value["runs"].as_array().expect("runs").len(),
         fixtures.len()
     );
+}
+
+/// The reassociated index over the whole conformance family: every distance it offers is
+/// the reassociated kernel's, bit for bit, on the path the index recorded, and every
+/// offer is well-formed under the shared order. Its receipt names the reassociated
+/// implementation and the evidence of that path.
+#[test]
+fn reassociated_distances_match_reassociated_kernel() {
+    let resolved = Reassociated::resolve().expect("the test thread runs the default environment");
+    let oracle = |query: &[f64], query_norm: f64, row: &[f64], row_norm: f64| {
+        KERNEL
+            .distance_reassociated(resolved, query, query_norm, row, row_norm)
+            .expect("the fixture is finite and the kernel keeps it so")
+    };
+    let mut runs = Vec::new();
+    for fixture in &family() {
+        let norms = norms_of(&fixture.matrix);
+        for regime in regimes() {
+            let index = HnswIndex::build_reassociated(fixture.matrix.clone(), &METRIC, regime)
+                .expect("the fixture builds");
+            assert_eq!(
+                index.arithmetic(),
+                resolved,
+                "{}: the index records the path this process resolves",
+                fixture.name
+            );
+            assert!(
+                index.verify_rebuild().expect("the rebuild succeeds"),
+                "{}: a reassociated index is a pure function of its input on its own path",
+                fixture.name
+            );
+            for &k in &KS {
+                runs.push(
+                    run_regime_under(fixture, &index, &norms, regime.ef_search(), k, &oracle).json,
+                );
+            }
+        }
+    }
+    let evidence = profile::loss_evidence_reassociated(resolved.path());
+    let path = emit(
+        "reassociated-conformance",
+        &receipt_for(
+            "reassociated-conformance",
+            IMPLEMENTATION_ID_REASSOCIATED,
+            &evidence,
+            &runs,
+        ),
+    );
+    let value = reread_for(&path, IMPLEMENTATION_ID_REASSOCIATED);
+    assert_eq!(value["runs"].as_array().expect("runs").len(), runs.len());
+    assert_eq!(value["loss_evidence"], json!(evidence));
+}
+
+/// The reassociated index's recall, graded against the exact oracle exactly as the exact
+/// index's is, meets the exact index's pinned recall on every conformance regime.
+///
+/// The floor is [`RECALL_GOLDEN`] itself: the exact index's measured hit count for the
+/// same fixture, parameters and `k`. The reassociated arithmetic moves only last bits, so
+/// a graph it builds may differ where candidates nearly tie; this asserts that no such
+/// difference costs a single oracle row against the exact build on this family.
+#[test]
+fn reassociated_recall_meets_exact_floor() {
+    let resolved = Reassociated::resolve().expect("the test thread runs the default environment");
+    let oracle = |query: &[f64], query_norm: f64, row: &[f64], row_norm: f64| {
+        KERNEL
+            .distance_reassociated(resolved, query, query_norm, row, row_norm)
+            .expect("the fixture is finite and the kernel keeps it so")
+    };
+    let mut measured: Vec<(&str, usize, usize, u64, u64)> = Vec::new();
+    for fixture in &family() {
+        let norms = norms_of(&fixture.matrix);
+        for (ordinal, regime) in regimes().into_iter().enumerate() {
+            let index = HnswIndex::build_reassociated(fixture.matrix.clone(), &METRIC, regime)
+                .expect("the fixture builds");
+            for &k in &KS {
+                let run = run_regime_under(fixture, &index, &norms, regime.ef_search(), k, &oracle);
+                measured.push((fixture.name, ordinal, k, run.hits, run.offered));
+            }
+        }
+    }
+    assert_eq!(measured.len(), RECALL_GOLDEN.len());
+    let below: Vec<String> = measured
+        .iter()
+        .zip(RECALL_GOLDEN.iter())
+        .filter(|(fast, floor)| fast.3 < floor.3)
+        .map(|(fast, floor)| format!("{fast:?} is below the exact floor {floor:?}"))
+        .collect();
+    assert!(
+        below.is_empty(),
+        "reassociated recall on the {} path fell below the exact index's pinned recall:\n{}",
+        resolved.path(),
+        below.join("\n")
+    );
+    // The floor is not vacuous: the family includes regimes whose exact recall is short of
+    // every row, so a fast build that lost rows there would be seen.
+    assert!(RECALL_GOLDEN.iter().any(|entry| entry.3 < entry.4));
 }

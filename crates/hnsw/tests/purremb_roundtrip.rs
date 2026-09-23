@@ -17,6 +17,7 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+use purrdf_core::distance::{Arithmetic, Path, Reassociated};
 use purrdf_core::{EmbeddingView, IndexUseRole, verify_embedding};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, profile, relation::HnswSpace};
 use purrdf_sparql_eval::{Completeness, KnnGuard, OrderFidelity, PropertyFunction};
@@ -373,4 +374,116 @@ fn the_profiles_own_evidence_and_loss_contract_still_bind_and_are_what_fidelity_
         "a graph over untransformed vectors compares exact distances for every candidate it \
          visits, so the rows it does return are in true relative order"
     );
+}
+
+/// The guard's profile, read back from `artifact`, or its refusal.
+fn validated(artifact: &[u8]) -> purrdf_hnsw::Result<Params> {
+    let mut view = EmbeddingView::from_bytes(artifact).expect("the artifact opens");
+    verify_embedding(&mut view).expect("the artifact verifies");
+    let selected = guard::select(&view).expect("the guard names the profile");
+    guard::validate_guard(&selected)
+}
+
+/// The description of a `GuardProfile` refusal, or a panic naming what was raised instead.
+fn profile_refusal(error: HnswError) -> String {
+    match error {
+        HnswError::GuardProfile { description } => description,
+        other => panic!("expected a profile refusal, got {other}"),
+    }
+}
+
+#[test]
+fn guard_refuses_cross_paired_profile() {
+    let exact = purremb::Fixture::new(24, 4, params());
+    let fast = purremb::Fixture::new_reassociated(24, 4, params());
+    let path = Reassociated::resolve()
+        .expect("the test thread runs the default float environment")
+        .path();
+
+    // The two legal pairings: each implementation with its own arithmetic's evidence, and
+    // a payload recording a code that evidence names. Both validate and both load.
+    assert_eq!(validated(&exact.bytes).expect("validates"), params());
+    assert_eq!(validated(&fast.bytes).expect("validates"), params());
+    assert_eq!(
+        fast.guard_contract.implementation.identifier,
+        profile::IMPLEMENTATION_ID_REASSOCIATED
+    );
+    assert!(
+        HnswSpace::from_artifact(
+            &exact.bytes,
+            exact.target_set,
+            exact.vector_space,
+            exact.bindings(),
+            KnnGuard::new(24, 24).expect("valid"),
+        )
+        .is_ok()
+    );
+    let space = HnswSpace::from_artifact_reassociated(
+        &fast.bytes,
+        fast.target_set,
+        fast.vector_space,
+        fast.bindings(),
+        KnnGuard::new(24, 24).expect("valid"),
+    )
+    .expect("the reassociated space binds");
+    assert_eq!(space.evidence(), profile::loss_evidence_reassociated(path));
+
+    // Illegal: the exact implementation carrying the reassociated evidence.
+    let mut crossed = profile::implementation();
+    crossed.revision = Some(profile::loss_evidence_reassociated(path).into_bytes());
+    let refusal = profile_refusal(
+        validated(&exact.with_implementation(crossed)).expect_err("a cross pairing is refused"),
+    );
+    assert!(
+        refusal.contains("`hnsw-v2` carries the evidence revision `hnsw-reassociated-v2`"),
+        "{refusal}"
+    );
+
+    // Illegal: the reassociated implementation carrying the exact evidence.
+    let mut crossed = profile::implementation_for::<Reassociated>(path);
+    crossed.revision = Some(profile::LOSS_EVIDENCE.as_bytes().to_vec());
+    let refusal = profile_refusal(
+        validated(&fast.with_implementation(crossed)).expect_err("a cross pairing is refused"),
+    );
+    assert!(
+        refusal.contains("`hnsw-reassociated-v2` carries the evidence revision `hnsw-v2`"),
+        "{refusal}"
+    );
+
+    // Illegal: a legal reassociated identity for ANOTHER path over this path's payload. The
+    // guard alone is a published row, so it validates; the pairing of that row with the
+    // payload's recorded code is what the load refuses.
+    let other = [
+        Path::Sse2,
+        Path::Avx2Fma,
+        Path::Avx512f,
+        Path::Neon,
+        Path::WasmSimd128,
+    ]
+    .into_iter()
+    .find(|candidate| *candidate != path)
+    .expect("another reassociated path exists");
+    let elsewhere = fast.with_implementation(profile::implementation_for::<Reassociated>(other));
+    assert_eq!(
+        validated(&elsewhere).expect("the row alone is legal"),
+        params()
+    );
+    let mut view = EmbeddingView::from_bytes(&elsewhere).expect("the artifact opens");
+    verify_embedding(&mut view).expect("the artifact verifies");
+    let selected = guard::select(&view).expect("the guard names the profile");
+    let refusal = profile_refusal(
+        guard::load_reassociated(&selected, fast.matrix.clone())
+            .expect_err("a guard naming another path than its payload is refused"),
+    );
+    assert!(refusal.contains("two different compilations"), "{refusal}");
+
+    // And an implementation loaded as the other arithmetic is refused at the guard, before
+    // any payload is decoded.
+    let mut view = EmbeddingView::from_bytes(&fast.bytes).expect("the artifact opens");
+    verify_embedding(&mut view).expect("the artifact verifies");
+    let selected = guard::select(&view).expect("the guard names the profile");
+    let refusal = profile_refusal(
+        guard::load(&selected, fast.matrix.clone()).expect_err("loaded as the wrong law"),
+    );
+    assert!(refusal.contains("hnsw-reassociated-v2"), "{refusal}");
 }

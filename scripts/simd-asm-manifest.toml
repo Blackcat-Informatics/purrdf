@@ -2371,13 +2371,17 @@ summary = "`metric::norm`, the normative PURREMB L2 norm, measured in `hnsw::bui
 
 [[site]]
 id = "hnsw.search-build"
-summary = "HNSW `search::search_layer` and `builder::build_graph`, the distance-bound graph walk and build"
+summary = "HNSW `search::search_layer` and `builder::build_graph`, the distance-bound graph walk and build, each compiled in `purrdf_hnsw` once per arithmetic"
 
+  # The exact index. The distance work is the `distance.exact.*` kernels these call; the
+  # counts here are the walk's own, integer lane work in the build's level assignment.
+  # Measured search v0 everywhere; build v0 (x86_64), v132 (x86_64-v3), v46 (x86_64-v4),
+  # v1 (aarch64), v49 (aarch64-neoverse-v1), v0 (wasm32), v83 (wasm32-simd128).
   [[site.measure]]
   label = "search"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_hnsw"
-  symbol = "purrdf_hnsw::search::search_layer"
+  symbol = "purrdf_hnsw::search::search_layer::<purrdf_core::distance::Exact>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2386,7 +2390,30 @@ summary = "HNSW `search::search_layer` and `builder::build_graph`, the distance-
   label = "build"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_hnsw"
-  symbol = "purrdf_hnsw::builder::build_graph"
+  symbol = "purrdf_hnsw::builder::build_graph::<purrdf_core::distance::Exact>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The reassociated index: the same walk compiled for `Reassociated` inside this crate,
+  # through the constructors that fill `Compiled`, so the instantiation the gate measures
+  # is the one every downstream search runs. Its distance work, FMA included, is the
+  # out-of-line `distance.reassociated.*` kernels it calls, so the walk itself carries no
+  # fused multiply-add. Measured identically to the exact walk on every configuration.
+  [[site.measure]]
+  label = "search reassociated"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hnsw"
+  symbol = "purrdf_hnsw::search::search_layer::<purrdf_core::distance::Reassociated>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "build reassociated"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hnsw"
+  symbol = "purrdf_hnsw::builder::build_graph::<purrdf_core::distance::Reassociated>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2398,7 +2425,7 @@ summary = "`search::DistanceCache`, the per-round `BTreeMap` distance memo, inli
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_hnsw"
-  symbol = "purrdf_hnsw::search::search_layer"
+  symbol = "purrdf_hnsw::search::search_layer::<purrdf_core::distance::Exact>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

@@ -43,7 +43,7 @@
 //! comparison depends on iteration order of a hash container and none on thread identity,
 //! so the selected set is a function of the beam alone.
 
-use purrdf_core::distance::{Exact, Resolved};
+use purrdf_core::distance::{Arithmetic, Resolved};
 use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked};
 
 use crate::error::{HnswError, Result};
@@ -62,11 +62,11 @@ use crate::search::norm_of;
 ///
 /// [`crate::error::HnswError::NonFiniteDistance`] if a candidate-to-candidate distance left
 /// the finite range.
-pub(crate) fn select_neighbors(
+pub(crate) fn select_neighbors<A: Arithmetic>(
     beam: &[Ranked],
     cap: usize,
     matrix: &VectorMatrix,
-    arithmetic: Resolved<Exact>,
+    arithmetic: Resolved<A>,
     kernel: Kernel,
     norms: &[f64],
 ) -> Result<Vec<Ranked>> {
@@ -133,7 +133,7 @@ pub(crate) fn select_neighbors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purrdf_core::distance::Arithmetic;
+    use purrdf_core::distance::Exact;
 
     fn exact() -> Resolved<Exact> {
         Exact::resolve().expect("the test thread runs the default float environment")

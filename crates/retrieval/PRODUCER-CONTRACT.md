@@ -1200,6 +1200,19 @@ bound. Both kNN relations, and the HNSW relation, also name their arithmetic in
 `RankedDeclaration::arithmetic`, which a compiled plan is identified by (below): an
 exact and a reassociated producer over one space are two plans.
 
+The reassociated HNSW relation, `HnswRelation<Reassociated>` over an index built by
+`HnswIndex::build_reassociated`, says the same thing on both of its axes. Its
+completeness axis is `Lossy` as every HNSW relation's is, and the evidence occupying
+it is the reassociated profile's own revision: the exact profile's sentence, then the
+arithmetic's evidence for the dispatch path the index was built on, then the sentence
+that its canonical image is reproducible only by a build running that path
+(`profile::loss_evidence_reassociated`), byte for byte. Its order axis composes the
+derived value with `Perturbed` carrying the arithmetic's own evidence for that path,
+the words the reassociated kNN relation carries, and then with the host's
+`OrderFidelity`, through the same `composed_order_fidelity`. It declares
+`DeclaredArithmetic::of::<Reassociated>()`. The exact HNSW relation declares what it
+always did.
+
 **This is not the attestation channel, and does not duplicate it.**
 `ServiceLevel::Incomplete` answers a different question — was the index *version*
 that served this invocation whole, given a shard that failed to load or a replica
@@ -1232,7 +1245,9 @@ Pinned by `the_declaration_carries_the_profile_evidence_byte_for_byte`,
 `a_host_that_approximated_its_vectors_declares_a_perturbed_order`,
 `a_host_that_transformed_nothing_gets_the_declaration_it_always_had` and
 `the_composition_takes_the_worse_of_the_two_and_keeps_the_hosts_words` in
-`crates/hnsw/tests/ranked_declaration.rs`; by
+`crates/hnsw/tests/ranked_declaration.rs`, with
+`reassociated_hnsw_declares_its_evidence_perturbed_order_and_law` and its exact
+control beside them; by
 `the_ranked_declaration_carries_the_fidelity_the_caller_stated` in
 `crates/sparql-eval/src/knn/tests.rs`, with
 `reassociated_relation_declares_perturbed_order`, its control

@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_core::{DistanceMetric, IndexLossContract, TermValue};
 use purrdf_hnsw::relation::{
     HnswRelation, HnswSpace, RankedHnswRegistration, composed_order_fidelity, order_fidelity,
@@ -426,4 +427,83 @@ fn a_search_within_the_beam_is_still_served() {
         .search_rows(0, 4)
         .expect("a search within the beam succeeds");
     assert!(!rows.is_empty(), "and it returns rows");
+}
+
+// --- The reassociated index declares its own arithmetic ----------------------
+
+/// A reassociated space over the same vectors [`space`] builds its exact index over.
+fn reassociated_space(rows: usize) -> Arc<HnswSpace<Reassociated>> {
+    let exact = space(rows);
+    let index = HnswIndex::build_reassociated(
+        exact.index().matrix().clone(),
+        &DistanceMetric::SquaredEuclidean,
+        params(),
+    )
+    .expect("it builds");
+    let guard = KnnGuard::new(rows as u64, rows as u64).expect("a valid guard");
+    Arc::new(HnswSpace::from_index(index, iris(rows), guard).expect("a valid space"))
+}
+
+#[test]
+fn reassociated_hnsw_declares_its_evidence_perturbed_order_and_law() {
+    let fast = reassociated_space(16);
+    let path = fast.index().arithmetic().path();
+    let evidence = profile::loss_evidence_reassociated(path);
+    assert_eq!(
+        fast.evidence(),
+        evidence,
+        "the space carries the path's revision"
+    );
+
+    let decl = HnswRelation::new(Arc::clone(&fast)).ranked_declaration(
+        stratum(),
+        TermKind::Iri,
+        XSD_INTEGER.to_owned(),
+        OrderFidelity::Faithful,
+        CandidateDomains::Unrestricted,
+    );
+    let Completeness::Lossy { evidence: lossy } = &decl.fidelity.completeness else {
+        panic!("an HNSW search offers candidates and never certifies absence");
+    };
+    assert_eq!(
+        &**lossy, evidence,
+        "the reassociated revision, byte for byte"
+    );
+    let OrderFidelity::Perturbed { evidence: order } = &decl.fidelity.order else {
+        panic!("a law whose bits depend on the path perturbs the order");
+    };
+    assert_eq!(
+        Some(&**order),
+        Reassociated::evidence(path),
+        "the order axis carries the arithmetic's own evidence, as the reassociated kNN \
+         relation's does"
+    );
+    assert_eq!(
+        decl.arithmetic
+            .map(purrdf_sparql_eval::DeclaredArithmetic::id),
+        Some(Reassociated::ID)
+    );
+
+    // The control: the exact space over the same vectors declares what it always did,
+    // so each difference above is the arithmetic's and not the fixture's.
+    let exact = declaration(&space(16));
+    let Completeness::Lossy {
+        evidence: exact_lossy,
+    } = &exact.fidelity.completeness
+    else {
+        panic!("an HNSW search offers candidates and never certifies absence");
+    };
+    assert_eq!(&**exact_lossy, profile::LOSS_EVIDENCE);
+    assert_eq!(exact.fidelity.order, OrderFidelity::Faithful);
+    assert_eq!(
+        exact
+            .arithmetic
+            .map(purrdf_sparql_eval::DeclaredArithmetic::id),
+        Some(Exact::ID)
+    );
+    assert_ne!(
+        decl.canonical_description(),
+        exact.canonical_description(),
+        "two laws are two plans"
+    );
 }

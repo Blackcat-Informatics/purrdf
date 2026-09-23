@@ -57,6 +57,32 @@ rayon workers and identical across `wasm32-unknown-unknown`, with or without
 `+simd128`. `rayon` runs
 inline-sequentially on wasm, so that build is slower but not different.
 
+## The reassociated index
+
+`HnswIndex` is generic over its distance arithmetic, `HnswIndex<A = Exact>`, and
+everything above describes the exact default. `HnswIndex::build_reassociated`
+(or `purrdf_hnsw::build_reassociated`) builds the same algorithm as a separate
+type, `HnswIndex<Reassociated>`, whose distances run through
+`purrdf_core::distance::Reassociated`: sums may be reassociated and contracted to
+fused multiply-add along the dispatch path this process resolves.
+
+* **One distance per pair.** Build, neighbour selection and search compute a
+  pair through the same compiled kernel on one path, so the graph is still a
+  pure function of its input there, and identical across worker counts.
+* **Bound to its build and its path.** Its last bits may differ from the exact
+  index's and between dispatch paths or builds, so near-tied candidates may link
+  or rank differently. The image header records the path's code, the guard names
+  the `hnsw-reassociated-v2` implementation with evidence that names the path,
+  and `decode_reassociated`, `verify_rebuild` and every search on a process that
+  runs another path are refused with `HnswError::ArithmeticPathUnavailable`
+  rather than answered with other bits.
+* **Graded against the exact oracle.** Its recall is measured against the exact
+  scan exactly as the exact index's is, and meets the exact index's pinned recall
+  on the conformance family.
+* **The loss contract is unchanged.** The arithmetic transforms no stored vector,
+  so the guard stays `transforms_vectors: false`; the choice is recorded in the
+  image field, the implementation identifier and its evidence revision.
+
 ## The approximation contract, stated honestly
 
 This is an **approximate** index, and the crate is explicit about what that
@@ -188,6 +214,7 @@ cargo test -p purrdf-hnsw                 # unit, invariant, guard and oracle su
 make wasm                                 # builds the crate for wasm32-unknown-unknown
 make hnsw-determinism                     # proves native and wasm32 bytes are identical
 cargo bench -p purrdf-hnsw --bench recall # recall/work/latency against the exact oracle
+cargo bench -p purrdf-hnsw --bench build  # build cost, exact and reassociated, report-only
 ```
 
 ## License

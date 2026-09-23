@@ -32,7 +32,7 @@
 
 use std::collections::BTreeSet;
 
-use purrdf_core::distance::{Arithmetic, Exact, Resolved, RowsRef};
+use purrdf_core::distance::{Arithmetic, Resolved, RowsRef};
 
 use crate::error::{HnswError, Result};
 use crate::params::Params;
@@ -43,9 +43,10 @@ pub(crate) const IMAGE_MAGIC: [u8; 8] = *b"PURHNSW1";
 
 /// The canonical image's format version.
 ///
-/// Version 2 is the first whose distances are folded by the sixteen-lane exact
-/// arithmetic, and the first whose header records that arithmetic (in the `u32` that
-/// version 1 reserved as zero). A version-1 image's distances were folded sequentially,
+/// Version 2 is the first whose distances are folded by a named arithmetic, and the
+/// first whose header records that arithmetic's image code (in the `u32` that version 1
+/// reserved as zero): `1` for the sixteen-lane exact arithmetic, and for the
+/// reassociated one the code of the dispatch path the build ran. A version-1 image's distances were folded sequentially,
 /// so its recorded bits are not the ones this build computes; it is refused with
 /// [`HnswError::VersionMismatch`] rather than decoded.
 pub(crate) const IMAGE_VERSION: u32 = 2;
@@ -365,10 +366,11 @@ impl VectorMatrix {
     ///
     /// The crate's own call sites use this rather than [`VectorMatrix::distance`], so
     /// every distance the index computes runs under an arithmetic whose float
-    /// environment was checked. The two return the same bits.
-    pub(crate) fn distance_with(
+    /// environment was checked. Under [`purrdf_core::distance::Exact`] the two return
+    /// the same bits.
+    pub(crate) fn distance_with<A: Arithmetic>(
         &self,
-        arithmetic: Resolved<Exact>,
+        arithmetic: Resolved<A>,
         kernel: Kernel,
         a: usize,
         a_norm: f64,
@@ -401,9 +403,9 @@ impl VectorMatrix {
         reason = "the resolved arithmetic, the kernel, both endpoints with their norms and \
                   the bound are each an independent input of one distance"
     )]
-    pub(crate) fn distance_bounded_with(
+    pub(crate) fn distance_bounded_with<A: Arithmetic>(
         &self,
-        arithmetic: Resolved<Exact>,
+        arithmetic: Resolved<A>,
         kernel: Kernel,
         a: usize,
         a_norm: f64,
@@ -443,9 +445,9 @@ impl VectorMatrix {
         reason = "the resolved arithmetic, the kernel, the seed with its norm, the norm \
                   table, the ids and the output are each an independent input of one batch"
     )]
-    pub(crate) fn distances_from_row(
+    pub(crate) fn distances_from_row<A: Arithmetic>(
         &self,
-        arithmetic: Resolved<Exact>,
+        arithmetic: Resolved<A>,
         kernel: Kernel,
         seed: usize,
         seed_norm: f64,
@@ -482,9 +484,9 @@ impl VectorMatrix {
         reason = "the resolved arithmetic, the kernel, the query with its norm, the norm \
                   table, the ids and the output are each an independent input of one batch"
     )]
-    pub(crate) fn distances_from_query(
+    pub(crate) fn distances_from_query<A: Arithmetic>(
         &self,
-        arithmetic: Resolved<Exact>,
+        arithmetic: Resolved<A>,
         kernel: Kernel,
         query: &[f64],
         query_norm: f64,
@@ -695,8 +697,15 @@ impl Graph {
         true
     }
 
-    /// Encode the graph into its canonical byte image.
-    pub(crate) fn canonical_image(&self, kernel: Kernel, params: &Params) -> Vec<u8> {
+    /// Encode the graph into its canonical byte image, recording `arithmetic` -- the
+    /// image code of the arithmetic and dispatch path its distances were computed
+    /// on -- in the header.
+    pub(crate) fn canonical_image(
+        &self,
+        kernel: Kernel,
+        params: &Params,
+        arithmetic: u32,
+    ) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&IMAGE_MAGIC);
         push_u32(&mut out, IMAGE_VERSION);
@@ -707,8 +716,8 @@ impl Graph {
         push_u64(&mut out, as_u64(params.ef_search()));
         push_u64(&mut out, as_u64(self.node_count()));
         push_u32(&mut out, self.max_level);
-        // The arithmetic the recorded distances were folded under.
-        push_u32(&mut out, Exact::IMAGE_CODE);
+        // The arithmetic, and path, the recorded distances were folded under.
+        push_u32(&mut out, arithmetic);
         push_u64(&mut out, self.entry.map_or(u64::MAX, as_u64));
 
         for row in 0..self.node_count() {
@@ -842,10 +851,18 @@ pub(crate) struct GraphImage {
     pub graph: Graph,
     pub kernel: Kernel,
     pub params: Params,
+    /// The image code the header records, one of the decoding arithmetic's codes.
+    pub arithmetic: u32,
 }
 
-/// Decode a canonical image, validating every structural invariant it must satisfy.
-pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
+/// Decode a canonical image as one computed under arithmetic `A`, validating every
+/// structural invariant it must satisfy.
+///
+/// A header whose arithmetic field is not one of `A`'s image codes is refused with
+/// [`HnswError::ArithmeticMismatch`]: its distances were folded under another law. Which
+/// of `A`'s codes it records is returned, for the caller to hold against the path it
+/// runs.
+pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
     let mut cursor = Cursor::new(bytes);
     if cursor.take(IMAGE_MAGIC.len())? != IMAGE_MAGIC.as_slice() {
         return Err(HnswError::InvalidPayload {
@@ -869,9 +886,9 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
     let node_count = cursor.usize()?;
     let max_level = cursor.u32()?;
     let arithmetic = cursor.u32()?;
-    if arithmetic != Exact::IMAGE_CODE {
+    if !A::IMAGE_CODES.contains(&arithmetic) {
         return Err(HnswError::ArithmeticMismatch {
-            arithmetic: Exact::ID,
+            arithmetic: A::ID,
             actual: arithmetic,
         });
     }
@@ -1013,6 +1030,7 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
         graph,
         kernel,
         params,
+        arithmetic,
     })
 }
 
@@ -1131,6 +1149,7 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::distance::{Exact, Reassociated};
 
     fn params() -> Params {
         Params::new(4, 8, 16, 8).expect("valid")
@@ -1228,30 +1247,56 @@ mod tests {
     fn a_canonical_image_round_trips_byte_for_byte() {
         let graph = sample_graph();
         let params = params();
-        let image = graph.canonical_image(Kernel::SquaredEuclidean, &params);
-        let decoded = decode_image(&image).expect("the image decodes");
+        let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, Exact::IMAGE_CODE);
+        let decoded = decode_image::<Exact>(&image).expect("the image decodes");
         assert_eq!(decoded.kernel, Kernel::SquaredEuclidean);
         assert_eq!(decoded.params, params);
+        assert_eq!(decoded.arithmetic, Exact::IMAGE_CODE);
         assert_eq!(decoded.graph, graph, "the graph survives decode");
-        let reencoded = decoded
-            .graph
-            .canonical_image(decoded.kernel, &decoded.params);
+        let reencoded =
+            decoded
+                .graph
+                .canonical_image(decoded.kernel, &decoded.params, decoded.arithmetic);
         assert_eq!(image, reencoded, "decode then encode is the identity");
+    }
+
+    #[test]
+    fn the_header_code_is_decoded_only_by_its_own_arithmetic() {
+        let graph = sample_graph();
+        let params = params();
+        for &code in Reassociated::IMAGE_CODES {
+            let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, code);
+            assert_eq!(
+                decode_image::<Reassociated>(&image)
+                    .expect("a reassociated code decodes as reassociated")
+                    .arithmetic,
+                code
+            );
+            assert!(matches!(
+                decode_image::<Exact>(&image),
+                Err(HnswError::ArithmeticMismatch { actual, .. }) if actual == code
+            ));
+        }
+        let exact = graph.canonical_image(Kernel::SquaredEuclidean, &params, Exact::IMAGE_CODE);
+        assert!(matches!(
+            decode_image::<Reassociated>(&exact),
+            Err(HnswError::ArithmeticMismatch { actual: 1, .. })
+        ));
     }
 
     #[test]
     fn truncated_and_corrupt_images_are_refused() {
         let graph = sample_graph();
-        let image = graph.canonical_image(Kernel::Cosine, &params());
-        assert!(decode_image(&image[..image.len() - 1]).is_err());
+        let image = graph.canonical_image(Kernel::Cosine, &params(), Exact::IMAGE_CODE);
+        assert!(decode_image::<Exact>(&image[..image.len() - 1]).is_err());
         let mut trailing = image.clone();
         trailing.push(0);
-        assert!(decode_image(&trailing).is_err());
+        assert!(decode_image::<Exact>(&trailing).is_err());
         let mut bad_magic = image.clone();
         bad_magic[0] ^= 0xff;
-        assert!(decode_image(&bad_magic).is_err());
+        assert!(decode_image::<Exact>(&bad_magic).is_err());
         let mut bad_version = image;
         bad_version[8] = 0xff;
-        assert!(decode_image(&bad_version).is_err());
+        assert!(decode_image::<Exact>(&bad_version).is_err());
     }
 }

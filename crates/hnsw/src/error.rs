@@ -97,6 +97,22 @@ pub enum HnswError {
         actual: u32,
     },
 
+    /// A payload's header records a dispatch path of its arithmetic that this process
+    /// does not run.
+    ///
+    /// A reassociated arithmetic's bits depend on the compilation that produced them, so
+    /// an image records the path its distances came from, and only that path can decode
+    /// it, verify its rebuild or search it: another path would recompute every distance
+    /// with different last bits. That is not tampering and not an honest "no", so it is
+    /// refused by name rather than answered `false`. An arithmetic whose bits are the
+    /// same on every path records one code and never raises this.
+    ArithmeticPathUnavailable {
+        /// The image code the payload records.
+        recorded: u32,
+        /// The image code of the dispatch path this process resolved.
+        available: u32,
+    },
+
     /// The calling thread's floating-point environment is not the IEEE-754 one the
     /// distance arithmetic defines its results under.
     ///
@@ -203,6 +219,18 @@ impl fmt::Display for HnswError {
                 "the payload's arithmetic field is {actual}, which is not a code of the \
                  {arithmetic} distance arithmetic this index computes with"
             ),
+            Self::ArithmeticPathUnavailable {
+                recorded,
+                available,
+            } => write!(
+                f,
+                "the payload's distances were computed on the dispatch path recorded as \
+                 arithmetic code {recorded} ({}), and this process runs code {available} \
+                 ({}); an image whose arithmetic depends on its dispatch path is reproducible \
+                 only by a build running the path that built it",
+                crate::profile::path_label(*recorded),
+                crate::profile::path_label(*available)
+            ),
             Self::FloatEnvironment(error) => write!(
                 f,
                 "the floating-point environment cannot run the distance arithmetic: {error}"
@@ -295,6 +323,10 @@ mod tests {
             HnswError::ArithmeticMismatch {
                 arithmetic: "binary64-lane16-tree-v1",
                 actual: 0,
+            },
+            HnswError::ArithmeticPathUnavailable {
+                recorded: 2,
+                available: 3,
             },
             HnswError::FloatEnvironment(
                 purrdf_core::distance::FloatEnvironmentError::FlushToZero {
