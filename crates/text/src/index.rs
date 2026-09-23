@@ -691,20 +691,28 @@ impl TextIndex {
         document: u32,
         term: &str,
     ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
-        let doc = self
-            .document(document)
-            .ok_or_else(|| TextError::data("field input names an absent document"))?;
-        let frequencies = self
-            .term_entry(term)
-            .and_then(|entry| {
-                let postings = span_slice(entry, doc.partition);
-                postings
-                    .binary_search_by_key(&document, |posting| posting.document)
-                    .ok()
-                    .map(|at| postings[at].predicate_frequencies.as_slice())
-            })
-            .unwrap_or(&[]);
+        if self.document(document).is_none() {
+            return Err(TextError::data("field input names an absent document"));
+        }
+        let frequencies = self.posted_frequencies(document, term).unwrap_or(&[]);
         self.field_inputs_from_counts(document, frequencies)
+    }
+
+    /// The predicate frequencies of `term`'s posting for `document`, or `None`
+    /// when the document holds no posting for it — including a term the
+    /// dictionary does not hold and an id naming no document.
+    ///
+    /// One binary search over the dictionary and one over the term's postings
+    /// within the document's own partition span: the point lookup that decides
+    /// membership, returning the very facts the scorer reads, so a caller that
+    /// both decides and scores searches once rather than twice.
+    pub(crate) fn posted_frequencies(&self, document: u32, term: &str) -> Option<&[(u32, u64)]> {
+        let partition = self.documents.get(document as usize)?.partition;
+        let postings = span_slice(self.term_entry(term)?, partition);
+        postings
+            .binary_search_by_key(&document, |posting| posting.document)
+            .ok()
+            .map(|at| postings[at].predicate_frequencies.as_slice())
     }
 
     /// Assemble field inputs from a posting already located by the query walk.

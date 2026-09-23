@@ -32,14 +32,17 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_core::{
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
+};
 use purrdf_sparql_eval::{
-    CandidateDomains, Completeness, DuplicatePolicy, EvalError, ExclusionBasis, OrderFidelity,
-    PfArgs, PfRow, PropertyFunction, PropertyFunctionRegistry, RankFidelity, RankedDeclaration,
+    CandidateDomains, Completeness, DuplicatePolicy, EvalError, ExclusionBasis, ExtensionEnv,
+    NativeSparqlEngine, OrderFidelity, PfArgs, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    QueryOptions, RankFidelity, RankedDeclaration,
 };
 use purrdf_text::{
-    Analyzer, Fixed, GraphSelector, PartitionFilter, Scored, TextIndex, TextIndexConfig,
-    TextSearchRelation, explain, select,
+    Analyzer, Fixed, GraphSelector, PartitionFilter, Scored, SearchObservations, TextIndex,
+    TextIndexConfig, TextSearchRelation, explain, select,
 };
 
 /// The one predicate whose literals the fixture indexes.
@@ -323,6 +326,21 @@ fn every_document_agrees_with_the_stream_in_both_directions() {
             bound[0] = Some(subject.clone());
             let rows = invoke(&relation, &bound).expect("a bound needle");
 
+            // The same question asked the way an exclusion lookup asks it, with
+            // the rank unobserved: the same rows, carrying the same score and
+            // matched count, whichever path answered.
+            let in_place = invoke_unobserved(&relation, &bound, &LOOKUP_UNOBSERVED);
+            assert_eq!(
+                in_place
+                    .iter()
+                    .map(|row| (row[0].clone(), row[2].clone(), row[5].clone()))
+                    .collect::<Vec<_>>(),
+                rows.iter()
+                    .map(|row| (row[0].clone(), row[2].clone(), row[5].clone()))
+                    .collect::<Vec<_>>(),
+                "document {document}, needle {needle:?}: the in-place answer is the ranked one"
+            );
+
             if in_stream {
                 named += 1;
                 assert_eq!(
@@ -532,5 +550,330 @@ fn membership_is_admitted_from_an_exhaustive_host_and_from_a_lossy_one() {
         "and the neighbour differing only in the host's fidelity is admitted too: a \
          membership answer is about this index's own postings, which a host's lossy \
          coverage of its corpus does not make less exact"
+    );
+}
+
+// ── 5. A present document whose rank nothing reads ───────────────────────────
+
+/// The fixture corpus with `filler` more documents that each hold **both** needle
+/// terms, so every posting list of `"quick brown"` grows with it and so does the
+/// candidate set a ranking would have to score.
+fn grown_index(filler: usize) -> Arc<TextIndex> {
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE);
+    let mut push = |local: &str, text: &str| {
+        let subject = builder.intern_iri(&format!("http://example.org/{local}"));
+        let object = builder.intern_literal(RdfLiteral::simple(text));
+        builder.push_quad(subject, note, object, None);
+    };
+    for (local, text) in ROWS {
+        push(local, text);
+    }
+    for at in 0..filler {
+        // Varying lengths and frequencies, so the grown corpus moves the
+        // statistics a score is computed against rather than repeating one row.
+        let text = format!("quick brown filler{at} {}", "quick ".repeat(at % 3).trim());
+        push(&format!("filler{at}"), &text);
+    }
+    let dataset = builder.freeze().expect("the fixture must validate");
+    Arc::new(
+        TextIndex::from_dataset(
+            &dataset,
+            &TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
+                .expect("the fixture configuration is well formed"),
+        )
+        .expect("the fixture indexes"),
+    )
+}
+
+/// The positions an exclusion lookup leaves unobserved: every free position but
+/// the candidate's, which is exactly what a lookup rendered with a blank node at
+/// each of them reports.
+const LOOKUP_UNOBSERVED: [bool; 6] = [false, false, true, true, true, true];
+
+/// Invoke with `unobserved` reported for the positions it marks.
+fn invoke_unobserved(
+    relation: &TextSearchRelation,
+    bound: &[Option<TermValue>],
+    unobserved: &[bool],
+) -> Vec<PfRow> {
+    let refs: Vec<Option<&TermValue>> = bound.iter().map(Option::as_ref).collect();
+    let (subject, object) = refs.split_at(relation.arity().subject);
+    let args = PfArgs::new(subject, object).with_unobserved(unobserved);
+    let mut cursor = relation.open(&args, None).expect("a bound needle opens");
+    let mut rows = Vec::new();
+    while let Some(row) = cursor.next().expect("the cursor reads") {
+        rows.push(row);
+    }
+    rows
+}
+
+/// Every counter [`SearchObservations`] keeps, in one comparable value:
+/// `(membership lookups, rankings, point scorings, documents scored, posting
+/// lists walked, postings walked)`.
+fn counters(observed: &SearchObservations) -> [u64; 6] {
+    [
+        observed.membership_lookups(),
+        observed.rankings(),
+        observed.point_scorings(),
+        observed.documents_scored(),
+        observed.posting_lists_walked(),
+        observed.postings_walked(),
+    ]
+}
+
+/// The lexical of an `xsd:decimal` or `xsd:integer` cell.
+fn lexical(term: &TermValue) -> &str {
+    match term {
+        TermValue::Literal { lexical_form, .. } => lexical_form,
+        other => panic!("a score, rank or count cell is a literal, not {other:?}"),
+    }
+}
+
+/// **A present document asked with `?rank` unobserved is scored in place: one
+/// document scored, no posting list walked, nothing ranked — the same counts at
+/// two corpus sizes a hundredfold apart — and its score is the ranked reading's
+/// score for that document, bit for bit.**
+///
+/// The oracle observes every way the work could have grown. A relation that
+/// still ranked would move `rankings`, `posting_lists_walked` and
+/// `postings_walked`, and would score every candidate; the ranked reading of the
+/// same needle over the same index is run beside it and is asserted to move all
+/// four, and to move `postings_walked` and `documents_scored` with the corpus, so
+/// the point path's zeros and ones are a measurement the fixture can falsify
+/// rather than a counter nothing increments.
+///
+/// The excluded neighbour (`d5`) is asserted unchanged: the membership lookups
+/// and nothing else, at both sizes.
+#[test]
+fn a_possible_lookup_scores_one_document_whatever_the_corpus_holds() {
+    let needle = "quick brown";
+    let terms = distinct_terms(needle);
+    let mut point_counts = Vec::new();
+    let mut excluded_counts = Vec::new();
+    let mut ranked_postings = Vec::new();
+
+    for filler in [20_usize, 2_000] {
+        let index = grown_index(filler);
+        let candidates = select(
+            &index,
+            &analyze(needle),
+            &PartitionFilter::unconstrained(),
+            None,
+            None,
+        )
+        .expect("the fixture needle ranks");
+        assert_eq!(
+            candidates.len(),
+            5 + filler,
+            "every filler document is a candidate, so the ranked reading grows with the corpus"
+        );
+
+        // The free ranked reading: the oracle for the score, and the control that
+        // shows these counters do move when a ranking happens.
+        let ranked = TextSearchRelation::new(Arc::clone(&index));
+        let ranked_rows = invoke_unobserved(&ranked, &search_args(needle), &LOOKUP_UNOBSERVED);
+        assert_eq!(ranked_rows.len(), candidates.len());
+        let ranked_observed = counters(&ranked.observations());
+        assert_eq!(
+            ranked_observed,
+            [0, 1, 0, candidates.len() as u64, terms, ranked_observed[5],],
+            "a free ?doc ranks: no lookup, one ranking, every candidate scored, one walk \
+             per needle term"
+        );
+        assert!(
+            ranked_observed[5] >= candidates.len() as u64,
+            "and the walks read at least one posting per candidate"
+        );
+        ranked_postings.push(ranked_observed[5]);
+
+        // The present document, asked the way an exclusion lookup asks.
+        let relation = TextSearchRelation::new(Arc::clone(&index));
+        let observed = relation.observations();
+        let d3 = TermValue::iri("http://example.org/d3");
+        let mut bound = search_args(needle);
+        bound[0] = Some(d3.clone());
+        let rows = invoke_unobserved(&relation, &bound, &LOOKUP_UNOBSERVED);
+        assert_eq!(rows.len(), 1, "a present document answers with its one row");
+        point_counts.push(counters(&observed));
+
+        // Bit for bit, against both the relation's own ranked reading and the
+        // ranker's `Fixed` directly.
+        let streamed_row = ranked_rows
+            .iter()
+            .find(|row| row[0] == d3)
+            .expect("the ranked reading names d3");
+        assert_eq!(
+            (lexical(&rows[0][2]), lexical(&rows[0][5])),
+            (lexical(&streamed_row[2]), lexical(&streamed_row[5])),
+            "the in-place score and matched count are the ranked reading's, exactly"
+        );
+        let document = index.documents_with_subject(&d3)[0];
+        let scored = candidates
+            .iter()
+            .find(|row| row.document == document)
+            .expect("the ranker scores d3");
+        assert_eq!(
+            lexical(&rows[0][2]),
+            scored.score.to_decimal_lexical(),
+            "and the ranker's own `Fixed`, rendered at its full scale"
+        );
+        assert_ne!(
+            scored.score,
+            Fixed::ZERO,
+            "compared against a score that is not zero"
+        );
+        assert_eq!(
+            lexical(&rows[0][3]),
+            "0",
+            "the rank nothing reads is not computed, and carries a value outside the \
+             1-based rank domain rather than a plausible-looking one"
+        );
+
+        // The excluded neighbour, unchanged.
+        let excluded = TextSearchRelation::new(Arc::clone(&index));
+        let mut bound = search_args(needle);
+        bound[0] = Some(TermValue::iri("http://example.org/d5"));
+        assert_eq!(
+            invoke_unobserved(&excluded, &bound, &LOOKUP_UNOBSERVED),
+            Vec::<PfRow>::new(),
+            "a document holding no needle term is still answered with nothing"
+        );
+        excluded_counts.push(counters(&excluded.observations()));
+    }
+
+    assert!(
+        ranked_postings[1] > ranked_postings[0] * 50,
+        "the control's walk grew with the corpus: {ranked_postings:?}"
+    );
+    assert_eq!(
+        point_counts,
+        vec![[terms, 0, 1, 1, 0, 0]; 2],
+        "at both sizes: one lookup per needle term, no ranking, one in-place scoring of \
+         exactly one document, and no posting list walked"
+    );
+    assert_eq!(
+        excluded_counts,
+        vec![[terms, 0, 0, 0, 0, 0]; 2],
+        "the excluded lookup is the membership lookups and nothing else, at both sizes"
+    );
+}
+
+/// **With `?rank` observed, a present document is still ranked — and the row
+/// carries the ranked reading's real rank.**
+///
+/// The neighbour the in-place path must not swallow: a caller that reads the
+/// rank is owed the rank, which only a ranking can produce. Asked of a document
+/// that is *not* first, so a rank of `1` could not pass by accident.
+#[test]
+fn an_observed_rank_is_still_ranked() {
+    let index = grown_index(20);
+    let needle = "quick brown";
+    let relation = TextSearchRelation::new(Arc::clone(&index));
+    let observed = relation.observations();
+    let ranked = invoke(&relation, &search_args(needle)).expect("a bound needle");
+    let before = counters(&observed);
+
+    // Only the positions a lookup would leave unobserved *except* the rank.
+    let unobserved = [false, false, true, false, true, true];
+    let mut chosen = None;
+    for row in &ranked {
+        if lexical(&row[3]) != "1" {
+            chosen = Some(row.clone());
+            break;
+        }
+    }
+    let expected = chosen.expect("the ranking has a row below rank one");
+    let mut bound = search_args(needle);
+    bound[0] = Some(expected[0].clone());
+    let rows = invoke_unobserved(&relation, &bound, &unobserved);
+    assert_eq!(
+        rows,
+        vec![expected],
+        "the row is the ranked reading's row, rank and all"
+    );
+    let after = counters(&observed);
+    assert_eq!(after[1] - before[1], 1, "and it was ranked to get there");
+    assert_eq!(after[2] - before[2], 0, "not scored in place");
+}
+
+// ── 6. The engine reports what a query leaves unread ─────────────────────────
+
+/// The caller-supplied IRI the engine tests call ranked retrieval by.
+const ENGINE_SEARCH: &str = "http://example.org/pf#search";
+
+/// Run `query` over the fixture with a fresh relation, returning the rows and
+/// what the relation did.
+fn engine_answer(query: &str) -> (usize, [u64; 6]) {
+    let dataset = corpus();
+    let relation = TextSearchRelation::new(index());
+    let observed = relation.observations();
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(ENGINE_SEARCH, Arc::new(relation));
+    let result = NativeSparqlEngine::new()
+        .query_with_options_view(
+            &*dataset,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                env: &ExtensionEnv::over_relations(registry)
+                    .expect("the fixture declarations read cleanly"),
+                ..QueryOptions::EMPTY
+            },
+        )
+        .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("a SELECT answers with solutions");
+    };
+    (rows.len(), counters(&observed))
+}
+
+/// **A blank node written once at `?rank` is reported unobserved by the engine,
+/// and the relation scores in place; a variable there, or a blank repeated
+/// elsewhere in the call, is observed, and the relation ranks.**
+///
+/// Executed through the engine rather than through a hand-built `PfArgs`, so what
+/// is asserted is the engine's reading of the query text. Each neighbour differs
+/// from the first query in one respect only, and each is a case where skipping
+/// the rank would be wrong: a projected `?r` is read, and a blank repeated at two
+/// positions is compared against itself, so the value at the rank position
+/// decides whether the row survives.
+#[test]
+fn the_engine_reports_a_lone_blank_as_unobserved_and_nothing_else() {
+    let lone = format!(
+        "SELECT ?m WHERE {{ ( <http://example.org/d3> ) <{ENGINE_SEARCH}> \
+         ( \"quick brown\" _:s _:r _:l ?m ) }}"
+    );
+    assert_eq!(
+        engine_answer(&lone),
+        (1, [2, 0, 1, 1, 0, 0]),
+        "a lone blank at ?rank: one row, scored in place, nothing ranked"
+    );
+
+    let variable = format!(
+        "SELECT ?m WHERE {{ ( <http://example.org/d3> ) <{ENGINE_SEARCH}> \
+         ( \"quick brown\" _:s ?r _:l ?m ) }}"
+    );
+    let (rows, observed) = engine_answer(&variable);
+    assert_eq!(
+        (rows, observed[1], observed[2]),
+        (1, 1, 0),
+        "a variable at ?rank is observed — even one the query does not project, because \
+         whether a variable is read further up is not a fact about the call — so it ranks"
+    );
+
+    let repeated = format!(
+        "SELECT ?m WHERE {{ ( <http://example.org/d3> ) <{ENGINE_SEARCH}> \
+         ( \"quick brown\" _:x _:x _:l ?m ) }}"
+    );
+    let (rows, observed) = engine_answer(&repeated);
+    assert_eq!(
+        (rows, observed[1], observed[2]),
+        (0, 1, 0),
+        "a blank repeated at ?score and ?rank is compared against itself, so the rank is \
+         observed and ranked, and the row whose score is not its rank is dropped"
     );
 }

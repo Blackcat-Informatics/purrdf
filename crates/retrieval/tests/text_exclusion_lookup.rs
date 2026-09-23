@@ -1164,11 +1164,32 @@ fn point_reads(subjects: Subjects) {
     );
     let stream = &mut stream_for(&mut execution.streams, Side::Right).stream;
 
+    // What the relation itself did for each lookup, as
+    // `[membership lookups, rankings, point scorings, documents scored, posting
+    // lists walked, postings walked]`. `NEEDLE` is two distinct terms.
+    //
+    // The `Possible` lookup is the one that used to rank the right partition: its
+    // document holds a needle term, and a rank was owed to the free `?rank` of the
+    // lookup's call. The lookup now writes that position as a blank the engine
+    // reports unobserved, so the relation scores the one document in place — one
+    // document scored, no posting list walked, nothing ranked, whatever the
+    // index holds.
+    let work = |observed: &SearchObservations| {
+        [
+            observed.membership_lookups(),
+            observed.rankings(),
+            observed.point_scorings(),
+            observed.documents_scored(),
+            observed.posting_lists_walked(),
+            observed.postings_walked(),
+        ]
+    };
     let cases = [
         (
             left_first,
             ExclusionVerdict::Excluded,
             0,
+            [2, 0, 0, 0, 0, 0],
             "a candidate the left stratum ranked, which the right index holds only a \
              non-matching document for",
         ),
@@ -1176,22 +1197,36 @@ fn point_reads(subjects: Subjects) {
             right_first,
             ExclusionVerdict::Possible,
             1,
+            [2, 0, 1, 1, 0, 0],
             "a candidate the right stratum ranked itself",
         ),
         (
             Term::new(subjects.term("never-ranked")),
             ExclusionVerdict::Excluded,
             0,
+            [0, 0, 0, 0, 0, 0],
             "a candidate no ranking read of this execution named",
         ),
     ];
-    for (candidate, verdict, rows, case) in cases {
+    let observed = right.observations();
+    for (candidate, verdict, rows, cost, case) in cases {
         let bound_before = right.candidate_bound();
         let free_before = right.candidate_free();
         let served_bound_before = right.served_bound();
         let served_free_before = right.served_free();
+        let work_before = work(&observed);
 
         let answered = block_on(stream.exclusion(&candidate)).expect("the lookup answers");
+        let work_after = work(&observed);
+        let spent: Vec<u64> = work_after
+            .iter()
+            .zip(work_before)
+            .map(|(after, before)| after - before)
+            .collect();
+        assert_eq!(
+            spent, cost,
+            "{subjects:?} {case}: the relation's own work for this one lookup"
+        );
 
         let report = format!(
             "{subjects:?} {case}: bound invocations +{}, free invocations +{}, rows served bound +{}, \

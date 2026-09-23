@@ -332,8 +332,9 @@
 //!
 //! Everything above is about the **streaming** text, and none of it changes. The
 //! second text a capable stratum compiles to
-//! ([`RenderedQuery::exclusion_text`]) leaves the depth position a free
-//! variable, because it is asking a different question. A depth is an offer — how many
+//! ([`RenderedQuery::exclusion_text`]) leaves the depth position free — a blank
+//! node, like every free position of a lookup other than the candidate's, since the
+//! lookup reads nothing out of them — because it is asking a different question. A depth is an offer — how many
 //! rows to rank — and a producer handed one answers *is this candidate among your best
 //! n*, whose absences are not exclusions: a candidate at rank `n + 1` is one the stream
 //! will still name, and a consumer that read its absence as an exclusion would refuse
@@ -471,19 +472,30 @@ impl RenderedQuery {
     /// ceiling (or, for a self-bounding producer, the depth argument in its call)
     /// and the unit's outer bound. Neither is stored, so neither can be replaced.
     fn text(&self, depth: ProbedDepth, declared_rows: Option<u64>) -> String {
-        let render = |argument: &UnitArgument| match argument {
+        let render = |position: usize, argument: &UnitArgument| match argument {
             UnitArgument::Placed(text) => text.clone(),
+            // The variable the projections below read the candidate and the block
+            // out of, under the one spelling both texts share.
+            UnitArgument::Free => format!("?c{position}"),
             UnitArgument::Depth { datatype } => {
                 render::typed_literal(&depth_argument(depth, declared_rows).to_string(), datatype)
             }
         };
+        let subject_len = self.subject.len();
         let subject_text = self
             .subject
             .iter()
-            .map(render)
+            .enumerate()
+            .map(|(position, argument)| render(position, argument))
             .collect::<Vec<_>>()
             .join(" ");
-        let object_text = self.object.iter().map(render).collect::<Vec<_>>().join(" ");
+        let object_text = self
+            .object
+            .iter()
+            .enumerate()
+            .map(|(position, argument)| render(subject_len + position, argument))
+            .collect::<Vec<_>>()
+            .join(" ");
         let candidate = self.candidate;
         // One projection per position the unit reads back, in the order the executor
         // reads them: the candidate, then the block where the producer declared one.
@@ -574,9 +586,18 @@ impl RenderedQuery {
             }
             match argument {
                 UnitArgument::Placed(text) => text.clone(),
-                // The same spelling `render_slots` gives a free slot, so the one
-                // naming convention covers both and no two positions can collide.
-                UnitArgument::Depth { .. } => format!("?c{position}"),
+                // Every other free position — the depth's included — is a blank node,
+                // one distinct label per position so no two can be read as one. That
+                // is SPARQL's own spelling of "nothing reads this": the lookup
+                // projects the candidate and nothing else, so a value produced at
+                // any other free position is discarded unread, and a blank written
+                // once says so to the engine, which reports the position unobserved
+                // to the producer (`PfArgs::is_unobserved`). A producer whose rows
+                // carry a value it can only compute at corpus-wide cost — a rank —
+                // is thereby told it need not, which is the difference between a
+                // lookup whose cost is a point search and one that ranks a partition
+                // per candidate.
+                UnitArgument::Free | UnitArgument::Depth { .. } => format!("_:c{position}"),
             }
         };
         let subject_text = self
@@ -2032,13 +2053,13 @@ mod tests {
     fn self_bounding() -> RenderedQuery {
         RenderedQuery {
             producer: "https://example.org/pf/neighbours".to_owned(),
-            subject: vec![UnitArgument::Placed("?c0".to_owned())],
+            subject: vec![UnitArgument::Free],
             object: vec![
                 UnitArgument::Placed("<https://example.org/d/seed>".to_owned()),
                 UnitArgument::Depth {
                     datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
                 },
-                UnitArgument::Placed("?c3".to_owned()),
+                UnitArgument::Free,
             ],
             candidate: 0,
             block: None,
@@ -2068,9 +2089,21 @@ mod tests {
             "no number belongs in the depth position of a lookup: {lookup}"
         );
         assert!(
-            lookup.contains("?c2"),
-            "the depth position is left free, under the same spelling `render_slots` gives \
-             any free slot: {lookup}"
+            lookup.contains("_:c2") && lookup.contains("_:c3"),
+            "the depth position is left free, as the blank node every free position of a \
+             lookup other than the candidate's is written as: {lookup}"
+        );
+        assert!(
+            !lookup
+                .replace(&format!("?{CANDIDATE_NAME}"), "")
+                .contains('?'),
+            "a lookup names no variable but the candidate, so nothing it does not read is \
+             reported observed to the producer: {lookup}"
+        );
+        assert!(
+            streaming.contains("( ?c0 )") && streaming.contains("?c3"),
+            "while the streaming read keeps its free positions variables, because it projects \
+             the candidate out of one: {streaming}"
         );
         assert!(
             lookup.contains(&format!("?{CANDIDATE_NAME}")),

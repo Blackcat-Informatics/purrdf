@@ -196,6 +196,10 @@ struct CallPlan {
     /// Whether a row ceiling may be handed to the relation for this call — see
     /// [`args_are_admission_transparent`].
     ceiling_is_offerable: bool,
+    /// Per flattened position, whether the relation's value there is read by
+    /// nothing — see [`unobserved_positions`]. Handed to every invocation through
+    /// [`PfArgs::with_unobserved`].
+    unobserved: Vec<bool>,
 }
 
 impl CallPlan {
@@ -222,6 +226,7 @@ impl CallPlan {
             .filter_map(|(slot, col)| col.map(|col| (slot, col)))
             .collect();
         let ceiling_is_offerable = args_are_admission_transparent(&args, slot_cols.len());
+        let unobserved = unobserved_positions(&args, &slot_cols, &slot_seed);
         Ok(Self {
             args,
             subject_len: call.subject_args.len(),
@@ -230,6 +235,7 @@ impl CallPlan {
             bound_cols,
             slot_seed,
             ceiling_is_offerable,
+            unobserved,
         })
     }
 
@@ -274,6 +280,53 @@ fn args_are_admission_transparent(args: &[Arg], slot_count: usize) -> bool {
     }
     let mut seen = vec![false; slot_count];
     args.iter().all(|arg| walk(arg, &mut seen))
+}
+
+/// Which flattened positions carry a value that nothing downstream of the call reads.
+///
+/// A position qualifies when the call site wrote a **blank node** there that occurs
+/// **exactly once** in the whole call (quoted-triple components included) and is not
+/// seeded from the input row. Each condition closes one way the value could be read:
+///
+/// * a blank slot has no output column — it is projected away before the node's rows
+///   leave — so no operator above the call can see it;
+/// * a single occurrence means [`unify_row`] binds it and compares it against
+///   nothing, so no other position of the same row can reject it;
+/// * an unseeded slot arrives free, so no input value filters it either.
+///
+/// What is left is a value that is bound and then discarded unread, which is what
+/// [`PfArgs::is_unobserved`] reports to the relation. A variable never qualifies,
+/// even one the query never projects: whether a variable is read further up is a
+/// question about the whole query, and this answer is deliberately confined to what
+/// the call itself states.
+fn unobserved_positions(
+    args: &[Arg],
+    slot_cols: &[Option<usize>],
+    slot_seed: &[Option<usize>],
+) -> Vec<bool> {
+    fn count(arg: &Arg, occurrences: &mut [usize]) {
+        match arg {
+            Arg::Constant(_) => {}
+            Arg::Slot(slot) => occurrences[*slot] += 1,
+            Arg::Triple(parts) => {
+                for part in &**parts {
+                    count(part, occurrences);
+                }
+            }
+        }
+    }
+    let mut occurrences = vec![0_usize; slot_cols.len()];
+    for arg in args {
+        count(arg, &mut occurrences);
+    }
+    args.iter()
+        .map(|arg| match arg {
+            Arg::Slot(slot) => {
+                slot_cols[*slot].is_none() && slot_seed[*slot].is_none() && occurrences[*slot] == 1
+            }
+            Arg::Constant(_) | Arg::Triple(_) => false,
+        })
+        .collect()
 }
 
 /// Compile one argument position, registering any variable/blank it introduces.
@@ -461,7 +514,7 @@ fn eval_call_over<D: DatasetView + Sync>(
         let refs: smallvec::SmallVec<[Option<&TermValue>; 4]> =
             args.iter().map(Option::as_ref).collect();
         let (subject, object) = refs.split_at(plan.subject_len);
-        let pf_args = PfArgs::new(subject, object);
+        let pf_args = PfArgs::new(subject, object).with_unobserved(&plan.unobserved);
         let mode = pf_args.mode();
         admit_mode(&modes, &call.iri, mode)?;
 
@@ -966,7 +1019,7 @@ pub(crate) fn open_call_cursor(
     let refs: smallvec::SmallVec<[Option<&TermValue>; 4]> =
         args.iter().map(Option::as_ref).collect();
     let (subject, object) = refs.split_at(plan.subject_len);
-    let pf_args = PfArgs::new(subject, object);
+    let pf_args = PfArgs::new(subject, object).with_unobserved(&plan.unobserved);
     admit_mode(&modes, &call.iri, pf_args.mode())?;
     // The licence the governed lane offers the same call: the node's whole `LIMIT`,
     // withheld unless the call is admission-transparent. See `eval_call_over`.

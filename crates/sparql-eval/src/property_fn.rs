@@ -132,10 +132,30 @@ impl core::fmt::Display for PfArity {
 /// evaluator's per-invocation buffer, and deep-cloning heap-string-owning
 /// [`TermValue`]s on a per-row invocation path would be pure overhead. A relation
 /// that must retain a value past [`PropertyFunction::open`] clones it itself.
+///
+/// # Unobserved positions
+///
+/// A free position may also be **unobserved**: the call site wrote a blank node
+/// there that occurs nowhere else in the call. The engine binds such a position,
+/// compares nothing against it and projects it away before the call's rows leave
+/// (see the blank-node rule in `crate::property_fn_eval`), so no operator, filter,
+/// projection or join can ever read the value a relation emits there. That makes it
+/// the one kind of position whose value a relation need not *compute*: it still
+/// emits a term, because a row carries a value for every position, but whatever
+/// term it emits is discarded unread. [`Self::is_unobserved`] reports it, and a
+/// relation that ignores the report is exactly as correct as before — it merely
+/// computes a value nothing reads.
+///
+/// It is a fact about the query text and nothing else, so it cannot be wrong in the
+/// direction that matters: a position is reported unobserved only where the call
+/// site spelled "I do not care" in SPARQL's own vocabulary for it.
 #[derive(Debug, Clone, Copy)]
 pub struct PfArgs<'a> {
     subject: &'a [Option<&'a TermValue>],
     object: &'a [Option<&'a TermValue>],
+    /// Per flattened position, whether its emitted value is read by nothing. Empty
+    /// means every position is observed — the reading [`Self::new`] gives.
+    unobserved: &'a [bool],
 }
 
 impl<'a> PfArgs<'a> {
@@ -145,7 +165,36 @@ impl<'a> PfArgs<'a> {
         subject: &'a [Option<&'a TermValue>],
         object: &'a [Option<&'a TermValue>],
     ) -> Self {
-        Self { subject, object }
+        Self {
+            subject,
+            object,
+            unobserved: &[],
+        }
+    }
+
+    /// This view with the positions `unobserved` marks reported as unobserved.
+    ///
+    /// Indexed by flattened position; a position past the slice's end is
+    /// observed. Only a **free** position is ever reported unobserved, whatever
+    /// the slice says about a bound one: a bound position carries a value the
+    /// engine compares every emitted row against, so it is observed by
+    /// construction. See the type's documentation for what the engine guarantees
+    /// about a position it marks.
+    #[must_use]
+    pub const fn with_unobserved(mut self, unobserved: &'a [bool]) -> Self {
+        self.unobserved = unobserved;
+        self
+    }
+
+    /// Whether flattened position `pos` is free **and** its emitted value is read
+    /// by nothing — see the type's documentation.
+    ///
+    /// A relation may put any term at such a position, and may therefore skip
+    /// whatever work computing the real value would have cost. `false` for a bound
+    /// position, an observed free one, and a position out of range.
+    #[must_use]
+    pub fn is_unobserved(&self, pos: usize) -> bool {
+        self.get(pos).is_none() && self.unobserved.get(pos) == Some(&true)
     }
 
     /// The subject-side arguments, in written order.
