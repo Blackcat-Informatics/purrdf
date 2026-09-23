@@ -56,6 +56,7 @@
 //! compare two runs against each other.
 
 use std::collections::BTreeMap;
+use std::env;
 use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -157,6 +158,39 @@ const STRATA: [&str; 3] = ["nra/a", "nra/b", "nra/c"];
 /// converging would report a short answer rather than run until the streams are
 /// exhausted.
 const PULL_BUDGET: usize = 1 << 16;
+
+/// The stream length and row count `--test` mode runs every case shape at.
+///
+/// This file has no `criterion` harness, so nothing in it already knows how to
+/// answer cargo's `--test` the way the crate's criterion-driven benches do
+/// (`benches/on_demand_read.rs` gets that for free from
+/// `Criterion::default().configure_from_args()`, which is what makes `--test`
+/// run one fast pass there). A smoke run has to shrink the *inputs*, not skip
+/// the measurement, and it has to shrink them past every phase's worst case,
+/// not just its typical one: [`shared_block_phase`] under
+/// [`ExclusionBasis::Unavailable`], and the collided-regime call in [`main`],
+/// can each only certify a row once every stream is fully exhausted (see their
+/// doc comments), so the true per-phase cost at `total` rows is `3 * total`
+/// pulls, not the handful the bounded cases need. At `SMOKE_TOTAL` that worst
+/// case is a few hundred pulls; at the full grid's largest `total` it is
+/// millions.
+const SMOKE_TOTAL: u64 = 64;
+
+/// The rows fused per case in `--test` mode, well under [`SMOKE_TOTAL`] so
+/// every case shape — bounded or full-drain — has rows left to hand back.
+const SMOKE_ROWS: usize = 8;
+
+/// Whether this run is cargo's `--test` smoke pass.
+///
+/// `cargo bench -- --test` appends `--test` to the harness binary's own argv;
+/// a `harness = false` binary that never reads its argv — this file, before
+/// this function existed — runs its full `main` regardless, which is exactly
+/// what made a "smoke" invocation of this bench cost the same as the full
+/// report. Checked by literal argument match rather than a flag-parsing crate,
+/// because the one flag this file honours is the one cargo itself defines.
+fn smoke_requested() -> bool {
+    env::args().any(|arg| arg == "--test")
+}
 
 fn stratum(suffix: &str) -> Iri {
     Iri::parse(&format!("http://example.org/stratum/{suffix}")).expect("fixture IRIs are valid")
@@ -411,8 +445,8 @@ fn fixture_declaring(
 
 /// Certify `rows` rows from three streams of `total` rows each, reporting the
 /// peak heap and the resident-set delta across the certifying window.
-fn phase(label: &str, total: u64, rows: usize) {
-    phase_at_weight(label, total, rows, Fixed::ONE);
+fn phase(label: &str, total: u64, rows: usize) -> usize {
+    phase_at_weight(label, total, rows, Fixed::ONE)
 }
 
 /// The same phase at a stratum weight whose adjacent ranks collide, so the
@@ -423,7 +457,7 @@ fn phase(label: &str, total: u64, rows: usize) {
 /// certifies until the plateau ends. At a unit weight that regime begins past a
 /// million ranks — beyond `PULL_BUDGET`, so every phase above stops short of it
 /// and this bench has never once reported on it.
-fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
+fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) -> usize {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, &pulls, weight);
     let mut fusion = FusionStream::new(streams, profile);
@@ -451,6 +485,7 @@ fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
         rss_before,
         rss_after,
     );
+    fused
 }
 
 /// A lossy but order-faithful declaration: what an HNSW graph is, and the only
@@ -502,7 +537,7 @@ fn perturbed() -> RankFidelity {
 /// Report-only, like every phase above. Nothing here asserts a time, a ratio or
 /// a bound: this machine is not quiet, and a threshold would be noise wearing a
 /// gate's clothes.
-fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity) {
+fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity) -> usize {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture_declaring(
         total,
@@ -548,6 +583,7 @@ fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity)
         rss_before,
         rss_after,
     );
+    fused
 }
 
 /// The caller-named block each stratum of the disjoint fixture draws from, in
@@ -603,7 +639,7 @@ fn disjoint_fixture(
 /// watch. `pulled` is the quantity of interest: over disjoint strata it is
 /// `rows` plus a head per stream when the producers declare their blocks, and
 /// the whole of every stream when they do not.
-fn disjoint_phase(label: &str, total: u64, rows: usize) {
+fn disjoint_phase(label: &str, total: u64, rows: usize) -> usize {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = disjoint_fixture(total, &pulls);
     let mut fusion = FusionStream::new(streams, profile);
@@ -631,6 +667,7 @@ fn disjoint_phase(label: &str, total: u64, rows: usize) {
         rss_before,
         rss_after,
     );
+    fused
 }
 
 /// The profile and three streams that all declare ONE block while minting
@@ -687,7 +724,7 @@ fn shared_block_fixture(
 /// `work` is the third number, and it is here because it is the one a headline
 /// about materialised rows is a headline about: the rows the reads behind these
 /// streams returned, summed over the strata, straight off the trailer.
-fn shared_block_phase(label: &str, total: u64, rows: usize, basis: ExclusionBasis) {
+fn shared_block_phase(label: &str, total: u64, rows: usize, basis: ExclusionBasis) -> usize {
     let pulls = Arc::new(AtomicUsize::new(0));
     let lookups = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = shared_block_fixture(total, &pulls, &lookups, basis);
@@ -733,9 +770,87 @@ fn shared_block_phase(label: &str, total: u64, rows: usize, basis: ExclusionBasi
         rss_before,
         rss_after,
     );
+    fused
+}
+
+/// The `--test` path: every case shape this file has, run exactly once at
+/// [`SMOKE_TOTAL`]/[`SMOKE_ROWS`], each asserted to have certified every row
+/// it was asked for.
+///
+/// This is deliberately not "print without asserting", which is what every
+/// phase above does for the full report: a smoke run exists to prove the
+/// protocol still holds, and a phase that silently fused zero rows because a
+/// fixture stopped converging would be a smoke run that passed while proving
+/// nothing. Asserting `fused == SMOKE_ROWS` catches exactly that, on every
+/// fixture shape in this file: the overlapping fixture, the collided-weight
+/// regime, the disjoint fixture, both shared-block bases, and both degraded
+/// fidelities.
+fn run_smoke() {
+    assert_eq!(
+        phase("smoke: overlapping", SMOKE_TOTAL, SMOKE_ROWS),
+        SMOKE_ROWS,
+        "the overlapping fixture must fuse every requested row"
+    );
+
+    let colliding = Fixed::from_raw(1_000);
+    assert_eq!(
+        phase_at_weight("smoke: collided", SMOKE_TOTAL, SMOKE_ROWS, colliding),
+        SMOKE_ROWS,
+        "the collided-weight regime must still fuse every requested row"
+    );
+
+    assert_eq!(
+        disjoint_phase("smoke: disjoint", SMOKE_TOTAL, SMOKE_ROWS),
+        SMOKE_ROWS,
+        "the disjoint fixture must fuse every requested row"
+    );
+
+    assert_eq!(
+        shared_block_phase(
+            "smoke: shared silent",
+            SMOKE_TOTAL,
+            SMOKE_ROWS,
+            ExclusionBasis::Unavailable,
+        ),
+        SMOKE_ROWS,
+        "the shared-block fixture must fuse every requested row once its \
+         streams are exhausted"
+    );
+    assert_eq!(
+        shared_block_phase(
+            "smoke: shared asking",
+            SMOKE_TOTAL,
+            SMOKE_ROWS,
+            ExclusionBasis::Membership,
+        ),
+        SMOKE_ROWS,
+        "an exclusion-answering shared-block fixture must fuse every requested row"
+    );
+
+    let lossy = lossy();
+    assert_eq!(
+        degraded_phase("smoke: lossy", SMOKE_TOTAL, SMOKE_ROWS, &lossy),
+        SMOKE_ROWS,
+        "a lossy stratum must not block certification"
+    );
+    let perturbed = perturbed();
+    assert_eq!(
+        degraded_phase("smoke: perturbed", SMOKE_TOTAL, SMOKE_ROWS, &perturbed),
+        SMOKE_ROWS,
+        "a perturbed stratum must not block certification"
+    );
+
+    println!(
+        "[fusion_frontier_alloc] --test: every case shape fused {SMOKE_ROWS} rows at \
+         total={SMOKE_TOTAL}"
+    );
 }
 
 fn main() {
+    if smoke_requested() {
+        run_smoke();
+        return;
+    }
     // Warm every lazy one-time allocation outside the reported phases.
     phase("warmup", 1_000, 32);
     println!("[fusion_frontier_alloc] --- stream length varies, rows fused fixed at 32 ---");
