@@ -106,9 +106,9 @@ sha2 = { workspace = true, default-features = true }
 
 # Maintainer-only golden-capture binary. Freezes the native
 # SPARQL engine over the corpus as committed goldens under
-# crates/sparql-conformance/tests/goldens/. Rides the always-on `gts` feature.
+# crates/sparql-conformance/tests/goldens/.
 [[bin]]
-name = "capture_sparql_goldens"
+name = "capture-sparql-goldens"
 path = "src/bin/capture_sparql_goldens.rs"
 
 # Maintainer-only vector-freezing binary. Regenerates the two dict-compaction
@@ -117,7 +117,7 @@ path = "src/bin/capture_sparql_goldens.rs"
 # committed `.gts` bytes are the frozen artifacts; `tests/dict_vectors.rs`
 # is the drift guard, not this binary.
 [[bin]]
-name = "gen_dict_vectors"
+name = "gen-dict-vectors"
 path = "src/bin/gen_dict_vectors.rs"
 
 # Maintainer-only vector-freezing binary. Re-freezes the streamable-compaction
@@ -127,7 +127,7 @@ path = "src/bin/gen_dict_vectors.rs"
 # bytes are the frozen artifacts; `tests/streamable_vectors.rs` is the drift
 # guard, not this binary.
 [[bin]]
-name = "gen_streamable_vectors"
+name = "gen-streamable-vectors"
 path = "src/bin/gen_streamable_vectors.rs"
 
 [dev-dependencies]
