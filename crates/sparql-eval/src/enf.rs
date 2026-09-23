@@ -86,8 +86,10 @@
 //!      as a constant, and a blank node or a quoted triple is driven in by a
 //!      one-row `VALUES` on the call's left — a relation's argument is an
 //!      invocation input, not a join key a `VALUES` table joined beside the call
-//!      could supply. What differs is only which calls each walk reaches, per
-//!      divergences 1 and 2.
+//!      could supply. Inside an `EXISTS` body the driver additionally sits under a
+//!      projection of the call's undriven variables, so the call's output does not
+//!      rebind a variable the filtered row already carries. What differs is only
+//!      which calls each walk reaches, per divergences 1 and 2.
 //!
 //!   Where the two walks also AGREE is at a `Bgp`/`Path` leaf. `apply_substitutions`
 //!   pushes a pre-bound constant into the leaf's term positions so the bound
