@@ -129,16 +129,24 @@ impl PreparedQuery {
     /// `ORDER BY` is not, whoever wrote it.
     #[must_use]
     pub fn is_call_read(&self) -> bool {
-        match &self.query {
-            Query::Select {
-                pattern, dataset, ..
-            } => {
-                dataset.default.is_empty()
-                    && dataset.named.is_empty()
-                    && crate::property_fn_eval::is_call_read_shape(pattern)
-            }
-            _ => false,
-        }
+        self.call_read_shape().is_ok()
+    }
+
+    /// The call this plan consists of and which of its variables each projected
+    /// column reads, when the plan has the shape [`Self::is_call_read`] answers `true`
+    /// for — or the refusal naming the first thing in the way.
+    ///
+    /// The same check [`Self::is_call_read`] and
+    /// [`NativeSparqlEngine::open_call_cursor`] make, returned as a description rather
+    /// than a yes: a composition layer that asks the one call a second question reads
+    /// the call here, as this plan admitted it, rather than parsing the text again.
+    ///
+    /// # Errors
+    ///
+    /// [`CallReadRefusal`](crate::CallReadRefusal) naming a form other than `SELECT`,
+    /// a dataset clause, or the first node that is not a row-for-row operator.
+    pub fn call_read_shape(&self) -> Result<crate::CallReadShape<'_>, crate::CallReadRefusal> {
+        crate::CallReadShape::of(&self.query)
     }
 
     fn from_algebra(
@@ -1138,24 +1146,10 @@ impl NativeSparqlEngine {
             &crate::DetHashSet::default(),
             ShaclPrebinding::None,
         )?;
-        let refused = |what: &str| {
-            RdfDiagnostic::error(
-                "native-sparql-query-eval",
-                format!(
-                    "an on-demand call read is a SELECT over the default dataset; this is {what}"
-                ),
-            )
-        };
-        let Query::Select {
-            pattern, dataset, ..
-        } = &prepared.query
-        else {
-            return Err(refused("not a SELECT"));
-        };
-        if !dataset.default.is_empty() || !dataset.named.is_empty() {
-            return Err(refused("a query with a dataset clause"));
-        }
-        crate::property_fn_eval::open_call_cursor(pattern, options.property_functions()).map_err(
+        let shape = prepared.call_read_shape().map_err(|refusal| {
+            RdfDiagnostic::error("native-sparql-query-eval", refusal.reason().to_owned())
+        })?;
+        crate::property_fn_eval::open_call_cursor(&shape, options.property_functions()).map_err(
             |e| {
                 RdfDiagnostic::error(
                     eval_diagnostic_code(&e, "native-sparql-query-eval"),

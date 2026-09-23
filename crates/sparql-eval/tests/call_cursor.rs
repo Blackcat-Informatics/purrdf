@@ -417,3 +417,121 @@ fn the_shape_predicate_agrees_with_the_open_and_opens_nothing() {
         );
     }
 }
+
+/// **The shape describes the call and where each projected column comes from, and
+/// it describes a text before any registry planned it exactly as it describes the
+/// plan it becomes.**
+///
+/// A composition layer asks one call a second question — the same invocation with
+/// one output position bound — so it needs the call and the call variable a column
+/// reads, carried back through the renaming operators the shape admits. Those are
+/// asked here of a prepared plan and of the bare parse of the same text; the answers
+/// must agree, because the second is how a layer with no registry in hand refuses a
+/// text that no registry could make one call of. The refusals are asked beside the
+/// admitted shapes, of both readings, and name the node in the way.
+#[test]
+fn the_shape_names_the_call_and_each_columns_source_before_and_after_planning() {
+    use purrdf_sparql_algebra::{ParserOptions, SparqlParser, TermPattern, Variable};
+    use purrdf_sparql_eval::CallReadShape;
+
+    let parse = |query: &str| {
+        let options = ParserOptions {
+            property_fn_iris: vec![REL.to_owned()],
+            ..ParserOptions::default()
+        };
+        SparqlParser::new()
+            .parse_query_with(query, &options)
+            .expect("the fixture query parses")
+    };
+    let variable = |name: &str| Variable::new(name);
+    let admitted = [
+        (
+            format!(
+                "SELECT ?x ?b ?z WHERE {{ {{ SELECT (?a AS ?x) ?b ?z WHERE {{ ( ?a ) <{REL}> \
+                 ( ?b ) }} LIMIT 3 }} }}"
+            ),
+            [("x", Some("a")), ("b", Some("b")), ("z", None)],
+        ),
+        (
+            format!("SELECT ?y ?b ?z WHERE {{ ( ?a ) <{REL}> ( ?b ) BIND(?a AS ?y) }}"),
+            [("y", Some("a")), ("b", Some("b")), ("z", None)],
+        ),
+    ];
+    for (query, columns) in admitted {
+        let (env, _) = environment(None);
+        let prepared = NativeSparqlEngine::new()
+            .prepare_query_with_options(&query, None, options(&env))
+            .expect("the query prepares");
+        let planned = prepared.call_read_shape().expect("the plan is one call");
+        let raw = parse(&query);
+        let unplanned = CallReadShape::of(&raw).expect("the bare parse is one call");
+        for shape in [&planned, &unplanned] {
+            assert_eq!(shape.call().iri, REL, "{query}");
+            assert_eq!(
+                shape.call().subject_args,
+                vec![TermPattern::Variable(variable("a"))],
+                "{query}"
+            );
+            for (column, source) in columns {
+                assert_eq!(
+                    shape.source_of(column),
+                    source.map(variable).as_ref(),
+                    "column ?{column} of {query}"
+                );
+            }
+        }
+        assert_eq!(planned.projection(), unplanned.projection(), "{query}");
+    }
+
+    // A variable inside a quoted-triple argument is a call variable too: the call
+    // compiles it to a slot and a column exactly as it does a top-level one.
+    let quoted = format!(
+        "SELECT ?s WHERE {{ ( ?a ) <{REL}> ( <<( ?s <{}> <{}> )>> ) }}",
+        ex("p"),
+        ex("o")
+    );
+    let raw = parse(&quoted);
+    assert_eq!(
+        CallReadShape::of(&raw)
+            .expect("one call")
+            .source_of("s")
+            .cloned(),
+        Some(variable("s")),
+        "{quoted}"
+    );
+
+    let refused = [
+        (
+            format!("SELECT ?a WHERE {{ ( ?a ) <{REL}> ( ?b ) FILTER(?a != ?b) }}"),
+            "a Filter node",
+        ),
+        (
+            format!("SELECT ?a WHERE {{ ( ?a ) <{REL}> ( ?b ) . ( ?a ) <{REL}> ( ?c ) }}"),
+            "a join of the call with another pattern",
+        ),
+        (
+            format!(
+                "SELECT ?a FROM <{}> WHERE {{ ( ?a ) <{REL}> ( ?b ) }}",
+                ex("graph")
+            ),
+            "a query with a dataset clause",
+        ),
+    ];
+    for (query, reason) in refused {
+        let raw = parse(&query);
+        let refusal = CallReadShape::of(&raw).expect_err("not one call");
+        assert!(
+            refusal.reason().contains(reason),
+            "the bare parse names {reason}: {refusal} — {query}"
+        );
+        let (env, _) = environment(None);
+        let prepared = NativeSparqlEngine::new()
+            .prepare_query_with_options(&query, None, options(&env))
+            .expect("the query prepares");
+        let refusal = prepared.call_read_shape().expect_err("not one call");
+        assert!(
+            refusal.reason().contains(reason),
+            "and so does the plan: {refusal} — {query}"
+        );
+    }
+}

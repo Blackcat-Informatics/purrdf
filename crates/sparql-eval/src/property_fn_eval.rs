@@ -82,8 +82,8 @@ use std::sync::Arc;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, TermValue, TrippedGovernor};
 use purrdf_sparql_algebra::{
-    AggregateFunction, Function, GraphPattern, NamedNodePattern, PropertyFunctionCall, TermPattern,
-    TriplePattern, Variable,
+    AggregateFunction, Function, GraphPattern, NamedNodePattern, PropertyFunctionCall, Query,
+    TermPattern, TriplePattern, Variable,
 };
 
 use crate::DetHashMap;
@@ -907,94 +907,278 @@ impl std::fmt::Debug for CallCursor {
     }
 }
 
-/// Whether `pattern` is the shape [`open_call_cursor`] reads: one property-function
-/// call under nothing but row-for-row operators, at least one of them a projection.
+/// Why a query is not one property-function call read on demand, in words that name
+/// the first thing in the way.
 ///
-/// A question about the algebra alone. It opens nothing, resolves no relation and
-/// reads no registry, so an answer of `true` says the query *can* be read one row per
-/// pull, and the open itself still makes every refusal the governed lane would.
-pub(crate) fn is_call_read_shape(pattern: &GraphPattern) -> bool {
-    call_read_shape(pattern).is_ok()
+/// Returned by [`CallReadShape::of`]. It is a description and never a verdict on the
+/// query itself: every query refused here still evaluates, materialised, exactly as it
+/// would have.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallReadRefusal {
+    /// The sentence naming what stands where only a row-for-row operator may.
+    reason: String,
 }
 
-/// The one call `pattern` consists of and the operators above it, outermost first —
-/// or a refusal naming the first node that is not a row-for-row operator.
+impl CallReadRefusal {
+    /// The refusal's sentence.
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+}
+
+impl std::fmt::Display for CallReadRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for CallReadRefusal {}
+
+/// A query that is exactly one property-function call under nothing but row-for-row
+/// operators, as the algebra describes it: the call itself, and which of the call's
+/// variables each column the query projects reads.
+///
+/// This is the **one** shape check behind every reading of a call on demand.
+/// [`PreparedQuery::is_call_read`](crate::PreparedQuery::is_call_read) asks it,
+/// [`NativeSparqlEngine::open_call_cursor`](crate::NativeSparqlEngine::open_call_cursor)
+/// opens what it describes, and a composition layer that needs to ask the same call a
+/// second question — the same invocation with one output position bound — reads the
+/// call and the column's source here rather than parsing the text a second way.
 ///
 /// The operators admitted are projections, `LIMIT`s with no `OFFSET`, and `BIND`s
-/// that rename a variable: each maps the call's `i`-th row to the answer's `i`-th
-/// row or stops. A walk that reaches the call without passing a projection is
-/// refused too, because a `SELECT` always has one and a pattern without it names no
-/// columns to read.
-fn call_read_shape(
-    pattern: &GraphPattern,
-) -> Result<(&PropertyFunctionCall, Vec<&GraphPattern>), EvalError> {
-    let not_one_call = |node: &str| {
-        EvalError::unsupported(format!(
-            "an on-demand call read is one property-function call under projections, \
-             OFFSET-free LIMITs and variable-renaming BINDs; this query has {node} there"
-        ))
-    };
-    // Walk down to the call, remembering every operator on the way.
-    let mut operators: Vec<&GraphPattern> = Vec::new();
-    let mut node = pattern;
-    let call = loop {
-        match node {
-            GraphPattern::PropertyFunction(call) => break call,
-            GraphPattern::Slice {
-                start: 0, inner, ..
-            }
-            | GraphPattern::Project { inner, .. }
-            | GraphPattern::Extend {
-                inner,
-                expression: purrdf_sparql_algebra::Expression::Variable(_),
-                ..
-            } => {
-                operators.push(node);
-                node = inner;
-            }
-            GraphPattern::Slice { .. } => return Err(not_one_call("an OFFSET")),
-            GraphPattern::Extend { .. } => return Err(not_one_call("a computed BIND")),
-            other => {
-                let name = format!("{other:?}");
-                let kind = name.split([' ', '(', '{']).next().unwrap_or("an operator");
-                return Err(not_one_call(&format!("a {kind} node")));
-            }
-        }
-    };
-    if !operators
-        .iter()
-        .any(|operator| matches!(operator, GraphPattern::Project { .. }))
-    {
-        return Err(not_one_call("no projection"));
-    }
-    Ok((call, operators))
+/// that rename a variable: each maps the call's `i`-th row to the answer's `i`-th row
+/// or stops. A walk that reaches the call without passing a projection is refused too,
+/// because a `SELECT` always has one and a pattern without it names no columns to read.
+///
+/// A question about the algebra alone. It opens nothing, resolves no relation and
+/// reads no registry, so a shape says the query *can* be read one row per pull; the
+/// open itself still makes every refusal the governed lane would.
+#[derive(Clone, Debug)]
+pub struct CallReadShape<'q> {
+    /// The one call the query consists of.
+    call: &'q PropertyFunctionCall,
+    /// The operators above it, outermost first.
+    operators: Vec<&'q GraphPattern>,
 }
 
-/// Open the one call `pattern` consists of, against `registry`, as a [`CallCursor`].
+impl<'q> CallReadShape<'q> {
+    /// The shape of `query`, or a refusal naming the first thing that is not part of
+    /// it: a form other than `SELECT`, a dataset clause, or a node between the root and
+    /// the call that is not a row-for-row operator.
+    ///
+    /// # Errors
+    ///
+    /// [`CallReadRefusal`] naming that first thing.
+    pub fn of(query: &'q Query) -> Result<Self, CallReadRefusal> {
+        let refused = |what: &str| CallReadRefusal {
+            reason: format!(
+                "an on-demand call read is a SELECT over the default dataset; this is {what}"
+            ),
+        };
+        let Query::Select {
+            pattern, dataset, ..
+        } = query
+        else {
+            return Err(refused("not a SELECT"));
+        };
+        if !dataset.default.is_empty() || !dataset.named.is_empty() {
+            return Err(refused("a query with a dataset clause"));
+        }
+        Self::of_pattern(pattern).map_err(|error| CallReadRefusal {
+            reason: error.to_string(),
+        })
+    }
+
+    /// The shape of a `SELECT`'s root `pattern`, or a refusal naming the first node
+    /// that is not a row-for-row operator.
+    fn of_pattern(pattern: &'q GraphPattern) -> Result<Self, EvalError> {
+        let not_one_call = |node: &str| {
+            EvalError::unsupported(format!(
+                "an on-demand call read is one property-function call under projections, \
+                 OFFSET-free LIMITs and variable-renaming BINDs; this query has {node} there"
+            ))
+        };
+        // Walk down to the call, remembering every operator on the way.
+        let mut operators: Vec<&GraphPattern> = Vec::new();
+        let mut node = pattern;
+        let call = loop {
+            match node {
+                GraphPattern::PropertyFunction(call) => break call,
+                GraphPattern::Slice {
+                    start: 0, inner, ..
+                }
+                | GraphPattern::Project { inner, .. }
+                | GraphPattern::Extend {
+                    inner,
+                    expression: purrdf_sparql_algebra::Expression::Variable(_),
+                    ..
+                } => {
+                    operators.push(node);
+                    node = inner;
+                }
+                // The parser's own spelling of a triples block that is one call and
+                // nothing else: the call laterally joined onto the empty pattern
+                // written before it. The empty pattern is the join identity, so this
+                // is the call itself — exactly what planning reduces it to — and the
+                // shape of a text read before any registry planned it is the shape of
+                // the plan it becomes.
+                GraphPattern::Lateral { left, right }
+                    if matches!(&**left, GraphPattern::Bgp { patterns } if patterns.is_empty())
+                        && matches!(&**right, GraphPattern::PropertyFunction(_)) =>
+                {
+                    node = right;
+                }
+                GraphPattern::Slice { .. } => return Err(not_one_call("an OFFSET")),
+                GraphPattern::Extend { .. } => return Err(not_one_call("a computed BIND")),
+                other @ (GraphPattern::Join { .. } | GraphPattern::Lateral { .. }) => {
+                    return Err(not_one_call(&format!(
+                        "a join of the call with another pattern (a {} node)",
+                        node_kind(other)
+                    )));
+                }
+                other => {
+                    return Err(not_one_call(&format!("a {} node", node_kind(other))));
+                }
+            }
+        };
+        if !operators
+            .iter()
+            .any(|operator| matches!(operator, GraphPattern::Project { .. }))
+        {
+            return Err(not_one_call("no projection"));
+        }
+        Ok(Self { call, operators })
+    }
+
+    /// The call the query consists of: its IRI and both argument lists, exactly as
+    /// the query wrote them.
+    #[must_use]
+    pub const fn call(&self) -> &'q PropertyFunctionCall {
+        self.call
+    }
+
+    /// The tightest `LIMIT` on the way down, whichever level wrote it: every operator
+    /// between them is row-for-row, so it bounds the answer.
+    fn limit(&self) -> Option<usize> {
+        self.operators
+            .iter()
+            .filter_map(|operator| match operator {
+                GraphPattern::Slice { length, .. } => *length,
+                _ => None,
+            })
+            .min()
+    }
+
+    /// Every column the query projects, in projection order, beside the call
+    /// variable it reads — or `None` for a projected column no call variable reaches,
+    /// which the query answers unbound.
+    ///
+    /// The call's variables are carried out through the operators, innermost first:
+    /// a renaming `BIND` makes a new name for the variable its source reads, and a
+    /// projection keeps only the names it lists. The outermost projection's list is
+    /// the answer. A blank node in an argument position is no variable and reaches no
+    /// column.
+    #[must_use]
+    pub fn projection(&self) -> Vec<(&'q Variable, Option<&'q Variable>)> {
+        let mut visible: Vec<(&'q Variable, Option<&'q Variable>)> = Vec::new();
+        for term in self.call.subject_args.iter().chain(&self.call.object_args) {
+            call_variables(term, &mut visible);
+        }
+        let lookup = |visible: &[(&'q Variable, Option<&'q Variable>)], variable: &Variable| {
+            visible
+                .iter()
+                .find(|(name, _)| *name == variable)
+                .and_then(|(_, source)| *source)
+        };
+        let mut projection = Vec::new();
+        for operator in self.operators.iter().rev() {
+            match operator {
+                GraphPattern::Extend {
+                    variable,
+                    expression: purrdf_sparql_algebra::Expression::Variable(source),
+                    ..
+                } => {
+                    let source = lookup(&visible, source);
+                    visible.push((variable, source));
+                }
+                GraphPattern::Project { variables, .. } => {
+                    let projected: Vec<(&'q Variable, Option<&'q Variable>)> = variables
+                        .iter()
+                        .map(|variable| (variable, lookup(&visible, variable)))
+                        .collect();
+                    visible.clone_from(&projected);
+                    projection = projected;
+                }
+                _ => {}
+            }
+        }
+        projection
+    }
+
+    /// The call variable the projected column `column` reads, or `None` where the
+    /// query projects no such column or the column is one no call variable reaches.
+    #[must_use]
+    pub fn source_of(&self, column: &str) -> Option<&'q Variable> {
+        self.projection()
+            .into_iter()
+            .find(|(name, _)| name.as_str() == column)
+            .and_then(|(_, source)| source)
+    }
+}
+
+/// The variant name of `pattern`, for a refusal that names the node in the way.
+fn node_kind(pattern: &GraphPattern) -> String {
+    let name = format!("{pattern:?}");
+    name.split([' ', '(', '{'])
+        .next()
+        .unwrap_or("an operator")
+        .to_owned()
+}
+
+/// Record every variable `term` binds as a call variable read by itself, once, in
+/// first-seen order — the variables inside a quoted-triple argument included, because
+/// the compiled call gives each of them a slot and a column exactly as it gives a
+/// top-level variable (see `compile_arg`). A blank node binds no column and is skipped.
+fn call_variables<'q>(
+    term: &'q TermPattern,
+    visible: &mut Vec<(&'q Variable, Option<&'q Variable>)>,
+) {
+    fn record<'q>(variable: &'q Variable, visible: &mut Vec<(&'q Variable, Option<&'q Variable>)>) {
+        if !visible.iter().any(|(name, _)| *name == variable) {
+            visible.push((variable, Some(variable)));
+        }
+    }
+    match term {
+        TermPattern::Variable(variable) => record(variable, visible),
+        TermPattern::Triple(triple) => {
+            if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                record(variable, visible);
+            }
+            call_variables(&triple.subject, visible);
+            call_variables(&triple.object, visible);
+        }
+        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {}
+    }
+}
+
+/// Open the one call `shape` describes, against `registry`, as a [`CallCursor`].
 ///
-/// `pattern` is a `SELECT` query's root, and it must be one property-function call
-/// under nothing but **row-for-row** operators: projections, `LIMIT`s with no
-/// `OFFSET`, and `BIND`s that rename a variable. Those are the operators a nested
-/// `SELECT (?c AS ?x) WHERE { call } LIMIT n` is made of, and each one maps the
-/// call's `i`-th row to the answer's `i`-th row or stops — so the answer can be
-/// produced one row per pull by carrying each row through them. Anything else is
-/// refused with a diagnostic naming the node: an operator that could reorder,
-/// merge, drop or compute over rows would need reading on demand itself, and this
-/// entry reads the call and nothing else.
+/// `shape` is a `SELECT` query that is one property-function call under nothing but
+/// **row-for-row** operators — projections, `LIMIT`s with no `OFFSET`, and `BIND`s
+/// that rename a variable — as [`CallReadShape::of`] admitted it. Those are the
+/// operators a nested `SELECT (?c AS ?x) WHERE { call } LIMIT n` is made of, and each
+/// one maps the call's `i`-th row to the answer's `i`-th row or stops — so the answer
+/// can be produced one row per pull by carrying each row through them. An operator
+/// that could reorder, merge, drop or compute over rows would need reading on demand
+/// itself, which is why the shape refuses every other node by name and this entry
+/// reads the call and nothing else.
 pub(crate) fn open_call_cursor(
-    pattern: &GraphPattern,
+    shape: &CallReadShape<'_>,
     registry: &crate::property_fn::PropertyFunctionRegistry,
 ) -> Result<CallCursor, EvalError> {
-    let (call, operators) = call_read_shape(pattern)?;
-    // The tightest `LIMIT` on the way down bounds the answer, whichever level wrote
-    // it: every operator between them is row-for-row.
-    let limit = operators
-        .iter()
-        .filter_map(|operator| match operator {
-            GraphPattern::Slice { length, .. } => *length,
-            _ => None,
-        })
-        .min();
+    let call = shape.call();
+    let limit = shape.limit();
     let relation = registry.resolve(&call.iri).map(Arc::clone).ok_or_else(|| {
         EvalError::function(format!(
             "no property function is registered for <{}>",
@@ -1038,55 +1222,20 @@ pub(crate) fn open_call_cursor(
         generation: generation_contained(&*cursor, &call.iri)?,
         service: service_level_contained(&*cursor, &call.iri)?,
     };
-    // Carry the call's variables out through the operators, innermost first: each
-    // visible name is bound to the call slot it reads, and a name no slot reaches is
-    // projected unbound, exactly as the materialising evaluator leaves it.
-    let mut visible: Vec<(Variable, Option<usize>)> = plan
-        .bound_cols
-        .iter()
-        .filter_map(|&(slot, column)| {
-            plan.schema
-                .vars()
-                .get(column)
-                .map(|variable| (variable.clone(), Some(slot)))
+    // Each projected column, beside the call slot it reads: the shape carried the
+    // call's variables out through the operators, and a variable is a slot exactly
+    // where the compiled call gave it a column. A name no slot reaches is projected
+    // unbound, exactly as the materialising evaluator leaves it.
+    let slot_of = |variable: &Variable| {
+        plan.bound_cols.iter().find_map(|&(slot, column)| {
+            (plan.schema.vars().get(column) == Some(variable)).then_some(slot)
         })
+    };
+    let projection: Vec<(&Variable, Option<usize>)> = shape
+        .projection()
+        .into_iter()
+        .map(|(variable, source)| (variable, source.and_then(slot_of)))
         .collect();
-    let lookup = |visible: &[(Variable, Option<usize>)], variable: &Variable| {
-        visible
-            .iter()
-            .find(|(name, _)| name == variable)
-            .and_then(|(_, slot)| *slot)
-    };
-    let mut projection: Option<Vec<(Variable, Option<usize>)>> = None;
-    for operator in operators.iter().rev() {
-        match operator {
-            GraphPattern::Extend {
-                variable,
-                expression: purrdf_sparql_algebra::Expression::Variable(source),
-                ..
-            } => {
-                let slot = lookup(&visible, source);
-                visible.push((variable.clone(), slot));
-            }
-            GraphPattern::Project { variables, .. } => {
-                let projected: Vec<(Variable, Option<usize>)> = variables
-                    .iter()
-                    .map(|variable| (variable.clone(), lookup(&visible, variable)))
-                    .collect();
-                visible.clone_from(&projected);
-                projection = Some(projected);
-            }
-            _ => {}
-        }
-    }
-    // `call_read_shape` admitted the pattern only with a projection on the way down,
-    // and the loop above records every projection it passes.
-    let Some(projection) = projection else {
-        return Err(EvalError::unsupported(
-            "an on-demand call read is one projected property-function call; this query \
-             projects nothing",
-        ));
-    };
     Ok(CallCursor {
         iri: call.iri.clone(),
         declared,

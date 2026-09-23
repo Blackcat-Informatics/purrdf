@@ -1465,12 +1465,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
     // candidate, because the fusion asks only about candidates it has pulled.
     let mut lookups: Vec<PendingLookup> = Vec::new();
     let candidates: Rc<RefCell<CandidateIndex<D::Id>>> = Rc::new(RefCell::new(HashMap::new()));
-    let exclusions: Vec<Option<String>> = compiled
-        .units
-        .iter()
-        .map(StratumUnit::exclusion_sparql)
-        .collect();
-    let index_candidates = exclusions.iter().any(Option::is_some);
+    let index_candidates = compiled.units.iter().any(StratumUnit::declares_exclusion);
     let mut statuses = HashMap::with_capacity(compiled.units.len());
     // The registry is named identically at prepare and at evaluation: the
     // evaluator refuses a plan prepared against a different registry than the
@@ -1498,7 +1493,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         ..QueryOptions::EMPTY
     };
 
-    for (unit, exclusion) in compiled.units.iter().zip(exclusions) {
+    for unit in &compiled.units {
         // There is no empty-text arm here, and there is nothing left for one to catch.
         // An empty supplied text is not a query, so `StratumUnit::new` refuses it
         // outright (`UnitError::NotAQuery`), and a rendered text is assembled from a
@@ -1511,9 +1506,24 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         // taken from the unit once, here, so the text, the reach and the rank the
         // ending reports cannot be three readings of two different numbers.
         let depth = unit.probed_depth();
-        // Prepared before the ranking read, and once for the whole stratum. It
-        // is a second query over the same producer — the same call with the
-        // candidate bound — and the fusion stage runs it once per candidate it
+        let sparql = unit.sparql();
+        let prepared = match engine.prepare_query_with_options(&sparql, None, options()) {
+            Ok(prepared) => prepared,
+            Err(diagnostic) => {
+                statuses.insert(
+                    unit.stratum.clone(),
+                    ProducerStatus::ExecutionFailed {
+                        reason: diagnostic.to_string(),
+                    },
+                );
+                continue;
+            }
+        };
+        // Prepared before the ranking read runs, and once for the whole stratum —
+        // but after the ranking text is prepared, because that prepared plan is what
+        // a caller's own one-call text has its lookup derived from (see
+        // `StratumUnit::exclusion_sparql`). It is a second query over the same
+        // producer — the same call with the candidate bound — and the fusion stage runs it once per candidate it
         // needs a verdict for, so parsing and feasibility-ordering it here is
         // the difference between a prepared lookup and a re-parse per
         // candidate. A stratum whose lookup will not prepare is a stratum whose
@@ -1531,9 +1541,22 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         // whose absences are not exclusions. Declaring it is what puts the call in
         // the candidate-bound mode a membership basis is admitted against, and the
         // execution refuses to run with it unbound, so it cannot be run free.
-        let exclusion = match exclusion {
+        let exclusion = match unit.exclusion_sparql(&prepared, registry) {
             None => None,
-            Some(text) => {
+            Some(Err(reason)) => {
+                statuses.insert(
+                    unit.stratum.clone(),
+                    ProducerStatus::ExecutionFailed {
+                        reason: format!(
+                            "stratum {}: the exclusion lookup its contract declared could not be \
+                             derived from its query: {reason}",
+                            unit.stratum
+                        ),
+                    },
+                );
+                continue;
+            }
+            Some(Ok(text)) => {
                 match engine.prepare_execution(&text, None, &[CANDIDATE_NAME], options()) {
                     Ok(execution) => {
                         let slot = execution
@@ -1555,19 +1578,6 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                         continue;
                     }
                 }
-            }
-        };
-        let sparql = unit.sparql();
-        let prepared = match engine.prepare_query_with_options(&sparql, None, options()) {
-            Ok(prepared) => prepared,
-            Err(diagnostic) => {
-                statuses.insert(
-                    unit.stratum.clone(),
-                    ProducerStatus::ExecutionFailed {
-                        reason: diagnostic.to_string(),
-                    },
-                );
-                continue;
             }
         };
         // On demand: the same prepared text, opened as one invocation held open, and

@@ -437,6 +437,23 @@ free variable in the lookup's text — and *only* in the lookup's text; the
 streaming unit still carries the depth the plan derived. A depth is an offer, and
 a lookup is not asking for an offer to be filled.
 
+**A caller's own one-call text is looked up the same way.** A unit built with
+`StratumUnit::new` over a hand-written query may declare your basis when that
+query is one call of your relation under nothing but projections, `OFFSET`-free
+`LIMIT`s and variable-renaming `BIND`s — the shape an on-demand read already
+recognises (`PreparedQuery::call_read_shape`), and the one shape check both
+paths share. The lookup is derived from the call the caller wrote, carried back
+through the renamings to the position its `?candidate` column reads: that
+position is the parameter, your depth position is freed whatever the caller
+wrote there, every other variable is a blank, and every other constant is the
+caller's own. It is held to the same terms as a rendered lookup: the call's IRI
+must be registered with a ranked declaration stating the basis the unit claims,
+and the candidate must be read from the position that basis was admitted at, or
+the stratum fails by name. A supplied text of any other shape — a join, a
+`FILTER`, an `ORDER BY`, a dataset clause — has no one call to ask and is
+refused at construction (`UnitError::ExclusionNotRenderable`, naming the node in
+the way); declare `ExclusionBasis::Unavailable` for such a text.
+
 **The candidate is declared to the prepare, not merely substituted.** The
 consumer prepares the lookup through
 [`prepare_execution`](purrdf_sparql_eval::NativeSparqlEngine::prepare_execution),

@@ -52,7 +52,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   prepares each stratum's lookup once, binds each candidate by the dataset id its read
   found it under, and hands the lookup back inside the stream; a stratum whose lookup
   will not prepare is that stratum's `ExecutionFailed` status. A unit built from a
-  caller-supplied query cannot declare a basis (`UnitError::ExclusionNotRenderable`),
+  caller-supplied query that is one property-function call under projections,
+  `OFFSET`-free `LIMIT`s and renaming `BIND`s — the shape
+  `PreparedQuery::call_read_shape` (new, beside `CallReadShape` and
+  `CallReadRefusal`) describes and `is_call_read` asks — gets the same lookup,
+  derived from the call it wrote: the position its `?candidate` column reads is the
+  parameter, a declared depth position is freed, and the registry must declare the
+  unit's basis for that call at that candidate position or the stratum fails by
+  name. A supplied query of any other shape cannot declare a basis
+  (`UnitError::ExclusionNotRenderable`, whose `reason` names what is in the way),
   and registration refuses a declared basis on a relation with no candidate-bound
   access mode whose row bound is one. `FusionTrailer::exclusion_bases` records each
   stream's basis, and `FusionTrailer::evidence_id` now also covers which strata
