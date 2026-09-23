@@ -224,9 +224,14 @@
 //! [`StratumResolution::rows_materialised`](crate::StratumResolution::rows_materialised)
 //! is taken at that settlement, beside the ranks the fusion pulled.
 //!
+//! A producer that takes its depth as an argument is opened at the planned depth
+//! too, and that costs its search nothing: both nearest-neighbour producers in this
+//! workspace do the same search at any `k` — a full scan, or a beam of the index's
+//! declared width — and a smaller `k` only keeps a prefix of the same ranking. See
+//! [`execute_within`](crate::execute_within)'s module header.
+//!
 //! A stratum the profile does not weight is still read to its end, because its
-//! status is how it ended and nothing but reading it can say that; a unit running a
-//! caller's own text is read materialised, as [`execute`](crate::execute) reads it.
+//! status is how it ended and nothing but reading it can say that.
 
 use std::collections::BTreeMap;
 

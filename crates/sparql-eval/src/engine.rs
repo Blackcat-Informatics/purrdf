@@ -110,6 +110,37 @@ impl PreparedQuery {
         Self::from_algebra(query, options, &PlanMemoryObserver::default())
     }
 
+    /// Whether this plan has the shape
+    /// [`NativeSparqlEngine::open_call_cursor`] reads one row per pull: a `SELECT`
+    /// over the default dataset whose pattern is one property-function call under
+    /// nothing but projections, `OFFSET`-free `LIMIT`s and variable-renaming `BIND`s.
+    ///
+    /// A question about the algebra and nothing else. It resolves no relation and
+    /// opens nothing, so `true` says the plan *can* be read on demand, not that the
+    /// open will succeed: the open still makes every refusal the governed lane makes
+    /// (an unregistered relation, an undeclared mode, a relation that refuses). And
+    /// `false` is never a refusal of the query: the governed lane reads every such
+    /// plan exactly as before, all of it before its first row is readable.
+    ///
+    /// Asked of the plan rather than of where its text came from, because the
+    /// shape is what decides whether one invocation held open *is* the answer. A
+    /// caller's hand-written `SELECT ?c WHERE { (?c) <pf> ("q") }` is that shape
+    /// exactly as a rendered one is; a text with a join, a `FILTER` or an
+    /// `ORDER BY` is not, whoever wrote it.
+    #[must_use]
+    pub fn is_call_read(&self) -> bool {
+        match &self.query {
+            Query::Select {
+                pattern, dataset, ..
+            } => {
+                dataset.default.is_empty()
+                    && dataset.named.is_empty()
+                    && crate::property_fn_eval::is_call_read_shape(pattern)
+            }
+            _ => false,
+        }
+    }
+
     fn from_algebra(
         query: Query,
         options: QueryOptions<'_>,
@@ -1060,7 +1091,8 @@ impl NativeSparqlEngine {
     /// receipt must still describe.
     ///
     /// `options` must name the registry the plan was prepared against, as for every
-    /// prepared-plan entry.
+    /// prepared-plan entry. Whether a plan has the shape this reads is answerable
+    /// without opening anything: [`PreparedQuery::is_call_read`].
     ///
     /// # Errors
     ///

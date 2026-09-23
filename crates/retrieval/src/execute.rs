@@ -226,7 +226,9 @@
 //! [`execute_within`] takes a [`ReadSchedule`]. [`ReadSchedule::Materialised`] is the
 //! read described so far, and it is what [`execute`] runs. Under
 //! [`ReadSchedule::OnDemand`] — the schedule [`search`](crate::search) runs — every
-//! unit this layer rendered is opened as **one invocation held open**
+//! unit whose prepared text is one property-function call under row-for-row
+//! operators ([`PreparedQuery::is_call_read`](purrdf_sparql_eval::PreparedQuery::is_call_read)),
+//! which is every unit this layer rendered, is opened as **one invocation held open**
 //! ([`NativeSparqlEngine::open_call_cursor`]): the same text, the same planned depth,
 //! the same bound one probe row past it, and the same arguments, admission, width
 //! check and unification the governed lane gives it. Its stream then produces a row
@@ -255,9 +257,34 @@
 //! exactly the rows the stream handed out, and the consumer checks that count
 //! against the rows it pulled.
 //!
-//! A unit running a caller's own text is materialised under either schedule: what
-//! that text bounds inside itself is not one invocation this layer can hold open.
-//! And a failure is isolated exactly as far as it still can be — one before the
+//! # A producer that takes its depth is opened at the planned depth, and pays nothing for it
+//!
+//! A rendered unit hands a self-bounding producer — a nearest-neighbour search — the
+//! planned depth (one probe row past it, within its declaration) as its `k`, and the
+//! on-demand read opens it there even where the fusion will provably stop far
+//! shallower. That is not a missed saving, because neither nearest-neighbour producer
+//! in this workspace does work that depends on `k`. The exact scan computes one
+//! distance per row of its space for any `k` of at least one — the nearest row is
+//! not known until every row has been measured — and `k` only sizes the selection
+//! it keeps. The graph search walks a beam of the artifact's declared `ef_search`,
+//! which is part of the index identity and is never narrowed or widened to fit a
+//! request, and `k` only truncates the beam's sorted result. So the search an
+//! invocation performs is the same search at `k = 6` as at `k = 401`, both producers'
+//! results at a smaller `k` are exactly the prefix of their results at a larger one
+//! (the order is total: distance, then row), and the rows past the fusion's stop are
+//! never produced because the cursor builds a row only when it is pulled. Opening at
+//! a shallower `k` and continuing with a second invocation where the fusion read
+//! past it would repeat that whole search for the second read — twice the work of
+//! the one invocation this layer takes — and would buy the first read nothing.
+//!
+//! A unit whose text is anything else — a caller's own join, `FILTER`, `ORDER BY` or
+//! dataset clause — is materialised under either schedule: it is not one invocation
+//! this layer can hold open. A caller's own text that *is* one call under row-for-row
+//! operators is read on demand exactly as a rendered one, and ends
+//! [`StreamEnding::SuppliedQueryEnded`] rather than `Exhausted` when it runs out,
+//! for the reason its materialised read does.
+//!
+//! A failure is isolated exactly as far as it still can be — one before the
 //! first row is that stratum's [`ProducerStatus::ExecutionFailed`], while one after
 //! rows were merged fails the request by name, because those rows are already in the
 //! answer.
@@ -1259,9 +1286,11 @@ pub async fn execute<'d, D: DatasetView + Sync>(
 /// the `schedule` given.
 ///
 /// [`execute`] is this function at [`ReadSchedule::Materialised`]. Under
-/// [`ReadSchedule::OnDemand`] every unit this layer rendered is opened at its planned
-/// depth as one invocation held open, and its stream produces a row each time it is
-/// pulled — see this module's header. The two schedules run the same text and read
+/// [`ReadSchedule::OnDemand`] every unit whose prepared text is one property-function
+/// call under row-for-row operators — every unit this layer rendered, and a caller's
+/// own text of that shape — is opened at its planned depth as one invocation held
+/// open, and its stream produces a row each time it is pulled — see this module's
+/// header. The two schedules run the same text and read
 /// the same rows in the same order; what differs is how many of them a consumer that
 /// stops early ever causes to be produced.
 ///
@@ -1271,8 +1300,9 @@ pub async fn execute<'d, D: DatasetView + Sync>(
 ///   stream is read, because how it ends is decided by how far it is read. Its
 ///   stream's receipt is its status, and a caller that wants the status of a stream
 ///   it will not fuse reads the stream to its end;
-/// * a unit running a caller's own text is materialised under this schedule too, and
-///   does get an entry.
+/// * a unit whose text is not one call under row-for-row operators — a caller's own
+///   join, `FILTER`, `ORDER BY` or dataset clause — is materialised under this
+///   schedule too, and does get an entry.
 ///
 /// # Errors
 ///
@@ -1429,7 +1459,11 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         // On demand: the same prepared text, opened as one invocation held open, and
         // read as its stream is pulled. No status is recorded, because how this read
         // ends is decided by how far its consumer reads it; see `execute_within`.
-        if schedule == ReadSchedule::OnDemand && unit.is_rendered() {
+        //
+        // Decided by the prepared plan's shape, never by who wrote the text: a
+        // caller's own text that is one call under row-for-row operators is exactly
+        // one invocation, and one that is anything else is read materialised below.
+        if schedule == ReadSchedule::OnDemand && prepared.is_call_read() {
             let opened = engine
                 .open_call_cursor(&prepared, options())
                 .map_err(|diagnostic| diagnostic.to_string())
@@ -2047,17 +2081,23 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
             .next_row()
             .map_err(|error| isolated(error.to_string()))?
         else {
-            // Ran out. Filling a depth the read could not be taken past is the
-            // producer's own bound stopping it, which nobody could observe past;
-            // anything short of it is a verified exhaustion.
-            let ending =
-                if self.reach == ReadReach::AtDepth && self.materialised == u64::from(self.depth) {
+            // Ran out. A caller's own text is the stopper nobody observed past, and
+            // the ending names it, exactly as `bound_to_depth` does: a `LIMIT` inside
+            // that text may have cut the read before this layer's bound was reached.
+            // Filling a depth the read could not be taken past is the producer's own
+            // bound stopping it, which nobody could observe past either; anything
+            // else is a verified exhaustion.
+            let ending = match self.reach {
+                ReadReach::Unknown => StreamEnding::SuppliedQueryEnded {
+                    rank: self.materialised,
+                },
+                ReadReach::AtDepth if self.materialised == u64::from(self.depth) => {
                     StreamEnding::RowBoundReached {
                         rank: u64::from(self.depth),
                     }
-                } else {
-                    StreamEnding::Exhausted
-                };
+                }
+                ReadReach::AtDepth | ReadReach::PastDepth => StreamEnding::Exhausted,
+            };
             return Ok(ReadStep::Ended(ending));
         };
         self.materialised += 1;

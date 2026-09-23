@@ -24,6 +24,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
@@ -108,6 +109,9 @@ const SHORT_REASON: &str = "shard 3 rebuilding";
 /// [`Index`] says.
 struct IndexedProducer {
     index: Index,
+    /// Every row any of this producer's cursors has minted: the producer's own count
+    /// of the work it did, read independently of anything the executor reports.
+    minted: Arc<AtomicU64>,
 }
 
 impl PropertyFunction for IndexedProducer {
@@ -136,6 +140,7 @@ impl PropertyFunction for IndexedProducer {
     ) -> Result<Box<dyn PfCursor>, EvalError> {
         Ok(Box::new(IndexedCursor {
             index: self.index.clone(),
+            minted: Arc::clone(&self.minted),
             needle: args
                 .flattened()
                 .nth(1)
@@ -150,6 +155,7 @@ impl PropertyFunction for IndexedProducer {
 /// The cursor behind [`IndexedProducer`].
 struct IndexedCursor {
     index: Index,
+    minted: Arc<AtomicU64>,
     needle: TermValue,
     emitted: u64,
 }
@@ -164,6 +170,7 @@ impl PfCursor for IndexedCursor {
             self.needle.clone(),
         ];
         self.emitted += 1;
+        self.minted.fetch_add(1, Ordering::SeqCst);
         Ok(Some(row))
     }
 
@@ -200,16 +207,26 @@ fn strata() -> [Iri; 2] {
 /// The registry, with the left producer's index behaving as `left` says and the
 /// right one's stable.
 fn registry(left: Index) -> PropertyFunctionRegistry {
+    counted_registry(left).0
+}
+
+/// [`registry`], with each producer's count of the rows it minted, in stratum order.
+fn counted_registry(left: Index) -> (PropertyFunctionRegistry, [Arc<AtomicU64>; 2]) {
+    let minted = [Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0))];
     let mut registry = PropertyFunctionRegistry::new();
     let block = DomainTag::parse(&ex("domain/shared")).expect("a valid tag");
-    for ((predicate, stratum), index) in ["title", "body"]
+    for (((predicate, stratum), index), minted) in ["title", "body"]
         .into_iter()
         .zip(strata())
         .zip([left, Index::Stable])
+        .zip(&minted)
     {
         registry.register_ranked(
             ex(&format!("pf/{predicate}")),
-            Arc::new(IndexedProducer { index }),
+            Arc::new(IndexedProducer {
+                index,
+                minted: Arc::clone(minted),
+            }),
             RankedDeclaration {
                 stratum: purrdf_core::parse_iri(stratum.as_str()).expect("a valid IRI"),
                 accepted_terms: vec![AcceptedTerm {
@@ -236,7 +253,7 @@ fn registry(left: Index) -> PropertyFunctionRegistry {
             },
         );
     }
-    registry
+    (registry, minted)
 }
 
 fn request() -> RetrievalRequest {
@@ -591,5 +608,276 @@ fn a_forged_announcement_is_refused_at_the_settlement_and_the_true_one_is_admitt
             .expect("a stable index answers")
             .rows,
         "and the hand-composed on-demand read is `search`'s answer"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A caller's own text: read on demand by its shape, not by its origin
+// ---------------------------------------------------------------------------
+
+/// A caller's hand-written text for the producer at `predicate`: one call, projected,
+/// with the needle every rendered unit places — the shape the on-demand read admits.
+fn one_call(predicate: &str) -> String {
+    format!(
+        "SELECT ?candidate WHERE {{ ( ?candidate ) <{}> ( \"quick brown fox\"@en ) }}",
+        ex(&format!("pf/{predicate}"))
+    )
+}
+
+/// The same call under a `FILTER` every one of its rows passes: the same rows in the
+/// same order, in a shape that is not one call under row-for-row operators.
+fn filtered_call(predicate: &str) -> String {
+    format!(
+        "SELECT ?candidate WHERE {{ ( ?candidate ) <{}> ( \"quick brown fox\"@en ) \
+         FILTER(isIRI(?candidate)) }}",
+        ex(&format!("pf/{predicate}"))
+    )
+}
+
+/// The same call joined with an empty-bindings `VALUES` row: again the same rows in
+/// the same order, and again not the shape the on-demand read admits.
+fn joined_call(predicate: &str) -> String {
+    format!(
+        "SELECT ?candidate WHERE {{ VALUES ?unused {{ UNDEF }} ( ?candidate ) <{}> \
+         ( \"quick brown fox\"@en ) }}",
+        ex(&format!("pf/{predicate}"))
+    )
+}
+
+/// What one hand-composed read of caller-supplied units came to.
+struct Supplied {
+    rows: Vec<purrdf_retrieval::FusedRow>,
+    /// Per stratum: `(ranks the fusion pulled, rows the stream reports it produced)`.
+    resolution: Vec<(u64, Option<u64>)>,
+    /// Per stratum, the rows the producer itself minted.
+    minted: Vec<u64>,
+    /// Per stratum, the status the executor recorded before any row was pulled.
+    statuses: Vec<Option<purrdf_retrieval::ProducerStatus>>,
+}
+
+/// Compile the fixture, replace every unit with the caller text `text` writes for its
+/// producer, run it under [`ReadSchedule::OnDemand`] and fuse it.
+fn supplied(text: fn(&str) -> String) -> Supplied {
+    let dataset = common::empty_dataset();
+    let (registry, minted) = counted_registry(Index::Stable);
+    let statistics = statistics();
+    let profile = profile();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+    let planned = plan(&request(), &registry, &statistics).expect("the fixture plans");
+    let mut compiled = compile(&planned, &env).expect("the fixture compiles");
+    for (unit, predicate) in compiled.units.iter_mut().zip(["title", "body"]) {
+        *unit = purrdf_retrieval::StratumUnit::new(
+            unit.stratum.clone(),
+            text(predicate),
+            unit.contract.clone(),
+            unit.depth(),
+            unit.declared_rows(),
+        )
+        .expect("the compiler's own depth and declaration are admitted");
+        assert!(
+            unit.supplied_query().is_some(),
+            "the unit runs the caller's text"
+        );
+    }
+    let execution = block_on(execute_within(
+        &compiled,
+        &registry,
+        dataset,
+        ReadSchedule::OnDemand,
+    ))
+    .expect("it executes");
+    let statuses = strata()
+        .iter()
+        .map(|stratum| execution.statuses.get(stratum).cloned())
+        .collect();
+    let streams = execution
+        .streams
+        .into_iter()
+        .map(|stream| {
+            let adapter =
+                RankedStreamAdapter::new(stream.stream, stream.contract, &profile, &stream.stratum)
+                    .expect("both strata are weighted")
+                    .with_plan_id(stream.plan_id)
+                    .with_fused_bound(stream.fused_bound)
+                    .with_attestation(stream.attestation);
+            (stream.stratum, adapter)
+        })
+        .collect();
+    let fused = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
+        streams,
+        &profile,
+        compiled.fused_bound,
+    ))
+    .expect("the caller's units fuse");
+    Supplied {
+        resolution: strata()
+            .iter()
+            .map(|stratum| {
+                let resolution = &fused.trailer.resolution[stratum];
+                (resolution.ranks_pulled, resolution.rows_materialised)
+            })
+            .collect(),
+        rows: fused.rows,
+        minted: minted
+            .iter()
+            .map(|minted| minted.load(Ordering::SeqCst))
+            .collect(),
+        statuses,
+    }
+}
+
+/// **A caller's own text that is one call is read on demand; one that is not is
+/// materialised; both answer what the rendered units answer.**
+///
+/// Whether a stratum is read a row per pull is decided by its prepared text's shape.
+/// The single-call text is exactly the invocation a rendered unit makes, so the fusion
+/// stops it at the sixth rank having caused six rows to be minted — no probe row,
+/// because the fusion never read past the depth. The `FILTER` and join texts are
+/// executed too, not merely refused a cursor: each is read materialised, all four
+/// hundred rows of each producer before the first is fused, and each ends naming the
+/// caller's text as its stopper. All three give the rendered bundle's answer, row
+/// for row.
+#[test]
+fn a_callers_single_call_is_read_on_demand_and_a_callers_filter_or_join_is_materialised() {
+    let dataset = common::empty_dataset();
+    let reference = materialised(Index::Stable, dataset);
+
+    let on_demand = supplied(one_call);
+    assert_eq!(
+        on_demand.rows, reference.rows,
+        "the caller's single call answers what the rendered unit answers"
+    );
+    assert_eq!(
+        on_demand.resolution,
+        vec![(6, Some(6)), (6, Some(6))],
+        "read on demand: each stream produced the ranks the fusion pulled, and no probe \
+         row because it never read past the depth"
+    );
+    assert_eq!(
+        on_demand.minted,
+        vec![6, 6],
+        "and the producers themselves minted exactly those rows"
+    );
+    assert_eq!(
+        on_demand.statuses,
+        vec![None, None],
+        "an on-demand stratum has no status until its stream is read"
+    );
+
+    for (name, text) in [
+        ("FILTER", filtered_call as fn(&str) -> String),
+        ("join", joined_call),
+    ] {
+        let read = supplied(text);
+        assert_eq!(
+            read.rows, reference.rows,
+            "the caller's {name} answers what the rendered unit answers"
+        );
+        assert_eq!(
+            read.minted,
+            vec![ROWS, ROWS],
+            "the {name} text is materialised: every row each producer holds was minted"
+        );
+        assert_eq!(
+            read.resolution,
+            vec![(6, Some(ROWS)), (6, Some(ROWS))],
+            "the fusion still pulls six ranks, out of a read of every row — {name}"
+        );
+        assert_eq!(
+            read.statuses,
+            vec![
+                Some(purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: ROWS }),
+                Some(purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: ROWS }),
+            ],
+            "and it has its status before a row is pulled, naming the caller's text — {name}"
+        );
+    }
+}
+
+/// **A caller's single call that runs out is not certified exhausted.**
+///
+/// Read on demand to its end, a caller's text bounded by a `LIMIT` of its own stops
+/// at three rows with the probe slot never reached; the ending names the caller's
+/// text, exactly as the same text read materialised does. The neighbour is the
+/// rendered unit read on demand to its end: this layer wrote its bound, the probe
+/// slot existed and nothing filled it, and it is certified `Exhausted`.
+#[test]
+fn a_callers_single_call_read_on_demand_to_its_end_names_the_callers_text() {
+    let dataset = common::empty_dataset();
+    let registry = registry(Index::Stable);
+    let statistics = statistics();
+    let profile = profile();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+    let planned = plan(&request(), &registry, &statistics).expect("the fixture plans");
+    let rendered = compile(&planned, &env).expect("the fixture compiles");
+    let mut bounded = rendered.clone();
+    bounded.units[0] = purrdf_retrieval::StratumUnit::new(
+        bounded.units[0].stratum.clone(),
+        format!("{} LIMIT 3", one_call("title")),
+        bounded.units[0].contract.clone(),
+        bounded.units[0].depth(),
+        bounded.units[0].declared_rows(),
+    )
+    .expect("admitted");
+
+    let drained = |compiled: &purrdf_retrieval::CompiledRetrieval, schedule| {
+        let mut execution =
+            block_on(execute_within(compiled, &registry, dataset, schedule)).expect("it runs");
+        let stratum = strata()[0].clone();
+        let status = execution.statuses.remove(&stratum);
+        let stream = execution
+            .streams
+            .iter_mut()
+            .find(|stream| stream.stratum == stratum)
+            .expect("the stratum streamed");
+        let mut rows = 0_u64;
+        while block_on(stream.stream.next()).expect("it reads").is_some() {
+            rows += 1;
+        }
+        let receipt = block_on(stream.stream.receipt()).expect("it settles");
+        (
+            rows,
+            purrdf_retrieval::ProducerStatus::from(receipt),
+            status,
+        )
+    };
+
+    let (rows, ending, status) = drained(&bounded, ReadSchedule::OnDemand);
+    assert_eq!(
+        (rows, ending, status),
+        (
+            3,
+            purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: 3 },
+            None
+        ),
+        "read on demand, the caller's bound stopped it, and the ending says so"
+    );
+    let (rows, ending, status) = drained(&bounded, ReadSchedule::Materialised);
+    assert_eq!(
+        (rows, ending, status),
+        (
+            3,
+            purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: 3 },
+            Some(purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: 3 })
+        ),
+        "exactly as its materialised read ends"
+    );
+
+    let (rows, ending, _) = drained(&rendered, ReadSchedule::OnDemand);
+    assert_eq!(
+        (rows, ending),
+        (
+            ROWS,
+            purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: ROWS }
+        ),
+        "the rendered neighbour, whose probe slot this layer wrote, is certified exhausted"
     );
 }

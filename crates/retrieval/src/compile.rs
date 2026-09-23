@@ -687,11 +687,16 @@ pub enum ReadSchedule {
     /// first one is readable: the unfused rung [`execute`](crate::execute) returns,
     /// whose every stream already knows how it ended.
     Materialised,
-    /// Every stratum this layer rendered is opened at its planned depth and read one
-    /// row at a time as its stream is pulled, with the invocation held open between
-    /// pulls; see [`search`](crate::search)'s header. A unit running a caller's own
-    /// text is materialised under this schedule too, because what that text bounds
-    /// inside itself is not one call this layer can hold open.
+    /// Every unit whose prepared text is one property-function call under
+    /// row-for-row operators
+    /// ([`PreparedQuery::is_call_read`](purrdf_sparql_eval::PreparedQuery::is_call_read))
+    /// is opened at its planned depth and read one row at a time as its stream is
+    /// pulled, with the invocation held open between pulls; see
+    /// [`search`](crate::search)'s header. That is every unit this layer rendered,
+    /// and a caller's own text of the same shape. A unit whose text is anything
+    /// else — a join, a `FILTER`, an `ORDER BY`, a dataset clause — is materialised
+    /// under this schedule too, because it is not one invocation that can be held
+    /// open.
     OnDemand,
 }
 
@@ -1155,16 +1160,6 @@ impl StratumUnit {
                 dataset_at,
             } => supplied_text(text, *body_at, dataset_at.as_ref(), self.depth),
         }
-    }
-
-    /// Whether this unit's text is one this layer rendered — one call to its
-    /// producer, projected — rather than a caller's own.
-    ///
-    /// The one question [`ReadSchedule::OnDemand`] asks of a unit: a rendered unit
-    /// is exactly one invocation, which can be held open and read as far as its
-    /// consumer asks, and a supplied text is whatever its caller wrote.
-    pub(crate) const fn is_rendered(&self) -> bool {
-        matches!(self.query, UnitQuery::Rendered(_))
     }
 
     /// The query text a caller supplied, or `None` for a query this layer rendered.

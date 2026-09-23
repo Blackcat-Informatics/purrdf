@@ -2284,3 +2284,81 @@ fn the_distance_a_lookup_reports_is_the_one_the_scan_would_have() {
         );
     }
 }
+
+/// **A smaller `k` is the prefix of a larger one, and costs the same scan.**
+///
+/// The fact a consumer that hands this relation a depth relies on when it opens it
+/// once at the planned depth and reads only as far as it needs: the scan measures
+/// every row of the space whatever `k` is — the nearest row is not known until every
+/// row has been measured — and `k` only sizes the selection kept. So the rows at
+/// every `k` are exactly the first `k` rows of the largest read, distance for
+/// distance, and every read, at every `k`, examined the whole space.
+///
+/// The fixture carries **ties**: four pairs of rows at one distance from the seed.
+/// Without them the prefix property would hold for any selection at all; with them it
+/// holds only because the order is total — distance, then row — so a selection that
+/// kept an arbitrary member of a tied pair would fail here at the `k` that splits it.
+#[test]
+fn a_smaller_k_is_a_prefix_of_a_larger_one_and_scans_the_same_rows() {
+    const NAMES: [&str; 10] = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"];
+    // Distances from `r0` under squared Euclidean: 0, then 1 twice, 4 twice, 9 twice,
+    // 16 twice, and 25.
+    let coordinates = [
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (0.0, 1.0),
+        (2.0, 0.0),
+        (0.0, 2.0),
+        (3.0, 0.0),
+        (0.0, 3.0),
+        (4.0, 0.0),
+        (0.0, 4.0),
+        (5.0, 0.0),
+    ];
+    let rows: Vec<(&str, Vec<f64>)> = NAMES
+        .iter()
+        .zip(coordinates)
+        .map(|(name, (x, y))| (*name, vec![x, y]))
+        .collect();
+    let space = fixture(&DistanceMetric::SquaredEuclidean, &rows)
+        .open(KnnGuard::new(100, 10).expect("positive bounds"))
+        .expect("space opens");
+    let relation = EmbeddingKnnRelation::new(Arc::new(space));
+    let observed = relation.observations();
+
+    let full = named(
+        &invoke(
+            &relation,
+            &[None, Some(iri("r0")), Some(count(10)), None],
+            None,
+        )
+        .expect("search"),
+    );
+    assert_eq!(full.len(), 10);
+    let distances: Vec<&str> = full.iter().map(|(_, distance)| distance.as_str()).collect();
+    assert!(
+        distances.windows(2).any(|pair| pair[0] == pair[1]),
+        "the fixture must carry tied distances, or the prefix property is not tested at \
+         a tie: {full:?}"
+    );
+    assert_eq!((observed.scans(), observed.scanned_candidates()), (1, 10));
+
+    for k in 1..=10_i64 {
+        let before = observed.scanned_candidates();
+        let read = named(
+            &invoke(
+                &relation,
+                &[None, Some(iri("r0")), Some(count(k)), None],
+                None,
+            )
+            .expect("search"),
+        );
+        let k = usize::try_from(k).expect("small");
+        assert_eq!(read, full[..k], "k = {k} is the first {k} rows of k = 10");
+        assert_eq!(
+            observed.scanned_candidates() - before,
+            10,
+            "k = {k} measured every row of the space, as k = 10 did"
+        );
+    }
+}

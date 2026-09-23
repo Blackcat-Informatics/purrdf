@@ -346,3 +346,74 @@ fn a_shape_that_is_not_one_call_under_row_for_row_operators_is_refused_by_name()
         "and it honours its LIMIT"
     );
 }
+
+/// **The shape predicate answers exactly what the open admits, and opens nothing.**
+///
+/// `PreparedQuery::is_call_read` is how a consumer decides, before opening, whether a
+/// plan is read on demand or materialised. It must agree with `open_call_cursor` on
+/// every shape above — `true` exactly where the open is admitted — and asking it must
+/// mint no row. A dataset clause is the one refusal the open makes before the walk,
+/// so it is asked here too, beside the same call without one.
+#[test]
+fn the_shape_predicate_agrees_with_the_open_and_opens_nothing() {
+    let cases = [
+        (nested(4), true),
+        (nested(HOLDS + 1), true),
+        (
+            format!("SELECT ?b ?a WHERE {{ ( ?a ) <{REL}> ( ?b ) }}"),
+            true,
+        ),
+        (
+            format!("SELECT ?a WHERE {{ ( ?a ) <{REL}> ( ?b ) }} OFFSET 1"),
+            false,
+        ),
+        (
+            format!("SELECT (STR(?a) AS ?x) WHERE {{ ( ?a ) <{REL}> ( ?b ) }}"),
+            false,
+        ),
+        (
+            format!("SELECT DISTINCT ?a WHERE {{ ( ?a ) <{REL}> ( ?b ) }}"),
+            false,
+        ),
+        (
+            format!("SELECT ?a WHERE {{ ( ?a ) <{REL}> ( ?b ) FILTER(?a != ?b) }}"),
+            false,
+        ),
+        (
+            format!("SELECT ?a WHERE {{ ( ?a ) <{REL}> ( ?b ) }} ORDER BY ?b"),
+            false,
+        ),
+        (
+            format!(
+                "SELECT ?a WHERE {{ ?a <{}> ?c . ( ?a ) <{REL}> ( ?b ) }}",
+                ex("p")
+            ),
+            false,
+        ),
+        (
+            format!(
+                "SELECT ?a FROM <{}> WHERE {{ ( ?a ) <{REL}> ( ?b ) }}",
+                ex("graph")
+            ),
+            false,
+        ),
+    ];
+    for (query, admitted) in cases {
+        let (env, minted) = environment(None);
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine
+            .prepare_query_with_options(&query, None, options(&env))
+            .expect("the query prepares");
+        assert_eq!(prepared.is_call_read(), admitted, "{query}");
+        assert_eq!(
+            minted.load(Ordering::SeqCst),
+            0,
+            "asking the shape opened no invocation — {query}"
+        );
+        assert_eq!(
+            engine.open_call_cursor(&prepared, options(&env)).is_ok(),
+            admitted,
+            "the predicate and the open agree — {query}"
+        );
+    }
+}

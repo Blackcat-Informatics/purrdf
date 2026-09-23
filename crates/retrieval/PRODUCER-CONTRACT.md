@@ -926,6 +926,16 @@ announcement, so relabelling the trailer would keep rows ordered under a claim
 the read did not end with. A relation over a snapshot pinned at `open`, which
 answers both questions the same way at both instants, never meets this.
 
+A producer that takes its depth as an argument is opened **once, at the planned
+depth** (one probe row past it, within its declaration), however early the
+fusion then stops pulling: there is one invocation per stratum and never a
+second. The rows past the stop are never produced, but whatever the search does
+before its first row is sized by that `k`. Both shipped nearest-neighbour
+producers do the same search at every `k` — the exact scan measures every row of
+its space, the graph search walks a beam of its index's declared `ef_search` — so
+for them the planned depth costs nothing a smaller one would save. A host
+producer whose search grows with `k` pays for the planned depth.
+
 **Both shipped producers attest a content-derived generation**, and each value is
 pinned against its own source rather than merely asserted non-empty.
 

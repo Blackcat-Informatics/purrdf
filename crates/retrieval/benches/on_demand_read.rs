@@ -26,6 +26,18 @@
 //! Each group runs at two corpus sizes, because the first and third shapes' on-demand
 //! cost is flat in the corpus and the materialised cost is not.
 //!
+//! A fourth group, `depth_taking`, is about a producer that takes its depth as an
+//! argument — the exact nearest-neighbour relation over a sealed embedding artifact —
+//! and prices the alternative to opening it once at the planned depth. Each case
+//! reads the 66 ranks the drained-with-lookups shape pulls: `at_planned` from one
+//! invocation opened at the planned depth (the space's every row), `at_stop` from one
+//! opened at `k = 66`, and `continued` from a `k = 66` invocation read out and then a
+//! second one at the planned depth read to rank 80, the continuation an overrun would
+//! need. The scan measures every row at any `k`, so the first two are expected to sit
+//! together and the third to pay a second whole scan; the exact counters behind that
+//! are asserted in `purrdf-sparql-eval`'s kNN tests and in the umbrella's
+//! `multimodal_exact_knn.rs`.
+//!
 //! Report-only, per this repository's rule: benches exist so a later change has a
 //! number to move, never so a speedup can be asserted. The deterministic
 //! counterparts — rows produced and producer-reported work, exactly, against the
@@ -39,16 +51,22 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_core::{
+    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
+    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
+    EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
+    RdfDataset, RdfDatasetBuilder, RdfTermTarget, StageImplementation, TargetSet, TermValue,
+    VectorDtype,
+};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed,
     FusionProfile, Iri, RECIP_K, RankFidelity, RankedStreamAdapter, RequestTerm, RetrievalRequest,
     Statistics, Term, TopK, compile, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, EmbeddingKnnRelation, EmbeddingSpace, EvalError, ExclusionBasis,
+    KnnGuard, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 /// The fixture namespace. A bench mints no vocabulary of its own, and a
@@ -405,5 +423,167 @@ fn reads(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, reads);
+// ---------------------------------------------------------------------------
+// A producer that takes its depth
+// ---------------------------------------------------------------------------
+
+/// The ranks the drained-with-lookups shape pulls from each stratum.
+const PULLED: usize = 66;
+
+/// The dimensionality of the bench's embedding space.
+const DIMS: usize = 16;
+
+fn identity(name: &str) -> ArtifactIdentity {
+    ArtifactIdentity::new(
+        ex(name),
+        "application/octet-stream",
+        ContentDigest::of(name.as_bytes()),
+        None,
+        ArtifactIdentityKind::Single,
+    )
+    .expect("the fixture artifact identity is well formed")
+}
+
+fn stage(name: &str) -> AppliedStage {
+    AppliedStage::Applied(
+        StageImplementation::new(
+            ex(name),
+            ContentDigest::of(name.as_bytes()),
+            "application/octet-stream",
+            vec![1],
+        )
+        .expect("the fixture stage is well formed"),
+    )
+}
+
+/// A sealed embedding artifact of `rows` deterministic vectors, opened as a space.
+fn embedding_space(rows: usize) -> EmbeddingSpace {
+    let dimension = u32::try_from(DIMS).expect("small");
+    let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+    let (source, _) = CertifiedPurrpckSource::from_dataset(&empty).expect("source pack");
+    let mut targets = Vec::with_capacity(rows);
+    let mut bindings = Vec::with_capacity(rows);
+    for at in 0..rows {
+        let term = ex(&format!("vec/{at:09}"));
+        let target = RdfTermTarget::Iri(term.clone())
+            .into_target(true, None)
+            .expect("the fixture term target is well formed");
+        bindings.push((target.id, TermValue::iri(term)));
+        targets.push(target);
+    }
+    let set = TargetSet::new(targets.iter().map(|target| target.id).collect())
+        .expect("the fixture target set is well formed");
+    let mut declared = targets;
+    declared.push(source.dataset_target(true).expect("dataset target"));
+    declared.sort_unstable_by_key(|target| target.id);
+    let contract = EmbeddingFamilyContract {
+        model: identity("model"),
+        engine: identity("engine"),
+        tokenizer: identity("tokenizer"),
+        execution: stage("execution"),
+        subject_projection: stage("projection"),
+        preprocessing: AppliedStage::NotApplied,
+        chunking: AppliedStage::NotApplied,
+        pooling: stage("pooling"),
+        normalization: AppliedStage::NotApplied,
+        truncation: AppliedStage::NotApplied,
+        dtype: VectorDtype::F64,
+        metric: DistanceMetric::SquaredEuclidean,
+        dimensionality: DimensionalityPolicy::fixed(dimension, PrefixPostprocessing::None)
+            .expect("fixed dimensions"),
+        extensions: Vec::new(),
+    };
+    let family = contract.derive().expect("the family derives");
+    let projection = ProjectionSpec::derive(family.id, dimension, PrefixPostprocessing::None);
+    let vector_space = projection.vector_space_id;
+    let mut state = 0x0DE9_7B7A_4E00_0001_u64;
+    let matrix = MatrixInput {
+        family_id: family.id,
+        target_set_id: set.id,
+        stored_dimension: dimension,
+        rows: bindings
+            .iter()
+            .map(|(target, _)| {
+                let values = (0..DIMS)
+                    .map(|_| {
+                        // splitmix64, so the bench depends on no private helper.
+                        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                        let mut z = state;
+                        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                        z ^= z >> 31;
+                        f64::from(u32::try_from(z >> 40).expect("24 bits fit")) + 1.0
+                    })
+                    .collect();
+                MatrixRow::new(*target, values)
+            })
+            .collect(),
+        projections: vec![projection],
+    };
+    let metadata = CanonicalMetadataInput {
+        source,
+        family_contracts: vec![contract],
+        targets: declared,
+        target_sets: vec![set.clone()],
+        relations: Vec::new(),
+        token_spans: Vec::new(),
+        external_bindings: Vec::new(),
+        indexes: Vec::new(),
+        extensions: Vec::new(),
+    };
+    let mut builder = EmbeddingBuilder::from_typed_metadata(metadata);
+    builder.add_f64_matrix(matrix);
+    let encoded = builder.build().expect("the fixture artifact encodes");
+    let rows = u64::try_from(rows).expect("the bench corpus fits");
+    let guard = KnnGuard::new(rows, rows).expect("a valid guard");
+    EmbeddingSpace::from_artifact(&encoded.bytes, set.id, vector_space, bindings, guard)
+        .expect("the fixture space opens")
+}
+
+/// Open one ranked invocation of `relation` from the seed at `k`, and pull `pulled`
+/// rows off it, skipping the first `skip`.
+fn pull_at(
+    relation: &EmbeddingKnnRelation,
+    seed: &TermValue,
+    k: usize,
+    skip: usize,
+    pulled: usize,
+) -> usize {
+    let count = TermValue::typed_literal(k.to_string(), "http://www.w3.org/2001/XMLSchema#integer");
+    let subject = [None];
+    let object = [Some(seed), Some(&count), None];
+    let args = PfArgs::new(&subject, &object);
+    let mut cursor = relation.open(&args, None).expect("the invocation opens");
+    let mut read = 0;
+    for _ in 0..skip + pulled {
+        if cursor.next().expect("the invocation reads").is_none() {
+            break;
+        }
+        read += 1;
+    }
+    read
+}
+
+fn depth_taking(c: &mut Criterion) {
+    let mut group = c.benchmark_group("on_demand_read/depth_taking");
+    for rows in [400_usize, 4_000] {
+        let relation = EmbeddingKnnRelation::new(Arc::new(embedding_space(rows)));
+        let seed = TermValue::iri(ex("vec/000000000"));
+        group.bench_with_input(BenchmarkId::new("at_planned", rows), &rows, |b, _| {
+            b.iter(|| black_box(pull_at(&relation, &seed, rows, 0, PULLED)));
+        });
+        group.bench_with_input(BenchmarkId::new("at_stop", rows), &rows, |b, _| {
+            b.iter(|| black_box(pull_at(&relation, &seed, PULLED, 0, PULLED)));
+        });
+        group.bench_with_input(BenchmarkId::new("continued", rows), &rows, |b, _| {
+            b.iter(|| {
+                black_box(pull_at(&relation, &seed, PULLED, 0, PULLED));
+                black_box(pull_at(&relation, &seed, rows, PULLED, 80 - PULLED))
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, reads, depth_taking);
 criterion_main!(benches);

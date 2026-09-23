@@ -197,3 +197,60 @@ fn held_out_recall_is_measured_rather_than_assumed() {
         queries.len()
     );
 }
+
+/// **A smaller `k` is the prefix of a larger one, out of the same beam.**
+///
+/// The beam is the artifact's declared `ef_search` and is never narrowed or widened to
+/// fit a request; `k` only truncates the beam's sorted result. So a search at any `k`
+/// walks the same graph and evaluates the same distances, and its rows are exactly the
+/// first `k` of a search at a larger `k`. That is what lets a consumer open a search
+/// once at a planned depth and read only as far as it needs: a smaller `k` would have
+/// saved no distance evaluation, and a second search at a larger `k` would repeat the
+/// whole beam to return rows the first already held.
+///
+/// Asked from stored rows and from held-out vectors, at every `k` from one past the
+/// beam down to one — the widest `k` is answered short, at the beam's width, and every
+/// other is its prefix.
+#[test]
+fn a_smaller_k_is_a_prefix_of_a_larger_one_out_of_the_same_beam() {
+    let matrix = corpus(400, 16);
+    let index = HnswIndex::build(matrix.clone(), &METRIC, params()).expect("builds");
+    let beam = params().ef_search();
+    let widest = beam + 1;
+    for query_row in [0, 17, 211, 399] {
+        let (full, full_work) = index
+            .search_rows_work(query_row, widest)
+            .expect("the row is held");
+        assert_eq!(
+            full.len(),
+            beam,
+            "a k past the beam is answered at the beam's width"
+        );
+        for k in 1..=widest {
+            let (read, work) = index
+                .search_rows_work(query_row, k)
+                .expect("the row is held");
+            assert_eq!(
+                read,
+                full[..k.min(beam)],
+                "row {query_row}: k = {k} is the prefix of k = {widest}"
+            );
+            assert_eq!(
+                work, full_work,
+                "row {query_row}: k = {k} evaluated the distances k = {widest} did"
+            );
+        }
+    }
+    for (at, query) in held_out(&matrix, 4, 0x5EED).iter().enumerate() {
+        let (full, full_work) = index
+            .search_vector_work(query, widest)
+            .expect("the query has the index's dimension");
+        for k in 1..=widest {
+            let (read, work) = index
+                .search_vector_work(query, k)
+                .expect("the query has the index's dimension");
+            assert_eq!(read, full[..k.min(full.len())], "held-out {at}: k = {k}");
+            assert_eq!(work, full_work, "held-out {at}: k = {k}");
+        }
+    }
+}

@@ -850,21 +850,27 @@ impl std::fmt::Debug for CallCursor {
     }
 }
 
-/// Open the one call `pattern` consists of, against `registry`, as a [`CallCursor`].
+/// Whether `pattern` is the shape [`open_call_cursor`] reads: one property-function
+/// call under nothing but row-for-row operators, at least one of them a projection.
 ///
-/// `pattern` is a `SELECT` query's root, and it must be one property-function call
-/// under nothing but **row-for-row** operators: projections, `LIMIT`s with no
-/// `OFFSET`, and `BIND`s that rename a variable. Those are the operators a nested
-/// `SELECT (?c AS ?x) WHERE { call } LIMIT n` is made of, and each one maps the
-/// call's `i`-th row to the answer's `i`-th row or stops — so the answer can be
-/// produced one row per pull by carrying each row through them. Anything else is
-/// refused with a diagnostic naming the node: an operator that could reorder,
-/// merge, drop or compute over rows would need reading on demand itself, and this
-/// entry reads the call and nothing else.
-pub(crate) fn open_call_cursor(
+/// A question about the algebra alone. It opens nothing, resolves no relation and
+/// reads no registry, so an answer of `true` says the query *can* be read one row per
+/// pull, and the open itself still makes every refusal the governed lane would.
+pub(crate) fn is_call_read_shape(pattern: &GraphPattern) -> bool {
+    call_read_shape(pattern).is_ok()
+}
+
+/// The one call `pattern` consists of and the operators above it, outermost first —
+/// or a refusal naming the first node that is not a row-for-row operator.
+///
+/// The operators admitted are projections, `LIMIT`s with no `OFFSET`, and `BIND`s
+/// that rename a variable: each maps the call's `i`-th row to the answer's `i`-th
+/// row or stops. A walk that reaches the call without passing a projection is
+/// refused too, because a `SELECT` always has one and a pattern without it names no
+/// columns to read.
+fn call_read_shape(
     pattern: &GraphPattern,
-    registry: &crate::property_fn::PropertyFunctionRegistry,
-) -> Result<CallCursor, EvalError> {
+) -> Result<(&PropertyFunctionCall, Vec<&GraphPattern>), EvalError> {
     let not_one_call = |node: &str| {
         EvalError::unsupported(format!(
             "an on-demand call read is one property-function call under projections, \
@@ -898,6 +904,31 @@ pub(crate) fn open_call_cursor(
             }
         }
     };
+    if !operators
+        .iter()
+        .any(|operator| matches!(operator, GraphPattern::Project { .. }))
+    {
+        return Err(not_one_call("no projection"));
+    }
+    Ok((call, operators))
+}
+
+/// Open the one call `pattern` consists of, against `registry`, as a [`CallCursor`].
+///
+/// `pattern` is a `SELECT` query's root, and it must be one property-function call
+/// under nothing but **row-for-row** operators: projections, `LIMIT`s with no
+/// `OFFSET`, and `BIND`s that rename a variable. Those are the operators a nested
+/// `SELECT (?c AS ?x) WHERE { call } LIMIT n` is made of, and each one maps the
+/// call's `i`-th row to the answer's `i`-th row or stops — so the answer can be
+/// produced one row per pull by carrying each row through them. Anything else is
+/// refused with a diagnostic naming the node: an operator that could reorder,
+/// merge, drop or compute over rows would need reading on demand itself, and this
+/// entry reads the call and nothing else.
+pub(crate) fn open_call_cursor(
+    pattern: &GraphPattern,
+    registry: &crate::property_fn::PropertyFunctionRegistry,
+) -> Result<CallCursor, EvalError> {
+    let (call, operators) = call_read_shape(pattern)?;
     // The tightest `LIMIT` on the way down bounds the answer, whichever level wrote
     // it: every operator between them is row-for-row.
     let limit = operators
@@ -991,8 +1022,13 @@ pub(crate) fn open_call_cursor(
             _ => {}
         }
     }
+    // `call_read_shape` admitted the pattern only with a projection on the way down,
+    // and the loop above records every projection it passes.
     let Some(projection) = projection else {
-        return Err(not_one_call("no projection"));
+        return Err(EvalError::unsupported(
+            "an on-demand call read is one projected property-function call; this query \
+             projects nothing",
+        ));
     };
     Ok(CallCursor {
         iri: call.iri.clone(),

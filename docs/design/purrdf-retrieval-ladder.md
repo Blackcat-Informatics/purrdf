@@ -591,8 +591,11 @@ planned depth, the producer running out, the producer's own bound — one row at
 a time. The receipt is taken when the consumer stops (§6): the stream announces
 what the invocation attested the instant it opened, and settles, when the
 fusion stops, to the witness the invocation stands behind then, read under the
-sole-witness rule and held to that announcement. A unit running a caller's own
-text is materialized under either schedule.
+sole-witness rule and held to that announcement. The schedule asks the prepared
+text's shape, not its origin: a caller's own text that is one call under
+row-for-row operators is read the same way and ends `SuppliedQueryEnded` when it
+runs out, and a text with a join, a `FILTER`, an `ORDER BY` or a dataset clause is
+materialized under either schedule.
 
 The third element of each row is the block of the candidate universe the
 producer drew it from, which exists for the licence below. What the rung
@@ -706,8 +709,18 @@ at its planned depth, read a row per pull and never re-opened. The read is
 exactly as deep as the fusion's own stop, plus the probe row where the fusion
 read past the planned depth; a fusion that needs more reads on in the same
 invocation, so there is no misprediction to recover from and nothing is read
-twice. The answer stays verifiable because the receipt is taken when the read
-stops rather than before its first row: every stream announces what its
+twice. A producer that takes its depth as an argument is handed the planned
+depth as its `k` and loses nothing by it: both nearest-neighbour producers do
+the same search at every `k` — the exact scan measures every row, the graph
+search walks a beam of the index's declared `ef_search` — and a smaller `k`
+keeps only a prefix of the same totally ordered ranking, so a shallower first
+invocation would save no search and a continuation past it would repeat the
+whole search. Which units are read this way is decided by the prepared text's
+shape, not by who wrote it: a caller's own text that is one call under
+projections, `OFFSET`-free `LIMIT`s and renaming `BIND`s is read on demand like
+a rendered one, and anything else is materialized. The answer stays verifiable
+because the receipt is taken when the read stops rather than before its first
+row: every stream announces what its
 invocation attested the instant it opened, the fusion certifies under that
 announcement, and at the stop every stream settles to its invocation's witness
 under the sole-witness rule and is held to it — an index that moved under the
