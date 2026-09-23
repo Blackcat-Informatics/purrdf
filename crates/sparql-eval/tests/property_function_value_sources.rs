@@ -8,10 +8,15 @@
 //! exactly when a feasible order binds that input first. A triple pattern always
 //! did; this file pins the rest of the rule — an inline `VALUES` column with no
 //! `UNDEF`, a `BIND`, a sub-`SELECT` that projects the variable, a nested group,
-//! a `UNION` both of whose branches bind it, the variable naming a `GRAPH`, and a
-//! `LATERAL`'s left side — and the refusals that bound it: an `UNDEF` cell, a
-//! `BIND` written after the call, a `BIND` over an `OPTIONAL` variable, a
-//! sub-`SELECT` that does not project it, a `UNION` branch that does not bind it.
+//! a `UNION` both of whose branches bind it, the variable naming a `GRAPH`, a
+//! `LATERAL`'s left side, and a `LATERAL`'s right side judged with its left side's
+//! bindings in hand — and the refusals that bound it: an `UNDEF` cell, a `BIND`
+//! written after the call, a `BIND` over an `OPTIONAL` variable, a sub-`SELECT` that
+//! does not project it, a `UNION` branch that does not bind it.
+//!
+//! Every shape the `LATERAL` rule admits is also checked against SPARQL's bottom-up
+//! answer: a relation serving its input both bound and free must answer the same
+//! rows bound as its free evaluation joined with the rest of the query afterwards.
 //!
 //! # The oracle
 //!
@@ -190,18 +195,35 @@ fn render(cell: Option<&TermValue>) -> String {
 
 /// Run `body` as `SELECT ?q ?out WHERE { body }` against [`Expand`].
 fn run(variant: Variant, body: &str) -> Outcome {
+    run_over(&dataset(), variant, body)
+}
+
+/// [`run`] over `data` rather than the shared fixture.
+fn run_over(data: &RdfDataset, variant: Variant, body: &str) -> Outcome {
     let invocations = Arc::new(Mutex::new(Vec::new()));
     let relation = match variant {
         Variant::BoundOnly => Expand::bound_only(Arc::clone(&invocations)),
         Variant::FreeCapable => Expand::free_capable(Arc::clone(&invocations)),
     };
+    run_relation(data, EXPAND, Arc::new(relation), &invocations, body)
+}
+
+/// Run `body` as `SELECT ?q ?out WHERE { body }` over `data`, with `relation`
+/// registered at `iri` and recording into `invocations`.
+fn run_relation(
+    data: &RdfDataset,
+    iri: &str,
+    relation: Arc<dyn PropertyFunction>,
+    invocations: &Mutex<Vec<String>>,
+    body: &str,
+) -> Outcome {
     let mut registry = PropertyFunctionRegistry::new();
-    registry.register(EXPAND.to_owned(), Arc::new(relation));
+    registry.register(iri.to_owned(), relation);
     let env = ExtensionEnv::over_relations(registry).expect("the fixture declarations read");
     let query = format!("SELECT ?q ?out WHERE {{ {body} }}");
     let answer = NativeSparqlEngine::new()
         .query_with_options_view(
-            &*dataset(),
+            data,
             SparqlRequest {
                 query: &query,
                 base_iri: None,
@@ -672,4 +694,420 @@ fn a_lateral_after_a_call_is_driven_by_the_calls_rows() {
             .expect("the fixture recorder is never poisoned"),
         calls(&["bf:beta"])
     );
+}
+
+// ── a LATERAL's right side, judged with its left side in hand ────────────────
+
+/// `<a> <p> "alpha"`, `<b> <p> "beta"` and `<c> <p> "epsilon"`: three left rows,
+/// each a different value, so an answer names which of them reached the call.
+fn lateral_dataset() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri(&format!("{EX}p"));
+    for (subject, value) in [("a", "alpha"), ("b", "beta"), ("c", "epsilon")] {
+        let subject = builder.intern_iri(&format!("{EX}{subject}"));
+        let value = builder.intern_literal(RdfLiteral::simple(value));
+        builder.push_quad(subject, p, value, None);
+    }
+    builder.freeze().expect("the fixture must validate")
+}
+
+/// [`Expand`]'s answer when `"alpha"`, `"beta"` and `"epsilon"` each reach the call
+/// bound.
+fn every_left_value_bound() -> Outcome {
+    Outcome {
+        answer: Ok(rows(&[
+            ("alpha", "alpha/1"),
+            ("alpha", "alpha/2"),
+            ("beta", "beta/1"),
+            ("epsilon", "epsilon/1"),
+        ])),
+        invocations: calls(&["bf:alpha", "bf:beta", "bf:epsilon"]),
+    }
+}
+
+/// The right side of a `LATERAL` is evaluated once per left row with that row
+/// substituted in, so a `BIND` there reading a left variable binds its target on
+/// every row, exactly as the same `BIND` written without the `LATERAL` does. A
+/// bound-only relation fed by it is admitted and invoked bound with each left value;
+/// the free-capable variant is invoked bound too, never free.
+#[test]
+fn a_lateral_bind_over_the_left_side_feeds_the_call() {
+    let data = lateral_dataset();
+    let written_after = format!("?s <{EX}p> ?v LATERAL {{ BIND(?v AS ?q) }} ?q <{EXPAND}> ?out");
+    assert_eq!(
+        run_over(&data, Variant::BoundOnly, &written_after),
+        every_left_value_bound()
+    );
+    assert_eq!(
+        run_over(&data, Variant::FreeCapable, &written_after),
+        every_left_value_bound()
+    );
+    // The call inside the right side, after the `BIND`, is fed the same way.
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!("?s <{EX}p> ?v LATERAL {{ BIND(?v AS ?q) ?q <{EXPAND}> ?out }}")
+        ),
+        every_left_value_bound()
+    );
+    // A computed value over the left variable is per row.
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!(
+                "?s <{EX}p> ?v LATERAL {{ BIND(CONCAT(?v, \"!\") AS ?q) }} ?q <{EXPAND}> ?out"
+            )
+        ),
+        Outcome {
+            answer: Ok(rows(&[
+                ("alpha!", "alpha!/1"),
+                ("beta!", "beta!/1"),
+                ("epsilon!", "epsilon!/1"),
+            ])),
+            invocations: calls(&["bf:alpha!", "bf:beta!", "bf:epsilon!"]),
+        }
+    );
+    // The neighbour the rule is borrowed from: the same `BIND` without the `LATERAL`.
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!("?s <{EX}p> ?v BIND(?v AS ?q) ?q <{EXPAND}> ?out")
+        ),
+        every_left_value_bound()
+    );
+}
+
+/// A sub-`SELECT` on a `LATERAL`'s right side receives the left row only for the
+/// variables it projects. Projecting `?v` carries it in, so a `BIND` over it feeds the
+/// call; not projecting it leaves the inner `?v` a different, unbound variable — the
+/// bound-only relation is refused at prepare, and the free-capable variant shows why:
+/// the call really is reached with its input free.
+#[test]
+fn a_lateral_sub_select_carries_the_left_row_only_for_what_it_projects() {
+    let data = lateral_dataset();
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!(
+                "?s <{EX}p> ?v LATERAL {{ SELECT ?v ?q WHERE {{ BIND(?v AS ?q) }} }} \
+                 ?q <{EXPAND}> ?out"
+            )
+        ),
+        every_left_value_bound()
+    );
+    // The call inside the sub-`SELECT` itself, fed by the projected left variable.
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!(
+                "?s <{EX}p> ?v LATERAL {{ SELECT ?v ?q ?out WHERE {{ BIND(?v AS ?q) \
+                 ?q <{EXPAND}> ?out }} }}"
+            )
+        ),
+        every_left_value_bound()
+    );
+    // A call inside the sub-`SELECT` reading a projected left variable directly: each
+    // subject IRI reaches it bound.
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!(
+                "?s <{EX}p> ?v LATERAL {{ SELECT ?s ?out WHERE {{ ?s <{EXPAND}> ?out }} }} \
+                 BIND(?s AS ?q)"
+            )
+        ),
+        Outcome {
+            answer: Ok(rows(&[
+                ("https://example.org/d/a", "https://example.org/d/a/1"),
+                ("https://example.org/d/b", "https://example.org/d/b/1"),
+                ("https://example.org/d/c", "https://example.org/d/c/1"),
+            ])),
+            invocations: calls(&[
+                "bf:https://example.org/d/a",
+                "bf:https://example.org/d/b",
+                "bf:https://example.org/d/c",
+            ]),
+        }
+    );
+    assert_refused_at_prepare(&run_over(
+        &data,
+        Variant::BoundOnly,
+        &format!(
+            "?s <{EX}p> ?v LATERAL {{ SELECT ?out WHERE {{ ?s <{EXPAND}> ?out }} }} BIND(?s AS ?q)"
+        ),
+    ));
+    let unprojected = format!(
+        "?s <{EX}p> ?v LATERAL {{ SELECT ?q WHERE {{ BIND(?v AS ?q) }} }} ?q <{EXPAND}> ?out"
+    );
+    assert_refused_at_prepare(&run_over(&data, Variant::BoundOnly, &unprojected));
+    assert_eq!(
+        run_over(&data, Variant::FreeCapable, &unprojected),
+        Outcome {
+            answer: Ok(rows(&[
+                ("https://example.org/d/free", "free"),
+                ("https://example.org/d/free", "free"),
+                ("https://example.org/d/free", "free"),
+            ])),
+            invocations: calls(&["ff:-", "ff:-", "ff:-"]),
+        }
+    );
+}
+
+/// A `LATERAL` `BIND` over a variable only an `OPTIONAL` binds inherits that absence
+/// wherever the `OPTIONAL` sits — on the left side or inside the right — and is not
+/// a source: the bound-only relation is refused at prepare, and the free-capable
+/// variant is reached with its input free. `COALESCE` over it with a left variable
+/// as the fallback is a source.
+#[test]
+fn a_lateral_bind_over_an_optional_variable_is_not_a_source() {
+    let data = lateral_dataset();
+    let optional_on_the_left = format!(
+        "?s <{EX}p> ?v OPTIONAL {{ ?s <{EX}nothing> ?w }} LATERAL {{ BIND(?w AS ?q) }} \
+         ?q <{EXPAND}> ?out"
+    );
+    let optional_on_the_right = format!(
+        "?s <{EX}p> ?v LATERAL {{ OPTIONAL {{ ?s <{EX}nothing> ?w }} BIND(?w AS ?q) }} \
+         ?q <{EXPAND}> ?out"
+    );
+    let three_free_rows = Outcome {
+        answer: Ok(rows(&[
+            ("https://example.org/d/free", "free"),
+            ("https://example.org/d/free", "free"),
+            ("https://example.org/d/free", "free"),
+        ])),
+        invocations: calls(&["ff:-", "ff:-", "ff:-"]),
+    };
+    for body in [&optional_on_the_left, &optional_on_the_right] {
+        assert_refused_at_prepare(&run_over(&data, Variant::BoundOnly, body));
+        assert_eq!(run_over(&data, Variant::FreeCapable, body), three_free_rows);
+    }
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!(
+                "?s <{EX}p> ?v LATERAL {{ OPTIONAL {{ ?s <{EX}nothing> ?w }} \
+                 BIND(COALESCE(?w, ?v) AS ?q) }} ?q <{EXPAND}> ?out"
+            )
+        ),
+        every_left_value_bound()
+    );
+}
+
+/// A `VALUES` table and a triple on a `LATERAL`'s right side feed the call, the
+/// right side correlated with the left through the row it is handed.
+#[test]
+fn a_lateral_values_and_a_lateral_triple_feed_the_call() {
+    let data = lateral_dataset();
+    // Each left row keeps the one `VALUES` row equal to its own value; `"epsilon"`
+    // has none, so only `"alpha"` and `"beta"` reach the call.
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!(
+                "?s <{EX}p> ?v LATERAL {{ VALUES ?q {{ \"alpha\" \"beta\" }} FILTER(?q = ?v) }} \
+                 ?q <{EXPAND}> ?out"
+            )
+        ),
+        alpha_and_beta()
+    );
+    // The triple reads the left row's `?s`: each subject yields its own value.
+    assert_eq!(
+        run_over(
+            &data,
+            Variant::BoundOnly,
+            &format!("?s <{EX}p> ?v LATERAL {{ ?s <{EX}p> ?q }} ?q <{EXPAND}> ?out")
+        ),
+        every_left_value_bound()
+    );
+}
+
+// ── the differential against bottom-up evaluation ────────────────────────────
+
+/// The relation the differential calls.
+const PAIRS: &str = "https://example.org/rel/pairs";
+
+/// The fixed table [`Pairs`] serves. `"delta"` is a key no left row holds and
+/// `"epsilon"` a left value the table has no key for, so a join on either side
+/// that ignores the other would show.
+const PAIR_TABLE: &[(&str, &str)] = &[
+    ("alpha", "alpha/1"),
+    ("alpha", "alpha/2"),
+    ("beta", "beta/1"),
+    ("delta", "delta/1"),
+];
+
+/// `?input <pairs> ?output` over [`PAIR_TABLE`], serving `bf` and `ff` CONSISTENTLY:
+/// bound, it answers the table's rows for that key; free, the whole table. So a
+/// query answered with its input bound must equal the free evaluation joined with
+/// the rest of the query afterwards — SPARQL's bottom-up answer.
+struct Pairs {
+    modes: Vec<BindingPattern>,
+    invocations: Arc<Mutex<Vec<String>>>,
+}
+
+fn simple_literal(text: &str) -> TermValue {
+    TermValue::Literal {
+        lexical_form: text.to_owned(),
+        datatype: "http://www.w3.org/2001/XMLSchema#string".into(),
+        language: None,
+        direction: None,
+    }
+}
+
+impl PropertyFunction for Pairs {
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        PfArity::new(1, 1)
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        &self.modes
+    }
+
+    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+        4
+    }
+
+    fn open(
+        &self,
+        args: &PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        let key = args.get(0).map(key_of);
+        self.invocations
+            .lock()
+            .expect("the fixture recorder is never poisoned")
+            .push(format!(
+                "{}:{}",
+                args.mode().code(),
+                key.as_deref().unwrap_or("-")
+            ));
+        let mut rows: Vec<PfRow> = Vec::new();
+        for &(input, output) in PAIR_TABLE {
+            if key.as_deref().is_none_or(|key| key == input) {
+                rows.push(vec![simple_literal(input), simple_literal(output)]);
+            }
+        }
+        Ok(Box::new(Rows(rows.into_iter())))
+    }
+}
+
+/// Run `body` against [`Pairs`] declaring `modes`.
+fn run_pairs(modes: &[&str], body: &str) -> Outcome {
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let relation = Pairs {
+        modes: modes
+            .iter()
+            .map(|code| BindingPattern::from_code(code))
+            .collect(),
+        invocations: Arc::clone(&invocations),
+    };
+    run_relation(
+        &lateral_dataset(),
+        PAIRS,
+        Arc::new(relation),
+        &invocations,
+        body,
+    )
+}
+
+/// Each shape this rule newly admits answers, with its input bound, exactly what
+/// SPARQL's bottom-up evaluation answers: the left pattern on its own, joined on
+/// `?q` with the relation evaluated FREE on its own. Checked for a relation serving
+/// only `bf` and for one serving both, and the reference's own evaluation is checked
+/// to have been the free one.
+#[test]
+fn newly_admitted_lateral_shapes_answer_the_bottom_up_join() {
+    let call = format!("?q <{PAIRS}> ?out");
+    // (the left pattern alone, the same pattern with the call inside the `LATERAL`'s
+    // right side); each is also checked with the call written after the `LATERAL`.
+    let lefts_and_insides: [(String, String); 4] = [
+        (
+            format!("?s <{EX}p> ?v LATERAL {{ BIND(?v AS ?q) }}"),
+            format!("?s <{EX}p> ?v LATERAL {{ BIND(?v AS ?q) {call} }}"),
+        ),
+        (
+            format!("?s <{EX}p> ?v LATERAL {{ BIND(CONCAT(\"al\", SUBSTR(?v, 3)) AS ?q) }}"),
+            format!("?s <{EX}p> ?v LATERAL {{ BIND(CONCAT(\"al\", SUBSTR(?v, 3)) AS ?q) {call} }}"),
+        ),
+        (
+            format!(
+                "?s <{EX}p> ?v LATERAL {{ OPTIONAL {{ ?s <{EX}nothing> ?w }} \
+                 BIND(COALESCE(?w, ?v) AS ?q) }}"
+            ),
+            format!(
+                "?s <{EX}p> ?v LATERAL {{ OPTIONAL {{ ?s <{EX}nothing> ?w }} \
+                 BIND(COALESCE(?w, ?v) AS ?q) {call} }}"
+            ),
+        ),
+        (
+            format!("?s <{EX}p> ?v LATERAL {{ SELECT ?v ?q WHERE {{ BIND(?v AS ?q) }} }}"),
+            format!(
+                "?s <{EX}p> ?v LATERAL {{ SELECT ?v ?q ?out WHERE {{ BIND(?v AS ?q) {call} }} }}"
+            ),
+        ),
+    ];
+    let shapes: Vec<(String, String)> = lefts_and_insides
+        .into_iter()
+        .flat_map(|(left, inside)| {
+            let after = format!("{left} {call}");
+            [(left.clone(), after), (left, inside)]
+        })
+        .collect();
+
+    // The relation evaluated free on its own, once.
+    let free = run_pairs(&["bf", "ff"], &call);
+    assert_eq!(
+        free.invocations,
+        calls(&["ff:-"]),
+        "the reference is the free one"
+    );
+    let free_rows = free.answer.expect("the free evaluation answers");
+
+    for (left, full) in &shapes {
+        let left_rows = run_pairs(&["bf", "ff"], left)
+            .answer
+            .unwrap_or_else(|message| panic!("the left pattern {left} answers: {message}"));
+        let mut bottom_up: Vec<(String, String)> = left_rows
+            .iter()
+            .flat_map(|(q, _)| {
+                free_rows
+                    .iter()
+                    .filter(move |(input, _)| input == q)
+                    .cloned()
+            })
+            .collect();
+        bottom_up.sort();
+        assert!(
+            !bottom_up.is_empty(),
+            "the shape {full} must have answers to compare"
+        );
+        for modes in [&["bf"][..], &["bf", "ff"][..]] {
+            let outcome = run_pairs(modes, full);
+            assert_eq!(
+                outcome.answer.as_ref(),
+                Ok(&bottom_up),
+                "{full} declaring {modes:?} answers the bottom-up join"
+            );
+            assert!(
+                outcome
+                    .invocations
+                    .iter()
+                    .all(|invocation| invocation.starts_with("bf:")),
+                "{full} declaring {modes:?} invokes the relation bound only: {:?}",
+                outcome.invocations
+            );
+        }
+    }
 }

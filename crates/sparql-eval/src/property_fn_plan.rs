@@ -570,7 +570,10 @@ fn order_chain(
         };
         let atom = remaining.remove(index);
         bound_before.push(bound.clone());
-        collect_certainly_bound(atom.pattern, &mut bound);
+        // Every atom is evaluated with the enclosing context in hand (the chain as a
+        // whole is), so a `BIND` inside one reading only `outer` binds its target —
+        // but never with an earlier sibling's rows: siblings are joined, not correlated.
+        collect_certainly_bound_in(atom.pattern, outer, &mut bound);
         ordered.push(atom.pattern);
         is_call.push(atom.call.is_some());
     }
@@ -809,7 +812,7 @@ fn map_children(
         // here is a pattern the pushdown does not enter.
         GraphPattern::Lateral { left, right } => {
             let mut inner = outer.clone();
-            collect_certainly_bound(left, &mut inner);
+            collect_certainly_bound_in(left, outer, &mut inner);
             GraphPattern::Lateral {
                 left: recurse(left, outer, here)?,
                 right: recurse(right, &inner, promise.beyond_pushdown())?,
@@ -828,8 +831,8 @@ fn map_children(
             // The inline condition is evaluated only on candidate JOINED rows, so
             // both sides' bindings are available to it.
             let mut condition_scope = outer.clone();
-            collect_certainly_bound(left, &mut condition_scope);
-            collect_certainly_bound(right, &mut condition_scope);
+            collect_certainly_bound_in(left, outer, &mut condition_scope);
+            collect_certainly_bound_in(right, outer, &mut condition_scope);
             GraphPattern::LeftJoin {
                 left: recurse(left, outer, here)?,
                 right: recurse(right, outer, promise.beyond_pushdown())?,
@@ -862,7 +865,7 @@ fn map_children(
         // invocable with the outer row's values.
         GraphPattern::Filter { expr, inner } => {
             let mut scope = outer.clone();
-            collect_certainly_bound(inner, &mut scope);
+            collect_certainly_bound_in(inner, outer, &mut scope);
             with_rows(&mut scope, promise);
             GraphPattern::Filter {
                 expr: plan_expression(
@@ -882,7 +885,7 @@ fn map_children(
             expression,
         } => {
             let mut scope = outer.clone();
-            collect_certainly_bound(inner, &mut scope);
+            collect_certainly_bound_in(inner, outer, &mut scope);
             with_rows(&mut scope, promise);
             // The pushdown descends a `BIND` beneath the core as well as above it, and
             // does not carry the variable the `BIND` itself binds into its operand.
@@ -917,7 +920,7 @@ fn map_children(
             companion,
         } => {
             let mut scope = outer.clone();
-            collect_certainly_bound(inner, &mut scope);
+            collect_certainly_bound_in(inner, outer, &mut scope);
             with_rows(&mut scope, promise);
             GraphPattern::Unfold {
                 inner: recurse(inner, outer, wrapped)?,
@@ -938,7 +941,7 @@ fn map_children(
         },
         GraphPattern::OrderBy { inner, expression } => {
             let mut scope = outer.clone();
-            collect_certainly_bound(inner, &mut scope);
+            collect_certainly_bound_in(inner, outer, &mut scope);
             with_rows(&mut scope, promise);
             GraphPattern::OrderBy {
                 inner: recurse(inner, outer, wrapped)?,
@@ -965,13 +968,15 @@ fn map_children(
                     .collect::<Result<Vec<_>, PlanError>>()?,
             }
         }
-        // A sub-`SELECT` is its own scope: a variable bound outside it is not visible
-        // inside, so the correlation set is emptied on the way in. The projection a
-        // caller's own `SELECT` produces sits on the descent to the core, so the
-        // promise survives it there; a sub-`SELECT` anywhere else is a scope nothing
-        // binds a parameter in.
+        // A sub-`SELECT` is its own scope: a variable bound outside it is visible inside
+        // only when it projects it — the correlated substitution (a `LATERAL`'s right
+        // operand, an `EXISTS` body) writes the outer row into it for exactly the
+        // projected variables — so the correlation set is narrowed to them on the way
+        // in. The projection a caller's own `SELECT` produces sits on the descent to the
+        // core, so the promise survives it there; a sub-`SELECT` anywhere else is a
+        // scope nothing binds a parameter in.
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: recurse(inner, &DetHashSet::default(), wrapped)?,
+            inner: recurse(inner, &narrowed_to(outer, variables), wrapped)?,
             variables: variables.clone(),
         },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
@@ -995,7 +1000,7 @@ fn map_children(
             aggregates,
         } => {
             let mut scope = outer.clone();
-            collect_certainly_bound(inner, &mut scope);
+            collect_certainly_bound_in(inner, outer, &mut scope);
             with_rows(&mut scope, promise);
             GraphPattern::Group {
                 inner: recurse(inner, outer, wrapped)?,
@@ -1306,13 +1311,16 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 ///   argument;
 /// * a `VALUES` column with a term — no `UNDEF` — in every row;
 /// * the target of a `BIND` whose expression reads only variables its inner pattern
-///   binds by this same rule (see [`expression_reads_only_bound`]);
+///   binds by this same rule, or variables the context it is evaluated in holds bound
+///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound`]
+///   and [`collect_certainly_bound_in`]);
 /// * the variable naming a `GRAPH`;
 /// * a grouping key;
 /// * bound by both operands of a `UNION`, by either operand of a `Join` or a
-///   `LATERAL`, by the left operand of an `OPTIONAL` or a `MINUS`, by the inner pattern
-///   of a `FILTER`, `BIND`, `UNFOLD`, `ORDER BY`, `DISTINCT`, `REDUCED` or slice, or
-///   by the inner pattern of a sub-`SELECT` that projects it.
+///   `LATERAL` (the right one judged with the left one's bindings in hand), by the
+///   left operand of an `OPTIONAL` or a `MINUS`, by the inner pattern of a `FILTER`,
+///   `BIND`, `UNFOLD`, `ORDER BY`, `DISTINCT`, `REDUCED` or slice, or by the inner
+///   pattern of a sub-`SELECT` that projects it.
 ///
 /// # Why a `BIND` counts although its expression can error
 ///
@@ -1341,6 +1349,30 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// missed and the query is refused at prepare time with a message that names exactly
 /// what could not be bound.
 pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+    collect_certainly_bound_in(pattern, &DetHashSet::default(), out);
+}
+
+/// [`collect_certainly_bound`] for a pattern evaluated with `context` already bound:
+/// every variable of `context` holds a value in every row the pattern is evaluated
+/// over, written into it before it runs.
+///
+/// That is what the right operand of a `LATERAL` is — evaluated once per left row with
+/// that row substituted in — and what a correlated `EXISTS` body is. So a `BIND` there
+/// reading only `context` (or what its own inner pattern binds) binds its target on
+/// every row: `?s ?p ?v LATERAL { BIND(?v AS ?q) }` binds `?q` exactly as
+/// `?s ?p ?v BIND(?v AS ?q)` does. `context` itself is never added to `out` — the
+/// pattern does not bind it, its enclosing context does.
+///
+/// `context` reaches everywhere the substitution does: both operands of a `Join`, a
+/// `UNION`, an `OPTIONAL` and a `MINUS`, every wrapper's inner pattern, and the inner
+/// pattern of a sub-`SELECT` for the variables it projects — a variable it does not
+/// project is a different variable inside it. A nested `LATERAL`'s right operand sees
+/// `context` and its own left operand's certain bindings.
+pub(crate) fn collect_certainly_bound_in(
+    pattern: &GraphPattern,
+    context: &DetHashSet<Variable>,
+    out: &mut DetHashSet<Variable>,
+) {
     match pattern {
         GraphPattern::Bgp { patterns } => {
             for triple in patterns {
@@ -1362,20 +1394,30 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
                 collect_term_vars(term, out);
             }
         }
-        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            collect_certainly_bound(left, out);
-            collect_certainly_bound(right, out);
+        GraphPattern::Join { left, right } => {
+            collect_certainly_bound_in(left, context, out);
+            collect_certainly_bound_in(right, context, out);
+        }
+        // The right operand is evaluated once per left row with that row in hand, so it
+        // sees the left operand's certain bindings as well as the enclosing context's.
+        GraphPattern::Lateral { left, right } => {
+            let mut left_bound = DetHashSet::default();
+            collect_certainly_bound_in(left, context, &mut left_bound);
+            let mut right_context = context.clone();
+            right_context.extend(left_bound.iter().cloned());
+            collect_certainly_bound_in(right, &right_context, out);
+            out.extend(left_bound);
         }
         // The right side may contribute nothing to a row.
         GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, right: _ } => {
-            collect_certainly_bound(left, out);
+            collect_certainly_bound_in(left, context, out);
         }
         // Only what BOTH branches bind is bound in every row.
         GraphPattern::Union { left, right } => {
             let mut l = DetHashSet::default();
             let mut r = DetHashSet::default();
-            collect_certainly_bound(left, &mut l);
-            collect_certainly_bound(right, &mut r);
+            collect_certainly_bound_in(left, context, &mut l);
+            collect_certainly_bound_in(right, context, &mut r);
             out.extend(l.intersection(&r).cloned());
         }
         GraphPattern::Filter { expr: _, inner }
@@ -1389,19 +1431,20 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
         // `UNFOLD`s own targets are NOT certainly bound: a SEP-0009 `null` element
         // (or a null map value) yields the row with that variable unbound, so only
         // what the inner pattern certainly binds escapes.
-        | GraphPattern::Unfold { inner, .. } => collect_certainly_bound(inner, out),
+        | GraphPattern::Unfold { inner, .. } => collect_certainly_bound_in(inner, context, out),
         // A `BIND`'s target counts when its expression reads only what the inner
-        // pattern certainly binds: it is then unbound only in a row whose expression
-        // errored on the data, and that row is refused per row by the evaluator rather
-        // than invoked free. See this function's doc for the whole argument.
+        // pattern certainly binds, or what the enclosing context already holds: it is
+        // then unbound only in a row whose expression errored on the data, and that row
+        // is refused per row by the evaluator rather than invoked free. See
+        // [`collect_certainly_bound`]'s doc for the whole argument.
         GraphPattern::Extend {
             inner,
             variable,
             expression,
         } => {
             let mut inner_bound = DetHashSet::default();
-            collect_certainly_bound(inner, &mut inner_bound);
-            if expression_reads_only_bound(expression, &inner_bound) {
+            collect_certainly_bound_in(inner, context, &mut inner_bound);
+            if expression_reads_only_bound(expression, context, &inner_bound) {
                 out.insert(variable.clone());
             }
             out.extend(inner_bound);
@@ -1410,13 +1453,15 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
             if let NamedNodePattern::Variable(variable) = name {
                 out.insert(variable.clone());
             }
-            collect_certainly_bound(inner, out);
+            collect_certainly_bound_in(inner, context, out);
         }
         // Only what the projection keeps escapes, and only if the inner pattern bound
-        // it certainly.
+        // it certainly. The context reaches the inner pattern only through the
+        // variables the projection names.
         GraphPattern::Project { inner, variables } => {
+            let inner_context = narrowed_to(context, variables);
             let mut inner_bound = DetHashSet::default();
-            collect_certainly_bound(inner, &mut inner_bound);
+            collect_certainly_bound_in(inner, &inner_context, &mut inner_bound);
             out.extend(
                 variables
                     .iter()
@@ -1452,12 +1497,24 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
     }
 }
 
+/// The part of `context` a sub-`SELECT` projecting `variables` lets into its inner
+/// pattern: an enclosing binding is substituted into it only for a variable it
+/// projects.
+fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
+    context
+        .iter()
+        .filter(|variable| variables.contains(*variable))
+        .cloned()
+        .collect()
+}
+
 /// Whether `expr` can be left without a value only by the data it reads — never
 /// because the query text leaves a variable it reads unbound.
 ///
-/// `bound` is what the rows `expr` is evaluated over certainly bind. A variable read
-/// outside it — the right side of an `OPTIONAL`, an `UNDEF` column, an aggregate's
-/// output over a possibly empty group — makes the expression error on exactly the rows
+/// `bound` is what the rows `expr` is evaluated over certainly bind, and `context` what
+/// the enclosing context holds bound in every one of them. A variable read outside both
+/// — the right side of an `OPTIONAL`, an `UNDEF` column, an aggregate's output over a
+/// possibly empty group — makes the expression error on exactly the rows
 /// the text leaves it unbound in, which is a structural absence, not a per-row one.
 ///
 /// Exact where an operator's evaluation reads every operand (arithmetic, comparisons,
@@ -1466,14 +1523,18 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
 /// while `COALESCE` qualifies when any argument does, because it answers with the first
 /// argument that evaluates. `BOUND` and `EXISTS` never error on an unbound variable, so
 /// they always qualify.
-fn expression_reads_only_bound(expr: &Expression, bound: &DetHashSet<Variable>) -> bool {
-    let reads = |expr: &Expression| expression_reads_only_bound(expr, bound);
+fn expression_reads_only_bound(
+    expr: &Expression,
+    context: &DetHashSet<Variable>,
+    bound: &DetHashSet<Variable>,
+) -> bool {
+    let reads = |expr: &Expression| expression_reads_only_bound(expr, context, bound);
     match expr {
         Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Bound(_)
         | Expression::Exists(_) => true,
-        Expression::Variable(variable) => bound.contains(variable),
+        Expression::Variable(variable) => bound.contains(variable) || context.contains(variable),
         Expression::Or(a, b)
         | Expression::And(a, b)
         | Expression::Equal(a, b)
