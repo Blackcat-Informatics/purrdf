@@ -11,7 +11,6 @@ repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-rdf"
 rust-version.workspace = true
-readme = "README.md"
 keywords = ["rdf", "rdf-12", "gts", "knowledge-graph", "diagnostics"]
 categories = ["parser-implementations", "encoding", "data-structures"]
 # The published package carries no tests: the harnesses read vendored fixture
