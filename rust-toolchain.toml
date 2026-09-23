@@ -33,7 +33,11 @@
 # names. A job left on another channel while developers run this one makes a
 # failure impossible to attribute; `scripts/check-toolchain-pin.py` enforces the
 # agreement.
+#
+# `targets` are the standard libraries the cross-target gates build against:
+# wasm32 for `make wasm` and its execution lanes, aarch64 for `make simd-asm`,
+# which emits x86_64, aarch64 and wasm32 asm from one host.
 [toolchain]
 channel = "nightly"
 components = ["clippy", "rustfmt"]
-targets = ["wasm32-unknown-unknown"]
+targets = ["wasm32-unknown-unknown", "aarch64-unknown-linux-gnu"]

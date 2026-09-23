@@ -124,6 +124,11 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "evaluates the full W3C corpora, tens of minutes. `make conformance` is the local "
         "entry point; only its `--self-test` arm is cheap enough for `make check`"
     ),
+    "scripts/check-simd-asm.py": (
+        "emits asm for seven target configurations; needs the wasm32 and aarch64 std "
+        "targets. `make simd-asm` is the local entry point; only its `--self-test` arm "
+        "runs in `make check`"
+    ),
 }
 
 
@@ -132,7 +137,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
 # refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
 # both the changelog and the PR body is the proof that nothing noticed. Growth is now a
 # deliberate, visible edit to this number.
-ONE_SIDED_COUNT = 6
+ONE_SIDED_COUNT = 7
 
 
 def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:

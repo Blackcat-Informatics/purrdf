@@ -158,6 +158,9 @@ jobs:
       - name: Check every scraped conformance row is RED without its scoreboard line
         run: python3 scripts/conformance-matrix.py --self-test
 
+      - name: Check the SIMD asm evidence gate can still fail
+        run: python3 scripts/check-simd-asm.py --self-test
+
       - name: Verify BM25F goldens against the independent integer reference
         run: python3 crates/text/tests/reference/bm25f.py --check
 
@@ -420,6 +423,44 @@ jobs:
 
       - name: GraphQL emitter schema oracle
         run: node crates/shapes/tests/graphql_oracle.mjs
+
+  # The SIMD asm evidence gate. It builds the audited packages seven times -- x86_64
+  # (baseline, x86-64-v3, x86-64-v4), aarch64 (baseline, neoverse-v1) and wasm32
+  # (baseline, +simd128) -- in release with one codegen unit and LTO off, and counts
+  # the vector work each manifest site compiled to. It is its own job because those
+  # builds are most of its run time; each configuration is a cold build of the graph.
+  simd-asm:
+    runs-on: ubuntu-latest
+    # Seven configurations at roughly seven minutes each, with margin.
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+
+      - name: Install the C cross toolchain the asm gate's build scripts compile with
+        # blake3's build script compiles C for aarch64 (its NEON backend). The asm gate
+        # never measures that object, but the build script must succeed. The gate names
+        # clang + llvm-ar for every cross target; clang finds the aarch64 C library
+        # headers through the Ubuntu cross installation, which is why the aarch64 gcc
+        # and libc packages are installed beside it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Count the vector work in emitted asm on seven target configurations
+        # Every manifest site must still compile to the vector instructions that prove
+        # its shape, with no fused multiply-add where the arithmetic is exact and no
+        # relaxed-simd anywhere.
+        run: make simd-asm
 
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
   # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module

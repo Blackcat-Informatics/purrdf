@@ -1,0 +1,243 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# The sites `scripts/check-simd-asm.py` measures in emitted asm, one `[[site]]` each.
+# The script's docstring defines every key; this header states how the numbers here
+# were chosen.
+#
+# Every floor was set from a measurement of this tree's emitted asm, never guessed.
+# `min_vector_ops` is half the smallest count measured across the configurations a
+# measure covers, rounded down: a scheduling change in a new nightly moves a count by a
+# few instructions and must not redden the gate, while losing the vector body takes it
+# to zero or near it and must. `require_mnemonics` carries the proof of shape, and it is
+# what a floor alone cannot express. A floor of 0 is a measured statement that the
+# configuration runs a scalar or SWAR path, and the measure still requires the symbol to
+# exist, so the statement stays attached to real code.
+#
+# A private or inlined site is measured in the function it is compiled into, which the
+# measure names. memchr is the example: on x86_64 it dispatches at run time to its own
+# `find_sse2` / `find_avx2` functions, so those are measured in crate `memchr`; on aarch64
+# and wasm32 its kernels are `#[inline]`, and they are measured inside the purrdf
+# function that inlined them.
+
+[build]
+packages = ["purrdf-sparql-algebra", "purrdf-rdf"]
+
+[[site]]
+id = "memchr.sparql-lex-string"
+summary = "memchr2 kernels behind the SPARQL lexer's string clean-run skip (`Lexer::lex_string`, inlined into `Lexer::lex_one`)"
+
+  # x86_64 baseline: memchr's SSE2 kernel. Measured v30.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_sse2"
+  min_vector_ops = 15
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # memchr's AVX2 kernel, selected at run time on the baseline build and the only kernel
+  # emitted when the build already assumes AVX2. Measured v36 (x86_64), v38 (x86_64-v3).
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_avx2"
+  min_vector_ops = 18
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the same kernel compares into mask registers
+  # (`vpcmpeqb ..., %k0`, then `kord`/`kortestd`), so `vpmovmskb` is gone and the
+  # mask-register compare is the proof. Measured v16.
+  [[site.measure]]
+  label = "avx2 (avx512 masks)"
+  configs = ["x86_64-v4"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_avx2"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON: memchr's kernel is inlined into the lexer; `shrn` + `umaxp` are its movemask.
+  # Measured v150 on both aarch64 configurations.
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::lexer::Lexer>::lex_one"
+  min_vector_ops = 75
+  require_mnemonics = ["cmeq .16b", "shrn", "umaxp"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # simd128: memchr's wasm kernel inlined into the lexer. Measured v204.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::lexer::Lexer>::lex_one"
+  min_vector_ops = 102
+  require_mnemonics = ["i8x16.eq", "i8x16.bitmask"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: memchr runs its word-at-a-time (SWAR)
+  # fallback, and without the vector kernels `lex_one` is small enough to be inlined
+  # into `Lexer::run`, which is where it is measured. Measured v0.
+  [[site.measure]]
+  label = "swar"
+  configs = ["wasm32"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::lexer::Lexer>::run"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "memchr.rdf-line-split"
+summary = "memchr2 kernels behind the line-oriented codecs' line split (`split_line_chunks` / `count_line_terminators`, inlined into `parse_lines_parallel`)"
+
+  # x86_64: the same memchr kernels the lexer reaches, by the same run-time dispatch.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_sse2"
+  min_vector_ops = 15
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_avx2"
+  min_vector_ops = 18
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx2 (avx512 masks)"
+  configs = ["x86_64-v4"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_avx2"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON: inlined into the parallel line parser. Measured v44 on both configurations.
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::text_parse::parse_lines_parallel"
+  min_vector_ops = 22
+  require_mnemonics = ["cmeq .16b", "shrn", "umaxp"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # simd128: measured v67.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::text_parse::parse_lines_parallel"
+  min_vector_ops = 33
+  require_mnemonics = ["i8x16.eq", "i8x16.bitmask"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32: memchr's SWAR fallback. Measured v0.
+  [[site.measure]]
+  label = "swar"
+  configs = ["wasm32"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::text_parse::parse_lines_parallel"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "sha2.sha256-compress"
+summary = "SHA-256 block compression (content digests): sha2's SHA-NI kernel on x86_64, its portable code elsewhere"
+
+  # sha2 dispatches at run time (cpufeatures) to its SHA-NI kernel; no x86-64 level
+  # implies the SHA extensions, so all three builds keep it out of line.
+  # Measured v126 (x86_64, x86_64-v3), v122 (x86_64-v4).
+  [[site.measure]]
+  label = "sha-ni"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "sha2"
+  symbol = "sha2::sha256::x86::digest_blocks"
+  min_vector_ops = 61
+  require_mnemonics = ["sha256rnds2", "sha256msg1", "sha256msg2"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # sha2 0.10 compiles its ARMv8 crypto-extension backend only under its `asm` Cargo
+  # feature, which this workspace does not enable, so aarch64 runs the portable
+  # compression: general-register code with no vector work. wasm32 has only the
+  # portable code. Measured v0 on all four configurations.
+  [[site.measure]]
+  label = "portable"
+  configs = ["aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "sha2"
+  symbol = "sha2::sha256::compress256"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "blake3.hash-many-dispatch"
+summary = "BLAKE3 multi-chunk hashing (GTS content identity): run-time dispatch into blake3's own SIMD kernels"
+
+  # blake3's x86_64 kernels are hand-written assembly its build script assembles, not
+  # rustc output, so there is no vector body in rustc's asm to count. What rustc's asm
+  # does prove is that the dispatch reaches them: every width is called from the
+  # chunk-parallel path. Measured v0, all four calls present, on all three builds.
+  [[site.measure]]
+  label = "asm kernels"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "blake3"
+  symbol = "blake3::compress_chunks_parallel"
+  min_vector_ops = 0
+  require_mnemonics = [
+    "callq blake3_hash_many_sse2",
+    "callq blake3_hash_many_sse41",
+    "callq blake3_hash_many_avx2",
+    "callq blake3_hash_many_avx512",
+  ]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # aarch64: blake3's NEON kernel is C its build script compiles; the chunk-parallel
+  # path calls it. Measured v0 with the call present on both configurations.
+  [[site.measure]]
+  label = "neon (C)"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "blake3"
+  symbol = "blake3::compress_chunks_parallel"
+  min_vector_ops = 0
+  require_mnemonics = ["bl blake3_hash_many_neon"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32: blake3's simd128 backend is compiled only under its `wasm32_simd` Cargo
+  # feature, which this workspace does not enable, so both wasm builds run the portable
+  # compression, and LLVM does not vectorize it. Measured v0 on both.
+  [[site.measure]]
+  label = "portable"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "blake3"
+  symbol = "blake3::portable::compress_in_place"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true

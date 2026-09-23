@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -121,6 +121,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-entailment-surface.py
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
+	python3 scripts/check-simd-asm.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
 	python3 scripts/benchmark-acquire.py --self-test
@@ -550,6 +551,22 @@ geo-determinism: ## Prove purrdf-geo's native and wasm32 answers are byte-identi
 hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are identical (own gate, NOT part of `check`).
 	bash scripts/check-hnsw-determinism.sh
 
+# The SIMD asm evidence gate: seven release builds (x86_64 baseline, x86-64-v3,
+# x86-64-v4, aarch64, aarch64 neoverse-v1, wasm32, wasm32 +simd128) with
+# `--emit=asm`, then every site in scripts/simd-asm-manifest.toml is counted in the
+# emitted functions. It needs the aarch64 and wasm32 standard libraries, and clang +
+# llvm-ar for the C that build scripts compile for the cross targets; any of them
+# missing is a failure here, never a skip. Too slow for `check`, which runs only its
+# `--self-test`.
+#
+# This recipe runs the asm checks alone. The design-document parity and coverage
+# checks are the script's `--doc` mode, which hard-fails when
+# docs/design/purrdf-simd.md does not exist -- so `--doc` joins this recipe in the
+# same change that adds that document, and cannot be added earlier and pass by
+# finding nothing to check.
+simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
+	python3 scripts/check-simd-asm.py
+
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they
 	@# ANSWER the same way there, and for the three ranking surfaces that is the claim
@@ -608,7 +625,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
 	@# +simd128 is a PLATFORM target feature (not a Cargo feature): it turns on
 	@# the wasm SIMD instruction set so memchr's byte scan (the parser hot path)
-	@# and blake3's simd128 backend run vectorized instead of scalar/SWAR. It is
+	@# runs vectorized instead of SWAR. BLAKE3 does not change: blake3 compiles
+	@# its own simd128 backend only under its `wasm32_simd` Cargo feature, which
+	@# this workspace does not enable, so it stays on its portable code here --
+	@# `make simd-asm` measures both, on this build and the baseline one. It is
 	@# scoped to this npm-artifact build only, so `make wasm` stays baseline-clean.
 	@# This raises the artifact's browser baseline to engines with wasm SIMD
 	@# (all major browsers since ~2021; Node >= 18, the package's engine floor).
