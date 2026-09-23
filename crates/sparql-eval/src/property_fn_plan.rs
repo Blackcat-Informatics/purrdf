@@ -436,21 +436,48 @@ fn plan_pattern(
 ///
 /// Returns whether `pattern` is a chain node at all: a bare `Bgp` or any other leaf is
 /// not, so an ordinary query never allocates past the empty vector above.
+///
+/// # What joins into one chain
+///
+/// Every member of a chain is joined to every other, and a join is associative and
+/// commutative — which is what licenses [`order_chain`] to reorder them at all. So a
+/// `Join` whose operand is ITSELF a chain spine is one chain with it, not an opaque
+/// member: `{ VALUES ?q { … } ?q ex:rel ?out }` parses to `Join(VALUES, Lateral(Z,
+/// call))`, and the call is fed by the `VALUES` exactly as it would be by a triple
+/// written in its own block. Treating the right operand as a sealed atom evaluated on
+/// its own would leave the call seeing none of it, and refuse at prepare a query the
+/// data can serve.
+///
+/// A `LATERAL` whose right operand is NOT a call is the opposite case, and is not a
+/// chain node: its right operand is evaluated once per left row with that row in
+/// hand, a dependency a `Join` does not carry. Flattening it into a chain would
+/// rebuild it through a `Join` and evaluate the right operand without the left rows;
+/// the structural recursion keeps it a `Lateral` and plans each side in its own scope.
 fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bool {
     match pattern {
-        GraphPattern::Lateral { left, right } | GraphPattern::Join { left, right } => {
-            let call = match (&**right, pattern) {
-                (GraphPattern::PropertyFunction(call), GraphPattern::Lateral { .. }) => Some(call),
-                // A call under a `Join` rather than a `Lateral` would lose the
-                // dependency the `Lateral` encodes, so it is not treated as a chain
-                // member; the structural recursion handles it.
-                (GraphPattern::PropertyFunction(_), _) => return false,
-                _ => None,
+        GraphPattern::Lateral { left, right } => {
+            let GraphPattern::PropertyFunction(call) = &**right else {
+                return false;
             };
             if !collect_chain(left, atoms) {
                 push_atom(left, None, atoms);
             }
-            push_atom(right, call, atoms);
+            push_atom(right, Some(call), atoms);
+            true
+        }
+        GraphPattern::Join { left, right } => {
+            // A call under a `Join` rather than a `Lateral` would lose the dependency
+            // the `Lateral` encodes, so it is not treated as a chain member; the
+            // structural recursion handles it.
+            if matches!(&**right, GraphPattern::PropertyFunction(_)) {
+                return false;
+            }
+            if !collect_chain(left, atoms) {
+                push_atom(left, None, atoms);
+            }
+            if !collect_chain(right, atoms) {
+                push_atom(right, None, atoms);
+            }
             true
         }
         _ => false,
@@ -1262,15 +1289,57 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 // Certainly-bound variables
 // ---------------------------------------------------------------------------
 
-/// Add to `out` every variable `pattern` binds in **every** solution it produces.
+/// Add to `out` every variable `pattern` binds in **every** solution it produces, save
+/// only a solution in which a `BIND`'s own expression raised an error.
 ///
 /// This is deliberately narrower than a scope walk. A variable that is merely *in
-/// scope* may still be unbound in a given row (`OPTIONAL`'s right side, a `UNION` branch
-/// that does not mention it, a `BIND` whose expression errored), and treating one of
-/// those as bound would let this pass admit an invocation the evaluator then cannot
-/// make. Erring the other way is harmless: at worst a feasible order is missed and the
-/// query is refused at prepare time with a message that names exactly what could not be
-/// bound.
+/// scope* may be unbound in a row for a reason the query text fixes — `OPTIONAL`'s
+/// right side, a `UNION` branch that does not mention it, an `UNDEF` cell of a `VALUES`
+/// column, an aggregate over an empty group — and treating one of those as bound
+/// would admit an invocation the text itself guarantees some row cannot make.
+///
+/// # The rule, exactly
+///
+/// A variable is a binding source here when it is:
+///
+/// * a variable of a triple pattern, a path's endpoints, or a property-function
+///   argument;
+/// * a `VALUES` column with a term — no `UNDEF` — in every row;
+/// * the target of a `BIND` whose expression reads only variables its inner pattern
+///   binds by this same rule (see [`expression_reads_only_bound`]);
+/// * the variable naming a `GRAPH`;
+/// * a grouping key;
+/// * bound by both operands of a `UNION`, by either operand of a `Join` or a
+///   `LATERAL`, by the left operand of an `OPTIONAL` or a `MINUS`, by the inner pattern
+///   of a `FILTER`, `BIND`, `UNFOLD`, `ORDER BY`, `DISTINCT`, `REDUCED` or slice, or
+///   by the inner pattern of a sub-`SELECT` that projects it.
+///
+/// # Why a `BIND` counts although its expression can error
+///
+/// An expression that errors leaves its variable unbound in that row (SPARQL 1.1
+/// §18.6). When every variable it reads is bound, that is an outcome of evaluating one
+/// row, not a shape of the query: the same `BIND(CONCAT(?a, ?b) AS ?q)` binds `?q` on
+/// every row its operands are strings, and whether any row errors is a fact about the
+/// data. Refusing it here would refuse, at prepare, every call fed by a computed value
+/// — including every run that would never have erred. So such a `BIND` target counts,
+/// and a row that did err is handled where rows are: the evaluator re-derives every
+/// invocation's access pattern from the row in hand and refuses one its relation does
+/// not declare, with a typed error naming both patterns (`admit_mode` in
+/// `crate::property_fn_eval`). A relation is therefore never invoked with a position
+/// free that its declared modes require bound; a relation that ALSO declares the free
+/// mode is invoked free on that row, as the row's own access pattern is.
+///
+/// A `BIND` that reads a variable its inner pattern does NOT certainly bind —
+/// `BIND(?x AS ?q)` after an `OPTIONAL` that may leave `?x` unbound, or over an
+/// aggregate's output — inherits that structural absence, and its target does not count.
+///
+/// An `UNFOLD` target is not the same case, and does not count: a SEP-0009 `null`
+/// element is a legitimate member of the composite, not an error, and the row it yields
+/// with the target unbound is a normal answer.
+///
+/// Erring on the narrow side is otherwise harmless: at worst a feasible order is
+/// missed and the query is refused at prepare time with a message that names exactly
+/// what could not be bound.
 pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     match pattern {
         GraphPattern::Bgp { patterns } => {
@@ -1317,14 +1386,26 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. }
-        // A `BIND`'s own variable is NOT certain: an expression that errors leaves it
-        // unbound (SPARQL 1.1 §18.6), so only the inner pattern's bindings carry.
         // `UNFOLD`s own targets are NOT certainly bound: a SEP-0009 `null` element
         // (or a null map value) yields the row with that variable unbound, so only
-        // what the inner pattern certainly binds escapes — the same rule `Extend`
-        // follows for a `BIND` whose expression can error.
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::Extend { inner, .. } => collect_certainly_bound(inner, out),
+        // what the inner pattern certainly binds escapes.
+        | GraphPattern::Unfold { inner, .. } => collect_certainly_bound(inner, out),
+        // A `BIND`'s target counts when its expression reads only what the inner
+        // pattern certainly binds: it is then unbound only in a row whose expression
+        // errored on the data, and that row is refused per row by the evaluator rather
+        // than invoked free. See this function's doc for the whole argument.
+        GraphPattern::Extend {
+            inner,
+            variable,
+            expression,
+        } => {
+            let mut inner_bound = DetHashSet::default();
+            collect_certainly_bound(inner, &mut inner_bound);
+            if expression_reads_only_bound(expression, &inner_bound) {
+                out.insert(variable.clone());
+            }
+            out.extend(inner_bound);
+        }
         GraphPattern::Graph { name, inner } => {
             if let NamedNodePattern::Variable(variable) = name {
                 out.insert(variable.clone());
@@ -1350,9 +1431,68 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
             variables,
             aggregates: _,
         } => out.extend(variables.iter().cloned()),
-        // A `VALUES` cell may be UNDEF, and a remote endpoint may omit a column, so
-        // neither promises anything.
-        GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
+        // A `VALUES` column binds its variable in every row exactly when no row holds
+        // `UNDEF` there. An empty table produces no row at all, so every column of it
+        // qualifies vacuously — and nothing downstream is ever invoked from it.
+        GraphPattern::Values {
+            variables,
+            bindings,
+        } => {
+            for (column, variable) in variables.iter().enumerate() {
+                if bindings
+                    .iter()
+                    .all(|row| row.get(column).is_some_and(Option::is_some))
+                {
+                    out.insert(variable.clone());
+                }
+            }
+        }
+        // A remote endpoint may omit a column, so it promises nothing.
+        GraphPattern::Service { .. } => {}
+    }
+}
+
+/// Whether `expr` can be left without a value only by the data it reads — never
+/// because the query text leaves a variable it reads unbound.
+///
+/// `bound` is what the rows `expr` is evaluated over certainly bind. A variable read
+/// outside it — the right side of an `OPTIONAL`, an `UNDEF` column, an aggregate's
+/// output over a possibly empty group — makes the expression error on exactly the rows
+/// the text leaves it unbound in, which is a structural absence, not a per-row one.
+///
+/// Exact where an operator's evaluation reads every operand (arithmetic, comparisons,
+/// function calls), and narrow where it may not: `||`, `&&`, `IF` and `IN` require
+/// every operand to qualify even though SPARQL's error-masking can sometimes spare one,
+/// while `COALESCE` qualifies when any argument does, because it answers with the first
+/// argument that evaluates. `BOUND` and `EXISTS` never error on an unbound variable, so
+/// they always qualify.
+fn expression_reads_only_bound(expr: &Expression, bound: &DetHashSet<Variable>) -> bool {
+    let reads = |expr: &Expression| expression_reads_only_bound(expr, bound);
+    match expr {
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Bound(_)
+        | Expression::Exists(_) => true,
+        Expression::Variable(variable) => bound.contains(variable),
+        Expression::Or(a, b)
+        | Expression::And(a, b)
+        | Expression::Equal(a, b)
+        | Expression::SameTerm(a, b)
+        | Expression::Greater(a, b)
+        | Expression::GreaterOrEqual(a, b)
+        | Expression::Less(a, b)
+        | Expression::LessOrEqual(a, b)
+        | Expression::Add(a, b)
+        | Expression::Subtract(a, b)
+        | Expression::Multiply(a, b)
+        | Expression::Divide(a, b) => reads(a) && reads(b),
+        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => reads(a),
+        Expression::If(condition, then, otherwise) => {
+            reads(condition) && reads(then) && reads(otherwise)
+        }
+        Expression::In(needle, haystack) => reads(needle) && haystack.iter().all(reads),
+        Expression::Coalesce(items) => items.iter().any(reads),
+        Expression::FunctionCall(_, args) => args.iter().all(reads),
     }
 }
 

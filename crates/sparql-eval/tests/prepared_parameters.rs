@@ -564,17 +564,20 @@ fn a_filter_exists_over_the_core_invokes_its_call_with_the_declared_parameter_bo
 // What a call is admitted against is what it is invoked with
 // ---------------------------------------------------------------------------
 
-/// **A call is admitted against the variables its evaluation actually hands it: a
-/// nested group's call and an `OPTIONAL` arm's call do not see the enclosing group's
-/// bindings, and are refused at prepare rather than on every run.**
+/// **A call is admitted against the variables its evaluation actually hands it: an
+/// `OPTIONAL` arm's call does not see the enclosing group's bindings, and is refused at
+/// prepare rather than on every run — while a call in a nested group does.**
 ///
-/// A `Join` and an `OPTIONAL` evaluate their right operand on its own and match it
-/// against the left afterwards; only a call written into the group itself is driven
-/// with the rows before it. A plan that admitted the first two against the left's
-/// bindings would be refused by the relation on every run instead — the same
-/// question, answered later and once per execution. Each refusal is executed beside
-/// the neighbour that differs only in where the call is written, which is admitted and
-/// answers.
+/// An `OPTIONAL` evaluates its right operand on its own and matches it against the
+/// left afterwards, so a call inside it is invoked with nothing the left binds. A plan
+/// that admitted it against the left's bindings would be refused by the relation on
+/// every run instead — the same question, answered later and once per execution.
+///
+/// A nested group is different: `{ A . { call } }` is `Join(A, call)`, and a join is
+/// associative and commutative, so the planner joins the nested group's call into the
+/// enclosing chain and drives it with `A`'s rows exactly as it drives a call written
+/// into the group itself. Both are executed, and both answer with the relation invoked
+/// bound.
 #[test]
 fn a_call_is_admitted_against_what_its_evaluation_hands_it() {
     let (registry, relation) = registry();
@@ -586,40 +589,39 @@ fn a_call_is_admitted_against_what_its_evaluation_hands_it() {
     };
     let dataset = linked_dataset();
 
-    for (refused_text, shape) in [
+    let refused_text =
+        format!("SELECT ?o WHERE {{ ?s <{LINKED}> ?o OPTIONAL {{ ( ?s ) <{RELATED}> ( ?x ) }} }}");
+    let refused = engine
+        .prepare_execution(&refused_text, None, &[], options)
+        .expect_err("the call's subject is free where it is evaluated");
+    assert_eq!(
+        refused.code, "native-sparql-property-function",
+        "an OPTIONAL arm: refused as the infeasible call it is: {refused}"
+    );
+    assert!(
+        refused.to_string().contains(RELATED_MODE),
+        "an OPTIONAL arm: {refused}"
+    );
+
+    for (admitted, neighbour) in [
         (
-            format!("SELECT ?x WHERE {{ ?s <{LINKED}> ?o . {{ ( ?s ) <{RELATED}> ( ?x ) }} }}"),
-            "a nested group",
+            1,
+            format!("SELECT ?x WHERE {{ ?s <{LINKED}> ?o . ( ?s ) <{RELATED}> ( ?x ) }}"),
         ),
         (
-            format!(
-                "SELECT ?o WHERE {{ ?s <{LINKED}> ?o OPTIONAL {{ ( ?s ) <{RELATED}> ( ?x ) }} }}"
-            ),
-            "an OPTIONAL arm",
+            2,
+            format!("SELECT ?x WHERE {{ ?s <{LINKED}> ?o . {{ ( ?s ) <{RELATED}> ( ?x ) }} }}"),
         ),
     ] {
-        let refused = engine
-            .prepare_execution(&refused_text, None, &[], options)
-            .expect_err("the call's subject is free where it is evaluated");
+        let mut execution = engine
+            .prepare_execution(&neighbour, None, &[], options)
+            .expect("a call joined into the group is driven by the rows before it");
         assert_eq!(
-            refused.code, "native-sparql-property-function",
-            "{shape}: refused as the infeasible call it is: {refused}"
+            run(&engine, &mut execution, &dataset, options).expect("and it answers"),
+            1
         );
-        assert!(
-            refused.to_string().contains(RELATED_MODE),
-            "{shape}: {refused}"
-        );
+        assert_eq!(relation.bound_invocations(), admitted, "{neighbour}");
     }
-
-    let neighbour = format!("SELECT ?x WHERE {{ ?s <{LINKED}> ?o . ( ?s ) <{RELATED}> ( ?x ) }}");
-    let mut execution = engine
-        .prepare_execution(&neighbour, None, &[], options)
-        .expect("a call written into the group is driven by the rows before it");
-    assert_eq!(
-        run(&engine, &mut execution, &dataset, options).expect("and it answers"),
-        1
-    );
-    assert_eq!(relation.bound_invocations(), 1);
 }
 
 // ---------------------------------------------------------------------------
