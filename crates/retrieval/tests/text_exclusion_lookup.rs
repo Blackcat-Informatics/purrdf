@@ -53,8 +53,8 @@ use purrdf_retrieval::{
     StratumStream, Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
-    EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, RankedDeclaration, ServiceLevel, Volatility,
+    EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity, PfAttestation, PfCursor, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, ServiceLevel, Volatility,
 };
 use purrdf_text::{
     GraphSelector, SearchObservations, TextIndex, TextIndexConfig, TextSearchRelation,
@@ -583,6 +583,8 @@ struct Measured {
     /// cursor as the evaluator pulled them — the producer's end of the seam the
     /// trailer's figure above is read from the other end of.
     served_free: [u64; 2],
+    /// What each stratum's index attested, as the trailer reports it.
+    attestations: BTreeMap<Iri, PfAttestation>,
     /// The evidence identity the answer carries.
     evidence_id: EvidenceId,
     /// The canonical bytes that identity is the digest of, re-derived from the
@@ -678,6 +680,7 @@ fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
                 .and_then(|resolution| resolution.rows_materialised)
         }),
         served_free: [recorders[0].served_free(), recorders[1].served_free()],
+        attestations: result.trailer.attestations.clone(),
         evidence_id: result.evidence_id,
         evidence_bytes: result.trailer.evidence_canonical_bytes(),
     }
@@ -899,24 +902,28 @@ fn a_lookup_answered_by_a_rebuilt_index_is_refused_and_one_at_the_pinned_generat
     );
 }
 
-/// The evidence identity of the no-lookup control: the attestation-only layout
-/// over the two indexes' fingerprints, which a run that asked no lookup must
-/// digest exactly as it always did. Pinned, so a change to either the layout or
-/// the fixture's indexes is seen rather than absorbed.
-const CONTROL_EVIDENCE_ID_HEX: &str =
-    "2b35a84aef0a25428618dd21ee98d9453feec48af0beb358d21cc48295fe0cd0";
-
 /// **Lookups are covered by the evidence, deterministically, and a run that asked
 /// none carries the evidence it always carried.**
 ///
-/// Three runs over one index state. The control asks no lookup, and its identity is
-/// held to the literal it carried before lookups were bound into evidence — so a
-/// run without lookups is shown byte-identical, not merely self-consistent. The two
-/// declaring runs ask, and agree with each other exactly. And the declaring runs'
-/// evidence is the control's bytes followed by the strata whose lookups were asked,
-/// which is what separates "the lookups are bound" from "the identity moved for
-/// some other reason": the attestations both share are the same prefix, and what
-/// follows names exactly the strata the trailer counts lookups for.
+/// Three runs over one index state. The control asks no lookup, and its canonical
+/// bytes are held to the attestation-only layout rebuilt here by hand from the
+/// attestations the run itself reports — so a run without lookups is shown
+/// byte-identical to the layout an identity had before lookups were evidence, and
+/// its identity is the digest of exactly those bytes. The two declaring runs ask,
+/// and agree with each other exactly. And the declaring runs' evidence is the
+/// control's bytes followed by the strata whose lookups were asked, which is what
+/// separates "the lookups are bound" from "the identity moved for some other
+/// reason": the attestations both share are the same prefix, and what follows
+/// names exactly the strata the trailer counts lookups for.
+///
+/// No digest literal is pinned here, deliberately. Each generation this fixture
+/// attests is a text index's content fingerprint, and that fingerprint binds the
+/// Unicode tables the index was built under — among them the standard library's,
+/// which move with the compiler. A literal over it would be a golden that moves
+/// under a compiler bump. The digest of the attestation-only layout is pinned
+/// instead over fixed generation strings, in the wasm determinism suite, where no
+/// compiler-chosen byte reaches it; this test proves the no-lookup encoding *is*
+/// that layout, over whatever fingerprint the index reports.
 #[test]
 fn the_evidence_binds_the_lookups_and_a_run_without_lookups_is_unchanged() {
     let dataset = dataset();
@@ -925,21 +932,35 @@ fn the_evidence_binds_the_lookups_and_a_run_without_lookups_is_unchanged() {
     let second = measure(&dataset, ExclusionBasis::Membership);
 
     assert_eq!(control.fused_lookups, 0, "the control asks nothing");
+
+    // What the control's indexes attested, read off its own trailer — and each is
+    // the generation the index names itself by, its content fingerprint, with
+    // nothing said about its wholeness. The oracle below is built from these
+    // reported values, so a fingerprint that moves with the toolchain moves the
+    // oracle with it, while the layout it is written in does not move.
     assert_eq!(
-        control.evidence_id.to_hex(),
-        CONTROL_EVIDENCE_ID_HEX,
-        "a run that asked no lookup carries the identity it always carried"
+        control.attestations.len(),
+        SIDES.len(),
+        "each stratum's index attested once"
     );
-    assert_eq!(
-        EvidenceId::from_canonical(&control.evidence_bytes),
-        control.evidence_id,
-        "and the control's trailer re-derives it"
-    );
-    // The literal is only as good as the layout it was taken under, so the
-    // control's bytes are also rebuilt here by hand in the attestation-only layout
-    // — version, entry count, then per stratum its name, the declared-generation
-    // tag and the index's own fingerprint, and the undeclared-service tag — which
-    // is every byte an identity carried before lookups were evidence.
+    for side in SIDES {
+        assert_eq!(
+            control.attestations.get(&iri(&side.stratum())),
+            Some(&PfAttestation {
+                generation: IndexGeneration::Declared(Arc::from(purrdf_core::hex::lower(
+                    &index(&dataset, side).fingerprint()
+                ))),
+                service: ServiceLevel::Undeclared,
+            }),
+            "{side:?}: the stratum attests its index's own fingerprint"
+        );
+    }
+
+    // The control's bytes, rebuilt by hand in the attestation-only layout —
+    // version, entry count, then per stratum in canonical order its name, the
+    // declared-generation tag and the generation the run reported, and the
+    // undeclared-service tag — which is every byte an identity carried before
+    // lookups were evidence, and nothing after them.
     let framed = |out: &mut Vec<u8>, text: &str| {
         out.extend_from_slice(&(text.len() as u64).to_le_bytes());
         out.extend_from_slice(text.as_bytes());
@@ -947,17 +968,23 @@ fn the_evidence_binds_the_lookups_and_a_run_without_lookups_is_unchanged() {
     let mut attestation_only = EVIDENCE_VERSION.to_le_bytes().to_vec();
     attestation_only.extend_from_slice(&2_u64.to_le_bytes());
     for side in SIDES {
+        let reported = &control.attestations[&iri(&side.stratum())];
+        let IndexGeneration::Declared(generation) = &reported.generation else {
+            panic!("{side:?}: the text index declares its generation, got {reported:?}");
+        };
         framed(&mut attestation_only, &side.stratum());
         attestation_only.push(1);
-        framed(
-            &mut attestation_only,
-            &purrdf_core::hex::lower(&index(&dataset, side).fingerprint()),
-        );
+        framed(&mut attestation_only, generation);
         attestation_only.push(0);
     }
     assert_eq!(
         control.evidence_bytes, attestation_only,
         "a run that asked no lookup digests the attestation-only layout, byte for byte"
+    );
+    assert_eq!(
+        control.evidence_id,
+        EvidenceId::from_canonical(&attestation_only),
+        "and the identity it carries is the digest of exactly those bytes"
     );
 
     assert!(first.fused_lookups > 0, "the declaring run asks");
