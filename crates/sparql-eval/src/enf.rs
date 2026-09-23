@@ -80,15 +80,16 @@
 //!      ONE caller-supplied value into the whole query ONCE, before any row is
 //!      evaluated — there is no "current row" to restrict against, unlike
 //!      `Replace`, which runs once per outer row inside a live evaluation.
-//!   3. **Literal property-function-argument substitution.** SHACL pre-binding
-//!      rewrites a `PropertyFunction` argument's `TermPattern` directly (an
-//!      IRI/literal constant swap), where `Replace`'s Values-Insertion walk never
-//!      touches `PropertyFunction` argument vectors at all — a relation's argument
-//!      is an invocation input the evaluator reads from the row, not a join key a
-//!      `VALUES` table can supply (see `crate::expr::substitute_term_pattern`'s
-//!      doc).
+//!   3. **Scope, not rule, at a property-function call.** Both walks put a value
+//!      into a call's arguments by the SAME decision,
+//!      `crate::substitute::bind_call_arguments`: an IRI or a literal is written in
+//!      as a constant, and a blank node or a quoted triple is driven in by a
+//!      one-row `VALUES` on the call's left — a relation's argument is an
+//!      invocation input, not a join key a `VALUES` table joined beside the call
+//!      could supply. What differs is only which calls each walk reaches, per
+//!      divergences 1 and 2.
 //!
-//!   Where the two walks do AGREE is at a `Bgp`/`Path` leaf. `apply_substitutions`
+//!   Where the two walks also AGREE is at a `Bgp`/`Path` leaf. `apply_substitutions`
 //!   pushes a pre-bound constant into the leaf's term positions so the bound
 //!   position is an index probe rather than a scan the seed join filters afterwards,
 //!   and it restores the column the rewrite consumed with exactly this module's

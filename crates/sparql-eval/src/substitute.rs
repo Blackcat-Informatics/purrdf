@@ -734,6 +734,13 @@ fn seed_row(driven: &[usize], probes: &[(Variable, GroundTerm)]) -> GraphPattern
 /// Idempotent: a value the left operand already drives is not driven again (see
 /// [`drives`]), so the SHACL walk passing over a call the pushdown already drove
 /// leaves it as it is.
+///
+/// Which values are driven, and the one-row `VALUES` that drives them, are
+/// [`call_driver`]'s decision; this function only plants that driver in place. The
+/// correlated per-row walk (`crate::expr`'s `substitute_pattern_impl`) plants the SAME
+/// driver, decided by the same function through [`bind_call_arguments`], in the same
+/// two positions — it builds the nodes itself only because each one it builds must
+/// also be mapped back to the plan node it stands for.
 fn drive_call_arguments(
     pattern: &mut GraphPattern,
     probes: &[(Variable, GroundTerm)],
@@ -741,34 +748,84 @@ fn drive_call_arguments(
 ) {
     match pattern {
         GraphPattern::PropertyFunction(call) => {
-            let driven = driven_arguments(call, probes, rule, None);
-            if driven.is_empty() {
-                return;
+            if let Some(seed) = call_driver(call, probes, rule, None) {
+                plant_stand_alone_driver(pattern, seed);
             }
-            let seed = seed_row(&driven, probes);
-            purrdf_sparql_algebra::substitute::take_and_replace(pattern, |call| {
-                GraphPattern::Lateral {
-                    left: Box::new(seed),
-                    right: Box::new(call),
-                }
-            });
         }
         GraphPattern::Lateral { left, right } => {
             let GraphPattern::PropertyFunction(call) = &**right else {
                 return;
             };
-            let driven = driven_arguments(call, probes, rule, Some(left));
-            if driven.is_empty() {
-                return;
+            if let Some(seed) = call_driver(call, probes, rule, Some(left)) {
+                plant_left_driver(left, seed);
             }
-            let seed = seed_row(&driven, probes);
-            purrdf_sparql_algebra::substitute::take_and_replace(left, |left| GraphPattern::Join {
-                left: Box::new(seed),
-                right: Box::new(left),
-            });
         }
         _ => {}
     }
+}
+
+/// The one-row `VALUES` that must drive `call` — every value of `values` that `rule`
+/// cannot write into an argument `call` names, less any `already` (the left operand
+/// of the `Lateral` `call` is the right operand of) drives — or `None` when there is
+/// nothing to drive. See [`drive_call_arguments`].
+fn call_driver(
+    call: &purrdf_sparql_algebra::PropertyFunctionCall,
+    values: &[(Variable, GroundTerm)],
+    rule: Unwritable,
+    already: Option<&GraphPattern>,
+) -> Option<GraphPattern> {
+    let driven = driven_arguments(call, values, rule, already);
+    (!driven.is_empty()).then(|| seed_row(&driven, values))
+}
+
+/// A stand-alone call, driven: `Lateral(seed, call)`.
+fn plant_stand_alone_driver(call: &mut GraphPattern, seed: GraphPattern) {
+    purrdf_sparql_algebra::substitute::take_and_replace(call, |call| GraphPattern::Lateral {
+        left: Box::new(seed),
+        right: Box::new(call),
+    });
+}
+
+/// A `Lateral`'s left operand, carrying the driver of the call on its right:
+/// `Join(seed, left)` — the shape [`drives`] recognizes.
+fn plant_left_driver(left: &mut GraphPattern, seed: GraphPattern) {
+    purrdf_sparql_algebra::substitute::take_and_replace(left, |left| GraphPattern::Join {
+        left: Box::new(seed),
+        right: Box::new(left),
+    });
+}
+
+/// Write a row's values into a property-function call's arguments, and return the
+/// one-row `VALUES` that must drive the ones that cannot be written — the single
+/// definition of "put this value into that call" both whole-query rewrites and the
+/// per-row correlated walk share.
+///
+/// An IRI or a literal is written into the argument as the constant it is, so the
+/// relation reads it exactly as if the query had spelled it
+/// ([`substitute_in_term_pattern`]). A blank node and a quoted triple are not: a blank
+/// node in a query is an anonymous variable, and a quoted triple has no argument
+/// spelling this rule admits (the pre-binding walk shares the EXPRESSION rule,
+/// [`Unwritable::InArgument`]). Those are DRIVEN instead — the returned `VALUES` row
+/// carries them into the call as the terms they are (see [`drive_call_arguments`]),
+/// placed by the caller as the left operand of a `Lateral` over the call when `call`
+/// stands alone, or joined onto `already` — the left operand of the `Lateral` whose
+/// right operand `call` is — when it does not.
+///
+/// A value no argument names is neither written nor driven, so a row carrying
+/// unrelated bindings leaves `call` as it was and returns `None`.
+pub(crate) fn bind_call_arguments(
+    call: &mut purrdf_sparql_algebra::PropertyFunctionCall,
+    values: &[(Variable, GroundTerm)],
+    already: Option<&GraphPattern>,
+) -> Option<GraphPattern> {
+    for term in call
+        .subject_args
+        .iter_mut()
+        .chain(call.object_args.iter_mut())
+    {
+        substitute_in_term_pattern(term, values);
+    }
+    call_driver(call, values, Unwritable::InArgument, already)
 }
 
 /// Re-bind the columns a leaf rewrite consumed, unless the seed is about to.
@@ -1127,8 +1184,9 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
         GraphPattern::Lateral { left, right } => {
             substitute_in_graph_pattern(left, expr_subs);
             if let GraphPattern::PropertyFunction(call) = &mut **right {
-                substitute_in_call(call, expr_subs);
-                drive_call_arguments(pattern, &expr_subs.0, Unwritable::InArgument);
+                if let Some(seed) = bind_call_arguments(call, &expr_subs.0, Some(left)) {
+                    plant_left_driver(left, seed);
+                }
             } else {
                 substitute_in_graph_pattern(right, expr_subs);
             }
@@ -1189,8 +1247,9 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
         // own — see [`drive_call_arguments`] — and the relation is invoked with it
         // bound, exactly as with an IRI.
         GraphPattern::PropertyFunction(call) => {
-            substitute_in_call(call, expr_subs);
-            drive_call_arguments(pattern, &expr_subs.0, Unwritable::InArgument);
+            if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
+                plant_stand_alone_driver(pattern, seed);
+            }
         }
         GraphPattern::Group {
             inner, aggregates, ..
@@ -1209,20 +1268,6 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
     }
 }
 
-/// Substitute every argument of `call` — see [`substitute_in_term_pattern`].
-fn substitute_in_call(
-    call: &mut purrdf_sparql_algebra::PropertyFunctionCall,
-    expr_subs: &ExprSubs,
-) {
-    for term in call
-        .subject_args
-        .iter_mut()
-        .chain(call.object_args.iter_mut())
-    {
-        substitute_in_term_pattern(term, expr_subs);
-    }
-}
-
 /// Replace a pre-bound variable in a property-function argument position with its
 /// constant term.
 ///
@@ -1234,11 +1279,28 @@ fn substitute_in_call(
 /// to be substituted with here, and is driven into the call instead — see
 /// [`drive_call_arguments`]. A non-variable argument is already a constant and
 /// passes through unchanged.
-fn substitute_in_term_pattern(term: &mut TermPattern, expr_subs: &ExprSubs) {
-    let TermPattern::Variable(var) = term else {
-        return;
+///
+/// A quoted-triple argument is entered: its subject and object are argument
+/// positions too, and a variable there is an input of the call exactly as a bare
+/// argument is. Left unwritten, the relation would be handed a triple with that
+/// component free — refused by a relation serving only the bound mode, and answered
+/// from the relation's whole extent by one serving both. [`driven_arguments`] enters
+/// the same two positions for the values it drives, so every variable an argument
+/// names, at any depth, is either written or driven. The predicate is not entered:
+/// it names a predicate, which only an IRI can, and neither rule writes there.
+fn substitute_in_term_pattern(term: &mut TermPattern, values: &[(Variable, GroundTerm)]) {
+    let var = match term {
+        TermPattern::Variable(var) => var,
+        TermPattern::Triple(triple) => {
+            substitute_in_term_pattern(&mut triple.subject, values);
+            substitute_in_term_pattern(&mut triple.object, values);
+            return;
+        }
+        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+            return;
+        }
     };
-    let Some(ground) = expr_subs.get(var.as_str()) else {
+    let Some((_, ground)) = values.iter().find(|(candidate, _)| candidate == var) else {
         return;
     };
     // Wildcard-free over [`Pushability`], so a new class of value cannot slip through
@@ -1650,7 +1712,7 @@ mod tests {
             let subs = ExprSubs(vec![(variable.clone(), ground)]);
 
             let mut arg = TermPattern::Variable(variable.clone());
-            substitute_in_term_pattern(&mut arg, &subs);
+            substitute_in_term_pattern(&mut arg, &subs.0);
             assert_eq!(
                 !matches!(arg, TermPattern::Variable(_)),
                 want_arg,
@@ -1703,7 +1765,7 @@ mod tests {
         assert!(subs.get("other").is_none());
 
         let mut arg = TermPattern::Variable(other.clone());
-        substitute_in_term_pattern(&mut arg, &subs);
+        substitute_in_term_pattern(&mut arg, &subs.0);
         assert_eq!(arg, TermPattern::Variable(other.clone()));
 
         let mut name = NamedNodePattern::Variable(other.clone());
@@ -1769,6 +1831,64 @@ mod tests {
             "a cap-triggered clear must keep the observer's total bounded to \
              roughly one table's worth of entries, not the {total_inserted} names \
              ever inserted (after fill: {after_fill}, bound: {bound})"
+        );
+    }
+
+    /// **A variable inside a quoted-triple argument is written or driven, like a bare
+    /// one.** The component is an input of the call; [`bind_call_arguments`] writes an
+    /// IRI there and drives a blank node, and the neighbouring variable no value names
+    /// is left alone.
+    #[test]
+    fn a_variable_inside_a_quoted_triple_argument_is_written_or_driven() {
+        let v = Variable::new("v");
+        let a = NamedNode::new_unchecked("http://example.org/a");
+        let r = NamedNode::new_unchecked("http://example.org/r");
+        let i = NamedNode::new_unchecked("http://example.org/i");
+        let quoted = |object: TermPattern| {
+            TermPattern::Triple(Box::new(TriplePattern {
+                subject: TermPattern::NamedNode(a.clone()),
+                predicate: NamedNodePattern::NamedNode(r.clone()),
+                object,
+            }))
+        };
+        let call = || purrdf_sparql_algebra::PropertyFunctionCall {
+            iri: "http://example.org/rel".to_owned(),
+            subject_args: vec![quoted(TermPattern::Variable(v.clone()))],
+            object_args: vec![TermPattern::Variable(Variable::new("out"))],
+        };
+
+        let mut written = call();
+        let seed = bind_call_arguments(
+            &mut written,
+            &[(v.clone(), GroundTerm::NamedNode(i.clone()))],
+            None,
+        );
+        assert!(seed.is_none(), "an IRI is written, so nothing is driven");
+        assert_eq!(
+            written.subject_args,
+            vec![quoted(TermPattern::NamedNode(i))]
+        );
+        assert_eq!(
+            written.object_args,
+            vec![TermPattern::Variable(Variable::new("out"))],
+            "a variable no value names is left alone"
+        );
+
+        let blank = GroundTerm::BlankNode(BlankNode::new("b"));
+        let mut driven = call();
+        let seed = bind_call_arguments(&mut driven, &[(v.clone(), blank.clone())], None);
+        assert_eq!(
+            driven.subject_args,
+            call().subject_args,
+            "a blank node is never written into the argument"
+        );
+        assert_eq!(
+            seed,
+            Some(GraphPattern::Values {
+                variables: vec![v],
+                bindings: vec![vec![Some(blank)]],
+            }),
+            "it is driven by a one-row VALUES instead"
         );
     }
 }

@@ -213,6 +213,24 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   once, at prepare. A call written into the group itself is still driven by the
   rows before it.
 
+- **sparql-eval:** a literal, blank-node or quoted-triple value reaching a
+  property-function call through correlated substitution — an `EXISTS` or
+  `NOT EXISTS` body, a `LATERAL`'s right side below other operators, an `OPTIONAL`
+  inside a `LATERAL`, a sub-`SELECT` receiving a projected variable — was never
+  written into the call's arguments, so the relation was invoked with that
+  position free and a relation serving only the bound mode refused the call on
+  every row, though the plan admitted it; one serving both answered from its whole
+  extent. It now arrives as the term it is: an IRI or a literal written into the
+  argument, a blank node or a quoted triple driven into the call by a one-row
+  `VALUES`, including a variable nested inside a quoted-triple argument.
+
+- **sparql-eval:** a property function fed from a `LATERAL`'s right side is now
+  admitted when its input is certainly bound there: a `BIND`, `VALUES`, triple or
+  `FILTER` inside `LATERAL { … }` is judged with the left side's bindings in hand,
+  so `?s ?p ?v LATERAL { BIND(?v AS ?q) } ?q <rel> ?out` invokes a bound-only
+  relation with each `?v` instead of being refused at prepare; a sub-`SELECT` sees
+  the enclosing bindings it projects.
+
 - **sparql-eval:** a property function's input could be fed only by a triple pattern. A
   `VALUES` table or a `BIND` written in the same group — `{ VALUES ?q { "alpha beta" } ?doc
   ex:search (?q …) }`, `{ BIND("alpha beta" AS ?q) ?doc ex:search (?q …) }` — and a nested
@@ -2191,6 +2209,13 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   expectation produces the byte-identical report the unbound call produces.
 
 ### Performance
+
+- **retrieval:** fused selection reads one key per signature group instead of
+  walking the whole frontier on every pass, so a read through a plateau of equal
+  contributions costs work linear in the rows pulled rather than quadratic (a
+  collided-weight drain of 8,000 candidates read 150,985,757 frontier states and
+  now reads 61,910 index entries); every emitted row, its order, its score interval
+  and the trailer are unchanged.
 
 - **sparql-eval/text:** Attesting an index generation is a refcount bump instead of
   a string copy, and an entry point that cannot carry the answer no longer asks the

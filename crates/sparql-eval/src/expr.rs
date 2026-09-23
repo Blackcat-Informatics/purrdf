@@ -1900,9 +1900,10 @@ impl SubstitutionRow {
 ///
 /// # Property-function arguments
 ///
-/// Unchanged: still IRI-only value substitution via `substitute_term_pattern`
-/// — the fusion contract a joined `VALUES` row cannot satisfy (see that
-/// function's doc).
+/// Written INTO the call rather than joined beside it — the fusion contract a
+/// joined `VALUES` row cannot satisfy: an IRI or a literal as the constant it is,
+/// a blank node or a quoted triple through a one-row `VALUES` driving the call
+/// (see [`bind_row_into_call`]), so every term kind reaches the relation bound.
 pub(crate) fn substitute_pattern(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
@@ -2103,28 +2104,14 @@ fn substitute_pattern_impl(
             );
             join_leaf_with_values(leaf, &vars, &row.term, pattern, map)
         }
-        // A property function's argument vectors are term positions, but — unlike a
-        // `Bgp`/`Path` leaf, which now receives its row via a joined `VALUES` above —
-        // the relation's invocation contract needs the argument itself constant, not
-        // merely join-compatible with one (`substitute_term_pattern`'s fusion-contract
-        // doc). This is that helper's one remaining client.
-        GraphPattern::PropertyFunction(call) => boxed_and_mapped(
-            GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
-                iri: call.iri.clone(),
-                subject_args: call
-                    .subject_args
-                    .iter()
-                    .map(|term| substitute_term_pattern(term, &row.expr))
-                    .collect(),
-                object_args: call
-                    .object_args
-                    .iter()
-                    .map(|term| substitute_term_pattern(term, &row.expr))
-                    .collect(),
-            }),
-            pattern,
-            map,
-        ),
+        // A property function's arguments are invocation INPUTS, not join keys: a
+        // `VALUES` row joined beside the call (a `Bgp`/`Path` leaf's Values Insertion)
+        // would leave the relation invoked with the position free. The row's value
+        // has to be IN the call — written as a constant where it has one, driven by a
+        // one-row `VALUES` on the call's left where it has not — which is
+        // `crate::substitute::bind_call_arguments`'s decision; see
+        // [`bind_row_into_call`].
+        GraphPattern::PropertyFunction(call) => bind_row_into_call(call, row, pattern, map),
         // `wrap_with_expr_term_only_values` closes the gap `substitute_expr` alone
         // leaves open: a blank-node/quoted-triple outer binding referenced ONLY by
         // `expr` (no leaf occurrence elsewhere in `inner`) has no `Expression`
@@ -2256,9 +2243,32 @@ fn substitute_pattern_impl(
                 map,
             )
         }
+        // A call that is the `Lateral`'s DIRECT right operand keeps that position: it
+        // is the one the evaluator drives per left row, handing it each left row's
+        // bindings as bound arguments, and wrapping the call would demote it to the
+        // generic correlated path. So the row's writable values are written into the
+        // call in place, and the driver of the rest is joined onto the LEFT operand —
+        // the same placement `crate::substitute`'s whole-query rewrites use.
         GraphPattern::Lateral { left, right } => {
             let left_sub = substitute_pattern_impl(left, row, map);
-            let right_sub = substitute_pattern_impl(right, row, map);
+            let (left_sub, right_sub) = if let GraphPattern::PropertyFunction(call) = &**right {
+                let mut bound = call.clone();
+                let seed =
+                    crate::substitute::bind_call_arguments(&mut bound, &row.term, Some(&left_sub));
+                let right_sub = boxed_and_mapped(GraphPattern::PropertyFunction(bound), right, map);
+                let left_sub = match seed {
+                    Some(seed) => plant_mapped_driver(left_sub, seed, left, map, |seed, left| {
+                        GraphPattern::Join {
+                            left: seed,
+                            right: left,
+                        }
+                    }),
+                    None => left_sub,
+                };
+                (left_sub, right_sub)
+            } else {
+                (left_sub, substitute_pattern_impl(right, row, map))
+            };
             boxed_and_mapped(
                 GraphPattern::Lateral {
                     left: left_sub,
@@ -2746,37 +2756,59 @@ fn wrap_with_expr_term_only_values(
     )
 }
 
-/// Substitute outer-bound variables into a property-function argument term —
-/// the ONLY remaining client of this substitution style, since Values
-/// Insertion (`substitute_pattern`'s `Bgp`/`Path` arms) took over triple-pattern
-/// positions.
+/// Substitute μ into a property-function call: every value an argument names is
+/// written into the call as a constant (an IRI, a literal) or DRIVEN into it by a
+/// one-row `VALUES` on its left (a blank node, a quoted triple), so the relation is
+/// invoked with that argument BOUND to exactly μ's term.
 ///
-/// IRI-valued bindings only, by the fusion contract: a property-function
-/// argument is an INVOCATION INPUT the relation reads directly from the row
-/// (`crate::property_fn_eval`), not a join key a `VALUES` row could supply —
-/// joining a literal/blank-node/quoted-triple binding in would hand the
-/// relation a FREE argument position it may refuse to be invoked with, where a
-/// rewritten IRI constant is a position the relation can read exactly as if
-/// the caller had written it literally. A literal, blank-node, or quoted-triple
-/// binding therefore leaves the argument as the original variable, and the
-/// per-row argument read supplies the value instead — see
-/// `property_function_arg_with_a_literal_binding_behaves_unchanged`.
-fn substitute_term_pattern(
-    term: &purrdf_sparql_algebra::TermPattern,
-    bindings: &[(Variable, Expression)],
-) -> purrdf_sparql_algebra::TermPattern {
-    use purrdf_sparql_algebra::TermPattern;
-
-    if let TermPattern::Variable(v) = term {
-        for (bv, expr) in bindings {
-            if bv == v
-                && let Expression::NamedNode(n) = expr
-            {
-                return TermPattern::NamedNode(n.clone());
+/// A call's argument is an invocation input the relation reads from the row it is
+/// driven with (`crate::property_fn_eval`), not a join key: a `VALUES` row joined
+/// BESIDE the call, as Values Insertion does for a `Bgp`/`Path` leaf, would leave the
+/// relation invoked with the position free — refused by a relation serving only the
+/// bound mode, and answered from the relation's whole extent by one serving both.
+/// Which values are written and which are driven, and the driving row itself, are
+/// `crate::substitute::bind_call_arguments`'s decision — the one the SHACL
+/// pre-binding walk makes too — so the two walks cannot diverge on it.
+///
+/// A stand-alone call that needs a driver becomes `Lateral(VALUES, call)`: the call
+/// is then a `Lateral`'s direct right operand, the position the evaluator drives per
+/// left row with that row's terms in hand. The call keeps its variable, so its column
+/// survives beside the driven value.
+fn bind_row_into_call(
+    call: &purrdf_sparql_algebra::PropertyFunctionCall,
+    row: &SubstitutionRow,
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+) -> Box<GraphPattern> {
+    let mut bound = call.clone();
+    let seed = crate::substitute::bind_call_arguments(&mut bound, &row.term, None);
+    let node = boxed_and_mapped(GraphPattern::PropertyFunction(bound), source, map);
+    match seed {
+        Some(seed) => plant_mapped_driver(node, seed, source, map, |seed, call| {
+            GraphPattern::Lateral {
+                left: seed,
+                right: call,
             }
-        }
+        }),
+        None => node,
     }
-    term.clone()
+}
+
+/// Plant a call's one-row driver `seed` beside `node` — `assemble(seed, node)` builds
+/// the node that joins them — mapping every node it adds to `source` exactly as
+/// [`join_leaf_with_values`] maps its wrapper: `seed` is scaffolding, and the new
+/// node, not `node`, becomes `source`'s row-counting entry, because its output (not
+/// `node`'s, which lacks the driven column) is `source`'s true output for this row.
+fn plant_mapped_driver(
+    node: Box<GraphPattern>,
+    seed: GraphPattern,
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+    assemble: impl FnOnce(Box<GraphPattern>, Box<GraphPattern>) -> GraphPattern,
+) -> Box<GraphPattern> {
+    demote_to_scaffolding(map, std::ptr::from_ref(node.as_ref()) as usize);
+    let seed = boxed_and_mapped_scaffolding(seed, source, map);
+    boxed_and_mapped(assemble(seed, node), source, map)
 }
 
 /// Substitute outer-bound variables in expression positions by replacing
@@ -8453,13 +8485,11 @@ mod tests {
     }
 
     #[test]
-    fn property_function_arg_with_a_literal_binding_behaves_unchanged() {
-        // The fusion contract: a property-function argument's
-        // substitution stays IRI-only. A literal-valued row binding must leave
-        // the argument as the bare variable — UNCHANGED from before Values
-        // Insertion — so the relation still reads the value from the per-row
-        // argument dispatch, never from a rewritten constant a joined `VALUES`
-        // could not have supplied either.
+    fn property_function_arg_with_a_literal_binding_is_written_into_the_call() {
+        // A property-function argument is an invocation input: nothing but the call
+        // itself can carry the row's value to the relation. A literal is written
+        // into the argument as the constant it is — exactly as an IRI is — so the
+        // relation is invoked with the position bound.
         use purrdf_sparql_algebra::PropertyFunctionCall;
 
         let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
@@ -8472,18 +8502,58 @@ mod tests {
             expr: vec![(Variable::new("w"), Expression::Literal(literal.clone()))],
             term: vec![(
                 Variable::new("w"),
-                purrdf_sparql_algebra::GroundTerm::Literal(literal),
+                purrdf_sparql_algebra::GroundTerm::Literal(literal.clone()),
             )],
         };
 
         let substituted = *substitute_pattern(&call, &row);
         let GraphPattern::PropertyFunction(c) = substituted else {
-            panic!("PropertyFunction node preserved");
+            panic!("a written value needs no driver, so the call stays a bare call");
         };
         assert_eq!(
             c.subject_args[0],
-            ex_vp("w"),
-            "a literal binding must not rewrite the argument"
+            purrdf_sparql_algebra::TermPattern::Literal(literal),
+            "a literal binding is written into the argument"
+        );
+        assert_eq!(
+            c.object_args[0],
+            ex_vp("parts"),
+            "an unbound argument is untouched"
+        );
+    }
+
+    #[test]
+    fn property_function_arg_with_a_blank_binding_is_driven_into_the_call() {
+        // A blank node has no spelling in a pattern — one written there is an
+        // anonymous variable — so it is DRIVEN: the call becomes the direct right
+        // operand of a `Lateral` over a one-row `VALUES` binding it, which is the
+        // position the evaluator hands a row's terms to the relation as bound
+        // arguments. The argument keeps its variable.
+        use purrdf_sparql_algebra::PropertyFunctionCall;
+
+        let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
+            iri: ex_iri("split").as_str().to_owned(),
+            subject_args: vec![ex_vp("w")],
+            object_args: vec![ex_vp("parts")],
+        });
+        let blank = purrdf_sparql_algebra::GroundTerm::BlankNode(
+            purrdf_sparql_algebra::BlankNode::new("b0"),
+        );
+        let row = SubstitutionRow {
+            expr: Vec::new(),
+            term: vec![(Variable::new("w"), blank.clone())],
+        };
+
+        let substituted = *substitute_pattern(&call, &row);
+        assert_eq!(
+            substituted,
+            GraphPattern::Lateral {
+                left: Box::new(GraphPattern::Values {
+                    variables: vec![Variable::new("w")],
+                    bindings: vec![vec![Some(blank)]],
+                }),
+                right: Box::new(call),
+            }
         );
     }
 

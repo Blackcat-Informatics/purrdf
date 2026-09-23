@@ -2852,9 +2852,9 @@ mod tests {
     ///
     /// Two things about it are load-bearing for the test below. It declares ONLY `bf`,
     /// so the query is evaluable at all only if the engine invokes it with its argument
-    /// bound; and its argument is a LITERAL, which the IRI-only outer-binding
-    /// substitution could not have carried — so a passing test is evidence the dispatch
-    /// reads the row itself.
+    /// bound; and its argument is a LITERAL arriving from the atom before it, which
+    /// reaches the call bound only if the dispatch reads the row itself — so a passing
+    /// test is evidence it does.
     #[derive(Debug)]
     struct DenyListRelation {
         modes: [purrdf_sparql_eval::BindingPattern; 1],

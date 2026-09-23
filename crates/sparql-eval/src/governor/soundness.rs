@@ -934,9 +934,10 @@ pub(crate) const fn child_row_ceiling(
         // What defeats the count is that this operator can DROP a row. The generic path
         // substitutes the left row into the right operand, evaluates the rewritten
         // pattern, and then applies the lateral join's **compatibility test** to what comes
-        // back — the substitution is IRI-only by doctrine
-        // ([`crate::expr::substitute_pattern`]), so a literal, blank or quoted-triple
-        // binding is reconciled afterwards instead of being pushed in. `k` rows out of the
+        // back — the substitution ([`crate::expr::substitute_pattern`]) restricts a
+        // leaf by joining the row's values beside it rather than rewriting the leaf's own
+        // positions, so what the operand returns is reconciled afterwards rather than
+        // produced already joined. `k` rows out of the
         // right operand can therefore yield fewer than `k` output rows, and no finite
         // prefix of that child is enough — exactly as `k` intermediate rows of a BGP join
         // order can yield fewer than `k` answers, which is why [`crate::bgp`] applies its
@@ -2027,9 +2028,10 @@ pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
 /// * `PropertyFunction`: never admissible. A relation's argument is an invocation
 ///   INPUT the evaluator reads from the CURRENT row (`crate::property_fn_eval`),
 ///   not a join key a post-hoc `VALUES` probe can supply — the same "fusion
-///   contract" `crate::expr::substitute_term_pattern`'s doc states for why
-///   substitution rewrites property-function arguments literally rather than via
-///   Values Insertion. Evaluating the call once, unconstrained, and probing its
+///   contract" `crate::expr::substitute_pattern`'s doc states, under
+///   "Property-function arguments", for why substitution puts μ's value INTO a
+///   call's arguments (`crate::substitute::bind_call_arguments`) rather than
+///   joining it beside the call by Values Insertion. Evaluating the call once, unconstrained, and probing its
 ///   output afterward is not equivalent to invoking it WITH μ's own arguments.
 /// * `Graph`: admissible iff the inner is (the graph-name column, when `?g` is a
 ///   variable, already lands in the node's own schema per Part 3's pinning, and

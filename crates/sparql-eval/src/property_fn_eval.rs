@@ -18,16 +18,20 @@
 //! # Why the arguments are read from the row rather than from a substituted node
 //!
 //! The generic `Lateral` path substitutes the outer row into its right operand and
-//! evaluates the rewritten pattern. That substitution is IRI-only by doctrine
-//! ([`crate::expr::substitute_pattern`]): a literal, blank-node or quoted-triple
-//! binding stays a variable in the rewritten tree and is reconciled afterwards by the
-//! lateral join's compatibility test. For an ordinary pattern that is merely a
-//! late filter. For a relation it would be a **wrong access pattern**: the position
-//! would be reported free, the invocation's [`BindingPattern`] would lose a bound bit,
+//! evaluates the rewritten pattern. For an ordinary pattern the row's values are joined
+//! BESIDE a leaf ([`crate::expr::substitute_pattern`]'s Values Insertion) and the
+//! lateral join's compatibility test reconciles the rest — merely a late filter. For
+//! a relation that would be a **wrong access pattern**: a value joined beside the call
+//! leaves its position free, the invocation's [`BindingPattern`] loses a bound bit,
 //! and a relation that declares only `bf` would be refused an invocation the engine
 //! can perfectly well make — or, worse, an unbounded generator would be opened
 //! wide-open and filtered afterwards. So the call reads the row itself and every
-//! binding, whatever its term kind, becomes a bound argument.
+//! binding, whatever its term kind, becomes a bound argument. Wherever a call is
+//! reached by substitution instead — inside an `EXISTS` body, an `OPTIONAL`, a
+//! `UNION`, a sub-`SELECT` — the value is put INTO it
+//! (`crate::substitute::bind_call_arguments`): an IRI or a literal written as a
+//! constant, a blank node or a quoted triple driven by a one-row `VALUES` that makes
+//! the call a `Lateral`'s direct right operand, read through this same door.
 //!
 //! # What the engine guarantees about what a relation returns
 //!
