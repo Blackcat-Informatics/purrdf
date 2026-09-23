@@ -199,13 +199,25 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   column. A fresh target, a plain key over the variable, and a target a sub-select
   hides still parse.
 
-- **sparql-eval:** a property-function call inside a nested group or an `OPTIONAL`'s
-  right arm was admitted at prepare as though the variables bound to its left were
-  bound for it, but both operands are evaluated on their own and matched afterwards,
-  so the relation was invoked with those positions free and refused on every run. It
-  is now admitted against what its evaluation actually hands it, and a call no mode
-  can serve there is refused once, at prepare. A call written into the group itself
-  is still driven by the rows before it.
+- **sparql-eval:** a property-function call inside an `OPTIONAL`'s right arm was
+  admitted at prepare as though the variables bound to its left were bound for it,
+  but that arm is evaluated on its own and matched afterwards, so the relation was
+  invoked with those positions free and refused on every run. It is now refused
+  once, at prepare. A call written into the group itself is still driven by the
+  rows before it.
+
+- **sparql-eval:** a property function's input could be fed only by a triple pattern. A
+  `VALUES` table or a `BIND` written in the same group — `{ VALUES ?q { "alpha beta" } ?doc
+  ex:search (?q …) }`, `{ BIND("alpha beta" AS ?q) ?doc ex:search (?q …) }` — and a nested
+  group, a sub-`SELECT` projecting the variable, or a `UNION` binding it in both branches
+  were all refused at prepare with "no feasible evaluation order", so a relation serving
+  only a bound input could not take a computed or tabled needle. A group's joined operands
+  are now planned as one chain, and a `VALUES` column with no `UNDEF` and a `BIND` whose
+  expression reads only bound variables count as binding their variable; a row whose
+  `BIND` expression errors is refused by the evaluator's per-row access-pattern check
+  rather than invoked free, and an `UNDEF` cell, an `OPTIONAL` arm or a `BIND` over one
+  still does not count. A `LATERAL` written after a call is also no longer re-planned as
+  an independent join, which had evaluated its right side without the call's rows.
 
 - **sparql-eval:** a prepared execution's parameters now count as bound when its
   property-function calls are admitted, wherever a run's rewrite really binds them,

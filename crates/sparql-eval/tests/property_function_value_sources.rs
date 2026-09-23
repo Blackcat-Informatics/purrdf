@@ -123,7 +123,7 @@ impl PropertyFunction for Expand {
                         vec![
                             term.clone(),
                             TermValue::Literal {
-                                lexical_form: format!("{key}#{n}"),
+                                lexical_form: format!("{key}/{n}"),
                                 datatype: "http://www.w3.org/2001/XMLSchema#string".into(),
                                 language: None,
                                 direction: None,
@@ -250,9 +250,9 @@ fn calls(recorded: &[&str]) -> Vec<String> {
 fn alpha_and_beta() -> Outcome {
     Outcome {
         answer: Ok(rows(&[
-            ("alpha", "alpha#1"),
-            ("alpha", "alpha#2"),
-            ("beta", "beta#1"),
+            ("alpha", "alpha/1"),
+            ("alpha", "alpha/2"),
+            ("beta", "beta/1"),
         ])),
         invocations: calls(&["bf:alpha", "bf:beta"]),
     }
@@ -284,7 +284,7 @@ fn a_triple_feeds_the_input() {
             &format!("<{EX}s> <{EX}p> ?q . ?q <{EXPAND}> ?out")
         ),
         Outcome {
-            answer: Ok(rows(&[("beta", "beta#1")])),
+            answer: Ok(rows(&[("beta", "beta/1")])),
             invocations: calls(&["bf:beta"]),
         }
     );
@@ -338,7 +338,7 @@ fn values_after_the_call_in_the_same_group_feeds_it() {
             &format!("?q <{EXPAND}> ?out . <{EX}s> <{EX}p> ?q")
         ),
         Outcome {
-            answer: Ok(rows(&[("beta", "beta#1")])),
+            answer: Ok(rows(&[("beta", "beta/1")])),
             invocations: calls(&["bf:beta"]),
         }
     );
@@ -361,8 +361,8 @@ fn an_undef_cell_is_not_a_source() {
         ),
         Outcome {
             answer: Ok(rows(&[
-                ("alpha", "alpha#1"),
-                ("alpha", "alpha#2"),
+                ("alpha", "alpha/1"),
+                ("alpha", "alpha/2"),
                 ("https://example.org/d/free", "free"),
             ])),
             invocations: calls(&["bf:alpha", "ff:-"]),
@@ -375,7 +375,7 @@ fn an_undef_cell_is_not_a_source() {
             &format!("VALUES ?q {{ \"alpha\" }} ?q <{EXPAND}> ?out")
         ),
         Outcome {
-            answer: Ok(rows(&[("alpha", "alpha#1"), ("alpha", "alpha#2")])),
+            answer: Ok(rows(&[("alpha", "alpha/1"), ("alpha", "alpha/2")])),
             invocations: calls(&["bf:alpha"]),
         }
     );
@@ -405,7 +405,7 @@ fn bind_before_the_call_feeds_it() {
             &format!("BIND(\"beta\" AS ?q) ?q <{EXPAND}> ?out")
         ),
         Outcome {
-            answer: Ok(rows(&[("beta", "beta#1")])),
+            answer: Ok(rows(&[("beta", "beta/1")])),
             invocations: calls(&["bf:beta"]),
         }
     );
@@ -415,7 +415,7 @@ fn bind_before_the_call_feeds_it() {
             &format!("BIND(CONCAT(\"al\", \"pha\") AS ?q) ?q <{EXPAND}> ?out")
         ),
         Outcome {
-            answer: Ok(rows(&[("alpha", "alpha#1"), ("alpha", "alpha#2")])),
+            answer: Ok(rows(&[("alpha", "alpha/1"), ("alpha", "alpha/2")])),
             invocations: calls(&["bf:alpha"]),
         }
     );
@@ -426,7 +426,7 @@ fn bind_before_the_call_feeds_it() {
             &format!("<{EX}s> <{EX}p> ?v BIND(CONCAT(?v, \"!\") AS ?q) ?q <{EXPAND}> ?out")
         ),
         Outcome {
-            answer: Ok(rows(&[("beta!", "beta!#1")])),
+            answer: Ok(rows(&[("beta!", "beta!/1")])),
             invocations: calls(&["bf:beta!"]),
         }
     );
@@ -459,7 +459,7 @@ fn bind_after_the_call_is_not_a_source() {
             &format!("<{EX}s> <{EX}p> ?q . ?q <{EXPAND}> ?out BIND(\"x\" AS ?later)")
         ),
         Outcome {
-            answer: Ok(rows(&[("beta", "beta#1")])),
+            answer: Ok(rows(&[("beta", "beta/1")])),
             invocations: calls(&["bf:beta"]),
         }
     );
@@ -508,7 +508,7 @@ fn a_bind_over_an_optional_variable_is_not_a_source() {
             &format!("<{EX}s> <{EX}p> ?v BIND(?v AS ?q) ?q <{EXPAND}> ?out")
         ),
         Outcome {
-            answer: Ok(rows(&[("beta", "beta#1")])),
+            answer: Ok(rows(&[("beta", "beta/1")])),
             invocations: calls(&["bf:beta"]),
         }
     );
@@ -523,7 +523,7 @@ fn a_bind_over_an_optional_variable_is_not_a_source() {
             )
         ),
         Outcome {
-            answer: Ok(rows(&[("alpha", "alpha#1"), ("alpha", "alpha#2")])),
+            answer: Ok(rows(&[("alpha", "alpha/1"), ("alpha", "alpha/2")])),
             invocations: calls(&["bf:alpha"]),
         }
     );
@@ -550,7 +550,7 @@ fn a_sub_select_projecting_the_input_feeds_it() {
             &format!("{{ SELECT (\"beta\" AS ?q) WHERE {{}} }} ?q <{EXPAND}> ?out")
         ),
         Outcome {
-            answer: Ok(rows(&[("beta", "beta#1")])),
+            answer: Ok(rows(&[("beta", "beta/1")])),
             invocations: calls(&["bf:beta"]),
         }
     );
@@ -600,7 +600,7 @@ fn a_graph_variable_feeds_it() {
         Outcome {
             answer: Ok(rows(&[(
                 "https://example.org/d/g",
-                "https://example.org/d/g#1"
+                "https://example.org/d/g/1"
             )])),
             invocations: calls(&["bf:https://example.org/d/g"]),
         }
@@ -662,8 +662,8 @@ fn a_lateral_after_a_call_is_driven_by_the_calls_rows() {
         rendered,
         vec![vec![
             "beta".to_owned(),
-            "beta#1".to_owned(),
-            "beta#1!".to_owned()
+            "beta/1".to_owned(),
+            "beta/1!".to_owned()
         ]]
     );
     assert_eq!(
