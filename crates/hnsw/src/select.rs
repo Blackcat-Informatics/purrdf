@@ -43,6 +43,7 @@
 //! comparison depends on iteration order of a hash container and none on thread identity,
 //! so the selected set is a function of the beam alone.
 
+use purrdf_core::distance::{Exact, Resolved};
 use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked};
 
 use crate::error::{HnswError, Result};
@@ -65,6 +66,7 @@ pub(crate) fn select_neighbors(
     beam: &[Ranked],
     cap: usize,
     matrix: &VectorMatrix,
+    arithmetic: Resolved<Exact>,
     kernel: Kernel,
     norms: &[f64],
 ) -> Result<Vec<Ranked>> {
@@ -87,7 +89,8 @@ pub(crate) fn select_neighbors(
             // The value is never kept -- only whether it falls under the candidate's own
             // distance -- so the kernel may stop as soon as it cannot. Equality already
             // falsifies the test, hence `AtOrAbove`.
-            match matrix.distance_bounded(
+            match matrix.distance_bounded_with(
+                arithmetic,
                 kernel,
                 candidate.row,
                 norm_of(norms, candidate.row),
@@ -130,6 +133,11 @@ pub(crate) fn select_neighbors(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::distance::Arithmetic;
+
+    fn exact() -> Resolved<Exact> {
+        Exact::resolve().expect("the test thread runs the default float environment")
+    }
 
     /// Explicit points, so a candidate can be far from the query and still add a direction.
     fn plane(points: &[(f64, f64)]) -> VectorMatrix {
@@ -170,8 +178,8 @@ mod tests {
     fn a_beam_within_the_budget_is_kept_whole() {
         let matrix = line(8);
         let beam = beam_over(&matrix, 0, &[1, 2, 3]);
-        let chosen =
-            select_neighbors(&beam, 4, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
+        let chosen = select_neighbors(&beam, 4, &matrix, exact(), Kernel::SquaredEuclidean, &[])
+            .expect("selects");
         assert_eq!(chosen, beam, "no candidate is discarded under the bound");
     }
 
@@ -183,8 +191,8 @@ mod tests {
         // chosen neighbour is a shortcut to it.
         let matrix = duplicate_and_direction();
         let beam = beam_over(&matrix, 0, &[1, 2, 3]);
-        let chosen =
-            select_neighbors(&beam, 2, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
+        let chosen = select_neighbors(&beam, 2, &matrix, exact(), Kernel::SquaredEuclidean, &[])
+            .expect("selects");
         let rows: Vec<usize> = chosen.iter().map(|pick| pick.row).collect();
         assert_eq!(
             rows,
@@ -213,8 +221,8 @@ mod tests {
         // result is restored to rank order.
         let matrix = line(64);
         let beam = beam_over(&matrix, 0, &[30, 31, 32, 33]);
-        let chosen =
-            select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
+        let chosen = select_neighbors(&beam, 3, &matrix, exact(), Kernel::SquaredEuclidean, &[])
+            .expect("selects");
         assert_eq!(chosen.len(), 3, "the degree budget is spent, not abandoned");
         let mut sorted = chosen.clone();
         sorted.sort_unstable();
@@ -225,10 +233,10 @@ mod tests {
     fn selection_is_a_pure_function_of_the_beam() {
         let matrix = line(64);
         let beam = beam_over(&matrix, 5, &[1, 2, 3, 20, 21, 40]);
-        let first =
-            select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
-        let second =
-            select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
+        let first = select_neighbors(&beam, 3, &matrix, exact(), Kernel::SquaredEuclidean, &[])
+            .expect("selects");
+        let second = select_neighbors(&beam, 3, &matrix, exact(), Kernel::SquaredEuclidean, &[])
+            .expect("selects");
         assert_eq!(first, second, "selection is a function of the beam alone");
     }
 }

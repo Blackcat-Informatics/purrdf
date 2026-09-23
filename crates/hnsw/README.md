@@ -43,13 +43,18 @@ replaced with a fixed rule:
   condition rather than by keeping the nearest `M`. Nearest-`M` truncation spends
   every edge in one direction and leaves the graph unnavigable.
 * **Distances** come from the exact path's kernels, consumed from
-  `purrdf_sparql_eval::knn::{Kernel, Ranked}` rather than re-implemented.
+  `purrdf_sparql_eval::knn::{Kernel, Ranked}` rather than re-implemented, and
+  computed under `purrdf_core::distance::Exact` — sixteen binary64 lanes, a fixed
+  pairwise tree, a sequential tail, the same bits on every target and dispatch
+  path. The image header records that arithmetic (format version 2); a version-1
+  image is refused by name.
 * **The digest** committed by a guard is a hand-rolled FNV-1a fold of the
   canonical payload bytes, stable across toolchain bumps; it is never
   `DefaultHasher` (SipHash, unspecified) or a randomly seeded map.
 
 The result is a **canonical byte image** that is identical at 1, 2, 4 and 8
-rayon workers and identical across `wasm32-unknown-unknown`. `rayon` runs
+rayon workers and identical across `wasm32-unknown-unknown`, with or without
+`+simd128`. `rayon` runs
 inline-sequentially on wasm, so that build is slower but not different.
 
 ## The approximation contract, stated honestly

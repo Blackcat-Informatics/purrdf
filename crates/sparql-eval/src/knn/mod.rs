@@ -87,19 +87,24 @@
 //!
 //! # Determinism
 //!
-//! Every distance is computed by a [`Kernel`]: binary64, one correctly-rounded IEEE
-//! operation at a time, in a pinned accumulation order, with no fused multiply-add and no
-//! transcendental. Ranking breaks equal distances by ascending row number, and a
-//! PURREMB target set numbers its rows by sorted `TargetId` — a digest of canonical
-//! content — so the tie-break is a function of the data rather than of the order anything
-//! was built in. Two independently produced artifacts over the same targets rank
-//! identically, on every target this workspace builds for.
+//! Every distance is computed by a [`Kernel`] under [`purrdf_core::distance::Exact`]:
+//! binary64, one correctly-rounded IEEE operation at a time, in the pinned sixteen-lane
+//! tree order, with no fused multiply-add and no transcendental. The exact scan scores
+//! every row through the batch kernel, whose dispatch path is resolved once per search and
+//! whose every path returns the same bits; resolving it also refuses a thread whose
+//! floating-point environment flushes subnormals or rounds other than to nearest, with
+//! [`EvalError::FloatEnvironment`]. Ranking breaks equal distances by ascending row
+//! number, and a PURREMB target set numbers its rows by sorted `TargetId` — a digest of
+//! canonical content — so the tie-break is a function of the data rather than of the
+//! order anything was built in. Two independently produced artifacts over the same
+//! targets rank identically, on every target this workspace builds for.
 
 mod metric;
 
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_core::distance::{Arithmetic, Exact, RowsRef};
 use purrdf_core::{
     ContentDigest, DistanceMetric, EmbeddingView, FamilyContractDigest, Iri,
     ProjectionContentDigest, TargetId, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
@@ -289,6 +294,10 @@ impl EmbeddingSpace {
     /// unreadable row, a zero-norm vector under a norm-dividing metric, or a derived-index
     /// guard naming this space but binding a different matrix.
     ///
+    /// [`EvalError::FloatEnvironment`] when the calling thread's floating-point
+    /// environment is not the IEEE one the exact arithmetic defines its results under;
+    /// the norms computed here would already differ.
+    ///
     /// # A row without a term is a refusal, not a skipped row
     ///
     /// Dropping an uncovered row would make the search quietly range over fewer
@@ -302,6 +311,9 @@ impl EmbeddingSpace {
         bindings: Vec<(TargetId, TermValue)>,
         guard: KnnGuard,
     ) -> Result<Self, EvalError> {
+        // The float environment first: every number this constructor computes (the norms
+        // a cosine space divides by) is already arithmetic under it.
+        Exact::resolve().map_err(EvalError::FloatEnvironment)?;
         let mut view = EmbeddingView::from_bytes(artifact)
             .map_err(|e| EvalError::data(format!("the PURREMB artifact is unreadable: {e}")))?;
         verify_embedding(&mut view)
@@ -461,31 +473,53 @@ impl EmbeddingSpace {
     /// is the work unit this surface reports to the governor: one distance computation per
     /// candidate, every candidate scored exactly once.
     ///
+    /// Every row is scored by one call to the exact batch kernel over the flat matrix,
+    /// with the dispatch path resolved once for the scan. The environment is resolved
+    /// here rather than stored because it is a property of the calling thread, and an
+    /// invocation may run on a different thread from the one that built the space.
+    ///
     /// # Errors
     ///
     /// [`EvalError::Data`] if a distance leaves the finite binary64 range. Ranking by an
     /// infinity would sort — last, confidently — from a number that overflowed.
+    /// [`EvalError::FloatEnvironment`] if the calling thread's floating-point environment
+    /// is not the IEEE one the arithmetic defines.
     fn search(&self, query_row: usize, k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {
         if k == 0 {
             // No neighbours were asked for, so no candidate is examined and no work is
             // reported. A zero request is a well-formed question with an empty answer.
             return Ok((Vec::new(), 0));
         }
-        let query = self.vector(query_row);
-        let query_norm = self.norm_of(query_row);
+        let arithmetic = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
+        let rows = RowsRef::new(&self.vectors, self.row_count(), self.dimension, &self.norms)
+            .ok_or_else(|| {
+                EvalError::internal(format!(
+                    "the space's {} value(s) and {} norm(s) do not describe {} row(s) of {} \
+                     component(s)",
+                    self.vectors.len(),
+                    self.norms.len(),
+                    self.row_count(),
+                    self.dimension
+                ))
+            })?;
+        let mut distances: Vec<Option<f64>> = vec![None; self.row_count()];
+        arithmetic.distances(
+            self.kernel.measure(),
+            self.vector(query_row),
+            self.norm_of(query_row),
+            rows,
+            &mut distances,
+        );
         let mut scored: Vec<Ranked> = Vec::with_capacity(self.row_count());
-        for row in 0..self.row_count() {
-            let distance = self
-                .kernel
-                .distance(query, query_norm, self.vector(row), self.norm_of(row))
-                .ok_or_else(|| {
-                    EvalError::data(format!(
-                        "the distance from row {query_row} to row {row} left the finite range \
-                         under {:?}; the artifact's magnitudes cannot be ranked under this \
-                         metric",
-                        self.metric
-                    ))
-                })?;
+        for (row, distance) in distances.into_iter().enumerate() {
+            let distance = distance.ok_or_else(|| {
+                EvalError::data(format!(
+                    "the distance from row {query_row} to row {row} left the finite range \
+                     under {:?}; the artifact's magnitudes cannot be ranked under this \
+                     metric",
+                    self.metric
+                ))
+            })?;
             scored.push(Ranked { distance, row });
         }
         let examined = scored.len() as u64;

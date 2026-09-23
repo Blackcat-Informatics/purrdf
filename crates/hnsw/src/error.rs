@@ -83,6 +83,28 @@ pub enum HnswError {
         actual: u32,
     },
 
+    /// A payload's header records an arithmetic code this index type does not compute
+    /// with.
+    ///
+    /// The code is the arithmetic the recorded distances were produced under. Reading
+    /// them as another arithmetic's would compare numbers from two different laws, so
+    /// the payload is refused by name rather than decoded; a zero (the reserved value
+    /// of the previous image version) names no arithmetic at all.
+    ArithmeticMismatch {
+        /// The identifier of the arithmetic this index computes with.
+        arithmetic: &'static str,
+        /// The code found in the bytes.
+        actual: u32,
+    },
+
+    /// The calling thread's floating-point environment is not the IEEE-754 one the
+    /// distance arithmetic defines its results under.
+    ///
+    /// A build, rebuild or search computed under a flush-to-zero or re-rounding
+    /// environment would produce different distances, and a different graph, with
+    /// nothing in the result to say so.
+    FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
+
     /// A checked arithmetic operation overflowed.
     ArithmeticOverflow,
 
@@ -176,6 +198,15 @@ impl fmt::Display for HnswError {
                 f,
                 "payload version {actual} is not the implemented version {expected}"
             ),
+            Self::ArithmeticMismatch { arithmetic, actual } => write!(
+                f,
+                "the payload's arithmetic field is {actual}, which is not a code of the \
+                 {arithmetic} distance arithmetic this index computes with"
+            ),
+            Self::FloatEnvironment(error) => write!(
+                f,
+                "the floating-point environment cannot run the distance arithmetic: {error}"
+            ),
             Self::ArithmeticOverflow => write!(f, "index arithmetic overflowed"),
             Self::AddressSpaceExceeded { required, maximum } => write!(
                 f,
@@ -214,6 +245,12 @@ impl fmt::Display for HnswError {
 }
 
 impl std::error::Error for HnswError {}
+
+impl From<purrdf_core::distance::FloatEnvironmentError> for HnswError {
+    fn from(error: purrdf_core::distance::FloatEnvironmentError) -> Self {
+        Self::FloatEnvironment(error)
+    }
+}
 
 impl From<purrdf_core::EmbeddingError> for HnswError {
     fn from(error: purrdf_core::EmbeddingError) -> Self {
@@ -255,6 +292,16 @@ mod tests {
                 expected: 1,
                 actual: 2,
             },
+            HnswError::ArithmeticMismatch {
+                arithmetic: "binary64-lane16-tree-v1",
+                actual: 0,
+            },
+            HnswError::FloatEnvironment(
+                purrdf_core::distance::FloatEnvironmentError::FlushToZero {
+                    register: "MXCSR",
+                    bits: 0x9fc0,
+                },
+            ),
             HnswError::ArithmeticOverflow,
             HnswError::AddressSpaceExceeded {
                 required: 10,

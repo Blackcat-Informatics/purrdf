@@ -83,7 +83,8 @@
 //!   ef_search  u64
 //!   node_count u64
 //!   max_level  u32
-//!   reserved   u32       0
+//!   arithmetic u32       the distance arithmetic's image code: 1 = Exact
+//!                        (binary64-lane16-tree-v1); 0 is refused
 //!   entry      u64       row, or u64::MAX for an empty graph
 //! node records, in ascending row order:
 //!   row        u64       must equal the record's position
@@ -101,7 +102,23 @@
 //! The in-memory graph orders a node's neighbours by `(distance, row)`; the image orders
 //! them by neighbour row, because the row set is the identity and the distances are
 //! derived. Decoding re-sorts by rank, so the two are views of one graph.
+//!
+//! Version 2 of the image is the first whose distances are folded by the sixteen-lane
+//! exact arithmetic, and its `arithmetic` field (the `u32` version 1 reserved as zero)
+//! records that. A version-1 image is refused with
+//! [`HnswError::VersionMismatch`](crate::HnswError::VersionMismatch), and an image whose
+//! field names another arithmetic with
+//! [`HnswError::ArithmeticMismatch`](crate::HnswError::ArithmeticMismatch).
+//!
+//! # The arithmetic is part of the profile
+//!
+//! [`profile_declaration`] folds the arithmetic's identifier, so the implementation
+//! identity's digest binds the law every recorded distance was computed under. The
+//! [`loss_contract`] does not change with it: an arithmetic decides how distances are
+//! rounded, not what vectors are stored, and PURREMB requires `loss_encoding: None` for
+//! a non-transforming index.
 
+use purrdf_core::distance::{Arithmetic, Exact};
 use purrdf_core::{ArtifactIdentity, ArtifactIdentityKind, ContentDigest, IndexLossContract};
 
 use crate::error::{HnswError, Result};
@@ -172,13 +189,15 @@ pub fn implementation() -> ArtifactIdentity {
 ///
 /// A stable, human-readable declaration rather than a serialized struct: it has no host
 /// layout and no trailing version-dependent representation, so the digest is a function of
-/// the profile's *meaning*.
+/// the profile's *meaning*. It names the distance arithmetic, so the digest binds the law
+/// the recorded distances were folded under as well as the algorithm.
 #[must_use]
 pub fn profile_declaration() -> String {
     format!(
-        "{IMPLEMENTATION_ID}\n{PARAMETER_ENCODING}\n{}\n{}\n{LOSS_EVIDENCE}",
+        "{IMPLEMENTATION_ID}\n{PARAMETER_ENCODING}\n{}\n{}\narithmetic={}\n{LOSS_EVIDENCE}",
         crate::INDEX_MEDIA_TYPE,
-        "approximate=true;transforms_vectors=false"
+        "approximate=true;transforms_vectors=false",
+        Exact::ID
     )
 }
 
@@ -408,6 +427,26 @@ mod tests {
         assert!(!loss.transforms_vectors);
         assert!(loss.loss_encoding.is_none());
         assert!(loss.loss_parameters.is_none());
+    }
+
+    #[test]
+    fn the_profile_declaration_binds_the_arithmetic() {
+        let declaration = profile_declaration();
+        assert_eq!(IMPLEMENTATION_ID, "hnsw-v2");
+        assert!(
+            declaration.contains("arithmetic=binary64-lane16-tree-v1"),
+            "the digest must bind the law: {declaration}"
+        );
+        // The neighbour: every other line of the declaration is the one it was before
+        // the arithmetic joined it, so the arithmetic line is the only one added.
+        let lines: Vec<&str> = declaration.lines().collect();
+        assert_eq!(lines.len(), 6);
+        assert_eq!(lines[0], IMPLEMENTATION_ID);
+        assert_eq!(lines[1], PARAMETER_ENCODING);
+        assert_eq!(lines[2], crate::INDEX_MEDIA_TYPE);
+        assert_eq!(lines[3], "approximate=true;transforms_vectors=false");
+        assert_eq!(lines[5], LOSS_EVIDENCE);
+        assert_eq!(PAYLOAD_VERSION, 2);
     }
 
     #[test]

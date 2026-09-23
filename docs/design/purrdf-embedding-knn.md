@@ -32,26 +32,50 @@ it would buy the same guarantee at the cost of introducing a quantization step t
 PURREMB's own format does not have, and of disagreeing with the artifact's
 arithmetic.
 
-It would also disagree with the spec. `docs/PURREMB.md` already states the
-arithmetic contract normatively: *"All intermediate operations are IEEE-754 binary64,
-round-to-nearest ties-to-even, performed in the written order without a fused
-multiply-add."* The kNN kernels implement exactly that, and `purrdf-core`'s own
-deterministic L2 fold is the code precedent, `#[allow(clippy::suboptimal_flops)]`
-and all.
+It would also disagree with the spec. `docs/PURREMB.md` states the arithmetic
+contract normatively for the artifact's own folds: *"All intermediate operations are
+IEEE-754 binary64, round-to-nearest ties-to-even, performed in the written order
+without a fused multiply-add."* The L2 norm is one of those folds (§13.2), so the kNN
+kernels do not compute a norm of their own: `knn::norm` is `purrdf_core`'s normative
+`norm_fold`, the single copy of that order in the workspace. For the distance sums,
+PURREMB §7.4 lets a kernel optimize evaluation as long as it preserves the metric and
+the row-number tie-break, so their order is this crate's contract rather than the
+format's, and it is pinned just as hard: every dot product and squared Euclidean sum is
+`purrdf_core::distance::Exact`.
 
 So there are precisely two residual ways a float kernel can diverge, and both are
 closed structurally rather than hoped about:
 
 | hazard | why it would diverge | what closes it |
 |---|---|---|
-| **reassociation** | float addition is not associative, so a sum depends on the order it was folded in | every fold runs over ascending component index, in one sequential loop; no accumulator is ever split across rayon workers or chunked |
-| **fused multiply-add** | `a * b + c` as a single FMA rounds once where the written form rounds twice | every product is bound to a named local before it is added; Rust never contracts implicitly and PURREMB forbids the fusion |
+| **reassociation** | float addition is not associative, so a sum depends on the order it was folded in | the order is part of the arithmetic's definition (`Exact`, identifier `binary64-lane16-tree-v1`): sixteen binary64 lanes, lane `l` summing the terms at indices `16·c + l` over the whole sixteen-element chunks in ascending `c`; the pairwise tree `(l, l+8)`, `(l, l+4)`, `(l, l+2)`, `(0, 1)`; then the remaining terms one at a time in ascending index. No accumulator is ever split across rayon workers. Every target and every dispatch path computes that one order |
+| **fused multiply-add** | `a * b + c` as a single FMA rounds once where the written form rounds twice | every product is bound to a named local before it is added; Rust never contracts implicitly, no exact path enables `fma`, and PURREMB forbids the fusion |
 
-The reassociation rule is asserted, not merely stated. A test folds a vector chosen
-so the two directions genuinely disagree — `[1e16, -1e16, 1]` against all-ones sums
-to `1` left-to-right and `0` right-to-left — and pins which one the kernel produces.
-A test that only checked "the same input gives the same output twice" would pass on
-a kernel with no fixed order at all.
+Fixing the order as sixteen independent lanes is what lets the fold vectorize without
+licensing the compiler to reorder anything: the lanes are sixteen separate add chains,
+and LLVM packs them into whatever vector width the target has (SSE2 and AVX2 on x86-64,
+NEON on aarch64, `f64x2` under wasm `+simd128`). On `x86_64` the exact scan dispatches
+once per search between a portable compilation of the body and an AVX2 compilation of
+the same body; `purrdf_core`'s tests hold every path the host can execute to a scalar
+reference model of the lanes, the tree and the tail, bit for bit. A vector shorter than
+one chunk folds exactly as the old ascending sequential loop did, since the tree of
+sixteen zero lanes is zero.
+
+The order is asserted, not merely stated. A test folds a vector chosen so the orders
+genuinely disagree — `1e16`, `1` and `-1e16` in lanes 0, 1 and 8 against all-ones sums
+to `1` under the lane tree and to `0` under both sequential orders — and pins which one
+the kernel produces. A test that only checked "the same input gives the same output
+twice" would pass on a kernel with no fixed order at all.
+
+The arithmetic also assumes IEEE-754's default environment. A thread with flush-to-zero
+or denormals-are-zero set, or another rounding direction, computes different bits from
+the same code, so resolving the arithmetic reads the control register (MXCSR on x86-64,
+FPCR on aarch64) and refuses such a thread with `EvalError::FloatEnvironment`, at space
+construction and again at every search, since an invocation may run on another thread.
+
+The metric does not change with the arithmetic. `DistanceMetric` names *what* is
+measured, and the family-contract digest is computed from it alone; the arithmetic is
+recorded beside it, in the HNSW image header and profile.
 
 ### The cross-target claim is executed, not argued
 
@@ -61,15 +85,19 @@ kernel that is target-independent from one that is merely self-consistent wherev
 was last compiled. `make wasm` has the same limit in the other direction — it proves
 the release crates *build* for wasm32, never that they *answer* the same way there.
 
-So `crates/sparql-eval/tests/knn_wasm_determinism.rs` is one test body carrying two
-attributes: an ordinary `#[test]` natively, a `#[wasm_bindgen_test]` on wasm32. It runs
-a real SPARQL kNN query over a real PURREMB artifact whose components are deliberately
-*not* exactly representable in binary64 — every product, every partial sum and both
-norms round — and asserts five pinned `xsd:double` lexicals, in order. `cargo test`
-executes it on the host; the new `make wasm-test` lane compiles it to wasm32 and runs it
-in Node through `wasm-bindgen-test-runner` (which ships in the wasm-bindgen archive the
-wasm lane already installs, so there is no second pin to keep in step). CI's wasm job
-runs that lane. A target that computes a different last bit renders a different lexical
+So `crates/sparql-eval/tests/knn_wasm_determinism.rs` carries test bodies with two
+attributes each: an ordinary `#[test]` natively, a `#[wasm_bindgen_test]` on wasm32.
+They run real SPARQL kNN queries over real PURREMB artifacts whose components are
+deliberately *not* exactly representable in binary64 — every product, every partial sum
+and both norms round — and assert five pinned `xsd:double` lexicals each, in order. One
+fixture is six-dimensional, which reaches only the exact fold's sequential tail; the
+other is seventy-dimensional, which fills all sixteen lanes and the 64-element bound
+checkpoint and leaves a six-element tail, asked under cosine and under squared
+Euclidean. `cargo test` executes them on the host; `make wasm-test` compiles them to
+wasm32 twice — on the baseline target and with `+simd128`, where the lanes become
+`f64x2` operations — and runs both in Node through `wasm-bindgen-test-runner` (which
+ships in the wasm-bindgen archive the wasm lane already installs, so there is no second
+pin to keep in step). CI's wasm job runs that lane. A target that computes a different last bit renders a different lexical
 and fails there, rather than surfacing later as an unexplained reordering.
 
 ### The limit of the claim, stated

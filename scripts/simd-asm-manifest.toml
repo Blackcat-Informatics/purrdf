@@ -1107,45 +1107,388 @@ summary = "`dialect::markdown::lines`, the per-char line split, inlined through 
   forbid_relaxed = true
 
 [[site]]
-id = "knn.dot"
-summary = "`metric::dot`, the sequential binary64 dot fold, inlined into `Kernel::distance`"
+id = "distance.exact.dot"
+summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels the kNN scan (`distances`) and the HNSW beam (`distances_indexed`) call"
 
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v169.
   [[site.measure]]
-  label = "f64"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_sparql_eval"
-  symbol = "<purrdf_sparql_eval::knn::metric::Kernel>::distance::<f64, f64>"
+  label = "batch f64×f64"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances::<f64, f64>"
+  min_vector_ops = 84
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v157. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  [[site.measure]]
+  label = "batch f64×f64 avx2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx2::distances::<f64, f64>"
+  min_vector_ops = 78
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157 (x86_64-v3), v133 (x86_64-v4).
+  [[site.measure]]
+  label = "batch f64×f64"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances::<f64, f64>"
+  min_vector_ops = 66
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v160 (aarch64), v167 (neoverse-v1).
+  [[site.measure]]
+  label = "batch f64×f64"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances::<f64, f64>"
+  min_vector_ops = 80
+  require_mnemonics = ["fadd .2d", "fmul .2d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `f64x2` lanes and no `relaxed_` op. Measured v149.
+  [[site.measure]]
+  label = "batch f64×f64"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances::<f64, f64>"
+  min_vector_ops = 74
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  [[site.measure]]
+  label = "batch f64×f64"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances::<f64, f64>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v235.
   [[site.measure]]
-  label = "f32"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_sparql_eval"
-  symbol = "<purrdf_sparql_eval::knn::metric::Kernel>::distance::<f32, f32>"
+  label = "indexed f64×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f64, f32>"
+  min_vector_ops = 117
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v149. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  [[site.measure]]
+  label = "indexed f64×f32 avx2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx2::distances_indexed::<f64, f32>"
+  min_vector_ops = 74
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v197 (x86_64-v3), v161 (x86_64-v4).
+  [[site.measure]]
+  label = "indexed f64×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f64, f32>"
+  min_vector_ops = 80
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v208 (aarch64), v215 (neoverse-v1).
+  [[site.measure]]
+  label = "indexed f64×f32"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f64, f32>"
+  min_vector_ops = 104
+  require_mnemonics = ["fadd .2d", "fmul .2d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `f64x2` lanes and no `relaxed_` op. Measured v183.
+  [[site.measure]]
+  label = "indexed f64×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f64, f32>"
+  min_vector_ops = 91
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  [[site.measure]]
+  label = "indexed f64×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f64, f32>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v299.
+  [[site.measure]]
+  label = "indexed f32×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f32, f32>"
+  min_vector_ops = 149
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v173. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  [[site.measure]]
+  label = "indexed f32×f32 avx2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx2::distances_indexed::<f32, f32>"
+  min_vector_ops = 86
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v237 (x86_64-v3), v189 (x86_64-v4).
+  [[site.measure]]
+  label = "indexed f32×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f32, f32>"
+  min_vector_ops = 94
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v256 (aarch64), v270 (neoverse-v1).
+  [[site.measure]]
+  label = "indexed f32×f32"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f32, f32>"
+  min_vector_ops = 128
+  require_mnemonics = ["fadd .2d", "fmul .2d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `f64x2` lanes and no `relaxed_` op. Measured v231.
+  [[site.measure]]
+  label = "indexed f32×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f32, f32>"
+  min_vector_ops = 115
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  [[site.measure]]
+  label = "indexed f32×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f32, f32>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
-id = "knn.sqeuclid"
-summary = "`metric::squared_euclidean_bounded`, the sequential squared-Euclidean fold with a per-block bound check"
+id = "distance.exact.sqeuclid"
+summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Euclidean fold with its 64-element checkpoint, in the pair kernels HNSW's selection and repair call"
 
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v169.
   [[site.measure]]
-  label = "f64"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_sparql_eval"
-  symbol = "<purrdf_sparql_eval::knn::metric::Kernel>::distance::<f64, f64>"
+  label = "bounded f64×f64"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f64, f64>"
+  min_vector_ops = 84
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v157. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  [[site.measure]]
+  label = "bounded f64×f64 avx2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx2::distance_bounded::<f64, f64>"
+  min_vector_ops = 78
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157 (x86_64-v3), v133 (x86_64-v4).
+  [[site.measure]]
+  label = "bounded f64×f64"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f64, f64>"
+  min_vector_ops = 66
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v160 (aarch64), v167 (neoverse-v1).
+  [[site.measure]]
+  label = "bounded f64×f64"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f64, f64>"
+  min_vector_ops = 80
+  require_mnemonics = ["fadd .2d", "fmul .2d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `f64x2` lanes and no `relaxed_` op. Measured v149.
+  [[site.measure]]
+  label = "bounded f64×f64"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f64, f64>"
+  min_vector_ops = 74
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  [[site.measure]]
+  label = "bounded f64×f64"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f64, f64>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v201.
   [[site.measure]]
-  label = "bounded (hnsw)"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_hnsw"
-  symbol = "<purrdf_hnsw::graph::VectorMatrix>::distance_bounded"
+  label = "bounded f32×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f32, f32>"
+  min_vector_ops = 100
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v125. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  [[site.measure]]
+  label = "bounded f32×f32 avx2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx2::distance_bounded::<f32, f32>"
+  min_vector_ops = 62
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v125 (x86_64-v3), v89 (x86_64-v4).
+  [[site.measure]]
+  label = "bounded f32×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f32, f32>"
+  min_vector_ops = 44
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v192 (aarch64), v206 (neoverse-v1).
+  [[site.measure]]
+  label = "bounded f32×f32"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f32, f32>"
+  min_vector_ops = 96
+  require_mnemonics = ["fadd .2d", "fmul .2d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `f64x2` lanes and no `relaxed_` op. Measured v181.
+  [[site.measure]]
+  label = "bounded f32×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f32, f32>"
+  min_vector_ops = 90
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  [[site.measure]]
+  label = "bounded f32×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f32, f32>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v235.
+  [[site.measure]]
+  label = "pair f64×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
+  min_vector_ops = 117
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v197 (x86_64-v3), v161 (x86_64-v4).
+  [[site.measure]]
+  label = "pair f64×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
+  min_vector_ops = 80
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v208 (aarch64), v215 (neoverse-v1).
+  [[site.measure]]
+  label = "pair f64×f32"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
+  min_vector_ops = 104
+  require_mnemonics = ["fadd .2d", "fmul .2d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `f64x2` lanes and no `relaxed_` op. Measured v183.
+  [[site.measure]]
+  label = "pair f64×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
+  min_vector_ops = 91
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  [[site.measure]]
+  label = "pair f64×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

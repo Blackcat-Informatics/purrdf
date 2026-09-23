@@ -591,6 +591,18 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@#
 	@# wasm-bindgen-test-runner ships in the same pinned wasm-bindgen-cli archive the
 	@# wasm lane already installs, so there is no second version to keep in step.
+	@#
+	@# The kNN file runs twice: on the baseline build, and on a +simd128 build, where
+	@# LLVM packs the exact fold's sixteen lanes into f64x2 operations. Both assert the
+	@# same pinned lexicals, so the vectorized wasm compilation is held to the scalar
+	@# one's bits. +simd128 travels in CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS,
+	@# which Cargo ignores whenever RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS is set, so a
+	@# caller's RUSTFLAGS is folded into it and RUSTFLAGS unset for that one run, and
+	@# CARGO_ENCODED_RUSTFLAGS is refused. A target-scoped value also REPLACES
+	@# build.rustflags, so the workspace's -D warnings bar is restated in it.
+	@if [ -n "$${CARGO_ENCODED_RUSTFLAGS:-}" ]; then \
+		echo "FAIL: CARGO_ENCODED_RUSTFLAGS is set; Cargo would ignore the +simd128 run's target-scoped flags and run the baseline build twice"; exit 1; \
+	fi
 	@if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		if [ -n "$${CI:-}" ]; then echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; fi; \
 		if ! command -v rustup >/dev/null 2>&1; then \
@@ -606,6 +618,11 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		echo "SKIP: node not on PATH — the wasm test harness runs the module in Node"; \
 	else \
 		CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-sparql-eval --test knn_wasm_determinism \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-sparql-eval --test knn_wasm_determinism \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \

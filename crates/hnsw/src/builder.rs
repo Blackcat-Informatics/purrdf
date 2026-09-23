@@ -54,15 +54,16 @@ use std::collections::BTreeSet;
 
 use rayon::prelude::*;
 
+use purrdf_core::distance::{Exact, Resolved};
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
-use crate::HnswIndex;
 use crate::error::{HnswError, Result};
 use crate::graph::{Edge, Graph, VectorMatrix};
 use crate::level::{level_cap, level_from_index};
 use crate::params::Params;
 use crate::search::{DistanceCache, Query, Visited, greedy_descend, norm_of, search_layer};
 use crate::select::select_neighbors;
+use crate::{HnswIndex, resolve_exact};
 
 /// One node's proposal: per layer, the selected neighbours in rank order.
 type NodeProposal = Vec<(u32, Vec<Ranked>)>;
@@ -96,7 +97,8 @@ struct Round<'a> {
 /// [`HnswError::InvalidParameter`] / [`HnswError::ParameterValidation`] for a parameter or
 /// matrix problem caught before any work; [`HnswError::ZeroNorm`] when `kernel` divides by
 /// a norm and a row's is zero; [`HnswError::NonFiniteDistance`] if a kernel result leaves
-/// the finite range.
+/// the finite range; [`HnswError::FloatEnvironment`] if the calling thread, or a worker
+/// thread the build runs on, is not in the IEEE environment the arithmetic defines.
 pub(crate) fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Result<HnswIndex> {
     build_with_batch(matrix, kernel, params, None)
 }
@@ -113,7 +115,8 @@ pub(crate) fn build_with_batch(
     params: Params,
     batch: Option<usize>,
 ) -> Result<HnswIndex> {
-    let (graph, norms) = build_graph(&matrix, kernel, params, batch)?;
+    let arithmetic = resolve_exact()?;
+    let (graph, norms) = build_graph(&matrix, arithmetic, kernel, params, batch)?;
     Ok(HnswIndex::new(matrix, kernel, params, graph, norms))
 }
 
@@ -124,8 +127,13 @@ pub(crate) fn build_with_batch(
 /// holds the vectors -- `verify_rebuild`, which rebuilds in order to compare -- avoid
 /// copying them. At a million rows of 4,096 `f64` that copy is over thirty gigabytes, and
 /// the guard's verification path was paying it twice.
+///
+/// Every distance runs under `arithmetic`, resolved on the calling thread; each worker of
+/// the parallel proposal phase resolves again on its own thread, because the float
+/// environment is a per-thread property.
 pub(crate) fn build_graph(
     matrix: &VectorMatrix,
+    arithmetic: Resolved<Exact>,
     kernel: Kernel,
     params: Params,
     batch: Option<usize>,
@@ -179,7 +187,9 @@ pub(crate) fn build_graph(
         start = end;
     }
 
-    repair_connectivity(&mut graph, matrix, kernel, &norms, &params, entry)?;
+    repair_connectivity(
+        &mut graph, matrix, arithmetic, kernel, &norms, &params, entry,
+    )?;
 
     Ok((graph, norms))
 }
@@ -215,6 +225,7 @@ pub(crate) fn build_graph(
 fn repair_connectivity(
     graph: &mut Graph,
     matrix: &VectorMatrix,
+    arithmetic: Resolved<Exact>,
     kernel: Kernel,
     norms: &[f64],
     params: &Params,
@@ -239,7 +250,8 @@ fn repair_connectivity(
             }
             let host = choose_host(graph, &reachable, &protected, bound, entry, orphan)?;
             let distance = matrix
-                .distance(
+                .distance_with(
+                    arithmetic,
                     kernel,
                     host,
                     norm_of(norms, host),
@@ -352,8 +364,13 @@ fn propose_round(round: &Round<'_>, batch: &[usize], levels: &[u32]) -> Result<V
     let results: Vec<Result<NodeProposal>> = batch
         .par_iter()
         .map_init(
-            || Visited::new(node_count),
-            |visited, &node| propose_node(round, visited, node, levels[node]),
+            // Resolved per worker: the float environment belongs to the thread that runs
+            // the proposal, not to the one that started the build.
+            || (Visited::new(node_count), resolve_exact()),
+            |(visited, arithmetic), &node| {
+                let arithmetic = arithmetic.clone()?;
+                propose_node(round, arithmetic, visited, node, levels[node])
+            },
         )
         .collect();
 
@@ -387,6 +404,7 @@ fn propose_round(round: &Round<'_>, batch: &[usize], levels: &[u32]) -> Result<V
 /// The proposed links for one node: per layer, the selected neighbours in rank order.
 fn propose_node(
     round: &Round<'_>,
+    arithmetic: Resolved<Exact>,
     visited: &mut Visited,
     node: usize,
     node_level: u32,
@@ -400,7 +418,14 @@ fn propose_node(
     // never need the same pair, so a shared cache buys little and costs a lock in the
     // innermost loop of the parallel phase.
     let cache = DistanceCache::new();
-    let query = Query::new(round.matrix, round.kernel, round.norms, &cache, node);
+    let query = Query::new(
+        round.matrix,
+        round.kernel,
+        arithmetic,
+        round.norms,
+        &cache,
+        node,
+    );
     let frozen_top = frozen.max_level();
 
     // Greedy descent through the snapshot's layers above this node's own level.
@@ -427,6 +452,7 @@ fn propose_node(
             &beam,
             round.params.degree_bound(layer),
             round.matrix,
+            arithmetic,
             round.kernel,
             round.norms,
         )?;

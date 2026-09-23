@@ -42,13 +42,20 @@ use rayon::ThreadPoolBuilder;
 /// `scripts/check-hnsw-determinism.sh` reads this constant out of this file by name rather
 /// than restating it, so there is exactly one copy in the tree and the native assertion
 /// and the wasm assertion cannot drift apart.
-const GOLDEN_DIGEST: u64 = 0x0c71_b169_ebb4_4d7e;
+///
+/// Moved when distances began folding in the sixteen-lane tree order and the image header
+/// began carrying the arithmetic field: every recorded distance bit and the header both
+/// changed, so the image and its digest did.
+const GOLDEN_DIGEST: u64 = 0xa367_d6c5_8963_1389;
 
 /// The pinned digest of the serial-insert build (`batch = 1`).
 ///
 /// It is deliberately different from [`GOLDEN_DIGEST`]: the round structure changes the
 /// graph, and that difference is asserted rather than assumed.
-const GOLDEN_SERIAL_DIGEST: u64 = 0x7e11_7799_b79a_b829;
+///
+/// Moved for the same reason as [`GOLDEN_DIGEST`]: distances fold in the sixteen-lane tree
+/// order, and the image header carries the arithmetic field.
+const GOLDEN_SERIAL_DIGEST: u64 = 0xf0b2_fd33_0bcc_fcc7;
 
 /// The digest is a property of the input alone, not of a schedule: one, two, four and
 /// eight rayon workers all fold the same bytes.

@@ -18,12 +18,21 @@
 //! * **Neighbour selection** keeps a diverse set rather than the nearest `M`, so the graph
 //!   stays navigable; the admission rule is a total function of the beam.
 //! * **Distances** come from the exact path's kernels via
-//!   [`purrdf_sparql_eval::knn`], and candidates are ordered by the shared [`Ranked`] type
-//!   `(distance, row)` — there is no second comparator to drift out of step.
+//!   [`purrdf_sparql_eval::knn`], computed under [`purrdf_core::distance::Exact`] — the
+//!   sixteen-lane binary64 fold with a fixed pairwise tree, the same bits on every target
+//!   and dispatch path — and candidates are ordered by the shared [`Ranked`] type
+//!   `(distance, row)`, so there is no second comparator to drift out of step. Every call
+//!   site (build, neighbour selection, search, decode and rebuild verification) runs under
+//!   an arithmetic resolved for its thread, which refuses a flush-to-zero or re-rounding
+//!   float environment with [`HnswError::FloatEnvironment`]; a beam expands each node by
+//!   one call to the batch kernel.
 //!
 //! The result is an index whose **canonical byte image** is byte-identical across thread
-//! counts and across `wasm32-unknown-unknown`. `rayon` runs inline-sequentially on wasm,
-//! so the wasm build is slower but not different.
+//! counts, across dispatch paths and across `wasm32-unknown-unknown` with or without
+//! `+simd128`. `rayon` runs inline-sequentially on wasm, so the wasm build is slower but
+//! not different. The image header records the arithmetic its distances were folded
+//! under ([`INDEX_VERSION`] 2); a version-1 image, folded sequentially, is refused with
+//! [`HnswError::VersionMismatch`].
 //!
 //! # The approximation contract, stated honestly
 //!
@@ -78,19 +87,33 @@ pub use purrdf_sparql_eval::knn::{Kernel, Ranked};
 use std::sync::Mutex;
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::{Arithmetic, Exact, Resolved};
 use rayon::prelude::*;
 
 use crate::graph::{Graph, decode_image};
 use crate::search::{DistanceCache, Query, Visited, greedy_descend, search_layer};
 
 /// The canonical image format version.
-pub const INDEX_VERSION: u32 = 1;
+///
+/// Version 2 folds every recorded distance with the sixteen-lane exact arithmetic and
+/// records that arithmetic in the header.
+pub const INDEX_VERSION: u32 = 2;
 
 /// The media type of an HNSW index payload.
 pub const INDEX_MEDIA_TYPE: &str = "application/vnd.blackcatinformatics.purrdf.hnsw";
 
 /// The derived-index implementation identifier.
-pub const IMPLEMENTATION_ID: &str = "hnsw-v1";
+pub const IMPLEMENTATION_ID: &str = "hnsw-v2";
+
+/// The exact arithmetic, resolved for the calling thread.
+///
+/// # Errors
+///
+/// [`HnswError::FloatEnvironment`] when the thread's float environment is not the IEEE
+/// one the arithmetic defines.
+pub(crate) fn resolve_exact() -> Result<Resolved<Exact>> {
+    Ok(Exact::resolve()?)
+}
 
 /// Build an index over `matrix` under `metric` and `params`.
 ///
@@ -170,7 +193,9 @@ impl HnswIndex {
     /// [`HnswError::UnsupportedMetric`] if `metric` is a caller-defined extension metric
     /// with no kernel this crate can evaluate.
     /// Otherwise the errors of the builder: the parameter validation matrix, a zero-norm
-    /// row under a norm-dividing kernel, or a non-finite distance.
+    /// row under a norm-dividing kernel, a non-finite distance, or
+    /// [`HnswError::FloatEnvironment`] for a thread whose float environment is not the IEEE
+    /// one.
     pub fn build(matrix: VectorMatrix, metric: &DistanceMetric, params: Params) -> Result<Self> {
         let kernel = Kernel::of(metric).ok_or_else(|| HnswError::UnsupportedMetric {
             metric: format!("{metric:?}"),
@@ -214,28 +239,32 @@ impl HnswIndex {
     ///
     /// [`HnswError::RowOutOfBounds`] if `query_row` is not a row of the matrix.
     /// [`HnswError::NonFiniteDistance`] if a kernel result leaves the finite range.
+    /// [`HnswError::FloatEnvironment`] if the calling thread's float environment is not the
+    /// IEEE one.
     pub fn search_rows(&self, query_row: usize, k: usize) -> Result<Vec<Ranked>> {
+        let arithmetic = resolve_exact()?;
         let cache = DistanceCache::new();
-        self.with_scratch(|visited| self.search_with(query_row, k, &cache, visited))
+        self.with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))
     }
 
     /// The `k` nearest rows to `query_row`, together with the number of candidate
     /// distance evaluations the search performed.
     ///
     /// This is [`HnswIndex::search_rows`] with the work it cost made observable: one unit
-    /// per `Kernel::distance` call, counted through the search's memo, so a candidate whose
-    /// distance was already computed is not charged twice. The count is what a
-    /// property-function cursor reports through `PfCursor::take_work` — the rows a search
-    /// returns are `k`, and `k` says nothing about the size of the graph they were selected
-    /// from.
+    /// per candidate distance the exact kernel computes, counted through the search's
+    /// memo, so a candidate whose distance was already computed is not charged twice. The
+    /// count is what a property-function cursor reports through `PfCursor::take_work` —
+    /// the rows a search returns are `k`, and `k` says nothing about the size of the graph
+    /// they were selected from.
     ///
     /// # Errors
     ///
     /// As [`HnswIndex::search_rows`].
     pub fn search_rows_work(&self, query_row: usize, k: usize) -> Result<(Vec<Ranked>, u64)> {
+        let arithmetic = resolve_exact()?;
         let cache = DistanceCache::new();
-        let ranked =
-            self.with_scratch(|visited| self.search_with(query_row, k, &cache, visited))?;
+        let ranked = self
+            .with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))?;
         Ok((ranked, cache.evaluations()))
     }
 
@@ -258,6 +287,8 @@ impl HnswIndex {
     /// [`HnswError::ParameterValidation`] if `query` does not have the matrix's dimension.
     /// [`HnswError::NonFiniteDistance`] if a kernel result leaves the finite range, which
     /// includes a query vector whose own components are extreme enough to overflow the fold.
+    /// [`HnswError::FloatEnvironment`] if the calling thread's float environment is not the
+    /// IEEE one: the query's norm and every distance would already differ.
     pub fn search_vector(&self, query: &[f64], k: usize) -> Result<Vec<Ranked>> {
         let cache = DistanceCache::new();
         let bound = self.bind_vector(query, &cache)?;
@@ -276,8 +307,10 @@ impl HnswIndex {
         Ok((ranked, cache.evaluations()))
     }
 
-    /// Validate a query vector's shape once and bind it to this index's kernel and memo.
+    /// Validate a query vector's shape once and bind it to this index's kernel, the
+    /// arithmetic resolved for this thread, and the memo.
     fn bind_vector<'a>(&'a self, query: &'a [f64], cache: &'a DistanceCache) -> Result<Query<'a>> {
+        let arithmetic = resolve_exact()?;
         if query.len() != self.matrix.dims() {
             return Err(HnswError::ParameterValidation {
                 description: format!(
@@ -291,6 +324,7 @@ impl HnswIndex {
         Ok(Query::from_vector(
             &self.matrix,
             self.kernel,
+            arithmetic,
             &self.norms,
             cache,
             query,
@@ -301,7 +335,10 @@ impl HnswIndex {
     ///
     /// The order is the input order, not completion order: the batch is mapped by rayon's
     /// indexed adaptor, so the answers line up with the questions even when workers
-    /// finish out of order. Per-worker scratch is reused across the batch.
+    /// finish out of order. Each worker reuses its visited scratch across the batch and
+    /// resolves the arithmetic on its own thread; every query gets its own distance memo,
+    /// because the memo is keyed by candidate row alone and a memo carried from one query
+    /// to the next would hand the second query the first one's distances.
     ///
     /// # Errors
     ///
@@ -311,8 +348,12 @@ impl HnswIndex {
         query_rows
             .par_iter()
             .map_init(
-                || (DistanceCache::new(), Visited::new(rows)),
-                |(cache, visited), &query_row| self.search_with(query_row, k, cache, visited),
+                || (Visited::new(rows), resolve_exact()),
+                |(visited, arithmetic), &query_row| {
+                    let arithmetic = arithmetic.clone()?;
+                    let cache = DistanceCache::new();
+                    self.search_with(arithmetic, query_row, k, &cache, visited)
+                },
             )
             .collect()
     }
@@ -320,6 +361,7 @@ impl HnswIndex {
     /// One search against caller-supplied scratch, from a stored row.
     fn search_with(
         &self,
+        arithmetic: Resolved<Exact>,
         query_row: usize,
         k: usize,
         cache: &DistanceCache,
@@ -332,7 +374,14 @@ impl HnswIndex {
                 max: rows.saturating_sub(1),
             });
         }
-        let query = Query::new(&self.matrix, self.kernel, &self.norms, cache, query_row);
+        let query = Query::new(
+            &self.matrix,
+            self.kernel,
+            arithmetic,
+            &self.norms,
+            cache,
+            query_row,
+        );
         self.traverse(&query, k, visited)
     }
 
@@ -377,11 +426,15 @@ impl HnswIndex {
     /// # Errors
     ///
     /// [`HnswError::InvalidPayload`] for malformed or structurally invalid bytes,
-    /// [`HnswError::VersionMismatch`] for an unimplemented version,
+    /// [`HnswError::VersionMismatch`] for an unimplemented version (a version-1 image among
+    /// them), [`HnswError::ArithmeticMismatch`] for a header naming another arithmetic,
     /// [`HnswError::ParameterValidation`] / [`HnswError::ArithmeticOverflow`] if the
-    /// decoded parameters do not describe the matrix, and [`HnswError::ZeroNorm`] if the
-    /// decoded kernel needs norms and a row has none.
+    /// decoded parameters do not describe the matrix, [`HnswError::ZeroNorm`] if the
+    /// decoded kernel needs norms and a row has none, and [`HnswError::FloatEnvironment`]
+    /// if the calling thread's float environment is not the IEEE one.
     pub fn decode(matrix: VectorMatrix, bytes: &[u8]) -> Result<Self> {
+        // The norms computed below are arithmetic under the thread's environment.
+        resolve_exact()?;
         let image = decode_image(bytes)?;
         if image.graph.node_count() != matrix.rows() {
             return Err(HnswError::InvalidPayload {
@@ -411,18 +464,28 @@ impl HnswIndex {
     /// the vectors and only wants the verdict. It decodes the image, rebuilds from the
     /// borrow, and compares -- so neither side copies a matrix that may be tens of
     /// gigabytes. A structurally invalid payload, a row-count disagreement or a parameter
-    /// disagreement are all `Ok(false)`: this answers a question, it does not raise.
+    /// disagreement are all `Ok(None)`: this answers a question, it does not raise.
     ///
     /// # Errors
     ///
-    /// Only what the rebuild itself can fail on -- a zero norm under a norm-dividing
-    /// kernel, or a non-finite distance.
+    /// [`HnswError::VersionMismatch`] for an image of another format version and
+    /// [`HnswError::ArithmeticMismatch`] for one recorded under another arithmetic. Those
+    /// are not a "no": a version-1 image is a real index whose distances were folded
+    /// under a different law, and answering `false` would report it as tampered with when
+    /// it is merely a format this build does not rebuild. Otherwise only what the rebuild
+    /// itself can fail on -- a zero norm under a norm-dividing kernel, a non-finite
+    /// distance, or a float environment the arithmetic refuses.
     pub(crate) fn verify_bytes_against(
         matrix: &VectorMatrix,
         bytes: &[u8],
     ) -> Result<Option<Params>> {
-        let Ok(image) = decode_image(bytes) else {
-            return Ok(None);
+        let arithmetic = resolve_exact()?;
+        let image = match decode_image(bytes) {
+            Ok(image) => image,
+            Err(
+                error @ (HnswError::VersionMismatch { .. } | HnswError::ArithmeticMismatch { .. }),
+            ) => return Err(error),
+            Err(_) => return Ok(None),
         };
         if image.graph.node_count() != matrix.rows()
             || image
@@ -432,7 +495,8 @@ impl HnswIndex {
         {
             return Ok(None);
         }
-        let (rebuilt, _) = builder::build_graph(matrix, image.kernel, image.params, None)?;
+        let (rebuilt, _) =
+            builder::build_graph(matrix, arithmetic, image.kernel, image.params, None)?;
         if rebuilt.canonical_image(image.kernel, &image.params)
             == image.graph.canonical_image(image.kernel, &image.params)
         {
@@ -457,7 +521,9 @@ impl HnswIndex {
         // Rebuilt from a borrow: the vectors are already here, and copying a
         // million-row matrix in order to compare against it is the largest avoidable
         // allocation in the crate.
-        let (graph, _) = builder::build_graph(&self.matrix, self.kernel, self.params, None)?;
+        let arithmetic = resolve_exact()?;
+        let (graph, _) =
+            builder::build_graph(&self.matrix, arithmetic, self.kernel, self.params, None)?;
         Ok(graph.canonical_image(self.kernel, &self.params) == self.canonical_image())
     }
 
@@ -604,6 +670,86 @@ mod tests {
             decoded.search_rows(3, 4).expect("searches"),
             index.search_rows(3, 4).expect("searches")
         );
+    }
+
+    #[test]
+    fn a_batch_answers_every_query_exactly_as_a_single_search_does() {
+        // On one worker a rayon batch runs many queries through one `map_init` state. The
+        // distance memo is keyed by candidate row alone, so a memo carried across queries
+        // would hand each later query the earlier queries' distances. Every answer must
+        // equal its own single search, row for row and bit for bit.
+        let index = HnswIndex::build(fixture(64, 20), &DistanceMetric::SquaredEuclidean, params())
+            .expect("builds");
+        let queries: Vec<usize> = (0..64).collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("a one-worker pool");
+        let batch = pool
+            .install(|| index.search_batch(&queries, 5))
+            .expect("searches");
+        for (answer, &query) in batch.iter().zip(&queries) {
+            let single = index.search_rows(query, 5).expect("searches");
+            assert_eq!(answer, &single, "query {query}");
+            assert_eq!(
+                answer[0].row, query,
+                "a stored row is its own nearest neighbour"
+            );
+            assert_eq!(answer[0].distance.to_bits(), 0.0_f64.to_bits());
+        }
+    }
+
+    #[test]
+    fn a_version_one_image_is_refused_by_name_rather_than_answered_false() {
+        let matrix = fixture(48, 20);
+        let index = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
+            .expect("builds");
+        let image = index.canonical_image();
+        // What a version-1 encoder wrote: version 1, and zero in the field version 2 uses
+        // for the arithmetic.
+        let mut version_one = image.clone();
+        version_one[8..12].copy_from_slice(&1_u32.to_le_bytes());
+        version_one[60..64].copy_from_slice(&0_u32.to_le_bytes());
+        let refusal = HnswError::VersionMismatch {
+            expected: 2,
+            actual: 1,
+        };
+        assert_eq!(
+            HnswIndex::decode(matrix.clone(), &version_one).expect_err("refused"),
+            refusal
+        );
+        assert_eq!(
+            HnswIndex::verify_bytes_against(&matrix, &version_one).expect_err("refused"),
+            refusal,
+            "a version-1 image is an index folded under another law, not a tampered one"
+        );
+        // Another arithmetic's code is refused by name on the verification path too.
+        let mut other_arithmetic = image.clone();
+        other_arithmetic[60..64].copy_from_slice(&2_u32.to_le_bytes());
+        assert!(matches!(
+            HnswIndex::verify_bytes_against(&matrix, &other_arithmetic),
+            Err(HnswError::ArithmeticMismatch { actual: 2, .. })
+        ));
+
+        // The neighbours: the image as built verifies, and a structurally corrupt one of
+        // the current version is still an honest "no".
+        assert_eq!(
+            HnswIndex::verify_bytes_against(&matrix, &image).expect("verifies"),
+            Some(params())
+        );
+        let mut truncated = image;
+        truncated.pop();
+        assert_eq!(
+            HnswIndex::verify_bytes_against(&matrix, &truncated).expect("answers"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_versions_and_identifier_name_the_exact_arithmetic() {
+        assert_eq!(INDEX_VERSION, 2);
+        assert_eq!(IMPLEMENTATION_ID, "hnsw-v2");
+        assert_eq!(profile::PAYLOAD_VERSION, INDEX_VERSION);
     }
 
     #[test]

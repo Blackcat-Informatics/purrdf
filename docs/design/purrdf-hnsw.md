@@ -131,7 +131,7 @@ invented; the adapter is `purrdf_hnsw::guard` over `purrdf-core`'s existing
 
 | field | value |
 |---|---|
-| implementation identifier | `hnsw-v1` |
+| implementation identifier | `hnsw-v2` |
 | implementation media type | `application/vnd.blackcatinformatics.purrdf.hnsw.profile-v1` |
 | parameter encoding | `application/vnd.blackcatinformatics.purrdf.hnsw.parameters+tlv-v1` |
 | payload media type | `application/vnd.blackcatinformatics.purrdf.hnsw` |
@@ -139,7 +139,9 @@ invented; the adapter is `purrdf_hnsw::guard` over `purrdf-core`'s existing
 
 The implementation identity's digest is a domain-separated SHA-256 of a stable,
 human-readable profile declaration (no host layout, no version-dependent
-serialization). Its revision bytes are the approximation evidence string, so
+serialization). The declaration names the distance arithmetic
+(`arithmetic=binary64-lane16-tree-v1`), so the digest binds the law every recorded
+distance was folded under as well as the algorithm. Its revision bytes are the approximation evidence string, so
 the guard digest commits **what the index does not promise**, not merely the
 algorithm name.
 
@@ -196,7 +198,8 @@ header:
   ef_search  u64
   node_count u64
   max_level  u32
-  reserved   u32       0
+  arithmetic u32       the distance arithmetic's image code: 1 = Exact
+                       (binary64-lane16-tree-v1); 0 is refused
   entry      u64       row, or u64::MAX for an empty graph
 node records, in ascending row order:
   row        u64       must equal the record's position
@@ -216,6 +219,24 @@ orders them by neighbour row, because the row set is the identity and the
 distances are derived. Decoding re-sorts by rank, so the two are views of one
 graph. The layout is fixed **before** any borrowed view is added precisely so a
 zero-copy `HnswView<'a>` can be introduced later without a wire-format change.
+
+`IMAGE_VERSION` (and `INDEX_VERSION`) is 2. Version 2 is the first whose recorded
+distances are folded by `purrdf_core::distance::Exact` — sixteen binary64 lanes, the
+pairwise tree `(l, l+8)`, `(l, l+4)`, `(l, l+2)`, `(0, 1)`, then a sequential tail —
+and the first whose header records that arithmetic, in the `u32` version 1 reserved as
+zero. A version-1 image's distances were folded sequentially, so its bits are not the
+ones this build computes: `decode`, `guard::load` and `guard::verify_rebuild` refuse it
+with the named `HnswError::VersionMismatch`, never with an `Ok(false)` that would read
+as tampering. A header whose arithmetic field is not `1` is refused with
+`HnswError::ArithmeticMismatch`. The canonical image is byte-identical across worker
+counts, across the exact arithmetic's dispatch paths (portable and AVX2 on x86-64), and
+across `wasm32-unknown-unknown` with and without `+simd128`; `make hnsw-determinism`
+executes all three wasm-side and native digests against the one golden.
+
+Every build, rebuild, decode and search resolves the exact arithmetic on its own thread
+first, which refuses a flush-to-zero or re-rounding float environment with
+`HnswError::FloatEnvironment`, and a beam expands each node by one call to the batch
+kernel over its unvisited neighbours.
 
 ### 2.5 What a binding proves before a search runs
 

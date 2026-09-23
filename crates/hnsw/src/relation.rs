@@ -71,7 +71,20 @@ use purrdf_sparql_eval::{
     RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
+use crate::error::HnswError;
 use crate::{HnswIndex, profile};
+
+/// An HNSW failure as the evaluator's error, under `context`.
+///
+/// A float-environment refusal keeps its own variant rather than being flattened into
+/// data prose: nothing is wrong with the artifact, the calling thread is, and a host has
+/// to be able to tell the two apart without reading a message.
+fn eval_error(context: &str, error: HnswError) -> EvalError {
+    match error {
+        HnswError::FloatEnvironment(refusal) => EvalError::FloatEnvironment(refusal),
+        other => EvalError::data(format!("{context}: {other}")),
+    }
+}
 
 /// The `?neighbour` position: the retrieved term.
 const HNSW_NEIGHBOUR: usize = 0;
@@ -167,6 +180,9 @@ impl HnswSpace {
     /// missing or ambiguous HNSW guard, a stale or substituted guard, a payload whose
     /// commitment fails, an unreadable row, or a decoded kernel that disagrees with the
     /// family contract.
+    ///
+    /// [`EvalError::FloatEnvironment`] when the calling thread's float environment is not
+    /// the IEEE one the distance arithmetic defines.
     pub fn from_artifact(
         artifact: &[u8],
         target_set: TargetSetId,
@@ -233,7 +249,7 @@ impl HnswSpace {
         let matrix = crate::guard::read_effective_matrix(&effective)
             .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?;
         let index = crate::guard::load(&guard_view, matrix)
-            .map_err(|e| EvalError::data(format!("the HNSW payload is unusable: {e}")))?;
+            .map_err(|e| eval_error("the HNSW payload is unusable", e))?;
         if index.kernel() != kernel {
             return Err(EvalError::data(format!(
                 "the HNSW payload was built under a different distance kernel than the \
@@ -762,7 +778,7 @@ impl HnswCursor {
                 .space
                 .index
                 .search_rows_work(row, self.select_k)
-                .map_err(|e| EvalError::data(format!("the HNSW search failed: {e}")))?,
+                .map_err(|e| eval_error("the HNSW search failed", e))?,
             None => (Vec::new(), 0),
         };
         self.unreported_work = self.unreported_work.saturating_add(work);

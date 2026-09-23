@@ -274,6 +274,16 @@ pub enum EvalError {
         /// The relation's own description of what was missing, verbatim.
         reason: String,
     },
+
+    /// The calling thread's floating-point environment is not the IEEE-754 one a
+    /// distance arithmetic defines its results under: it flushes subnormals to zero,
+    /// rounds other than to nearest, or cannot be read on this target.
+    ///
+    /// Its own variant rather than [`Self::Data`], because nothing about the data is
+    /// wrong: the same artifact ranks correctly on a thread with the default
+    /// environment. Ranking under the flushed one would return different distances
+    /// with nothing to say so, which is a silent divergence rather than an answer.
+    FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
 }
 
 impl EvalError {
@@ -317,7 +327,8 @@ impl EvalError {
             | Self::Function(_)
             | Self::ExistsScopeCollision { .. }
             | Self::Config(_)
-            | Self::CompositeBound(_) => None,
+            | Self::CompositeBound(_)
+            | Self::FloatEnvironment(_) => None,
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
         }
     }
@@ -415,6 +426,11 @@ impl core::fmt::Display for EvalError {
                 "property function <{iri}> served this query from an index it declares was \
                  not whole ({reason}); this entry point carries no witness to label the \
                  shortfall with, so the query is refused rather than answered short"
+            ),
+            Self::FloatEnvironment(error) => write!(
+                f,
+                "the floating-point environment cannot run the exact distance arithmetic: \
+                 {error}"
             ),
         }
     }

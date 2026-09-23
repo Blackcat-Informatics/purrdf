@@ -127,7 +127,7 @@ PurRDF 是 [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology) 技�
 **确定，因而可移植。**Postgres 技术栈每个构建给出一种答案：`ts_rank` 与 pgvector 的
 距离是浮点数，PostGIS 谓词运行在 GEOS 的浮点几何上。PurRDF 的三个接口在每个目标上
 都是其输入的纯函数——BM25 用 `i128` 定点数配合固定迭代次数的整数对数，几何用精确
-有理数配合整数 DE-9IM 判定，k 近邻用 binary64 配合单一的顺序累加——并且每一种排序
+有理数配合整数 DE-9IM 判定，k 近邻用 binary64 配合单一固定的累加顺序——并且每一种排序
 都是规范的：文档 id 在按 `(graph, subject, language)` 排序后分配，空间行按
 `TermValue` 的全序排序，k 近邻的并列按内容派生的 `TargetId` 打破。这一声称是被执行
 而非被论证的：文本与 k 近邻的确定性测试是同时带有 `#[test]` 与

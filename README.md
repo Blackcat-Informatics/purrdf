@@ -142,7 +142,7 @@ per build: `ts_rank` and pgvector distances are floating point, and PostGIS
 predicates run on GEOS's floating-point geometry. PurRDF's three surfaces are pure
 functions of their input on every target — BM25 in `i128` fixed point with a
 fixed-iteration integer logarithm, geometry as exact rationals with integer
-DE-9IM decisions, kNN in binary64 with one sequential accumulation order — and
+DE-9IM decisions, kNN in binary64 with one pinned sixteen-lane accumulation order — and
 every ordering is canonical: document ids are assigned after sorting on
 `(graph, subject, language)`, spatial rows sort in `TermValue`'s total order,
 and kNN ties break on the content-derived `TargetId`. The claim is executed,

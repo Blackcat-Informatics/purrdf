@@ -1898,6 +1898,12 @@ impl SubstitutionRow {
 /// Unchanged: still IRI-only value substitution via `substitute_term_pattern`
 /// — the fusion contract a joined `VALUES` row cannot satisfy (see that
 /// function's doc).
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 pub(crate) fn substitute_pattern(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
@@ -2028,6 +2034,12 @@ struct SubstitutionTracking<'a> {
 /// site, BEFORE this call's own map is pushed — or `None` when `pattern` is not itself
 /// inside an already-substituted subtree. See [`SubstitutionSource`]'s doc for why a
 /// nested `LATERAL` needs it.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 pub(crate) fn substitute_pattern_tracked(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
@@ -2055,6 +2067,12 @@ pub(crate) fn substitute_pattern_tracked(
 /// mapped to the identical source its wrapped child already resolves to — see
 /// [`SubstitutionSourceMap`]'s doc for why that, not leaving the wrapper unmapped, is the
 /// correct choice.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn substitute_pattern_impl(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
@@ -2621,6 +2639,12 @@ fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, addres
 /// leaf that needs it — see [`SubstitutionRow`]'s doc: that per-leaf fan-out is `Arc`
 /// refcount traffic (both types store their text behind `Arc<str>`), not the per-term
 /// `String` allocation AGENTS.md's hot-path rule forbids.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn join_leaf_with_values(
     leaf: Box<GraphPattern>,
     leaf_vars: &DetHashSet<Variable>,
@@ -2698,6 +2722,12 @@ fn join_leaf_with_values(
 /// expression-bearing node that needs a term-only var, and the `(Variable, GroundTerm)`
 /// clone at each such site is `Arc` refcount traffic (see [`SubstitutionRow`]'s doc), not
 /// a `String` allocation.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn wrap_with_expr_term_only_values(
     node: Box<GraphPattern>,
     expr_free_vars: &DetHashSet<Variable>,

@@ -32,6 +32,8 @@
 
 use std::collections::BTreeSet;
 
+use purrdf_core::distance::{Arithmetic, Exact, Resolved, RowsRef};
+
 use crate::error::{HnswError, Result};
 use crate::params::Params;
 use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked, norm};
@@ -40,7 +42,13 @@ use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked, norm};
 pub(crate) const IMAGE_MAGIC: [u8; 8] = *b"PURHNSW1";
 
 /// The canonical image's format version.
-pub(crate) const IMAGE_VERSION: u32 = 1;
+///
+/// Version 2 is the first whose distances are folded by the sixteen-lane exact
+/// arithmetic, and the first whose header records that arithmetic (in the `u32` that
+/// version 1 reserved as zero). A version-1 image's distances were folded sequentially,
+/// so its recorded bits are not the ones this build computes; it is refused with
+/// [`HnswError::VersionMismatch`] rather than decoded.
+pub(crate) const IMAGE_VERSION: u32 = 2;
 
 /// A deterministic, finite-valued, row-major matrix of `f64` vectors.
 ///
@@ -351,6 +359,173 @@ impl VectorMatrix {
     }
 }
 
+impl VectorMatrix {
+    /// The distance between two stored rows under `kernel`, along `arithmetic`'s
+    /// resolved dispatch path.
+    ///
+    /// The crate's own call sites use this rather than [`VectorMatrix::distance`], so
+    /// every distance the index computes runs under an arithmetic whose float
+    /// environment was checked. The two return the same bits.
+    pub(crate) fn distance_with(
+        &self,
+        arithmetic: Resolved<Exact>,
+        kernel: Kernel,
+        a: usize,
+        a_norm: f64,
+        b: usize,
+        b_norm: f64,
+    ) -> Option<f64> {
+        let (a_start, b_start) = (a * self.dims, b * self.dims);
+        let measure = kernel.measure();
+        match &self.data {
+            Vectors::F64(data) => arithmetic.distance(
+                measure,
+                &data[a_start..a_start + self.dims],
+                a_norm,
+                &data[b_start..b_start + self.dims],
+                b_norm,
+            ),
+            Vectors::F32(data) => arithmetic.distance(
+                measure,
+                &data[a_start..a_start + self.dims],
+                a_norm,
+                &data[b_start..b_start + self.dims],
+                b_norm,
+            ),
+        }
+    }
+
+    /// [`VectorMatrix::distance_with`], permitted to stop once it cannot clear `bound`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the resolved arithmetic, the kernel, both endpoints with their norms and \
+                  the bound are each an independent input of one distance"
+    )]
+    pub(crate) fn distance_bounded_with(
+        &self,
+        arithmetic: Resolved<Exact>,
+        kernel: Kernel,
+        a: usize,
+        a_norm: f64,
+        b: usize,
+        b_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        let (a_start, b_start) = (a * self.dims, b * self.dims);
+        let measure = kernel.measure();
+        match &self.data {
+            Vectors::F64(data) => arithmetic.distance_bounded(
+                measure,
+                &data[a_start..a_start + self.dims],
+                a_norm,
+                &data[b_start..b_start + self.dims],
+                b_norm,
+                bound,
+            ),
+            Vectors::F32(data) => arithmetic.distance_bounded(
+                measure,
+                &data[a_start..a_start + self.dims],
+                a_norm,
+                &data[b_start..b_start + self.dims],
+                b_norm,
+                bound,
+            ),
+        }
+    }
+
+    /// The distances from stored row `seed` to each row of `ids`, in `ids` order, by one
+    /// call to the batch kernel.
+    ///
+    /// `norms` is the index's per-row norm table: empty for a kernel that does not divide
+    /// by one, one per row otherwise.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the resolved arithmetic, the kernel, the seed with its norm, the norm \
+                  table, the ids and the output are each an independent input of one batch"
+    )]
+    pub(crate) fn distances_from_row(
+        &self,
+        arithmetic: Resolved<Exact>,
+        kernel: Kernel,
+        seed: usize,
+        seed_norm: f64,
+        norms: &[f64],
+        ids: &[usize],
+        out: &mut [Option<f64>],
+    ) {
+        let start = seed * self.dims;
+        let measure = kernel.measure();
+        match &self.data {
+            Vectors::F64(data) => arithmetic.distances_indexed(
+                measure,
+                &data[start..start + self.dims],
+                seed_norm,
+                self.rows_ref(data, norms),
+                ids,
+                out,
+            ),
+            Vectors::F32(data) => arithmetic.distances_indexed(
+                measure,
+                &data[start..start + self.dims],
+                seed_norm,
+                self.rows_ref(data, norms),
+                ids,
+                out,
+            ),
+        }
+    }
+
+    /// The distances from an external `binary64` query to each row of `ids`, in `ids`
+    /// order, by one call to the batch kernel.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the resolved arithmetic, the kernel, the query with its norm, the norm \
+                  table, the ids and the output are each an independent input of one batch"
+    )]
+    pub(crate) fn distances_from_query(
+        &self,
+        arithmetic: Resolved<Exact>,
+        kernel: Kernel,
+        query: &[f64],
+        query_norm: f64,
+        norms: &[f64],
+        ids: &[usize],
+        out: &mut [Option<f64>],
+    ) {
+        let measure = kernel.measure();
+        match &self.data {
+            Vectors::F64(data) => arithmetic.distances_indexed(
+                measure,
+                query,
+                query_norm,
+                self.rows_ref(data, norms),
+                ids,
+                out,
+            ),
+            Vectors::F32(data) => arithmetic.distances_indexed(
+                measure,
+                query,
+                query_norm,
+                self.rows_ref(data, norms),
+                ids,
+                out,
+            ),
+        }
+    }
+
+    /// This matrix's buffer as the batch kernels' row view.
+    fn rows_ref<'a, T: purrdf_core::distance::Scalar>(
+        &self,
+        data: &'a [T],
+        norms: &'a [f64],
+    ) -> RowsRef<'a, T> {
+        RowsRef::new(data, self.rows, self.dims, norms).expect(
+            "a validated matrix holds rows * dims values, and its norm table is empty or \
+             one per row",
+        )
+    }
+}
+
 /// One directed adjacency update: `node` gains `neighbor` at `layer`.
 ///
 /// The build emits both directions of every proposed link, so a commit applies them by
@@ -532,7 +707,8 @@ impl Graph {
         push_u64(&mut out, as_u64(params.ef_search()));
         push_u64(&mut out, as_u64(self.node_count()));
         push_u32(&mut out, self.max_level);
-        push_u32(&mut out, 0);
+        // The arithmetic the recorded distances were folded under.
+        push_u32(&mut out, Exact::IMAGE_CODE);
         push_u64(&mut out, self.entry.map_or(u64::MAX, as_u64));
 
         for row in 0..self.node_count() {
@@ -692,10 +868,11 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
     )?;
     let node_count = cursor.usize()?;
     let max_level = cursor.u32()?;
-    let reserved = cursor.u32()?;
-    if reserved != 0 {
-        return Err(HnswError::InvalidPayload {
-            reason: format!("the header's reserved field is {reserved}, not zero"),
+    let arithmetic = cursor.u32()?;
+    if arithmetic != Exact::IMAGE_CODE {
+        return Err(HnswError::ArithmeticMismatch {
+            arithmetic: Exact::ID,
+            actual: arithmetic,
         });
     }
     let entry_raw = cursor.u64()?;

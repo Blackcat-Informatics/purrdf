@@ -157,9 +157,10 @@ pub fn select<'a>(view: &EmbeddingView<'a>) -> Result<IndexGuardView<'a>> {
     }
     match count {
         0 => Err(HnswError::MissingIndexGuard {
-            description: "the artifact holds no derived index whose implementation is \
-                          `hnsw-v1`; register one with `guard::derived_index`"
-                .to_owned(),
+            description: format!(
+                "the artifact holds no derived index whose implementation is \
+                 `{IMPLEMENTATION_ID}`; register one with `guard::derived_index`"
+            ),
         }),
         1 => Ok(selected.expect("count one implies a selected guard")),
         count => Err(HnswError::AmbiguousIndexGuard { count }),
@@ -541,9 +542,14 @@ fn check_row_width(row: usize, decoded: usize, dimension: usize) -> Result<()> {
 ///
 /// # Errors
 ///
-/// [`HnswError`] only from the rebuild itself (for example a kernel result that leaves the
-/// finite range on the supplied matrix); a payload that cannot be read or decoded is
-/// `Ok(false)`, since it cannot be the rebuild either.
+/// [`HnswError`] from the rebuild itself (for example a kernel result that leaves the
+/// finite range on the supplied matrix, or [`HnswError::FloatEnvironment`] for a thread
+/// whose float environment the arithmetic refuses), and
+/// [`HnswError::VersionMismatch`] / [`HnswError::ArithmeticMismatch`] for a payload of
+/// another image version or arithmetic: a version-1 image is an index folded under a
+/// different law, not a tampered one, and answering `false` would say otherwise. Any other
+/// payload that cannot be read or decoded is `Ok(false)`, since it cannot be the rebuild
+/// either.
 pub fn verify_rebuild(
     guard: &IndexGuardView<'_>,
     source_matrix: &VectorMatrix,

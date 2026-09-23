@@ -18,15 +18,26 @@
 //!   on it — a cache hit and a recomputation return the same bits — so it is
 //!   digest-neutral by construction; it exists only to stop the build evaluating a pair
 //!   it already knows.
-//! * [`Query`] binds the query row, its norm, and the cache into the one closure every
-//!   distance in a search goes through, so no call site can accidentally rank by a
-//!   differently-computed number.
+//! * [`Query`] binds the query row, its norm, the resolved exact arithmetic and the
+//!   cache into the one closure every distance in a search goes through, so no call site
+//!   can accidentally rank by a differently-computed number.
+//!
+//! # Expansion is one batch per node
+//!
+//! Expanding a node scores every unvisited neighbour it links to. Those neighbours are
+//! collected first and scored by **one** call to the exact batch kernel
+//! (`distances_indexed`), with the query held across the batch and the dispatch path
+//! already resolved, and only then admitted to the beam one at a time in adjacency order.
+//! Scoring cannot depend on admission, so batching changes nothing but how often the
+//! kernel is entered: the admitted set, its order and the charged evaluation count are
+//! the ones a one-at-a-time expansion produces.
 
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 
+use purrdf_core::distance::{Exact, Resolved};
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
 use crate::error::{HnswError, Result};
@@ -149,6 +160,8 @@ impl DistanceCache {
 pub(crate) struct Query<'a> {
     matrix: &'a VectorMatrix,
     kernel: Kernel,
+    /// The exact arithmetic, resolved for the thread running this search.
+    arithmetic: Resolved<Exact>,
     norms: &'a [f64],
     cache: &'a DistanceCache,
     /// What every candidate is ranked against.
@@ -177,6 +190,7 @@ impl<'a> Query<'a> {
     pub(crate) fn from_vector(
         matrix: &'a VectorMatrix,
         kernel: Kernel,
+        arithmetic: Resolved<Exact>,
         norms: &'a [f64],
         cache: &'a DistanceCache,
         vector: &'a [f64],
@@ -189,6 +203,7 @@ impl<'a> Query<'a> {
         Self {
             matrix,
             kernel,
+            arithmetic,
             norms,
             cache,
             target: Target::Vector(vector),
@@ -203,6 +218,7 @@ impl<'a> Query<'a> {
     pub(crate) fn new(
         matrix: &'a VectorMatrix,
         kernel: Kernel,
+        arithmetic: Resolved<Exact>,
         norms: &'a [f64],
         cache: &'a DistanceCache,
         query_row: usize,
@@ -210,6 +226,7 @@ impl<'a> Query<'a> {
         Self {
             matrix,
             kernel,
+            arithmetic,
             norms,
             cache,
             target: Target::Row(query_row),
@@ -231,17 +248,96 @@ impl<'a> Query<'a> {
         let candidate_norm = norm_of(self.norms, row);
         let distance = match self.target {
             Target::Vector(vector) => {
-                self.matrix
-                    .distance_from_query(self.kernel, vector, self.norm, row, candidate_norm)
+                let mut out = [None];
+                self.matrix.distances_from_query(
+                    self.arithmetic,
+                    self.kernel,
+                    vector,
+                    self.norm,
+                    self.norms,
+                    &[row],
+                    &mut out,
+                );
+                out[0]
             }
-            Target::Row(seed) => {
-                self.matrix
-                    .distance(self.kernel, seed, self.norm, row, candidate_norm)
-            }
+            Target::Row(seed) => self.matrix.distance_with(
+                self.arithmetic,
+                self.kernel,
+                seed,
+                self.norm,
+                row,
+                candidate_norm,
+            ),
         }
         .ok_or(HnswError::NonFiniteDistance { row })?;
         self.cache.insert(row, distance);
         Ok(distance)
+    }
+
+    /// The distances from the query to every row of `rows`, in `rows` order, memoized.
+    ///
+    /// The rows not already in the memo are scored by one call to the batch kernel;
+    /// `rows` must be distinct, which a neighbour list is. Each newly scored row is
+    /// charged once, exactly as [`Query::of`] charges it.
+    ///
+    /// # Errors
+    ///
+    /// [`HnswError::NonFiniteDistance`] naming the first row, in `rows` order, whose
+    /// distance left the finite range.
+    pub(crate) fn of_many(
+        &self,
+        rows: &[usize],
+        scratch: &mut Scratch,
+        out: &mut Vec<f64>,
+    ) -> Result<()> {
+        out.clear();
+        scratch.missing_rows.clear();
+        scratch.missing_at.clear();
+        for (at, &row) in rows.iter().enumerate() {
+            if let Some(distance) = self.cache.get(row) {
+                out.push(distance);
+            } else {
+                out.push(f64::NAN);
+                scratch.missing_rows.push(row);
+                scratch.missing_at.push(at);
+            }
+        }
+        if scratch.missing_rows.is_empty() {
+            return Ok(());
+        }
+        scratch.scored.clear();
+        scratch.scored.resize(scratch.missing_rows.len(), None);
+        match self.target {
+            Target::Vector(vector) => self.matrix.distances_from_query(
+                self.arithmetic,
+                self.kernel,
+                vector,
+                self.norm,
+                self.norms,
+                &scratch.missing_rows,
+                &mut scratch.scored,
+            ),
+            Target::Row(seed) => self.matrix.distances_from_row(
+                self.arithmetic,
+                self.kernel,
+                seed,
+                self.norm,
+                self.norms,
+                &scratch.missing_rows,
+                &mut scratch.scored,
+            ),
+        }
+        for ((&row, &at), scored) in scratch
+            .missing_rows
+            .iter()
+            .zip(&scratch.missing_at)
+            .zip(&scratch.scored)
+        {
+            let distance = scored.ok_or(HnswError::NonFiniteDistance { row })?;
+            self.cache.insert(row, distance);
+            out[at] = distance;
+        }
+        Ok(())
     }
 
     /// The cached distance from the query, or `None` if it has not been computed.
@@ -249,6 +345,18 @@ impl<'a> Query<'a> {
     pub(crate) fn cached(&self, row: usize) -> Option<f64> {
         self.cache.get(row)
     }
+}
+
+/// Reusable buffers for [`Query::of_many`], so a search allocates them once rather than
+/// once per expanded node.
+#[derive(Debug, Default)]
+pub(crate) struct Scratch {
+    /// The rows of the current batch not yet in the memo.
+    missing_rows: Vec<usize>,
+    /// Where each of those rows sits in the batch.
+    missing_at: Vec<usize>,
+    /// The batch kernel's output for them.
+    scored: Vec<Option<f64>>,
 }
 
 /// The L2 norm of `row`, or `0.0` for a kernel that does not divide by one.
@@ -273,22 +381,27 @@ pub(crate) fn greedy_descend(
     if from_layer < to_layer {
         return Ok((current, current_distance));
     }
+    let mut scratch = Scratch::default();
+    let mut rows: Vec<usize> = Vec::new();
+    let mut distances: Vec<f64> = Vec::new();
     for layer in (to_layer..=from_layer).rev() {
         loop {
             let mut improved = false;
-            for neighbor in graph.neighbors(current, layer) {
-                let distance = query.of(neighbor.row)?;
-                let candidate = Ranked {
-                    distance,
-                    row: neighbor.row,
-                };
+            // Every neighbour of the node the climb stands on is scored in one batch, and
+            // then compared in adjacency order exactly as a one-at-a-time climb would:
+            // a distance does not depend on which node is current.
+            rows.clear();
+            rows.extend(graph.neighbors(current, layer).iter().map(|n| n.row));
+            query.of_many(&rows, &mut scratch, &mut distances)?;
+            for (&row, &distance) in rows.iter().zip(&distances) {
+                let candidate = Ranked { distance, row };
                 if candidate
                     < (Ranked {
                         distance: current_distance,
                         row: current,
                     })
                 {
-                    current = neighbor.row;
+                    current = row;
                     current_distance = distance;
                     improved = true;
                 }
@@ -333,6 +446,9 @@ pub(crate) fn search_layer(
         }
     }
 
+    let mut scratch = Scratch::default();
+    let mut fresh: Vec<usize> = Vec::new();
+    let mut distances: Vec<f64> = Vec::new();
     while let Some(Reverse(current)) = candidates.pop() {
         if results.len() >= ef {
             // The nearest unexplored candidate is already worse than the worst result, so
@@ -341,14 +457,18 @@ pub(crate) fn search_layer(
                 break;
             }
         }
+        // The unvisited neighbours, scored as one batch, then admitted in adjacency
+        // order: visiting does not depend on admission, and admission sees exactly the
+        // beam a one-at-a-time expansion would have built up to that neighbour.
+        fresh.clear();
         for neighbor in graph.neighbors(current.row, layer) {
-            if !visited.visit(neighbor.row) {
-                continue;
+            if visited.visit(neighbor.row) {
+                fresh.push(neighbor.row);
             }
-            let score = Ranked {
-                distance: query.of(neighbor.row)?,
-                row: neighbor.row,
-            };
+        }
+        query.of_many(&fresh, &mut scratch, &mut distances)?;
+        for (&row, &distance) in fresh.iter().zip(&distances) {
+            let score = Ranked { distance, row };
             let admitted = results.len() < ef || results.peek().is_some_and(|worst| score < *worst);
             if admitted {
                 candidates.push(Reverse(score));
@@ -367,6 +487,11 @@ pub(crate) fn search_layer(
 mod tests {
     use super::*;
     use crate::params::Params;
+    use purrdf_core::distance::Arithmetic;
+
+    fn exact() -> Resolved<Exact> {
+        Exact::resolve().expect("the test thread runs the default float environment")
+    }
 
     /// A small hand-built graph on a line: row `r` sits at `r` on the number line.
     fn line_graph(degrees: &[usize]) -> (VectorMatrix, Graph) {
@@ -409,7 +534,7 @@ mod tests {
     fn a_greedy_descent_walks_toward_the_query() {
         let (matrix, graph) = line_graph(&[2, 2, 2, 2]);
         let cache = DistanceCache::new();
-        let query = Query::new(&matrix, Kernel::SquaredEuclidean, &[], &cache, 3);
+        let query = Query::new(&matrix, Kernel::SquaredEuclidean, exact(), &[], &cache, 3);
         let (node, distance) = greedy_descend(&graph, &query, 0, 0, 0).expect("descends");
         assert_eq!(node, 3, "it should reach the query's own row");
         assert_eq!(distance, 0.0);
@@ -419,7 +544,7 @@ mod tests {
     fn the_beam_returns_the_nearest_first() {
         let (matrix, graph) = line_graph(&[3, 3, 3, 3, 3, 3]);
         let cache = DistanceCache::new();
-        let query = Query::new(&matrix, Kernel::SquaredEuclidean, &[], &cache, 0);
+        let query = Query::new(&matrix, Kernel::SquaredEuclidean, exact(), &[], &cache, 0);
         let mut visited = Visited::new(6);
         let result = search_layer(&graph, &query, &mut visited, &[0], 0, 3).expect("searches");
         let rows: Vec<usize> = result.iter().map(|ranked| ranked.row).collect();
@@ -430,7 +555,7 @@ mod tests {
     fn the_distance_cache_is_value_neutral() {
         let (matrix, _graph) = line_graph(&[2, 2, 2]);
         let cache = DistanceCache::new();
-        let query = Query::new(&matrix, Kernel::SquaredEuclidean, &[], &cache, 0);
+        let query = Query::new(&matrix, Kernel::SquaredEuclidean, exact(), &[], &cache, 0);
         let first = query.of(2).expect("finite");
         assert_eq!(query.cached(2), Some(first));
         let second = query.of(2).expect("finite");

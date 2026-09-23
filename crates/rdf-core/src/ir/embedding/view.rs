@@ -4429,10 +4429,16 @@ fn deterministic_norm_f64(bytes: &[u8], row: u64, dimension: u32) -> Result<f64,
     finish_norm(scale, ssq, row, dimension)
 }
 
+/// One step of PURREMB's normative scaled L2 fold (§13.2): fold the magnitude `value`
+/// into the running `scale` and sum of squared ratios `ssq`.
+///
+/// The single copy of that order in the workspace. `crate::distance::norm` folds a whole
+/// vector through it, so the kNN and HNSW norms and the artifact's own normalization
+/// cannot drift apart.
 // PURREMB v1 prescribes separate rounded multiply and add operations; fusing
 // them would change portable projection bytes.
 #[allow(clippy::suboptimal_flops)]
-fn norm_fold(value: f64, scale: &mut f64, ssq: &mut f64) {
+pub(crate) fn norm_fold(value: f64, scale: &mut f64, ssq: &mut f64) {
     if value == 0.0 {
         return;
     }

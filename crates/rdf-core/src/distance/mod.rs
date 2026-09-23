@@ -1,0 +1,602 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! **Distance arithmetic as a type**: the binary64 folds every ranked-retrieval surface
+//! in the workspace computes its distances with, and the law each one follows.
+//!
+//! A float kernel has two properties a caller can depend on, and they are different
+//! properties. One is the *metric*: what is being measured ([`Measure`], and PURREMB's
+//! `DistanceMetric` above it). The other is the *arithmetic*: the exact order of the
+//! correctly rounded operations that produce the number. Two builds that agree on the
+//! metric and disagree on the arithmetic return different last bits, two near-tied
+//! candidates swap, and the same query ranks differently on two targets. So the
+//! arithmetic is named here, as a type, rather than left to whatever order a loop
+//! happened to be written in.
+//!
+//! [`Arithmetic`] is a sealed trait. Each implementation is one law with one stable
+//! identifier ([`Arithmetic::ID`]) and one code for the images that record it
+//! ([`Arithmetic::IMAGE_CODE`]). Every consumer is generic over it, so two arithmetics
+//! are two monomorphized functions rather than one function with a mode, and mixing
+//! them is a type error.
+//!
+//! # [`Exact`]: the fixed-lane law
+//!
+//! `Exact` is the one law whose bits are the same on every target. It is *defined* as
+//! sixteen independent binary64 accumulators over consecutive sixteen-element chunks,
+//! a fixed pairwise tree, and a sequential tail:
+//!
+//! 1. Lane `l` (`0 ≤ l < 16`) sums the terms at indices `16·c + l`, for every whole
+//!    chunk `c`, in ascending `c`, starting from `+0.0`.
+//! 2. The sixteen lanes are combined pairwise: `s8[l] = lane[l] + lane[l+8]`, then
+//!    `s4[l] = s8[l] + s8[l+4]`, then `s2[l] = s4[l] + s4[l+2]`, then `s2[0] + s2[1]`.
+//! 3. The remaining `len % 16` terms are added to that sum one at a time, in ascending
+//!    index.
+//!
+//! A term is `x[i] · y[i]` for a dot product and `(x[i] - y[i])²` for squared
+//! Euclidean distance. Every product is bound to a named local before it is added, so
+//! no multiply is ever fused into an add; Rust never contracts a plain `*` and `+`
+//! into a fused multiply-add, so no target flag can change that either. Each operand
+//! is widened to binary64 per component ([`Scalar`]), which is exact, so `f32`, `f64`
+//! and mixed operands give identical bits.
+//!
+//! Because the order is the definition rather than an accident of compilation, it
+//! needs no permission from the compiler to vectorize: the sixteen lanes are sixteen
+//! independent add chains, and LLVM packs them into whatever vector width the target
+//! has. On a sequence shorter than one chunk the law is exactly the ascending
+//! sequential fold, since the tree of sixteen `+0.0` lanes is `+0.0`.
+//!
+//! # Dispatch happens once, inside one contract
+//!
+//! [`Arithmetic::resolve`] is called once per scan, relation or index and returns a
+//! [`Resolved`] handle naming the dispatch [`Path`] this process will run. On
+//! `x86_64`, `Exact` has two: a portable compilation of the generic body and an
+//! AVX2 compilation of the *same* body. They are two compilations of one source order,
+//! so they return the same bits, and a test holds every path the host can execute to
+//! a scalar reference model. `aarch64` NEON and wasm `simd128` are compile-time
+//! features of the one portable path. There is no exact AVX-512 path: at sixteen
+//! binary64 lanes AVX2 already holds the fold in four registers.
+//!
+//! The batch kernels ([`Resolved::distances`], [`Resolved::distances_indexed`]) are the
+//! unit of dispatch. A per-pair call ([`Resolved::distance`]) runs the same body.
+//!
+//! # The float environment is a precondition, checked
+//!
+//! Every arithmetic here assumes IEEE-754 round-to-nearest with subnormals preserved.
+//! A thread that has set flush-to-zero or denormals-are-zero, or another rounding
+//! direction, would compute different bits from the same code. [`Arithmetic::resolve`]
+//! reads the control register and refuses such an environment with a named
+//! [`FloatEnvironmentError`].
+
+mod dispatch;
+mod env;
+mod exact;
+
+#[cfg(test)]
+mod tests;
+
+use core::fmt;
+use core::marker::PhantomData;
+
+pub use env::FloatEnvironmentError;
+
+/// The number of independent accumulators in the [`Exact`] law.
+pub const EXACT_LANES: usize = exact::LANES;
+
+/// A stored scalar that widens to binary64 **exactly**.
+///
+/// PURREMB stores embedding matrices as either `binary32` or `binary64` (§12), and
+/// widening an `f32` to an `f64` is lossless -- every `f32` is representable. So a kernel
+/// can accept either width and widen per component inside its fold, and get bit for bit
+/// the answer it would have got from a matrix widened up front.
+///
+/// That distinction is worth the trait. Widening at LOAD doubles the resident size of an
+/// `f32` corpus and changes no arithmetic; widening in the FOLD costs nothing and changes
+/// no arithmetic either. At a million rows of 4,096 components that is sixteen gigabytes
+/// of difference for an identical answer, and on `wasm32` -- whose address space stops at
+/// four gigabytes -- it is the difference between a corpus loading and being refused.
+///
+/// Narrowing is NOT offered and must not be added: `f64` to `f32` loses bits, so a
+/// genuine `binary64` artifact has to stay `binary64`.
+pub trait Scalar: Copy {
+    /// This value as an `f64`, exactly.
+    fn widen(self) -> f64;
+}
+
+impl Scalar for f32 {
+    #[inline]
+    fn widen(self) -> f64 {
+        f64::from(self)
+    }
+}
+
+impl Scalar for f64 {
+    #[inline]
+    fn widen(self) -> f64 {
+        self
+    }
+}
+
+/// The threshold a bounded distance is measured against.
+///
+/// The two forms exist because the callers' comparisons differ, and picking the wrong one
+/// is a silent wrong answer rather than a slow one. A caller ranking by distance first and
+/// then by row may only abandon on a **strictly** greater partial sum, because at an equal
+/// distance the row still decides the comparison. A caller testing a bare `<` on the
+/// distance alone may abandon on equality, since equality already falsifies it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Bound {
+    /// Abandon once the partial sum is greater than or equal to this value.
+    AtOrAbove(f64),
+    /// Abandon only once the partial sum is strictly greater than this value.
+    Above(f64),
+}
+
+impl Bound {
+    /// Whether `sum` has reached this bound.
+    #[must_use]
+    pub fn is_met_by(self, sum: f64) -> bool {
+        match self {
+            Self::AtOrAbove(limit) => sum >= limit,
+            Self::Above(limit) => sum > limit,
+        }
+    }
+}
+
+/// The outcome of a bounded distance evaluation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Bounded {
+    /// The distance, on the near side of the bound, computed in full.
+    Below(f64),
+    /// The bound was reached; the distance's value was never completed.
+    Beyond,
+    /// A partial sum left the finite range, exactly as a full distance reports `None`.
+    NonFinite,
+}
+
+/// Which distance a kernel computes, in PURREMB's sense: smaller ranks first.
+///
+/// These are the three built-in PURREMB metrics and only those. A caller-defined
+/// extension metric has opaque parameters no kernel here can interpret, so it has no
+/// `Measure`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Measure {
+    /// `1 - dot(x, y) / (L2(x) · L2(y))`, written as one product, one quotient and one
+    /// subtraction, each rounded on its own. Undefined for a zero-norm operand.
+    Cosine,
+    /// `-dot(x, y)`.
+    NegativeDot,
+    /// `sum((x[i] - y[i])²)`.
+    SquaredEuclidean,
+}
+
+/// The dispatch path a [`Resolved`] arithmetic runs on this process.
+///
+/// A path is a compilation of an arithmetic's body, never a different arithmetic: every
+/// path of one arithmetic honours that arithmetic's whole contract. For [`Exact`] every
+/// path returns the same bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Path {
+    /// The generic body compiled for the target's baseline features. On `aarch64` that
+    /// is NEON, and on a `wasm32` build with `+simd128` it is wasm SIMD; both are
+    /// compile-time features, so this is the only path those targets have.
+    Portable,
+    /// The same generic body compiled with `#[target_feature(enable = "avx2")]`,
+    /// selected on `x86_64` when the processor reports AVX2.
+    Avx2,
+}
+
+impl Path {
+    /// The stable name of this path, as evidence text and test output print it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Portable => "portable",
+            Self::Avx2 => "avx2",
+        }
+    }
+}
+
+impl fmt::Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// A flat, row-major matrix of stored vectors, with the per-row norms a cosine kernel
+/// divides by.
+///
+/// Row `r` occupies `data[r * dims .. (r + 1) * dims]`. `norms` is either empty (a
+/// kernel that does not divide by a norm reads `0.0`) or holds exactly one norm per row.
+#[derive(Debug, Clone, Copy)]
+pub struct RowsRef<'a, T> {
+    data: &'a [T],
+    rows: usize,
+    dims: usize,
+    norms: &'a [f64],
+}
+
+impl<'a, T: Scalar> RowsRef<'a, T> {
+    /// A view of `rows` rows of `dims` components each over `data`.
+    ///
+    /// Returns `None` unless `data` holds exactly `rows * dims` values and `norms` is
+    /// either empty or holds exactly `rows` values. A matrix whose shape disagrees with
+    /// its buffer has no rows a kernel could score honestly.
+    #[must_use]
+    pub fn new(data: &'a [T], rows: usize, dims: usize, norms: &'a [f64]) -> Option<Self> {
+        let expected = rows.checked_mul(dims)?;
+        if data.len() != expected || !(norms.is_empty() || norms.len() == rows) {
+            return None;
+        }
+        Some(Self {
+            data,
+            rows,
+            dims,
+            norms,
+        })
+    }
+
+    /// How many rows the view holds.
+    #[must_use]
+    pub const fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// The number of components in every row.
+    #[must_use]
+    pub const fn dims(&self) -> usize {
+        self.dims
+    }
+
+    /// Row `row`'s components.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` is not a row of the view.
+    #[must_use]
+    pub fn row(&self, row: usize) -> &'a [T] {
+        assert!(
+            row < self.rows,
+            "row {row} is not one of the {} rows",
+            self.rows
+        );
+        let start = row * self.dims;
+        &self.data[start..start + self.dims]
+    }
+
+    /// Row `row`'s norm, or `0.0` when the view carries none.
+    #[must_use]
+    pub fn norm(&self, row: usize) -> f64 {
+        self.norms.get(row).copied().unwrap_or(0.0)
+    }
+}
+
+mod sealed {
+    /// Only this module's arithmetics implement [`super::Arithmetic`].
+    pub trait Sealed {}
+}
+
+/// An arithmetic contract: one law for the order of every rounded operation in a
+/// distance, with a stable identity.
+///
+/// Sealed. Every implementation is defined in this module, because an arithmetic is a
+/// promise about bits that every consumer records and a third-party law could not be
+/// held to it.
+///
+/// The kernel functions take a [`Resolved`] handle rather than a bare [`Path`]: a path
+/// is a claim about the processor, and the only way to obtain one is
+/// [`Arithmetic::resolve`], which checked it. Callers normally use the methods on
+/// [`Resolved`].
+pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static {
+    /// The stable identifier of this law. A plain identifier, not an IRI: PurRDF mints
+    /// no vocabulary.
+    const ID: &'static str;
+
+    /// The code an image records this arithmetic under.
+    ///
+    /// Zero is never a code, so a field that was reserved and zero in an older format
+    /// can never be read as naming an arithmetic.
+    const IMAGE_CODE: u32;
+
+    /// The divergence this arithmetic's results carry along `path`, or `None` for an
+    /// arithmetic whose bits are the same on every path and target.
+    fn evidence(path: Path) -> Option<&'static str>;
+
+    /// Check the float environment and select this process's dispatch path.
+    ///
+    /// Called once per scan, relation or index. The environment is a per-thread
+    /// property, so a caller that moves work to another thread resolves there too.
+    ///
+    /// # Errors
+    ///
+    /// [`FloatEnvironmentError`] when the current thread's floating-point control
+    /// register flushes subnormals or rounds other than to nearest, or when this
+    /// target's register cannot be read.
+    fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError>;
+
+    /// Score every row of `rows` against `query` into `out`, in row order.
+    ///
+    /// `out[r]` is `None` when row `r`'s distance left the finite range.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `query.len()` differs from `rows.dims()` or `out.len()` from
+    /// `rows.rows()`.
+    fn distances<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        query: &[Q],
+        query_norm: f64,
+        rows: RowsRef<'_, T>,
+        out: &mut [Option<f64>],
+    );
+
+    /// Score the rows named by `ids` against `query` into `out`, in `ids` order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `query.len()` differs from `rows.dims()`, `out.len()` from
+    /// `ids.len()`, or an id is not a row of `rows`.
+    fn distances_indexed<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        query: &[Q],
+        query_norm: f64,
+        rows: RowsRef<'_, T>,
+        ids: &[usize],
+        out: &mut [Option<f64>],
+    );
+
+    /// The distance from `a` to `b`, or `None` when it left the finite range.
+    ///
+    /// The operands are folded over their common prefix.
+    fn distance_on<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+    ) -> Option<f64>;
+
+    /// [`Arithmetic::distance_on`], permitted to stop once the answer cannot clear
+    /// `bound`.
+    fn distance_bounded_on<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+        bound: Bound,
+    ) -> Bounded;
+}
+
+/// An arithmetic whose float environment was checked and whose dispatch path was
+/// selected, by [`Arithmetic::resolve`].
+///
+/// `Copy` and cheap: it is the path and nothing else. It cannot be constructed any other
+/// way, so a path that names a processor feature is always one the processor reported.
+#[derive(Clone, Copy)]
+pub struct Resolved<A: Arithmetic> {
+    path: Path,
+    arithmetic: PhantomData<fn() -> A>,
+}
+
+impl<A: Arithmetic> Resolved<A> {
+    /// A handle on `path`. Callers must have established that the processor runs it.
+    const fn on(path: Path) -> Self {
+        Self {
+            path,
+            arithmetic: PhantomData,
+        }
+    }
+
+    /// The dispatch path this handle runs.
+    #[must_use]
+    pub const fn path(self) -> Path {
+        self.path
+    }
+
+    /// The divergence evidence of this arithmetic along this path; see
+    /// [`Arithmetic::evidence`].
+    #[must_use]
+    pub fn evidence(self) -> Option<&'static str> {
+        A::evidence(self.path)
+    }
+
+    /// See [`Arithmetic::distances`].
+    pub fn distances<Q: Scalar, T: Scalar>(
+        self,
+        measure: Measure,
+        query: &[Q],
+        query_norm: f64,
+        rows: RowsRef<'_, T>,
+        out: &mut [Option<f64>],
+    ) {
+        A::distances(self, measure, query, query_norm, rows, out);
+    }
+
+    /// See [`Arithmetic::distances_indexed`].
+    pub fn distances_indexed<Q: Scalar, T: Scalar>(
+        self,
+        measure: Measure,
+        query: &[Q],
+        query_norm: f64,
+        rows: RowsRef<'_, T>,
+        ids: &[usize],
+        out: &mut [Option<f64>],
+    ) {
+        A::distances_indexed(self, measure, query, query_norm, rows, ids, out);
+    }
+
+    /// See [`Arithmetic::distance_on`].
+    #[must_use]
+    pub fn distance<Q: Scalar, T: Scalar>(
+        self,
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+    ) -> Option<f64> {
+        A::distance_on(self, measure, a, a_norm, b, b_norm)
+    }
+
+    /// See [`Arithmetic::distance_bounded_on`].
+    #[must_use]
+    pub fn distance_bounded<Q: Scalar, T: Scalar>(
+        self,
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        A::distance_bounded_on(self, measure, a, a_norm, b, b_norm, bound)
+    }
+}
+
+impl<A: Arithmetic> PartialEq for Resolved<A> {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
+impl<A: Arithmetic> Eq for Resolved<A> {}
+
+impl<A: Arithmetic> fmt::Debug for Resolved<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Resolved")
+            .field("arithmetic", &A::ID)
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
+/// The fixed-lane exact arithmetic: sixteen binary64 lanes, the pairwise tree
+/// `(l, l+8)`, `(l, l+4)`, `(l, l+2)`, `(0, 1)`, then a sequential ascending tail.
+///
+/// The same bits on every target and every dispatch path. See the
+/// [module documentation](self) for the law.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Exact;
+
+impl sealed::Sealed for Exact {}
+
+impl Exact {
+    /// The exact distance from `a` to `b`, computed by the portable compilation of the
+    /// law, for a per-pair caller that holds no [`Resolved`] handle.
+    ///
+    /// Bit-identical to every dispatch path. It does not read the float environment;
+    /// a caller that ranks many pairs resolves once and uses [`Resolved::distance`],
+    /// which is where a flushing environment is refused.
+    #[must_use]
+    pub fn distance<Q: Scalar, T: Scalar>(
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+    ) -> Option<f64> {
+        dispatch::portable::distance(measure, a, a_norm, b, b_norm)
+    }
+
+    /// [`Exact::distance`], permitted to stop once the answer cannot clear `bound`.
+    ///
+    /// Only [`Measure::SquaredEuclidean`] can abandon: its terms are squares, so every
+    /// lane is non-decreasing. The other two measures accumulate signed products, so
+    /// they are computed in full and then classified.
+    #[must_use]
+    pub fn distance_bounded<Q: Scalar, T: Scalar>(
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        dispatch::portable::distance_bounded(measure, a, a_norm, b, b_norm, bound)
+    }
+}
+
+impl Arithmetic for Exact {
+    const ID: &'static str = "binary64-lane16-tree-v1";
+    const IMAGE_CODE: u32 = 1;
+
+    fn evidence(_path: Path) -> Option<&'static str> {
+        None
+    }
+
+    fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError> {
+        env::check()?;
+        Ok(Resolved::on(dispatch::exact_path()))
+    }
+
+    fn distances<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        query: &[Q],
+        query_norm: f64,
+        rows: RowsRef<'_, T>,
+        out: &mut [Option<f64>],
+    ) {
+        dispatch::distances(resolved.path, measure, query, query_norm, rows, out);
+    }
+
+    fn distances_indexed<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        query: &[Q],
+        query_norm: f64,
+        rows: RowsRef<'_, T>,
+        ids: &[usize],
+        out: &mut [Option<f64>],
+    ) {
+        dispatch::distances_indexed(resolved.path, measure, query, query_norm, rows, ids, out);
+    }
+
+    fn distance_on<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+    ) -> Option<f64> {
+        dispatch::distance(resolved.path, measure, a, a_norm, b, b_norm)
+    }
+
+    fn distance_bounded_on<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        dispatch::distance_bounded(resolved.path, measure, a, a_norm, b, b_norm, bound)
+    }
+}
+
+/// The Euclidean (L2) norm of `vector`, by PURREMB's normative scaled fold.
+///
+/// PURREMB §13.2 fixes this fold's written order (no fused multiply-add, sequential
+/// over ascending index), and a space stored with deterministic L2 postprocessing was
+/// normalized by it, so it is never reordered and has no second arithmetic. It carries
+/// a running maximum magnitude and a sum of squared *ratios*, which keeps it finite for
+/// vectors whose squares would overflow or underflow.
+///
+/// A zero-length vector and a vector of zeros both norm to `0.0`; refusing a zero norm
+/// is the job of a caller whose metric divides by it.
+#[must_use]
+pub fn norm<T: Scalar>(vector: &[T]) -> f64 {
+    let mut scale = 0.0_f64;
+    let mut sum_of_squares = 1.0_f64;
+    for value in vector {
+        crate::ir::embedding::norm_fold(value.widen().abs(), &mut scale, &mut sum_of_squares);
+    }
+    scale * sum_of_squares.sqrt()
+}
