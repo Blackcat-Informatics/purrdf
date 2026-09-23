@@ -2354,6 +2354,55 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
+        self.execute_ungoverned(execution, dataset, options, false, visit)
+            .map(|(answer, _)| answer)
+    }
+
+    /// [`Self::execute`], handing back beside `visit`'s answer the
+    /// [`RelationWitness`](crate::RelationWitness) of the run: which index
+    /// generation, and which service level, every registered relation the run
+    /// invoked stood behind.
+    ///
+    /// The ungoverned lane with a witness slot, which is exactly what makes it a
+    /// second entry rather than a flag: whether an execution records what its
+    /// relations attested is a fact about its return type (see the governed lanes'
+    /// context builder), and this is the prepared door whose return type carries the
+    /// record. A caller that runs one prepared question many times and must hold
+    /// each answer to the index generation an earlier read pinned needs the record
+    /// of every run, and the governed twin
+    /// ([`Self::execute_governed_in_operation`]) would charge each of those runs for
+    /// an admission survey and a registry description it declines to use.
+    ///
+    /// Because the witness can carry it, a relation that declares its index was not
+    /// whole is **reported** here rather than refused: its
+    /// [`ServiceLevel::Incomplete`](crate::ServiceLevel) is in the witness, as it is
+    /// on every witnessed lane, and it is the caller's to act on. [`Self::execute`],
+    /// which has nowhere to put it, refuses the query instead.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::execute`], except that a relation's declared shortfall is not one.
+    pub fn execute_witnessed<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<(R, crate::witness::RelationWitness), RdfDiagnostic> {
+        self.execute_ungoverned(execution, dataset, options, true, visit)
+    }
+
+    /// The one body behind [`Self::execute`] and [`Self::execute_witnessed`]:
+    /// `witnessing` is whether the caller's return type has a slot for the witness,
+    /// and the witness returned is empty exactly when it does not.
+    fn execute_ungoverned<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d>,
+        witnessing: bool,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<(R, crate::witness::RelationWitness), RdfDiagnostic> {
         let unbound = execution.unbound();
         if !unbound.is_empty() {
             return Err(RdfDiagnostic::error(
@@ -2364,6 +2413,7 @@ impl NativeSparqlEngine {
         check_prepared_registries_unchanged(&execution.prepared, options)?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
+        ctx.witnessing = witnessing;
         // This run's scratch interner comes from the execution's retained workspace
         // rather than from the context's own lazy one — emptied by the previous run
         // but still holding its tables. See `execution::ExecutionWorkspace`.
@@ -2388,7 +2438,7 @@ impl NativeSparqlEngine {
         // resolves `SolutionTerm::Computed` ids through this context's scratch.
         let answer = evaluated.map(|outcome| visit(borrow_outcome(&outcome, &ctx)));
         execution.check_in_workspace(&mut ctx.scratch);
-        answer
+        answer.map(|answer| (answer, core::mem::take(&mut ctx.witness)))
     }
 
     /// [`Self::execute`] under an operation budget: the governed twin, and the entry

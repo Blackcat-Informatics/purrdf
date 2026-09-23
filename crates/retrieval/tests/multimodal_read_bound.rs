@@ -59,14 +59,14 @@ use purrdf_retrieval::{
     DomainTag, DuplicatePolicy, ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile,
     FusionResult, FusionTrailer, Iri, PfAttestation, Plan, PlanId, PlannedResolution,
     ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream,
-    RankedStreamAdapter, ReadBound, RequestTerm, RetrievalRequest, RowBlock, Statistics,
-    StratumUnit, StreamContract, Term, TopK, compile, contribution_under, execute, fuse,
-    observed_resolution, plan, search, threshold_at,
+    RankedStreamAdapter, ReadBound, RequestTerm, RetrievalRequest, RowBlock, SearchError,
+    Statistics, StratumUnit, StreamContract, Term, TopK, compile, contribution_under, execute,
+    fuse, observed_resolution, plan, search, threshold_at,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
+    ServiceLevel, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -555,7 +555,71 @@ struct CountingProducer {
     /// Whether this relation names its candidates from the last it holds down
     /// to the first, rather than from the first up.
     reversed: bool,
+    /// Which index generation this relation's ranked reads and its lookups each
+    /// attest, when it declares one. `None` for every configuration of this file
+    /// but the one that tests a lookup against the read it was asked beside: a
+    /// relation that declares nothing attests
+    /// [`IndexGeneration::Undeclared`] on both, as the default cursor does.
+    generations: Option<Generations>,
     reads: Arc<Reads>,
+}
+
+/// The index generation a producer's ranked read opens on, and the one its
+/// exclusion lookups are answered by — each with the shortfall it declares, if any.
+///
+/// Equal for an index that stood still through the request. Different for one
+/// rebuilt after the ranked read pinned it and before the lookups were asked.
+#[derive(Clone, Copy, Debug)]
+struct Generations {
+    read: &'static str,
+    lookups: &'static str,
+    /// The reason the index the ranked read opened on declares itself short.
+    read_short: Option<&'static str>,
+    /// The reason the index the lookups are answered by declares itself short.
+    lookups_short: Option<&'static str>,
+}
+
+impl Generations {
+    /// One whole index, `read` for the ranked read and `lookups` for the lookups.
+    const fn whole(read: &'static str, lookups: &'static str) -> Self {
+        Self {
+            read,
+            lookups,
+            read_short: None,
+            lookups_short: None,
+        }
+    }
+}
+
+impl CountingProducer {
+    /// The generation this relation's ranked reads (`lookup == false`) or its
+    /// lookups attest.
+    fn generation(&self, lookup: bool) -> IndexGeneration {
+        self.generations
+            .map_or(IndexGeneration::Undeclared, |generations| {
+                IndexGeneration::declared(if lookup {
+                    generations.lookups
+                } else {
+                    generations.read
+                })
+            })
+    }
+
+    /// The service level this relation's ranked reads or its lookups attest.
+    fn service(&self, lookup: bool) -> ServiceLevel {
+        let reason = self.generations.and_then(|generations| {
+            if lookup {
+                generations.lookups_short
+            } else {
+                generations.read_short
+            }
+        });
+        reason.map_or(ServiceLevel::Undeclared, |reason| {
+            ServiceLevel::Incomplete {
+                reason: reason.to_owned(),
+            }
+        })
+    }
 }
 
 impl PropertyFunction for CountingProducer {
@@ -607,6 +671,8 @@ impl PropertyFunction for CountingProducer {
                 self.reads.lookups_found.fetch_add(1, Ordering::SeqCst);
             }
             return Ok(Box::new(LookupCursor {
+                generation: self.generation(true),
+                service: self.service(true),
                 row: held.then(|| {
                     bound
                         .iter()
@@ -625,6 +691,8 @@ impl PropertyFunction for CountingProducer {
         // per candidate held, done here and reported at the first pull.
         work.fetch_add(self.holds, Ordering::SeqCst);
         Ok(Box::new(CountingCursor {
+            generation: self.generation(false),
+            service: self.service(false),
             prefix: self.prefix,
             emitted: 0,
             holds: self.holds,
@@ -674,16 +742,28 @@ const INDEX_WIDTH: usize = 6;
 /// before it is pulled.
 struct LookupCursor {
     row: Option<PfRow>,
+    generation: IndexGeneration,
+    service: ServiceLevel,
 }
 
 impl PfCursor for LookupCursor {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         Ok(self.row.take())
     }
+
+    fn generation(&self) -> IndexGeneration {
+        self.generation.clone()
+    }
+
+    fn service_level(&self) -> ServiceLevel {
+        self.service.clone()
+    }
 }
 
 /// The lazy cursor behind [`CountingProducer`].
 struct CountingCursor {
+    generation: IndexGeneration,
+    service: ServiceLevel,
     prefix: &'static str,
     emitted: u64,
     holds: u64,
@@ -699,6 +779,14 @@ struct CountingCursor {
 impl PfCursor for CountingCursor {
     fn take_work(&mut self) -> u64 {
         std::mem::take(&mut self.unreported)
+    }
+
+    fn generation(&self) -> IndexGeneration {
+        self.generation.clone()
+    }
+
+    fn service_level(&self) -> ServiceLevel {
+        self.service.clone()
     }
 
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
@@ -769,6 +857,14 @@ fn accepted_terms(predicate: &str) -> Vec<AcceptedTerm> {
 
 /// The registry for one configuration, with both producers' read counters.
 fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc<Reads>; 2]) {
+    generational_registry(config, None)
+}
+
+/// [`configured_registry`], with both producers attesting `generations` when given.
+fn generational_registry(
+    config: Configuration,
+    generations: Option<Generations>,
+) -> (PropertyFunctionRegistry, [Arc<Reads>; 2]) {
     let domains = declared_domains(config.blocks);
     let prefixes = candidate_prefixes(config.results);
     let counters = [Arc::new(Reads::default()), Arc::new(Reads::default())];
@@ -795,6 +891,7 @@ fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc
             // The second producer only, and only where the configuration asks:
             // the pair then holds one candidate set in two opposite orders.
             reversed: config.results == Results::Reversed && index == 1,
+            generations,
             reads: Arc::clone(&counters[index]),
         };
         registry.register_ranked(
@@ -1036,7 +1133,16 @@ impl Measured {
 /// the stages by hand instead would measure a read this crate no longer takes —
 /// the whole subject of this file is which read `search` chooses.
 fn measure(config: Configuration, dataset: &RdfDataset) -> Measured {
-    let (registry, counters) = configured_registry(config);
+    measure_generational(config, None, dataset)
+}
+
+/// [`measure`], with both producers attesting `generations` when given.
+fn measure_generational(
+    config: Configuration,
+    generations: Option<Generations>,
+    dataset: &RdfDataset,
+) -> Measured {
+    let (registry, counters) = generational_registry(config, generations);
     let statistics = fixture_statistics();
     let profile = fixture_profile();
     let request = RetrievalRequest::bounded(request_terms(), TOP_K);
@@ -1429,6 +1535,179 @@ fn shared_block_disjoint_results_drain_both_streams_unbounded_control() {
     );
 }
 
+/// **A lookup answered by an index that moved since the read pinned it is refused;
+/// one answered by the pinned index is admitted.**
+///
+/// Both runs are [`SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS`], with each
+/// producer's ranked read opening on generation `gen-7`. In the refused run the
+/// lookups are answered by `gen-8` — the index rebuilt between the read's open and
+/// the lookup — while every verdict they give is the verdict `gen-7` would give,
+/// so the refusal is keyed on the evidence and not on the answer. In the admitted
+/// neighbour the lookups are answered by `gen-7`, and the run is the ordinary one:
+/// it asks, its answers shorten the read, and it answers exactly what the
+/// no-lookup control answers.
+#[test]
+fn a_lookup_answered_by_a_moved_index_is_refused_and_one_at_the_pinned_generation_is_admitted() {
+    let dataset = common::empty_dataset();
+    let config = SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS;
+
+    let (registry, counters) =
+        generational_registry(config, Some(Generations::whole("gen-7", "gen-8")));
+    let statistics = fixture_statistics();
+    let profile = fixture_profile();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+    let moved = block_on(search(
+        &RetrievalRequest::bounded(request_terms(), TOP_K),
+        &registry,
+        &statistics,
+        dataset,
+        &env,
+        &profile,
+    ));
+    let refused = match moved {
+        Err(SearchError::FusionError(FusionError::Protocol(error))) => *error,
+        other => panic!(
+            "a lookup answered by a moved index must fail the request, got {:?}",
+            other.map(|answer| answer.rows.len())
+        ),
+    };
+    let ProtocolError::ExclusionAttestationMoved { stratum, reason } = &refused else {
+        panic!("expected the lookup's attestation to be refused, got {refused:?}");
+    };
+    assert!(
+        strata().iter().any(|known| known.as_str() == stratum),
+        "the refusal names the stratum whose lookup moved: {refused}"
+    );
+    assert!(
+        reason.contains("gen-7") && reason.contains("gen-8"),
+        "and both generations: {reason}"
+    );
+    assert!(
+        counters.iter().map(|reads| reads.lookups()).sum::<u64>() > 0,
+        "the refusal came from a lookup a producer really answered"
+    );
+
+    let control = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
+    let stable = measure_generational(config, Some(Generations::whole("gen-7", "gen-7")), dataset);
+    let report = format!(
+        "{}; {}",
+        render(SHARED_BLOCK_DISJOINT_RESULTS, &control),
+        render(config, &stable)
+    );
+    assert!(
+        stable.fused_lookups.values().sum::<u64>() > 0,
+        "the neighbour asked — {report}"
+    );
+    assert!(
+        stable.ranks_pulled.values().sum::<u64>() < control.ranks_pulled.values().sum::<u64>(),
+        "and its answers shortened the read — {report}"
+    );
+    let answer = |measured: &Measured| -> Vec<(String, Fixed)> {
+        measured
+            .rows
+            .iter()
+            .map(|row| (row.entity.as_str().to_owned(), row.score))
+            .collect()
+    };
+    assert_eq!(
+        answer(&stable),
+        answer(&control),
+        "without moving the answer — {report}"
+    );
+}
+
+/// **A lookup answered by an index found short since the read pinned it is refused;
+/// one answered by the same short index the read attested is admitted.**
+///
+/// The service level is half of what a read pins, and a lookup is held to both
+/// halves. An index that was whole when the ranked read opened and has declared a
+/// missing shard by the time a lookup is answered is not the index the read
+/// pinned, and an `Excluded` from it may be the missing shard talking — refused.
+///
+/// The neighbour is the one a lookup lane that could not carry a shortfall used to
+/// refuse outright: the read and its lookups both attest the same short index. That
+/// is one index, attested alike on both sides, and the fusion already treats a
+/// short stratum's `Excluded` as never discharging what the shortfall may hide —
+/// so it is admitted, asks, and answers exactly what the same short producers
+/// answer when no lookup is asked at all.
+#[test]
+fn a_lookup_from_an_index_found_short_is_refused_and_one_from_the_attested_short_index_is_admitted()
+{
+    const SHORT: &str = "shard 3 rebuilding";
+    let dataset = common::empty_dataset();
+    let config = SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS;
+    let found_short = Generations {
+        lookups_short: Some(SHORT),
+        ..Generations::whole("gen-7", "gen-7")
+    };
+    let (registry, _) = generational_registry(config, Some(found_short));
+    let statistics = fixture_statistics();
+    let profile = fixture_profile();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+    let refused = match block_on(search(
+        &RetrievalRequest::bounded(request_terms(), TOP_K),
+        &registry,
+        &statistics,
+        dataset,
+        &env,
+        &profile,
+    )) {
+        Err(SearchError::FusionError(FusionError::Protocol(error))) => *error,
+        other => panic!(
+            "a lookup from an index found short must fail the request, got {:?}",
+            other.map(|answer| answer.rows.len())
+        ),
+    };
+    let ProtocolError::ExclusionAttestationMoved { reason, .. } = &refused else {
+        panic!("expected the lookup's attestation to be refused, got {refused:?}");
+    };
+    assert!(
+        reason.contains(SHORT),
+        "the refusal names the shortfall: {reason}"
+    );
+
+    let short_throughout = Generations {
+        read_short: Some(SHORT),
+        lookups_short: Some(SHORT),
+        ..Generations::whole("gen-7", "gen-7")
+    };
+    let control = measure_generational(
+        SHARED_BLOCK_DISJOINT_RESULTS,
+        Some(short_throughout),
+        dataset,
+    );
+    let asked = measure_generational(config, Some(short_throughout), dataset);
+    let report = format!(
+        "{}; {}",
+        render(SHARED_BLOCK_DISJOINT_RESULTS, &control),
+        render(config, &asked)
+    );
+    assert!(
+        asked.fused_lookups.values().sum::<u64>() > 0,
+        "the short index was asked, and answered — {report}"
+    );
+    let answer = |measured: &Measured| -> Vec<(String, Fixed)> {
+        measured
+            .rows
+            .iter()
+            .map(|row| (row.entity.as_str().to_owned(), row.score))
+            .collect()
+    };
+    assert_eq!(
+        answer(&asked),
+        answer(&control),
+        "and its lookups moved no answer — {report}"
+    );
+}
+
 /// **Anti-vacuity.** The control and the permanent control have the identical
 /// result structure — four hundred rows each, no candidate named twice, the
 /// same bound, the same weights. They differ in one thing only: what the two
@@ -1747,6 +2026,7 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry {
             prefix: entry.name,
             holds: ROWS,
             reversed: false,
+            generations: None,
             // Nothing in this section measures the read, only the depth the plan
             // recorded and the answer that came back, so these counts are
             // collected and never read.

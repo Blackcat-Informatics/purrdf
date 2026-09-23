@@ -47,13 +47,14 @@ use pretty_assertions::assert_eq;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionVerdict, Fixed,
-    FusedRow, FusionProfile, Iri, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics,
+    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, EVIDENCE_VERSION, EvidenceId,
+    ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile, Iri, ProtocolError, RECIP_K,
+    RankFidelity, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics,
     StratumStream, Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
-    EvalError, ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, RankedDeclaration, Volatility,
+    EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+    PropertyFunctionRegistry, RankedDeclaration, ServiceLevel, Volatility,
 };
 use purrdf_text::{
     GraphSelector, SearchObservations, TextIndex, TextIndexConfig, TextSearchRelation,
@@ -234,7 +235,19 @@ fn dataset() -> Arc<RdfDataset> {
 
 /// [`dataset`], with its subjects of the given kind.
 fn dataset_of(subjects: Subjects) -> Arc<RdfDataset> {
+    dataset_with(subjects, None)
+}
+
+/// [`dataset_of`], plus — under `added`'s predicate — the one document
+/// [`rebuilt_index`] adds.
+fn dataset_with(subjects: Subjects, added: Option<Side>) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
+    if let Some(side) = added {
+        let subject = builder.intern_iri(&ex("added-by-the-rebuild"));
+        let predicate = builder.intern_iri(&side.predicate());
+        let object = builder.intern_literal(RdfLiteral::simple("zulu yankee"));
+        builder.push_quad(subject, predicate, object, None);
+    }
     for side in SIDES {
         let predicate = builder.intern_iri(&side.predicate());
         for (subject, text) in rows(side) {
@@ -258,6 +271,25 @@ fn index(dataset: &RdfDataset, side: Side) -> Arc<TextIndex> {
     Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))
 }
 
+/// `side`'s index as it stands after a rebuild that added one document no needle
+/// term reaches, under a subject neither side ranks.
+///
+/// Every exclusion verdict this index gives is the verdict [`index`] gives — the
+/// added document matches nothing and names no candidate — so the only thing that
+/// moved is the generation it attests: the fingerprint covers the document table,
+/// and a document was added to it. A lookup answered here is therefore a lookup
+/// whose *answer* is right and whose *evidence* is another index's, which is the
+/// case a refusal keyed on the verdict could not see.
+fn rebuilt_index(dataset: &RdfDataset, side: Side) -> Arc<TextIndex> {
+    let rebuilt = index(&dataset_with(Subjects::Iri, Some(side)), side);
+    assert_ne!(
+        rebuilt.fingerprint(),
+        index(dataset, side).fingerprint(),
+        "the rebuild must move the generation, or the refusal below is not about one"
+    );
+    rebuilt
+}
+
 // ---------------------------------------------------------------------------
 // The recorder
 // ---------------------------------------------------------------------------
@@ -279,6 +311,12 @@ fn index(dataset: &RdfDataset, side: Side) -> Arc<TextIndex> {
 struct Recorder {
     /// The relation under observation.
     inner: TextSearchRelation,
+    /// The relation that answers this recorder's candidate-bound invocations, when
+    /// it is not [`Self::inner`]: the same producer's index as it stands after a
+    /// rebuild, so the lookups are answered by a newer generation than the one the
+    /// ranked read pinned. `None` for the ordinary producer, whose lookups and
+    /// ranked read are answered by one index.
+    lookups_from: Option<TextSearchRelation>,
     /// Invocations whose candidate position was bound: the exclusion lookups.
     candidate_bound: AtomicU64,
     /// Invocations whose candidate position was free: the ranked reads.
@@ -293,9 +331,12 @@ struct Recorder {
 }
 
 impl Recorder {
-    fn new(index: Arc<TextIndex>) -> Self {
+    /// A recorder whose ranked reads are answered by `index` and whose lookups are
+    /// answered by `lookups`, when given.
+    fn answering_lookups_from(index: Arc<TextIndex>, lookups: Option<Arc<TextIndex>>) -> Self {
         Self {
             inner: TextSearchRelation::new(index),
+            lookups_from: lookups.map(TextSearchRelation::new),
             candidate_bound: AtomicU64::new(0),
             candidate_free: AtomicU64::new(0),
             served_bound: Arc::new(AtomicU64::new(0)),
@@ -346,14 +387,19 @@ impl PropertyFunction for Recorder {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        let (counter, served) = if args.get(TextSearchRelation::DOC).is_some() {
+        let bound = args.get(TextSearchRelation::DOC).is_some();
+        let (counter, served) = if bound {
             (&self.candidate_bound, &self.served_bound)
         } else {
             (&self.candidate_free, &self.served_free)
         };
         counter.fetch_add(1, Ordering::Relaxed);
+        let answering = match &self.lookups_from {
+            Some(rebuilt) if bound => rebuilt,
+            _ => &self.inner,
+        };
         Ok(Box::new(Served {
-            inner: self.inner.open(args, ceiling)?,
+            inner: answering.open(args, ceiling)?,
             served: Arc::clone(served),
         }))
     }
@@ -373,6 +419,17 @@ impl PfCursor for Served {
             self.served.fetch_add(1, Ordering::Relaxed);
         }
         Ok(row)
+    }
+
+    /// The real relation's own attestation, passed through: which index generation
+    /// served these rows is the one fact a recorder must not paper over, because a
+    /// lookup is held to the generation its stratum's ranked read pinned.
+    fn generation(&self) -> IndexGeneration {
+        self.inner.generation()
+    }
+
+    fn service_level(&self) -> ServiceLevel {
+        self.inner.service_level()
     }
 }
 
@@ -454,8 +511,25 @@ fn registry(
     dataset: &RdfDataset,
     basis: ExclusionBasis,
 ) -> (PropertyFunctionRegistry, [Arc<Recorder>; 2]) {
+    registry_rebuilding(dataset, basis, None)
+}
+
+/// [`registry`], with `rebuilt`'s lookups answered by that side's index as it
+/// stands after a rebuild ([`rebuilt_index`]) while its ranked read is answered by
+/// the index the dataset was built into.
+fn registry_rebuilding(
+    dataset: &RdfDataset,
+    basis: ExclusionBasis,
+    rebuilt: Option<Side>,
+) -> (PropertyFunctionRegistry, [Arc<Recorder>; 2]) {
     let mut registry = PropertyFunctionRegistry::new();
-    let recorders = SIDES.map(|side| Arc::new(Recorder::new(index(dataset, side))));
+    let recorders = SIDES.map(|side| {
+        let lookups = (rebuilt == Some(side)).then(|| rebuilt_index(dataset, side));
+        Arc::new(Recorder::answering_lookups_from(
+            index(dataset, side),
+            lookups,
+        ))
+    });
     for (side, recorder) in SIDES.into_iter().zip(recorders.iter()) {
         let mut declaration: RankedDeclaration = recorder
             .inner
@@ -506,6 +580,11 @@ struct Measured {
     /// cursor as the evaluator pulled them — the producer's end of the seam the
     /// trailer's figure above is read from the other end of.
     served_free: [u64; 2],
+    /// The evidence identity the answer carries.
+    evidence_id: EvidenceId,
+    /// The canonical bytes that identity is the digest of, re-derived from the
+    /// trailer.
+    evidence_bytes: Vec<u8>,
 }
 
 impl Measured {
@@ -530,9 +609,14 @@ impl Measured {
     }
 }
 
-/// Run the request once under `basis` and measure it.
-fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
-    let (registry, recorders) = registry(dataset, basis);
+/// Run the request once under `basis`, with `rebuilt`'s lookups answered by that
+/// side's rebuilt index, and hand back what `search` answered beside the recorders.
+fn searched(
+    dataset: &RdfDataset,
+    basis: ExclusionBasis,
+    rebuilt: Option<Side>,
+) -> (Result<SearchResult, SearchError>, [Arc<Recorder>; 2]) {
+    let (registry, recorders) = registry_rebuilding(dataset, basis, rebuilt);
     let statistics = fixture_statistics();
     let profile = fixture_profile();
     let request = RetrievalRequest::bounded(request_terms(), TOP_K);
@@ -548,8 +632,14 @@ fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
         dataset,
         &env,
         &profile,
-    ))
-    .expect("the fixture request searches");
+    ));
+    (result, recorders)
+}
+
+/// Run the request once under `basis` and measure it.
+fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
+    let (result, recorders) = searched(dataset, basis, None);
+    let result = result.expect("the fixture request searches");
 
     let observed: [Arc<SearchObservations>; 2] =
         [recorders[0].observations(), recorders[1].observations()];
@@ -585,6 +675,8 @@ fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
                 .and_then(|resolution| resolution.rows_materialised)
         }),
         served_free: [recorders[0].served_free(), recorders[1].served_free()],
+        evidence_id: result.evidence_id,
+        evidence_bytes: result.trailer.evidence_canonical_bytes(),
     }
 }
 
@@ -744,6 +836,159 @@ fn a_declared_basis_shortens_a_real_text_read_without_moving_the_answer() {
              holds over two zeroes"
         );
     }
+}
+
+/// **A lookup answered by a rebuilt index is refused; one answered by the index the
+/// ranked read pinned is admitted.**
+///
+/// The right producer's ranked read is answered by the index the dataset was built
+/// into, and its lookups by that index after a rebuild that added one document no
+/// needle reaches ([`rebuilt_index`]). Every verdict the rebuilt index gives is the
+/// verdict the pinned one gives, so the answer this run would return is the answer
+/// the stable run returns — which is exactly why it must be refused: the rows were
+/// certified partly on the word of an index generation the answer's evidence does
+/// not name, and nothing in the answer would show it.
+///
+/// The neighbour differs in that one relation and nothing else: the stable run
+/// asks, is answered, shortens its read and answers what the no-lookup control
+/// answers.
+#[test]
+fn a_lookup_answered_by_a_rebuilt_index_is_refused_and_one_at_the_pinned_generation_is_admitted() {
+    let dataset = dataset();
+    let (moved, recorders) = searched(&dataset, ExclusionBasis::Membership, Some(Side::Right));
+    let refused = match moved {
+        Err(SearchError::FusionError(FusionError::Protocol(error))) => *error,
+        other => panic!(
+            "a lookup answered by a rebuilt index must fail the request, got {:?}",
+            other.map(|result| result.rows.len())
+        ),
+    };
+    let ProtocolError::ExclusionAttestationMoved { stratum, reason } = &refused else {
+        panic!("expected the lookup's attestation to be refused, got {refused:?}");
+    };
+    assert_eq!(stratum, &Side::Right.stratum(), "{refused}");
+    assert!(
+        reason.contains(&purrdf_core::hex::lower(
+            &rebuilt_index(&dataset, Side::Right).fingerprint()
+        )) && reason.contains(&purrdf_core::hex::lower(
+            &index(&dataset, Side::Right).fingerprint()
+        )),
+        "the refusal names both generations: {reason}"
+    );
+    assert!(
+        recorders[1].candidate_bound() > 0,
+        "the refusal came from a lookup the rebuilt index really answered"
+    );
+
+    // The neighbour: the same request, the same registration, one index answering
+    // both the ranked read and the lookups.
+    let control = measure(&dataset, ExclusionBasis::Unavailable);
+    let stable = measure(&dataset, ExclusionBasis::Membership);
+    let report = format!("{}; {}", control.report("control"), stable.report("stable"));
+    assert!(stable.fused_lookups > 0, "the stable run asked — {report}");
+    assert!(
+        stable.ranks_pulled < control.ranks_pulled,
+        "and its answers shortened the read — {report}"
+    );
+    assert_eq!(
+        stable.answer, control.answer,
+        "without moving the answer — {report}"
+    );
+}
+
+/// The evidence identity of the no-lookup control: the attestation-only layout
+/// over the two indexes' fingerprints, which a run that asked no lookup must
+/// digest exactly as it always did. Pinned, so a change to either the layout or
+/// the fixture's indexes is seen rather than absorbed.
+const CONTROL_EVIDENCE_ID_HEX: &str =
+    "2b35a84aef0a25428618dd21ee98d9453feec48af0beb358d21cc48295fe0cd0";
+
+/// **Lookups are covered by the evidence, deterministically, and a run that asked
+/// none carries the evidence it always carried.**
+///
+/// Three runs over one index state. The control asks no lookup, and its identity is
+/// held to the literal it carried before lookups were bound into evidence — so a
+/// run without lookups is shown byte-identical, not merely self-consistent. The two
+/// declaring runs ask, and agree with each other exactly. And the declaring runs'
+/// evidence is the control's bytes followed by the strata whose lookups were asked,
+/// which is what separates "the lookups are bound" from "the identity moved for
+/// some other reason": the attestations both share are the same prefix, and what
+/// follows names exactly the strata the trailer counts lookups for.
+#[test]
+fn the_evidence_binds_the_lookups_and_a_run_without_lookups_is_unchanged() {
+    let dataset = dataset();
+    let control = measure(&dataset, ExclusionBasis::Unavailable);
+    let first = measure(&dataset, ExclusionBasis::Membership);
+    let second = measure(&dataset, ExclusionBasis::Membership);
+
+    assert_eq!(control.fused_lookups, 0, "the control asks nothing");
+    assert_eq!(
+        control.evidence_id.to_hex(),
+        CONTROL_EVIDENCE_ID_HEX,
+        "a run that asked no lookup carries the identity it always carried"
+    );
+    assert_eq!(
+        EvidenceId::from_canonical(&control.evidence_bytes),
+        control.evidence_id,
+        "and the control's trailer re-derives it"
+    );
+    // The literal is only as good as the layout it was taken under, so the
+    // control's bytes are also rebuilt here by hand in the attestation-only layout
+    // — version, entry count, then per stratum its name, the declared-generation
+    // tag and the index's own fingerprint, and the undeclared-service tag — which
+    // is every byte an identity carried before lookups were evidence.
+    let framed = |out: &mut Vec<u8>, text: &str| {
+        out.extend_from_slice(&(text.len() as u64).to_le_bytes());
+        out.extend_from_slice(text.as_bytes());
+    };
+    let mut attestation_only = EVIDENCE_VERSION.to_le_bytes().to_vec();
+    attestation_only.extend_from_slice(&2_u64.to_le_bytes());
+    for side in SIDES {
+        framed(&mut attestation_only, &side.stratum());
+        attestation_only.push(1);
+        framed(
+            &mut attestation_only,
+            &purrdf_core::hex::lower(&index(&dataset, side).fingerprint()),
+        );
+        attestation_only.push(0);
+    }
+    assert_eq!(
+        control.evidence_bytes, attestation_only,
+        "a run that asked no lookup digests the attestation-only layout, byte for byte"
+    );
+
+    assert!(first.fused_lookups > 0, "the declaring run asks");
+    assert_eq!(
+        (first.evidence_id, &first.evidence_bytes),
+        (second.evidence_id, &second.evidence_bytes),
+        "two runs over one index state that asked the same lookups are the same evidence"
+    );
+    assert_eq!(
+        EvidenceId::from_canonical(&first.evidence_bytes),
+        first.evidence_id,
+        "the declaring run's trailer re-derives its identity too"
+    );
+    assert_ne!(
+        first.evidence_id, control.evidence_id,
+        "an answer certified on lookups is not the evidence of one that read instead"
+    );
+
+    // The declaring run's bytes are the control's, then the lookup section: a
+    // count and every stratum that was asked, each framed by its length.
+    let suffix = first
+        .evidence_bytes
+        .strip_prefix(control.evidence_bytes.as_slice())
+        .expect("the attestations the two runs share are the same leading bytes");
+    let mut expected = 2_u64.to_le_bytes().to_vec();
+    for side in SIDES {
+        framed(&mut expected, &side.stratum());
+    }
+    assert_eq!(
+        suffix,
+        expected.as_slice(),
+        "both strata answered lookups ({}), so both are named, in canonical order",
+        first.report("asked")
+    );
 }
 
 /// **A fused read whose candidates are blank nodes gets its lookups answered, and

@@ -667,6 +667,10 @@ enum RowSource<'d> {
     Materialised {
         rows: VecDeque<(u64, Term, RowBlock)>,
         ending: StreamEnding,
+        /// What the read's witness attested when it finished, for a read this
+        /// executor took; `None` for rows a caller handed [`RankedStreamImpl::new`],
+        /// which came from no read this crate observed.
+        attested: Option<PfAttestation>,
     },
     /// One invocation held open and read a row per pull, and — once it has ended —
     /// how it ended.
@@ -679,10 +683,15 @@ enum RowSource<'d> {
 impl fmt::Debug for RowSource<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Materialised { rows, ending } => f
+            Self::Materialised {
+                rows,
+                ending,
+                attested,
+            } => f
                 .debug_struct("Materialised")
                 .field("rows_left", &rows.len())
                 .field("ending", ending)
+                .field("attested", attested)
                 .finish(),
             Self::OnDemand { read, ended } => f
                 .debug_struct("OnDemand")
@@ -752,8 +761,10 @@ pub(crate) trait ExclusionLookup: fmt::Debug {
     ///
     /// [`ProtocolError::ExclusionLookupFailed`] for every way the lookup can
     /// fail — the term did not decode, the dataset read was refused, the
-    /// producer answered with more rows than its declared bound admits. None of
-    /// them degrades to a verdict.
+    /// producer answered with more rows than its declared bound admits — and
+    /// [`ProtocolError::ExclusionAttestationMoved`] when the index generation that
+    /// answered is not the one the stratum's ranked read pinned. None of them
+    /// degrades to a verdict.
     ///
     /// `&mut self` because a lookup is a prepared execution that is bound and run
     /// once per candidate, and a prepared execution is bound and run through a
@@ -784,6 +795,21 @@ enum CandidateBinding<I> {
 /// Every candidate the ranking reads of one [`execute_within`] call named, keyed by
 /// the [`Term`] the fusion stage will ask about. Shared by that call's lookups.
 type CandidateIndex<I> = HashMap<Term, CandidateBinding<I>>;
+
+/// One stratum's prepared lookup, held until every ranking read of the call is
+/// open and it can be attached to its stream.
+struct PendingLookup {
+    /// The stream's position in the call's streams.
+    position: usize,
+    /// The stratum the lookup answers for.
+    stratum: Iri,
+    /// The lookup, prepared once with the candidate as its one parameter.
+    execution: PreparedExecution,
+    /// The candidate parameter's slot in `execution`.
+    slot: usize,
+    /// What the stratum's ranked read pinned, which every lookup is held to.
+    pinned: PfAttestation,
+}
 
 /// The exclusion lookup [`execute`] compiles: one prepared execution, run against
 /// the caller's dataset once per candidate.
@@ -819,6 +845,10 @@ struct DatasetExclusion<'d, D: DatasetView + Sync> {
     candidates: Rc<RefCell<CandidateIndex<D::Id>>>,
     /// The caller's dataset, read exactly as the ranking read it.
     dataset: &'d D,
+    /// What the ranked read of this stratum pinned: the attestation its stream
+    /// announced before its first row. Every lookup is held to it — see
+    /// [`ProtocolError::ExclusionAttestationMoved`].
+    pinned: PfAttestation,
 }
 
 impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
@@ -863,21 +893,39 @@ impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
         };
         // Ungoverned, and the governed ranking read's reasoning is why that is no
         // loss: that lane declines every caller-settable ceiling and is taken for
-        // its receipt, and a lookup's receipt is its row count, which the visitor
-        // reads here.
-        let rows = self
-            .engine
-            .execute(
-                &mut self.execution,
-                self.dataset,
-                options,
-                |outcome| match outcome {
-                    InternedOutcome::Solutions(solutions) => Some(solutions.len()),
-                    InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => None,
-                },
-            )
-            .map_err(|diagnostic| failed(diagnostic.to_string()))?
-            .ok_or_else(|| failed("the exclusion lookup did not return solutions".to_owned()))?;
+        // its receipt. A lookup's receipt is two facts — its row count, which the
+        // visitor reads here, and the witness of the index generation that
+        // answered, which the witnessed door hands back beside it.
+        let (rows, witness) =
+            self.engine
+                .execute_witnessed(&mut self.execution, self.dataset, options, |outcome| {
+                    match outcome {
+                        InternedOutcome::Solutions(solutions) => Some(solutions.len()),
+                        InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => None,
+                    }
+                })
+                .map_err(|diagnostic| failed(diagnostic.to_string()))?;
+        let rows =
+            rows.ok_or_else(|| failed("the exclusion lookup did not return solutions".to_owned()))?;
+        // Held to the read before its verdict is read at all. A verdict is only a
+        // statement about the rows the ranked read would have gone on to name if it
+        // came from the index generation that read pinned; one from anywhere else
+        // is refused whatever it says, because a verdict that happens to agree has
+        // still certified rows on the word of an index the answer's evidence does
+        // not name. The lookup is one call with constant arguments, so its witness
+        // is read under the rule a compiled unit's is — one relation, one
+        // generation — and a witness that breaks it is the same refusal.
+        let moved = |reason: String| ProtocolError::ExclusionAttestationMoved {
+            stratum: stratum.as_str().to_owned(),
+            reason,
+        };
+        let answered = sole_attestation(&witness).map_err(moved)?;
+        if answered != self.pinned {
+            return Err(moved(format!(
+                "the read pinned {:?}, the lookup of {candidate} was answered under {:?}",
+                self.pinned, answered
+            )));
+        }
         let pulled = u64::try_from(rows).unwrap_or(u64::MAX);
         // The point bound a declared exclusion basis rests on, derived from the
         // ceiling the lookup is read under rather than written twice: the text
@@ -1006,6 +1054,7 @@ impl<'d> RankedStreamImpl<'d> {
             source: RowSource::Materialised {
                 rows: rows.into(),
                 ending,
+                attested: None,
             },
             pulled: 0,
             exhausted: false,
@@ -1042,6 +1091,19 @@ impl<'d> RankedStreamImpl<'d> {
         self
     }
 
+    /// Record what the witness of the read that produced these rows attested.
+    ///
+    /// A builder step for the reason [`with_materialised_rows`](Self::with_materialised_rows)
+    /// is: only the party that ran the read holds its witness. A caller-assembled
+    /// stream records nothing, and settles to nothing.
+    #[must_use]
+    pub(crate) fn with_attested(mut self, attestation: PfAttestation) -> Self {
+        if let RowSource::Materialised { attested, .. } = &mut self.source {
+            *attested = Some(attestation);
+        }
+        self
+    }
+
     /// How many rows the read behind this stream returned.
     ///
     /// The number [`RankedStream::rows_materialised`](crate::RankedStream::rows_materialised)
@@ -1065,15 +1127,20 @@ impl<'d> RankedStreamImpl<'d> {
         self.pulled
     }
 
-    /// What the read behind this stream stands behind now, if it is a read that is
-    /// still being taken.
+    /// What the read behind this stream stands behind now, if this crate observed
+    /// the read.
     ///
-    /// `None` for a materialised read: its witness was read, under the sole-witness
-    /// rule, when its run finished and before its first row was readable, and that
-    /// attestation travels beside the stream
-    /// ([`StratumStream::attestation`]) — there is nothing left for it to learn. For
-    /// a read produced on demand, the invocation's witness as it stands at this
-    /// instant, read under the same rule.
+    /// For a read this executor materialised, the attestation its witness held,
+    /// read under the sole-witness rule when its run finished and before its first
+    /// row was readable — the one [`StratumStream::attestation`] carries. It has
+    /// nothing left to learn, and it is still handed back rather than withheld: a
+    /// consumer holds whatever a caller announced for the stream to this, exactly
+    /// as it holds an on-demand read's announcement to its settled witness, so the
+    /// two schedules refuse a mis-announced attestation alike and the evidence an
+    /// answer names is the evidence its read and its exclusion lookups stood
+    /// behind. For a read produced on demand, the invocation's witness as it stands
+    /// at this instant, read under the same rule. `None` for rows a caller handed
+    /// [`Self::new`]: no read of this crate's stands behind them.
     ///
     /// # Errors
     ///
@@ -1084,7 +1151,7 @@ impl<'d> RankedStreamImpl<'d> {
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn settle(&mut self) -> Result<Option<PfAttestation>, ProtocolError> {
         match &self.source {
-            RowSource::Materialised { .. } => Ok(None),
+            RowSource::Materialised { attested, .. } => Ok(attested.clone()),
             RowSource::OnDemand { read, .. } => {
                 read.settle()
                     .map(Some)
@@ -1117,7 +1184,10 @@ impl<'d> RankedStreamImpl<'d> {
     /// # Errors
     ///
     /// [`ProtocolError::ExclusionUnavailable`] when no lookup was compiled for
-    /// this stratum, and whatever the lookup itself refuses with. Neither is
+    /// this stratum, and whatever the lookup itself refuses with — its failure
+    /// ([`ProtocolError::ExclusionLookupFailed`]), or an answer given under an
+    /// attestation other than the one this stream's read pinned
+    /// ([`ProtocolError::ExclusionAttestationMoved`]). None is
     /// answered as [`ExclusionVerdict::Possible`]: see
     /// [`RankedStream::exclusion`](crate::RankedStream::exclusion) for why a
     /// failed measurement must not wear that costume.
@@ -1349,7 +1419,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
     // read by lookups and by nothing else; a read produced on demand fills it as
     // each row is pulled, which is before any lookup can ask about that row's
     // candidate, because the fusion asks only about candidates it has pulled.
-    let mut lookups: Vec<(usize, Iri, PreparedExecution, usize)> = Vec::new();
+    let mut lookups: Vec<PendingLookup> = Vec::new();
     let candidates: Rc<RefCell<CandidateIndex<D::Id>>> = Rc::new(RefCell::new(HashMap::new()));
     let exclusions: Vec<Option<String>> = compiled
         .units
@@ -1488,7 +1558,13 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                         dataset,
                     };
                     if let Some((execution, slot)) = exclusion {
-                        lookups.push((streams.len(), unit.stratum.clone(), execution, slot));
+                        lookups.push(PendingLookup {
+                            position: streams.len(),
+                            stratum: unit.stratum.clone(),
+                            execution,
+                            slot,
+                            pinned: attestation.clone(),
+                        });
                     }
                     streams.push(StratumStream {
                         stratum: unit.stratum.clone(),
@@ -1571,9 +1647,16 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                         // bounded read as one row cheaper than it was.
                         let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
                         let stream = RankedStreamImpl::new(ranked, ending)
-                            .with_materialised_rows(materialised);
+                            .with_materialised_rows(materialised)
+                            .with_attested(attestation.clone());
                         if let Some((execution, slot)) = exclusion {
-                            lookups.push((streams.len(), unit.stratum.clone(), execution, slot));
+                            lookups.push(PendingLookup {
+                                position: streams.len(),
+                                stratum: unit.stratum.clone(),
+                                execution,
+                                slot,
+                                pinned: attestation.clone(),
+                            });
                         }
                         streams.push(StratumStream {
                             stratum: unit.stratum.clone(),
@@ -1636,7 +1719,14 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         }
     }
 
-    for (position, stratum, execution, slot) in lookups {
+    for PendingLookup {
+        position,
+        stratum,
+        execution,
+        slot,
+        pinned,
+    } in lookups
+    {
         streams[position]
             .stream
             .attach_exclusion(Box::new(DatasetExclusion {
@@ -1647,6 +1737,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                 slot,
                 candidates: Rc::clone(&candidates),
                 dataset,
+                pinned,
             }));
     }
 
@@ -2591,10 +2682,10 @@ mod tests {
             }
             let attestation = sole_attestation(&witness).expect("the conforming shape");
             let stratum = Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
-            crate::fusion_stream::evidence_canonical_bytes(&BTreeMap::from([(
-                stratum,
-                attestation,
-            )]))
+            crate::fusion_stream::evidence_canonical_bytes(
+                &BTreeMap::from([(stratum, attestation)]),
+                &BTreeMap::new(),
+            )
         };
         assert_eq!(
             bytes_after(1),
@@ -2608,10 +2699,10 @@ mod tests {
             witness.record(ONE_RELATION, declared("gen-8"), ServiceLevel::Undeclared);
             let attestation = sole_attestation(&witness).expect("the conforming shape");
             let stratum = Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
-            crate::fusion_stream::evidence_canonical_bytes(&BTreeMap::from([(
-                stratum,
-                attestation,
-            )]))
+            crate::fusion_stream::evidence_canonical_bytes(
+                &BTreeMap::from([(stratum, attestation)]),
+                &BTreeMap::new(),
+            )
         };
         assert_ne!(
             bytes_after(1),

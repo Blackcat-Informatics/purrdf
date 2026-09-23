@@ -1132,6 +1132,42 @@ pub enum ProtocolError {
         /// broke, rendered.
         reason: String,
     },
+
+    /// An exclusion lookup was answered under a different attestation from the one
+    /// its stream's read pinned.
+    ///
+    /// A verdict and a ranked read are two answers to one question — whether this
+    /// producer names a candidate — and they must agree for the verdict to settle
+    /// anything: an `Excluded` a fusion acts on stands in for the rows the ranked
+    /// read would have named had it been read further. That is only true of rows the
+    /// *same* index generation would have named. A lookup answered by another
+    /// generation — an index rebuilt between the read's open and the lookup — can
+    /// exclude a candidate the pinned generation holds, and a fusion that stops
+    /// before the stream would have named it returns a different answer with nothing
+    /// in it to say so. So each lookup's own witness is read under the sole-witness
+    /// rule and held to the attestation the read pinned — generation and service
+    /// level both, because a lookup served from an index that has since found itself
+    /// short is no more the pinned index than a rebuilt one — and a disagreement
+    /// fails the request, naming both sides.
+    ///
+    /// The same family as [`Self::AttestationMoved`] and
+    /// [`Self::ContributionMismatch`]: a value the consumer holds is checked against
+    /// the value the producer stood behind, and a disagreement is named with both
+    /// sides, repaired never. It is its own variant because it is a different
+    /// promise broken at a different instant: that one is the read disagreeing with
+    /// its own announcement when it stops, this is a point answer disagreeing with
+    /// the read it was asked beside, at the moment it is asked.
+    #[error(
+        "stratum {stratum}: an exclusion lookup was answered under a different attestation \
+         from the one its stream's read pinned: {reason}"
+    )]
+    ExclusionAttestationMoved {
+        /// The stratum whose lookup was answered elsewhere.
+        stratum: String,
+        /// Both sides of the disagreement, or the witness rule the lookup's own
+        /// receipt broke, rendered.
+        reason: String,
+    },
 }
 
 /// What a stream's read stands behind at the instant its consumer stops reading it.
@@ -1267,8 +1303,10 @@ pub trait RankedStream {
     /// # Errors
     ///
     /// [`ProtocolError::ExclusionLookupFailed`] when the lookup itself failed,
-    /// and [`ProtocolError::ExclusionUnavailable`] when the producer answers no
-    /// such lookup. Neither is degraded to a verdict: a failed measurement
+    /// [`ProtocolError::ExclusionAttestationMoved`] when it was answered under an
+    /// attestation other than the one this stream's read pinned, and
+    /// [`ProtocolError::ExclusionUnavailable`] when the producer answers no
+    /// such lookup. None is degraded to a verdict: a failed measurement
     /// reported as [`ExclusionVerdict::Possible`] is a swallowed error that
     /// leaves the answer correct and the read unbounded, which nothing
     /// downstream could ever notice.

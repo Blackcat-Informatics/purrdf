@@ -172,7 +172,8 @@ short index omits whatever its missing shard held *and*, since this layer scores
 by rank alone, promotes every row behind the missing one into a rank it did not
 earn: the candidate it missed is summed too low, the ones it named too high.
 `FusedRow::interval` carries the size of each error for one row. And `EvidenceId`
-digests the attestation map
+digests the attestation map, and which strata's exclusion lookups the rows were
+certified on,
 into the third identity an answer carries: `PlanId` names the question,
 `FusionProfileId` names the law, `EvidenceId` names the index generations that
 answered. The third exists because the first two are derived from configuration,

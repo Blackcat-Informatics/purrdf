@@ -926,6 +926,21 @@ announcement, so relabelling the trailer would keep rows ordered under a claim
 the read did not end with. A relation over a snapshot pinned at `open`, which
 answers both questions the same way at both instants, never meets this.
 
+An exclusion lookup is held to the same announcement. Each lookup is its own
+invocation, and its cursor is asked both questions exactly as a ranked read's is;
+the attestation it gives must be the one the stratum's ranked read pinned —
+generation and service level alike — or the request is refused
+([`ProtocolError::ExclusionAttestationMoved`]) before the verdict is read. A
+verdict is a statement about rows the ranked read would have gone on to name,
+which is only true of the index that read was served from; an index rebuilt
+between the two can exclude a candidate the pinned one holds. Which strata's
+lookups an answer was certified on is digested into [`EvidenceId`] beside the
+attestations, so an answer that leaned on lookups is not the evidence of one that
+read instead. A relation that answers lookups from the snapshot its ranked read
+pinned never meets this; one that re-resolves "the current index" per invocation
+must attest each invocation's generation honestly, and a rebuild mid-request is
+then a refused request rather than a silently different answer.
+
 A producer that takes its depth as an argument is opened **once, at the planned
 depth** (one probe row past it, within its declaration), however early the
 fusion then stops pulling: there is one invocation per stratum and never a

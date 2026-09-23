@@ -2859,7 +2859,8 @@ class retrieval:
     # instead of being read to its end is asking about this map. An answer whose
     # every entry is `None` was certified with no licence to skip anything.
     #
-    # `"evidence_id"` is the content identity of `"attestations"`, rendered
+    # `"evidence_id"` is the content identity of `"attestations"` and of which
+    # strata answered the exclusion lookups the rows were certified on, rendered
     # exactly like `"plan_id"` and `"profile_id"`: 64 lowercase hex characters. It
     # is the third of the three identities an answer carries — the plan pins the
     # question, the profile pins the law, and this pins the index generations that

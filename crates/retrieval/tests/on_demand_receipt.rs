@@ -534,8 +534,22 @@ fn a_shortfall_found_after_the_announcement_is_refused_and_one_announced_is_carr
 ///
 /// The neighbour attaches the attestation `execute_within` handed back, and gets
 /// exactly `search`'s answer.
+///
+/// Both schedules, because the forgery is the caller's and not the schedule's: a
+/// read materialised before its first row settles to the attestation its witness
+/// held, and is held to the announcement exactly as a read produced on demand is.
+/// Were it not, the same hand-composed ladder would be refused or admitted
+/// according to how the plan happened to be read, and a materialised answer's
+/// evidence would name a generation no read and no exclusion lookup stood behind.
 #[test]
 fn a_forged_announcement_is_refused_at_the_settlement_and_the_true_one_is_admitted() {
+    for schedule in [ReadSchedule::OnDemand, ReadSchedule::Materialised] {
+        forged_announcement_under(schedule);
+    }
+}
+
+/// The body of the forged-announcement test, read under `schedule`.
+fn forged_announcement_under(schedule: ReadSchedule) {
     let dataset = common::empty_dataset();
     let compose = |forge: bool| {
         let registry = registry(Index::Stable);
@@ -548,13 +562,8 @@ fn a_forged_announcement_is_refused_at_the_settlement_and_the_true_one_is_admitt
         };
         let planned = plan(&request(), &registry, &statistics).expect("the fixture plans");
         let compiled = compile(&planned, &env).expect("the fixture compiles");
-        let execution = block_on(execute_within(
-            &compiled,
-            &registry,
-            dataset,
-            ReadSchedule::OnDemand,
-        ))
-        .expect("it executes");
+        let execution =
+            block_on(execute_within(&compiled, &registry, dataset, schedule)).expect("it executes");
         let streams = execution
             .streams
             .into_iter()
@@ -590,15 +599,16 @@ fn a_forged_announcement_is_refused_at_the_settlement_and_the_true_one_is_admitt
 
     let forged = compose(true);
     let Err(FusionError::Protocol(error)) = &forged else {
-        panic!("a forged announcement must be refused, got {forged:?}");
+        panic!("{schedule:?}: a forged announcement must be refused, got {forged:?}");
     };
     let ProtocolError::AttestationMoved { stratum, reason } = &**error else {
-        panic!("expected the announcement to be refused, got {error:?}");
+        panic!("{schedule:?}: expected the announcement to be refused, got {error:?}");
     };
-    assert_eq!(stratum, strata()[0].as_str());
+    assert_eq!(stratum, strata()[0].as_str(), "{schedule:?}");
     assert!(
         reason.contains(MOVED_TO) && reason.contains(OPENED_ON),
-        "the refusal names the forged announcement and the settled truth: {reason}"
+        "{schedule:?}: the refusal names the forged announcement and the settled truth: \
+         {reason}"
     );
 
     let honest = compose(false).expect("the true announcement is admitted");
@@ -607,7 +617,7 @@ fn a_forged_announcement_is_refused_at_the_settlement_and_the_true_one_is_admitt
         searched(Index::Stable, dataset)
             .expect("a stable index answers")
             .rows,
-        "and the hand-composed on-demand read is `search`'s answer"
+        "{schedule:?}: and the hand-composed read is `search`'s answer"
     );
 }
 

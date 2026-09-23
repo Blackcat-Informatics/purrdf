@@ -277,8 +277,9 @@
 //! both independently `None`; `"exactness"` says whether the scores are exact or
 //! floors, naming the strata that came up short; `"domains"` reports the
 //! declaration each stream actually fused under; and `"evidence_id"` is the
-//! content identity of the attestation map, the third of the three identities
-//! beside `"plan_id"` and `"profile_id"`.
+//! content identity of the attestation map and of which strata answered the
+//! exclusion lookups the rows were certified on, the third of the three
+//! identities beside `"plan_id"` and `"profile_id"`.
 //!
 //! The one thing none of them says is "the index was whole". `None` under
 //! `"incomplete"` is silence, not a certificate: the engine-side service level

@@ -890,7 +890,8 @@ pub struct FusionTrailer {
     /// The fusion profile in force.
     pub profile_id: crate::id::FusionProfileId,
     /// The evidence these rows were produced against: the content identity of
-    /// [`Self::attestations`].
+    /// [`Self::attestations`], and of which strata answered the exclusion lookups
+    /// the rows were certified on.
     ///
     /// The third of the three identities an answer carries.
     /// [`Self::plan_id`] pins the question, [`Self::profile_id`] pins the law,
@@ -899,8 +900,28 @@ pub struct FusionTrailer {
     /// all. See [`EvidenceId`] for why the plan and the law are not enough on
     /// their own.
     ///
-    /// Derived from the attestation map alone, so it is as immovable across
-    /// repeated [`FusionStream::trailer`] calls as that map is.
+    /// # The exclusion lookups are evidence too
+    ///
+    /// A row certified on an `Excluded` verdict rests on that verdict as surely
+    /// as on the rows beside it, so an answer whose certification leaned on a
+    /// stratum's lookups is not the same evidence as one that read the stratum
+    /// instead. The strata whose lookups this fusion asked — those
+    /// [`Self::resolution`] records a nonzero
+    /// [`StratumResolution::exclusion_lookups`] for — are therefore digested after
+    /// the attestations. A stream [`execute`](crate::execute) produced admits a
+    /// lookup only under the attestation its read pinned
+    /// ([`ProtocolError::ExclusionAttestationMoved`]),
+    /// and a caller's own [`RankedStream`] owes the same as surely as it owes its
+    /// attestation, so naming the stratum binds its lookups to the generation
+    /// already digested for it; an answer whose lookups were answered by another
+    /// generation has no identity to replay, because it was refused.
+    ///
+    /// A fusion that asked no lookup digests exactly the attestation map, byte
+    /// for byte the identity such a run always carried. The attestation half is
+    /// immovable across repeated [`FusionStream::trailer`] calls; the lookup half
+    /// moves only if the caller certifies further rows between two calls and the
+    /// fusion asks a stratum it had not asked before — the evidence behind the
+    /// answer grew, and the identity says so.
     ///
     /// # Why [`Self::fidelities`] is deliberately NOT folded in
     ///
@@ -1120,7 +1141,35 @@ const SERVICE_INCOMPLETE: u8 = 1;
 /// evaluator's chunking of driving rows rather than anything an index said. An
 /// evidence identity derived from that count would move between two runs over one
 /// unchanged index, which is the exact opposite of what this identity is for.
-pub(crate) fn evidence_canonical_bytes(attestations: &BTreeMap<Iri, PfAttestation>) -> Vec<u8> {
+///
+/// # What the exclusion lookups add, and why a run without them is unchanged
+///
+/// A fused row can be certified on an exclusion verdict as well as on rows: a
+/// lookup that answered `Excluded` stands in for rows the ranked read was never
+/// taken far enough to name. That makes the lookups evidence the answer rests on,
+/// so the strata whose lookups the fusion acted on — every key of `resolution`
+/// with a nonzero [`StratumResolution::exclusion_lookups`] — are written after the
+/// attestations, as their count and then each stratum in canonical order. What a
+/// stratum's lookups attested needs no bytes of its own: a lookup is owed only
+/// under the attestation its stream's read pinned, which is the entry already
+/// written for that stratum above, and the executor refuses one answered under
+/// any other before its verdict is read
+/// ([`ProtocolError::ExclusionAttestationMoved`]).
+/// So naming the stratum commits its lookups to exactly that attestation.
+///
+/// The section is written only when it is non-empty, which keeps every identity
+/// minted for a run that asked no lookup byte for byte what it always was. The
+/// encoding stays injective across the two shapes: the attestation section is
+/// self-delimiting (its entry count comes first and every field is framed), so
+/// the bytes either end there or go on with a lookup count of at least one.
+///
+/// The lookup *count* is deliberately absent, for the reason the invocation
+/// count is absent from the attestations: how many lookups a fusion asked
+/// follows how its frontier was scheduled, not what any index said.
+pub(crate) fn evidence_canonical_bytes(
+    attestations: &BTreeMap<Iri, PfAttestation>,
+    resolution: &BTreeMap<Iri, StratumResolution>,
+) -> Vec<u8> {
     let mut writer = Writer::new();
     writer.u16(EVIDENCE_VERSION);
     writer.u64(attestations.len() as u64);
@@ -1145,16 +1194,32 @@ pub(crate) fn evidence_canonical_bytes(attestations: &BTreeMap<Iri, PfAttestatio
             }
         }
     }
+    let looked_up = || {
+        resolution
+            .iter()
+            .filter(|(_, resolution)| resolution.exclusion_lookups > 0)
+            .map(|(stratum, _)| stratum)
+    };
+    let strata = looked_up().count();
+    if strata > 0 {
+        writer.u64(strata as u64);
+        for stratum in looked_up() {
+            writer.string(stratum.as_str());
+        }
+    }
     writer.into_bytes()
 }
 
 impl FusionTrailer {
     /// The canonical bytes [`Self::evidence_id`] is the digest of.
     ///
-    /// A pure function of [`Self::attestations`]: the layout version, the entry
-    /// count, then every `(stratum, generation, service level)` in canonical
-    /// stratum order, each variable-length part framed by its own length and
-    /// every integer little-endian. Sorting comes free from the `BTreeMap` and
+    /// A pure function of [`Self::attestations`] and of which strata
+    /// [`Self::resolution`] records exclusion lookups for: the layout version,
+    /// the entry count, then every `(stratum, generation, service level)` in
+    /// canonical stratum order, each variable-length part framed by its own
+    /// length and every integer little-endian — followed, only when some
+    /// stratum's lookups were asked, by the count and names of those strata (see
+    /// [`Self::evidence_id`]). Sorting comes free from the `BTreeMap` and
     /// is relied on, so no iteration order can reach the digest; the framing is
     /// what makes the encoding injective, so no two different maps can share
     /// bytes by running their fields together; the little-endian integers are
@@ -1168,7 +1233,7 @@ impl FusionTrailer {
     /// [`Plan::canonical_bytes`](crate::Plan::canonical_bytes) is public.
     #[must_use]
     pub fn evidence_canonical_bytes(&self) -> Vec<u8> {
-        evidence_canonical_bytes(&self.attestations)
+        evidence_canonical_bytes(&self.attestations, &self.resolution)
     }
 
     /// Add the status of every producer that never became a stream, and return
@@ -2359,7 +2424,10 @@ impl<S: RankedStream> FusionStream<S> {
             // `evidence_canonical_bytes` calls, so the identity in an answer
             // and the identity a holder of that answer re-derives cannot come
             // from two encodings that drifted apart.
-            evidence_id: EvidenceId::from_canonical(&evidence_canonical_bytes(&self.attestations)),
+            evidence_id: EvidenceId::from_canonical(&evidence_canonical_bytes(
+                &self.attestations,
+                &resolution,
+            )),
             attestations: self.attestations.clone(),
             fidelities: self
                 .streams

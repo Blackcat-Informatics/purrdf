@@ -313,7 +313,8 @@
 //! different questions about it. [`PlanId`] names the question that was asked;
 //! [`FusionProfileId`] names the law the rows were fused under; and
 //! [`EvidenceId`] names the index generations that answered, digested over the
-//! per-stratum attestation map in [`FusionTrailer::attestations`]. The third
+//! per-stratum attestation map in [`FusionTrailer::attestations`] and over which
+//! strata answered the exclusion lookups the rows were certified on. The third
 //! exists because the first two are derived from configuration, and
 //! configuration is exactly what does not change when an index is rebuilt
 //! underneath a running system: the same plan under the same law over a rebuilt

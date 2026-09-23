@@ -949,8 +949,11 @@ impl RankedStream for RankedStreamAdapter<'_> {
     ///
     /// A read produced on demand settles to the attestation its invocation's
     /// witness now stands behind, which the fusion holds to the one this adapter
-    /// announced ([`Self::with_attestation`]). A materialised read has nothing
-    /// left to learn and settles to the announcement itself.
+    /// announced ([`Self::with_attestation`]). A read the executor materialised
+    /// has nothing left to learn and settles to what its witness attested when it
+    /// finished, which the fusion holds to the announcement the same way; rows a
+    /// caller handed the executor's stream type directly came from no read, and
+    /// settle to the announcement itself.
     async fn settle(&mut self) -> Result<ReadSettlement, ProtocolError> {
         let attestation = match self.inner.settle().await? {
             Some(settled) => settled,
