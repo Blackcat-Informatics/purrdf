@@ -198,10 +198,12 @@
 //! rank it stops at is not knowable until it has stopped. So `search` reads
 //! **twice at most**, and the second read is not a continuation of the first:
 //!
-//! 1. every stratum is read at [`ReadCeiling::Speculative`] — the shallower of
-//!    its planned depth and [`speculative_depth`](crate::speculative_depth), the
-//!    `k + strata` frontier the
-//!    fusion stage already bounds itself by — and those streams are fused;
+//! 1. every stratum is read at [`ReadCeiling::Speculative`] — the depth
+//!    [`CompiledRetrieval::speculative_read_depth`] derives: the `k + strata`
+//!    frontier the fusion stage already bounds itself by, deepened to the rank
+//!    [`PlannedResolution::stopping_rank`] proves the fusion cannot pull past
+//!    wherever every stratum sharing a block answers exclusion lookups, and
+//!    never past the planned depth — and those streams are fused;
 //! 2. if that fusion certified, the answer is that answer and the run is over. It
 //!    certified exactly when no stream ends at a rank below the depth its plan
 //!    recorded: every stream either ran out ([`ProducerStatus::Exhausted`]) or
@@ -220,9 +222,17 @@
 //! complete governed run of the whole bundle, so there is no prefix to stabilise,
 //! no two attestations to reconcile, and nothing a receipt could be wrong about.
 //!
-//! The cost of the discarded attempt is bounded by the frontier — `k + strata`
-//! rows per stratum, a constant beside the declared length that made the
-//! narrowing worth attempting — and it is **reported**, as
+//! Deepening the read to the proven stopping rank is what lets a configuration
+//! whose candidates only become final by lookup — strata sharing a block, each
+//! naming candidates the others do not hold — be answered by its first read: its
+//! fusion stops at the threshold crossing, which lies far past `k + strata`, and
+//! a frontier-deep attempt there would be cut every time. Where the declarations
+//! do not let finality settle before a stream runs out, the read stays at the
+//! frontier, because no depth short of the plan's own would be kept.
+//!
+//! The cost of a discarded attempt is bounded by the speculative depth — a
+//! constant in `k`, the weights and the declarations, beside the declared length
+//! that made the narrowing worth attempting — and it is **reported**, as
 //! [`SearchResult::read_attempts`], rather than left to be inferred from a
 //! timing. Nothing else about the answer can tell the two paths apart, and
 //! deliberately: a narrowed read that certified certified under exactly the law
@@ -368,7 +378,8 @@ pub struct SearchResult {
     ///
     /// [`ReadAttempts::Once`] is every run whose first, speculative read
     /// certified — and every run that had nothing to speculate about, because a
-    /// plan whose depths are already inside the fused frontier narrows to itself.
+    /// plan whose depths are already inside the speculative depth narrows to
+    /// itself.
     /// [`ReadAttempts::Twice`] is a speculative read that some stratum's ceiling
     /// cut, discarded whole, and the planned read that replaced it.
     ///
@@ -376,9 +387,10 @@ pub struct SearchResult {
     /// The rows, their order, the trailer and every identity are the same either
     /// way — that is the soundness claim the fallback exists to keep — so a
     /// caller that wants to know what its declarations cost it has nothing else
-    /// to read. A run reporting [`ReadAttempts::Twice`] paid the frontier twice
-    /// over for a narrowing that did not hold, and the fix is in the
-    /// declarations the planner narrows from, never here.
+    /// to read. A run reporting [`ReadAttempts::Twice`] paid a speculative read
+    /// on top of the planned one for a narrowing that did not hold, and the fix
+    /// is in the declarations the read depths are derived from — a disjoint
+    /// block, or an exclusion basis on every stratum sharing one — never here.
     pub read_attempts: ReadAttempts,
 }
 
@@ -393,7 +405,7 @@ pub enum ReadAttempts {
     /// One read produced this answer.
     ///
     /// Either the speculative read certified, or the plan's own depths were
-    /// already inside the fused frontier and the speculative read *was* the
+    /// already inside the speculative depth and the speculative read *was* the
     /// planned read.
     Once,
     /// Two: a speculative read a stratum's ceiling cut, discarded entirely, and

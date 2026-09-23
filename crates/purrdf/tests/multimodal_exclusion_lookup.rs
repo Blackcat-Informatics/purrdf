@@ -45,8 +45,8 @@ use purrdf::hnsw::relation::{HnswObservations, HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf::retrieval::{
     AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionBasis, Fixed, FusedRow,
-    FusionProfile, Iri, OrderFidelity, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest,
-    Statistics, Term, TopK, compile, execute, plan, search,
+    FusionProfile, Iri, OrderFidelity, RECIP_K, RankFidelity, ReadAttempts, RequestTerm,
+    RetrievalRequest, Statistics, Term, TopK, compile, execute, plan, search,
 };
 use purrdf::sparql::{KnnGuard, PropertyFunctionRegistry, RankedDeclaration, TermKind};
 use purrdf::text::{
@@ -372,6 +372,13 @@ struct Measured {
     vector_lookups: u64,
     /// Distances the vector relation's membership path computed.
     vector_membership_distances: u64,
+    /// How many complete reads of the compiled bundle the answer cost.
+    read_attempts: ReadAttempts,
+    /// The read-work figure the trailer reports for the text stratum: the rows its
+    /// reads returned, cumulative over every read the call took.
+    text_rows_materialised: Option<u64>,
+    /// The same figure for the vector stratum.
+    vector_rows_materialised: Option<u64>,
 }
 
 impl Measured {
@@ -381,7 +388,9 @@ impl Measured {
         format!(
             "{name}: rows={rows} text_ranks={text_ranks} vector_ranks={vector_ranks} \
              fused_lookups={fused} text_lookups={text_lookups} \
-             vector_lookups={vector_lookups} vector_membership_distances={distances}",
+             vector_lookups={vector_lookups} vector_membership_distances={distances} \
+             read_attempts={attempts:?} text_rows_materialised={text_rows:?} \
+             vector_rows_materialised={vector_rows:?}",
             rows = self.answer.len(),
             text_ranks = self.text_ranks,
             vector_ranks = self.vector_ranks,
@@ -389,6 +398,9 @@ impl Measured {
             text_lookups = self.text_lookups,
             vector_lookups = self.vector_lookups,
             distances = self.vector_membership_distances,
+            attempts = self.read_attempts,
+            text_rows = self.text_rows_materialised,
+            vector_rows = self.vector_rows_materialised,
         )
     }
 
@@ -443,6 +455,13 @@ fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
             .get(&iri(stratum))
             .map_or(0, |resolution| resolution.ranks_pulled)
     };
+    let materialised_of = |stratum: &str| {
+        result
+            .trailer
+            .resolution
+            .get(&iri(stratum))
+            .and_then(|resolution| resolution.rows_materialised)
+    };
     Measured {
         answer: result.rows.iter().map(reduce).collect(),
         text_ranks: ranks_of(TEXT_STRATUM),
@@ -456,6 +475,9 @@ fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
         text_lookups: text_observations.membership_lookups(),
         vector_lookups: vector_observations.membership_lookups(),
         vector_membership_distances: vector_observations.membership_distances(),
+        read_attempts: result.read_attempts,
+        text_rows_materialised: materialised_of(TEXT_STRATUM),
+        vector_rows_materialised: materialised_of(VECTOR_STRATUM),
     }
 }
 
@@ -503,6 +525,46 @@ fn a_declared_basis_shortens_a_text_and_vector_read_without_moving_the_answer() 
         asked.ranks_pulled() < control.ranks_pulled(),
         "a shared block with disjoint candidates drains both streams unless a stream can \
          be asked — {report}"
+    );
+
+    // 2b. And it is paid for once. Both strata declare the shared block and answer
+    //     lookups — the lossy beam included, whose membership answer is exact — so
+    //     the plan proves, before a row is read, that the fusion cannot pull either
+    //     head past rank 71: the fifth row is worth at least one stream's fifth
+    //     contribution, `c(5) = ⌊10¹²/65⌋`, and both heads together, `2·c(r)`,
+    //     first fall strictly below it at `r = 71` (at 70 they tie). Each stratum
+    //     is read to depth 71 with its probe row — 72 rows — in ONE read, where the
+    //     fusion itself stops at 66.
+    assert_eq!(
+        asked.read_attempts,
+        ReadAttempts::Once,
+        "the deepened read certified, so it is the answer — {report}"
+    );
+    assert_eq!(
+        (asked.text_rows_materialised, asked.vector_rows_materialised),
+        (Some(72), Some(72)),
+        "the proven stopping rank and its probe row, per stratum — {report}"
+    );
+    assert_eq!(
+        (asked.text_ranks, asked.vector_ranks),
+        (66, 66),
+        "inside which the fusion stopped where the fifth row crosses — {report}"
+    );
+    // The control, on record beside it: no basis, so nothing settles finality
+    // before a stream runs out, the frontier read (`k + strata = 7` and its probe
+    // row, 8) is cut and discarded, and all 80 rows of each stratum are read again.
+    assert_eq!(
+        control.read_attempts,
+        ReadAttempts::Twice,
+        "with no basis the speculative read is cut — {report}"
+    );
+    assert_eq!(
+        (
+            control.text_rows_materialised,
+            control.vector_rows_materialised
+        ),
+        (Some(88), Some(88)),
+        "the discarded frontier read and the drain — {report}"
     );
 
     // 3. The lookups really happened, and the control really did not ask.

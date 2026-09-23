@@ -804,7 +804,7 @@ fn main() {
         );
     }
     // The speculative read, as the two reads it chooses between. A narrowed read
-    // hands the fusion a stream the length of the fused frontier; the planned
+    // hands the fusion a stream the length of the speculative depth; the planned
     // read hands it the producer's whole declared length. The fusion consumes
     // the same ranks either way — that is the soundness claim — and `work` is
     // what the two reads cost, which is the number a narrowing is actually

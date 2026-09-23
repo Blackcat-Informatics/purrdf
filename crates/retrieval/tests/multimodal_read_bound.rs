@@ -257,6 +257,10 @@ enum Blocks {
     Distinct,
     /// Both producers declare one and the same block.
     Shared,
+    /// Neither producer declares a block at all:
+    /// [`CandidateDomains::Unrestricted`], so each may name anything and every
+    /// candidate is one the other could still name.
+    Undeclared,
 }
 
 /// Whether the two producers name the same candidates.
@@ -266,6 +270,10 @@ enum Results {
     Disjoint,
     /// Both name the identical four hundred candidates in the identical order.
     Intersecting,
+    /// Both name the identical four hundred candidates, the second producer in
+    /// the reverse of the first's order — so every candidate one of them names
+    /// early, the other holds and names late.
+    Reversed,
 }
 
 /// One of the three configurations, and its name.
@@ -345,6 +353,42 @@ const SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS: Configuration = Configurat
     exclusion: ExclusionBasis::Membership,
 };
 
+/// **The same answer with no block declared at all.** Both producers declare
+/// [`CandidateDomains::Unrestricted`] and answer exclusion lookups; everything
+/// else is [`SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS`].
+///
+/// Two unrestricted streams admit every candidate between them exactly as two
+/// streams declaring one shared block do, so the threshold sums the same two
+/// heads and the plan proves the same stopping rank. It is the neighbour that
+/// shows the deepened read is keyed on what the threshold can sum and on who
+/// answers lookups, not on a block tag being present.
+const UNDECLARED_BLOCKS_DISJOINT_RESULTS_WITH_LOOKUPS: Configuration = Configuration {
+    name: "undeclared_blocks_disjoint_results_with_lookups",
+    blocks: Blocks::Undeclared,
+    results: Results::Disjoint,
+    holds: ROWS,
+    exclusion: ExclusionBasis::Membership,
+};
+
+/// **The declarations license the deepened read and the rows break it.** One
+/// block, both producers answering lookups — every declaration identical to
+/// [`SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS`] — but the two hold the same
+/// four hundred candidates in opposite orders.
+///
+/// Every lookup therefore answers `Possible`: the candidate a stream names
+/// first, the other holds and names last. No candidate becomes final until the
+/// other stream reaches it, which is the premise the plan's stopping rank rests
+/// on, broken by the rows and invisible to the plan. It is the configuration the
+/// fallback exists for, constructed on purpose so that the fallback is shown to
+/// fire rather than assumed to.
+const SHARED_BLOCK_REVERSED_RESULTS_WITH_LOOKUPS: Configuration = Configuration {
+    name: "shared_block_reversed_results_with_lookups",
+    blocks: Blocks::Shared,
+    results: Results::Reversed,
+    holds: ROWS,
+    exclusion: ExclusionBasis::Membership,
+};
+
 /// **The short streams.** Structurally [`SHARED_BLOCK_DISJOINT_RESULTS`] — one
 /// block, no candidate named twice, the same declared four hundred rows and so
 /// the same planned depth — except that each producer really holds fewer
@@ -373,11 +417,19 @@ fn strata() -> [Iri; 2] {
     [iri(&ex("stratum/left")), iri(&ex("stratum/right"))]
 }
 
-/// The block each producer declares, under `blocks`.
-fn declared_blocks(blocks: Blocks) -> [DomainTag; 2] {
+/// The candidate domains each producer declares, under `blocks`.
+///
+/// One block per producer where one is declared, so the declaration entails the
+/// block of every row and nothing is owed per row.
+fn declared_domains(blocks: Blocks) -> [CandidateDomains; 2] {
+    let within = |tag: &str| CandidateDomains::within([domain_tag(tag)]);
     match blocks {
-        Blocks::Distinct => [domain_tag("domain/left"), domain_tag("domain/right")],
-        Blocks::Shared => [domain_tag("domain/shared"), domain_tag("domain/shared")],
+        Blocks::Distinct => [within("domain/left"), within("domain/right")],
+        Blocks::Shared => [within("domain/shared"), within("domain/shared")],
+        Blocks::Undeclared => [
+            CandidateDomains::Unrestricted,
+            CandidateDomains::Unrestricted,
+        ],
     }
 }
 
@@ -386,7 +438,7 @@ fn declared_blocks(blocks: Blocks) -> [DomainTag; 2] {
 const fn candidate_prefixes(results: Results) -> [&'static str; 2] {
     match results {
         Results::Disjoint => ["left/", "right/"],
-        Results::Intersecting => ["shared/", "shared/"],
+        Results::Intersecting | Results::Reversed => ["shared/", "shared/"],
     }
 }
 
@@ -476,6 +528,9 @@ struct CountingProducer {
     /// inside a narrowed read is exhausted rather than cut, and telling those
     /// two apart is the whole of what the fallback keys on.
     holds: u64,
+    /// Whether this relation names its candidates from the last it holds down
+    /// to the first, rather than from the first up.
+    reversed: bool,
     reads: Arc<Reads>,
 }
 
@@ -545,6 +600,7 @@ impl PropertyFunction for CountingProducer {
             prefix: self.prefix,
             emitted: 0,
             holds: self.holds,
+            reversed: self.reversed,
             bound,
             pulled: self.reads.begin(),
         }))
@@ -601,6 +657,7 @@ struct CountingCursor {
     prefix: &'static str,
     emitted: u64,
     holds: u64,
+    reversed: bool,
     bound: Vec<Option<TermValue>>,
     pulled: Arc<AtomicU64>,
 }
@@ -610,12 +667,17 @@ impl PfCursor for CountingCursor {
         if self.emitted >= self.holds {
             return Ok(None);
         }
-        let index = self.emitted;
+        let index = if self.reversed {
+            self.holds - 1 - self.emitted
+        } else {
+            self.emitted
+        };
         self.emitted += 1;
         self.pulled.fetch_add(1, Ordering::SeqCst);
         // Zero-padded, so the lexical order of the candidate IRIs is the order
         // the rows arrive in and the declared tie-break's last key agrees with
-        // the rank order instead of cutting across it.
+        // the rank order instead of cutting across it — for a relation that
+        // names from the first index up, which is every one but a reversed one.
         let row = [
             TermValue::iri(format!("{}entity{index:06}", ex(self.prefix))),
             TermValue::iri(format!("{}score{index:06}", ex(self.prefix))),
@@ -667,7 +729,7 @@ fn accepted_terms(predicate: &str) -> Vec<AcceptedTerm> {
 
 /// The registry for one configuration, with both producers' read counters.
 fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc<Reads>; 2]) {
-    let blocks = declared_blocks(config.blocks);
+    let domains = declared_domains(config.blocks);
     let prefixes = candidate_prefixes(config.results);
     let counters = [Arc::new(Reads::default()), Arc::new(Reads::default())];
     let mut registry = PropertyFunctionRegistry::new();
@@ -690,6 +752,9 @@ fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc
             modes,
             prefix: prefixes[index],
             holds: config.holds,
+            // The second producer only, and only where the configuration asks:
+            // the pair then holds one candidate set in two opposite orders.
+            reversed: config.results == Results::Reversed && index == 1,
             reads: Arc::clone(&counters[index]),
         };
         registry.register_ranked(
@@ -702,9 +767,7 @@ fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
-                // One block per producer, so the declaration entails the block
-                // of every row and nothing is owed per row.
-                domains: CandidateDomains::within([blocks[index].clone()]),
+                domains: domains[index].clone(),
                 block_position: None,
                 exclusion: config.exclusion,
                 mandatory: false,
@@ -1286,12 +1349,13 @@ fn shared_block_intersecting_results_answer_at_the_sixth_rank_inside_the_specula
 /// improving. They stay asserted exactly, so work that lowers them has to
 /// change this literal in the same commit that earns it.
 ///
-/// They are also not the whole bill, and the last assertion says so: this is the
-/// one configuration whose speculative read is cut, so it pays the frontier once
-/// for a read it throws away and then pays the four hundred anyway. The
-/// narrowing does not make this configuration cheaper — it makes it very
-/// slightly dearer — and what would make it cheaper is a narrowing the *planner*
-/// can license, not a deeper read here.
+/// They are also not the whole bill, and the last assertion says so: with no
+/// exclusion basis declared, nothing can settle finality before a stream runs
+/// out, so the speculative read is cut, thrown away, and followed by the four
+/// hundred anyway. What makes this configuration cheaper is the producers
+/// answering lookups — the same rows under a declared basis are answered by a
+/// single read at the rank the plan proves the fusion stops by; see
+/// [`the_lookups_answer_the_drained_configuration_in_one_read_at_the_proven_stopping_rank`].
 #[test]
 fn shared_block_disjoint_results_drain_both_streams_unbounded_control() {
     let dataset = common::empty_dataset();
@@ -1650,6 +1714,10 @@ fn the_speculative_read_returns_the_answer_the_planned_read_returns() {
         SHARED_BLOCK_INTERSECTING_RESULTS,
         SHARED_BLOCK_DISJOINT_RESULTS,
         SHARED_BLOCK_SHORT_STREAMS,
+        SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS,
+        SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS,
+        UNDECLARED_BLOCKS_DISJOINT_RESULTS_WITH_LOOKUPS,
+        SHARED_BLOCK_REVERSED_RESULTS_WITH_LOOKUPS,
     ] {
         let searched = measure(config, &dataset);
         let full = measure_at_planned_depth(config, &dataset);
@@ -1733,6 +1801,7 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry {
             modes: vec![arity.all_free_mode()],
             prefix: entry.name,
             holds: ROWS,
+            reversed: false,
             // Nothing in this section measures the read, only the depth the plan
             // recorded and the answer that came back, so these counts are
             // collected and never read.
@@ -2884,70 +2953,352 @@ fn membership_lookups_stop_the_drain_where_the_threshold_licenses() {
         "these producers share no candidate, so no lookup may find one — {report}"
     );
 
-    // What the lookups did NOT cost: a single extra ranked row. The reads are
-    // the control's own two, byte for byte, so the hundred-odd point queries
-    // added nothing to the sorted access this file measures — which is what
-    // makes a lookup a lookup.
+    // What the lookups did NOT cost: a single extra ranked row. The only
+    // ranked read is the one the plan asked for — its proven stopping rank and
+    // the probe row — so the point queries added nothing to the sorted access
+    // this file measures, which is what makes a lookup a lookup.
     assert_eq!(
         measured.both("the reads", &measured.reads),
-        control.both("the reads", &control.reads),
+        vec![stopping_read_limit()],
         "an exclusion lookup is a point query and must add no ranked row — {report}"
     );
 }
 
-/// **What the lookups do not buy here: a single read.**
+/// The rank [`PlannedResolution::stopping_rank`] proves this file's two-stratum
+/// configurations cannot pull past, where the two share whatever they admit and
+/// both answer lookups — computed by the library's own derivation, never
+/// restated.
 ///
-/// The speculative read asks each stratum for the fused frontier and one probe
-/// row, and this configuration's answer needs sixty-six ranks of each — so the
-/// narrowed read is still cut and still discarded, exactly as it is in the
-/// control. Asserted rather than left unstated, because the mechanism looks like
-/// it should have removed the second read and did not, and a file that measured
-/// the improvement while going quiet about its limit would be reporting half a
-/// number.
+/// The value is pinned once, as a literal with its arithmetic, in
+/// [`the_lookups_answer_the_drained_configuration_in_one_read_at_the_proven_stopping_rank`];
+/// every other use reads it from here.
+fn stopping_read_depth() -> u64 {
+    let k = u64::try_from(TOP_K.get()).expect("the fixture bound fits a u64");
+    crossing_rank_at(decay(), &[Fixed::ONE], k, &[Fixed::ONE, Fixed::ONE])
+}
+
+/// The rows a read taken to [`stopping_read_depth`] materialises: that depth,
+/// and the probe row every emitted bound carries one past it.
+fn stopping_read_limit() -> u64 {
+    stopping_read_depth() + 1
+}
+
+/// Plan and compile one configuration exactly as [`search`] does, for the
+/// depths the bundle derives before anything is read.
+fn compiled_for(config: Configuration) -> CompiledRetrieval {
+    let (registry, _) = configured_registry(config);
+    let statistics = fixture_statistics();
+    let profile = fixture_profile();
+    let request = RetrievalRequest::bounded(request_terms(), TOP_K);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+    let planned = plan(&request, &registry, &statistics).expect("the fixture request plans");
+    compile(&planned, &env).expect("a fresh plan is admitted")
+}
+
+/// The speculative depth the bundle derives for each of its units, which the
+/// two symmetric strata of this file must agree on.
+fn speculative_read_depths(config: Configuration) -> u64 {
+    let compiled = compiled_for(config);
+    let depths: BTreeSet<u32> = compiled
+        .units
+        .iter()
+        .map(|unit| compiled.speculative_read_depth(unit))
+        .collect();
+    assert_eq!(
+        depths.len(),
+        1,
+        "{name}: the two symmetric strata disagree on their speculative depth: {depths:?}",
+        name = config.name
+    );
+    u64::from(*depths.first().expect("the fixture compiles two units"))
+}
+
+/// **The drained configuration, answered by one read.**
 ///
-/// The arithmetic is the file's own, and it is not close. The threshold gate for
-/// a candidate one of two sharers named first passes at rank sixty-three — that
-/// is `a_candidate_one_of_two_sharers_named_crosses_only_past_the_smoothing_constant`,
-/// asserted above with no executor in it — and the speculative depth is seven.
-/// No observation about a candidate can change that: the threshold bounds an item
-/// **nobody has named**, so it is summed over every open stream that admits the
-/// block whatever any of them said about any particular candidate. Removing this
-/// second read is a narrowing the *planner* would have to license, which is where
-/// the control's own note already points.
+/// [`SHARED_BLOCK_DISJOINT_RESULTS`] reads every row there is because nothing
+/// is final while a stream sharing its block is open. With the producers
+/// answering lookups, finality settles by observation — and the plan knows,
+/// before a row is read, that it will: every stratum sharing a block answers
+/// lookups. So the speculative read is taken to the rank
+/// [`PlannedResolution::stopping_rank`] proves the fusion cannot pull past, the
+/// fusion certifies inside it, and that read is the answer.
+///
+/// # The closed form, per stratum
+///
+/// `k = 5`, unit weights, reciprocal rank with smoothing constant `60` at the
+/// fixed-point scale `10¹²`, and two streams admitting the shared block:
+///
+/// * the fifth row is worth at least one stream's fifth contribution,
+///   `c(5) = ⌊10¹²/65⌋ = 15 384 615 384`, because each stream's first five rows
+///   are five distinct candidates;
+/// * a pull from head rank `r` happens only while the threshold — at most both
+///   heads, each at most `c(r)` — is at least that, and `2·c(r) < c(5)` first
+///   holds at `r = 71`. At `r = 70` it is a tie, `2·⌊10¹²/130⌋ = 15 384 615 384`,
+///   and the engine's strict comparison does not pass a tie;
+/// * so each stratum is read to depth **71**, and the read carries its probe row:
+///   **72** rows materialised per stratum, in **one** read.
+///
+/// Against the control's `8 + 400 = 408` per stratum. Fusion itself stops at
+/// sixty-six — the fifth row really sits at rank three, and the proof can only
+/// assume rank five — so the read is five ranks and a probe row past what fusion
+/// used, which is the price of a depth decided with no row read.
 #[test]
-fn the_lookups_do_not_narrow_the_speculative_read_and_the_arithmetic_says_why() {
+fn the_lookups_answer_the_drained_configuration_in_one_read_at_the_proven_stopping_rank() {
     let dataset = common::empty_dataset();
     let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
-    let report = render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &measured);
+    let control = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let report = format!(
+        "declared={} control={}",
+        render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &measured),
+        render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS, &control),
+    );
+
+    // The closed form, as the arithmetic: the tie one rank shallower, and the
+    // crossing at the rank the depth is.
+    assert_eq!(
+        sum_at(decay(), &[Fixed::ONE], 5),
+        sum_at(decay(), &[Fixed::ONE, Fixed::ONE], 70),
+        "at rank seventy both heads together tie one stream's fifth contribution"
+    );
+    assert!(
+        sum_at(decay(), &[Fixed::ONE], 5) > sum_at(decay(), &[Fixed::ONE, Fixed::ONE], 71),
+        "and at seventy-one they fall strictly below it"
+    );
+    assert_eq!(
+        stopping_read_depth(),
+        71,
+        "the library's derivation lands on the closed form"
+    );
+    assert_eq!(
+        speculative_read_depths(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS),
+        71,
+        "and the bundle asks each stratum for exactly that depth — {report}"
+    );
+
+    // One read, of exactly that depth and its probe row, at both ends of the
+    // seam: the producer's own count and the trailer's figure.
+    assert_eq!(
+        measured.read_attempts,
+        ReadAttempts::Once,
+        "the fusion certified inside the deepened read, so it IS the answer — {report}"
+    );
+    assert_eq!(
+        measured.both("the reads", &measured.reads),
+        vec![72],
+        "one read per stratum: the proven stopping rank and its probe row — {report}"
+    );
+    assert_eq!(
+        measured.both("the reported rows", &measured.reported_materialised),
+        Some(72),
+        "and the trailer bills that read and nothing else — {report}"
+    );
+    assert_eq!(
+        stopping_read_limit(),
+        72,
+        "the literal above is the closed form, not a measurement copied back"
+    );
+
+    // The read the fusion used, inside the read it was given. The proof is an
+    // upper bound on this, and the gap is the rank-five assumption.
+    assert_eq!(
+        measured.both("the ranks pulled", &measured.ranks_pulled),
+        66,
+        "fusion stops where the fifth row, at rank three, crosses — {report}"
+    );
+    assert!(
+        measured.both("the ranks pulled", &measured.ranks_pulled) <= stopping_read_depth(),
+        "a fusion that pulled past the proven stopping rank would falsify the \
+         derivation the read depth rests on — {report}"
+    );
+    assert_eq!(
+        measured.both("the terminal status", &measured.status),
+        ceiling_at(66),
+        "the fusion, not the read, stopped both streams — {report}"
+    );
+
+    // The permanent control stays on record beside it: the same rows with no
+    // basis declared still pay the discarded frontier and the whole drain.
+    assert_eq!(
+        speculative_read_depths(SHARED_BLOCK_DISJOINT_RESULTS),
+        speculative_read_depth(),
+        "with no basis declared, nothing licenses a deeper read than the \
+         frontier — {report}"
+    );
+    assert_eq!(control.read_attempts, ReadAttempts::Twice, "{report}");
+    assert_eq!(
+        control.both("the reads", &control.reads),
+        vec![speculative_limit(), ROWS],
+        "the control's bill is unchanged: the frontier, discarded, then all four \
+         hundred — {report}"
+    );
+    assert_eq!(
+        control.both("the reported rows", &control.reported_materialised),
+        Some(speculative_limit() + ROWS),
+        "{report}"
+    );
+
+    // And the same answer. Against the control, the rows, scores and order: its
+    // rows were certified after both streams ran out, so their threshold
+    // witnesses are zero, and a witness is a fact about when a row certified.
+    assert_eq!(
+        measured.answer(),
+        control.answer(),
+        "the declared basis changed what the answer cost and nothing about the \
+         answer — {report}"
+    );
+    // Against the planned read of the same declarations, byte for byte —
+    // contributions, intervals and threshold witnesses included — because the
+    // fusion over the deepened read is the fusion over the full one, up to the
+    // rank it stopped at.
+    let full = measure_at_planned_depth(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
+    assert_eq!(
+        full.both("the reads", &full.reads),
+        vec![ROWS],
+        "the reference must read in full — {report}"
+    );
+    assert_eq!(
+        measured.rows, full.rows,
+        "the deepened read answers exactly as the planned read does — {report}"
+    );
+}
+
+/// **Undeclared domains: the same deepened read, and the identical answer.**
+///
+/// Both producers declare no block at all and answer lookups. Two unrestricted
+/// streams admit every candidate between them, so the threshold sums the same
+/// two heads a shared block does and the plan proves the same stopping rank —
+/// and the answer, read once at that depth, is byte for byte the answer the
+/// planned read gives.
+#[test]
+fn undeclared_domains_answering_lookups_read_once_and_answer_identically() {
+    let dataset = common::empty_dataset();
+    let config = UNDECLARED_BLOCKS_DISJOINT_RESULTS_WITH_LOOKUPS;
+    let measured = measure(config, &dataset);
+    let full = measure_at_planned_depth(config, &dataset);
+    let report = format!(
+        "searched={} planned={}",
+        render_with_lookups(config, &measured),
+        render_with_lookups(config, &full),
+    );
+
+    assert_eq!(
+        measured.both("the planned depth", &measured.planned_depth),
+        400,
+        "two unrestricted strata license no prefix — {report}"
+    );
+    assert_eq!(
+        speculative_read_depths(config),
+        stopping_read_depth(),
+        "two unrestricted heads are the same two heads a shared block sums — {report}"
+    );
+    assert_eq!(measured.read_attempts, ReadAttempts::Once, "{report}");
+    assert_eq!(
+        measured.both("the reads", &measured.reads),
+        vec![stopping_read_limit()],
+        "{report}"
+    );
+    assert!(
+        total(&measured.fused_lookups) > 0,
+        "finality settled by lookups, not by a stream running out — {report}"
+    );
+
+    // The observing oracle: the reference read every row the plan allowed, so
+    // an answer that agrees with it agrees because the deepened read held.
+    assert_eq!(
+        full.both("the reads", &full.reads),
+        vec![ROWS],
+        "the reference must read in full — {report}"
+    );
+    assert_eq!(
+        measured.rows, full.rows,
+        "the answer read once at the proven stopping rank is the answer the \
+         planned read gives, byte for byte — {report}"
+    );
+    assert_eq!(
+        measured.rows,
+        measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset).rows,
+        "and it is the answer the declared-block twin gives — {report}"
+    );
+}
+
+/// **The prediction undershoots, and the fallback answers.**
+///
+/// Every declaration is the one that licenses the deepened read — a shared
+/// block, both producers answering lookups — so the plan asks for the same
+/// seventy-one ranks. The rows break the premise underneath it: the two
+/// producers hold the same candidates in opposite orders, every lookup answers
+/// `Possible`, and no candidate is final until the other stream reaches it. So
+/// the fusion reads past the deepened depth, the stream reports the cut, and
+/// the attempt is discarded for the planned read.
+///
+/// Asserted as the fallback *firing*, not merely as the answer being right: two
+/// reads, the deepened one and the full one, in that order. A fallback that
+/// never fired in this file would be indistinguishable from dead code.
+#[test]
+fn a_stopping_rank_the_rows_overrun_falls_back_to_the_planned_read() {
+    let dataset = common::empty_dataset();
+    let config = SHARED_BLOCK_REVERSED_RESULTS_WITH_LOOKUPS;
+    let measured = measure(config, &dataset);
+    let full = measure_at_planned_depth(config, &dataset);
+    let report = format!(
+        "searched={} planned={}",
+        render_with_lookups(config, &measured),
+        render_with_lookups(config, &full),
+    );
+
+    // The premise the plan can see is the licensed one.
+    assert_eq!(
+        speculative_read_depths(config),
+        stopping_read_depth(),
+        "the declarations are the deepened read's own — {report}"
+    );
+    // And the rows break the one it cannot: every lookup found its candidate.
+    assert!(
+        total(&measured.served_lookups) > 0,
+        "the lookups were asked — {report}"
+    );
+    assert_eq!(
+        total(&measured.found_lookups),
+        total(&measured.served_lookups),
+        "every candidate is held by both producers, so every lookup answers \
+         Possible — {report}"
+    );
 
     assert_eq!(
         measured.read_attempts,
         ReadAttempts::Twice,
-        "the answering read is still the planned one — {report}"
+        "the deepened read was cut, so the fallback fired — {report}"
     );
     assert_eq!(
         measured.both("the reads", &measured.reads),
-        vec![speculative_limit(), ROWS],
-        "the narrowed read this configuration still cannot keep, and then the \
-         read it always took — {report}"
-    );
-
-    // The gap, stated as the comparison rather than as a claim about it: the
-    // read that answers is an order of magnitude deeper than the read the
-    // speculation asked for, so no verdict could have brought it inside.
-    let answered_at = measured.both("the ranks pulled", &measured.ranks_pulled);
-    assert!(
-        answered_at > speculative_read_depth(),
-        "a fusion that certified inside the speculative depth would have kept \
-         that read; this one needs {answered_at} ranks of a {} rank read — {report}",
-        speculative_read_depth()
+        vec![stopping_read_limit(), ROWS],
+        "the deepened read, discarded, then the planned one — {report}"
     );
     assert_eq!(
-        crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE, Fixed::ONE]),
-        63,
-        "and the shallowest rank at which even the FIRST row of this \
-         configuration can cross the threshold is already nine times the \
-         speculative depth — {report}"
+        measured.both("the reported rows", &measured.reported_materialised),
+        Some(stopping_read_limit() + ROWS),
+        "and the bill counts both — {report}"
+    );
+    assert_eq!(
+        measured.both("the ranks pulled", &measured.ranks_pulled),
+        ROWS,
+        "no candidate is final until the other stream names it, so both drain — \
+         {report}"
+    );
+
+    // The answer is the planned read's, row for row.
+    assert_eq!(
+        measured.rows, full.rows,
+        "the fallback returns exactly the answer the planned read gives — {report}"
+    );
+    assert_eq!(
+        measured.both("the terminal status", &measured.status),
+        full.both("the terminal status", &full.status),
+        "{report}"
     );
 }
 
@@ -3079,6 +3430,26 @@ fn a_candidate_that_cannot_win_is_never_looked_up() {
         "the ceiling this is measured against, stated so the comparison above \
          is not a comparison with an unbounded number — {report}"
     );
+
+    // And what declaring a basis costs this configuration in ranked rows. Before
+    // a row is read, it is indistinguishable from the drained configuration —
+    // the same block, the same basis on both sides, the same premise — so the
+    // plan deepens its read to the same proven stopping rank: one read of 72
+    // rows per stratum where the undeclared twin's frontier read of 8 certifies.
+    // The fusion needs six ranks either way; the difference is the price of a
+    // depth decided with no row read, and it is pinned so it cannot move
+    // unnoticed in either direction.
+    assert_eq!(measured.read_attempts, ReadAttempts::Once, "{report}");
+    assert_eq!(
+        measured.both("the reads", &measured.reads),
+        vec![stopping_read_limit()],
+        "the deepened read, taken once — {report}"
+    );
+    assert_eq!(
+        control.both("the reads", &control.reads),
+        vec![speculative_limit()],
+        "against the undeclared twin's frontier read — {report}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3125,7 +3496,7 @@ fn reported_rows(measured: &Measured, stratum: &Iri) -> u64 {
 fn declared_sharing(config: Configuration) -> Vec<Fixed> {
     match config.blocks {
         Blocks::Distinct => vec![Fixed::ONE],
-        Blocks::Shared => vec![Fixed::ONE, Fixed::ONE],
+        Blocks::Shared | Blocks::Undeclared => vec![Fixed::ONE, Fixed::ONE],
     }
 }
 
