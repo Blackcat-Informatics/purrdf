@@ -2376,25 +2376,83 @@ class slice:
 #     #  "completeness_evidence": "a 10% sample of the corpus",
 #     #  "order": "faithful"}
 _Fidelity: TypeAlias = tuple[str | None, str | None]
-# The seventh position is `exclusion`, and it only ever takes a capability AWAY:
-# `None` (or an omitted position) takes whatever exclusion basis the relation
-# itself declares, and the string `"unavailable"` withdraws it, so this producer
-# is never asked whether it holds a candidate. There is no spelling that ASSERTS
-# a basis — what an exclusion answer is a fact about is a property of the index
-# behind the relation, and a host naming one would be putting a claim about the
-# producer's own universe into the producer's mouth. Declining runs the other way
-# and is always sound: a lookup nobody makes cannot make an answer wrong, only a
-# read longer. A host declines because asking costs a point query per candidate
-# whose fate a verdict could change, and over strata whose candidates overlap
-# heavily every verdict comes back "possible" and narrows nothing. Any other
-# string raises `ValueError` naming the producer.
 _TextProducerSpec: TypeAlias = (
     tuple[str, str, str]
     | tuple[str, str, str, list[str] | None]
     | tuple[str, str, str, list[str] | None, _Attestation]
     | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity]
-    | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity, str | None]
 )
+# One vector space, as the rows a vector producer ranks: `(iri, vector)` pairs
+# in the host's own row order, which is kept because it is what ranks two
+# neighbours at exactly equal distance. The IRI is the entity the row stands for
+# — the spelling a fused row's `"entity"` names, without the angle brackets — and
+# every vector carries the same number of finite components. A seed is an
+# `("entity", "<iri>")` request term naming a row the space holds: a vector
+# producer searches FROM a term it already has a vector for.
+#
+# An empty row list, a row whose width differs from the first row's, a row IRI
+# the IRI parser refuses, a non-finite component, one IRI on two rows, and more
+# rows than the guard's `max_candidates` each raise `ValueError` naming the
+# producer, before any row is read. Under `"cosine"` a zero vector is refused
+# too: it has no direction, so its distance to anything is undefined.
+_VectorRows: TypeAlias = list[tuple[str, list[float]]]
+# The distance a space ranks by: "cosine", "negative_dot" or
+# "squared_euclidean". Any other spelling raises `ValueError` naming the three.
+_VectorMetric: TypeAlias = str
+# `(max_candidates, max_neighbours)`: the largest space the producer admits, and
+# the largest neighbour count one invocation may ask for. Both are the host's
+# statement of what it will spend and neither has a default; a zero in either
+# admits nothing and raises `ValueError`.
+_VectorGuard: TypeAlias = tuple[int, int]
+# One HNSW producer: `(stratum, rows, metric, guard, (m, m0, ef_construction,
+# ef_search), domains, attestation, order)`. Every position is written — `None`,
+# `(None, None)` and `None` where the host states nothing — so a value is never
+# read by guessing which optional position its tail meant.
+#
+# The graph is built in the call, deterministically, from the rows and the four
+# parameters; an invalid parameter set (`m < 2`, `m0 < m`, `ef_construction <
+# m0`, `ef_search < 1`) raises `ValueError`. `domains` and the attestation read
+# exactly as `_TextProducerSpec`'s do: a silent attestation axis delegates to the
+# relation's own, which attests the content digest of the graph and its terms.
+#
+# `order` is `None` — the vectors are the values the host meant — or the host's
+# own words for how they were approximated before they arrived (a non-empty
+# `str`, carried verbatim into `"fidelities"`). There is no completeness
+# position: a beam search offers the candidates it reached and never certifies
+# that nothing else matched, so this producer's stratum is always reported
+# `"lossy"`, with the relation's own evidence, and the answer's `"exactness"`
+# names it.
+_HnswProducerSpec: TypeAlias = tuple[
+    str,
+    _VectorRows,
+    _VectorMetric,
+    _VectorGuard,
+    tuple[int, int, int, int],
+    list[str] | None,
+    _Attestation,
+    str | None,
+]
+# One exact nearest-neighbour producer: `(stratum, rows, metric, guard, domains,
+# attestation, fidelity)`, every position written. The scan compares every row's
+# exact distance, so over the vectors it holds it names every neighbour that was
+# due and orders them truly; whether those vectors are the whole of the host's
+# corpus is the host's to say, on the same `(completeness, order)` fidelity a
+# text producer carries. `(None, None)` states nothing on either axis.
+_KnnProducerSpec: TypeAlias = tuple[
+    str,
+    _VectorRows,
+    _VectorMetric,
+    _VectorGuard,
+    list[str] | None,
+    _Attestation,
+    _Fidelity,
+]
+# Every relation the three producer maps build declares its own exclusion basis,
+# `"membership"`: asked whether it will ever name a candidate, it answers out of
+# its own index — a posting for the needle, or a row for the term. There is no
+# position that asserts or withdraws a basis, because what an exclusion answer
+# is a fact about is a property of the index rather than something a host can say
+# on the producer's behalf.
 
 class _PlanDocumentError(ValueError):
     """A refusal from the plan-document boundary: `certify_plan`, `explain_depth`.
@@ -2450,13 +2508,22 @@ class retrieval:
     #
     # `text_producers` maps a producer IRI to (stratum, predicate, graph), to
     # (stratum, predicate, graph, domains), or to those four followed by one
-    # (generation, incompleteness) attestation, where `graph` is "any", "default",
+    # (generation, incompleteness) attestation and then one (completeness, order)
+    # fidelity, where `graph` is "any", "default",
     # or a named-graph IRI and `domains` is the producer's candidate-domain
     # declaration (see `_TextProducerSpec`: `None` or an omitted fourth element
     # promises nothing and restricts nothing, a list of tag IRIs restricts the
     # producer to those blocks, and an empty list is refused by name; the fifth
     # position is what the host attests about the index behind the producer, and
     # declaring nothing there is silence rather than a claim the index was whole).
+    #
+    # `hnsw_producers` and `knn_producers` map a producer IRI to a
+    # `_HnswProducerSpec` or a `_KnnProducerSpec`: an approximate or an exact
+    # nearest-neighbour search over the host's own vectors, seeded by an
+    # ("entity", "<iri>") request term. Omitting either map registers no producer
+    # of that kind. All three maps are one registry: two producers of any kinds
+    # that claim one stratum, or one producer IRI written into two maps, raise
+    # `ValueError` naming both.
     # `statistics` must name
     # its "source" and "revision", and may carry "cardinality" (stratum IRI to
     # row count) and "selectivity" ((stratum IRI, request-term index) to an
@@ -2515,6 +2582,8 @@ class retrieval:
         text_producers: dict[str, _TextProducerSpec],
         statistics: dict[str, builtins.object],
         top_k: int,
+        hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
+        knn_producers: dict[str, _KnnProducerSpec] | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -2661,6 +2730,8 @@ class retrieval:
         text_producers: dict[str, _TextProducerSpec],
         statistics: dict[str, builtins.object],
         top_k: int,
+        hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
+        knn_producers: dict[str, _KnnProducerSpec] | None = None,
         weights: dict[str, int] | None = None,
         k: int | None = None,
         decay: str | None = None,
@@ -2746,15 +2817,16 @@ class retrieval:
     # request terms it was handed. "Answered with nothing" and "could not answer"
     # stay distinguishable, because none of the seven is reduced to a flag.
     #
-    # Three of the seven can come out of THIS surface: `"exhausted"`,
-    # `"depth_reached"` and `"ceiling_reached"`. The other four belong to
-    # producers or bundles this module does not build — `"row_bound_reached"` needs
-    # a producer that takes its depth as an argument, `"supplied_query_ended"`
-    # needs a unit carrying a query text a caller wrote and this surface compiles
-    # every unit it runs, `"terms_rejected"` is a receipt a producer writes for
-    # itself, and `"execution_failed"` needs a unit whose text
-    # could not be prepared or run — so they are reachable for a host driving the
-    # Rust surface with a bundle of its own. They are spelled and mapped here
+    # Four of the seven can come out of THIS surface: `"exhausted"`,
+    # `"depth_reached"`, `"ceiling_reached"` and `"row_bound_reached"` — the last
+    # from a vector producer, which takes its depth as its own neighbour count, so
+    # a read whose depth sits on the count it declared ends there unobserved. The
+    # other three belong to bundles or producers this module does not build —
+    # `"supplied_query_ended"` needs a unit carrying a query text a caller wrote
+    # and this surface compiles every unit it runs, `"terms_rejected"` is a
+    # receipt a producer writes for itself, and `"execution_failed"` needs a unit
+    # whose text could not be prepared or run — so they are reachable for a host
+    # driving the Rust surface with a bundle of its own. They are spelled and mapped here
     # regardless: the mapping is what makes a status a host DOES receive readable,
     # and the seven-way vocabulary is the engine's, not this binding's.
     #
@@ -2763,11 +2835,12 @@ class retrieval:
     # restriction — and `"exclusion_bases"` maps it to what that stream declared
     # its exclusion answers would be a fact about: `"unavailable"` or
     # `"membership"`. The two answer one question by two means: a declaration says
-    # a stream will never name a candidate, a lookup observes it. Read
-    # `"exclusion_bases"` whenever `"exclusion_lookups"` is zero, because zero
-    # means two different things — nothing COULD be asked, or nothing NEEDED
-    # asking, since the frontier asks only about candidates a verdict could change
-    # the fate of.
+    # a stream will never name a candidate, a lookup observes it. Zero
+    # `"exclusion_lookups"` means two different things in general — nothing COULD
+    # be asked, or nothing NEEDED asking, since the frontier asks only about
+    # candidates a verdict could change the fate of — and `"exclusion_bases"` is
+    # what tells them apart. Every relation this surface builds declares
+    # `"membership"`, so on an answer from here a zero is always the second.
     #
     # `"attestations"` maps a stratum to what the index behind its stream
     # attested, as `{"generation": str | None, "incomplete": str | None}`, read
@@ -2787,11 +2860,12 @@ class retrieval:
     # absent rather than reported as having declined to answer.
     #
     # Either axis may be the HOST's word rather than the relation's, through the
-    # fifth position of that producer's `_TextProducerSpec`. That is the only way
-    # an incompleteness reaches this map at all: the shipped text relation indexes
-    # the document it was handed and has no way to know what was missing from it,
-    # so a host whose corpus was assembled from a partial index is the only party
-    # who can say so. A declared generation replaces the content digest the
+    # fifth position of that producer's `_TextProducerSpec` or the attestation
+    # position of a `_HnswProducerSpec` / `_KnnProducerSpec`. That is the only way
+    # an incompleteness reaches this map at all: every shipped relation indexes
+    # what it was handed in this call and has no way to know what was missing from
+    # it, so a host whose corpus was assembled from a partial index is the only
+    # party who can say so. A declared generation replaces the content digest the
     # relation would otherwise attest; a declared incompleteness is added beside it
     # and leaves it alone.
     #
@@ -2879,6 +2953,8 @@ class retrieval:
         k: int,
         decay: str,
         top_k: int,
+        hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
+        knn_producers: dict[str, _KnnProducerSpec] | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...

@@ -111,15 +111,49 @@
 //! under arithmetic the caller never wrote, so an omitted `decay` is refused and
 //! an unknown spelling is refused by name.
 //!
-//! # The ranked producer a Python host configures
+//! # The ranked producers a Python host configures
 //!
 //! A ranked producer is registered through
 //! `purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked`, which takes
-//! a live relation object. `text_producers` builds the one shipped ranked
-//! relation whose entire configuration is plain data — `purrdf-text`'s BM25
-//! search over an indexed predicate — so a host declares it by naming a
-//! predicate rather than by constructing a Rust value. Registering several is
-//! how one request fuses across several strata.
+//! a live relation object. This surface builds the three shipped ranked
+//! relations whose entire configuration is plain data, so a host declares each
+//! by handing over data rather than by constructing a Rust value:
+//!
+//! * `text_producers` — `purrdf-text`'s BM25 search over one indexed predicate
+//!   of the call's own document, declared by naming the predicate;
+//! * `hnsw_producers` — `purrdf-hnsw`'s approximate nearest-neighbour search
+//!   over the host's own vectors, built into a graph in this call;
+//! * `knn_producers` — the exact nearest-neighbour scan
+//!   (`purrdf_sparql_eval::EmbeddingKnnRelation`) over the host's own vectors.
+//!
+//! Every relation takes the same declaration its Rust constructor takes — its
+//! own `ranked_declaration`, with the stratum, domains and fidelity the host
+//! states — so a request composed here is the request the Rust surface composes
+//! from the same relations. Registering several is how one request fuses across
+//! several strata, and several modalities: a lexical term reaches the text
+//! producers and an `("entity", term)` seed reaches the vector ones.
+//!
+//! # What a vector producer is built from
+//!
+//! A vector producer's space is a list of `(iri, vector)` rows: the IRI is the
+//! entity the row stands for — the same spelling a fused row's `"entity"` names —
+//! and the vector is its components. Row order is the host's and is kept: it is
+//! what ranks two neighbours at exactly equal distance. The metric is spelled
+//! as the distance the space ranks by — `"cosine"`, `"negative_dot"` or
+//! `"squared_euclidean"` — and the guard is `(max_candidates, max_neighbours)`,
+//! the two work bounds a host puts on one invocation, neither of which has a
+//! value this binding could invent. An HNSW producer also names the graph's
+//! `(m, m0, ef_construction, ef_search)`, which decide the graph and so its
+//! answers. A seed is an entity the space holds a row for: the producer
+//! searches FROM a term it already has a vector for.
+//!
+//! Every row must carry the same number of finite components, name a distinct
+//! IRI, and fit inside the guard; an empty row list is refused, because a
+//! producer that can name nothing should not be registered. Each refusal is a
+//! `ValueError` naming the producer, raised before any row is read.
+//!
+//! The neighbour count is written into the query as an `xsd:integer`, the one
+//! datatype both relations read it under, so there is no position for it.
 //!
 //! Each of them names a stratum of its **own**. A stratum is served by one
 //! producer, because a rank means nothing outside the list that assigned it: two
@@ -128,14 +162,16 @@
 //! producers whose scores are already comparable — shards or segments of one
 //! index — belong inside one producer that merges them by score; two that score
 //! differently belong in two strata, where the weighted sum across strata is the
-//! point of the fusion. A `text_producers` map that names one stratum twice is
-//! refused where it is registered.
+//! point of the fusion. Two producers — of any kind, in any of the three maps —
+//! that name one stratum are refused where they are registered, and so is one
+//! producer IRI written into two maps.
 //!
 //! # What a producer may name, and what a host has to tell it
 //!
 //! A `text_producers` entry may be written as a fourth element beside the three
 //! it already carries — `(stratum, predicate, graph, domains)` — where `domains`
-//! is `None` or a list of domain-tag IRIs. It is the second promise a producer
+//! is `None` or a list of domain-tag IRIs. A vector producer carries the same
+//! `domains` position, read by the same rules below. It is the second promise a producer
 //! makes about its own rows, beside its duplicate policy, and like that one it
 //! is host-supplied configuration read at registration rather than anything the
 //! engine infers.
@@ -160,12 +196,14 @@
 //! corpus size. What it costs instead is one point query per candidate whose
 //! fate a verdict could change, reported as `"exclusion_lookups"`.
 //!
-//! An undeclared read that CANNOT ask does still drain, and that is the shape a
-//! host reaches by declining the lookup (the seventh producer position, below).
-//! The three readings are therefore genuinely three: declared domains bound the
-//! read by promise, an undeclared read that may ask bounds it by observation, and
-//! an undeclared read that may not ask reads to the end of every stream. All
-//! three return the same rows and the same scores.
+//! Every relation this surface builds answers that lookup, and the basis is the
+//! relation's own declaration — what an exclusion answer is a fact about is a
+//! property of the index and its dictionary, so there is no position on any spec
+//! that asserts or withdraws one. The two readings a Python host reaches are
+//! therefore declared domains, which bound the read by promise, and an undeclared
+//! read, which bounds it by observation. Both return the same rows and the same
+//! scores, and `"exclusion_bases"` on the answer reports the basis each stream
+//! fused under.
 //!
 //! `None` — or an omitted fourth element — is `Unrestricted`: "this producer may
 //! name anything", the honest value for a host that does not know how its
@@ -212,29 +250,9 @@
 //! writes no attestation position declares exactly that silence, which is what
 //! every `text_producers` value declared before this position existed.
 //!
-//! # What a host may DECLINE, and why that is the only direction it travels
-//!
-//! A seventh element may follow the six above — `(stratum, predicate, graph,
-//! domains, (generation, incompleteness), (completeness, order), exclusion)` —
-//! and it is `None`, or the string `"unavailable"`. `None` (or an omitted
-//! position) takes whatever exclusion basis the relation itself declares, which
-//! is what every spec written before this position existed does.
-//! `"unavailable"` withdraws it: this producer will not be asked.
-//!
-//! There is deliberately no spelling that ASSERTS a basis. What an exclusion
-//! answer is a fact about is a property of the index and its dictionary, so a
-//! host naming one would be putting a claim about the producer's own universe
-//! into the producer's mouth — the same mistake a derived `domains` tag would
-//! be. Declining runs the other way and is always sound: a lookup nobody makes
-//! cannot make an answer wrong, only a read longer.
-//!
-//! A host declines for one reason, and it is a cost. Each lookup is a point
-//! query against the store, and over strata whose candidates overlap heavily
-//! every verdict comes back "possible" and narrows nothing — so a host that
-//! knows its corpus has that shape pays for asking and buys none of the read
-//! back. The answer reports which basis each stream actually fused under, under
-//! `"exclusion_bases"`, because an `"exclusion_lookups"` of zero means two
-//! different things: nothing COULD be asked, or nothing NEEDED asking.
+//! A vector producer carries the same attestation position, read the same way:
+//! `None` on an axis delegates to the relation's own generation — the content
+//! digest of the space this call built — and a declared generation replaces it.
 //!
 //! The two axes reach the answer differently, and only one of them is a
 //! shortfall:
@@ -341,36 +359,29 @@
 //! is the message the registration refusal above forecloses. The other two —
 //! *"named item I in block B, which its declared domains … do not include"* and
 //! *"name item I from two different blocks"* — need a producer whose rows DO
-//! name their own block, and both relations this module builds declare no block
-//! column, so nothing registered here can emit such a row. What a Python host
+//! name their own block, and none of the three relations this module builds
+//! declares a block column, so nothing registered here can emit such a row. What a Python host
 //! can actually meet is the two stratum-level messages above and the
 //! registration refusal.
 //!
-//! Two terminal *statuses* are unreachable here for the same kind of reason, and
-//! they are recorded next to those refusals because a reader checking whether a
-//! status is testable from Python will look in one place for all of them.
+//! One terminal *status* is unreachable here for the same kind of reason, and it
+//! is recorded next to those refusals because a reader checking whether a status
+//! is testable from Python will look in one place for all of them.
 //!
 //! `"supplied_query_ended"` — a unit running a query text the host wrote rather
 //! than one this layer rendered, whose own internal bound the layer cannot see —
 //! needs a caller-assembled bundle. This surface compiles every unit it runs and
 //! accepts no bundle from a caller, so no stratum a Python host can configure can
-//! end that way. It is mapped here for the same reason the next one is: a host
-//! fusing streams from the Rust surface can be handed it.
+//! end that way. It is mapped here because a host fusing streams from the Rust
+//! surface can be handed it.
 //!
-//! `"row_bound_reached"`
-//! — the producer stopping at the row count it declared it can serve per
-//! invocation — needs a **self-bounding** producer: one whose declaration places
-//! the depth as an argument the producer itself reads, so the read cannot reach
-//! for the row past it and how that read ended is not observable. The only
-//! relation this module registers is the text-search one, whose ranked
-//! declaration places no depth argument, so every stratum a Python host can
-//! configure is bounded by the unit's own emitted `LIMIT` and ends
-//! `"exhausted"`, `"depth_reached"` or `"ceiling_reached"` instead. The status is
-//! documented on [`search`] and mapped here because a host fusing streams from
-//! the Rust surface can be handed it, and reading it as "that was all of it"
-//! would be the exact mistake the seven spellings exist to prevent. Making it
-//! reachable from Python means letting a caller register a producer of its own,
-//! which this surface does not do.
+//! `"row_bound_reached"` — the producer stopping at the row count it declared it
+//! can serve per invocation — IS reachable, through a vector producer. Both
+//! vector relations are **self-bounding**: their declaration places the depth as
+//! the neighbour count they read themselves, so a read whose planned depth sits
+//! on that declared count cannot reach for the row past it, and how it ended is
+//! not observable. A text stratum is bounded by the unit's own emitted `LIMIT`
+//! instead and ends `"exhausted"`, `"depth_reached"` or `"ceiling_reached"`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -383,6 +394,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 
 use crate::attestation::Attestation;
+use crate::hnsw::relation::{HnswRelation, HnswSpace};
+use crate::hnsw::{HnswIndex, Params as HnswGraphParams, VectorMatrix};
 use crate::retrieval::{
     AdmissionEnvironment, ClassWidth, CompiledRetrieval, CounterReading, CrossingRank, DecayRule,
     DepthCause, Fixed, FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution,
@@ -392,10 +405,13 @@ use crate::retrieval::{
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
+use purrdf_core::DistanceMetric;
 use purrdf_sparql_eval::{
-    CandidateDomains, Completeness, DomainTag, ExclusionBasis, IndexGeneration, OrderFidelity,
-    PropertyFunctionRegistry, RankFidelity, ServiceLevel,
+    CandidateDomains, Completeness, DomainTag, EmbeddingKnnRelation, EmbeddingSpace,
+    IndexGeneration, KnnGuard, OrderFidelity, PropertyFunction, PropertyFunctionRegistry,
+    RankFidelity, RankedDeclaration, ServiceLevel, TermKind,
 };
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// The number of decimal digits in one whole fixed-point unit.
 ///
@@ -446,84 +462,147 @@ impl GraphSpec {
     }
 }
 
-/// One ranked text producer, exactly as the host declared it.
+/// One ranked producer, exactly as the host declared it.
+///
+/// The facts every kind declares the same way — the IRI it is registered under,
+/// its stratum, its candidate domains and the host's attestation about the index
+/// behind it — are fields here; what builds the relation itself is the
+/// [`ProducerKind`].
 #[derive(Clone, Debug)]
-struct TextProducer {
+struct Producer {
     /// The IRI the relation is registered under.
     producer: String,
     /// The caller-supplied stratum its rows rank within.
     stratum: String,
-    /// The one predicate its index is built over, and the predicate its accepted
-    /// request terms must name.
-    predicate: String,
-    /// Which graphs the index reads.
-    graph: GraphSpec,
     /// Which blocks of the candidate universe this producer promises its rows
     /// lie in, as the host spelled them, or `None` for the unrestricted
     /// declaration.
     ///
-    /// Host-supplied and never derived. Which entities a text index names is a
-    /// fact about the host's corpus, and neither this layer nor the relation can
-    /// see it: deriving a tag per stratum would hand two producers over one
-    /// entity space a pair of tags a consumer reads as disjoint, which makes a
-    /// fusion refuse a valid query in one direction and certify a score missing
-    /// a contribution in the other. `None` is the honest value where the host
-    /// does not know, and it is exactly what this binding declared before the
-    /// parameter existed.
+    /// Host-supplied and never derived. Which entities an index names is a fact
+    /// about the host's corpus, and neither this layer nor the relation can see
+    /// it: deriving a tag per stratum would hand two producers over one entity
+    /// space a pair of tags a consumer reads as disjoint, which makes a fusion
+    /// refuse a valid query in one direction and certify a score missing a
+    /// contribution in the other. `None` is the honest value where the host does
+    /// not know.
     domains: Option<Vec<String>>,
     /// What the host declares about the index this producer's rows came from:
     /// which version of it answered, and whether it was **not** whole.
     ///
-    /// [`Attestation::UNDECLARED`] — silence on both axes — is what a spec that
-    /// wrote no attestation position declares, and it leaves the registration
-    /// byte-for-byte what it was before that position existed. See this module's
-    /// header for what each axis does to the answer.
+    /// [`Attestation::UNDECLARED`] — silence on both axes — leaves the relation
+    /// registered unwrapped, attesting exactly what it attests itself. See this
+    /// module's header for what each axis does to the answer.
     attestation: Attestation,
-    /// What this producer's own search promises about the rows it can name, on
-    /// both axes, as the host declared them.
-    ///
-    /// Host-supplied for the reason `domains` is, and the reason is the same
-    /// shape. BM25 over the index this relation holds is exhaustive and ranks by
-    /// exact scores: every document carrying a query term is scored, with no
-    /// pruning and no early exit, and nothing is compared in an approximated
-    /// space. Over the document this call was handed, both axes are therefore
-    /// facts rather than claims.
-    ///
-    /// What the relation cannot see is whether that document is itself the whole
-    /// of what the host means. A host that handed in a sample, one partition of a
-    /// larger collection, or a snapshot it knows has fallen behind has a
-    /// genuinely lossy producer; a host whose text was transliterated, truncated
-    /// or machine-translated before it got here has a genuinely order-perturbed
-    /// one, because the values being compared are approximations of the ones the
-    /// ranking is meant to be over. Neither is visible from inside, and this is
-    /// the only place either can be said.
-    ///
-    /// Distinct from `attestation`, which is about the INDEX behind the rows: an
-    /// attestation says which version answered and whether that version was
-    /// whole, while this says whether the producer's own search over it names
-    /// every row it should and ranks them as they were due. A host can be silent
-    /// on one and explicit on the other.
-    fidelity: RankFidelity,
-    /// Whether the host DECLINED this producer's exclusion lookup.
-    ///
-    /// The one position on this spec that only ever takes a capability away, and
-    /// that asymmetry is deliberate. The basis is the RELATION's to declare —
-    /// what an exclusion answer is a fact about is a property of the index and
-    /// its dictionary, and a host asserting one would be putting a claim about
-    /// the producer's own universe into the producer's mouth. Declining is the
-    /// other direction and is always sound: a lookup that is never made cannot
-    /// make an answer wrong, only a read longer.
-    ///
-    /// `false` — an omitted seventh element — takes the relation's own
-    /// declaration verbatim, which is the behaviour every spec had before this
-    /// position existed.
-    ///
-    /// A host declines for one reason, and it is a cost: each lookup is a point
-    /// query against the store, and over strata whose candidates overlap heavily
-    /// every verdict comes back "possible" and narrows nothing. A host that
-    /// knows its corpus has that shape pays for asking and buys nothing, and
-    /// this is where it says so.
-    decline_exclusion: bool,
+    /// What builds the relation, per kind.
+    kind: ProducerKind,
+}
+
+/// The relation one [`Producer`] registers, with everything only that kind
+/// declares.
+#[derive(Clone, Debug)]
+enum ProducerKind {
+    /// `purrdf-text`'s BM25 search over one predicate of the call's document.
+    Text {
+        /// The one predicate its index is built over, and the predicate its
+        /// accepted request terms must name.
+        predicate: String,
+        /// Which graphs the index reads.
+        graph: GraphSpec,
+        /// What this producer's own search promises about the rows it can name,
+        /// on both axes, as the host declared them.
+        ///
+        /// Host-supplied for the reason `domains` is. BM25 over the index this
+        /// relation holds is exhaustive and ranks by exact scores: every document
+        /// carrying a query term is scored, with no pruning and no early exit,
+        /// and nothing is compared in an approximated space. Over the document
+        /// this call was handed, both axes are therefore facts rather than
+        /// claims.
+        ///
+        /// What the relation cannot see is whether that document is itself the
+        /// whole of what the host means. A host that handed in a sample, one
+        /// partition of a larger collection, or a snapshot it knows has fallen
+        /// behind has a genuinely lossy producer; a host whose text was
+        /// transliterated, truncated or machine-translated before it got here has
+        /// a genuinely order-perturbed one. Neither is visible from inside, and
+        /// this is the only place either can be said.
+        ///
+        /// Distinct from `attestation`, which is about the INDEX behind the rows:
+        /// an attestation says which version answered and whether that version
+        /// was whole, while this says whether the producer's own search over it
+        /// names every row it should and ranks them as they were due.
+        fidelity: RankFidelity,
+    },
+    /// `purrdf-hnsw`'s approximate nearest-neighbour search over the host's
+    /// vectors, built into a graph in this call.
+    Hnsw {
+        /// The rows, metric and guard the space is built from.
+        space: VectorSpec,
+        /// The graph's construction and search parameters.
+        params: HnswParams,
+        /// What the host declares about the ORDER of the vectors it handed in.
+        ///
+        /// The completeness axis is not the host's here: a beam search offers
+        /// the candidates it reached and never certifies that nothing else
+        /// matched, so the relation declares itself lossy on every space, with
+        /// the profile's own evidence. Whether the vectors were already
+        /// approximations of the values the host meant is upstream of anything
+        /// the space can read, so that axis is the host's, and it composes with
+        /// the relation's own — it can only degrade it.
+        order: OrderFidelity,
+    },
+    /// The exact nearest-neighbour scan over the host's vectors.
+    Knn {
+        /// The rows, metric and guard the space is built from.
+        space: VectorSpec,
+        /// What this producer's search promises about the rows it can name.
+        ///
+        /// The scan compares every row's exact distance, so over the vectors it
+        /// holds it names every neighbour that was due and orders them truly.
+        /// Whether those vectors are the whole of the host's corpus is not a
+        /// fact the relation holds, so both axes are the host's, exactly as they
+        /// are for a text producer.
+        fidelity: RankFidelity,
+    },
+}
+
+impl ProducerKind {
+    /// The noun a refusal names this kind of producer by.
+    const fn noun(&self) -> &'static str {
+        match self {
+            Self::Text { .. } => "text producer",
+            Self::Hnsw { .. } => "HNSW producer",
+            Self::Knn { .. } => "kNN producer",
+        }
+    }
+}
+
+/// One vector producer's space, as the host declared it.
+#[derive(Clone, Debug)]
+struct VectorSpec {
+    /// Each row's entity, in the host's row order.
+    terms: Vec<TermValue>,
+    /// Every row's components, row-major.
+    components: Vec<f64>,
+    /// How many components each row carries.
+    dimension: usize,
+    /// The distance the space ranks by.
+    metric: DistanceMetric,
+    /// The host's work bounds on one invocation.
+    guard: KnnGuard,
+}
+
+/// An HNSW graph's parameters, as the host declared them. Validated where the
+/// graph is built, by the one constructor that validates them.
+#[derive(Clone, Copy, Debug)]
+struct HnswParams {
+    /// Neighbours retained per node above layer 0.
+    m: usize,
+    /// Neighbours retained per node at layer 0.
+    m0: usize,
+    /// Beam width while selecting neighbours during construction.
+    ef_construction: usize,
+    /// Beam width while answering a query.
+    ef_search: usize,
 }
 
 /// The statistics provider the host supplied, as owned data.
@@ -578,8 +657,8 @@ struct Call {
     base: Option<String>,
     /// The request terms, in the host's own order.
     request: RetrievalRequest,
-    /// The ranked producers to register, in the host's own order.
-    producers: Vec<TextProducer>,
+    /// The ranked producers to register, of every kind, in canonical IRI order.
+    producers: Vec<Producer>,
     /// The statistics planning consults.
     statistics: HostStatistics,
 }
@@ -610,6 +689,8 @@ fn retrieval_iri(role: &str, text: &str) -> Result<Iri, String> {
 /// every answer this binding produced before domains could be declared. A list
 /// is `CandidateDomains::Within`, each entry validated as an IRI by the same
 /// parser every other IRI on this surface goes through.
+///
+/// `subject` names the producer in every refusal, kind and IRI together.
 ///
 /// An EMPTY list is refused here rather than read as the unrestricted
 /// declaration, and the two are not neighbours that could be quietly merged: an
@@ -644,7 +725,7 @@ fn retrieval_iri(role: &str, text: &str) -> Result<Iri, String> {
 /// set's own canonical order, so two hosts that wrote the same blocks in
 /// different orders read the same message about the same declaration.
 fn candidate_domains(
-    producer: &str,
+    subject: &str,
     declared: Option<&[String]>,
 ) -> Result<CandidateDomains, String> {
     let Some(tags) = declared else {
@@ -652,7 +733,7 @@ fn candidate_domains(
     };
     if tags.is_empty() {
         return Err(format!(
-            "text producer <{producer}>: `domains` is an empty list, which promises that this \
+            "{subject}: `domains` is an empty list, which promises that this \
              producer names no candidate at all rather than narrowing the ones it names. A \
              consumer holds a producer to that declaration row by row, so every row this \
              producer emitted would contradict it. Name the domains it really draws from, or \
@@ -661,8 +742,8 @@ fn candidate_domains(
     }
     let mut blocks = BTreeSet::new();
     for tag in tags {
-        let iri = crate::iri::parse(tag)
-            .map_err(|e| format!("text producer <{producer}>: domain tag <{tag}>: {e}"))?;
+        let iri =
+            crate::iri::parse(tag).map_err(|e| format!("{subject}: domain tag <{tag}>: {e}"))?;
         blocks.insert(DomainTag::new(iri));
     }
     // Counted after the set absorbs them, so a list that spells one block twice
@@ -675,7 +756,7 @@ fn candidate_domains(
             .collect::<Vec<_>>()
             .join(", ");
         return Err(format!(
-            "text producer <{producer}>: `domains` names {count} blocks [{listed}], and a \
+            "{subject}: `domains` names {count} blocks [{listed}], and a \
              several-block declaration only says this producer's candidates lie somewhere in that \
              set — it obliges the producer to say, row by row, which of those blocks each row came \
              from. The ranked relations this surface builds project a candidate and a score and \
@@ -699,16 +780,25 @@ fn build_dataset(call: &Call) -> Result<Arc<RdfDataset>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Register every declared text producer as a ranked producer over `data`.
+/// Register every declared producer as a ranked producer over `data`.
 ///
-/// The declaration is the relation's own
-/// (`TextSearchRelation::ranked_declaration`), so the capability recorded in the
-/// registry is the one the relation can honestly make: an index that resolves to
-/// more than one partition refuses to claim a ranked order, and that refusal
-/// arrives here as a `ValueError` rather than as a ranking that is not one.
+/// Every declaration is the relation's own `ranked_declaration`, so the
+/// capability recorded in the registry is the one the relation can honestly make:
+/// an index that resolves to more than one partition refuses to claim a ranked
+/// order, and that refusal arrives here as a `ValueError` rather than as a
+/// ranking that is not one. Nothing is edited into a declaration after the
+/// relation hands it out — not its exclusion basis, not its fidelity — so a
+/// producer registered here declares exactly what the same relation declares on
+/// the Rust surface.
+///
+/// The declaration is read off the relation itself, BEFORE the host's
+/// attestation wraps it: an attestation says nothing about arity, modes or ranked
+/// order, and the wrapper delegates every one of those, so taking the declaration
+/// from the relation is what makes that true by construction rather than by
+/// inspection.
 fn build_registry(
     data: &RdfDataset,
-    producers: &[TextProducer],
+    producers: &[Producer],
 ) -> Result<PropertyFunctionRegistry, String> {
     if producers.is_empty() {
         return Err(
@@ -718,53 +808,101 @@ fn build_registry(
         );
     }
     let mut registry = PropertyFunctionRegistry::new();
-    let mut seen: Vec<&str> = Vec::with_capacity(producers.len());
     for producer in producers {
-        if seen.contains(&producer.producer.as_str()) {
-            return Err(format!(
-                "property function <{}> is declared twice; a relation may not be silently \
-                 shadowed",
-                producer.producer
-            ));
-        }
-        seen.push(&producer.producer);
-
-        let config = TextIndexConfig::new(
-            vec![TermValue::iri(producer.predicate.clone())],
-            producer.graph.selector(),
-        )
-        .map_err(|e| format!("text producer <{}>: {e}", producer.producer))?;
-        let index = TextIndex::from_dataset(data, &config)
-            .map_err(|e| format!("text producer <{}>: {e}", producer.producer))?;
-        let relation = TextSearchRelation::new(Arc::new(index));
-        let stratum = crate::iri::parse(&producer.stratum).map_err(|e| {
-            format!(
-                "text producer <{}>: stratum <{}>: {e}",
-                producer.producer, producer.stratum
-            )
-        })?;
-        let domains = candidate_domains(&producer.producer, producer.domains.as_deref())?;
-        let fidelity = producer.fidelity.clone();
-        // Read off the relation itself, BEFORE the host's attestation wraps it:
-        // what a producer declares to the planner is what the relation can
-        // honestly declare, and an attestation says nothing about arity, modes or
-        // ranked order. The wrapper delegates every one of those, so the
-        // declaration would be identical either way; taking it from the relation
-        // is what makes that true by construction rather than by inspection.
-        let mut declaration = relation
-            .ranked_declaration(stratum, Some(producer.predicate.clone()), fidelity, domains)
-            .map_err(|e| format!("text producer <{}>: {e}", producer.producer))?;
-        // The host's declination, applied to the relation's own declaration
-        // rather than replacing it. It travels in one direction only: a basis
-        // the relation declared is withdrawn, and a basis it did not declare
-        // cannot be conjured, so this line can make a read longer and can never
-        // make an answer wrong.
-        if producer.decline_exclusion {
-            declaration.exclusion = ExclusionBasis::Unavailable;
-        }
+        let subject = format!("{} <{}>", producer.kind.noun(), producer.producer);
+        let stratum = crate::iri::parse(&producer.stratum)
+            .map_err(|e| format!("{subject}: stratum <{}>: {e}", producer.stratum))?;
+        let domains = candidate_domains(&subject, producer.domains.as_deref())?;
+        let (relation, declaration): (Arc<dyn PropertyFunction>, RankedDeclaration) =
+            match &producer.kind {
+                ProducerKind::Text {
+                    predicate,
+                    graph,
+                    fidelity,
+                } => {
+                    let config = TextIndexConfig::new(
+                        vec![TermValue::iri(predicate.clone())],
+                        graph.selector(),
+                    )
+                    .map_err(|e| format!("{subject}: {e}"))?;
+                    let index = TextIndex::from_dataset(data, &config)
+                        .map_err(|e| format!("{subject}: {e}"))?;
+                    let relation = TextSearchRelation::new(Arc::new(index));
+                    let declaration = relation
+                        .ranked_declaration(
+                            stratum,
+                            Some(predicate.clone()),
+                            fidelity.clone(),
+                            domains,
+                        )
+                        .map_err(|e| format!("{subject}: {e}"))?;
+                    (Arc::new(relation), declaration)
+                }
+                ProducerKind::Hnsw {
+                    space,
+                    params,
+                    order,
+                } => {
+                    let params = HnswGraphParams::new(
+                        params.m,
+                        params.m0,
+                        params.ef_construction,
+                        params.ef_search,
+                    )
+                    .map_err(|e| format!("{subject}: {e}"))?;
+                    let matrix = VectorMatrix::new(
+                        space.terms.len(),
+                        space.dimension,
+                        space.components.clone(),
+                    )
+                    .map_err(|e| format!("{subject}: {e}"))?;
+                    let index = HnswIndex::build(matrix, &space.metric, params)
+                        .map_err(|e| format!("{subject}: {e}"))?;
+                    let space = HnswSpace::from_index(index, space.terms.clone(), space.guard)
+                        .map_err(|e| format!("{subject}: {e}"))?;
+                    let relation = HnswRelation::new(Arc::new(space));
+                    let declaration = relation.ranked_declaration(
+                        stratum,
+                        TermKind::Iri,
+                        XSD_INTEGER.to_owned(),
+                        order.clone(),
+                        domains,
+                    );
+                    (Arc::new(relation), declaration)
+                }
+                ProducerKind::Knn { space, fidelity } => {
+                    let rows = space
+                        .terms
+                        .iter()
+                        .cloned()
+                        .zip(
+                            space
+                                .components
+                                .chunks_exact(space.dimension)
+                                .map(<[f64]>::to_vec),
+                        )
+                        .collect();
+                    let space = EmbeddingSpace::from_vectors(
+                        &space.metric,
+                        space.dimension,
+                        rows,
+                        space.guard,
+                    )
+                    .map_err(|e| format!("{subject}: {e}"))?;
+                    let relation = EmbeddingKnnRelation::new(Arc::new(space));
+                    let declaration = relation.ranked_declaration(
+                        stratum,
+                        TermKind::Iri,
+                        XSD_INTEGER.to_owned(),
+                        fidelity.clone(),
+                        domains,
+                    );
+                    (Arc::new(relation), declaration)
+                }
+            };
         registry.register_ranked(
             &producer.producer,
-            producer.attestation.clone().wrap(Arc::new(relation)),
+            producer.attestation.clone().wrap(relation),
             declaration,
         );
     }
@@ -1221,11 +1359,11 @@ fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<Retriev
     Ok(RetrievalRequest::bounded(terms, TopK::new(top_k)))
 }
 
-/// Collect the `text_producers` dict into the ordered declarations one call
-/// registers: `producer_iri -> (stratum_iri, predicate_iri, graph)`, or
+/// Collect the `text_producers` dict into the declarations one call registers:
+/// `producer_iri -> (stratum_iri, predicate_iri, graph)`, or
 /// `producer_iri -> (stratum_iri, predicate_iri, graph, domains)`, or the same
-/// four followed by one `(generation, incompleteness)` attestation, a
-/// `(completeness, order)` fidelity, and an `exclusion` position.
+/// four followed by one `(generation, incompleteness)` attestation, and then a
+/// `(completeness, order)` fidelity.
 ///
 /// The fourth element is the producer's candidate-domain declaration: `None`
 /// for the unrestricted promise, or a list of domain-tag IRIs. Omitting it
@@ -1243,30 +1381,18 @@ fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<Retriev
 /// rows cannot back a restriction it never made, the other reports a domain tag
 /// back to an operator as an index generation. So the position is fixed: a spec
 /// that attests writes its `domains` position explicitly, and `None` there
-/// restricts nothing. The shape refusal spells all three accepted widths.
-///
-/// # The seventh position only ever takes a capability AWAY
-///
-/// `exclusion` is `None` — or omitted — for "whatever this relation declares",
-/// and the string `"unavailable"` for "do not ask this producer". There is no
-/// spelling that *asserts* a basis, and that is the point: what an exclusion
-/// answer is a fact about is a property of the index behind the relation, so a
-/// host naming one would be putting a claim about the producer's own universe
-/// into the producer's mouth. Declining is the other direction and is always
-/// sound — a lookup nobody makes cannot make an answer wrong, only a read
-/// longer — so it is the only direction this position travels.
+/// restricts nothing. The shape refusal spells every accepted width.
 ///
 /// # Errors
 ///
 /// `TypeError` naming the accepted shapes when the value is not a sequence of
-/// three to seven positions, or when the fifth is not a two-member
-/// sequence; `ValueError` naming the producer when the seventh position is a
-/// string other than `"unavailable"`;
+/// three to six positions, or when the fifth is not a two-member sequence;
 /// `TypeError` naming the field when an attestation member is neither `str` nor
-/// `None`, or when a mandatory position is not a string; `ValueError` naming both
-/// producers and the stratum when two entries claim one stratum.
-fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer>> {
-    let mut declared = Vec::with_capacity(producers.len());
+/// `None`, or when a mandatory position is not a string.
+fn collect_text_producers(
+    producers: &Bound<'_, PyDict>,
+    declared: &mut Vec<Producer>,
+) -> PyResult<()> {
     for (key, value) in producers {
         let producer: String = key
             .extract()
@@ -1275,25 +1401,18 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             PyTypeError::new_err(format!(
                 "text producer <{producer}>: the value is (stratum, predicate, graph), \
                  (stratum, predicate, graph, domains), (stratum, predicate, graph, domains, \
-                 (generation, incompleteness)), (stratum, predicate, graph, domains, \
-                 (generation, incompleteness), (completeness, order)), or those six followed by \
-                 an `exclusion` position — an attestation is the fifth position, because a \
-                 fourth-position sequence is already a `domains` list and guessing between the \
-                 two would report one back as the other; a fidelity is the sixth, because it \
-                 speaks about the producer's search rather than about the index the attestation \
-                 names; and `exclusion` is the seventh, because it declines a capability the \
-                 relation declares rather than describing one"
+                 (generation, incompleteness)), or (stratum, predicate, graph, domains, \
+                 (generation, incompleteness), (completeness, order)) — an attestation is the \
+                 fifth position, because a fourth-position sequence is already a `domains` \
+                 list and guessing between the two would report one back as the other; and a \
+                 fidelity is the sixth, because it speaks about the producer's search rather \
+                 than about the index the attestation names"
             ))
         };
         let mut fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| shape())?;
         // Read off the tail first, deepest position first: the three mandatory
         // fields are destructured as an array, which consumes the vector, so every
         // optional position has to leave before that happens.
-        let exclusion = match fields.len() {
-            3..=6 => None,
-            7 => Some(fields.remove(6)),
-            _ => return Err(shape()),
-        };
         let fidelity = match fields.len() {
             3..=5 => None,
             6 => Some(fields.remove(5)),
@@ -1321,24 +1440,11 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
         };
         let [stratum, predicate, graph] =
             <[Bound<'_, PyAny>; 3]>::try_from(fields).map_err(|_| shape())?;
-        let field = |label: &str, value: &Bound<'_, PyAny>| -> PyResult<String> {
-            value.extract().map_err(|_| {
-                PyTypeError::new_err(format!(
-                    "text producer <{producer}>: `{label}` must be a string"
-                ))
-            })
-        };
-        let domains = match domains {
-            Some(value) if !value.is_none() => Some(value.extract::<Vec<String>>().map_err(|_| {
-                PyTypeError::new_err(format!(
-                    "text producer <{producer}>: `domains` is a list of domain-tag IRI strings, \
-                     or None for the unrestricted declaration (this producer may name anything). \
-                     An attestation is the FIFTH position, written after a `domains` position of \
-                     its own"
-                ))
-            })?),
-            _ => None,
-        };
+        let subject = format!("text producer <{producer}>");
+        let domains = domains
+            .map(|value| read_domains(&subject, &value))
+            .transpose()?
+            .flatten();
         let fidelity = match fidelity {
             Some(value) if !value.is_none() => {
                 // A sixth position that is not even SHAPED like a fidelity
@@ -1346,55 +1452,197 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
                 // position the caller may never have meant to write; one that is
                 // shaped like a fidelity but carries the wrong member types keeps
                 // its own precise diagnostic, which `read_fidelity` raises.
-                read_fidelity(&format!("text producer <{producer}>"), &value)?.ok_or_else(shape)?
+                read_fidelity(&subject, &value)?.ok_or_else(shape)?
             }
             _ => RankFidelity::EXACT,
         };
-        // Read as a DECLINATION and nothing else. `None` is "take the
-        // relation's own declaration", and the one accepted string withdraws
-        // the capability; anything else is refused by name rather than silently
-        // read as either, because a host that meant to decline and misspelled
-        // it would otherwise get the asking it was trying to avoid with no sign
-        // that its word went unread.
-        let decline_exclusion = match exclusion {
-            Some(value) if !value.is_none() => {
-                let spelled: String = value.extract().map_err(|_| {
-                    PyTypeError::new_err(format!(
-                        "text producer <{producer}>: `exclusion` is the string \"unavailable\", \
-                         or None to take whatever basis the relation itself declares"
-                    ))
-                })?;
-                if spelled != "unavailable" {
-                    return Err(PyValueError::new_err(format!(
-                        "text producer <{producer}>: `exclusion` is {spelled:?}, and the only \
-                         value this position takes is \"unavailable\" — it DECLINES the lookup \
-                         this relation declares, and there is no spelling that asserts one, \
-                         because what an exclusion answer is a fact about is a property of the \
-                         index rather than something a host can say on the producer's behalf"
-                    )));
-                }
-                true
-            }
-            _ => false,
-        };
-        let graph =
-            GraphSpec::parse(&producer, &field("graph", &graph)?).map_err(PyValueError::new_err)?;
-        declared.push(TextProducer {
-            stratum: field("stratum", &stratum)?,
-            predicate: field("predicate", &predicate)?,
-            graph,
+        let graph = GraphSpec::parse(&producer, &spec_string(&subject, "graph", &graph)?)
+            .map_err(PyValueError::new_err)?;
+        declared.push(Producer {
+            stratum: spec_string(&subject, "stratum", &stratum)?,
             domains,
             attestation,
-            fidelity,
-            decline_exclusion,
+            kind: ProducerKind::Text {
+                predicate: spec_string(&subject, "predicate", &predicate)?,
+                graph,
+                fidelity,
+            },
             producer,
         });
     }
-    // The dict's iteration order is the host's insertion order, but the registry
+    Ok(())
+}
+
+/// Collect the `hnsw_producers` dict: `producer_iri -> (stratum, rows, metric,
+/// (max_candidates, max_neighbours), (m, m0, ef_construction, ef_search),
+/// domains, (generation, incompleteness), order)`.
+///
+/// Every position is written, because none of them has a value this binding
+/// could supply: the space, the metric, the work bounds and the graph's
+/// parameters decide the answer, and `domains`, the attestation and `order` are
+/// the host's statements about its own corpus, written `None` / `(None, None)` /
+/// `None` where the host states nothing. One width, so a value is never read by
+/// guessing which optional position its tail was meant to be.
+///
+/// `order` is `None` — the vectors handed in are the values the host meant — or a
+/// non-empty `str` saying how they were approximated before they arrived, carried
+/// verbatim into the answer's `"fidelities"`. The completeness axis is not a
+/// position: a beam search offers the candidates it reached, so the relation
+/// declares itself lossy on every space, with its own evidence.
+///
+/// # Errors
+///
+/// `TypeError` naming the shape when the value is not eight positions, and
+/// naming the position when one has the wrong type; `ValueError` naming the
+/// producer for every refusal [`read_vector_spec`] makes, and for an empty
+/// `order`.
+fn collect_hnsw_producers(
+    producers: &Bound<'_, PyDict>,
+    declared: &mut Vec<Producer>,
+) -> PyResult<()> {
+    for (key, value) in producers {
+        let producer: String = key
+            .extract()
+            .map_err(|_| PyTypeError::new_err("HNSW producer keys must be IRI strings"))?;
+        let subject = format!("HNSW producer <{producer}>");
+        let shape = || {
+            PyTypeError::new_err(format!(
+                "{subject}: the value is (stratum, rows, metric, (max_candidates, \
+                 max_neighbours), (m, m0, ef_construction, ef_search), domains, (generation, \
+                 incompleteness), order) — every position written, with None, (None, None) \
+                 and None where the host states nothing"
+            ))
+        };
+        let fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| shape())?;
+        let [
+            stratum,
+            rows,
+            metric,
+            guard,
+            params,
+            domains,
+            attestation,
+            order,
+        ] = <[Bound<'_, PyAny>; 8]>::try_from(fields).map_err(|_| shape())?;
+        let params: (usize, usize, usize, usize) = params.extract().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "{subject}: `params` is (m, m0, ef_construction, ef_search), four non-negative \
+                 integers"
+            ))
+        })?;
+        let order =
+            read_evidence(&subject, "order", &order)?.map_or(OrderFidelity::Faithful, |evidence| {
+                OrderFidelity::Perturbed {
+                    evidence: Arc::from(evidence),
+                }
+            });
+        declared.push(Producer {
+            stratum: spec_string(&subject, "stratum", &stratum)?,
+            domains: read_domains(&subject, &domains)?,
+            attestation: Attestation::read(&subject, &attestation)?.ok_or_else(shape)?,
+            kind: ProducerKind::Hnsw {
+                space: read_vector_spec(&subject, &rows, &metric, &guard)?,
+                params: HnswParams {
+                    m: params.0,
+                    m0: params.1,
+                    ef_construction: params.2,
+                    ef_search: params.3,
+                },
+                order,
+            },
+            producer,
+        });
+    }
+    Ok(())
+}
+
+/// Collect the `knn_producers` dict: `producer_iri -> (stratum, rows, metric,
+/// (max_candidates, max_neighbours), domains, (generation, incompleteness),
+/// (completeness, order))`.
+///
+/// Every position is written, for the reason [`collect_hnsw_producers`] gives.
+/// The fidelity is both axes, each `None` or the host's own words: the scan is
+/// exhaustive and exact over the vectors it holds, and whether those are the
+/// whole of what the host means is the host's to say.
+///
+/// # Errors
+///
+/// As [`collect_hnsw_producers`], with seven positions.
+fn collect_knn_producers(
+    producers: &Bound<'_, PyDict>,
+    declared: &mut Vec<Producer>,
+) -> PyResult<()> {
+    for (key, value) in producers {
+        let producer: String = key
+            .extract()
+            .map_err(|_| PyTypeError::new_err("kNN producer keys must be IRI strings"))?;
+        let subject = format!("kNN producer <{producer}>");
+        let shape = || {
+            PyTypeError::new_err(format!(
+                "{subject}: the value is (stratum, rows, metric, (max_candidates, \
+                 max_neighbours), domains, (generation, incompleteness), (completeness, order)) \
+                 — every position written, with None and (None, None) where the host states \
+                 nothing"
+            ))
+        };
+        let fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| shape())?;
+        let [stratum, rows, metric, guard, domains, attestation, fidelity] =
+            <[Bound<'_, PyAny>; 7]>::try_from(fields).map_err(|_| shape())?;
+        declared.push(Producer {
+            stratum: spec_string(&subject, "stratum", &stratum)?,
+            domains: read_domains(&subject, &domains)?,
+            attestation: Attestation::read(&subject, &attestation)?.ok_or_else(shape)?,
+            kind: ProducerKind::Knn {
+                space: read_vector_spec(&subject, &rows, &metric, &guard)?,
+                fidelity: read_fidelity(&subject, &fidelity)?.ok_or_else(shape)?,
+            },
+            producer,
+        });
+    }
+    Ok(())
+}
+
+/// Collect every producer map into the declarations one call registers, in
+/// canonical IRI order.
+///
+/// # Errors
+///
+/// Everything each map's own reader raises, and `ValueError` naming both
+/// producers and the stratum when two entries — of any kind — claim one stratum,
+/// or naming the producer when one IRI is written into two maps.
+fn collect_producers(
+    text: &Bound<'_, PyDict>,
+    hnsw: Option<&Bound<'_, PyDict>>,
+    knn: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Vec<Producer>> {
+    let mut declared = Vec::new();
+    collect_text_producers(text, &mut declared)?;
+    if let Some(map) = hnsw {
+        collect_hnsw_producers(map, &mut declared)?;
+    }
+    if let Some(map) = knn {
+        collect_knn_producers(map, &mut declared)?;
+    }
+    // Each map's iteration order is the host's insertion order, but the registry
     // it builds is a set: sorting makes the registration order a pure function
     // of the declarations, so the registry's content fingerprint — which the
-    // plan records — cannot depend on how the dict was written.
+    // plan records — cannot depend on how the maps were written.
     declared.sort_by(|left, right| left.producer.cmp(&right.producer));
+    // One IRI registers one relation. Within a map a key is unique already; across
+    // two maps it is not, and the registry would otherwise keep one of the two
+    // relations and drop the other without a word.
+    if let Some(pair) = declared
+        .windows(2)
+        .find(|pair| pair[0].producer == pair[1].producer)
+    {
+        return Err(PyValueError::new_err(format!(
+            "property function <{}> is declared twice, as a {} and as a {}; a relation may \
+             not be silently shadowed",
+            pair[0].producer,
+            pair[0].kind.noun(),
+            pair[1].kind.noun()
+        )));
+    }
     // One stratum carries one producer, and the registry enforces that with a
     // panic — the right shape for a Rust caller assembling a registry in code, and
     // the wrong one here: a panic crosses the boundary as `PanicException`, which
@@ -1402,14 +1650,14 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
     // Every other misconfiguration on this surface raises `ValueError` by name, so
     // this one does too, before the registry is touched. Scanned after the sort,
     // so the two names reported are a function of the declarations and not of the
-    // order the host wrote the dict in.
+    // order the host wrote the maps in.
     for (index, later) in declared.iter().enumerate().skip(1) {
         if let Some(earlier) = declared[..index]
             .iter()
             .find(|earlier| earlier.stratum == later.stratum)
         {
             return Err(PyValueError::new_err(format!(
-                "text producers <{}> and <{}> both claim stratum <{}>: one stratum carries one \
+                "producers <{}> and <{}> both claim stratum <{}>: one stratum carries one \
                  producer, because a rank is meaningful only inside the list that assigned it \
                  and two lists concatenated rank the second producer's best row below every row \
                  of the first. Shards or segments whose scores are already comparable belong \
@@ -1421,6 +1669,142 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
         }
     }
     Ok(declared)
+}
+
+/// Read one mandatory string position of a producer spec.
+fn spec_string(subject: &str, label: &str, value: &Bound<'_, PyAny>) -> PyResult<String> {
+    value
+        .extract()
+        .map_err(|_| PyTypeError::new_err(format!("{subject}: `{label}` must be a string")))
+}
+
+/// Read a spec's `domains` position: `None`, or a list of domain-tag IRI strings.
+/// What the list may hold is [`candidate_domains`]'s to decide, at registration.
+fn read_domains(subject: &str, value: &Bound<'_, PyAny>) -> PyResult<Option<Vec<String>>> {
+    if value.is_none() {
+        return Ok(None);
+    }
+    // A bare string is not a list of its own characters.
+    if value.is_instance_of::<PyString>() {
+        return Err(domains_type_error(subject));
+    }
+    value
+        .extract::<Vec<String>>()
+        .map(Some)
+        .map_err(|_| domains_type_error(subject))
+}
+
+/// The refusal for a `domains` position that is neither `None` nor a list of
+/// strings.
+fn domains_type_error(subject: &str) -> PyErr {
+    PyTypeError::new_err(format!(
+        "{subject}: `domains` is a list of domain-tag IRI strings, or None for the \
+         unrestricted declaration (this producer may name anything). For a text producer an \
+         attestation is the FIFTH position, written after a `domains` position of its own"
+    ))
+}
+
+/// Read one host evidence string: `None` for silence, or real prose carried
+/// verbatim. An empty or blank string is refused, because a declared
+/// degradation with nothing behind it reports a degraded stratum while saying
+/// nothing a reader can act on.
+fn read_evidence(subject: &str, label: &str, value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    let declared = value
+        .extract::<Option<String>>()
+        .map_err(|_| PyTypeError::new_err(format!("{subject}: `{label}` must be a str or None")))?;
+    if declared.as_deref().is_some_and(|d| d.trim().is_empty()) {
+        return Err(PyValueError::new_err(format!(
+            "{subject}: `{label}` declares a degraded axis but supplies no evidence for it. A \
+             consumer carries this string into its answer verbatim, so an empty one reports a \
+             degraded stratum while saying nothing a reader can act on. State what the \
+             producer does not promise, or write None"
+        )));
+    }
+    Ok(declared)
+}
+
+/// Read a vector producer's space: its `rows`, `metric` and `guard` positions.
+///
+/// `rows` is a sequence of `(iri, vector)` pairs, in the host's own row order,
+/// which is kept because it is what ranks two neighbours at exactly equal
+/// distance. The dimension is the first row's width, and every other row is held
+/// to it here — a flat buffer checked only for its total length would read a
+/// ragged pair as two well-formed rows of the wrong vectors. Whether a component
+/// is finite, a term distinct, a norm non-zero or the space inside the guard is
+/// decided where the space is built, by the constructor that owns each check.
+///
+/// # Errors
+///
+/// `TypeError` when a position has the wrong shape; `ValueError` naming the
+/// producer for an empty row list, a row whose width is not the first row's, a
+/// row IRI the IRI parser refuses, an unknown metric spelling, or a zero guard
+/// bound.
+fn read_vector_spec(
+    subject: &str,
+    rows: &Bound<'_, PyAny>,
+    metric: &Bound<'_, PyAny>,
+    guard: &Bound<'_, PyAny>,
+) -> PyResult<VectorSpec> {
+    let rows_type = || {
+        PyTypeError::new_err(format!(
+            "{subject}: `rows` is a sequence of (iri, vector) pairs, each vector a sequence of \
+             floats"
+        ))
+    };
+    if rows.is_instance_of::<PyString>() {
+        return Err(rows_type());
+    }
+    let rows: Vec<(String, Vec<f64>)> = rows.extract().map_err(|_| rows_type())?;
+    let Some(dimension) = rows.first().map(|(_, vector)| vector.len()) else {
+        return Err(PyValueError::new_err(format!(
+            "{subject}: `rows` is empty, so this producer can name no candidate at all; a \
+             producer that can name nothing should not be registered"
+        )));
+    };
+    let mut terms = Vec::with_capacity(rows.len());
+    let mut components = Vec::with_capacity(rows.len().saturating_mul(dimension));
+    for (row, (iri, vector)) in rows.into_iter().enumerate() {
+        crate::iri::parse(&iri).map_err(|e| {
+            PyValueError::new_err(format!("{subject}: row {row} names <{iri}>: {e}"))
+        })?;
+        if vector.len() != dimension {
+            return Err(PyValueError::new_err(format!(
+                "{subject}: row {row} (<{iri}>) carries {} component(s) and row 0 carries \
+                 {dimension}; every vector in one space has one dimension",
+                vector.len()
+            )));
+        }
+        components.extend_from_slice(&vector);
+        terms.push(TermValue::iri(iri));
+    }
+    let metric: String = metric
+        .extract()
+        .map_err(|_| PyTypeError::new_err(format!("{subject}: `metric` must be a string")))?;
+    let metric = match metric.as_str() {
+        "cosine" => DistanceMetric::Cosine,
+        "negative_dot" => DistanceMetric::NegativeDot,
+        "squared_euclidean" => DistanceMetric::SquaredEuclidean,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "{subject}: unknown metric {other:?}; a space ranks by \"cosine\", \
+                 \"negative_dot\" or \"squared_euclidean\""
+            )));
+        }
+    };
+    let (max_candidates, max_neighbours): (u64, u64) = guard.extract().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{subject}: `guard` is (max_candidates, max_neighbours), two non-negative integers"
+        ))
+    })?;
+    let guard = KnnGuard::new(max_candidates, max_neighbours)
+        .map_err(|e| PyValueError::new_err(format!("{subject}: {e}")))?;
+    Ok(VectorSpec {
+        terms,
+        components,
+        dimension,
+        metric,
+        guard,
+    })
 }
 
 /// Collect the `weights` dict: `stratum_iri -> raw fixed-point units`.
@@ -1525,10 +1909,16 @@ fn collect_statistics(
 /// therefore which plan a request is. A `plan` or `compile` call that did not carry
 /// it would report a depth, a `LIMIT` and an identity for a read nobody asked
 /// for.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the three entry points' shared inputs are named, not bundled"
+)]
 fn collect_call(
     data: &str,
     request: &Bound<'_, PyAny>,
     text_producers: &Bound<'_, PyDict>,
+    hnsw_producers: Option<&Bound<'_, PyDict>>,
+    knn_producers: Option<&Bound<'_, PyDict>>,
     statistics: &Bound<'_, PyDict>,
     top_k: usize,
     data_format: &str,
@@ -1540,7 +1930,7 @@ fn collect_call(
         data: data.to_owned(),
         media_type: data_media_type(data_format).map_err(PyValueError::new_err)?,
         base: base.map(ToOwned::to_owned),
-        producers: collect_producers(text_producers)?,
+        producers: collect_producers(text_producers, hnsw_producers, knn_producers)?,
         request,
         statistics,
     })
@@ -2144,7 +2534,10 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     // which has two entirely different meanings: under `"unavailable"` nothing
     // COULD be asked, and under a declared basis nothing NEEDED asking, because
     // the frontier asks only about candidates a verdict could change the fate
-    // of. The count alone cannot tell those apart.
+    // of. The count alone cannot tell those apart. Every relation this surface
+    // builds declares `"membership"`, so an answer produced here always reads a
+    // zero the second way; the spelling is rendered from the engine's own enum,
+    // which carries both, rather than hard-coded to the one this surface reaches.
     let bases = PyDict::new(py);
     for (stratum, basis) in &result.trailer.exclusion_bases {
         bases.set_item(stratum.as_str(), basis.as_str())?;
@@ -2297,6 +2690,8 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     text_producers,
     statistics,
     top_k,
+    hnsw_producers=None,
+    knn_producers=None,
     data_format="turtle",
     base=None,
 ))]
@@ -2311,6 +2706,8 @@ fn plan<'py>(
     text_producers: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
     top_k: usize,
+    hnsw_producers: Option<&Bound<'py, PyDict>>,
+    knn_producers: Option<&Bound<'py, PyDict>>,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -2318,6 +2715,8 @@ fn plan<'py>(
         data,
         request,
         text_producers,
+        hnsw_producers,
+        knn_producers,
         statistics,
         top_k,
         data_format,
@@ -2491,6 +2890,8 @@ fn explain_depth(
     text_producers,
     statistics,
     top_k,
+    hnsw_producers=None,
+    knn_producers=None,
     weights=None,
     k=None,
     decay=None,
@@ -2508,6 +2909,8 @@ fn compile<'py>(
     text_producers: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
     top_k: usize,
+    hnsw_producers: Option<&Bound<'py, PyDict>>,
+    knn_producers: Option<&Bound<'py, PyDict>>,
     weights: Option<&Bound<'py, PyDict>>,
     k: Option<u32>,
     decay: Option<&str>,
@@ -2518,6 +2921,8 @@ fn compile<'py>(
         data,
         request,
         text_producers,
+        hnsw_producers,
+        knn_producers,
         statistics,
         top_k,
         data_format,
@@ -2749,6 +3154,8 @@ fn compile<'py>(
     k,
     decay,
     top_k,
+    hnsw_producers=None,
+    knn_producers=None,
     data_format="turtle",
     base=None,
 ))]
@@ -2766,6 +3173,8 @@ fn search<'py>(
     k: u32,
     decay: &str,
     top_k: usize,
+    hnsw_producers: Option<&Bound<'py, PyDict>>,
+    knn_producers: Option<&Bound<'py, PyDict>>,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -2773,6 +3182,8 @@ fn search<'py>(
         data,
         request,
         text_producers,
+        hnsw_producers,
+        knn_producers,
         statistics,
         top_k,
         data_format,

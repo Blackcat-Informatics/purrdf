@@ -427,12 +427,127 @@ impl EmbeddingSpace {
         })
     }
 
+    /// Build a queryable space directly from a host's own vectors, each already
+    /// named by the RDF term it stands for.
+    ///
+    /// The sibling of [`Self::from_artifact`] for a host that holds vectors rather than
+    /// a sealed PURREMB artifact — the same shape as `purrdf_hnsw::HnswSpace::from_index`
+    /// on the approximate side, which takes a matrix built from plain rows. Row `r` of the
+    /// space is `rows[r]`, in the host's own order: that order is what ranks two
+    /// neighbours at exactly equal distance, so it is the host's to state and is never
+    /// re-sorted here.
+    ///
+    /// Everything [`Self::from_artifact`] proves at construction is proved here too, so
+    /// an invocation's only remaining failure modes are about the invocation: the metric
+    /// is one this engine can evaluate, every row carries exactly `dimension` finite
+    /// components, no term is claimed by two rows, the space fits the guard's candidate
+    /// bound, and under a norm-dividing metric no vector has a zero norm. A non-finite
+    /// component is refused here rather than at the first query that reaches it, which
+    /// is where it would otherwise surface as a distance that left the finite range.
+    ///
+    /// # Generation
+    ///
+    /// A content identity over exactly what decides this space's answers — the metric,
+    /// the dimension, every component in row order and every term in row order — under
+    /// a domain separator of its own, so a space built this way can never attest the
+    /// generation of an artifact-built one. The guard is excluded for the reason
+    /// [`Self::generation`] gives.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Config`] for every refusal above: a zero `dimension`, a row whose
+    /// component count is not `dimension`, a non-finite component, a duplicate term, a
+    /// space larger than the guard admits, or an extension metric.
+    ///
+    /// [`EvalError::Data`] for a zero-norm vector under a norm-dividing metric, the
+    /// classification [`Self::from_artifact`] gives the same defect.
+    pub fn from_vectors(
+        metric: &DistanceMetric,
+        dimension: usize,
+        rows: Vec<(TermValue, Vec<f64>)>,
+        guard: KnnGuard,
+    ) -> Result<Self, EvalError> {
+        let kernel = Kernel::of(metric).ok_or_else(|| {
+            EvalError::config(format!(
+                "the caller-defined distance metric {metric:?} carries parameters as opaque \
+                 bytes this engine cannot evaluate; only the three built-in PURREMB metrics \
+                 can be ranked here"
+            ))
+        })?;
+        if dimension == 0 {
+            return Err(EvalError::config(
+                "a space of dimension zero holds vectors with no components, so no distance \
+                 between two of them separates anything"
+                    .to_owned(),
+            ));
+        }
+        let row_count = rows.len();
+        if row_count as u64 > guard.max_candidates() {
+            return Err(EvalError::config(format!(
+                "this space holds {row_count} row(s), which is more than the {} candidate(s) \
+                 the configured guard admits; a search here would either exceed the work the \
+                 host licensed or rank a prefix of the space and report it as the whole",
+                guard.max_candidates()
+            )));
+        }
+
+        let mut terms: Vec<TermValue> = Vec::with_capacity(row_count);
+        let mut vectors: Vec<f64> = Vec::with_capacity(row_count.saturating_mul(dimension));
+        for (row, (term, values)) in rows.into_iter().enumerate() {
+            if values.len() != dimension {
+                return Err(EvalError::config(format!(
+                    "row {row} ({term:?}) carries {} component(s); the space's dimension is \
+                     {dimension}",
+                    values.len()
+                )));
+            }
+            if let Some(at) = values.iter().position(|value| !value.is_finite()) {
+                return Err(EvalError::config(format!(
+                    "row {row} ({term:?}) carries the non-finite component {} at position \
+                     {at}; a distance computed from it could not be ranked",
+                    values[at]
+                )));
+            }
+            vectors.extend_from_slice(&values);
+            terms.push(term);
+        }
+
+        let mut rows_by_term: Vec<usize> = (0..row_count).collect();
+        rows_by_term.sort_unstable_by(|&left, &right| terms[left].cmp(&terms[right]));
+        if let Some(pair) = rows_by_term
+            .windows(2)
+            .find(|pair| terms[pair[0]] == terms[pair[1]])
+        {
+            return Err(EvalError::config(format!(
+                "the term {:?} is bound to two different rows; a query seed names a term, so \
+                 a term claimed by two rows makes the seed ambiguous",
+                terms[pair[0]]
+            )));
+        }
+
+        let norms = read_norms(kernel, &vectors, dimension, row_count)?;
+        let generation = vectors_generation(metric, dimension, &vectors, &terms);
+        Ok(Self {
+            kernel,
+            metric: metric.clone(),
+            dimension,
+            vectors,
+            norms,
+            terms,
+            rows_by_term,
+            guard,
+            generation,
+        })
+    }
+
     /// The generation this space attests for every row it returns.
     ///
     /// A content identity, comparable across processes and machines. It folds the
     /// projection digest, the family contract that names the metric, and every
     /// bound term in row order — and it moves exactly when the rows this space can
-    /// return move, which is what makes it worth comparing.
+    /// return move, which is what makes it worth comparing. A space built by
+    /// [`Self::from_vectors`] folds its metric, dimension and components in their
+    /// place, because it has no artifact to take a digest of.
     ///
     /// The projection digest rather than the matrix digest, because a prefix policy
     /// lets two spaces share one stored matrix and differ in the prefix taken. The
@@ -687,6 +802,58 @@ fn space_generation(
     );
     let mut term_bytes = Vec::new();
     for term in terms {
+        term_bytes.clear();
+        term.canonical_bytes(&mut term_bytes);
+        crate::registry_id::append_framed_part(&mut bytes, "term", &term_bytes);
+    }
+    Arc::from(ContentDigest::of(&bytes).to_hex())
+}
+
+/// The domain separator a [`EmbeddingSpace::from_vectors`] generation opens with. It
+/// differs from [`SPACE_GENERATION_DOMAIN`] so the two constructions can never attest
+/// one generation, however their folded fields happen to line up.
+const VECTORS_GENERATION_DOMAIN: &str = "purrdf-sparql-eval/embedding-space-vectors-generation/v1";
+
+/// The generation one [`EmbeddingSpace::from_vectors`] space attests.
+///
+/// The same discipline as [`space_generation`], over the facts this construction
+/// actually has: the metric's stable code (the law the vectors are compared under),
+/// the dimension, every component's exact binary64 bit pattern in row order, and every
+/// term in row order through the injective `TermValue::canonical_bytes`. Bit patterns
+/// rather than a decimal rendering, so two vectors that differ in their last bit are
+/// two generations. No clock, no counter, no RNG: two processes handed the same rows
+/// attest the same generation.
+fn vectors_generation(
+    metric: &DistanceMetric,
+    dimension: usize,
+    vectors: &[f64],
+    terms: &[TermValue],
+) -> Arc<str> {
+    let mut bytes = Vec::new();
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "domain",
+        VECTORS_GENERATION_DOMAIN.as_bytes(),
+    );
+    crate::registry_id::append_framed_part(&mut bytes, "metric", &metric.code().to_be_bytes());
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "dimension",
+        &(dimension as u64).to_be_bytes(),
+    );
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "row-count",
+        &(terms.len() as u64).to_be_bytes(),
+    );
+    let mut component_bytes = Vec::with_capacity(dimension * 8);
+    let mut term_bytes = Vec::new();
+    for (row, term) in terms.iter().enumerate() {
+        component_bytes.clear();
+        for value in &vectors[row * dimension..(row + 1) * dimension] {
+            component_bytes.extend_from_slice(&value.to_bits().to_be_bytes());
+        }
+        crate::registry_id::append_framed_part(&mut bytes, "vector", &component_bytes);
         term_bytes.clear();
         term.canonical_bytes(&mut term_bytes);
         crate::registry_id::append_framed_part(&mut bytes, "term", &term_bytes);

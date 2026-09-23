@@ -2362,3 +2362,205 @@ fn a_smaller_k_is_a_prefix_of_a_larger_one_and_scans_the_same_rows() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Construction from a host's own vectors
+// ---------------------------------------------------------------------------
+
+/// `points()` as the `(term, vector)` rows [`EmbeddingSpace::from_vectors`] takes.
+fn vector_rows(rows: &[(&str, Vec<f64>)]) -> Vec<(TermValue, Vec<f64>)> {
+    rows.iter()
+        .map(|(name, vector)| (iri(name), vector.clone()))
+        .collect()
+}
+
+#[test]
+fn a_space_from_vectors_ranks_exactly_as_the_artifact_space_over_the_same_rows() {
+    let from_vectors = EmbeddingSpace::from_vectors(
+        &DistanceMetric::SquaredEuclidean,
+        2,
+        vector_rows(&points()),
+        roomy(),
+    )
+    .expect("the plain rows open");
+    let from_artifact = space(&DistanceMetric::SquaredEuclidean, &points());
+    assert_eq!(from_vectors.metric(), &DistanceMetric::SquaredEuclidean);
+    assert_eq!(from_vectors.dimension(), 2);
+    assert_eq!(from_vectors.row_count(), 3);
+    assert_eq!(from_vectors.row_of(&iri("b")), Some(1));
+
+    let ask = |space: EmbeddingSpace| {
+        let relation = EmbeddingKnnRelation::new(Arc::new(space));
+        named(
+            &invoke(
+                &relation,
+                &[None, Some(iri("a")), Some(count(3)), None],
+                None,
+            )
+            .expect("search"),
+        )
+    };
+    let artifact_generation = from_artifact.generation().to_owned();
+    let vectors_generation = from_vectors.generation().to_owned();
+    assert_eq!(
+        ask(from_vectors),
+        ask(from_artifact),
+        "one arithmetic path: the same rows rank to the same neighbours at the same \
+         distances whichever constructor built the space"
+    );
+    assert_ne!(
+        vectors_generation, artifact_generation,
+        "the two constructions fold different facts under different domains"
+    );
+}
+
+#[test]
+fn a_space_from_vectors_attests_a_generation_that_moves_with_its_rows_only() {
+    let open = |rows: Vec<(TermValue, Vec<f64>)>, guard: KnnGuard| {
+        EmbeddingSpace::from_vectors(&DistanceMetric::SquaredEuclidean, 2, rows, guard)
+            .expect("the plain rows open")
+            .generation()
+            .to_owned()
+    };
+    let baseline = open(vector_rows(&points()), roomy());
+    assert_eq!(baseline.len(), 64, "a hex BLAKE3 digest");
+    assert_eq!(
+        open(vector_rows(&points()), roomy()),
+        baseline,
+        "the same rows attest the same generation"
+    );
+    assert_eq!(
+        open(
+            vector_rows(&points()),
+            KnnGuard::new(3, 1).expect("positive")
+        ),
+        baseline,
+        "the guard decides how hard a search tries, never which rows exist"
+    );
+
+    let mut moved = vector_rows(&points());
+    moved[2].1[1] = f64::from_bits(40.0_f64.to_bits() + 1);
+    assert_ne!(open(moved, roomy()), baseline, "one bit of one component");
+
+    let mut renamed = vector_rows(&points());
+    renamed[2].0 = iri("d");
+    assert_ne!(open(renamed, roomy()), baseline, "one row's term");
+
+    let under_dot = EmbeddingSpace::from_vectors(
+        &DistanceMetric::NegativeDot,
+        2,
+        vector_rows(&points()),
+        roomy(),
+    )
+    .expect("the plain rows open");
+    assert_ne!(under_dot.generation(), baseline, "the metric");
+}
+
+#[test]
+fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbours() {
+    let refuse = |metric: &DistanceMetric,
+                  dimension: usize,
+                  rows: Vec<(TermValue, Vec<f64>)>,
+                  guard: KnnGuard,
+                  needle: &str| {
+        let error = EmbeddingSpace::from_vectors(metric, dimension, rows, guard)
+            .expect_err("the construction is refused");
+        assert!(
+            error.to_string().contains(needle),
+            "expected {needle:?} in {error}"
+        );
+        error
+    };
+    let euclid = DistanceMetric::SquaredEuclidean;
+
+    // A row whose width is not the dimension, and the valid neighbour at that width.
+    let mut short = vector_rows(&points());
+    short[1].1.pop();
+    let error = refuse(&euclid, 2, short, roomy(), "carries 1 component(s)");
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+
+    // A non-finite component, and the finite neighbour.
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut rows = vector_rows(&points());
+        rows[2].1[0] = bad;
+        let error = refuse(&euclid, 2, rows, roomy(), "non-finite component");
+        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    }
+    let mut finite = vector_rows(&points());
+    finite[2].1[0] = f64::MAX / 4.0;
+    assert!(EmbeddingSpace::from_vectors(&euclid, 2, finite, roomy()).is_ok());
+
+    // One term on two rows, and two distinct terms at the same vector.
+    let mut twice = vector_rows(&points());
+    twice[2].0 = iri("a");
+    let error = refuse(&euclid, 2, twice, roomy(), "bound to two different rows");
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    let mut same_vector = vector_rows(&points());
+    same_vector[2].1 = same_vector[1].1.clone();
+    assert!(EmbeddingSpace::from_vectors(&euclid, 2, same_vector, roomy()).is_ok());
+
+    // Dimension zero, and dimension one.
+    let error = refuse(
+        &euclid,
+        0,
+        vec![(iri("a"), Vec::new())],
+        roomy(),
+        "dimension zero",
+    );
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(EmbeddingSpace::from_vectors(&euclid, 1, vec![(iri("a"), vec![1.0])], roomy()).is_ok());
+
+    // One row past the guard, and exactly at it.
+    let error = refuse(
+        &euclid,
+        2,
+        vector_rows(&points()),
+        KnnGuard::new(2, 10).expect("positive"),
+        "3 row(s)",
+    );
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        EmbeddingSpace::from_vectors(
+            &euclid,
+            2,
+            vector_rows(&points()),
+            KnnGuard::new(3, 10).expect("positive")
+        )
+        .is_ok()
+    );
+
+    // A zero-norm vector under cosine (the origin is `points()`'s first row), and the
+    // same rows under a metric that divides by nothing.
+    let error = refuse(
+        &DistanceMetric::Cosine,
+        2,
+        vector_rows(&points()),
+        roomy(),
+        "zero L2 norm",
+    );
+    assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+    assert!(
+        EmbeddingSpace::from_vectors(
+            &DistanceMetric::NegativeDot,
+            2,
+            vector_rows(&points()),
+            roomy()
+        )
+        .is_ok()
+    );
+
+    // An extension metric, whose rule this engine cannot evaluate.
+    let extension = DistanceMetric::Extension {
+        identifier: "https://example.org/my-metric".to_owned(),
+        parameter_encoding: "application/cbor".to_owned(),
+        parameters: vec![7],
+    };
+    let error = refuse(
+        &extension,
+        2,
+        vector_rows(&points()),
+        roomy(),
+        "caller-defined distance metric",
+    );
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+}

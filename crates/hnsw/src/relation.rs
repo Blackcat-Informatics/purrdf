@@ -154,8 +154,12 @@ impl HnswSpace {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] if the term count differs from the graph's row count, or one
-    /// term is claimed by two rows.
+    /// [`EvalError::Config`] if the term count differs from the graph's row count, one
+    /// term is claimed by two rows, or the graph holds more rows than the guard admits.
+    ///
+    /// The candidate bound is checked here and not only in [`Self::from_artifact`],
+    /// which delegates to this function: it is a property of the space, and a space
+    /// assembled straight from an index is still a space the guard promised to bound.
     pub fn from_index(
         index: HnswIndex,
         terms: Vec<TermValue>,
@@ -167,6 +171,14 @@ impl HnswSpace {
                  stand for exactly one RDF term",
                 index.rows(),
                 terms.len()
+            )));
+        }
+        if index.rows() as u64 > guard.max_candidates() {
+            return Err(EvalError::config(format!(
+                "this space holds {} row(s), which is more than the {} candidate(s) the \
+                 configured guard admits",
+                index.rows(),
+                guard.max_candidates()
             )));
         }
         check_distinct_terms(&terms)?;
@@ -1412,6 +1424,29 @@ mod tests {
         let object = [Some(&seed), Some(&count), None];
         let args = PfArgs::new(&subject, &object);
         relation.open(&args, None).expect("opens")
+    }
+
+    #[test]
+    fn a_space_assembled_from_an_index_is_held_to_the_guards_candidate_bound() {
+        let build = || {
+            HnswIndex::build(
+                matrix(16, 4),
+                &DistanceMetric::SquaredEuclidean,
+                Params::new(4, 8, 16, 8).expect("valid"),
+            )
+            .expect("builds")
+        };
+        let error =
+            HnswSpace::from_index(build(), terms(16), KnnGuard::new(15, 16).expect("valid"))
+                .expect_err("sixteen rows exceed a fifteen-candidate bound");
+        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        assert!(error.to_string().contains("16 row(s)"), "got {error}");
+        assert!(error.to_string().contains("15 candidate(s)"), "got {error}");
+        // The neighbouring valid case: a bound exactly at the row count admits the space.
+        assert!(
+            HnswSpace::from_index(build(), terms(16), KnnGuard::new(16, 16).expect("valid"))
+                .is_ok()
+        );
     }
 
     #[test]
