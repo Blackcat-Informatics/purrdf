@@ -511,17 +511,160 @@ summary = "`Lexer::cur` / `Lexer::peek`, an ASCII fast path that decodes only a 
 
 [[site]]
 id = "rdf.escape-scan"
-summary = "`ser_model::escape_scan`, the per-char clean-run scan behind `escape_iri` / `escape_literal`"
+summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the next byte that can begin an escape, bulk copies of the runs between"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
   [[site.measure]]
-  label = "iri"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::native_codecs::ser_model::escape_iri"
+  label = "iri scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 11
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v22.
+  [[site.measure]]
+  label = "iri scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 11
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v10.
+  [[site.measure]]
+  label = "iri scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v20.
+  [[site.measure]]
+  label = "iri scan neon"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 10
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build LLVM compares into predicate registers. Measured v13.
+  [[site.measure]]
+  label = "iri scan sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 6
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "iri scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
+  # Packed byte compares. Measured v19.
+  [[site.measure]]
+  label = "iri scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 9
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `escape_iri` is `purrdf_core::iri_escape::escape`, inlined at every call site; the driver is measured there. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
+  [[site.measure]]
+  label = "iri (in iri_escape::escape)"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::escape"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
+  [[site.measure]]
+  label = "literal scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  min_vector_ops = 6
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v11.
+  [[site.measure]]
+  label = "literal scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v5.
+  [[site.measure]]
+  label = "literal scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  min_vector_ops = 2
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v10 (aarch64), v10 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "literal scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  min_vector_ops = 5
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "literal scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "literal scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::ser_model::find_first_literal_escape"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "literal"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1152,9 +1295,76 @@ summary = "`numeric::canonical_double`, the xsd:double canonical lexical form"
 
 [[site]]
 id = "json.parser-string"
-summary = "`Parser::string`, the JSON string body scan"
+summary = "`Parser::string`, the JSON string body scan over `terminals::find_first_json_string_special`"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
   [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 4
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v21.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 10
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v17.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v6 (aarch64), v6 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v7.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The call site: one scanner call per clean run, then the per-byte escape grammar at the stop.
+  [[site.measure]]
+  label = "call site"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_json"
   symbol = "<purrdf_json::parse::Parser>::string"
@@ -1351,8 +1561,85 @@ summary = "the pack triples sorted-list intersect (`partition_rows`) and the del
 
 [[site]]
 id = "core.canon-escape"
-summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-Quads escapes"
+summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-Quads escapes: one chunked scan per value, bulk copies of the clean runs"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
+  [[site.measure]]
+  label = "iri scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 11
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v22.
+  [[site.measure]]
+  label = "iri scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 11
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v10.
+  [[site.measure]]
+  label = "iri scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v20.
+  [[site.measure]]
+  label = "iri scan neon"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 10
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build LLVM compares into predicate registers. Measured v13.
+  [[site.measure]]
+  label = "iri scan sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 6
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "iri scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v19.
+  [[site.measure]]
+  label = "iri scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 9
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Delegates to `iri_escape::push_escaped`. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "iri"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1362,6 +1649,72 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   max_fma = 0
   forbid_relaxed = true
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v11.
+  [[site.measure]]
+  label = "literal scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 5
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v23.
+  [[site.measure]]
+  label = "literal scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 11
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
+  [[site.measure]]
+  label = "literal scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 9
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v8 (aarch64), v8 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "literal scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 4
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "literal scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "literal scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "literal"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1582,8 +1935,85 @@ summary = "`chase::chase_until`, the chase fixpoint"
 
 [[site]]
 id = "entail.escape"
-summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inlined into `write_surface`)"
+summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inlined into `write_surface`), delegated to the canonical N-Quads writers"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
+  [[site.measure]]
+  label = "iri scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 11
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v22.
+  [[site.measure]]
+  label = "iri scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 11
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v10.
+  [[site.measure]]
+  label = "iri scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v20.
+  [[site.measure]]
+  label = "iri scan neon"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 10
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build LLVM compares into predicate registers. Measured v13.
+  [[site.measure]]
+  label = "iri scan sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 6
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "iri scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v19.
+  [[site.measure]]
+  label = "iri scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  min_vector_ops = 9
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Delegates to `purrdf_core::iri_escape::push_escaped`, monomorphized here. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "iri"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1593,6 +2023,72 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   max_fma = 0
   forbid_relaxed = true
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v11.
+  [[site.measure]]
+  label = "literal scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 5
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v23.
+  [[site.measure]]
+  label = "literal scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 11
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
+  [[site.measure]]
+  label = "literal scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 9
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v8 (aarch64), v8 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "literal scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 4
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "literal scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "literal scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Delegates to `purrdf_core::ir::canon::write_literal_escaped`. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "literal (in write_surface)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1709,8 +2205,85 @@ summary = "`matcher::search`, the backtracking triple-expression matcher"
 
 [[site]]
 id = "results.xml-escape"
-summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_escape_text`"
+summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_escape_text`: one `find_first_xml_special` pass that validates and finds references"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
+  [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 6
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v11.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v6.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 3
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v10.
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 5
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build LLVM compares into predicate registers. Measured v8.
+  [[site.measure]]
+  label = "scan sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 4
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "push_into"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -1741,9 +2314,76 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
 
 [[site]]
 id = "results.csv-field"
-summary = "`csv::push_field`, the CSV field quoting scan"
+summary = "`csv::push_field`, the CSV field quoting: one chunked scan for `\"`, `,`, LF and CR, continued through the field to double quotes"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v10.
   [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::csv::find_first_quoting"
+  min_vector_ops = 5
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v22.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::csv::find_first_quoting"
+  min_vector_ops = 11
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::csv::find_first_quoting"
+  min_vector_ops = 9
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v8 (aarch64), v8 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::csv::find_first_quoting"
+  min_vector_ops = 4
+  require_mnemonics = ["cmeq .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::csv::find_first_quoting"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::csv::find_first_quoting"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
+  [[site.measure]]
+  label = "call site"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_results"
   symbol = "purrdf_sparql_results::csv::push_field::<purrdf_core::sink::TextSink>"
@@ -1753,9 +2393,76 @@ summary = "`csv::push_field`, the CSV field quoting scan"
 
 [[site]]
 id = "results.json-escape"
-summary = "`json::json_escape_body`, the JSON results string escape (`position` over a byte predicate)"
+summary = "`json::json_escape_body`, the JSON results string escape over `terminals::find_first_json_string_special`"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
   [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 4
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v21.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 10
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v17.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v6 (aarch64), v6 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v7.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
+  [[site.measure]]
+  label = "call site"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_results"
   symbol = "purrdf_sparql_results::json::json_escape_body::<purrdf_core::sink::TextSink>"
@@ -1765,9 +2472,76 @@ summary = "`json::json_escape_body`, the JSON results string escape (`position` 
 
 [[site]]
 id = "markdown.lines"
-summary = "`dialect::markdown::lines`, the per-char line split, inlined through `read` into `analyze`"
+summary = "`dialect::markdown::lines`, the line split over a chunked `\\n` scan (`find_line_feed`, a one-run `ByteClass`); `lines` is inlined through `read` into `analyze`"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v2.
   [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_markdown"
+  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
+  min_vector_ops = 1
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v2.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_markdown"
+  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
+  min_vector_ops = 1
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v1.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_markdown"
+  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
+  min_vector_ops = 0
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v2 (aarch64), v2 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_markdown"
+  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
+  min_vector_ops = 1
+  require_mnemonics = ["cmeq .16b", "addp"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_markdown"
+  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v2.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_markdown"
+  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
+  min_vector_ops = 1
+  require_mnemonics = ["i8x16.eq", "v128.any_true"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The call site: one scanner call per line, and the line's span pushed.
+  [[site.measure]]
+  label = "call site (in analyze)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_markdown"
   symbol = "purrdf_markdown::analyze"

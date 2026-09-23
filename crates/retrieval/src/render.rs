@@ -13,12 +13,13 @@
 //! # Why the table is reproduced here rather than imported
 //!
 //! The kernel's canonical N-Quads writer owns the authoritative escape set, and
-//! its literal half is private. Reproducing it — rather than approximating it —
-//! is what makes an emitted constant and a canonicalized dataset agree character
-//! for character: `"a\nb"` written here is byte-identical to `"a\nb"` written
-//! there, so a needle that matches in one matches in the other. The IRI half is
-//! not reproduced at all: it is
-//! [`purrdf_core::iri_escape::is_iriref_escape_required`], read directly.
+//! this layer reproduces none of it: literals are written by
+//! [`purrdf_core::ir::canon::write_literal_escaped`] and IRIs by
+//! [`purrdf_core::iri_escape::push_escaped`], the same functions the canonical
+//! writer calls. That is what makes an emitted constant and a canonicalized
+//! dataset agree character for character: `"a\nb"` written here is
+//! byte-identical to `"a\nb"` written there, so a needle that matches in one
+//! matches in the other.
 //!
 //! # No serializer is pulled in
 //!
@@ -36,9 +37,6 @@
 //! [`place`](crate::matching::place) just proved bound, and the invocation would
 //! be admitted against a mode it does not actually have.
 
-use core::fmt::Write as _;
-
-use purrdf_core::iri_escape::is_iriref_escape_required;
 use purrdf_core::{RdfTextDirection, TermValue};
 
 /// `xsd:string`, the datatype a plain literal carries in the kernel's term
@@ -265,13 +263,7 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
 /// forbids.
 fn write_iri(iri: &str, out: &mut String) {
     out.push('<');
-    for ch in iri.chars() {
-        if is_iriref_escape_required(ch) {
-            write_u_escape(ch, out);
-        } else {
-            out.push(ch);
-        }
-    }
+    purrdf_core::iri_escape::push_escaped(iri, out);
     out.push('>');
 }
 
@@ -289,7 +281,7 @@ fn write_literal(
         });
     }
     out.push('"');
-    write_literal_escaped(lexical_form, out);
+    purrdf_core::ir::canon::write_literal_escaped(lexical_form, out);
     out.push('"');
     if let Some(tag) = language {
         if !is_langtag(tag) {
@@ -311,35 +303,6 @@ fn write_literal(
         write_iri(datatype, out);
     }
     Ok(())
-}
-
-/// Append `value` escaped for a `"…"` string, matching the canonical N-Quads
-/// `ECHAR` set; other C0 controls and `U+007F` become `\uXXXX`, and everything
-/// else (including all non-ASCII) rides verbatim as UTF-8.
-fn write_literal_escaped(value: &str, out: &mut String) {
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => write_u_escape(c, out),
-            c => out.push(c),
-        }
-    }
-}
-
-/// Write `\uXXXX`, or `\UXXXXXXXX` beyond the BMP, in upper-case hex.
-fn write_u_escape(ch: char, out: &mut String) {
-    let code_point = ch as u32;
-    if code_point <= 0xFFFF {
-        let _ = write!(out, "\\u{code_point:04X}");
-    } else {
-        let _ = write!(out, "\\U{code_point:08X}");
-    }
 }
 
 /// Whether `tag` is a `LANGTAG` body: `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`.

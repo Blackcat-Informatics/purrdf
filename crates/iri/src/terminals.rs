@@ -75,6 +75,11 @@
 //! is derived from the range table, so a scanner cannot disagree with the
 //! predicate it accelerates. Portable Rust, no `unsafe`, no dependency.
 //!
+//! A writer whose law stops at a class no production names — the bytes one
+//! egress escapes, the bytes a CSV field quotes on, a line feed — declares it
+//! as a [`ByteClass`] over its own `const [u8; 256]` table and gets the same
+//! kernel rather than a retyped one.
+//!
 //! This module lives in the zero-dependency [`purrdf-iri`](crate) leaf because
 //! that is the one crate every parser in the workspace already depends on —
 //! `purrdf-sparql-algebra`, `purrdf-shex` and the RDF text codecs — so sharing
@@ -97,8 +102,8 @@
 //! may be aliased to the other — see [`is_xml_name_start_char`].
 
 pub use crate::scan::{
-    find_first_iri_body_special, find_first_json_string_special, find_first_trivia,
-    find_first_xml_special,
+    ByteClass, byte_run_count, find_first_iri_body_special, find_first_json_string_special,
+    find_first_trivia, find_first_xml_special,
 };
 
 /// An inclusive Unicode scalar-value range `[lo, hi]`, the unit every

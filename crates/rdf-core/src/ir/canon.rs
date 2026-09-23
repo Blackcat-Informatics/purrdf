@@ -142,7 +142,6 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 
 use sha2::{Digest, Sha256, Sha384};
 
@@ -154,7 +153,8 @@ use crate::dataset_view::{
     DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch, ViewTermId,
     checkpointed_drain,
 };
-use crate::iri_escape::is_iriref_escape_required;
+use crate::iri_escape::push_escaped;
+use purrdf_iri::terminals::{ByteClass, byte_run_count};
 
 /// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -2789,50 +2789,218 @@ fn next_permutation(a: &mut [usize]) -> bool {
 ///
 /// Which scalars ride as `\uXXXX` is decided by
 /// [`is_iriref_escape_required`](crate::iri_escape::is_iriref_escape_required)
-/// and by nothing written here — see that module for the production
+/// and the emission is [`push_escaped`](crate::iri_escape::push_escaped), the one
+/// implementation of both — see that module for the production
 /// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5
 /// `[18t]`) and for why egress escapes DEL and the C1 block, which the grammar
 /// permits raw. Clean ASCII IRIs pass through unchanged.
 fn write_iri_escaped(iri: &str, out: &mut String) {
-    for ch in iri.chars() {
-        if is_iriref_escape_required(ch) {
-            write_u_escape(ch, out);
+    push_escaped(iri, out);
+}
+
+/// The bytes a canonical N-Quads literal escapes, as a class table: `"`, `\`,
+/// the C0 controls and DEL. Every member is ASCII and every member is escaped,
+/// so every byte the scan stops at is an escape and everything between two
+/// stops rides verbatim — including all non-ASCII, the C1 block among it.
+const LITERAL_ESCAPE_TABLE: [u8; 256] = {
+    let mut table = [0_u8; 256];
+    let mut b = 0;
+    while b < 0x20 {
+        table[b] = 1;
+        b += 1;
+    }
+    table[b'"' as usize] = 1;
+    table[b'\\' as usize] = 1;
+    table[0x7F] = 1;
+    table
+};
+
+const LITERAL_ESCAPES: ByteClass<{ byte_run_count(&LITERAL_ESCAPE_TABLE) }> =
+    ByteClass::from_table(LITERAL_ESCAPE_TABLE);
+
+/// The offset of the first byte of `bytes` a canonical N-Quads literal escapes.
+#[inline(never)]
+fn find_first_literal_escape(bytes: &[u8]) -> Option<usize> {
+    LITERAL_ESCAPES.find_first(bytes)
+}
+
+/// Upper-case hex digits, for the `\u00XX` spelling.
+const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+/// Append the escape of `b`, a member of [`LITERAL_ESCAPE_TABLE`].
+fn push_literal_escape(b: u8, out: &mut String) {
+    match b {
+        b'\\' => out.push_str("\\\\"),
+        b'"' => out.push_str("\\\""),
+        b'\n' => out.push_str("\\n"),
+        b'\r' => out.push_str("\\r"),
+        b'\t' => out.push_str("\\t"),
+        0x08 => out.push_str("\\b"),
+        0x0C => out.push_str("\\f"),
+        // The other C0 controls and DEL, as `\u00XX` in upper-case hex: the
+        // bytes `write!(out, "\\u{:04X}", b)` produces.
+        _ => {
+            out.push_str("\\u00");
+            out.push(char::from(HEX_UPPER[usize::from(b >> 4)]));
+            out.push(char::from(HEX_UPPER[usize::from(b & 0xF)]));
+        }
+    }
+}
+
+/// Append `value` escaped for a `"…"` canonical N-Quads string.
+///
+/// The canonical N-Triples `ECHAR` set (`\\`, `\"`, `\n`, `\r`, `\t`, `\b`,
+/// `\f`); every other C0 control and U+007F (DEL) becomes `\uXXXX` in upper-case
+/// hex, and every other scalar — all non-ASCII, the C1 block included — rides
+/// verbatim as UTF-8. The W3C RDFC-1.0 test suite pins that last point (test060
+/// carries the C1 block raw in a literal), unlike an IRI, where the writer
+/// escapes the full control range.
+///
+/// This is the one implementation of the law for every writer that answers to
+/// canonical N-Quads bytes; the entailment engine's surface form delegates here.
+/// One chunked scan finds each byte to escape, and every run between two of them
+/// is copied whole.
+///
+/// ```
+/// use purrdf_core::ir::canon::write_literal_escaped;
+///
+/// let mut out = String::new();
+/// write_literal_escaped("a\"b\\c\n\u{8}\u{1}\u{7f}\u{85}é", &mut out);
+/// assert_eq!(out, "a\\\"b\\\\c\\n\\b\\u0001\\u007F\u{85}é");
+/// ```
+pub fn write_literal_escaped(value: &str, out: &mut String) {
+    let bytes = value.as_bytes();
+    let mut at = 0;
+    while let Some(offset) = find_first_literal_escape(&bytes[at..]) {
+        let hit = at + offset;
+        out.push_str(&value[at..hit]);
+        push_literal_escape(bytes[hit], out);
+        at = hit + 1;
+    }
+    out.push_str(&value[at..]);
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::{find_first_literal_escape, write_iri_escaped, write_literal_escaped};
+    use crate::iri_escape::is_iriref_escape_required;
+    use std::fmt::Write as _;
+
+    /// The per-`char` writers the clean-run forms replaced, kept verbatim as the
+    /// oracle: RDFC-1.0 output bytes are whatever these produced.
+    fn reference_iri(iri: &str, out: &mut String) {
+        for ch in iri.chars() {
+            if is_iriref_escape_required(ch) {
+                reference_u_escape(ch, out);
+            } else {
+                out.push(ch);
+            }
+        }
+    }
+
+    fn reference_literal(value: &str, out: &mut String) {
+        for ch in value.chars() {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\u{08}' => out.push_str("\\b"),
+                '\u{0c}' => out.push_str("\\f"),
+                c if (c as u32) < 0x20 || c as u32 == 0x7f => reference_u_escape(c, out),
+                c => out.push(c),
+            }
+        }
+    }
+
+    fn reference_u_escape(ch: char, out: &mut String) {
+        let cp = ch as u32;
+        if cp <= 0xFFFF {
+            let _ = write!(out, "\\u{cp:04X}");
         } else {
-            out.push(ch);
+            let _ = write!(out, "\\U{cp:08X}");
         }
     }
-}
 
-/// Escape a literal lexical form for a `"…"` N-Quads string, matching the canonical
-/// N-Triples ECHAR set; other C0 control characters become `\uXXXX`.
-fn write_literal_escaped(value: &str, out: &mut String) {
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            // Canonical N-Quads escapes C0 controls and U+007F (DEL) as \uXXXX; every
-            // other character (incl. all non-ASCII, including the C1 block) is emitted
-            // verbatim as UTF-8 — the W3C RDFC-1.0 test suite fixtures (e.g. test060)
-            // pin the C1 block passing through raw in literals, unlike IRIs where the
-            // IRIREF grammar forbids the full control range.
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => write_u_escape(c, out),
-            c => out.push(c),
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
         }
     }
-}
 
-/// Write `\uXXXX` (or `\UXXXXXXXX` beyond the BMP) for `ch`.
-fn write_u_escape(ch: char, out: &mut String) {
-    let cp = ch as u32;
-    if cp <= 0xFFFF {
-        let _ = write!(out, "\\u{cp:04X}");
-    } else {
-        let _ = write!(out, "\\U{cp:08X}");
+    /// Every ASCII scalar (so every special byte), the whole `0xC2` block (the
+    /// C1 controls), and non-ASCII neighbours in every UTF-8 width.
+    fn alphabet() -> Vec<char> {
+        let mut out: Vec<char> = (0_u8..0x80).map(char::from).collect();
+        out.extend(('\u{80}'..='\u{BF}').chain([
+            '\u{E9}',
+            '\u{FF}',
+            '\u{2028}',
+            '\u{FFFD}',
+            '\u{FFFF}',
+            '\u{1F408}',
+            '\u{10FFFF}',
+        ]));
+        out
+    }
+
+    #[test]
+    fn clean_run_writers_agree_with_the_per_char_writers() {
+        let alphabet = alphabet();
+        let mut rng = SplitMix(0x00CA_0010_E5CA_9E00);
+        let mut escaped_past_first_chunk = 0_usize;
+        for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
+            for _ in 0..40 {
+                let value: String = (0..len)
+                    .map(|_| {
+                        if rng.below(5) == 0 {
+                            alphabet[rng.below(alphabet.len())]
+                        } else {
+                            'q'
+                        }
+                    })
+                    .collect();
+                for (skip, _) in value.char_indices().take(4) {
+                    let input = &value[skip..];
+                    let (mut got, mut expected) = (String::from("<"), String::from("<"));
+                    write_iri_escaped(input, &mut got);
+                    reference_iri(input, &mut expected);
+                    assert_eq!(got, expected, "iri {input:?}");
+                    let (mut got, mut expected) = (String::from("\""), String::from("\""));
+                    write_literal_escaped(input, &mut got);
+                    reference_literal(input, &mut expected);
+                    assert_eq!(got, expected, "literal {input:?}");
+                    escaped_past_first_chunk += usize::from(
+                        find_first_literal_escape(input.as_bytes()).is_some_and(|i| i >= 16),
+                    );
+                }
+            }
+        }
+        assert!(
+            escaped_past_first_chunk > 0,
+            "the chunked path found escapes"
+        );
+    }
+
+    #[test]
+    fn c1_rides_raw_in_a_literal_and_escaped_in_an_iri() {
+        let (mut literal, mut iri) = (String::new(), String::new());
+        write_literal_escaped("\u{85}\u{7f}", &mut literal);
+        write_iri_escaped("\u{85}\u{7f}", &mut iri);
+        assert_eq!(literal, "\u{85}\\u007F");
+        assert_eq!(iri, "\\u0085\\u007F");
     }
 }
 

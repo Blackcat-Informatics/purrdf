@@ -173,6 +173,166 @@ fn find_first(bytes: &[u8], runs: &[ByteRun], table: &[u8; 256], want: bool) -> 
         .map(|i| chunks.len() * CHUNK + i)
 }
 
+/// How many maximal runs of member bytes the class table `table` holds: the
+/// `RUNS` parameter of the [`ByteClass`] built from it.
+///
+/// A `const fn`, so the parameter is computed from the table it describes and
+/// never written by hand:
+///
+/// ```rust
+/// use purrdf_iri::terminals::{ByteClass, byte_run_count};
+///
+/// const QUOTES: [u8; 256] = {
+///     let mut table = [0_u8; 256];
+///     table[b'"' as usize] = 1;
+///     table[b'\'' as usize] = 1;
+///     table
+/// };
+/// const CLASS: ByteClass<{ byte_run_count(&QUOTES) }> = ByteClass::from_table(QUOTES);
+/// assert_eq!(byte_run_count(&QUOTES), 2);
+/// assert_eq!(CLASS.find_first(b"it's"), Some(2));
+/// ```
+#[must_use]
+pub const fn byte_run_count(table: &[u8; 256]) -> usize {
+    count_runs(table)
+}
+
+/// A caller-defined byte class, scanned in the one formulation every scanner of
+/// this module uses.
+///
+/// The four named scanners ([`find_first_trivia`], [`find_first_iri_body_special`],
+/// [`find_first_json_string_special`], [`find_first_xml_special`]) answer the
+/// classes a *parser* stops at, and those are terminals, spelled here once. A
+/// *writer* stops at classes the grammar does not name — the bytes a given
+/// egress law escapes, the bytes a CSV field quotes on, the line feed a
+/// line-oriented reader splits at — and those belong to the writer that owns
+/// the law. `ByteClass` is how such a writer gets the same kernel without
+/// retyping it: it supplies its class as a `const [u8; 256]` membership table
+/// (entry `b` non-zero when byte `b` is a member), and [`find_first`](Self::find_first)
+/// runs the sixteen-byte `0x00`/`0xFF`-lane scan described in the
+/// [module documentation](self) over the table's runs, which are derived from
+/// the table at compile time.
+///
+/// `RUNS` must be [`byte_run_count`] of the same table; any other value is a
+/// compile-time failure when the class is a `const`, so the runs are always the
+/// whole class and nothing but the class.
+///
+/// Declare the class as a `const` and call it from one ordinary function per
+/// class, so each class compiles to one kernel with its runs folded in as
+/// constants:
+///
+/// ```rust
+/// use purrdf_iri::terminals::{ByteClass, byte_run_count};
+///
+/// const LINE_FEED: [u8; 256] = {
+///     let mut table = [0_u8; 256];
+///     table[b'\n' as usize] = 1;
+///     table
+/// };
+/// const LINES: ByteClass<{ byte_run_count(&LINE_FEED) }> = ByteClass::from_table(LINE_FEED);
+///
+/// fn find_line_feed(bytes: &[u8]) -> Option<usize> {
+///     LINES.find_first(bytes)
+/// }
+///
+/// assert_eq!(find_line_feed(b"one\ntwo"), Some(3));
+/// assert_eq!(find_line_feed(b"no break here"), None);
+/// assert!(LINES.contains(b'\n') && !LINES.contains(b'\r'));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ByteClass<const RUNS: usize> {
+    /// Entry `b` is non-zero when byte `b` is a member: the tail's answer.
+    table: [u8; 256],
+    /// The maximal runs of members, as inclusive `[lo, hi]` pairs: the lanes'
+    /// answer, as comparisons.
+    runs: [ByteRun; RUNS],
+}
+
+impl<const RUNS: usize> ByteClass<RUNS> {
+    /// The class whose members are the bytes `b` with `table[b] != 0`.
+    ///
+    /// # Panics
+    ///
+    /// When `RUNS` is not the [`byte_run_count`] of `table`. In a `const` item that
+    /// is a compile-time error rather than a run-time panic.
+    #[must_use]
+    pub const fn from_table(table: [u8; 256]) -> Self {
+        let runs = byte_runs::<RUNS>(&table);
+        Self { table, runs }
+    }
+
+    /// Whether `b` is a member.
+    #[must_use]
+    pub const fn contains(&self, b: u8) -> bool {
+        self.table[table_index(widen(b))] != 0
+    }
+
+    /// The offset of the first member byte of `bytes`, or `None`.
+    ///
+    /// The same kernel as the named scanners: sixteen-byte chunks answered as
+    /// `0x00`/`0xFF` byte lanes by comparisons against the class's runs, a
+    /// branch-free OR of the lanes as the clean-chunk test, the hit chunk's
+    /// lanes read as a little-endian `u128` whose trailing-zero count over 8 is
+    /// the offset, and the tail answered from the table. A class of one run
+    /// tests the lanes' maximum instead and re-tests the hit chunk's bytes for
+    /// the offset, the form that vectorizes for a single comparison (see
+    /// `find_first_in_one_run`). Inlined into its caller, so the caller's
+    /// function is the one kernel for its class.
+    #[allow(
+        clippy::inline_always,
+        reason = "a class's kernel is its caller: the scan must be inlined so the class's runs \
+                  fold in as constants and the lane loop vectorizes"
+    )]
+    #[inline(always)]
+    #[must_use]
+    pub fn find_first(&self, bytes: &[u8]) -> Option<usize> {
+        if RUNS == 1 {
+            find_first_in_one_run(bytes, &self.runs, &self.table)
+        } else {
+            find_first(bytes, &self.runs, &self.table, true)
+        }
+    }
+}
+
+/// [`find_first`] for a class of one run, whose clean-chunk test is a
+/// maximum rather than an OR.
+///
+/// The two folds give the same answer — a lane is `0x00` or `0xFF`, so the
+/// maximum is non-zero exactly when some lane is — but not the same code. With
+/// one run the lane is a single comparison, the OR of sixteen of them is folded
+/// to an OR over the comparisons' one-bit results before vectorization, and on
+/// aarch64 that reduction was measured to vectorize eight lanes of sixteen and
+/// test the rest one byte at a time. The maximum is not folded that way: it
+/// lowers to one `cmeq .16b` and an `addp` fold on aarch64, to one `pcmpeqb`
+/// and a `pmovmskb` on x86_64 (the pair the OR-fold gives there), and to
+/// `i8x16.eq` and `v128.any_true` under wasm `simd128`. The chunk that holds a
+/// hit finds its offset by testing its bytes again rather than by reading the
+/// lanes as a `u128`: keeping the lanes alive for that read was measured to
+/// spill them and scalarize the clean-chunk test on both x86_64 and aarch64. A
+/// class of more than one run keeps the OR-fold, which is what the named
+/// scanners were measured with.
+#[allow(
+    clippy::inline_always,
+    reason = "a class's kernel is its caller: the scan must be inlined so the class's run \
+              folds in as constants and the lane loop vectorizes"
+)]
+#[inline(always)]
+fn find_first_in_one_run(bytes: &[u8], runs: &[ByteRun], table: &[u8; 256]) -> Option<usize> {
+    let (chunks, tail) = bytes.as_chunks::<CHUNK>();
+    for (k, chunk) in chunks.iter().enumerate() {
+        let lanes = chunk_lanes(chunk, runs, 0);
+        if lanes.iter().fold(0, |most, &lane| most.max(lane)) != 0 {
+            return chunk
+                .iter()
+                .position(|&b| in_runs(b, runs))
+                .map(|first| k * CHUNK + first);
+        }
+    }
+    tail.iter()
+        .position(|&b| table[usize::from(b)] != 0)
+        .map(|i| chunks.len() * CHUNK + i)
+}
+
 /// The `WS` class table, projected from [`ws_ranges`].
 const TRIVIA_TABLE: [u8; 256] = class_table(ws_ranges());
 const TRIVIA_RUNS: [ByteRun; count_runs(&TRIVIA_TABLE)] = byte_runs(&TRIVIA_TABLE);
@@ -774,6 +934,71 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A single-byte class, and one with a non-ASCII lead byte among ASCII
+    /// members: the two shapes writer-owned classes take.
+    const LINE_FEED_TABLE: [u8; 256] = {
+        let mut table = [0_u8; 256];
+        table[b'\n' as usize] = 1;
+        table
+    };
+    const LINE_FEED: ByteClass<{ byte_run_count(&LINE_FEED_TABLE) }> =
+        ByteClass::from_table(LINE_FEED_TABLE);
+    const MIXED_TABLE: [u8; 256] = {
+        let mut table = [0_u8; 256];
+        let mut b = 0;
+        while b < 0x20 {
+            table[b] = 1;
+            b += 1;
+        }
+        table[b'"' as usize] = 1;
+        table[b',' as usize] = 1;
+        table[0x7F] = 1;
+        table[0xC2] = 1;
+        table
+    };
+    const MIXED: ByteClass<{ byte_run_count(&MIXED_TABLE) }> = ByteClass::from_table(MIXED_TABLE);
+    const JSON_STRING: ByteClass<{ byte_run_count(&JSON_STRING_TABLE) }> =
+        ByteClass::from_table(JSON_STRING_TABLE);
+
+    #[test]
+    fn byte_class_agrees_with_the_per_byte_search_and_the_named_scanners() {
+        assert_eq!(byte_run_count(&LINE_FEED_TABLE), 1);
+        assert_eq!(byte_run_count(&MIXED_TABLE), 5);
+        for b in 0..=u8::MAX {
+            assert_eq!(LINE_FEED.contains(b), b == b'\n', "{b:#04X}");
+            assert_eq!(MIXED.contains(b), MIXED_TABLE[usize::from(b)] != 0);
+        }
+        let mut alphabet = boundary_bytes();
+        alphabet.extend([b'\n', b',', 0xC2, 0xC3]);
+        let mut rng = SplitMix(0x00B7_E0C1_A550_0001);
+        let mut hits = [0_usize; 2];
+        for len in lengths() {
+            for _ in 0..40 {
+                let bytes = random_bytes(&mut rng, &alphabet, len, b'a');
+                for skip in 0..4.min(bytes.len() + 1) {
+                    let input = &bytes[skip..];
+                    for (k, (class, table)) in [
+                        (LINE_FEED.find_first(input), &LINE_FEED_TABLE),
+                        (MIXED.find_first(input), &MIXED_TABLE),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let expected = input.iter().position(|&b| table[usize::from(b)] != 0);
+                        assert_eq!(class, expected, "{input:02X?}");
+                        hits[k] += usize::from(class.is_some_and(|i| i >= CHUNK));
+                    }
+                    // A class built from a named scanner's table is that scanner.
+                    assert_eq!(
+                        JSON_STRING.find_first(input),
+                        find_first_json_string_special(input)
+                    );
+                }
+            }
+        }
+        assert!(hits.iter().all(|&h| h > 0), "{hits:?}");
     }
 
     #[test]

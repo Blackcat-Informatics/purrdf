@@ -53,6 +53,7 @@ use crate::graph::write_dataset_nquads;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::TextOut;
+use purrdf_core::terminals::find_first_json_string_special;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
@@ -295,6 +296,11 @@ fn query_form(result: &SparqlResult) -> &'static str {
 /// A byte the JSON escaper must act on: the two metacharacters and the C0
 /// controls. All triggers are ASCII, so non-ASCII bytes (`>= 0x80`) never match
 /// and a run split here always lands on a char boundary.
+///
+/// The predicate the escaper tested per byte before it used
+/// [`find_first_json_string_special`]; kept as the oracle that the scan's class
+/// is this set exactly.
+#[cfg(test)]
 const fn json_trigger_byte(b: u8) -> bool {
     b < 0x20 || b == b'"' || b == b'\\'
 }
@@ -352,11 +358,10 @@ fn json_escape_body<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     let mut rest = value;
     while !rest.is_empty() {
         // Bulk-copy the clean run in one `push_str` rather than one `push`
-        // per `char`; only the trigger byte goes through the match below.
-        let run = rest
-            .bytes()
-            .position(json_trigger_byte)
-            .unwrap_or(rest.len());
+        // per `char`; only the trigger byte goes through the match below. The
+        // run ends at the first `"`, `\\` or C0 control, found by the chunked
+        // scan of that exact class (RFC 8259 §7's complement of `unescaped`).
+        let run = find_first_json_string_special(rest.as_bytes()).unwrap_or(rest.len());
         out.push_str(&rest[..run]);
         rest = &rest[run..];
         let Some(ch) = rest.chars().next() else {
@@ -513,6 +518,75 @@ mod tests {
             json_string_reference(case, &mut reference);
             assert_eq!(fast, reference, "{case:?}");
         }
+    }
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
+        }
+    }
+
+    /// The chunked escaper agrees with the per-`char` reference on fixed-seed
+    /// values holding every ASCII scalar (so every trigger byte), DEL and the
+    /// C1 block (which ride verbatim), and non-ASCII in every UTF-8 width, at
+    /// lengths 0-70 and past several chunks; and the scan's class is the
+    /// trigger predicate on every byte.
+    #[test]
+    fn chunked_escaper_agrees_with_the_reference_on_random_values() {
+        for b in 0..=u8::MAX {
+            assert_eq!(
+                find_first_json_string_special(&[b]).is_some(),
+                json_trigger_byte(b),
+                "{b:#04X}"
+            );
+        }
+        let mut alphabet: Vec<char> = (0_u8..0x80).map(char::from).collect();
+        alphabet.extend([
+            '\u{80}',
+            '\u{85}',
+            '\u{9F}',
+            '\u{E9}',
+            '\u{2028}',
+            '\u{FEFF}',
+            '\u{FFFD}',
+            '\u{1F431}',
+            '\u{10FFFF}',
+        ]);
+        let mut rng = SplitMix(0x0150_0E5C_A9E0_0001);
+        let mut escaped = 0_usize;
+        for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
+            for round in 0..40 {
+                let density = if round % 2 == 0 { 4 } else { 50 };
+                let value: String = (0..len)
+                    .map(|_| {
+                        if rng.below(density) == 0 {
+                            alphabet[rng.below(alphabet.len())]
+                        } else {
+                            'j'
+                        }
+                    })
+                    .collect();
+                let mut fast = String::from("prefix");
+                let mut reference = String::from("prefix");
+                json_string(&value, &mut fast);
+                json_string_reference(&value, &mut reference);
+                assert_eq!(fast, reference, "{value:?}");
+                // An escape makes the output longer than the quoted value.
+                escaped += usize::from(fast.len() > "prefix".len() + value.len() + 2);
+            }
+        }
+        assert!(escaped > 0);
     }
 
     fn json_text_ns(

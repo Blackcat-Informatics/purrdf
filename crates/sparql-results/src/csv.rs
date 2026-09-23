@@ -20,6 +20,7 @@ use crate::error::Error;
 use crate::model::ResultProvenance;
 use crate::term::ntriples_token;
 use purrdf_core::sink::TextOut;
+use purrdf_core::terminals::{ByteClass, byte_run_count};
 use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to W3C SPARQL Results CSV.
@@ -156,10 +157,62 @@ fn cell_value(value: &TermValue) -> Result<std::borrow::Cow<'_, str>, Error> {
     })
 }
 
+/// The bytes RFC 4180 §2 quotes a field on — `"`, `,`, LINE FEED and CARRIAGE
+/// RETURN — as a class table. Every member is ASCII.
+const QUOTING_TABLE: [u8; 256] = {
+    let mut table = [0_u8; 256];
+    table[b'"' as usize] = 1;
+    table[b',' as usize] = 1;
+    table[b'\n' as usize] = 1;
+    table[b'\r' as usize] = 1;
+    table
+};
+
+const QUOTING: ByteClass<{ byte_run_count(&QUOTING_TABLE) }> = ByteClass::from_table(QUOTING_TABLE);
+
+/// The offset of the first byte of `bytes` that makes a CSV field quoted.
+#[inline(never)]
+fn find_first_quoting(bytes: &[u8]) -> Option<usize> {
+    QUOTING.find_first(bytes)
+}
+
 /// Append a single CSV field, applying RFC-4180 quoting only when required:
 /// a value containing `"`, `,`, `\n`, or `\r` is wrapped in double quotes with
 /// internal `"` doubled; otherwise it is emitted raw.
+///
+/// One scan: the first quoting byte decides that the field is quoted, and the
+/// same scan continues from it, stopping at each later member so a `"` is
+/// doubled. Every run between two stops is copied whole, and the `,`, `\n` and
+/// `\r` it stops at ride inside the quotes verbatim.
 fn push_field<W: TextOut + ?Sized>(value: &str, out: &mut W) {
+    let bytes = value.as_bytes();
+    let Some(first) = find_first_quoting(bytes) else {
+        out.push_str(value);
+        return;
+    };
+    out.push('"');
+    let mut run_start = 0;
+    let mut hit = first;
+    loop {
+        if bytes[hit] == b'"' {
+            // The run ends after this quote; the quote is written once more.
+            out.push_str(&value[run_start..=hit]);
+            out.push('"');
+            run_start = hit + 1;
+        }
+        let next = hit + 1;
+        match find_first_quoting(&bytes[next..]) {
+            Some(offset) => hit = next + offset,
+            None => break,
+        }
+    }
+    out.push_str(&value[run_start..]);
+    out.push('"');
+}
+
+/// The two-pass field writer [`push_field`] replaced, kept as the oracle.
+#[cfg(test)]
+fn push_field_reference<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     let needs_quoting = value
         .chars()
         .any(|c| c == '"' || c == ',' || c == '\n' || c == '\r');
@@ -201,6 +254,87 @@ mod tests {
             datatype: datatype.to_string(),
             language: None,
             direction: None,
+        }
+    }
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
+        }
+    }
+
+    /// The one-scan field writer agrees with the two-pass one on every quoting
+    /// byte, runs of adjacent quotes, the other controls, and non-ASCII in every
+    /// UTF-8 width, at lengths 0-70 and past several chunks.
+    #[test]
+    fn push_field_agrees_with_the_two_pass_writer() {
+        const SCALARS: &[char] = &[
+            '"',
+            ',',
+            '\n',
+            '\r',
+            '\t',
+            ' ',
+            ';',
+            '\'',
+            '\\',
+            '\u{0}',
+            '\u{7F}',
+            '\u{85}',
+            '\u{E9}',
+            '\u{2028}',
+            '\u{FFFD}',
+            '\u{1F408}',
+        ];
+        let mut rng = SplitMix(0x0C5F_1E1D_0000_0001);
+        let (mut quoted, mut raw) = (0_usize, 0_usize);
+        for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
+            for round in 0..40 {
+                let density = if round % 2 == 0 { 3 } else { 60 };
+                let value: String = (0..len)
+                    .map(|_| {
+                        if rng.below(density) == 0 {
+                            SCALARS[rng.below(SCALARS.len())]
+                        } else {
+                            'v'
+                        }
+                    })
+                    .collect();
+                let (mut got, mut expected) = (String::new(), String::new());
+                push_field(&value, &mut got);
+                push_field_reference(&value, &mut expected);
+                assert_eq!(got, expected, "{value:?}");
+                if got == value {
+                    raw += 1;
+                } else {
+                    quoted += 1;
+                }
+            }
+        }
+        assert!(quoted > 0 && raw > 0, "{quoted} {raw}");
+        // Fixed edges: a lone quote, quotes at both ends, and the neighbour
+        // with no quoting byte, which is written raw.
+        for (value, expected) in [
+            ("\"", "\"\"\"\""),
+            ("\"a\"", "\"\"\"a\"\"\""),
+            ("a,b", "\"a,b\""),
+            ("a\r\nb", "\"a\r\nb\""),
+            ("plain value", "plain value"),
+        ] {
+            let mut got = String::new();
+            push_field(value, &mut got);
+            assert_eq!(got, expected, "{value:?}");
         }
     }
 
