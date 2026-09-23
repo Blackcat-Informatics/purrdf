@@ -47,7 +47,12 @@
 //!   character class decides token BOUNDARIES under maximal munch, so an
 //!   approximation misparses documents rather than merely widening the accepted
 //!   language, and one transcription is the only way to keep the scanners
-//!   agreeing with each other.
+//!   agreeing with each other. The same module carries the byte-class
+//!   scanners built from those tables ([`terminals::find_first_trivia`],
+//!   [`terminals::find_first_iri_body_special`],
+//!   [`terminals::find_first_json_string_special`],
+//!   [`terminals::find_first_xml_special`]): portable chunked scans that find
+//!   the first byte of a class sixteen bytes at a time.
 //!
 //! # Hard-fail
 //!
@@ -131,6 +136,7 @@ mod normalize;
 mod parse;
 pub mod pos;
 mod resolve;
+mod scan;
 pub mod terminals;
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};

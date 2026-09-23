@@ -21,9 +21,12 @@
 # function that inlined them.
 #
 # Every function row of the audit document has an entry here, whatever its verdict. A
-# `leave` or `rewrite` entry sets `min_vector_ops = 0` and requires no mnemonic: it
-# records what the site compiles to today (the document's generated cells), and still
-# fails when the symbol it names disappears. A `covered` entry carries the floors and
+# `leave` entry sets `min_vector_ops = 0` and requires no mnemonic: it records what the
+# site compiles to today (the document's generated cells), and still fails when the
+# symbol it names disappears. A `rewrite` entry does the same until its reformulation
+# lands, and from then on carries the floors and proof mnemonics of the new shape; a
+# rewritten site with nothing vector-shaped in it (a cursor, a table load) keeps 0 and
+# says why. A `covered` entry carries the floors and
 # the proof mnemonics that hold on each configuration. The site ids are the document's
 # row ids.
 
@@ -182,7 +185,8 @@ summary = "memchr2 kernels behind the line-oriented codecs' line split (`split_l
 
   # `PhysicalLines::next`, the serial line iterator, reaches the same memchr kernel: on
   # x86_64 through the dispatched `find_sse2` / `find_avx2` measured above, on aarch64 and
-  # wasm32 inlined into the iterator. Measured v22 (both aarch64), v30 (simd128), v0 (wasm32).
+  # wasm32 inlined into the iterator. Measured v22 (both aarch64), v30 (simd128), v0
+  # (wasm32).
   [[site.measure]]
   label = "neon (lines)"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -291,9 +295,82 @@ summary = "BLAKE3 multi-chunk hashing (GTS content identity): run-time dispatch 
 
 [[site]]
 id = "sparql.lexer-trivia"
-summary = "`Lexer::skip_trivia` and its `terminals::is_ws` byte test, inlined into `Lexer::run`"
+summary = "`Lexer::skip_trivia`: one `terminals::find_first_trivia` call per `WS` run, `memchr` per comment tail"
 
+  # The whitespace run is skipped by the out-of-line scanner, one copy in `purrdf_iri`
+  # that the lexer calls; its vector work is measured there.
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v10.
   [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 5
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v22.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 11
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v18.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 9
+  require_mnemonics = ["vpcmpltub %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v8 (aarch64), v8
+  # (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 4
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v8.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The call site, inlined into `Lexer::run`; its count includes the inlined
+  # comment-tail `memchr`.
+  [[site.measure]]
+  label = "call site (in run)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_algebra"
   symbol = "purrdf_sparql_algebra::lexer::Lexer>::run"
@@ -303,10 +380,92 @@ summary = "`Lexer::skip_trivia` and its `terminals::is_ws` byte test, inlined in
 
 [[site]]
 id = "sparql.lexer-iri"
-summary = "`Lexer::lex_lt_or_iri`, the three-pass IRIREF scan (`memchr` to `>`, a backslash scan, a forbidden-byte scan)"
+summary = "`Lexer::lex_lt_or_iri`, a single `terminals::find_first_iri_body_special` pass over the `IRIREF` body"
 
-  # Inlined through `lex_one` into `run` where `lex_one` is itself inlined.
+  # The body scan is the out-of-line scanner in `purrdf_iri`; its vector work is
+  # measured there.
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v17.
   [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 8
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v16.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v8.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 4
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v14.
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 7
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build LLVM compares into predicate registers (`cmpeq`, `cmplo`).
+  # Measured v11.
+  [[site.measure]]
+  label = "scan sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 5
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v13.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 6
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The call site, inlined through `lex_one` into `run` where `lex_one` is itself inlined.
+  [[site.measure]]
+  label = "call site (in run)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "wasm32"]
   crate = "purrdf_sparql_algebra"
   symbol = "purrdf_sparql_algebra::lexer::Lexer>::run"
@@ -314,8 +473,9 @@ summary = "`Lexer::lex_lt_or_iri`, the three-pass IRIREF scan (`memchr` to `>`, 
   max_fma = 0
   forbid_relaxed = true
 
-  # Out-of-line `lex_one`, which inlines it.
+  # The call site, in the out-of-line `lex_one`.
   [[site.measure]]
+  label = "call site (in lex_one)"
   configs = ["aarch64", "aarch64-neoverse-v1", "wasm32-simd128"]
   crate = "purrdf_sparql_algebra"
   symbol = "purrdf_sparql_algebra::lexer::Lexer>::lex_one"
@@ -325,8 +485,11 @@ summary = "`Lexer::lex_lt_or_iri`, the three-pass IRIREF scan (`memchr` to `>`, 
 
 [[site]]
 id = "sparql.lexer-cursor"
-summary = "`Lexer::cur` / `Lexer::peek`, a UTF-8 decode per lookahead"
+summary = "`Lexer::cur` / `Lexer::peek`, an ASCII fast path that decodes only a non-ASCII lead"
 
+  # The ASCII window test of `peek` is `<[u8]>::is_ascii`; it is scalar or std's own
+  # word test, and the entry records it. Measured v4 (x86_64, x86_64-v3), v3
+  # (x86_64-v4), v5 (aarch64, aarch64-neoverse-v1), v0 (wasm32, wasm32-simd128).
   [[site.measure]]
   label = "peek"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -336,6 +499,7 @@ summary = "`Lexer::cur` / `Lexer::peek`, a UTF-8 decode per lookahead"
   max_fma = 0
   forbid_relaxed = true
 
+  # `cur` is one byte load and a compare, inlined into `Lexer::run`.
   [[site.measure]]
   label = "cur (in run)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -425,48 +589,552 @@ summary = "`parse::find_first_of`, the u64 SWAR delimiter scan, inlined into `pa
   forbid_relaxed = true
 
 [[site]]
-id = "iri.validate-component"
-summary = "`parse::validate_component`, the per-char component validator"
+id = "iri.scan-trivia"
+summary = "`terminals::find_first_trivia`, the chunked scan for the end of a `WS` run (sixteen byte lanes, run compares, an OR-fold, a `u128` trailing-zero count on the hit chunk)"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v10.
   [[site.measure]]
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 5
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v22.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 11
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v18.
+  [[site.measure]]
+  label = "avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 9
+  require_mnemonics = ["vpcmpltub %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v8 (aarch64), v8
+  # (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 4
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v8.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_trivia"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "iri.scan-iri-body"
+summary = "`terminals::find_first_iri_body_special`, the chunked scan for the first `IRIREF`-forbidden byte (which includes the closing `>` and the `\\` of a `UCHAR`)"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v17.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 8
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v16.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v8.
+  [[site.measure]]
+  label = "avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 4
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v14.
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 7
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build LLVM compares into predicate registers (`cmpeq`, `cmplo`).
+  # Measured v11.
+  [[site.measure]]
+  label = "sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 5
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v13.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  min_vector_ops = 6
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "iri.scan-json-string"
+summary = "`terminals::find_first_json_string_special`, the chunked scan for the first `\"`, `\\` or C0 control of a JSON string body"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 4
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v21.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 10
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v17.
+  [[site.measure]]
+  label = "avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v6 (aarch64), v6
+  # (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v7.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "iri.scan-xml"
+summary = "`terminals::find_first_xml_special`, the chunked scan for the first byte XML 1.0 egress must replace or check"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 6
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v11.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v6.
+  [[site.measure]]
+  label = "avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 3
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v10.
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 5
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build LLVM compares into predicate registers (`cmpeq`, `cmplo`).
+  # Measured v8.
+  [[site.measure]]
+  label = "sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 4
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_xml_special"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "iri.validate-component"
+summary = "`parse::validate_component`, the component validator with its eight-byte compare-formulated clean-run precheck"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v79.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::validate_component"
+  min_vector_ops = 39
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v62.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::validate_component"
+  min_vector_ops = 31
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v20.
+  [[site.measure]]
+  label = "avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::validate_component"
+  min_vector_ops = 10
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v51.
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::validate_component"
+  min_vector_ops = 25
+  require_mnemonics = ["cmeq .8b", "cmhi .8b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build LLVM compares into predicate registers (`cmpeq`, `cmplo`).
+  # Measured v37.
+  [[site.measure]]
+  label = "sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::validate_component"
+  min_vector_ops = 18
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
   crate = "purrdf_iri"
   symbol = "purrdf_iri::parse::validate_component"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
+  # Packed byte compares. Measured v57.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::validate_component"
+  min_vector_ops = 28
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
 [[site]]
 id = "iri.terminals-in-ranges"
-summary = "`terminals::in_ranges`, the per-scalar binary search behind the class predicates (measured in `is_pn_chars`)"
+summary = "the class predicates, now a load from a `const [u8; 256]` class table below U+0100; they inline into every caller, measured in `parse::scan`, which inlines `is_ipvfuture_address_char`"
 
+  # A class-table load is a scalar load by nature: the entry records what the caller
+  # compiles to and fails if the symbol goes away. Measured v8 (x86_64), v6 (x86_64-v3,
+  # x86_64-v4, aarch64, aarch64-neoverse-v1), v0 (wasm32, wasm32-simd128), none of it
+  # the table lookup.
   [[site.measure]]
+  label = "table"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_iri"
-  symbol = "purrdf_iri::terminals::is_pn_chars"
+  symbol = "purrdf_iri::parse::scan"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
 id = "xsd.whitespace"
-summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collapse`"
+summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collapse`, each behind a sixteen-byte compare-formulated clean-path precheck"
 
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v18.
   [[site.measure]]
-  label = "replace"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "replace sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_replace"
+  min_vector_ops = 9
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v30.
+  [[site.measure]]
+  label = "replace avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_replace"
+  min_vector_ops = 15
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v15.
+  [[site.measure]]
+  label = "replace avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_replace"
+  min_vector_ops = 7
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v12 (aarch64), v12
+  # (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "replace neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_replace"
+  min_vector_ops = 6
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "replace scalar"
+  configs = ["wasm32"]
   crate = "purrdf_xsd"
   symbol = "purrdf_xsd::simple::normalize_whitespace_replace"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
+  # Packed byte compares. Measured v15.
   [[site.measure]]
-  label = "collapse"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "replace simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_replace"
+  min_vector_ops = 7
+  require_mnemonics = ["i8x16.eq", "v128.any_true"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v6.
+  [[site.measure]]
+  label = "collapse sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  min_vector_ops = 3
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v19.
+  [[site.measure]]
+  label = "collapse avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  min_vector_ops = 9
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`) rather than
+  # vector lanes, as in memchr's kernel. Measured v14.
+  [[site.measure]]
+  label = "collapse avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  min_vector_ops = 7
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v9 (aarch64), v9
+  # (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "collapse neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  min_vector_ops = 4
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar
+  # code, same result. Measured v0.
+  [[site.measure]]
+  label = "collapse scalar"
+  configs = ["wasm32"]
   crate = "purrdf_xsd"
   symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
   min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v5.
+  [[site.measure]]
+  label = "collapse simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  min_vector_ops = 2
+  require_mnemonics = ["i8x16.eq", "v128.any_true"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -580,7 +1248,8 @@ summary = "`pack::bits::select_in_word`, the bit-by-bit in-word select"
 id = "core.pack-rank1"
 summary = "`RankSelectDir::rank1`, the O(1) rank: directory lookups plus one in-word popcount"
 
-  # Baseline x86-64 has no POPCNT: `count_ones` compiles to the SWAR bit-count sequence. Measured v0.
+  # Baseline x86-64 has no POPCNT: `count_ones` compiles to the SWAR bit-count sequence.
+  # Measured v0.
   [[site.measure]]
   label = "swar popcount"
   configs = ["x86_64"]
@@ -1110,7 +1779,8 @@ summary = "`dialect::markdown::lines`, the per-char line split, inlined through 
 id = "distance.exact.dot"
 summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels the kNN scan (`distances`) and the HNSW beam (`distances_indexed`) call"
 
-  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v169.
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs.
+  # Measured v169.
   [[site.measure]]
   label = "batch f64×f64"
   configs = ["x86_64"]
@@ -1121,7 +1791,10 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v157. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
+  # run time. Measured v157. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # inlines it into the dispatch wrapper and the portable symbol below is itself the
+  # AVX2 code.
   [[site.measure]]
   label = "batch f64×f64 avx2"
   configs = ["x86_64"]
@@ -1132,7 +1805,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157 (x86_64-v3), v133 (x86_64-v4).
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157
+  # (x86_64-v3), v133 (x86_64-v4).
   [[site.measure]]
   label = "batch f64×f64"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1143,7 +1817,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v160 (aarch64), v167 (neoverse-v1).
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions.
+  # Measured v160 (aarch64), v167 (neoverse-v1).
   [[site.measure]]
   label = "batch f64×f64"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -1165,7 +1840,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order.
+  # Measured v0.
   [[site.measure]]
   label = "batch f64×f64"
   configs = ["wasm32"]
@@ -1175,7 +1851,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v235.
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs.
+  # Measured v235.
   [[site.measure]]
   label = "indexed f64×f32"
   configs = ["x86_64"]
@@ -1186,7 +1863,10 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v149. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
+  # run time. Measured v149. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # inlines it into the dispatch wrapper and the portable symbol below is itself the
+  # AVX2 code.
   [[site.measure]]
   label = "indexed f64×f32 avx2"
   configs = ["x86_64"]
@@ -1197,7 +1877,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v197 (x86_64-v3), v161 (x86_64-v4).
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v197
+  # (x86_64-v3), v161 (x86_64-v4).
   [[site.measure]]
   label = "indexed f64×f32"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1208,7 +1889,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v208 (aarch64), v215 (neoverse-v1).
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions.
+  # Measured v208 (aarch64), v215 (neoverse-v1).
   [[site.measure]]
   label = "indexed f64×f32"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -1230,7 +1912,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order.
+  # Measured v0.
   [[site.measure]]
   label = "indexed f64×f32"
   configs = ["wasm32"]
@@ -1240,7 +1923,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v299.
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs.
+  # Measured v299.
   [[site.measure]]
   label = "indexed f32×f32"
   configs = ["x86_64"]
@@ -1251,7 +1935,10 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v173. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
+  # run time. Measured v173. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # inlines it into the dispatch wrapper and the portable symbol below is itself the
+  # AVX2 code.
   [[site.measure]]
   label = "indexed f32×f32 avx2"
   configs = ["x86_64"]
@@ -1262,7 +1949,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v237 (x86_64-v3), v189 (x86_64-v4).
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v237
+  # (x86_64-v3), v189 (x86_64-v4).
   [[site.measure]]
   label = "indexed f32×f32"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1273,7 +1961,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v256 (aarch64), v270 (neoverse-v1).
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions.
+  # Measured v256 (aarch64), v270 (neoverse-v1).
   [[site.measure]]
   label = "indexed f32×f32"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -1295,7 +1984,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order.
+  # Measured v0.
   [[site.measure]]
   label = "indexed f32×f32"
   configs = ["wasm32"]
@@ -1309,7 +1999,8 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
 id = "distance.exact.sqeuclid"
 summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Euclidean fold with its 64-element checkpoint, in the pair kernels HNSW's selection and repair call"
 
-  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v169.
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs.
+  # Measured v169.
   [[site.measure]]
   label = "bounded f64×f64"
   configs = ["x86_64"]
@@ -1320,7 +2011,10 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v157. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
+  # run time. Measured v157. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # inlines it into the dispatch wrapper and the portable symbol below is itself the
+  # AVX2 code.
   [[site.measure]]
   label = "bounded f64×f64 avx2"
   configs = ["x86_64"]
@@ -1331,7 +2025,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157 (x86_64-v3), v133 (x86_64-v4).
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157
+  # (x86_64-v3), v133 (x86_64-v4).
   [[site.measure]]
   label = "bounded f64×f64"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1342,7 +2037,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v160 (aarch64), v167 (neoverse-v1).
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions.
+  # Measured v160 (aarch64), v167 (neoverse-v1).
   [[site.measure]]
   label = "bounded f64×f64"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -1364,7 +2060,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order.
+  # Measured v0.
   [[site.measure]]
   label = "bounded f64×f64"
   configs = ["wasm32"]
@@ -1374,7 +2071,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v201.
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs.
+  # Measured v201.
   [[site.measure]]
   label = "bounded f32×f32"
   configs = ["x86_64"]
@@ -1385,7 +2083,10 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at run time. Measured v125. On x86-64-v3/v4 the callers already have AVX2, so LLVM inlines it into the dispatch wrapper and the portable symbol below is itself the AVX2 code.
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
+  # run time. Measured v125. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # inlines it into the dispatch wrapper and the portable symbol below is itself the
+  # AVX2 code.
   [[site.measure]]
   label = "bounded f32×f32 avx2"
   configs = ["x86_64"]
@@ -1396,7 +2097,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v125 (x86_64-v3), v89 (x86_64-v4).
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v125
+  # (x86_64-v3), v89 (x86_64-v4).
   [[site.measure]]
   label = "bounded f32×f32"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1407,7 +2109,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v192 (aarch64), v206 (neoverse-v1).
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions.
+  # Measured v192 (aarch64), v206 (neoverse-v1).
   [[site.measure]]
   label = "bounded f32×f32"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -1429,7 +2132,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order.
+  # Measured v0.
   [[site.measure]]
   label = "bounded f32×f32"
   configs = ["wasm32"]
@@ -1439,7 +2143,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs. Measured v235.
+  # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs.
+  # Measured v235.
   [[site.measure]]
   label = "pair f64×f32"
   configs = ["x86_64"]
@@ -1450,7 +2155,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v197 (x86_64-v3), v161 (x86_64-v4).
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v197
+  # (x86_64-v3), v161 (x86_64-v4).
   [[site.measure]]
   label = "pair f64×f32"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1461,7 +2167,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions. Measured v208 (aarch64), v215 (neoverse-v1).
+  # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions.
+  # Measured v208 (aarch64), v215 (neoverse-v1).
   [[site.measure]]
   label = "pair f64×f32"
   configs = ["aarch64", "aarch64-neoverse-v1"]
@@ -1483,7 +2190,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order. Measured v0.
+  # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order.
+  # Measured v0.
   [[site.measure]]
   label = "pair f64×f32"
   configs = ["wasm32"]
@@ -1497,7 +2205,8 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
 id = "distance.reassociated.dot"
 summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-of-line compilation per dispatch path and stored-width pair (`<path>::<query>_<row>::dot`)"
 
-  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v70·f0.
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has
+  # none). Measured v70·f0.
   [[site.measure]]
   label = "sse2 f64×f64"
   configs = ["x86_64"]
@@ -1509,7 +2218,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v13·f21 on all three x86_64 configurations.
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the
+  # adds contracted into FMA. Measured v13·f21 on all three x86_64 configurations.
   [[site.measure]]
   label = "avx2+fma f64×f64"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
@@ -1521,7 +2231,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v15·f11.
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the
+  # reduction), FMA. Measured v15·f11.
   [[site.measure]]
   label = "avx512f f64×f64"
   configs = ["x86_64", "x86_64-v3"]
@@ -1533,7 +2244,9 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v13·f21.
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit
+  # vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`.
+  # Measured v13·f21.
   [[site.measure]]
   label = "avx512f f64×f64 (v4 tuning)"
   configs = ["x86_64-v4"]
@@ -1545,7 +2258,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v13·f21.
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the
+  # `sse2` path's symbol is itself `ymm` FMA code there. Measured v13·f21.
   [[site.measure]]
   label = "baseline f64×f64"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1569,7 +2283,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v9·f11.
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an
+  # `faddv` reduction. Measured v9·f11.
   [[site.measure]]
   label = "neon f64×f64 (neoverse-v1)"
   configs = ["aarch64-neoverse-v1"]
@@ -1581,7 +2296,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and
+  # no fused op; the symbol still exists exactly once. Measured v0·f0.
   [[site.measure]]
   label = "wasm-scalar f64×f64"
   configs = ["wasm32"]
@@ -1592,7 +2308,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v69·f0.
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside
+  # relaxed SIMD, which is never enabled. Measured v69·f0.
   [[site.measure]]
   label = "wasm-simd128 f64×f64"
   configs = ["wasm32-simd128"]
@@ -1604,7 +2321,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v104·f0.
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has
+  # none). Measured v104·f0.
   [[site.measure]]
   label = "sse2 f64×f32"
   configs = ["x86_64"]
@@ -1616,7 +2334,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the
+  # adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
   [[site.measure]]
   label = "avx2+fma f64×f32"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
@@ -1628,7 +2347,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v26·f11.
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the
+  # reduction), FMA. Measured v26·f11.
   [[site.measure]]
   label = "avx512f f64×f32"
   configs = ["x86_64", "x86_64-v3"]
@@ -1640,7 +2360,9 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v34·f21.
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit
+  # vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`.
+  # Measured v34·f21.
   [[site.measure]]
   label = "avx512f f64×f32 (v4 tuning)"
   configs = ["x86_64-v4"]
@@ -1652,7 +2374,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the
+  # `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
   [[site.measure]]
   label = "baseline f64×f32"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1676,7 +2399,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v10·f11.
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an
+  # `faddv` reduction. Measured v10·f11.
   [[site.measure]]
   label = "neon f64×f32 (neoverse-v1)"
   configs = ["aarch64-neoverse-v1"]
@@ -1688,7 +2412,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and
+  # no fused op; the symbol still exists exactly once. Measured v0·f0.
   [[site.measure]]
   label = "wasm-scalar f64×f32"
   configs = ["wasm32"]
@@ -1699,7 +2424,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v13·f0.
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside
+  # relaxed SIMD, which is never enabled. Measured v13·f0.
   [[site.measure]]
   label = "wasm-simd128 f64×f32"
   configs = ["wasm32-simd128"]
@@ -1711,7 +2437,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v104·f0.
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has
+  # none). Measured v104·f0.
   [[site.measure]]
   label = "sse2 f32×f64"
   configs = ["x86_64"]
@@ -1723,7 +2450,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the
+  # adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
   [[site.measure]]
   label = "avx2+fma f32×f64"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
@@ -1735,7 +2463,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v26·f11.
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the
+  # reduction), FMA. Measured v26·f11.
   [[site.measure]]
   label = "avx512f f32×f64"
   configs = ["x86_64", "x86_64-v3"]
@@ -1747,7 +2476,9 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v34·f21.
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit
+  # vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`.
+  # Measured v34·f21.
   [[site.measure]]
   label = "avx512f f32×f64 (v4 tuning)"
   configs = ["x86_64-v4"]
@@ -1759,7 +2490,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the
+  # `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
   [[site.measure]]
   label = "baseline f32×f64"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1783,7 +2515,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v10·f11.
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an
+  # `faddv` reduction. Measured v10·f11.
   [[site.measure]]
   label = "neon f32×f64 (neoverse-v1)"
   configs = ["aarch64-neoverse-v1"]
@@ -1795,7 +2528,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and
+  # no fused op; the symbol still exists exactly once. Measured v0·f0.
   [[site.measure]]
   label = "wasm-scalar f32×f64"
   configs = ["wasm32"]
@@ -1806,7 +2540,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v13·f0.
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside
+  # relaxed SIMD, which is never enabled. Measured v13·f0.
   [[site.measure]]
   label = "wasm-simd128 f32×f64"
   configs = ["wasm32-simd128"]
@@ -1818,7 +2553,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v138·f0.
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has
+  # none). Measured v138·f0.
   [[site.measure]]
   label = "sse2 f32×f32"
   configs = ["x86_64"]
@@ -1830,7 +2566,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the
+  # adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
   [[site.measure]]
   label = "avx2+fma f32×f32"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
@@ -1842,7 +2579,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v37·f11.
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the
+  # reduction), FMA. Measured v37·f11.
   [[site.measure]]
   label = "avx512f f32×f32"
   configs = ["x86_64", "x86_64-v3"]
@@ -1854,7 +2592,9 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v55·f21.
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit
+  # vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`.
+  # Measured v55·f21.
   [[site.measure]]
   label = "avx512f f32×f32 (v4 tuning)"
   configs = ["x86_64-v4"]
@@ -1866,7 +2606,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the
+  # `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
   [[site.measure]]
   label = "baseline f32×f32"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -1890,7 +2631,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v11·f11.
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an
+  # `faddv` reduction. Measured v11·f11.
   [[site.measure]]
   label = "neon f32×f32 (neoverse-v1)"
   configs = ["aarch64-neoverse-v1"]
@@ -1902,7 +2644,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and
+  # no fused op; the symbol still exists exactly once. Measured v0·f0.
   [[site.measure]]
   label = "wasm-scalar f32×f32"
   configs = ["wasm32"]
@@ -1913,7 +2656,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v16·f0.
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside
+  # relaxed SIMD, which is never enabled. Measured v16·f0.
   [[site.measure]]
   label = "wasm-simd128 f32×f32"
   configs = ["wasm32-simd128"]
@@ -1929,7 +2673,8 @@ summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-
 id = "distance.reassociated.sqeuclid"
 summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squared-Euclidean fold with its per-block checkpoint, in its one out-of-line compilation per dispatch path and stored-width pair"
 
-  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v104·f0.
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has
+  # none). Measured v104·f0.
   [[site.measure]]
   label = "sse2 f64×f64"
   configs = ["x86_64"]
@@ -1941,7 +2686,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the
+  # adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
   [[site.measure]]
   label = "avx2+fma f64×f64"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
@@ -1953,7 +2699,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v26·f11.
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the
+  # reduction), FMA. Measured v26·f11.
   [[site.measure]]
   label = "avx512f f64×f64"
   configs = ["x86_64", "x86_64-v3"]
@@ -1965,7 +2712,9 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v34·f21.
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit
+  # vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`.
+  # Measured v34·f21.
   [[site.measure]]
   label = "avx512f f64×f64 (v4 tuning)"
   configs = ["x86_64-v4"]
@@ -1977,7 +2726,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the
+  # `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
   [[site.measure]]
   label = "baseline f64×f64"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -2001,7 +2751,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v18·f11.
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an
+  # `faddv` reduction. Measured v18·f11.
   [[site.measure]]
   label = "neon f64×f64 (neoverse-v1)"
   configs = ["aarch64-neoverse-v1"]
@@ -2013,7 +2764,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and
+  # no fused op; the symbol still exists exactly once. Measured v0·f0.
   [[site.measure]]
   label = "wasm-scalar f64×f64"
   configs = ["wasm32"]
@@ -2024,7 +2776,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v13·f0.
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside
+  # relaxed SIMD, which is never enabled. Measured v13·f0.
   [[site.measure]]
   label = "wasm-simd128 f64×f64"
   configs = ["wasm32-simd128"]
@@ -2036,7 +2789,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v138·f0.
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has
+  # none). Measured v138·f0.
   [[site.measure]]
   label = "sse2 f64×f32"
   configs = ["x86_64"]
@@ -2048,7 +2802,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the
+  # adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
   [[site.measure]]
   label = "avx2+fma f64×f32"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
@@ -2060,7 +2815,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v37·f11.
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the
+  # reduction), FMA. Measured v37·f11.
   [[site.measure]]
   label = "avx512f f64×f32"
   configs = ["x86_64", "x86_64-v3"]
@@ -2072,7 +2828,9 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v55·f21.
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit
+  # vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`.
+  # Measured v55·f21.
   [[site.measure]]
   label = "avx512f f64×f32 (v4 tuning)"
   configs = ["x86_64-v4"]
@@ -2084,7 +2842,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the
+  # `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
   [[site.measure]]
   label = "baseline f64×f32"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -2108,7 +2867,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v19·f11.
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an
+  # `faddv` reduction. Measured v19·f11.
   [[site.measure]]
   label = "neon f64×f32 (neoverse-v1)"
   configs = ["aarch64-neoverse-v1"]
@@ -2120,7 +2880,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and
+  # no fused op; the symbol still exists exactly once. Measured v0·f0.
   [[site.measure]]
   label = "wasm-scalar f64×f32"
   configs = ["wasm32"]
@@ -2131,7 +2892,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v16·f0.
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside
+  # relaxed SIMD, which is never enabled. Measured v16·f0.
   [[site.measure]]
   label = "wasm-simd128 f64×f32"
   configs = ["wasm32-simd128"]
@@ -2143,7 +2905,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v138·f0.
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has
+  # none). Measured v138·f0.
   [[site.measure]]
   label = "sse2 f32×f64"
   configs = ["x86_64"]
@@ -2155,7 +2918,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the
+  # adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
   [[site.measure]]
   label = "avx2+fma f32×f64"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
@@ -2167,7 +2931,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v37·f11.
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the
+  # reduction), FMA. Measured v37·f11.
   [[site.measure]]
   label = "avx512f f32×f64"
   configs = ["x86_64", "x86_64-v3"]
@@ -2179,7 +2944,9 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v55·f21.
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit
+  # vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`.
+  # Measured v55·f21.
   [[site.measure]]
   label = "avx512f f32×f64 (v4 tuning)"
   configs = ["x86_64-v4"]
@@ -2191,7 +2958,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the
+  # `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
   [[site.measure]]
   label = "baseline f32×f64"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -2215,7 +2983,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v19·f11.
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an
+  # `faddv` reduction. Measured v19·f11.
   [[site.measure]]
   label = "neon f32×f64 (neoverse-v1)"
   configs = ["aarch64-neoverse-v1"]
@@ -2227,7 +2996,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and
+  # no fused op; the symbol still exists exactly once. Measured v0·f0.
   [[site.measure]]
   label = "wasm-scalar f32×f64"
   configs = ["wasm32"]
@@ -2238,7 +3008,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v16·f0.
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside
+  # relaxed SIMD, which is never enabled. Measured v16·f0.
   [[site.measure]]
   label = "wasm-simd128 f32×f64"
   configs = ["wasm32-simd128"]
@@ -2250,7 +3021,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v172·f0.
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has
+  # none). Measured v172·f0.
   [[site.measure]]
   label = "sse2 f32×f32"
   configs = ["x86_64"]
@@ -2262,7 +3034,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v76·f21 on all three x86_64 configurations.
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the
+  # adds contracted into FMA. Measured v76·f21 on all three x86_64 configurations.
   [[site.measure]]
   label = "avx2+fma f32×f32"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
@@ -2274,7 +3047,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v48·f11.
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the
+  # reduction), FMA. Measured v48·f11.
   [[site.measure]]
   label = "avx512f f32×f32"
   configs = ["x86_64", "x86_64-v3"]
@@ -2286,7 +3060,9 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v76·f21.
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit
+  # vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`.
+  # Measured v76·f21.
   [[site.measure]]
   label = "avx512f f32×f32 (v4 tuning)"
   configs = ["x86_64-v4"]
@@ -2298,7 +3074,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v76·f21.
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the
+  # `sse2` path's symbol is itself `ymm` FMA code there. Measured v76·f21.
   [[site.measure]]
   label = "baseline f32×f32"
   configs = ["x86_64-v3", "x86_64-v4"]
@@ -2322,7 +3099,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v20·f11.
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an
+  # `faddv` reduction. Measured v20·f11.
   [[site.measure]]
   label = "neon f32×f32 (neoverse-v1)"
   configs = ["aarch64-neoverse-v1"]
@@ -2334,7 +3112,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and
+  # no fused op; the symbol still exists exactly once. Measured v0·f0.
   [[site.measure]]
   label = "wasm-scalar f32×f32"
   configs = ["wasm32"]
@@ -2345,7 +3124,8 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
   forbid_relaxed = true
   single_copy = true
 
-  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v19·f0.
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside
+  # relaxed SIMD, which is never enabled. Measured v19·f0.
   [[site.measure]]
   label = "wasm-simd128 f32×f32"
   configs = ["wasm32-simd128"]
