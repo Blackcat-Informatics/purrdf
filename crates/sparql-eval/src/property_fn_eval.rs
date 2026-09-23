@@ -1198,10 +1198,12 @@ impl<'q> ColumnSource<'q> {
     /// would let a lookup built on it miss an invocation that names a candidate.
     ///
     /// The patterns the call is evaluated after are the left operands of the
-    /// `Lateral`s above it, up to the nearest sub-`SELECT`. Each left operand is one
-    /// **frame**, and a frame is evaluated with the rows of every frame above it in
-    /// hand — injected into it, as a `LATERAL` does. A frame is read as the conjuncts
-    /// of its own join spine, and only those:
+    /// `Lateral`s above it, up to the nearest sub-`SELECT` — its **scope** — and,
+    /// through the variables that sub-`SELECT` projects, the scopes around it (see
+    /// *Across a sub-`SELECT`* below). Each left operand is one **frame**, and a frame
+    /// is evaluated with the rows of every frame above it in hand — injected into it,
+    /// as a `LATERAL` does. A frame is read as the conjuncts of its own join spine,
+    /// and only those:
     ///
     /// * a `Join`'s two operands are evaluated each on its own, under whatever the
     ///   enclosing frames injected, and a solution of the join restricts to a solution
@@ -1224,7 +1226,7 @@ impl<'q> ColumnSource<'q> {
     /// A conjunct under a `GRAPH` inside the frame is wrapped in that `GRAPH`, so it
     /// reads the graph the text reads it in.
     ///
-    /// # Which conjuncts are kept, and why the result is implied
+    /// # Which conjuncts are kept
     ///
     /// Starting from the call's variables other than the column's, a conjunct any of
     /// whose bound variables is reached is kept, and its bound variables — the
@@ -1236,18 +1238,55 @@ impl<'q> ColumnSource<'q> {
     /// the frames are re-attached through `Lateral`s in their order: the kept
     /// conjuncts of a later frame see the values the text injects into them for
     /// every variable they mention, bound or unbound exactly as in the text, and a
-    /// value they do not mention cannot change their rows. A conjunct that mentions a
-    /// variable something outside the frames injects — a variable a sub-`SELECT`
-    /// carries in from the `LATERAL` around it, or a `GRAPH` variable it does not
-    /// project — is never kept, and neither is one depending, through a variable it
-    /// mentions, on a conjunct that is not.
+    /// value they do not mention cannot change their rows.
     ///
-    /// Then, for a solution the text evaluates the call in: each kept conjunct's
-    /// part of it is a solution of that conjunct, evaluated as the rebuilt pattern
-    /// evaluates it; the parts agree where they overlap, so their union is a solution
-    /// of the rebuilt pattern; and on the driven variables — bound, in the text, by
-    /// kept conjuncts only — it agrees with the text's solution. Leaving a conjunct
-    /// out only removes a constraint, which widens that set.
+    /// No conjunct is left out for mentioning a variable injected into its scope from
+    /// outside it: every such injection is reproduced (below), so a kept conjunct is
+    /// evaluated in the rebuilt pattern with exactly the values the text evaluates it
+    /// with. That holds for any conjunct — not only a triple, whose rows only shrink
+    /// as a variable is bound and which read with the variable free would merely
+    /// widen, but a `FILTER`, an `EXISTS`, a `MINUS` or a path with a zero-length
+    /// step, whose rows read with the variable free need not hold the text's at all.
+    ///
+    /// # Across a sub-`SELECT`
+    ///
+    /// A sub-`SELECT` is evaluated with the row of the frames around it injected for
+    /// exactly the variables it projects — a variable it does not project is another
+    /// variable inside it, which is also how the planner reads it. So a scope is joined
+    /// to the scope around it through its **carried** variables only: the ones its
+    /// sub-`SELECT` projects that the frames around it bind, or that are carried into
+    /// their own scope in turn. Where the call writes a carried variable, or a kept
+    /// conjunct mentions one, the pattern driving the carried variables it needs is
+    /// built in the scope around by this same rule, projected to them, and placed
+    /// before the scope's own pattern through a `Lateral`:
+    ///
+    /// ```text
+    /// { SELECT carried… WHERE { the scope around's pattern } } LATERAL { this scope's }
+    /// ```
+    ///
+    /// The projection keeps the carried variables the only ones injected: this
+    /// scope's own variables of the same names stay its own, as in the text. And by
+    /// the rule applied to the scope around, every row the text injects, restricted
+    /// to the carried variables, is a row of the projected pattern, which the
+    /// `Lateral` injects as the text injects it.
+    ///
+    /// A `GRAPH ?g` around a sub-`SELECT` that does not project `?g` evaluates it in
+    /// each named graph, and inside it `?g` is another variable. So the conjuncts
+    /// inside are wrapped in `GRAPH ?g′` instead, `?g′` a variable the query writes
+    /// nowhere: that reads them in every named graph, of which the text's graph is
+    /// one, so what it answers holds what the text's graph answers, whatever the
+    /// conjunct.
+    ///
+    /// # Why the result is implied
+    ///
+    /// For a solution the text evaluates the call in: each kept conjunct's part of
+    /// it is a solution of that conjunct, evaluated with the values the rebuilt
+    /// pattern injects into it — the text's own, or under a renamed `GRAPH` one
+    /// member of a union holding them; the parts agree where they overlap, so their
+    /// union is a solution of the rebuilt pattern; and on the driven variables —
+    /// bound, in the text, by kept conjuncts or carried into the scope by the
+    /// projected pattern — it agrees with the text's solution. Leaving a conjunct out
+    /// only removes a constraint, which widens that set.
     #[must_use]
     pub const fn driving_pattern(&self) -> Option<&GraphPattern> {
         self.driving.as_ref()
@@ -1302,7 +1341,7 @@ impl<'q> CallReadShape<'q> {
                     .to_owned(),
             });
         };
-        let mut walk = ShapeWalk::default();
+        let mut walk = ShapeWalk::over(pattern);
         let (columns, read) = walk.walk(pattern);
         let read = if !dataset.default.is_empty() || !dataset.named.is_empty() {
             Err(
@@ -1430,100 +1469,20 @@ impl<'q> CallReadShape<'q> {
     /// [`ColumnSource::driving_pattern`] states and proves.
     fn source(&self, index: usize, variable: &'q Variable) -> ColumnSource<'q> {
         let call = self.calls[index];
-        let context = &self.contexts[index];
         let mut call_vars = Vec::new();
         for term in call.subject_args.iter().chain(&call.object_args) {
             call_variables(term, &mut call_vars);
         }
-        let mut reached: Vec<Variable> = call_vars
+        let seed: Vec<Variable> = call_vars
             .iter()
             .map(|(name, _)| (*name).clone())
             .filter(|name| name != variable)
             .collect();
-        let conjuncts = context.conjuncts();
-        // Whether each conjunct may be kept: it mentions nothing injected from
-        // outside the frames, and nothing a conjunct evaluated before it binds that
-        // may not be kept itself. One pass in order suffices — a conjunct only ever
-        // depends on conjuncts before it.
-        let mut keepable = vec![false; conjuncts.len()];
-        for at in 0..conjuncts.len() {
-            let conjunct = &conjuncts[at];
-            keepable[at] = !conjunct
-                .mentions
-                .iter()
-                .any(|name| context.foreign.contains(name))
-                && !(0..at).any(|before| {
-                    !keepable[before]
-                        && conjuncts[before].precedes(conjunct)
-                        && conjuncts[before]
-                            .binds
-                            .iter()
-                            .any(|name| conjunct.mentions.contains(name))
-                });
-        }
-        let mut kept = vec![false; conjuncts.len()];
-        loop {
-            let mut changed = false;
-            for at in 0..conjuncts.len() {
-                if kept[at]
-                    || !keepable[at]
-                    || !conjuncts[at]
-                        .binds
-                        .iter()
-                        .any(|name| reached.contains(name))
-                {
-                    continue;
-                }
-                kept[at] = true;
-                changed = true;
-                for name in &conjuncts[at].binds {
-                    if name != variable && !reached.contains(name) {
-                        reached.push(name.clone());
-                    }
-                }
-            }
-            // A kept conjunct of a later frame is evaluated with what earlier frames
-            // bind injected into it, so each earlier conjunct binding a variable it
-            // mentions is kept beside it — keepable, since the later one is.
-            for at in 0..conjuncts.len() {
-                if !kept[at] {
-                    continue;
-                }
-                for before in 0..at {
-                    if kept[before]
-                        || !conjuncts[before].precedes(&conjuncts[at])
-                        || !conjuncts[before]
-                            .binds
-                            .iter()
-                            .any(|name| conjuncts[at].mentions.contains(name))
-                    {
-                        continue;
-                    }
-                    debug_assert!(keepable[before], "a kept conjunct's dependency is keepable");
-                    kept[before] = true;
-                    changed = true;
-                    for name in &conjuncts[before].binds {
-                        if name != variable && !reached.contains(name) {
-                            reached.push(name.clone());
-                        }
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let driving = context.rebuilt(&conjuncts, &kept);
+        let (driving, binds) = self.contexts[index].driving(&seed, Some(variable));
         let driven = call_vars
             .iter()
             .map(|(name, _)| *name)
-            .filter(|name| {
-                *name != variable
-                    && conjuncts
-                        .iter()
-                        .zip(&kept)
-                        .any(|(conjunct, kept)| *kept && conjunct.binds.contains(name))
-            })
+            .filter(|name| *name != variable && binds.contains(name))
             .collect();
         ColumnSource {
             call,
@@ -1536,18 +1495,27 @@ impl<'q> CallReadShape<'q> {
 }
 
 /// The patterns a call is evaluated after, as [`ShapeWalk`] gathers them: the left
-/// operands of the `Lateral`s above it, up to the nearest sub-`SELECT`, each one
-/// **frame**, cut into its atoms (see [`lateral_atoms`]).
+/// operands of the `Lateral`s above it, up to the nearest sub-`SELECT` — one
+/// **scope** — each one **frame**, cut into its atoms (see [`lateral_atoms`]); and the
+/// scope around that sub-`SELECT`, through the variables it carries in.
 #[derive(Clone, Debug, Default)]
 struct CallContext<'q> {
     /// The atoms, in evaluation order: every atom of an outer frame before every atom
     /// of a frame inside its right operand.
     atoms: Vec<ContextAtom<'q>>,
-    /// Variables a node outside the frames may inject into them — the variables a
-    /// sub-`SELECT` projects that the `LATERAL`s around it bind, and the `GRAPH`
-    /// variables around it that it does not project. No rebuilt pattern reproduces
-    /// that injection, so no atom mentioning one is kept.
-    foreign: Vec<Variable>,
+    /// The scope around the nearest sub-`SELECT` above, where its frames inject a
+    /// variable that sub-`SELECT` projects.
+    enclosing: Option<Box<Enclosing<'q>>>,
+}
+
+/// The scope around a sub-`SELECT`, as its frames inject into it.
+#[derive(Clone, Debug)]
+struct Enclosing<'q> {
+    /// The frames around the sub-`SELECT`, in their own scope.
+    context: CallContext<'q>,
+    /// The variables injected into the sub-`SELECT`: the ones it projects that the
+    /// frames around it bind or that are carried into their own scope — never empty.
+    carried: Vec<Variable>,
 }
 
 /// One atom of a [`CallContext`].
@@ -1555,8 +1523,10 @@ struct CallContext<'q> {
 struct ContextAtom<'q> {
     /// The atom as the text writes it.
     pattern: &'q GraphPattern,
-    /// The names of the `GRAPH`s around it, outermost first.
-    graphs: Vec<&'q NamedNodePattern>,
+    /// The names of the `GRAPH`s around it, outermost first — a variable a
+    /// sub-`SELECT` between it and its `GRAPH` does not project already renamed
+    /// (see [`ShapeWalk::fresh`]).
+    graphs: Vec<NamedNodePattern>,
     /// Its frame: the depth of the `Lateral` whose left operand it is in, counted from
     /// the outermost frame of its sub-`SELECT`.
     frame: usize,
@@ -1592,6 +1562,132 @@ impl Conjunct {
 }
 
 impl CallContext<'_> {
+    /// The variables carried into this scope from the scope around it.
+    fn carried(&self) -> &[Variable] {
+        self.enclosing
+            .as_ref()
+            .map_or(&[], |enclosing| enclosing.carried.as_slice())
+    }
+
+    /// The pattern driving `seed` in this scope, by the rule
+    /// [`ColumnSource::driving_pattern`] states and proves, beside every variable it
+    /// binds. `column` — the variable carrying the column, in the call's own scope —
+    /// is never followed.
+    fn driving(
+        &self,
+        seed: &[Variable],
+        column: Option<&Variable>,
+    ) -> (Option<GraphPattern>, Vec<Variable>) {
+        let conjuncts = self.conjuncts();
+        let mut reached: Vec<Variable> = seed
+            .iter()
+            .filter(|name| Some(*name) != column)
+            .cloned()
+            .collect();
+        let mut kept = vec![false; conjuncts.len()];
+        let reach = |conjunct: &Conjunct, reached: &mut Vec<Variable>| {
+            for name in &conjunct.binds {
+                if Some(name) != column && !reached.contains(name) {
+                    reached.push(name.clone());
+                }
+            }
+        };
+        loop {
+            let mut changed = false;
+            for at in 0..conjuncts.len() {
+                if kept[at]
+                    || !conjuncts[at]
+                        .binds
+                        .iter()
+                        .any(|name| reached.contains(name))
+                {
+                    continue;
+                }
+                kept[at] = true;
+                changed = true;
+                reach(&conjuncts[at], &mut reached);
+            }
+            // A kept conjunct of a later frame is evaluated with what earlier frames
+            // bind injected into it, so each earlier conjunct binding a variable it
+            // mentions is kept beside it.
+            for at in 0..conjuncts.len() {
+                if !kept[at] {
+                    continue;
+                }
+                for before in 0..at {
+                    if kept[before]
+                        || !conjuncts[before].precedes(&conjuncts[at])
+                        || !conjuncts[before]
+                            .binds
+                            .iter()
+                            .any(|name| conjuncts[at].mentions.contains(name))
+                    {
+                        continue;
+                    }
+                    kept[before] = true;
+                    changed = true;
+                    reach(&conjuncts[before], &mut reached);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut pattern = self.rebuilt(&conjuncts, &kept);
+        let mut binds: Vec<Variable> = Vec::new();
+        for (conjunct, _) in conjuncts.iter().zip(&kept).filter(|(_, kept)| **kept) {
+            for name in &conjunct.binds {
+                if !binds.contains(name) {
+                    binds.push(name.clone());
+                }
+            }
+        }
+        // The carried variables this scope reads — ones the seed asks for or a kept
+        // conjunct mentions — driven in the scope around, projected to them, and
+        // injected before this scope's own pattern, as the text injects them.
+        if let Some(enclosing) = &self.enclosing {
+            let needed: Vec<Variable> = enclosing
+                .carried
+                .iter()
+                .filter(|name| {
+                    seed.contains(name)
+                        || conjuncts
+                            .iter()
+                            .zip(&kept)
+                            .any(|(conjunct, kept)| *kept && conjunct.mentions.contains(*name))
+                })
+                .cloned()
+                .collect();
+            if !needed.is_empty() {
+                let (around, around_binds) = enclosing.context.driving(&needed, None);
+                let projected: Vec<Variable> = needed
+                    .into_iter()
+                    .filter(|name| around_binds.contains(name))
+                    .collect();
+                if let Some(around) = around
+                    && !projected.is_empty()
+                {
+                    let around = GraphPattern::Project {
+                        inner: Box::new(around),
+                        variables: projected.clone(),
+                    };
+                    pattern = Some(match pattern {
+                        None => around,
+                        Some(inner) => GraphPattern::Lateral {
+                            left: Box::new(around),
+                            right: Box::new(inner),
+                        },
+                    });
+                    for name in projected {
+                        if !binds.contains(&name) {
+                            binds.push(name);
+                        }
+                    }
+                }
+            }
+        }
+        (pattern, binds)
+    }
     /// The context's conjuncts, in order.
     fn conjuncts(&self) -> Vec<Conjunct> {
         let mut out = Vec::new();
@@ -1713,12 +1809,12 @@ fn attach_frame(before: Option<GraphPattern>, frame: GraphPattern) -> GraphPatte
 }
 
 /// `pattern` inside the `GRAPH`s named by `graphs`, outermost first.
-fn in_graphs(pattern: GraphPattern, graphs: &[&NamedNodePattern]) -> GraphPattern {
+fn in_graphs(pattern: GraphPattern, graphs: &[NamedNodePattern]) -> GraphPattern {
     graphs
         .iter()
         .rev()
         .fold(pattern, |inner, name| GraphPattern::Graph {
-            name: (*name).clone(),
+            name: name.clone(),
             inner: Box::new(inner),
         })
 }
@@ -1738,13 +1834,41 @@ struct ShapeWalk<'q> {
     /// the node being walked, up to the nearest sub-`SELECT`, it is inside the right
     /// operand of.
     frame: usize,
-    /// The names of the `GRAPH`s around the node being walked, outermost first.
-    graphs: Vec<&'q NamedNodePattern>,
+    /// The names of the `GRAPH`s around the node being walked, outermost first, a
+    /// variable a sub-`SELECT` between does not project renamed (see [`Self::fresh`]).
+    graphs: Vec<NamedNodePattern>,
     /// Variables dropped beneath an operator that does not answer them.
     dropped: Vec<(Variable, String)>,
+    /// Every variable the query writes, and every one [`Self::fresh`] minted.
+    taken: crate::DetHashSet<Variable>,
 }
 
 impl<'q> ShapeWalk<'q> {
+    /// A walk over `pattern`, the root of the query.
+    fn over(pattern: &GraphPattern) -> Self {
+        let mut taken = crate::DetHashSet::default();
+        crate::expr::pattern_all_vars(pattern, &mut taken);
+        Self {
+            taken,
+            ..Self::default()
+        }
+    }
+
+    /// A variable named after `name` that the query writes nowhere and no earlier
+    /// call minted: the name a `GRAPH` variable is read under inside a sub-`SELECT`
+    /// that does not project it, where the variable of that name is another one.
+    fn fresh(&mut self, name: &Variable) -> Variable {
+        let mut suffix = 0_usize;
+        loop {
+            let candidate = Variable::new(format!("{}_{suffix}", name.as_str()));
+            if !self.taken.contains(&candidate) {
+                self.taken.insert(candidate.clone());
+                return candidate;
+            }
+            suffix += 1;
+        }
+    }
+
     /// Walk `pattern`: its variables' sources, and the one call it is with the
     /// operators above it — or the refusal naming the outermost node in the way.
     #[allow(
@@ -1783,47 +1907,51 @@ impl<'q> ShapeWalk<'q> {
                 )
             }
             GraphPattern::Project { inner, variables } => {
-                // A sub-`SELECT` is its own scope: no pattern outside it drives a call
-                // inside it, which is how the planner reads it too. But a `LATERAL`
-                // around it injects the variables it projects, and a `GRAPH` around it
-                // joins its variable with the one of that name the sub-`SELECT`
-                // projects and with no other: an atom inside mentioning such a
-                // variable reads something no pattern rebuilt from inside reproduces.
-                let mut foreign = Vec::new();
-                if !self.context.atoms.is_empty()
-                    || !self.context.foreign.is_empty()
-                    || !self.graphs.is_empty()
+                // A sub-`SELECT` is its own scope: the frames around it inject into it
+                // only the variables it projects, which is how the planner reads it
+                // too. Those it carries in from the scope around, which a call inside
+                // is driven through (see `ColumnSource::driving_pattern`).
+                let mut carried: Vec<Variable> = Vec::new();
+                for name in self
+                    .context
+                    .bound()
+                    .into_iter()
+                    .chain(self.context.carried().iter().cloned())
                 {
-                    for name in self
-                        .context
-                        .bound()
-                        .into_iter()
-                        .chain(self.context.foreign.iter().cloned())
-                    {
-                        if variables.contains(&name) && !foreign.contains(&name) {
-                            foreign.push(name);
-                        }
-                    }
-                    for name in &self.graphs {
-                        if let NamedNodePattern::Variable(name) = name
-                            && !variables.contains(name)
-                            && !foreign.contains(name)
-                        {
-                            foreign.push(name.clone());
-                        }
+                    if variables.contains(&name) && !carried.contains(&name) {
+                        carried.push(name);
                     }
                 }
+                let enclosing = (!carried.is_empty()).then(|| {
+                    Box::new(Enclosing {
+                        context: self.context.clone(),
+                        carried,
+                    })
+                });
                 let outer = std::mem::replace(
                     &mut self.context,
                     CallContext {
                         atoms: Vec::new(),
-                        foreign,
+                        enclosing,
                     },
                 );
+                // A `GRAPH` variable it does not project is another variable inside
+                // it: the `GRAPH` is read under a name the query writes nowhere.
+                let outer_graphs = self.graphs.clone();
+                for at in 0..self.graphs.len() {
+                    if let NamedNodePattern::Variable(name) = &self.graphs[at]
+                        && !variables.contains(name)
+                    {
+                        let name = name.clone();
+                        let renamed = self.fresh(&name);
+                        self.graphs[at] = NamedNodePattern::Variable(renamed);
+                    }
+                }
                 let outer_frame = std::mem::take(&mut self.frame);
                 let (below, read) = self.walk(inner);
                 self.context = outer;
                 self.frame = outer_frame;
+                self.graphs = outer_graphs;
                 let columns = variables
                     .iter()
                     .filter_map(|variable| below.iter().find(|column| column.name == *variable))
@@ -1958,7 +2086,7 @@ impl<'q> ShapeWalk<'q> {
                 )
             }
             GraphPattern::Graph { name, inner } => {
-                self.graphs.push(name);
+                self.graphs.push(name.clone());
                 let (mut columns, _) = self.walk(inner);
                 self.graphs.pop();
                 if let NamedNodePattern::Variable(variable) = name {
@@ -2081,7 +2209,7 @@ fn bind_column<'q>(columns: &mut Vec<Provenance<'q>>, column: Provenance<'q>) {
 fn lateral_atoms<'q>(
     pattern: &'q GraphPattern,
     frame: usize,
-    graphs: &[&'q NamedNodePattern],
+    graphs: &[NamedNodePattern],
     context: &mut Vec<ContextAtom<'q>>,
 ) {
     match pattern {
@@ -4609,17 +4737,20 @@ mod tests {
 
     /// **A `LATERAL` whose right operand is not a call drives the call as one pattern,
     /// written as the text wrote it; a frame inside another is rebuilt inside a
-    /// `LATERAL` of it; a pattern in a `GRAPH` is read in it; and a pattern reading a
-    /// variable a sub-`SELECT` carries in from outside drives nothing.**
+    /// `LATERAL` of it; a pattern in a `GRAPH` is read in it; and a sub-`SELECT` the
+    /// `LATERAL` injects a variable into is driven with that injection reproduced.**
     ///
     /// Each is the implied-pattern rule of [`ColumnSource::driving_pattern`] read off
     /// the plan. The correlated right operand `?z ex:needle ?q FILTER(?z = ?y)` read
     /// alone, `?y` unbound, is empty; kept inside the `LATERAL` beside `?w ex:on ?y`,
     /// it is the text's own relation. The sub-`SELECT` projecting `?y` has it injected
-    /// by the `LATERAL` around it, which nothing rebuilt from inside reproduces, so the
-    /// pattern mentioning it is not kept — and its neighbour, projecting no `?y`, reads
-    /// `?y` as its own unbound variable, which the pattern read alone reproduces, so it
-    /// is kept.
+    /// by the `LATERAL` around it: the pattern mentioning it is kept, after the frame
+    /// binding `?y` projected to `?y` alone — and its neighbour, projecting no `?y`,
+    /// reads `?y` as its own unbound variable, which the pattern read alone
+    /// reproduces, so nothing is carried in. A needle the `LATERAL` injects is driven
+    /// by the frame around alone; and a `GRAPH ?g` around a sub-`SELECT` not
+    /// projecting `?g` is read under a fresh name, since the `?g` inside is another
+    /// variable.
     #[test]
     fn a_correlated_lateral_drives_its_call_whole_and_in_its_own_frame() {
         let registry = registry_of(vec![(PF_TAG, Arc::new(split_table()))]);
@@ -4686,15 +4817,23 @@ mod tests {
             "{graphed:#?}"
         );
 
-        // A sub-SELECT the LATERAL injects `?y` into: the pattern reading it is not
-        // kept. Its neighbour, which does not project `?y`, keeps it.
+        // A sub-SELECT the LATERAL injects `?y` into: the pattern reading it is kept,
+        // after the frame binding `?y`, projected to it. Its neighbour, which does not
+        // project `?y`, keeps it alone.
         let carried = driving(&format!(
             "SELECT ?c WHERE {{ ?w <{EX}on> ?y LATERAL {{ SELECT ?c ?y WHERE {{ {{ {correlated} \
              }} {call} }} }} }}"
-        ));
-        assert_eq!(
-            carried, None,
-            "a pattern reading an injected ?y drives nothing"
+        ))
+        .expect("the injected ?y is reproduced");
+        let GraphPattern::Lateral { left, right } = &carried else {
+            panic!("the scope around, then the sub-SELECT's own: {carried:#?}");
+        };
+        assert!(
+            matches!(&**left, GraphPattern::Project { inner, variables }
+                if variables.iter().map(Variable::as_str).eq(["y"])
+                    && matches!(&**inner, GraphPattern::Bgp { patterns } if patterns.len() == 1))
+                && matches!(&**right, GraphPattern::Filter { .. }),
+            "{carried:#?}"
         );
         let local = driving(&format!(
             "SELECT ?c WHERE {{ ?w <{EX}on> ?y LATERAL {{ SELECT ?c WHERE {{ {{ {correlated} \
@@ -4702,5 +4841,39 @@ mod tests {
         ))
         .expect("the sub-SELECT's own ?y is read alone as the text reads it");
         assert!(matches!(&local, GraphPattern::Filter { .. }), "{local:#?}");
+
+        // The needle itself injected: the frame around drives the call, projected to
+        // the needle.
+        let injected = driving(&format!(
+            "SELECT ?c WHERE {{ ?w <{EX}needle> ?q LATERAL {{ SELECT ?c ?q WHERE {{ {call} }} \
+             }} }}"
+        ))
+        .expect("the injected needle is reproduced");
+        assert!(
+            matches!(&injected, GraphPattern::Project { variables, .. }
+                if variables.iter().map(Variable::as_str).eq(["q"])),
+            "{injected:#?}"
+        );
+
+        // Under a GRAPH whose variable the sub-SELECT does not project: the triple's
+        // own `?g` is the sub-SELECT's, and the GRAPH is read under another name.
+        let renamed = driving(&format!(
+            "SELECT ?c WHERE {{ GRAPH ?g {{ SELECT ?c WHERE {{ ?g <{EX}needle> ?q . {call} }} }} \
+             }}"
+        ))
+        .expect("the needle drives the call");
+        let GraphPattern::Graph { name, inner } = &renamed else {
+            panic!("read in a GRAPH: {renamed:#?}");
+        };
+        assert!(
+            matches!(name, NamedNodePattern::Variable(name) if name.as_str() == "g_0"),
+            "{renamed:#?}"
+        );
+        assert!(
+            matches!(&**inner, GraphPattern::Bgp { patterns }
+                if matches!(&patterns[..], [triple]
+                    if triple.subject == TermPattern::Variable(Variable::new("g")))),
+            "{renamed:#?}"
+        );
     }
 }

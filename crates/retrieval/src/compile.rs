@@ -2160,6 +2160,15 @@ fn supplied_exclusion_texts(
 /// declared point bound holds per row of it: a conforming producer answers each with
 /// at most one row, the text projects the candidate and the inputs, and two identical
 /// rows are one invocation answering twice.
+///
+/// # The mode the lookup asks
+///
+/// A lookup, driven or not, is derived only where the relation declares a mode that
+/// serves the access pattern it invokes the call in — the candidate, the constants and
+/// the driven inputs bound, every other position free
+/// ([`lookup_mode_is_declared`]). Otherwise the call does not qualify, by name: a
+/// point lookup is never a stand-in for inputs the text drives and the lookup does
+/// not.
 fn qualifying_lookup(
     source: &ColumnSource<'_>,
     registry: &PropertyFunctionRegistry,
@@ -2226,6 +2235,14 @@ fn qualifying_lookup(
             })
         })
         .collect();
+    lookup_mode_is_declared(
+        call,
+        registry,
+        source_var,
+        &arguments,
+        depth_position,
+        &inputs,
+    )?;
     if inputs.is_empty() {
         return Ok(LookupText::point(point_lookup(
             call,
@@ -2241,6 +2258,111 @@ fn qualifying_lookup(
         depth_position,
         &inputs,
     ))
+}
+
+/// Whether the lookup of `call` invokes it in a mode its relation declares — or the
+/// refusal naming the call, the mode it would be asked in and each position left
+/// free.
+///
+/// The lookup binds the candidate, the constants the text wrote and the `inputs` its
+/// driving pattern binds; every other position it leaves free: a variable nothing
+/// before the call binds, a blank node, the freed depth. A relation that declares no
+/// mode serving that access pattern cannot be asked the lookup at all, so the call
+/// does not qualify, and it is named here rather than when the lookup fails to
+/// prepare. It is never asked in a mode it did not declare instead.
+///
+/// Beside the depth, which every lookup frees on purpose (see [`qualifying_lookup`]),
+/// this refuses only what the text itself cannot run: the text invokes the call with
+/// its inputs bound by the patterns the driving pattern is built from
+/// ([`ColumnSource::driving_pattern`]) — the frames before it in its own scope, and
+/// through a sub-`SELECT`'s projection the scopes around — so where a declared mode
+/// needs an input the lookup leaves free, the planner could not have bound it in the
+/// text either.
+fn lookup_mode_is_declared(
+    call: &PropertyFunctionCall,
+    registry: &PropertyFunctionRegistry,
+    candidate: &Variable,
+    arguments: &[&TermPattern],
+    depth_position: Option<usize>,
+    inputs: &[&Variable],
+) -> Result<(), String> {
+    let bound_variable = |variable: &Variable| variable == candidate || inputs.contains(&variable);
+    let bound: Vec<bool> = arguments
+        .iter()
+        .enumerate()
+        .map(|(position, term)| {
+            depth_position != Some(position) && lookup_binds(term, &bound_variable)
+        })
+        .collect();
+    let mode = BindingPattern::from_bools(bound.iter().copied());
+    let relation = registry.resolve(&call.iri).ok_or_else(|| {
+        format!(
+            "the registry registers no relation <{}>, so nothing serves its lookup",
+            call.iri
+        )
+    })?;
+    let declared =
+        purrdf_sparql_eval::property_fn::declaration_contained(&call.iri, "declared modes", || {
+            relation.modes().to_vec()
+        })
+        .map_err(|error| error.to_string())?;
+    if declared.iter().any(|declared| declared.subsumes(mode)) {
+        return Ok(());
+    }
+    // The positions some declared mode binds and the lookup leaves free: what the
+    // text would have had to drive for any declared mode to serve the lookup.
+    let needed: Vec<String> = arguments
+        .iter()
+        .zip(&bound)
+        .enumerate()
+        .filter(|(position, (_, bound))| {
+            !**bound && declared.iter().any(|declared| declared.is_bound(*position))
+        })
+        .map(|(position, (term, _))| {
+            if depth_position == Some(position) {
+                format!("the depth at position {position}, which a lookup always frees")
+            } else {
+                match term {
+                    TermPattern::Variable(variable) => {
+                        format!("?{} at position {position}", variable.as_str())
+                    }
+                    TermPattern::BlankNode(_) => format!("a blank node at position {position}"),
+                    _ => format!("a quoted triple not wholly bound at position {position}"),
+                }
+            }
+        })
+        .collect();
+    Err(format!(
+        "its lookup would invoke <{}> as `{}` and the relation declares [{}], none serving it: \
+         no pattern the text evaluates before the call binds {}, so no lookup is derived for \
+         that call",
+        call.iri,
+        mode.code(),
+        declared
+            .iter()
+            .map(|mode| mode.code())
+            .collect::<Vec<_>>()
+            .join(", "),
+        needed.join(" or ")
+    ))
+}
+
+/// Whether the lookup binds `term`'s position: a constant, a variable
+/// `bound_variable` holds, or a quoted triple each of whose parts is one of those.
+fn lookup_binds(term: &TermPattern, bound_variable: &dyn Fn(&Variable) -> bool) -> bool {
+    match term {
+        TermPattern::NamedNode(_) | TermPattern::Literal(_) => true,
+        TermPattern::BlankNode(_) => false,
+        TermPattern::Variable(variable) => bound_variable(variable),
+        TermPattern::Triple(triple) => {
+            lookup_binds(&triple.subject, bound_variable)
+                && match &triple.predicate {
+                    NamedNodePattern::NamedNode(_) => true,
+                    NamedNodePattern::Variable(variable) => bound_variable(variable),
+                }
+                && lookup_binds(&triple.object, bound_variable)
+        }
+    }
 }
 
 /// Whether `term` writes `variable`, at its top level or inside a quoted triple.
@@ -2797,17 +2919,26 @@ mod tests {
     }
 
     fn neighbours_registry(exclusion: ExclusionBasis) -> PropertyFunctionRegistry {
+        neighbours_declaring(
+            exclusion,
+            vec![
+                BindingPattern::from_bound_positions(4, [1, 2]),
+                BindingPattern::from_bound_positions(4, [0, 1]),
+                BindingPattern::from_bound_positions(4, [2]),
+                BindingPattern::from_bound_positions(4, [0]),
+            ],
+        )
+    }
+
+    /// [`neighbours_registry`], the relation declaring `modes`.
+    fn neighbours_declaring(
+        exclusion: ExclusionBasis,
+        modes: Vec<BindingPattern>,
+    ) -> PropertyFunctionRegistry {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register_ranked(
             NEIGHBOURS,
-            Arc::new(Neighbours {
-                modes: vec![
-                    BindingPattern::from_bound_positions(4, [1, 2]),
-                    BindingPattern::from_bound_positions(4, [0, 1]),
-                    BindingPattern::from_bound_positions(4, [2]),
-                    BindingPattern::from_bound_positions(4, [0]),
-                ],
-            }),
+            Arc::new(Neighbours { modes }),
             RankedDeclaration {
                 stratum: purrdf_core::parse_iri("https://example.org/stratum/near")
                     .expect("a fixture IRI"),
@@ -3075,5 +3206,106 @@ mod tests {
             lookup.contains(&format!("?{CANDIDATE_NAME}")),
             "and the candidate is the one variable a caller binds per lookup: {lookup}"
         );
+    }
+
+    /// **A call whose input nothing in the text binds, under a relation that cannot be
+    /// asked without it, derives no lookup and is refused by name — and only where the
+    /// text itself cannot bind that input either.**
+    ///
+    /// The relation declares only modes binding the seed: `bbff` and `fbff`. The text
+    /// `?candidate <neighbours> ( ?seed ?depth ?score )` binds `?seed` nowhere, and
+    /// against that relation it does not even prepare — the planner finds no order that
+    /// binds the seed, so no run of the text invokes the call. The text prepared
+    /// against a relation that also serves the free mode is handed the seed-bound
+    /// relation's declarations: its lookup would ask `bfff`, which that relation does
+    /// not declare, and the derivation says so — the call, the mode, `?seed` at
+    /// position 1, the declared modes — rather than deriving a point lookup that
+    /// fails to prepare, or one asking a mode nothing declared.
+    ///
+    /// The neighbours: the same text under a relation that also declares the all-free
+    /// mode, which serves `bfff`, derives its point lookup; and the text binding its
+    /// seed from
+    /// `VALUES` before the call, under the seed-bound relation, derives a driven
+    /// lookup that prepares.
+    #[test]
+    fn a_call_whose_input_nothing_binds_is_refused_by_name_where_its_relation_needs_it() {
+        let seed_bound = || {
+            vec![
+                BindingPattern::from_bound_positions(4, [0, 1]),
+                BindingPattern::from_bound_positions(4, [1]),
+            ]
+        };
+        let strict = neighbours_declaring(ExclusionBasis::Membership, seed_bound());
+        let wide = neighbours_declaring(
+            ExclusionBasis::Membership,
+            std::iter::once(BindingPattern::from_bound_positions(4, []))
+                .chain(seed_bound())
+                .collect(),
+        );
+        let text = format!(
+            "SELECT ?candidate WHERE {{ ?candidate <{NEIGHBOURS}> ( ?seed ?depth ?score ) }}"
+        );
+        let engine = NativeSparqlEngine::new();
+        let prepared_under = |registry: &PropertyFunctionRegistry, text: &str| {
+            let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
+            engine
+                .prepare_query_with_options(
+                    text,
+                    None,
+                    QueryOptions {
+                        env: &env,
+                        ..QueryOptions::EMPTY
+                    },
+                )
+                .map_err(|error| error.to_string())
+        };
+
+        let unplanned = prepared_under(&strict, &text)
+            .expect_err("no order binds the seed, so the text itself cannot run");
+        assert!(
+            unplanned.contains("no feasible evaluation order"),
+            "the planner's own refusal: {unplanned}"
+        );
+
+        let prepared = prepared_under(&wide, &text).expect("the free mode serves the text");
+        let refused = supplied_exclusion_texts(&prepared, &strict, ExclusionBasis::Membership)
+            .expect_err("no declared mode serves the lookup");
+        assert!(
+            refused.contains(&format!(
+                "<{NEIGHBOURS}> as `bfff` and the relation declares [bbff, fbff], none serving \
+                 it: no pattern the text evaluates before the call binds ?seed at position 1,"
+            )),
+            "the call, the mode, the undriven input and the declared modes named: {refused}"
+        );
+
+        let lookups = supplied_exclusion_texts(&prepared, &wide, ExclusionBasis::Membership)
+            .expect("the free-seed mode the wide relation declares serves a point lookup");
+        let [lookup] = <[LookupText; 1]>::try_from(lookups.concat())
+            .unwrap_or_else(|lookups| panic!("one call, one lookup: {lookups:?}"));
+        assert!(!lookup.driven, "nothing drives the call");
+
+        let driven_text = format!(
+            "SELECT ?candidate WHERE {{ VALUES ?seed {{ <https://example.org/d/seed> }} \
+             ?candidate <{NEIGHBOURS}> ( ?seed ?depth ?score ) }}"
+        );
+        let prepared =
+            prepared_under(&strict, &driven_text).expect("the VALUES row binds the seed");
+        let lookups = supplied_exclusion_texts(&prepared, &strict, ExclusionBasis::Membership)
+            .expect("the driven lookup asks `bbff`, which the relation declares");
+        let [lookup] = <[LookupText; 1]>::try_from(lookups.concat())
+            .unwrap_or_else(|lookups| panic!("one call, one lookup: {lookups:?}"));
+        assert!(lookup.driven, "the VALUES row drives the call");
+        let env = ExtensionEnv::over_relations(strict).expect("the fixture env");
+        engine
+            .prepare_execution(
+                &lookup.text,
+                None,
+                &[CANDIDATE_NAME],
+                QueryOptions {
+                    env: &env,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .unwrap_or_else(|error| panic!("the driven lookup prepares: {error}\n{}", lookup.text));
     }
 }

@@ -2137,7 +2137,44 @@ fn lateral_needle_shapes() -> Vec<(&'static str, Text<'static>, bool)> {
             Box::new(move |p: &str| lateral_needle(p, "VALUES ?q { \"quick brown fox\"@en }")),
             true,
         ),
+        (
+            "a sub-SELECT picking its needle by a FILTER over the variable the LATERAL injects",
+            Box::new(move |p: &str| {
+                lateral_subselect_needle(
+                    p,
+                    "{ VALUES ?q { \"quick brown fox\"@en \"lazy dog\"@en } FILTER(?q = ?y) }",
+                )
+            }),
+            true,
+        ),
+        (
+            "a sub-SELECT binding its needle from the variable the LATERAL injects",
+            Box::new(move |p: &str| lateral_subselect_needle(p, "BIND(?y AS ?q)")),
+            true,
+        ),
+        (
+            "a sub-SELECT whose needle the LATERAL injects",
+            Box::new(move |p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ VALUES ?q {{ \"quick brown fox\"@en }} LATERAL \
+                     {{ SELECT ?candidate ?q WHERE {{ ( ?candidate ) <{}> ( ?q ) }} }} }}",
+                    producer_iri(p)
+                )
+            }),
+            true,
+        ),
     ]
+}
+
+/// `VALUES ?y { "quick brown fox"@en } LATERAL { SELECT ?candidate ?y WHERE { body
+/// call } }`, the call's needle `?q`: the sub-`SELECT` projects `?y`, so the `LATERAL`
+/// injects it there.
+fn lateral_subselect_needle(predicate: &str, body: &str) -> String {
+    format!(
+        "SELECT ?candidate WHERE {{ VALUES ?y {{ \"quick brown fox\"@en }} LATERAL {{ SELECT \
+         ?candidate ?y WHERE {{ {body} ( ?candidate ) <{}> ( ?q ) }} }} }}",
+        producer_iri(predicate)
+    )
 }
 
 /// `VALUES ?y { "quick brown fox"@en } LATERAL { lateral }` and then the call, its
@@ -3028,7 +3065,10 @@ type CorrelatedNeedle = (&'static str, Text<'static>, i128, [u64; 2], [u64; 2]);
 /// stratum's contribution only where the right stratum's needles include
 /// `"zulu yankee"` — the text's own needle set — and a lookup driven by any other set
 /// excluded it there, leaving the left stratum's `16393442622` alone. The texts
-/// binding both needles score it `22566282128`, the others `32522474880`.
+/// binding both needles score it `22566282128`, the others `32522474880`. The
+/// membership tests are the second oracle: two per needle term per candidate asked, so
+/// a lookup driven by a wider needle set than the text's — an injected variable read
+/// free — asks twice as many as one driven by the text's own `"zulu yankee"`.
 fn correlated_needles() -> Vec<CorrelatedNeedle> {
     let needle = || ex("needle");
     vec![
@@ -3138,6 +3178,117 @@ fn correlated_needles() -> Vec<CorrelatedNeedle> {
             [36, 50],
         ),
         (
+            "a sub-SELECT whose needle triple reads the variable the LATERAL injects",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ SELECT ?candidate \
+                         ?y WHERE {{ ?y <{}> ?q . ?candidate <{producer}> ( ?q ?score ?rank \
+                         ?lang ?matched ) }} }} }}",
+                        ex("x"),
+                        ex("p"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
+            "a sub-SELECT whose needle the LATERAL injects",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate WHERE {{ <{}> <{}> ?q LATERAL {{ SELECT ?candidate \
+                         ?q WHERE {{ ?candidate <{producer}> ( ?q ?score ?rank ?lang ?matched ) \
+                         }} }} }}",
+                        ex("y"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
+            "a sub-SELECT whose needle group's FILTER compares against the variable the \
+             LATERAL injects",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ SELECT ?candidate \
+                         ?y WHERE {{ {{ ?z <{}> ?q FILTER(?z = ?y) }} ?candidate <{producer}> \
+                         ( ?q ?score ?rank ?lang ?matched ) }} }} }}",
+                        ex("x"),
+                        ex("p"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        // The neighbour: the FILTER written in the call's own group filters the call's
+        // rows, so it drives nothing — every needle the triple reads drives the lookup,
+        // two terms each, which is looser than the text's one needle and still answers
+        // as the full read.
+        (
+            "a sub-SELECT whose FILTER over the injected variable filters the call's own group",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ SELECT ?candidate \
+                         ?y WHERE {{ ?z <{}> ?q FILTER(?z = ?y) ?candidate <{producer}> ( ?q \
+                         ?score ?rank ?lang ?matched ) }} }} }}",
+                        ex("x"),
+                        ex("p"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 100],
+        ),
+        (
+            "a sub-SELECT inside a sub-SELECT, the injected variable carried through both",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ SELECT ?candidate \
+                         ?y WHERE {{ {{ SELECT ?candidate ?y WHERE {{ ?y <{}> ?q . ?candidate \
+                         <{producer}> ( ?q ?score ?rank ?lang ?matched ) }} }} }} }} }}",
+                        ex("x"),
+                        ex("p"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
+            "a sub-SELECT inside a GRAPH variable it does not project",
+            Box::new(move |producer: &str| {
+                right_only(producer, |producer| {
+                    format!(
+                        "SELECT ?candidate WHERE {{ GRAPH ?g {{ SELECT ?candidate WHERE {{ <{}> \
+                         <{}> ?q . ?candidate <{producer}> ( ?q ?score ?rank ?lang ?matched ) \
+                         }} }} }}",
+                        ex("config2"),
+                        needle()
+                    )
+                })
+            }),
+            32_522_474_880,
+            [18, 25],
+            [36, 50],
+        ),
+        (
             "a needle read under a FROM clause",
             Box::new(move |producer: &str| {
                 right_only(producer, |producer| {
@@ -3172,6 +3323,18 @@ fn correlated_needles() -> Vec<CorrelatedNeedle> {
 /// contribution, or a failed request. Here each `LATERAL` is kept whole in the
 /// lookup's driving pattern, and each text is run twice — with its lookups, read on
 /// demand, and declaring no basis, read in full — to one answer, as exactly.
+///
+/// The call may sit inside a sub-`SELECT` the `LATERAL` injects into: its needle
+/// triple reading the injected `?y`, a group whose `FILTER` compares against it, the
+/// needle `?q` itself injected, and `?y` carried through two nested sub-`SELECT`s. A
+/// lookup that left such a piece out drove the call with no needle — a mode the text
+/// relation does not declare — and the right stratum failed, leaving `<a1>` the left
+/// stratum's `16393442622`; here the injection is reproduced, and the membership
+/// tests are the one needle's. The neighbour whose `FILTER` sits in the call's own
+/// group filters the call's rows rather than driving it: its lookup is driven by every
+/// needle the triple reads, twice the tests, and answers the same. A `GRAPH ?g` around
+/// a sub-`SELECT` that does not project `?g` is read under a fresh name, in every named
+/// graph — here `<g1>` alone, whose `"zulu yankee"` the text reads.
 ///
 /// The neighbours: an uncorrelated `LATERAL`, still admitted and answering the same;
 /// a correlated group inside the `LATERAL`'s right operand beside the call, whose
@@ -3382,6 +3545,19 @@ fn aliased_needle(predicate: &str, lateral: &str) -> String {
     format!(
         "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ {lateral} }} ( ?candidate ) <{}> ( \
          ?q ) }}",
+        ex("left/entity000003"),
+        ex("data/alias"),
+        producer_iri(predicate)
+    )
+}
+
+/// `<left/entity000003> data:alias ?y LATERAL { SELECT ?candidate ?y WHERE { body
+/// call } }`, the call's needle `?q`, over [`tagged_dataset`]: `?y`, the intruder, is
+/// injected into the sub-`SELECT`, which projects it.
+fn aliased_subselect(predicate: &str, body: &str) -> String {
+    format!(
+        "SELECT ?candidate WHERE {{ <{}> <{}> ?y LATERAL {{ SELECT ?candidate ?y WHERE {{ {body} \
+         ( ?candidate ) <{}> ( ?q ) }} }} }}",
         ex("left/entity000003"),
         ex("data/alias"),
         producer_iri(predicate)
@@ -3704,6 +3880,31 @@ fn no_admitted_shape_excludes_a_candidate_its_stream_names() {
             "LATERAL: uncorrelated",
             Box::new(|p: &str| {
                 aliased_needle(p, &format!("?z <{tag}> ?q FILTER(?z = <{intruder}>)"))
+            }),
+            Sweep::Runs,
+        ),
+        // The same needles picked inside a sub-`SELECT` the `LATERAL` injects `?y`
+        // into, and a needle the `LATERAL` injects itself.
+        (
+            "LATERAL sub-SELECT: a triple reading the injected variable",
+            Box::new(|p: &str| aliased_subselect(p, &format!("?y <{tag}> ?q ."))),
+            Sweep::Runs,
+        ),
+        (
+            "LATERAL sub-SELECT: a FILTER over the injected variable",
+            Box::new(|p: &str| {
+                aliased_subselect(p, &format!("{{ ?z <{tag}> ?q FILTER(?z = ?y) }}"))
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "LATERAL sub-SELECT: the needle injected",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ <{intruder}> <{tag}> ?q LATERAL {{ SELECT \
+                     ?candidate ?q WHERE {{ ( ?candidate ) <{}> ( ?q ) }} }} }}",
+                    pf(p)
+                )
             }),
             Sweep::Runs,
         ),
