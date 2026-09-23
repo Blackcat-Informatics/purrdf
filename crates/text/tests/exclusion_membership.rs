@@ -805,14 +805,19 @@ const ENGINE_SEARCH: &str = "http://example.org/pf#search";
 /// Run `query` over the fixture with a fresh relation, returning the rows and
 /// what the relation did.
 fn engine_answer(query: &str) -> (usize, [u64; 6]) {
-    let dataset = corpus();
+    engine_answer_over(&corpus(), query)
+}
+
+/// [`engine_answer`] over `dataset` — the fixture plus whatever a test adds — with
+/// the relation still indexing the fixture's notes alone.
+fn engine_answer_over(dataset: &RdfDataset, query: &str) -> (usize, [u64; 6]) {
     let relation = TextSearchRelation::new(index());
     let observed = relation.observations();
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(ENGINE_SEARCH, Arc::new(relation));
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
-            &*dataset,
+            dataset,
             SparqlRequest {
                 query,
                 base_iri: None,
@@ -875,5 +880,59 @@ fn the_engine_reports_a_lone_blank_as_unobserved_and_nothing_else() {
         (0, 1, 0),
         "a blank repeated at ?score and ?rank is compared against itself, so the rank is \
          observed and ranked, and the row whose score is not its rank is dropped"
+    );
+}
+
+/// The fixture plus `ex:slot ex:at 1 … 6`: a triple pattern that binds a rank.
+fn corpus_with_rank_slots() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE);
+    for (local, text) in ROWS {
+        let subject = builder.intern_iri(&format!("http://example.org/{local}"));
+        let object = builder.intern_literal(RdfLiteral::simple(text));
+        builder.push_quad(subject, note, object, None);
+    }
+    let slot = builder.intern_iri("http://example.org/slot");
+    let at = builder.intern_iri("http://example.org/at");
+    for rank in 1..=ROWS.len() {
+        let rank = builder.intern_literal(RdfLiteral {
+            lexical_form: rank.to_string(),
+            datatype: Some("http://www.w3.org/2001/XMLSchema#integer".to_owned()),
+            language: None,
+            direction: None,
+        });
+        builder.push_quad(slot, at, rank, None);
+    }
+    builder.freeze().expect("the fixture must validate")
+}
+
+/// **A blank at `?rank` that a triple pattern of the same group also names is one
+/// variable across the two, so the rank is observed and the relation ranks — it does
+/// not score in place.**
+///
+/// The lone-blank query above scores in place because nothing reads the rank. Here
+/// the same blank is also the object of `ex:slot ex:at _:r`, so the triple reads it:
+/// the call is driven with each slot's rank bound and answers only where the
+/// document really sits at that rank. The control writes `?r` in both places, and
+/// the two must agree row for row and counter for counter. Read as two unrelated
+/// blanks instead, the call would score in place and every slot would join with
+/// its one row — six rows, not one.
+#[test]
+fn a_rank_blank_shared_with_a_triple_is_observed_and_ranked() {
+    let dataset = corpus_with_rank_slots();
+    let query = |rank: &str| {
+        format!(
+            "SELECT ?m WHERE {{ <http://example.org/slot> <http://example.org/at> {rank} . \
+             ( <http://example.org/d3> ) <{ENGINE_SEARCH}> ( \"quick brown\" _:s {rank} _:l ?m ) }}"
+        )
+    };
+    let control = engine_answer_over(&dataset, &query("?r"));
+    let shared = engine_answer_over(&dataset, &query("_:r"));
+    assert_eq!(control.0, 1, "d3 sits at exactly one rank");
+    assert!(control.1[1] > 0, "the control ranks");
+    assert_eq!(control.1[2], 0, "the control never scores in place");
+    assert_eq!(
+        shared, control,
+        "a blank shared with a triple is the variable it stands for: same rows, same work"
     );
 }

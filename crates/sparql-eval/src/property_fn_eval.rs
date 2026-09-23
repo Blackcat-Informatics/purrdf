@@ -289,7 +289,11 @@ fn args_are_admission_transparent(args: &[Arg], slot_count: usize) -> bool {
 /// seeded from the input row. Each condition closes one way the value could be read:
 ///
 /// * a blank slot has no output column — it is projected away before the node's rows
-///   leave — so no operator above the call can see it;
+///   leave — so no operator above the call can see it. A label the call shares with
+///   another piece of its basic graph pattern (a triple, a path, another call) never
+///   arrives here as a blank at all: admission renamed it to the one variable it is
+///   across those pieces (`crate::blank_scope`), so it has a column, a sibling reads
+///   it, and the position is observed;
 /// * a single occurrence means [`unify_row`] binds it and compares it against
 ///   nothing, so no other position of the same row can reject it;
 /// * an unseeded slot arrives free, so no input value filters it either.

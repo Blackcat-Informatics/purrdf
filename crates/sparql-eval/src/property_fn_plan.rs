@@ -126,10 +126,13 @@ pub(crate) fn parameter_set(names: &[&str]) -> DetHashSet<Variable> {
     names.iter().map(|name| Variable::new(*name)).collect()
 }
 
-/// Rewrite every property-function chain in `query` into a feasible order.
+/// Rewrite every property-function chain in `query` into a feasible order, after
+/// joining every blank node label shared between the pieces of one basic graph pattern
+/// (`crate::blank_scope`).
 ///
-/// The query is returned unchanged — and no work is done at all — when it carries no
-/// call node, which is every query on a host that has not configured the seam.
+/// The query is returned unchanged — after one read-only walk — when it carries no call
+/// node and no such shared label, which is every query on a host that has not
+/// configured the seam and writes no blank node into two pieces of one block.
 ///
 /// `parameters` are the variables an execution has PROMISED to supply through the
 /// substitution channel. They are treated as bound where the substitution really binds
@@ -177,14 +180,14 @@ pub(crate) fn plan_query(
 /// [`plan_query`] on a standalone [`GraphPattern`] rather than a full [`Query`] — the
 /// entry an UPDATE's `WHERE` clause uses, because a `DELETE`/`INSERT … WHERE`
 /// operation has no `Query` wrapper to hand in. Same admission (unregistered IRI,
-/// arity mismatch, an infeasible chain), same feasibility rewrite, same "untouched,
-/// no work at all, when the pattern carries no call node" contract — an UPDATE
-/// WHERE is a triple-pattern context exactly like a query's, so it is planned
-/// exactly like one.
+/// arity mismatch, an infeasible chain), same shared-blank join and feasibility
+/// rewrite, same "untouched when the pattern carries neither a call node nor a shared
+/// blank label" contract — an UPDATE WHERE is a triple-pattern context exactly like a
+/// query's, so it is planned exactly like one.
 ///
-/// Returns `Ok(None)` unchanged (not merely equal) when `pattern` carries no call
-/// node, so a caller can keep evaluating its own borrowed `pattern` rather than a
-/// clone that happens to match it.
+/// Returns `Ok(None)` unchanged (not merely equal) in that case, so a caller can keep
+/// evaluating its own borrowed `pattern` rather than a clone that happens to match
+/// it.
 ///
 /// # Where a promised parameter counts as bound
 ///
@@ -209,12 +212,19 @@ pub(crate) fn plan_where_pattern(
     parameters: &DetHashSet<Variable>,
     reach: ShaclPrebinding,
 ) -> Result<Option<GraphPattern>, PlanError> {
+    // A blank node label written in two pieces of one basic graph pattern — a
+    // triple and a call, a triple and a path, two calls — is one variable across
+    // them. Settled first, and for every pattern whether or not it carries a call,
+    // because a call's arguments are admitted below by what is bound, and a
+    // shared blank a sibling binds IS bound. See `crate::blank_scope`.
+    let joined = crate::blank_scope::join_shared_blanks(pattern);
+    let pattern = joined.as_ref().unwrap_or(pattern);
     // Either hazard alone must still run the walk: a query with a `Custom`
     // aggregate and no property-function call would otherwise skip this pass
     // entirely on the property-function-only check, and its admission (below,
     // via `plan_aggregate`) would never happen.
     if !crate::property_fn_eval::pattern_needs_admission(pattern) {
-        return Ok(None);
+        return Ok(joined);
     }
     // The rewriting walk is recursive just like evaluation. Apply its existing
     // execution envelope before cloning or traversing an admitted call chain.

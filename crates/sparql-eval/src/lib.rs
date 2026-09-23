@@ -81,6 +81,7 @@ pub mod agg_fn;
 mod basic_profile;
 mod bgp;
 mod binop;
+mod blank_scope;
 mod cdt_agg;
 mod cdt_fn;
 mod cdt_unfold;

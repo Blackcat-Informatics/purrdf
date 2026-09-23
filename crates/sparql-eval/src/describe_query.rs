@@ -72,6 +72,12 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
             if !describe_all && !var_targets.contains(&name.as_str()) {
                 continue;
             }
+            // `DESCRIBE *` names the pattern's variables; a blank node shared
+            // between the pieces of a basic graph pattern is not one of them
+            // (see `crate::blank_scope`), whatever column it rides in.
+            if describe_all && crate::blank_scope::is_joined_blank(&seq.schema.vars()[col]) {
+                continue;
+            }
             for row in &rows {
                 // Only IRI bindings are describable subjects; a literal, blank, or
                 // unbound cell contributes nothing.

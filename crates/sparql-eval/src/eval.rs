@@ -2769,8 +2769,15 @@ pub fn eval<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
     crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
+    // Raw algebra has not passed admission, which is where a blank node label shared
+    // by two pieces of one basic graph pattern is made the one variable it is — so
+    // that is done here, and the renamed column is dropped from the bag handed back.
+    // See `crate::blank_scope`.
+    let joined = crate::blank_scope::join_shared_blanks(pattern);
+    let pattern = joined.as_ref().unwrap_or(pattern);
     eval_evaluated(pattern, ctx)?
         .into_complete()
+        .map(crate::blank_scope::without_joined_blanks)
         .map_err(|truncation| {
             EvalError::internal(format!(
                 "a governor tripped on an evaluation entry point that can only return a \
@@ -3034,11 +3041,18 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
         .then(crate::parallel::force_sequential_operation);
     prepare_query_context(query, ctx)?;
     match query {
+        // A parsed `SELECT` ends in a projection, which already names only the
+        // pattern's variables; a caller-built one need not, so a shared blank's column
+        // (see `crate::blank_scope`) is dropped from the answer here either way.
         Query::Select { pattern, .. } => {
             match commit_answer_rows(eval_evaluated(pattern, ctx)?, ctx) {
-                Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(seq))),
+                Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(
+                    crate::blank_scope::without_joined_blanks(seq),
+                ))),
                 Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
-                    outcome: Outcome::Solutions(certificate.rows().clone()),
+                    outcome: Outcome::Solutions(crate::blank_scope::without_joined_blanks(
+                        certificate.rows().clone(),
+                    )),
                     certificate,
                 }),
             }
@@ -3100,6 +3114,10 @@ pub fn evaluate_query<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, EvalError> {
+    // As [`eval`]: a query handed in here has not passed admission, so the shared
+    // blank labels admission joins are joined here.
+    let joined = crate::blank_scope::join_shared_blanks_in_query(query);
+    let query = joined.as_ref().unwrap_or(query);
     match evaluate_query_evaluated(query, ctx)? {
         EvaluatedOutcome::Complete(outcome) => Ok(outcome),
         EvaluatedOutcome::Truncated {
