@@ -124,7 +124,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "evaluates the full W3C corpora, tens of minutes. `make conformance` is the local "
         "entry point; only its `--self-test` arm is cheap enough for `make check`"
     ),
-    "scripts/check-simd-asm.py": (
+    "scripts/check-simd-asm.py --doc": (
         "emits asm for seven target configurations; needs the wasm32 and aarch64 std "
         "targets. `make simd-asm` is the local entry point; only its `--self-test` arm "
         "runs in `make check`"

@@ -90,7 +90,11 @@ scalar code too. *FMA* is any fused multiply-add, scalar or packed. *Relaxed* is
 Manifest (``scripts/simd-asm-manifest.toml``)
 ---------------------------------------------
 
-``[build] packages`` names the packages to build. Each ``[[site]]`` has an ``id`` and a
+``[build] packages`` names the packages to build. ``[build] rlib_packages`` names
+packages that are also a ``cdylib``: linking a cdylib needs a linker for the target,
+which a cross configuration does not have and the asm does not need, so each of those
+is built on its own by ``cargo rustc --crate-type rlib``, against the same dependency
+units. Each ``[[site]]`` has an ``id`` and a
 list of ``[[site.measure]]`` tables, which between them cover all seven
 configurations. A measure names ``configs``, ``crate`` and ``symbol`` and carries:
 
@@ -124,7 +128,8 @@ Document mode (``--doc``)
 
 * ``<!-- simd-asm:sites:begin -->`` ... ``<!-- simd-asm:sites:end -->``: the site table.
   Its header names ``id``, ``crate``, ``fn``, ``covers``, ``verdict`` and ``reason`` and
-  one column per configuration name. The configuration cells are generated.
+  one column per configuration name; further descriptive columns are free-form and
+  kept as written. The configuration cells are generated.
 * ``<!-- simd-asm:benches:begin -->`` ... ``<!-- simd-asm:benches:end -->``: the bench
   table, with ``bench`` (a ``crates/<crate>/benches/<file>.rs`` path) and ``sites``.
 
@@ -846,6 +851,7 @@ class Site:
 class Manifest:
     packages: tuple[str, ...]
     sites: tuple[Site, ...]
+    rlib_packages: tuple[str, ...] = ()
 
     def ids(self) -> set[str]:
         return {site.id for site in self.sites}
@@ -853,7 +859,7 @@ class Manifest:
 
 _MEASURE_KEYS = {
     "configs", "crate", "symbol", "label", "min_vector_ops", "require_mnemonics", "max_fma",
-    "min_fma", "forbid_relaxed", "single_copy", "note",
+    "min_fma", "forbid_relaxed", "single_copy",
 }
 _SITE_KEYS = {"id", "summary", "measure"}
 
@@ -934,10 +940,18 @@ def load_manifest(data: dict) -> Manifest:
     if unknown_top:
         problems.append(f"unknown top-level keys {sorted(unknown_top)}")
     build = data.get("build", {})
+    for key in set(build) - {"packages", "rlib_packages"}:
+        problems.append(f"`[build]`: unknown key `{key}`")
     packages = build.get("packages")
     if not isinstance(packages, list) or not packages or not all(isinstance(p, str) for p in packages):
         problems.append("`[build] packages` must be a non-empty list of package names")
         packages = []
+    rlib_packages = build.get("rlib_packages", [])
+    if not isinstance(rlib_packages, list) or not all(isinstance(p, str) and p for p in rlib_packages):
+        problems.append("`[build] rlib_packages` must be a list of package names")
+        rlib_packages = []
+    for package in sorted(set(rlib_packages) & set(packages)):
+        problems.append(f"`{package}` is in both `packages` and `rlib_packages`; a package is built one way")
     sites: list[Site] = []
     seen: set[str] = set()
     for raw in data.get("site", []):
@@ -1003,7 +1017,7 @@ def load_manifest(data: dict) -> Manifest:
         sites.append(Site(sid, str(raw.get("summary", "")), tuple(measures)))
     if problems:
         raise GateError("manifest is invalid:\n  " + "\n  ".join(problems))
-    return Manifest(tuple(packages), tuple(sites))
+    return Manifest(tuple(packages), tuple(sites), tuple(rlib_packages))
 
 
 # --------------------------------------------------------------------------- evaluation
@@ -1241,8 +1255,16 @@ def verify_command_lines(stderr: str, config: Config) -> list[str]:
     return problems
 
 
-def asm_paths(stdout: str, config: Config) -> list[Path]:
-    """The ``.s`` of every target library unit, located from cargo's artifact messages."""
+def asm_paths(stdout: str, config: Config, is_file=Path.is_file) -> list[Path]:
+    """The ``.s`` of every target library unit, located from cargo's artifact messages.
+
+    rustc writes the ``.s`` beside the unit's own rlib/rmeta. For a plain library that
+    file carries cargo's hash suffix (``libname-<16 hex>.rmeta``). A package that is also
+    a ``cdylib`` cannot take the suffix, so its unit files are unhashed, in the unit's
+    own output directory, next to the unhashed copy cargo uplifts. So the hashed files
+    are tried first and every other rlib/rmeta after them, and the first with a ``.s``
+    beside it is the unit's asm.
+    """
     paths: list[Path] = []
     problems: list[str] = []
     for line in stdout.splitlines():
@@ -1257,15 +1279,16 @@ def asm_paths(stdout: str, config: Config) -> list[Path]:
         files = [Path(f) for f in message.get("filenames", [])]
         if not any(f"/{config.triple}/" in str(f) for f in files):
             continue
-        hashed = [f for f in files if f.suffix in (".rmeta", ".rlib") and re.search(r"-[0-9a-f]{16}$", f.stem)]
-        if not hashed:
-            problems.append(f"{message['package_id']}: no hashed rlib/rmeta among {files}")
+        libs = [f for f in files if f.suffix in (".rmeta", ".rlib")]
+        if not libs:
+            problems.append(f"{message['package_id']}: no rlib/rmeta among {files}")
             continue
-        stem = hashed[0].stem.removeprefix("lib")
-        asm = hashed[0].with_name(stem + ".s")
-        if not asm.is_file():
+        hashed = [f for f in libs if re.search(r"-[0-9a-f]{16}$", f.stem)]
+        candidates = [f.with_name(f.stem.removeprefix("lib") + ".s") for f in (*hashed, *(f for f in libs if f not in hashed))]
+        asm = next((a for a in candidates if is_file(a)), None)
+        if asm is None:
             problems.append(
-                f"`{message['target']['name']}` has no {asm.name} beside its {hashed[0].name}; "
+                f"`{message['target']['name']}` has no .s beside any of {[f.name for f in libs]}; "
                 f"the build did not emit asm for it (a cache that restores outputs without the .s, "
                 f"or a flag layer that dropped --emit=asm)"
             )
@@ -1278,26 +1301,43 @@ def asm_paths(stdout: str, config: Config) -> list[Path]:
     return paths
 
 
-def build_config(config: Config, packages: tuple[str, ...], scratch: Path, host: str, chooser) -> list[Function]:
+def failure_tail(stderr: str, lines: int = 40) -> str:
+    """The last ``lines`` of a failed build's stderr, without cargo's progress lines.
+
+    ``-v`` prints every rustc command line and a ``Fresh`` line per unit, so a plain
+    tail is the failing command and none of the reason for it.
+    """
+    kept = [l for l in stderr.splitlines() if not re.match(r"^\s*(?:Running `|Fresh |Compiling |Dirty |Checking )", l)]
+    return "\n".join(kept[-lines:])
+
+
+def build_commands(config: Config, packages: tuple[str, ...], rlib_packages: tuple[str, ...]) -> list[list[str]]:
+    """The cargo invocations for one configuration: one build, then one per rlib-only package."""
+    common = [
+        "-v", "--message-format=json-render-diagnostics", "--release", "--locked",
+        "--lib", "--target", config.triple,
+        "--config", "profile.release.lto=false", "--config", "profile.release.codegen-units=1",
+    ]
+    cmds = [["cargo", "build", *common, *(arg for p in packages for arg in ("-p", p))]]
+    cmds += [["cargo", "rustc", *common, "-p", p, "--crate-type", "rlib"] for p in rlib_packages]
+    return cmds
+
+
+def build_config(config: Config, manifest: Manifest, scratch: Path, host: str, chooser) -> list[Function]:
     """Build one configuration and return the emitted functions ``chooser`` selects."""
     print(f"== {config.name}: cargo build --target {config.triple} ({config.rustflags()})", flush=True)
     env = config_env(config, dict(os.environ), host, log=lambda line: print(line, flush=True))
     env["CARGO_TARGET_DIR"] = str(scratch)
-    cmd = [
-        "cargo", "build", "-v", "--message-format=json-render-diagnostics", "--release", "--locked",
-        "--lib", "--target", config.triple,
-        "--config", "profile.release.lto=false", "--config", "profile.release.codegen-units=1",
-    ]
-    for package in packages:
-        cmd += ["-p", package]
-    proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
-        tail = "\n".join(proc.stderr.splitlines()[-40:])
-        raise GateError(f"{config.name}: cargo build failed (exit {proc.returncode}):\n{tail}")
-    problems = verify_command_lines(proc.stderr, config)
-    if problems:
-        raise GateError("the build was not the configuration it claims:\n  " + "\n  ".join(problems))
-    units = ((str(p), p.read_text(encoding="utf-8", errors="replace")) for p in asm_paths(proc.stdout, config))
+    paths: list[Path] = []
+    for cmd in build_commands(config, manifest.packages, manifest.rlib_packages):
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            raise GateError(f"{config.name}: `{' '.join(cmd[:2])}` failed (exit {proc.returncode}):\n{failure_tail(proc.stderr)}")
+        problems = verify_command_lines(proc.stderr, config)
+        if problems:
+            raise GateError("the build was not the configuration it claims:\n  " + "\n  ".join(problems))
+        paths += [p for p in asm_paths(proc.stdout, config) if p not in paths]
+    units = ((str(p), p.read_text(encoding="utf-8", errors="replace")) for p in paths)
     return collect_functions(units, config.arch, chooser.keep, chooser.select)
 
 
@@ -1340,7 +1380,7 @@ def measure_all(manifest: Manifest, configs: tuple[Config, ...], keep_for) -> di
     out: dict[str, list[Function]] = {}
     with Scratch() as scratch:
         for config in configs:
-            out[config.name] = build_config(config, manifest.packages, scratch, host, keep_for(config))
+            out[config.name] = build_config(config, manifest, scratch, host, keep_for(config))
     return out
 
 
@@ -1597,6 +1637,13 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld) -> li
     return problems
 
 
+def require_doc(path: Path) -> None:
+    """``--doc`` on a missing document is a failure, never a skip."""
+    if not path.is_file():
+        shown = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
+        raise GateError(f"{shown} does not exist; `--doc` checks it, it does not skip it")
+
+
 def write_doc(doc: str, cells: dict) -> str:
     header, rows, (lo, hi) = parse_table(doc, SITES_BEGIN, SITES_END)
     idx = header.index("id")
@@ -1628,8 +1675,8 @@ def run(args: argparse.Namespace) -> int:
     problems: list[str] = []
     problems += identity_scan(rust_sources())
     problems += multiplier_scan("CHANGELOG.md [Unreleased]", unreleased_changelog(CHANGELOG.read_text(encoding="utf-8")))
-    if (args.doc or args.write_doc) and not DOC.is_file():
-        raise GateError(f"{DOC.relative_to(REPO_ROOT)} does not exist; `--doc` checks it, it does not skip it")
+    if args.doc or args.write_doc:
+        require_doc(DOC)
 
     if args.probe:
         wanted = tuple(CONFIG_BY_NAME[c] for c in (args.config or CONFIG_NAMES))
@@ -1893,12 +1940,46 @@ def self_test() -> int:
         (_manifest_dict(measure=[{k: v for k, v in _manifest_dict()["site"][0]["measure"][0].items() if k != "forbid_relaxed"}]), "an implicit forbid_relaxed"),
         (_manifest_dict(measure=[{**_manifest_dict()["site"][0]["measure"][0], "min_fma": 1}]), "both max_fma and min_fma"),
         (_manifest_dict(measure=[{**_manifest_dict()["site"][0]["measure"][0], "floor": 1}]), "an unknown key"),
+        (_manifest_dict(measure=[{**_manifest_dict()["site"][0]["measure"][0], "note": "x"}]), "a `note` key (annotations are TOML comments)"),
     ):
         try:
             load_manifest(bad)
             failures.append(f"{what} must be refused")
         except GateError:
             pass
+
+    # -- a `note` is refused by name, like any key the gate would read and then ignore;
+    # the same measure without it loads
+    try:
+        load_manifest(_manifest_dict(measure=[{**_manifest_dict()["site"][0]["measure"][0], "note": "x"}]))
+    except GateError as err:
+        expect("unknown key `note`" in str(err), f"a `note` must be refused as an unknown key: {err}")
+    try:
+        load_manifest(_manifest_dict(measure=[dict(_manifest_dict()["site"][0]["measure"][0])]))
+    except GateError as err:
+        failures.append(f"the same measure without `note` must load: {err}")
+
+    # -- `rlib_packages`: each cdylib package is built alone as an rlib; a package listed
+    # both ways, a wrong type or an unknown `[build]` key is refused
+    rlib_ok = {**_manifest_dict(), "build": {"packages": ["demo"], "rlib_packages": ["demo-wasm"]}}
+    try:
+        expect(load_manifest(rlib_ok).rlib_packages == ("demo-wasm",), "rlib_packages load as written")
+    except GateError as err:
+        failures.append(f"a manifest with rlib_packages must load: {err}")
+    for build, what in (
+        ({"packages": ["demo"], "rlib_packages": ["demo"]}, "a package in both lists"),
+        ({"packages": ["demo"], "rlib_packages": "demo-wasm"}, "a string rlib_packages"),
+        ({"packages": ["demo"], "features": ["x"]}, "an unknown [build] key"),
+    ):
+        try:
+            load_manifest({**_manifest_dict(), "build": build})
+            failures.append(f"{what} must be refused")
+        except GateError:
+            pass
+    cmds = build_commands(CONFIG_BY_NAME["aarch64"], ("demo",), ("demo-wasm",))
+    expect(len(cmds) == 2 and cmds[0][:2] == ["cargo", "build"] and cmds[1][:2] == ["cargo", "rustc"], f"one build plus one rustc per rlib package: {cmds}")
+    expect(cmds[1][-4:] == ["-p", "demo-wasm", "--crate-type", "rlib"] and "--target" in cmds[1] and "--lib" in cmds[1], f"the rlib build names its package and crate type: {cmds[1]}")
+    expect(len(build_commands(CONFIG_BY_NAME["x86_64"], ("demo",), ())) == 1, "no rlib package, one command")
 
     # -- a wrong-typed field is a named manifest error, never a coercion; its neighbour loads
     base_measure = _manifest_dict()["site"][0]["measure"][0]
@@ -1981,6 +2062,33 @@ def self_test() -> int:
     native = config_env(CONFIG_BY_NAME["x86_64"], {"CFLAGS": "-O2"}, "x86_64-unknown-linux-gnu")
     expect(native.get("CFLAGS") == "-O2" and "CC_x86_64_unknown_linux_gnu" not in native, "a host-target build keeps the host C configuration")
 
+    # -- locating each unit's asm: a hashed rlib's `.s`; an unhashed cdylib+rlib unit's
+    # `.s` in its own output directory; a unit with no `.s` anywhere is refused
+    def artifact(name: str, filenames: list[str], kind: list[str]) -> str:
+        return json.dumps({
+            "reason": "compiler-artifact", "package_id": name,
+            "target": {"name": name, "kind": kind}, "filenames": filenames,
+        })
+    x86 = CONFIG_BY_NAME["x86_64"]
+    unit = "/t/build/x86_64-unknown-linux-gnu/release/build/demo/0123456789abcdef/out"
+    plain = artifact("demo", ["/t/x86_64-unknown-linux-gnu/release/deps/libdemo-0123456789abcdef.rlib", "/t/x86_64-unknown-linux-gnu/release/deps/libdemo-0123456789abcdef.rmeta"], ["lib"])
+    cdylib = artifact("demo_wasm", ["/t/x86_64-unknown-linux-gnu/release/libdemo_wasm.so", "/t/x86_64-unknown-linux-gnu/release/libdemo_wasm.rlib", f"{unit}/libdemo_wasm.rmeta"], ["cdylib", "rlib"])
+    present = {Path("/t/x86_64-unknown-linux-gnu/release/deps/demo-0123456789abcdef.s"), Path(f"{unit}/demo_wasm.s")}
+    try:
+        found = asm_paths(plain + "\n" + cdylib, x86, is_file=lambda p: p in present)
+        expect(found == [Path("/t/x86_64-unknown-linux-gnu/release/deps/demo-0123456789abcdef.s"), Path(f"{unit}/demo_wasm.s")], f"hashed and cdylib+rlib units both locate their .s: {found}")
+    except GateError as err:
+        failures.append(f"a cdylib+rlib unit with a .s in its output directory must be found: {err}")
+    try:
+        asm_paths(cdylib, x86, is_file=lambda _p: False)
+        failures.append("a unit with no .s beside any rlib/rmeta must be refused")
+    except GateError as err:
+        expect("has no .s beside any" in str(err), f"the missing .s is named: {err}")
+
+    # -- a failed build names the compiler's error, not only the command that failed
+    noisy = "     Running `rustc --crate-name demo`\n       Fresh memchr v2\n   Compiling demo v1\nerror: linking with `cc` failed\n"
+    expect(failure_tail(noisy) == "error: linking with `cc` failed", f"progress lines are dropped, the error kept: {failure_tail(noisy)!r}")
+
     # -- identity scan
     expect(identity_scan({"crates/rdf-core/src/canon.rs": "let s = a.algebraic_add(b);"}), "algebraic_add in canon.rs must fail")
     expect(not identity_scan({"crates/rdf-core/src/distance/exact.rs": "let s = a.algebraic_add(b);"}), "algebraic_add under distance/ must pass")
@@ -2035,6 +2143,41 @@ def self_test() -> int:
         failures.append("a document without the generated regions must fail")
     except GateError:
         pass
+
+    # -- every other parity refusal, each against the passing fixture it differs from
+    def refuses(doc: str, needle: str, what: str, man: Manifest = manifest, cl: dict = cells) -> None:
+        found = doc_checks(doc, man, cl, _FIXTURE_WORLD)
+        expect(any(needle in p for p in found), f"{what} must fail ({needle!r} not in {found})")
+    fn_row = f"| `demo.dot` | `demo-core` | `kernel::dot` | {covers} | leave | r | {vals} |\n"
+    exempt_row = f"| `demo-cli` | `demo-cli` | — | — | leave | no hot path; `crates/demo-cli/benches/` does not exist | {dash} |\n"
+    refuses(_fixture_doc(rows=fn_row + fn_row + exempt_row), "appears twice", "a duplicated row id")
+    refuses(_fixture_doc(rows=fn_row.replace("| leave |", "| faster-ish |") + exempt_row), "is not one of", "an unknown verdict")
+    refuses(_fixture_doc(rows=fn_row.replace("`demo-core`", "`demo-gone`") + exempt_row), "is not a workspace member", "a row for a crate outside the workspace")
+    refuses(_fixture_doc(rows=fn_row.replace("`kernel::dot`", "—") + exempt_row), "has a manifest entry but names no function", "a manifest site whose row names no function")
+    refuses(_fixture_doc(rows=fn_row + exempt_row.replace("| leave |", "| rewrite |")), "must be `leave`", "a crate-level row with a non-leave verdict")
+    no_covers = _fixture_doc().replace("| covers |", "| scope |", 1)
+    refuses(no_covers, "has no `covers` column", "a site table without a `covers` column")
+    refuses(_fixture_doc(benches="| `crates/demo-core/benches/dot.rs` | demo.dot |\n| `crates/demo-core/benches/gone.rs` | demo.dot |\n"), "names no bench file that exists", "a bench row for a file that does not exist")
+    bad_bench_head = _fixture_doc().replace("| bench | sites |", "| bench | rows |")
+    refuses(bad_bench_head, "needs `bench` and `sites` columns", "a bench table without a `sites` column")
+    # the valid neighbour of the column checks: extra descriptive columns are accepted,
+    # and `--write-doc` keeps them while regenerating only the configuration cells
+    extra = _fixture_doc().replace("| reason |", "| reason | path |").replace("|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|")
+    extra = extra.replace("| a loop-carried sum |", "| a loop-carried sum | `src/k.rs:1` |").replace("does not exist |", "does not exist | — |")
+    found = doc_checks(extra, manifest, cells, _FIXTURE_WORLD)
+    expect(not found, f"extra descriptive columns must be accepted: {found}")
+    stale_extra = extra.replace("v0·f0·r0", "v9·f0·r0")
+    expect(write_doc(stale_extra, cells) == extra, "--write-doc keeps extra columns and regenerates only the configuration cells")
+    # `--doc` on a missing document is a failure; an existing one passes the precondition
+    try:
+        require_doc(REPO_ROOT / "docs" / "design" / "no-such-simd-audit.md")
+        failures.append("a missing document must fail --doc")
+    except GateError as err:
+        expect("does not skip it" in str(err), f"the missing document is named: {err}")
+    try:
+        require_doc(Path(__file__).resolve())
+    except GateError as err:
+        failures.append(f"an existing document must pass the --doc precondition: {err}")
 
     if failures:
         print("FAIL: the simd-asm gate's self-test found refusals that do not fire or neighbours that do not pass:", file=sys.stderr)

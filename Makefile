@@ -559,13 +559,13 @@ hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are i
 # missing is a failure here, never a skip. Too slow for `check`, which runs only its
 # `--self-test`.
 #
-# This recipe runs the asm checks alone. The design-document parity and coverage
-# checks are the script's `--doc` mode, which hard-fails when
-# docs/design/purrdf-simd.md does not exist -- so `--doc` joins this recipe in the
-# same change that adds that document, and cannot be added earlier and pass by
-# finding nothing to check.
+# `--doc` adds the audit document's checks: every manifest site is a row of
+# docs/design/purrdf-simd.md and every function row has a manifest site, its
+# generated count cells equal this measurement, and every workspace member and bench
+# file is covered. `--doc` hard-fails when the document is missing; it never skips.
+# `python3 scripts/check-simd-asm.py --write-doc` regenerates the count cells.
 simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
-	python3 scripts/check-simd-asm.py
+	python3 scripts/check-simd-asm.py --doc
 
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they

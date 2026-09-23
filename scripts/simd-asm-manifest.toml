@@ -19,9 +19,24 @@
 # `find_sse2` / `find_avx2` functions, so those are measured in crate `memchr`; on aarch64
 # and wasm32 its kernels are `#[inline]`, and they are measured inside the purrdf
 # function that inlined them.
+#
+# Every function row of the audit document has an entry here, whatever its verdict. A
+# `leave` or `rewrite` entry sets `min_vector_ops = 0` and requires no mnemonic: it
+# records what the site compiles to today (the document's generated cells), and still
+# fails when the symbol it names disappears. A `covered` entry carries the floors and
+# the proof mnemonics that hold on each configuration. The site ids are the document's
+# row ids.
 
 [build]
-packages = ["purrdf-sparql-algebra", "purrdf-rdf"]
+packages = [
+  "purrdf-core", "purrdf-iri", "purrdf-xsd", "purrdf-json", "purrdf-rdf", "purrdf-sparql-algebra",
+  "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
+  "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
+  "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice",
+]
+# purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
+# cross configurations do not have and the asm does not need: it is built as an rlib.
+rlib_packages = ["purrdf-wasm"]
 
 [[site]]
 id = "memchr.sparql-lex-string"
@@ -165,6 +180,38 @@ summary = "memchr2 kernels behind the line-oriented codecs' line split (`split_l
   max_fma = 0
   forbid_relaxed = true
 
+  # `PhysicalLines::next`, the serial line iterator, reaches the same memchr kernel: on
+  # x86_64 through the dispatched `find_sse2` / `find_avx2` measured above, on aarch64 and
+  # wasm32 inlined into the iterator. Measured v22 (both aarch64), v30 (simd128), v0 (wasm32).
+  [[site.measure]]
+  label = "neon (lines)"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_rdf"
+  symbol = "<purrdf_rdf::native_codecs::text_parse::PhysicalLines as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 11
+  require_mnemonics = ["cmeq .16b", "shrn", "umaxp"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "simd128 (lines)"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "<purrdf_rdf::native_codecs::text_parse::PhysicalLines as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 15
+  require_mnemonics = ["i8x16.eq", "i8x16.bitmask"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "swar (lines)"
+  configs = ["wasm32"]
+  crate = "purrdf_rdf"
+  symbol = "<purrdf_rdf::native_codecs::text_parse::PhysicalLines as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
 [[site]]
 id = "sha2.sha256-compress"
 summary = "SHA-256 block compression (content digests): sha2's SHA-NI kernel on x86_64, its portable code elsewhere"
@@ -238,6 +285,1133 @@ summary = "BLAKE3 multi-chunk hashing (GTS content identity): run-time dispatch 
   configs = ["wasm32", "wasm32-simd128"]
   crate = "blake3"
   symbol = "blake3::portable::compress_in_place"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "sparql.lexer-trivia"
+summary = "`Lexer::skip_trivia` and its `terminals::is_ws` byte test, inlined into `Lexer::run`"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::lexer::Lexer>::run"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "sparql.lexer-iri"
+summary = "`Lexer::lex_lt_or_iri`, the three-pass IRIREF scan (`memchr` to `>`, a backslash scan, a forbidden-byte scan)"
+
+  # Inlined through `lex_one` into `run` where `lex_one` is itself inlined.
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "wasm32"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::lexer::Lexer>::run"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Out-of-line `lex_one`, which inlines it.
+  [[site.measure]]
+  configs = ["aarch64", "aarch64-neoverse-v1", "wasm32-simd128"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::lexer::Lexer>::lex_one"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "sparql.lexer-cursor"
+summary = "`Lexer::cur` / `Lexer::peek`, a UTF-8 decode per lookahead"
+
+  [[site.measure]]
+  label = "peek"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::lexer::Lexer>::peek"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "cur (in run)"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_algebra"
+  symbol = "purrdf_sparql_algebra::lexer::Lexer>::run"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "rdf.escape-scan"
+summary = "`ser_model::escape_scan`, the per-char clean-run scan behind `escape_iri` / `escape_literal`"
+
+  [[site.measure]]
+  label = "iri"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::ser_model::escape_iri"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "literal"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::native_codecs::ser_model::escape_literal"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "rdf.sort-canonical"
+summary = "`SerGraph::sort_canonical`, the serializer's canonical statement sort"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "<purrdf_rdf::native_codecs::ser_model::SerGraph>::sort_canonical"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "iri.find-first-of"
+summary = "`parse::find_first_of`, the u64 SWAR delimiter scan, inlined into `parse::scan`"
+
+  # SWAR: the word-at-a-time exit is a trailing-zero count on the match mask.
+  [[site.measure]]
+  label = "swar"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::scan"
+  min_vector_ops = 0
+  require_mnemonics = ["rep bsfq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "swar"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::scan"
+  min_vector_ops = 0
+  require_mnemonics = ["tzcntq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "swar"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::scan"
+  min_vector_ops = 0
+  require_mnemonics = ["rbit", "clz"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "swar"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::scan"
+  min_vector_ops = 0
+  require_mnemonics = ["i64.ctz"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "iri.validate-component"
+summary = "`parse::validate_component`, the per-char component validator"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::parse::validate_component"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "iri.terminals-in-ranges"
+summary = "`terminals::in_ranges`, the per-scalar binary search behind the class predicates (measured in `is_pn_chars`)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::terminals::is_pn_chars"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "xsd.whitespace"
+summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collapse`"
+
+  [[site.measure]]
+  label = "replace"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_replace"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "collapse"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "xsd.canonical-double"
+summary = "`numeric::canonical_double`, the xsd:double canonical lexical form"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::numeric::canonical_double"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "json.parser-string"
+summary = "`Parser::string`, the JSON string body scan"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_json"
+  symbol = "<purrdf_json::parse::Parser>::string"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "json.parser-whitespace"
+summary = "`Parser::whitespace`, inlined into `Parser::value`"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_json"
+  symbol = "<purrdf_json::parse::Parser>::value"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.intern"
+summary = "`Interner::intern`, the fixed-key ahash term interner"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::builder::Interner>::intern"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.content-id-hex"
+summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_hex_32`)"
+
+  [[site.measure]]
+  label = "content-id"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "content-store"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.hex-lower"
+summary = "`hex::lower`, lowercase hex encoding"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::hex::lower"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.pack-dict-prefix"
+summary = "`pack::dict::encode_values` with its inlined `common_prefix_len` front coding"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::dict::encode_values"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.pack-select-in-word"
+summary = "`pack::bits::select_in_word`, the bit-by-bit in-word select"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::bits::select_in_word"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.pack-rank1"
+summary = "`RankSelectDir::rank1`, the O(1) rank: directory lookups plus one in-word popcount"
+
+  # Baseline x86-64 has no POPCNT: `count_ones` compiles to the SWAR bit-count sequence. Measured v0.
+  [[site.measure]]
+  label = "swar popcount"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::pack::bits::RankSelectRef as purrdf_core::ir::pack::bits::RankSelectDir>::rank1"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v0, `popcntq` present.
+  [[site.measure]]
+  label = "popcnt"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::pack::bits::RankSelectRef as purrdf_core::ir::pack::bits::RankSelectDir>::rank1"
+  min_vector_ops = 0
+  require_mnemonics = ["popcntq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `cnt v.8b` + `addv`. Measured v2.
+  [[site.measure]]
+  label = "neon cnt"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::pack::bits::RankSelectRef as purrdf_core::ir::pack::bits::RankSelectDir>::rank1"
+  min_vector_ops = 1
+  require_mnemonics = ["cnt .8b", "addv"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # SVE `cnt z.d`. Measured v1.
+  [[site.measure]]
+  label = "sve cnt"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::pack::bits::RankSelectRef as purrdf_core::ir::pack::bits::RankSelectDir>::rank1"
+  min_vector_ops = 0
+  require_mnemonics = ["cnt .d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Scalar `i64.popcnt`. Measured v0.
+  [[site.measure]]
+  label = "i64.popcnt"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::pack::bits::RankSelectRef as purrdf_core::ir::pack::bits::RankSelectDir>::rank1"
+  min_vector_ops = 0
+  require_mnemonics = ["i64.popcnt"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.pack-intvector-get"
+summary = "`IntVector::get`, the fixed-width packed read (a two-word gather)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::pack::bits::IntVector>::get"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.dataset-scan-filter"
+summary = "the residual `(s, p, o, g)` filter of `RdfDataset::quads_for_pattern_with_plan`, in the `Map<Filter<..>>::next` its callers instantiate"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "core"
+  symbol = "<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<purrdf_core::ir::dataset::QuadCandidates, <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan::{closure#0}>, <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan::{closure#1}> as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.pack-triples-intersect"
+summary = "the pack triples sorted-list intersect (`partition_rows`) and the delta-varint decode (`DeltaListRef::next`)"
+
+  [[site.measure]]
+  label = "intersect"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::triples::partition_rows"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "delta"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::pack::bits::DeltaListRef as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.canon-escape"
+summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-Quads escapes"
+
+  [[site.measure]]
+  label = "iri"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::write_iri_escaped"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "literal"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::canon::write_literal_escaped"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.purremb-f32-decode"
+summary = "`F32Scalars::next`, the per-scalar f32 row decode, inlined into `EffectiveF32Row::next`"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::embedding::view::EffectiveF32Row as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.purremb-norm"
+summary = "`norm_fold` (the normative PURREMB L2 fold), measured in `L2F32Scalars::new`"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::embedding::view::L2F32Scalars>::new"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.paged-map-quad"
+summary = "`paged::map_quad_to_global`, the four-column page-to-global id gather, measured in `PagedDataset::from_provider`"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::paged::PagedDataset>::from_provider"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.xsd-regex-scan"
+summary = "the compiled XSD regex's literal prefilter (`regex_automata` `Memchr::find`) behind `is_match`"
+
+  # x86_64: the prefilter calls memchr, which dispatches at run time. Measured v21.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr_raw::find_sse2"
+  min_vector_ops = 10
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v24 on both.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr_raw::find_avx2"
+  min_vector_ops = 12
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Mask-register compares. Measured v10.
+  [[site.measure]]
+  label = "avx2 (avx512 masks)"
+  configs = ["x86_64-v4"]
+  crate = "memchr"
+  symbol = "memchr::arch::x86_64::memchr::memchr_raw::find_avx2"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # memchr's NEON kernel inlined into the prefilter. Measured v18 on both.
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "regex_automata"
+  symbol = "<regex_automata::util::prefilter::memchr::Memchr as regex_automata::util::prefilter::PrefilterI>::find"
+  min_vector_ops = 9
+  require_mnemonics = ["cmeq .16b", "shrn", "umaxp"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v18.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "regex_automata"
+  symbol = "<regex_automata::util::prefilter::memchr::Memchr as regex_automata::util::prefilter::PrefilterI>::find"
+  min_vector_ops = 9
+  require_mnemonics = ["i8x16.eq", "i8x16.bitmask"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # memchr's SWAR fallback. Measured v0.
+  [[site.measure]]
+  label = "swar"
+  configs = ["wasm32"]
+  crate = "regex_automata"
+  symbol = "<regex_automata::util::prefilter::memchr::Memchr as regex_automata::util::prefilter::PrefilterI>::find"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "eval.regex-row-alloc"
+summary = "the per-row `String` a SPARQL `REGEX` argument is materialized into (`eval_string_arg_expr`)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "purrdf_sparql_eval::expr::eval_string_arg_expr::<purrdf_core::ir::dataset::RdfDataset>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "eval.solution-compatible"
+summary = "`solution::compatible` and `bgp::bind_row`, the solution-row join checks"
+
+  [[site.measure]]
+  label = "compatible"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "purrdf_sparql_eval::solution::compatible::<purrdf_core::ir::term::TermId>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "bind_row"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "eval.bgp-cost-planner"
+summary = "`bgp::cost_order_dp`, the f64 BGP cost planner"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "purrdf_sparql_eval::bgp::cost_order_dp::<purrdf_core::ir::term::TermId>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "eval.bgp-join-probe"
+summary = "`bgp::eval_bgp`, the index-nested-loop join probe loop"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "purrdf_sparql_eval::bgp::eval_bgp::<purrdf_core::ir::dataset::RdfDataset>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "datalog.relation-contains"
+summary = "`Relation::contains`, the galloping batch probe plus the linear tail scan"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_datalog"
+  symbol = "<purrdf_datalog::store::Relation>::contains"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "datalog.gallop-leapfrog"
+summary = "`gallop_lower_bound` (in `Batch::subject_run`) and `LeapfrogValueCursor::seek`"
+
+  [[site.measure]]
+  label = "gallop"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_datalog"
+  symbol = "<purrdf_datalog::store::Batch>::subject_run"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "leapfrog"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_datalog"
+  symbol = "<purrdf_datalog::seminaive::LeapfrogValueCursor>::seek"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "datalog.chase"
+summary = "`chase::chase_until`, the chase fixpoint"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_datalog"
+  symbol = "purrdf_datalog::chase::chase_until"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "entail.escape"
+summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inlined into `write_surface`)"
+
+  [[site.measure]]
+  label = "iri"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_entail"
+  symbol = "purrdf_entail::engine::write_iri_escaped"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "literal (in write_surface)"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_entail"
+  symbol = "purrdf_entail::engine::write_surface"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "entail.classify"
+summary = "classification: `Subsumptions::decide` over the `owl_dl::saturate` completion"
+
+  [[site.measure]]
+  label = "decide"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_entail"
+  symbol = "<purrdf_entail::reasoner::classify::Subsumptions>::decide"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "saturate"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_entail"
+  symbol = "purrdf_entail::owl_dl::saturate::saturate"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "shapes.frontier-dedup"
+summary = "`FrontierDedup::insert`, the small-frontier linear dedup"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shapes"
+  symbol = "<purrdf_shapes::path::FrontierDedup>::insert"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "shapes.path-eval"
+summary = "`path::eval_planned_ids_from_id`, the planned SHACL path walk"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shapes"
+  symbol = "purrdf_shapes::path::eval_planned_ids_from_id::<purrdf_shapes::data_view::ShaclDatasetView>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "shapes.finish-report"
+summary = "`engine::finish_report`, the report sort and assembly"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shapes"
+  symbol = "purrdf_shapes::engine::finish_report"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "shex.char-count"
+summary = "`str::chars().count()` in the ShEx length facets, which calls std's out-of-line `do_count_chars`"
+
+  # std's precompiled counter is not in this build's asm; the call to it is the evidence.
+  [[site.measure]]
+  label = "std count"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_shex"
+  symbol = "purrdf_shex::validate::node::check_node_constraint"
+  min_vector_ops = 0
+  require_mnemonics = ["callq do_count_chars"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "std count"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_shex"
+  symbol = "purrdf_shex::validate::node::check_node_constraint"
+  min_vector_ops = 0
+  require_mnemonics = ["bl do_count_chars"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "std count"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_shex"
+  symbol = "purrdf_shex::validate::node::check_node_constraint"
+  min_vector_ops = 0
+  require_mnemonics = ["call do_count_chars"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "shex.matcher"
+summary = "`matcher::search`, the backtracking triple-expression matcher"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shex"
+  symbol = "purrdf_shex::validate::matcher::search"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "results.xml-escape"
+summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_escape_text`"
+
+  [[site.measure]]
+  label = "push_into"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::xml_escape::push_into::<purrdf_core::sink::TextSink>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "writer"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::xml::xml_escape_text::<purrdf_core::sink::TextSink>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 inlines `xml_escape_text` into the term writer.
+  [[site.measure]]
+  label = "writer"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::xml::write_term::<purrdf_core::sink::TextSink>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "results.csv-field"
+summary = "`csv::push_field`, the CSV field quoting scan"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::csv::push_field::<purrdf_core::sink::TextSink>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "results.json-escape"
+summary = "`json::json_escape_body`, the JSON results string escape (`position` over a byte predicate)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_results"
+  symbol = "purrdf_sparql_results::json::json_escape_body::<purrdf_core::sink::TextSink>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "markdown.lines"
+summary = "`dialect::markdown::lines`, the per-char line split, inlined through `read` into `analyze`"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_markdown"
+  symbol = "purrdf_markdown::analyze"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "knn.dot"
+summary = "`metric::dot`, the sequential binary64 dot fold, inlined into `Kernel::distance`"
+
+  [[site.measure]]
+  label = "f64"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "<purrdf_sparql_eval::knn::metric::Kernel>::distance::<f64, f64>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "f32"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "<purrdf_sparql_eval::knn::metric::Kernel>::distance::<f32, f32>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "knn.sqeuclid"
+summary = "`metric::squared_euclidean_bounded`, the sequential squared-Euclidean fold with a per-block bound check"
+
+  [[site.measure]]
+  label = "f64"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "<purrdf_sparql_eval::knn::metric::Kernel>::distance::<f64, f64>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "bounded (hnsw)"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hnsw"
+  symbol = "<purrdf_hnsw::graph::VectorMatrix>::distance_bounded"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "knn.norm"
+summary = "`metric::norm`, the normative PURREMB L2 norm, measured in `hnsw::builder::compute_norms`"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hnsw"
+  symbol = "purrdf_hnsw::builder::compute_norms"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hnsw.search-build"
+summary = "HNSW `search::search_layer` and `builder::build_graph`, the distance-bound graph walk and build"
+
+  [[site.measure]]
+  label = "search"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hnsw"
+  symbol = "purrdf_hnsw::search::search_layer"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "build"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hnsw"
+  symbol = "purrdf_hnsw::builder::build_graph"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hnsw.distance-cache"
+summary = "`search::DistanceCache`, the per-round `BTreeMap` distance memo, inlined into `search_layer`"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_hnsw"
+  symbol = "purrdf_hnsw::search::search_layer"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "text.bm25f"
+summary = "`PreparedQuery::contribution`, BM25F on `i128` fixed point"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "<purrdf_text::ranking::PreparedQuery>::contribution"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "retrieval.rrf"
+summary = "`reciprocal_rank::contribution`, reciprocal-rank fusion on fixed point"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_retrieval"
+  symbol = "purrdf_retrieval::reciprocal_rank::contribution"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "columnar.plain-codec"
+summary = "`parquet` PLAIN `encode_plain` (inlined into `write_table`) and `decode_plain`"
+
+  [[site.measure]]
+  label = "encode (in write_table)"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_columnar"
+  symbol = "purrdf_columnar::parquet::write_table"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "decode"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_columnar"
+  symbol = "purrdf_columnar::parquet::decode_plain"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "columnar.rle"
+summary = "the RLE / bit-packed hybrid definition-level decode (`decode_definition_levels`)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_columnar"
+  symbol = "purrdf_columnar::parquet::decode_definition_levels"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "geo.exact-limbs"
+summary = "`exact::mag_add` limb carry chain and `Int::gcd` (`gcd_u128`)"
+
+  [[site.measure]]
+  label = "mag_add"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_geo"
+  symbol = "purrdf_geo::exact::mag_add"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "gcd"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_geo"
+  symbol = "<purrdf_geo::exact::Int>::gcd"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "geo.relate"
+summary = "`topology::relate::relate` and its pairwise `segment::intersect`"
+
+  [[site.measure]]
+  label = "relate"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_geo"
+  symbol = "purrdf_geo::topology::relate::relate"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "intersect"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_geo"
+  symbol = "purrdf_geo::topology::segment::intersect"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "gts.cbor-writer"
+summary = "the GTS canonical CBOR writer (`wire::Canonical` serialization)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_gts"
+  symbol = "<purrdf_gts::wire::Canonical as serde_core::ser::Serialize>::serialize"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "wasm.term-marshal"
+summary = "`convert::term_value_into_rdf_term`, the per-term JS-boundary marshalling of SELECT rows"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_wasm"
+  symbol = "purrdf_wasm::convert::term_value_into_rdf_term"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "slice.ownership"
+summary = "`OwnershipAnalyzer::analyze` and `collect_term_iri_refs` (inlined into `inspect_rdf_dataset`)"
+
+  [[site.measure]]
+  label = "analyze"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_slice"
+  symbol = "<purrdf_slice::ownership::OwnershipAnalyzer>::analyze"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "iri refs"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_slice"
+  symbol = "purrdf_slice::ownership::inspect_rdf_dataset"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "cli.pack-input"
+summary = "the CLI pack-input path: `ImmutableInput` acquisition, then `verify_pack` (measured in purrdf-core)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::certify::verify_pack"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "rdf.viz-layout"
+summary = "`viz::layout::layout_scene`, the deterministic layered layout (string-keyed position maps)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::viz::layout::layout_scene"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "rdf.projections"
+summary = "`projections::carrier::project_archive`, the carrier projections (CSVW, LPG, research objects)"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::carrier::project_archive::<purrdf_core::ir::dataset::RdfDataset>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "core.sssom-tsv"
+summary = "`sssom::serialize_tsv`, the SSSOM TSV document writer"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::sssom::serialize_tsv"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "shapes.pydantic-emit"
+summary = "`pydantic::emit_pydantic`, the deterministic Pydantic package emitter"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shapes"
+  symbol = "purrdf_shapes::pydantic::emit_pydantic"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "shapes.schema-compile"
+summary = "`json_schema::compile_schema`, the SHACL to JSON Schema compiler"
+
+  [[site.measure]]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shapes"
+  symbol = "purrdf_shapes::json_schema::compile_schema"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
