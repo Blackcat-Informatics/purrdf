@@ -3431,6 +3431,36 @@ def test_a_non_positive_weight_is_refused_naming_the_stratum() -> None:
         assert answer["rows"], f"a raw weight of {accepted} is a weight and answers"
 
 
+def test_crossing_rank_at_refuses_a_non_positive_weight_and_answers_its_neighbour() -> None:
+    """The crossing derivation refuses a weight its search cannot rest on.
+
+    ``retrieval.crossing_rank_at`` bisects over the head rank, which is exact only
+    while the threshold does not rise with the rank — true only while every weight
+    in it is positive. A zero or negative weight, whether on the stratum that
+    named the candidate or on one that merely shares its block, raises
+    ``ValueError`` naming the weight it was handed.
+
+    The neighbour is executed and pinned: one stratum named the candidate at rank
+    five, two equal strata share its block, so under a smoothing constant of 60
+    the threshold has to fall to half the candidate's bound, which it first does
+    at head rank 71. A one-unit sharer is a weight too and is searched, crossing
+    where a lone sharer does, at rank six.
+    """
+    scale = retrieval.SCALE
+    for decay in (TRUNCATED, "weighted_reciprocal_rank"):
+        for refused in (0, -1):
+            for naming, sharing in (([refused], [scale, scale]), ([scale], [scale, refused])):
+                with pytest.raises(ValueError, match="non-positive weight") as raised:
+                    retrieval.crossing_rank_at(naming, 5, sharing, 60, decay=decay)
+                assert f"Fixed({refused})" in str(raised.value), (
+                    f"the refusal names the weight it was handed: {raised.value}"
+                )
+
+        assert retrieval.crossing_rank_at([scale], 5, [scale, scale], 60, decay=decay) == 71
+        assert retrieval.crossing_rank_at([scale], 5, [scale, 1], 60, decay=decay) == 6
+        assert retrieval.crossing_rank_at([scale], 5, [scale], 60, decay=decay) == 6
+
+
 def test_every_graph_selector_spelling_selects_a_different_reading() -> None:
     """``"any"``, ``"default"`` and a graph IRI are three readings of one corpus.
 
