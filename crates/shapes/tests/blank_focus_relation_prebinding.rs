@@ -17,18 +17,21 @@
 //! itself, which the body then joins against the data graph. So every run tells apart
 //! three outcomes: refused (the subject arrived free), the focus node's own verdict,
 //! and another node's verdict. Each shape runs over four focus nodes — a violating and
-//! a conforming IRI, and a violating and a conforming blank node — and the violating
-//! nodes are told apart by the status literal each one owns, so a blank focus node
-//! whose identity was swapped for the other blank's would report the wrong value or
-//! none.
+//! a conforming IRI, and a violating and a conforming blank node. The oracle holds each
+//! node by the term id the dataset gives it, so the two blank nodes are never merged
+//! into one "blank" answer: each reported focus node must BE the violating node that
+//! owns the reported status, the conforming blank node must report nothing, and each
+//! relation invocation is counted against the exact node it was bound to. A conforming
+//! blank focus node handed the violating blank's answer would be reported under its own
+//! identity, and fail.
 //!
 //! Fixture IRIs are `example.org`; PurRDF mints none.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use purrdf::RdfDataset;
-use purrdf_core::TermValue;
+use purrdf_core::{TermId, TermValue};
 use purrdf_shapes::engine::{parse_shapes, validate_dataset};
 use purrdf_shapes::sparql::enter_property_function_scope;
 use purrdf_sparql_eval::{
@@ -46,12 +49,13 @@ const REL_IRI: &str = "http://example.org/rel/self";
 #[derive(Debug)]
 struct SelfRelation {
     modes: [BindingPattern; 1],
-    /// Every subject a bound invocation was handed, rendered.
-    seen: Mutex<Vec<String>>,
+    /// Every subject a bound invocation was handed, as the term itself — a blank node
+    /// keeps its label and scope, so two blank nodes are never recorded as one.
+    seen: Mutex<Vec<TermValue>>,
 }
 
 impl SelfRelation {
-    fn seen(&self) -> Vec<String> {
+    fn seen(&self) -> Vec<TermValue> {
         self.seen.lock().expect("unpoisoned").clone()
     }
 }
@@ -93,12 +97,7 @@ impl PropertyFunction for SelfRelation {
                     .to_owned(),
             ));
         };
-        let rendered = match subject {
-            TermValue::Blank { .. } => "blank".to_owned(),
-            TermValue::Iri(iri) => iri.clone(),
-            other => format!("{other:?}"),
-        };
-        self.seen.lock().expect("unpoisoned").push(rendered);
+        self.seen.lock().expect("unpoisoned").push(subject.clone());
         Ok(Box::new(OneRow(Some(vec![
             subject.clone(),
             subject.clone(),
@@ -132,6 +131,62 @@ fn items() -> Arc<RdfDataset> {
     );
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&triples)
         .unwrap_or_else(|errors| panic!("fixture data: {}", errors.join("\n")))
+}
+
+/// The four fixture nodes, each by the term id the dataset holds it under.
+struct Nodes {
+    iri_bad: TermId,
+    iri_good: TermId,
+    blank_bad: TermId,
+    blank_good: TermId,
+}
+
+impl Nodes {
+    /// Find each node as the one subject that owns its status literal — so a blank node
+    /// is identified by the data it carries, not by the label it was written with.
+    fn of(dataset: &RdfDataset) -> Self {
+        let status = dataset
+            .term_id_by_iri(&format!("{EX}status"))
+            .expect("the status predicate is in the dataset");
+        let owner = |literal: &str| {
+            let object = dataset
+                .term_id_by_value(&TermValue::simple_literal(literal))
+                .unwrap_or_else(|| panic!("the status {literal:?} is in the dataset"));
+            let owners: Vec<TermId> = dataset
+                .quads()
+                .filter(|quad| quad.p == status && quad.o == object)
+                .map(|quad| quad.s)
+                .collect();
+            assert_eq!(owners.len(), 1, "one node owns {literal:?}: {owners:?}");
+            owners[0]
+        };
+        let nodes = Self {
+            iri_bad: owner("bad iri"),
+            iri_good: owner("fine iri"),
+            blank_bad: owner("bad blank"),
+            blank_good: owner("fine blank"),
+        };
+        for blank in [nodes.blank_bad, nodes.blank_good] {
+            assert!(
+                matches!(dataset.term_value(blank), TermValue::Blank { .. }),
+                "{:?}",
+                dataset.term_value(blank)
+            );
+        }
+        assert_ne!(
+            nodes.blank_bad, nodes.blank_good,
+            "two distinct blank nodes"
+        );
+        nodes
+    }
+}
+
+/// The dataset's own id for a term the validation or the relation handed back — the
+/// identity the oracle compares, which keeps two blank nodes apart.
+fn id_in(dataset: &RdfDataset, value: &TermValue, what: &str) -> TermId {
+    dataset
+        .term_id_by_value(value)
+        .unwrap_or_else(|| panic!("{what} {value:?} is a node the dataset holds"))
 }
 
 /// One shape over every item, whose `sh:select` body is `body`.
@@ -193,21 +248,28 @@ fn bodies() -> [(&'static str, String); 3] {
 
 /// Validate the four items under `body` and hold the report and the relation's
 /// invocations to the claim: every focus node — IRI or blank — reaches the relation
-/// bound, and exactly the two violating nodes are reported, each with its own status.
+/// bound AS ITSELF, and exactly the two violating nodes are reported, each under its own
+/// identity with its own status.
 fn check(position: &str, body: &str) {
     let (registry, relation) = relation();
+    let dataset = items();
+    let nodes = Nodes::of(&dataset);
     let report = {
         let _relations = enter_property_function_scope(registry);
-        validate_dataset(&items(), &shapes(body))
+        validate_dataset(&dataset, &shapes(body))
             .unwrap_or_else(|error| panic!("{position}: the validation runs: {error}"))
     };
     assert!(!report.conforms, "{position}: {report:?}");
-    let reported: BTreeSet<(bool, String)> = report
+    let reported: BTreeSet<(TermId, String)> = report
         .results
         .iter()
         .map(|result| {
             (
-                result.focus_node.to_string().starts_with("_:"),
+                id_in(
+                    &dataset,
+                    &result.focus_node.to_term_value(),
+                    "the focus node",
+                ),
                 result
                     .value
                     .as_ref()
@@ -216,45 +278,50 @@ fn check(position: &str, body: &str) {
             )
         })
         .collect();
-    let expected: BTreeSet<(bool, String)> = [
-        (false, "\"bad iri\"".to_owned()),
-        (true, "\"bad blank\"".to_owned()),
+    let expected: BTreeSet<(TermId, String)> = [
+        (nodes.iri_bad, "\"bad iri\"".to_owned()),
+        (nodes.blank_bad, "\"bad blank\"".to_owned()),
     ]
     .into_iter()
     .collect();
     assert_eq!(
         reported, expected,
-        "{position}: exactly the violating IRI and the violating blank node, each with \
-         the status it owns — {report:?}"
+        "{position}: exactly the violating IRI and the violating blank node, each reported \
+         as itself with the status it owns, and neither conforming node — {report:?}"
     );
     assert_eq!(report.results.len(), 2, "{position}: {report:?}");
 
     // Every focus node reached the relation bound — the relation refuses a free
-    // subject, so every recorded invocation is a bound one — and the blank focus
-    // nodes were handed to it exactly as often as the IRI ones: the validation
-    // runs its query the same number of times per focus node whatever its kind.
+    // subject, so every recorded invocation is a bound one — and each was handed to it
+    // as ITSELF, as often as every other: the validation runs its query the same number
+    // of times per focus node whatever its kind, so a blank focus node bound to the
+    // other blank node would leave one count high and the other short.
     let seen = relation.seen();
-    let count = |subject: &str| seen.iter().filter(|seen| seen.as_str() == subject).count();
-    let per_iri = count(&format!("{EX}iri-bad"));
+    let mut bound: BTreeMap<TermId, usize> = BTreeMap::new();
+    for subject in &seen {
+        *bound
+            .entry(id_in(&dataset, subject, "a bound subject"))
+            .or_default() += 1;
+    }
+    let per_node = bound.get(&nodes.iri_bad).copied().unwrap_or_default();
     assert!(
-        per_iri > 0,
+        per_node > 0,
         "{position}: the IRI focus nodes reached it — {seen:?}"
     );
+    let expected: BTreeMap<TermId, usize> = [
+        nodes.iri_bad,
+        nodes.iri_good,
+        nodes.blank_bad,
+        nodes.blank_good,
+    ]
+    .into_iter()
+    .map(|node| (node, per_node))
+    .collect();
     assert_eq!(
-        count(&format!("{EX}iri-good")),
-        per_iri,
-        "{position}: {seen:?}"
-    );
-    assert_eq!(
-        count("blank"),
-        2 * per_iri,
-        "{position}: both blank focus nodes were handed to the relation bound, as often \
-         as each IRI one — {seen:?}"
-    );
-    assert_eq!(
-        seen.len(),
-        4 * per_iri,
-        "{position}: nothing else — {seen:?}"
+        bound, expected,
+        "{position}: each focus node — both blank ones included, each as itself — was \
+         handed to the relation bound as often as every other, and nothing else was — \
+         {seen:?}"
     );
 }
 
