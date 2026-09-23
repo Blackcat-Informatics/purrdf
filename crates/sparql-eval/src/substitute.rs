@@ -124,7 +124,7 @@ impl<'a> Prebindings<'a> {
     /// # Panics
     ///
     /// If `index` is out of range, exactly as indexing the underlying slice would.
-    fn name(self, index: usize) -> &'a str {
+    pub(crate) fn name(self, index: usize) -> &'a str {
         match self {
             Self::Owned(list) => list[index].0.as_str(),
             Self::Borrowed(list) => list[index].variable,
@@ -726,10 +726,12 @@ fn seed_row(driven: &[usize], probes: &[(Variable, GroundTerm)]) -> GraphPattern
 /// Sound for the same reason the pushdown is: joining the one-row `var = b` onto the
 /// call keeps exactly the call's rows that bind `var` to `b`, and a call driven with
 /// `var = b` produces exactly those rows. In a scope the seed does not reach — the
-/// SHACL walk's `OPTIONAL` arms, unprojected sub-`SELECT`s and `EXISTS` bodies — it
-/// binds `var` to `b` in the call's own group, which is what writing the value there
-/// would have done had it a spelling. The variable is still in the call, so its
-/// column survives and needs no restoring `VALUES`.
+/// SHACL walk's `OPTIONAL` arms and unprojected sub-`SELECT`s — it binds `var` to `b`
+/// in the call's own group, which is what writing the value there would have done had
+/// it a spelling. The variable is still in the call, so its column survives and needs
+/// no restoring `VALUES`. An `EXISTS` body is the exception: the row it filters may
+/// already bind `var`, so the SHACL walk drives a call there inside a projection that
+/// does not carry `var` out — see [`plant_scoped_driver`].
 ///
 /// Idempotent: a value the left operand already drives is not driven again (see
 /// [`drives`]), so the SHACL walk passing over a call the pushdown already drove
@@ -793,6 +795,93 @@ fn plant_left_driver(left: &mut GraphPattern, seed: GraphPattern) {
         left: Box::new(seed),
         right: Box::new(left),
     });
+}
+
+/// Whether the SHACL walk ([`substitute_in_graph_pattern`]) is inside an `EXISTS`
+/// body, which decides where a call's driver may be planted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WalkScope {
+    /// Outside every `EXISTS` body: the driver binds the driven variable where the
+    /// call is, as the `VALUES` seed binds it.
+    Group,
+    /// Inside an `EXISTS` or `NOT EXISTS` body, at any depth: the driver is planted in
+    /// a scope of its own — see [`plant_scoped_driver`].
+    ExistsBody,
+}
+
+/// A call inside an `EXISTS` body, driven in a scope of its own:
+/// `Project(kept, Lateral(seed, call))`, where `kept` is every variable the call names
+/// except the ones `seed` drives ([`undriven_variables`]).
+///
+/// # Why the driver cannot bind the driven variable here
+///
+/// An `EXISTS` body is evaluated against the row being filtered, and that row usually
+/// already binds the pre-bound variable: the `VALUES` seed joined onto the core
+/// pattern is below the `FILTER`. A `VALUES` inside the body that binds the same
+/// variable is a REBINDING of it, which SPARQL's substitution semantics define no
+/// answer for, and the evaluator refuses it rather than guess
+/// (`crate::governor::soundness::exists_row_collision`). A stand-alone driver there
+/// turned every blank-node or quoted-triple focus node into that refusal, while an IRI
+/// focus node — written into the argument as a constant — validated.
+///
+/// # Why a projection is the sound place for it
+///
+/// A projection is a scope boundary for both the collision check and correlated
+/// substitution: a variable it does not carry out is a different variable inside it.
+/// So the call is still invoked with the driven argument BOUND to the pre-bound term,
+/// and its output no longer carries that variable — which is exactly the output of the
+/// same call with an IRI written into the argument, the answer the walk already gives
+/// for an IRI focus node. Every other variable the call names, including a predicate
+/// variable inside a quoted-triple argument, is carried out unchanged, so what the
+/// call binds for the rest of the body, and what it correlates with, is unchanged.
+fn plant_scoped_driver(call: &mut GraphPattern, seed: GraphPattern, kept: Vec<Variable>) {
+    purrdf_sparql_algebra::substitute::take_and_replace(call, |call| GraphPattern::Project {
+        inner: Box::new(GraphPattern::Lateral {
+            left: Box::new(seed),
+            right: Box::new(call),
+        }),
+        variables: kept,
+    });
+}
+
+/// Every variable `call` names in an argument — a predicate variable inside a
+/// quoted-triple argument included — that `seed` does not drive, in first-mention
+/// order: what [`plant_scoped_driver`]'s projection carries out.
+///
+/// A `seed` that is not the one-row `VALUES` [`seed_row`] builds drives nothing, so
+/// every variable is kept: the collision check then refuses the rebinding loudly,
+/// rather than a variable the call binds being hidden from the rest of the body.
+fn undriven_variables(
+    call: &purrdf_sparql_algebra::PropertyFunctionCall,
+    seed: &GraphPattern,
+) -> Vec<Variable> {
+    fn keep(var: &Variable, driven: &[Variable], kept: &mut Vec<Variable>) {
+        if !driven.contains(var) && !kept.contains(var) {
+            kept.push(var.clone());
+        }
+    }
+    fn visit(term: &TermPattern, driven: &[Variable], kept: &mut Vec<Variable>) {
+        match term {
+            TermPattern::Variable(var) => keep(var, driven, kept),
+            TermPattern::Triple(triple) => {
+                visit(&triple.subject, driven, kept);
+                if let NamedNodePattern::Variable(var) = &triple.predicate {
+                    keep(var, driven, kept);
+                }
+                visit(&triple.object, driven, kept);
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+    let driven: &[Variable] = match seed {
+        GraphPattern::Values { variables, .. } => variables,
+        _ => &[],
+    };
+    let mut kept = Vec::new();
+    for argument in call.subject_args.iter().chain(call.object_args.iter()) {
+        visit(argument, driven, &mut kept);
+    }
+    kept
 }
 
 /// Write a row's values into a property-function call's arguments, and return the
@@ -1061,7 +1150,7 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 
     let mut query = apply_probes(query, probes);
     map_patterns_in_query(&mut query, |pattern| {
-        substitute_in_graph_pattern(pattern, &expr_subs);
+        substitute_in_graph_pattern(pattern, &expr_subs, WalkScope::Group);
     });
     query
 }
@@ -1159,7 +1248,7 @@ fn map_patterns_in_query(query: &mut Query, f: impl FnOnce(&mut GraphPattern)) {
 }
 
 /// Recursively substitute pre-bound variables into a [`GraphPattern`].
-fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs) {
+fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs, scope: WalkScope) {
     // Wildcard-free on purpose: a `GraphPattern` variant added later must fail to
     // compile here rather than silently pass through unsubstituted.
     match pattern {
@@ -1175,20 +1264,36 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
         GraphPattern::Join { left, right }
         | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
-            substitute_in_graph_pattern(left, expr_subs);
-            substitute_in_graph_pattern(right, expr_subs);
+            substitute_in_graph_pattern(left, expr_subs, scope);
+            substitute_in_graph_pattern(right, expr_subs, scope);
         }
         // A call that is a `Lateral`'s right operand is substituted in place and never
         // walked as a stand-alone call: that position is what hands it its left rows,
         // and the drive below keeps it there.
+        //
+        // Inside an `EXISTS` body the driver cannot join the left operand: that would
+        // put the driven variable into the rows the body joins with the row being
+        // filtered, which may already bind it. The call is driven in a scope of its own
+        // instead — see [`plant_scoped_driver`] — and stays the `Lateral`'s right
+        // operand, now correlated with each left row through the ordinary per-row path.
         GraphPattern::Lateral { left, right } => {
-            substitute_in_graph_pattern(left, expr_subs);
+            substitute_in_graph_pattern(left, expr_subs, scope);
             if let GraphPattern::PropertyFunction(call) = &mut **right {
-                if let Some(seed) = bind_call_arguments(call, &expr_subs.0, Some(left)) {
-                    plant_left_driver(left, seed);
+                match scope {
+                    WalkScope::Group => {
+                        if let Some(seed) = bind_call_arguments(call, &expr_subs.0, Some(left)) {
+                            plant_left_driver(left, seed);
+                        }
+                    }
+                    WalkScope::ExistsBody => {
+                        if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
+                            let kept = undriven_variables(call, &seed);
+                            plant_scoped_driver(right, seed, kept);
+                        }
+                    }
                 }
             } else {
-                substitute_in_graph_pattern(right, expr_subs);
+                substitute_in_graph_pattern(right, expr_subs, scope);
             }
         }
         GraphPattern::LeftJoin {
@@ -1196,19 +1301,19 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
             right,
             expression,
         } => {
-            substitute_in_graph_pattern(left, expr_subs);
-            substitute_in_graph_pattern(right, expr_subs);
+            substitute_in_graph_pattern(left, expr_subs, scope);
+            substitute_in_graph_pattern(right, expr_subs, scope);
             if let Some(expression) = expression {
                 substitute_in_expression(expression, expr_subs);
             }
         }
         GraphPattern::Filter { expr, inner } => {
             substitute_in_expression(expr, expr_subs);
-            substitute_in_graph_pattern(inner, expr_subs);
+            substitute_in_graph_pattern(inner, expr_subs, scope);
         }
         GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
             substitute_in_named_node_pattern(name, expr_subs);
-            substitute_in_graph_pattern(inner, expr_subs);
+            substitute_in_graph_pattern(inner, expr_subs, scope);
         }
         // The operand and the expression are substituted; the target bindings
         // (`Extend`'s `variable`, `Unfold`'s `element`/`companion`) are this node's
@@ -1219,11 +1324,11 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
         | GraphPattern::Unfold {
             inner, expression, ..
         } => {
-            substitute_in_graph_pattern(inner, expr_subs);
+            substitute_in_graph_pattern(inner, expr_subs, scope);
             substitute_in_expression(expression, expr_subs);
         }
         GraphPattern::OrderBy { inner, expression } => {
-            substitute_in_graph_pattern(inner, expr_subs);
+            substitute_in_graph_pattern(inner, expr_subs, scope);
             for order in expression.iter_mut() {
                 substitute_in_order_expression(order, expr_subs);
             }
@@ -1234,7 +1339,7 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
         GraphPattern::Project { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => substitute_in_graph_pattern(inner, expr_subs),
+        | GraphPattern::Slice { inner, .. } => substitute_in_graph_pattern(inner, expr_subs, scope),
         // A property function's arguments are INVOCATION INPUTS, evaluated per row like
         // a function call's arguments rather than matched against the graph like a BGP
         // term — so they are substituted here, on the same rule and for the same reason
@@ -1245,16 +1350,23 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
         // has no constant spelling here, and the `VALUES` seed does not reach this
         // scope either, so it is DRIVEN into the call through a one-row `VALUES` of its
         // own — see [`drive_call_arguments`] — and the relation is invoked with it
-        // bound, exactly as with an IRI.
+        // bound, exactly as with an IRI. Inside an `EXISTS` body that driver is planted
+        // in a scope of its own, for the reason [`plant_scoped_driver`] gives.
         GraphPattern::PropertyFunction(call) => {
             if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
-                plant_stand_alone_driver(pattern, seed);
+                match scope {
+                    WalkScope::Group => plant_stand_alone_driver(pattern, seed),
+                    WalkScope::ExistsBody => {
+                        let kept = undriven_variables(call, &seed);
+                        plant_scoped_driver(pattern, seed, kept);
+                    }
+                }
             }
         }
         GraphPattern::Group {
             inner, aggregates, ..
         } => {
-            substitute_in_graph_pattern(inner, expr_subs);
+            substitute_in_graph_pattern(inner, expr_subs, scope);
             // `AggregateExpression` is rebuilt through its consuming `into_parts`, so
             // the entries are taken by value and collected back. `Vec::into_iter().
             // collect()` into the same element type reuses the buffer, so the take and
@@ -1393,7 +1505,10 @@ fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
             }
         }
         // Back into graph-pattern territory: the two walks convert together.
-        Expression::Exists(inner) => substitute_in_graph_pattern(inner, expr_subs),
+        // Everything below is an `EXISTS` body, however deeply it is nested there.
+        Expression::Exists(inner) => {
+            substitute_in_graph_pattern(inner, expr_subs, WalkScope::ExistsBody);
+        }
     }
 }
 
@@ -1889,6 +2004,64 @@ mod tests {
                 bindings: vec![vec![Some(blank)]],
             }),
             "it is driven by a one-row VALUES instead"
+        );
+    }
+
+    /// **Inside an `EXISTS` body a call is driven in a scope of its own; outside one it
+    /// is driven where it is.** The same call, pre-bound to a blank node, is rewritten
+    /// both ways in one query: outside the `EXISTS`, `Lateral(VALUES, call)` binds
+    /// `?this` beside the call's own variables; inside it, the same driver sits under a
+    /// projection carrying out every variable the call names — a predicate variable
+    /// inside a quoted-triple argument included — except `?this`, so the body never
+    /// rebinds the `?this` of the row it filters.
+    #[test]
+    fn a_call_inside_an_exists_body_is_driven_in_a_scope_of_its_own() {
+        let this = Variable::new("this");
+        let p = Variable::new("p");
+        let o = Variable::new("o");
+        let out = Variable::new("out");
+        let call = GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+            iri: "http://example.org/rel".to_owned(),
+            subject_args: vec![TermPattern::Triple(Box::new(TriplePattern {
+                subject: TermPattern::Variable(this.clone()),
+                predicate: NamedNodePattern::Variable(p.clone()),
+                object: TermPattern::Variable(o.clone()),
+            }))],
+            object_args: vec![TermPattern::Variable(out.clone())],
+        });
+        let blank = GroundTerm::BlankNode(BlankNode::new("b"));
+        let driver = || GraphPattern::Lateral {
+            left: Box::new(GraphPattern::Values {
+                variables: vec![this.clone()],
+                bindings: vec![vec![Some(blank.clone())]],
+            }),
+            right: Box::new(call.clone()),
+        };
+        let mut pattern = GraphPattern::Join {
+            left: Box::new(call.clone()),
+            right: Box::new(GraphPattern::Filter {
+                expr: Expression::Exists(Box::new(call.clone())),
+                inner: Box::new(GraphPattern::Bgp {
+                    patterns: Vec::new(),
+                }),
+            }),
+        };
+        let subs = ExprSubs(vec![(this.clone(), blank.clone())]);
+        substitute_in_graph_pattern(&mut pattern, &subs, WalkScope::Group);
+        assert_eq!(
+            pattern,
+            GraphPattern::Join {
+                left: Box::new(driver()),
+                right: Box::new(GraphPattern::Filter {
+                    expr: Expression::Exists(Box::new(GraphPattern::Project {
+                        inner: Box::new(driver()),
+                        variables: vec![p, o, out],
+                    })),
+                    inner: Box::new(GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    }),
+                }),
+            }
         );
     }
 }

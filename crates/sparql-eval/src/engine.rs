@@ -961,27 +961,42 @@ impl NativeSparqlEngine {
     where
         D: FallibleDatasetView + Sync,
     {
+        self.query_prepared_fallible_view_admitted(
+            dataset,
+            prepared,
+            &AdmittedSubstitutions::prepared(substitutions),
+            options,
+        )
+    }
+
+    /// [`Self::query_prepared_fallible_view`] for a plan admitted with the parameters
+    /// `substitutions` carries — the body both it and [`Self::query_fallible_view`] run.
+    fn query_prepared_fallible_view_admitted<'d, D>(
+        &'d self,
+        dataset: &'d D,
+        prepared: &PreparedQuery,
+        substitutions: &AdmittedSubstitutions<'_>,
+        options: QueryOptions<'d>,
+    ) -> FallibleSparqlResult<D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
         preflight_fallible_view(dataset)?;
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
             (|| {
-                check_plan_matches_relations(
-                    prepared,
-                    options,
-                    &crate::DetHashSet::default(),
-                    ShaclPrebinding::None,
-                )?;
+                substitutions.parameters.check(prepared, options)?;
                 let ctx = self.eval_ctx(dataset);
                 let mut ctx = apply_query_options(ctx, options)?;
                 let outcome = match options.prebinding {
                     ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
                         prepared,
-                        Prebindings::Owned(substitutions),
+                        Prebindings::Owned(substitutions.values),
                         &mut ctx,
                     )?,
                     ShaclPrebinding::None => evaluate_with_substitutions(
                         prepared,
-                        Prebindings::Owned(substitutions),
+                        Prebindings::Owned(substitutions.values),
                         &mut ctx,
                     )?,
                 };
@@ -1014,11 +1029,18 @@ impl NativeSparqlEngine {
         D: FallibleDatasetView + Sync,
     {
         preflight_fallible_view(dataset)?;
-        let prepared = match self.prepare_for(request.query, request.base_iri, options.env) {
+        let substitutions =
+            AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+        let prepared = match self.prepare_request(
+            request.query,
+            request.base_iri,
+            options.env,
+            &substitutions.parameters,
+        ) {
             Ok(prepared) => prepared,
             Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic)),
         };
-        self.query_prepared_fallible_view(dataset, &prepared, request.substitutions, options)
+        self.query_prepared_fallible_view_admitted(dataset, &prepared, &substitutions, options)
     }
 
     /// Parse and execute one request under caller-supplied execution governors.
@@ -1064,13 +1086,16 @@ impl NativeSparqlEngine {
         options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
-        self.query_prepared_governed_view(
-            &**dataset,
-            &prepared,
-            request.substitutions,
-            options,
-            governors,
+        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+        let prepared = self.prepare_request(
+            request.query,
+            request.base_iri,
+            options.env,
+            &admitted.parameters,
+        )?;
+        let state = Arc::new(GovernorState::new(governors));
+        self.query_governed_prepared_in_state(
+            &**dataset, &prepared, &admitted, options, None, &state,
         )
     }
 
@@ -1103,7 +1128,7 @@ impl NativeSparqlEngine {
         self.query_governed_prepared_in_state(
             dataset,
             prepared,
-            substitutions,
+            &AdmittedSubstitutions::prepared(substitutions),
             options,
             None,
             &state,
@@ -1221,17 +1246,12 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         prepared: &PreparedQuery,
-        substitutions: &[(String, TermValue)],
+        substitutions: &AdmittedSubstitutions<'_>,
         options: QueryOptions<'d>,
         source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        check_plan_matches_relations(
-            prepared,
-            options,
-            &crate::DetHashSet::default(),
-            ShaclPrebinding::None,
-        )?;
+        substitutions.parameters.check(prepared, options)?;
         // `prepared.relations` is the registry fingerprint computed once at prepare and
         // just validated against `options.property_functions()` above — reused rather than
         // re-derived, so this receipt's identity and the plan cache's key never disagree.
@@ -1249,12 +1269,12 @@ impl NativeSparqlEngine {
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
                 prepared,
-                Prebindings::Owned(substitutions),
+                Prebindings::Owned(substitutions.values),
                 &mut ctx,
             )?,
             ShaclPrebinding::None => evaluate_governed_with_substitutions(
                 prepared,
-                Prebindings::Owned(substitutions),
+                Prebindings::Owned(substitutions.values),
                 &mut ctx,
             )?,
         };
@@ -1302,12 +1322,18 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
+        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+        let prepared = self.prepare_request(
+            request.query,
+            request.base_iri,
+            options.env,
+            &admitted.parameters,
+        )?;
         let state = Arc::new(GovernorState::new(governors));
         self.query_governed_prepared_in_state(
             dataset,
             &prepared,
-            request.substitutions,
+            &admitted,
             options,
             Some(source),
             &state,
@@ -1353,14 +1379,14 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
-        self.query_prepared_governed_in_operation(
-            dataset,
-            &prepared,
-            request.substitutions,
-            options,
-            state,
-        )
+        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+        let prepared = self.prepare_request(
+            request.query,
+            request.base_iri,
+            options.env,
+            &admitted.parameters,
+        )?;
+        self.query_governed_prepared_in_state(dataset, &prepared, &admitted, options, None, state)
     }
 
     /// Execute a prepared plan under a caller-owned multi-query operation budget.
@@ -1385,7 +1411,7 @@ impl NativeSparqlEngine {
         self.query_governed_prepared_in_state(
             dataset,
             prepared,
-            substitutions,
+            &AdmittedSubstitutions::prepared(substitutions),
             options,
             None,
             state,
@@ -1488,7 +1514,13 @@ impl NativeSparqlEngine {
                 evidence: GovernedEvidence::new(evidence, state.evidence()),
             });
         }
-        let prepared = match self.prepare_for(request.query, request.base_iri, options.env) {
+        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+        let prepared = match self.prepare_request(
+            request.query,
+            request.base_iri,
+            options.env,
+            &admitted.parameters,
+        ) {
             Ok(prepared) => prepared,
             Err(diagnostic) => {
                 return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
@@ -1497,12 +1529,7 @@ impl NativeSparqlEngine {
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
             self.query_governed_prepared_in_state(
-                dataset,
-                &prepared,
-                request.substitutions,
-                options,
-                source,
-                &state,
+                dataset, &prepared, &admitted, options, source, &state,
             )
         };
         finish_governed_fallible_query(dataset, &state, evaluation)
@@ -1780,6 +1807,36 @@ impl NativeSparqlEngine {
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         self.cache.borrow_mut().prepare_in_env(query, base_iri, env)
+    }
+
+    /// [`Self::prepare_for`] for a request that carries substitutions: the plan is
+    /// admitted with every substituted name counted as bound wherever the request's
+    /// rewrite binds it, exactly as [`Self::prepare_execution`] admits its declared
+    /// parameters.
+    ///
+    /// A request's substitutions are bound on every run of it — each one carries its
+    /// value — so they are the same promise a prepared execution's parameters are.
+    /// Admitting the plan without them refused a property-function call whose input is
+    /// a substituted variable, in every term kind, as reachable only in a free mode the
+    /// relation does not serve, although the rewrite binds that input before the call
+    /// is ever invoked. The admission's reach is the request's own rewrite lane, which
+    /// is part of the plan-cache key, so a request and a prepared execution with the
+    /// same names under the same lane share one plan. A request with no substitutions
+    /// reaches the same entry [`Self::prepare_for`] does.
+    fn prepare_request(
+        &self,
+        query: &str,
+        base_iri: Option<&str>,
+        env: &crate::extension_env::ExtensionEnv,
+        admitted: &RequestParameters<'_>,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        self.cache.borrow_mut().prepare_execution_plan(
+            query,
+            base_iri,
+            env,
+            &admitted.names,
+            admitted.reach,
+        )
     }
 
     /// Bind every SPARQL-bodied function in `functions` against `env`: parse each
@@ -2180,7 +2237,13 @@ impl NativeSparqlEngine {
         request: SparqlRequest<'_>,
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
+        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+        let prepared = self.prepare_request(
+            request.query,
+            request.base_iri,
+            options.env,
+            &admitted.parameters,
+        )?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -2598,7 +2661,12 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
-        let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
+        let admitted = RequestParameters::of(
+            Prebindings::Borrowed(request.substitutions),
+            options.prebinding,
+        );
+        let prepared =
+            self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -2639,13 +2707,13 @@ impl NativeSparqlEngine {
         state: &Arc<GovernorState>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
-        let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
-        check_plan_matches_relations(
-            &prepared,
-            options,
-            &crate::DetHashSet::default(),
-            ShaclPrebinding::None,
-        )?;
+        let admitted = RequestParameters::of(
+            Prebindings::Borrowed(request.substitutions),
+            options.prebinding,
+        );
+        let prepared =
+            self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
+        admitted.check(&prepared, options)?;
         let identity = relation_identity(&prepared, options.property_functions())?;
         if let Some(refused) = self.admit_refusal(
             dataset,
@@ -2733,7 +2801,13 @@ impl NativeSparqlEngine {
         source: &'d (dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
+        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
+        let prepared = self.prepare_request(
+            request.query,
+            request.base_iri,
+            options.env,
+            &admitted.parameters,
+        )?;
         let ctx = self.eval_ctx(dataset).with_remote(source);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -3030,6 +3104,94 @@ impl QueryOptions<'_> {
 impl Default for QueryOptions<'_> {
     fn default() -> Self {
         Self::EMPTY
+    }
+}
+
+/// The names a request pre-binds and the rewrite that binds them: what the request's
+/// plan is admitted with ([`NativeSparqlEngine::prepare_request`]) and what its
+/// admission is re-checked against ([`check_plan_matches_relations`]).
+///
+/// The names are sorted and free of repeats, the form the plan-cache key takes, so one
+/// set of names reaches one entry whatever order the request spelled them in. Inline
+/// storage for the handful of names a request binds, because this is built per
+/// request and a SHACL validation sends one request per focus node.
+struct RequestParameters<'a> {
+    /// The pre-bound variable names, sorted and without repeats.
+    names: smallvec::SmallVec<[&'a str; 8]>,
+    /// The rewrite the names are admitted under; [`ShaclPrebinding::None`] when there
+    /// are none, so a request without substitutions shares the plain plan.
+    reach: ShaclPrebinding,
+}
+
+impl<'a> RequestParameters<'a> {
+    /// The parameters of a request whose substitutions are `substitutions`, rewritten
+    /// under `lane`.
+    fn of(substitutions: Prebindings<'a>, lane: ShaclPrebinding) -> Self {
+        let mut names: smallvec::SmallVec<[&'a str; 8]> = (0..substitutions.len())
+            .map(|index| substitutions.name(index))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        let reach = if names.is_empty() {
+            ShaclPrebinding::None
+        } else {
+            lane
+        };
+        Self { names, reach }
+    }
+
+    /// No parameters: what a plan prepared by [`NativeSparqlEngine::prepare_query`] or
+    /// [`NativeSparqlEngine::prepare_query_with_options`] was admitted with.
+    fn none() -> Self {
+        Self {
+            names: smallvec::SmallVec::new(),
+            reach: ShaclPrebinding::None,
+        }
+    }
+
+    /// Re-check `prepared` against `options` under these parameters — see
+    /// [`check_plan_matches_relations`].
+    fn check(
+        &self,
+        prepared: &PreparedQuery,
+        options: QueryOptions<'_>,
+    ) -> Result<(), RdfDiagnostic> {
+        check_plan_matches_relations(
+            prepared,
+            options,
+            &crate::property_fn_plan::parameter_set(&self.names),
+            self.reach,
+        )
+    }
+}
+
+/// A request's owned substitutions together with the parameters its plan was admitted
+/// with — what a governed or fallible body needs to re-check the admission and then
+/// apply the rewrite, carried as one value.
+struct AdmittedSubstitutions<'a> {
+    /// The substitutions, as the request spelled them.
+    values: &'a [(String, TermValue)],
+    /// The parameters the plan was admitted with.
+    parameters: RequestParameters<'a>,
+}
+
+impl<'a> AdmittedSubstitutions<'a> {
+    /// A text request's substitutions: its plan is admitted with every name they bind,
+    /// under `lane` — see [`NativeSparqlEngine::prepare_request`].
+    fn requested(values: &'a [(String, TermValue)], lane: ShaclPrebinding) -> Self {
+        Self {
+            values,
+            parameters: RequestParameters::of(Prebindings::Owned(values), lane),
+        }
+    }
+
+    /// Substitutions handed to a plan the caller prepared, which was admitted with no
+    /// parameters.
+    fn prepared(values: &'a [(String, TermValue)]) -> Self {
+        Self {
+            values,
+            parameters: RequestParameters::none(),
+        }
     }
 }
 
