@@ -304,6 +304,7 @@ fn registry(
             // given, so the exhaustive declaration is the true one. It is
             // stated rather than left out, because there is no default.
             fidelity: RankFidelity::EXACT,
+            arithmetic: None,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,
@@ -907,6 +908,7 @@ fn registry_declaring(
             // given, so the exhaustive declaration is the true one. It is
             // stated rather than left out, because there is no default.
             fidelity: RankFidelity::EXACT,
+            arithmetic: None,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,

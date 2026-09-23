@@ -203,10 +203,23 @@ The choice of arithmetic is recorded wherever it outlives the call:
 - the HNSW profile declaration folds the arithmetic identifier, so the profile
   digest binds the law;
 - `HnswSpace::evidence()` and `LOSS_EVIDENCE` carry the arithmetic-specific text;
-- the kNN relation's ranked declaration folds the identifier, and a reassociated
-  relation declares a perturbed order fidelity with the evidence text;
+- the kNN relation is `EmbeddingKnnRelation<A: Arithmetic = Exact>`: `new` builds the
+  exact relation and `new_reassociated` the reassociated one, resolving its dispatch
+  path once at construction (a flushing float environment is refused there, and on
+  every search, with the named `EvalError::FloatEnvironment`), and the scan runs
+  `A`'s batch kernel on that path. Its ranked declaration names the law in
+  `RankedDeclaration::arithmetic`, which `canonical_description` folds, so an exact
+  and a reassociated producer over one space have different registry content
+  fingerprints and so different plan ids. A declaration that names no arithmetic
+  (the lexical producer, which ranks fixed-point integers) describes itself in the
+  bytes it always did. A reassociated relation also composes the host's order
+  fidelity with `OrderFidelity::Perturbed`, carrying the evidence text for its
+  resolved path verbatim, through `composed_order_fidelity`, the one composition
+  the HNSW relation also uses. The completeness axis stays the host's, because a
+  reassociated scan still scores every row;
 - the fusion trailer (`FusionTrailer::fidelities`, `RankFidelity`) carries that
-  fidelity into any fused ranking.
+  fidelity into any fused ranking, and an answer with a reassociated stratum reports
+  it as having no finite score bound.
 
 Two records deliberately do **not** change. `DistanceMetric` names the metric's
 semantics, which are unchanged; PURREMB §7.4 permits a kernel to optimize the

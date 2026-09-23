@@ -314,6 +314,7 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
         // promise is the honest one on both terms; each is exercised where it is
         // the subject, in `fusion.rs`.
         fidelity: RankFidelity::EXACT,
+        arithmetic: None,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory: true,

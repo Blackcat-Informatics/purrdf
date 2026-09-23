@@ -97,6 +97,7 @@ fn ranked_declaration() -> RankedDeclaration {
         duplicates: DuplicatePolicy::Unique,
         // The fixture producer is exhaustive over its own table.
         fidelity: RankFidelity::EXACT,
+        arithmetic: None,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory: true,

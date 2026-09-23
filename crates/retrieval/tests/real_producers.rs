@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
+use purrdf_core::distance::Arithmetic;
 use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
     CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
@@ -310,6 +311,14 @@ fn space_over(rows: &[(&str, Vec<f64>)], guard: KnnGuard) -> EmbeddingSpace {
 /// Register both real relations as ranked producers, using the declaration each
 /// relation hands out for a caller-supplied stratum.
 fn registry() -> PropertyFunctionRegistry {
+    registry_with(EmbeddingKnnRelation::new(Arc::new(embedding_space())))
+}
+
+/// [`registry`], with `knn` as the nearest-neighbour producer: the same text
+/// relation, the same space and the same host declarations, so two registries built
+/// from two relations over one space differ in the relation's arithmetic and in
+/// nothing else.
+fn registry_with<A: Arithmetic>(knn: EmbeddingKnnRelation<A>) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
 
     let text = TextSearchRelation::new(Arc::new(text_index()));
@@ -327,7 +336,6 @@ fn registry() -> PropertyFunctionRegistry {
         .expect("a single-partition index declares a ranked order");
     registry.register_ranked(TEXT_PF, Arc::new(text), text_declaration);
 
-    let knn = EmbeddingKnnRelation::new(Arc::new(embedding_space()));
     let knn_declaration = knn.ranked_declaration(
         kernel_iri(KNN_STRATUM),
         // The space's rows are IRIs, and an IRI seed is what this host's
@@ -1906,4 +1914,67 @@ fn a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores() {
             &RankFidelity::EXACT
         );
     }
+}
+
+/// A fused answer carries the reassociated arithmetic's own divergence to its
+/// reader, and the exact producer's answer does not.
+///
+/// The two registries are [`registry_with`] over one space, one text index and one
+/// set of host declarations — the host states `EXACT` for the nearest-neighbour
+/// stratum in both — so the only difference between the treatment and the control
+/// is the arithmetic the relation was built under. The evidence the treatment's
+/// trailer carries is therefore the relation's, not the host's, and it arrives
+/// byte for byte.
+#[test]
+fn fusion_trailer_names_reassociated_kernel() {
+    let fast = EmbeddingKnnRelation::new_reassociated(Arc::new(embedding_space()))
+        .expect("the default float environment is the IEEE one");
+    let resolved = fast.resolved().expect("resolved at construction");
+    let evidence = resolved
+        .evidence()
+        .expect("the reassociated arithmetic names its divergence");
+    let reassociated = answer_from(&registry_with(fast));
+    let exact = answer_from(&registry_with(EmbeddingKnnRelation::new(Arc::new(
+        embedding_space(),
+    ))));
+
+    // The treatment: the nearest-neighbour stratum's fidelity carries the
+    // arithmetic's evidence, verbatim, on the order axis.
+    let carried = reassociated
+        .trailer
+        .fidelities
+        .get(&iri(KNN_STRATUM))
+        .expect("the nearest-neighbour producer declared a fidelity");
+    assert_eq!(
+        carried.evidence().map(|e| &**e).collect::<Vec<_>>(),
+        vec![evidence],
+        "the evidence names the {} path this relation runs",
+        resolved.path()
+    );
+    assert!(carried.order_is_unbounded());
+    assert!(
+        !carried.may_omit(),
+        "a reassociated scan still scores every row, so the host's completeness stands"
+    );
+    let ScoreExactness::Estimated { unbounded, .. } = &reassociated.trailer.exactness else {
+        panic!("a perturbed stratum must not leave the answer certifying exact scores");
+    };
+    assert!(
+        unbounded.contains(&iri(KNN_STRATUM)),
+        "near-ties may swap, so no finite bound on the error survives: {unbounded:?}"
+    );
+
+    // The control: the exact producer's trailer holds no such evidence anywhere, and
+    // the answer still certifies its scores.
+    for (stratum, fidelity) in &exact.trailer.fidelities {
+        assert!(
+            fidelity.evidence().all(|e| &**e != evidence),
+            "{stratum:?} carries the reassociated evidence under the exact arithmetic"
+        );
+    }
+    assert_eq!(
+        exact.trailer.fidelities.get(&iri(KNN_STRATUM)),
+        Some(&RankFidelity::EXACT)
+    );
+    assert_eq!(exact.trailer.exactness, ScoreExactness::Exact);
 }

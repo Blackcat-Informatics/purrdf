@@ -945,6 +945,7 @@ fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
+            arithmetic: None,
             domains,
             block_position: None,
             mandatory: false,

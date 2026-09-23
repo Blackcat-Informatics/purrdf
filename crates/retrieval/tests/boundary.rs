@@ -144,6 +144,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,
+        arithmetic: None,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory,

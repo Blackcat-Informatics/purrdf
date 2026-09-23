@@ -1913,3 +1913,323 @@ fn the_declared_depth_placement_yields_an_invocation_the_relation_answers() {
         "the depth rendered through the declaration IS k"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The arithmetic
+// ---------------------------------------------------------------------------
+
+/// A seeded splitmix64 stream of values in `[-1, 1)`, so every product and partial
+/// sum of a long row rounds and the order a fold takes is visible in its bits.
+fn stream(len: usize, seed: u64) -> Vec<f64> {
+    let mut state = seed;
+    (0..len)
+        .map(|_| {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+        })
+        .collect()
+}
+
+/// A space of 64-component rows the two arithmetics can tell apart.
+///
+/// `fused` and `plain` are the crafted pair of the distance module's no-substitution
+/// test: every product is `±(1 + 2⁻³⁰)²`, which rounds to `±(1 + 2⁻²⁹)`, the first
+/// half positive and the second negative. Rounded products cancel exactly in every
+/// order, so the exact dot product of the two is zero, while any contraction to a
+/// fused multiply-add keeps the `2⁻⁶⁰` the rounding drops and moves the sum off zero.
+/// The other rows are seeded noise, whose long sums round at every step.
+fn arithmetic_rows() -> Vec<(&'static str, Vec<f64>)> {
+    let factor = 1.0 + 2.0_f64.powi(-30);
+    let fused: Vec<f64> = (0..64)
+        .map(|index| if index < 32 { factor } else { -factor })
+        .collect();
+    vec![
+        ("fused", fused),
+        ("plain", vec![factor; 64]),
+        ("n1", stream(64, 1)),
+        ("n2", stream(64, 2)),
+        ("n3", stream(64, 3)),
+        ("n4", stream(64, 4)),
+    ]
+}
+
+/// Every `(query, neighbour, emitted distance)` a relation over `rows` emits, over
+/// every row as the seed and every row as a neighbour.
+fn every_distance<A: Arithmetic>(
+    relation: &EmbeddingKnnRelation<A>,
+    rows: &[(&str, Vec<f64>)],
+) -> Vec<(String, String, f64)> {
+    let mut out = Vec::new();
+    for (query, _) in rows {
+        let bound: Vec<Option<TermValue>> = vec![
+            None,
+            Some(iri(query)),
+            Some(count(i64::try_from(rows.len()).expect("small"))),
+            None,
+        ];
+        let refs: Vec<Option<&TermValue>> = bound.iter().map(Option::as_ref).collect();
+        let (subject, object) = refs.split_at(relation.arity().subject);
+        let mut cursor = relation
+            .open(&PfArgs::new(subject, object), None)
+            .expect("opens");
+        let mut emitted = Vec::new();
+        while let Some(row) = cursor.next().expect("searches") {
+            emitted.push(row);
+        }
+        assert_eq!(emitted.len(), rows.len(), "every row is a neighbour");
+        for (neighbour, lexical) in named(&emitted) {
+            let distance: f64 = lexical.parse().expect("an xsd:double lexical");
+            out.push(((*query).to_owned(), neighbour, distance));
+        }
+    }
+    out
+}
+
+/// The vector and norm the fixture gave the row named `name`.
+fn row_named<'a>(rows: &'a [(&str, Vec<f64>)], name: &str) -> (&'a [f64], f64) {
+    let vector = &rows
+        .iter()
+        .find(|(local, _)| *local == name)
+        .expect("a fixture row")
+        .1;
+    (vector, norm(vector))
+}
+
+/// Whether `path` contracts multiplies into adds, so the crafted pair's reassociated
+/// distance leaves zero.
+const fn fuses(path: purrdf_core::distance::Path) -> bool {
+    matches!(
+        path,
+        purrdf_core::distance::Path::Avx2Fma
+            | purrdf_core::distance::Path::Avx512f
+            | purrdf_core::distance::Path::Neon
+    )
+}
+
+/// A ranked declaration over `relation` with the host saying nothing about its
+/// vectors: complete, faithful, unrestricted.
+fn declared<A: Arithmetic>(relation: &EmbeddingKnnRelation<A>) -> RankedDeclaration {
+    relation.ranked_declaration(
+        purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
+        TermKind::Iri,
+        "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
+}
+
+/// The reassociated relation over the arithmetic fixture, under `metric`.
+fn reassociated(metric: &DistanceMetric) -> EmbeddingKnnRelation<Reassociated> {
+    EmbeddingKnnRelation::new_reassociated(Arc::new(space(metric, &arithmetic_rows())))
+        .expect("the default float environment is the IEEE one")
+}
+
+#[test]
+fn reassociated_relation_declares_perturbed_order() {
+    let relation = reassociated(&DistanceMetric::SquaredEuclidean);
+    let resolved = relation.resolved().expect("resolved at construction");
+    let evidence = resolved
+        .evidence()
+        .expect("the reassociated arithmetic names its divergence");
+    assert!(
+        evidence.contains(resolved.path().name()),
+        "the evidence is the one for the path this relation runs"
+    );
+
+    let declaration = declared(&relation);
+    let OrderFidelity::Perturbed { evidence: carried } = &declaration.fidelity.order else {
+        panic!(
+            "a reassociated relation's order is perturbed, got {:?}",
+            declaration.fidelity.order
+        );
+    };
+    assert_eq!(&**carried, evidence, "the arithmetic's evidence, verbatim");
+    assert!(declaration.fidelity.order_is_unbounded());
+    assert_eq!(
+        declaration.fidelity.completeness,
+        Completeness::Complete,
+        "the completeness axis is the host's: a reassociated scan still scores every row"
+    );
+    assert_eq!(
+        declaration.arithmetic.map(DeclaredArithmetic::id),
+        Some(Reassociated::ID)
+    );
+    assert!(
+        declaration
+            .canonical_description()
+            .contains(Reassociated::ID)
+    );
+
+    // A host that perturbed its vectors itself keeps its own words on the axis; the
+    // composition degrades the host's word and never upgrades it, and the law is
+    // still named in the declaration.
+    let host: Arc<str> = Arc::from("these vectors were quantized before they were embedded");
+    let hosted = relation.ranked_declaration(
+        purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
+        TermKind::Iri,
+        "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+        RankFidelity {
+            completeness: Completeness::Complete,
+            order: OrderFidelity::Perturbed {
+                evidence: Arc::clone(&host),
+            },
+        },
+        CandidateDomains::Unrestricted,
+    );
+    assert_eq!(
+        hosted.fidelity.order,
+        OrderFidelity::Perturbed { evidence: host }
+    );
+    assert_eq!(
+        hosted.arithmetic.map(DeclaredArithmetic::id),
+        Some(Reassociated::ID)
+    );
+}
+
+#[test]
+fn exact_relation_names_exact_arithmetic() {
+    // The control row: the same space, the same host words, the exact arithmetic.
+    let relation = EmbeddingKnnRelation::new(Arc::new(space(
+        &DistanceMetric::SquaredEuclidean,
+        &arithmetic_rows(),
+    )));
+    assert!(
+        relation.resolved().is_none(),
+        "the exact relation resolves per search"
+    );
+    let declaration = declared(&relation);
+    assert_eq!(
+        declaration.fidelity,
+        RankFidelity::EXACT,
+        "the exact arithmetic perturbs nothing, so the host's word stands"
+    );
+    assert_eq!(
+        declaration.arithmetic.map(DeclaredArithmetic::id),
+        Some("binary64-lane16-tree-v1")
+    );
+    let description = declaration.canonical_description();
+    assert!(description.contains("binary64-lane16-tree-v1"));
+    assert!(!description.contains("reassociated"));
+}
+
+#[test]
+fn reassociated_and_exact_plans_differ() {
+    let rows = arithmetic_rows();
+    let space = Arc::new(space(&DistanceMetric::SquaredEuclidean, &rows));
+    let exact = EmbeddingKnnRelation::new(Arc::clone(&space));
+    let fast = EmbeddingKnnRelation::new_reassociated(Arc::clone(&space)).expect("resolves");
+    assert_ne!(
+        declared(&exact).canonical_description(),
+        declared(&fast).canonical_description()
+    );
+
+    let registry = |relation: Arc<dyn PropertyFunction>, declaration: RankedDeclaration| {
+        let mut registry = crate::PropertyFunctionRegistry::new();
+        registry.register_ranked("https://example.org/knn", relation, declaration);
+        crate::property_fn_plan::content_fingerprint(&registry).expect("fingerprints")
+    };
+    let exact_plan = registry(Arc::new(exact.clone()), declared(&exact));
+    let fast_plan = registry(Arc::new(fast.clone()), declared(&fast));
+    assert_ne!(
+        exact_plan, fast_plan,
+        "registries differing only in a producer's arithmetic are two plans"
+    );
+    // The neighbour: the same arithmetic twice is one plan, so the difference above is
+    // the arithmetic's and not a fingerprint that moves on every registration.
+    assert_eq!(
+        exact_plan,
+        registry(
+            Arc::new(EmbeddingKnnRelation::new(Arc::clone(&space))),
+            declared(&exact)
+        )
+    );
+}
+
+#[test]
+fn exact_scan_matches_kernel_bits() {
+    let rows = arithmetic_rows();
+    for metric in [
+        DistanceMetric::SquaredEuclidean,
+        DistanceMetric::NegativeDot,
+        DistanceMetric::Cosine,
+    ] {
+        let kernel = Kernel::of(&metric).expect("built-in");
+        let relation = EmbeddingKnnRelation::new(Arc::new(space(&metric, &rows)));
+        let emitted = every_distance(&relation, &rows);
+        assert_eq!(emitted.len(), rows.len() * rows.len());
+        for (query, neighbour, distance) in emitted {
+            let (q, q_norm) = row_named(&rows, &query);
+            let (c, c_norm) = row_named(&rows, &neighbour);
+            let expected = kernel.distance(q, q_norm, c, c_norm).expect("finite");
+            assert_eq!(
+                distance.to_bits(),
+                expected.to_bits(),
+                "{metric:?} {query} -> {neighbour}"
+            );
+        }
+    }
+    // The crafted pair's exact dot product is zero in every unfused order.
+    let relation = EmbeddingKnnRelation::new(Arc::new(space(&DistanceMetric::NegativeDot, &rows)));
+    let crafted = every_distance(&relation, &rows)
+        .into_iter()
+        .find(|(query, neighbour, _)| query == "fused" && neighbour == "plain")
+        .expect("the crafted pair");
+    assert_eq!(
+        crafted.2.abs().to_bits(),
+        0,
+        "the exact relation cancels exactly, got {}",
+        crafted.2
+    );
+}
+
+#[test]
+fn reassociated_scan_matches_reassociated_kernel_bits() {
+    let rows = arithmetic_rows();
+    for metric in [
+        DistanceMetric::SquaredEuclidean,
+        DistanceMetric::NegativeDot,
+        DistanceMetric::Cosine,
+    ] {
+        let kernel = Kernel::of(&metric).expect("built-in");
+        let relation = reassociated(&metric);
+        let resolved = relation.resolved().expect("resolved");
+        let emitted = every_distance(&relation, &rows);
+        assert_eq!(emitted.len(), rows.len() * rows.len());
+        for (query, neighbour, distance) in emitted {
+            let (q, q_norm) = row_named(&rows, &query);
+            let (c, c_norm) = row_named(&rows, &neighbour);
+            let expected = kernel
+                .distance_reassociated(resolved, q, q_norm, c, c_norm)
+                .expect("finite");
+            assert_eq!(
+                distance.to_bits(),
+                expected.to_bits(),
+                "{metric:?} {query} -> {neighbour} on {}",
+                resolved.path()
+            );
+        }
+    }
+    // The observation that the relation ran the reassociated kernel and not the exact
+    // one: on a path that fuses, the crafted pair's distance leaves the exact zero.
+    let relation = reassociated(&DistanceMetric::NegativeDot);
+    let path = relation.resolved().expect("resolved").path();
+    let crafted = every_distance(&relation, &rows)
+        .into_iter()
+        .find(|(query, neighbour, _)| query == "fused" && neighbour == "plain")
+        .expect("the crafted pair");
+    println!(
+        "reassociated relation on {path}: crafted distance {}",
+        crafted.2
+    );
+    if fuses(path) {
+        assert_ne!(
+            crafted.2.abs().to_bits(),
+            0,
+            "a fused path keeps the residue the exact relation cancels"
+        );
+    }
+}

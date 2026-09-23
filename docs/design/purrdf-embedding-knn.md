@@ -75,7 +75,8 @@ construction and again at every search, since an invocation may run on another t
 
 The metric does not change with the arithmetic. `DistanceMetric` names *what* is
 measured, and the family-contract digest is computed from it alone; the arithmetic is
-recorded beside it, in the HNSW image header and profile.
+recorded beside it, in the HNSW image header and profile, and in the ranked declaration
+of either relation (below).
 
 A second arithmetic sits beside the exact one under its own names:
 `Kernel::distance_reassociated` and `Kernel::distance_bounded_reassociated` compute
@@ -90,6 +91,41 @@ handle's evidence says so in words. Each path compiles the body once, out of lin
 every caller on one path gets the same bits for the same pair. The exact entry points
 never run it, and it never stands in for them; `knn_wasm_reassociated` executes it on
 both wasm32 builds and holds each result to the summation error bound of the exact one.
+
+### The relation is generic over the arithmetic
+
+`EmbeddingKnnRelation<A: Arithmetic = Exact>` carries the law as a type parameter.
+`EmbeddingKnnRelation::new(space)` is the exact relation, unchanged and infallible: it
+resolves the float environment and a dispatch path per search, and every exact path
+returns the same bits. `EmbeddingKnnRelation::new_reassociated(space)` returns
+`Result<EmbeddingKnnRelation<Reassociated>, EvalError>`: it resolves the reassociated
+dispatch path once, refuses a flushing float environment with the named
+`EvalError::FloatEnvironment`, and every search then runs `A`'s batch kernel on that
+one path (the environment is still checked per search, on the calling thread). The
+scan is the same scan in both, scoring every row, so the reassociated relation omits
+nothing the exact one would name; what it can do is order two near-tied rows
+differently.
+
+That difference is declared, not hidden. `ranked_declaration` names the law in
+`RankedDeclaration::arithmetic` (`binary64-lane16-tree-v1` or
+`binary64-reassociated-v1`), which `canonical_description` folds, so the registry's
+content fingerprint and every plan id drawn from it bind the arithmetic: an exact and a
+reassociated producer over one space are two plans. The reassociated relation also
+composes the host's order fidelity with `OrderFidelity::Perturbed`, carrying the
+arithmetic's evidence for the resolved path verbatim, through
+`composed_order_fidelity`, the single composition the HNSW relation also uses. A fused
+answer carries that evidence in `FusionTrailer::fidelities` and reports the stratum as
+having no finite score bound. The completeness axis stays as the host declares it.
+
+The tests hold each half to an observation. `exact_scan_matches_kernel_bits` and
+`reassociated_scan_matches_reassociated_kernel_bits` compare every distance each
+relation emits with `Kernel::distance` and `Kernel::distance_reassociated` on the same
+path, bit for bit, over a fixture whose crafted pair cancels exactly under every
+unfused order and leaves zero only there, so on a fused path the reassociated relation
+is seen to differ from the exact one. `reassociated_relation_declares_perturbed_order`
+and its control `exact_relation_names_exact_arithmetic` pin the declaration, and
+`fusion_trailer_names_reassociated_kernel` in `purrdf-retrieval` fuses both producers
+over one space, with the exact one as the control row.
 
 ### The cross-target claim is executed, not argued
 

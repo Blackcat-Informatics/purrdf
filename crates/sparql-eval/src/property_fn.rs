@@ -664,6 +664,7 @@ pub enum OrderFidelity {
 /// |---|---|
 /// | BM25 over a full inverted index | `Complete` × `Faithful` |
 /// | an exhaustive kNN scan | `Complete` × `Faithful` |
+/// | an exhaustive kNN scan under the reassociated arithmetic | `Complete` × `Perturbed` |
 /// | an HNSW graph | `Lossy` × `Faithful` |
 /// | a product-quantized index | `Lossy` × `Perturbed` |
 ///
@@ -693,6 +694,7 @@ pub enum OrderFidelity {
 ///     depth_placement: None,
 ///     candidate_position: 0,
 ///     duplicates: DuplicatePolicy::Unique,
+///     arithmetic: None,
 ///     domains: CandidateDomains::Unrestricted,
 ///     block_position: None,
 ///     mandatory: false,
@@ -714,6 +716,7 @@ pub enum OrderFidelity {
 ///     candidate_position: 0,
 ///     duplicates: DuplicatePolicy::Unique,
 ///     fidelity: RankFidelity::EXACT,
+///     arithmetic: None,
 ///     domains: CandidateDomains::Unrestricted,
 ///     block_position: None,
 ///     mandatory: false,
@@ -811,6 +814,85 @@ impl RankFidelity {
                 push_canonical_option(out, Some(evidence));
             }
         }
+    }
+}
+
+/// The order fidelity of a producer whose own machinery may perturb the order
+/// **and** whose vectors the host may already have perturbed before the producer
+/// saw them.
+///
+/// `derived` is what the producer knows about itself: an index whose loss
+/// contract transforms vectors, or a relation ranking under an arithmetic whose
+/// last bits depend on the target. `host` is what only the host knows: that the
+/// values it handed over were already approximations of the ones it meant.
+///
+/// The meet of the two on a two-element lattice: the result is
+/// [`OrderFidelity::Perturbed`] when either input is, and
+/// [`OrderFidelity::Faithful`] only when both are. It degrades and never
+/// upgrades, which is the property that matters — a host passing `Faithful`
+/// says "I did nothing to the vectors", not "the producer is faithful", and
+/// cannot talk a perturbing producer back up to the top of the axis.
+///
+/// # Which evidence survives
+///
+/// When both inputs are perturbed the host's evidence is the one carried, and
+/// the derived string is **not** concatenated onto it, re-worded, or summarized:
+/// an axis holds one disclosure and a consumer reads those bytes rather than a
+/// composition of them. The host's is the one that must win the axis, because it
+/// is the only one of the two a reader could otherwise never obtain: A16 of the
+/// retrieval producer contract is exactly the rule that a consumer either
+/// receives such a fact from the producer or never has it, whereas the derived
+/// fact is recorded by the producer somewhere else as well. Each caller states
+/// where: the HNSW relation publishes the same string on its completeness axis,
+/// and the embedding kNN relation names its arithmetic in
+/// [`RankedDeclaration::arithmetic`], which reaches the registry's content
+/// fingerprint.
+///
+/// Either way the axis a consumer reads is `Perturbed`, so the one conclusion
+/// that decides its arithmetic — that no finite score bound exists — is the
+/// same whichever evidence it carries.
+#[must_use]
+pub fn composed_order_fidelity(derived: OrderFidelity, host: OrderFidelity) -> OrderFidelity {
+    match host {
+        OrderFidelity::Perturbed { evidence } => OrderFidelity::Perturbed { evidence },
+        OrderFidelity::Faithful => derived,
+    }
+}
+
+/// The distance arithmetic a ranked producer computes the values it ranks by,
+/// named by its law's stable identifier.
+///
+/// A producer that ranks by floating-point distances ranks under one of the
+/// sealed [`purrdf_core::distance::Arithmetic`] laws, and which one is part of
+/// what its answer means: under [`purrdf_core::distance::Exact`] the same query
+/// ranks identically on every target, and under the reassociated law, whose
+/// last bits depend on the build, two near-tied rows may swap between targets,
+/// builds and dispatch paths. Two registries whose producers differ
+/// only in that law are two different plans, so the law reaches
+/// [`RankedDeclaration::canonical_description`] and through it the registry's
+/// content fingerprint.
+///
+/// The only constructor is [`Self::of`], over the sealed trait, so a
+/// declaration can name a law this workspace defines and no other string. A
+/// producer that ranks by no float arithmetic at all — BM25F over fixed-point
+/// integers, say — declares `None` rather than a law it does not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeclaredArithmetic {
+    /// [`purrdf_core::distance::Arithmetic::ID`] of the law.
+    id: &'static str,
+}
+
+impl DeclaredArithmetic {
+    /// The declaration of arithmetic `A`.
+    #[must_use]
+    pub const fn of<A: purrdf_core::distance::Arithmetic>() -> Self {
+        Self { id: A::ID }
+    }
+
+    /// The law's stable identifier, [`purrdf_core::distance::Arithmetic::ID`].
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        self.id
     }
 }
 
@@ -1207,6 +1289,17 @@ pub struct RankedDeclaration {
     /// [`RankFidelity`] for why the two axes are independent and why only one of
     /// them admits a finite bound.
     pub fidelity: RankFidelity,
+    /// The distance arithmetic this producer ranks by, or `None` for a producer
+    /// whose ranking involves no floating-point distance.
+    ///
+    /// Stated by the producer, because it is a fact about its own kernel: the
+    /// embedding kNN and HNSW relations fill it from the law they were built
+    /// under, and a lexical producer ranking fixed-point integers states `None`.
+    /// It reaches [`Self::canonical_description`], so two registries that differ
+    /// only in a producer's arithmetic have different content fingerprints and a
+    /// plan admitted against one does not run against the other. See
+    /// [`DeclaredArithmetic`].
+    pub arithmetic: Option<DeclaredArithmetic>,
     /// Which blocks of the candidate universe this producer may name.
     ///
     /// The second promise a producer makes about its own rows. A consumer
@@ -1337,6 +1430,20 @@ impl RankedDeclaration {
                 push_canonical_field(&mut out, &placement.position.to_string());
                 push_canonical_option(&mut out, placement.datatype.as_deref());
             }
+        }
+        // The arithmetic closes the description, and only when one is declared.
+        // Everything before it is self-delimiting — the accepted-term list is
+        // count-prefixed and each of its parts is framed — so a reader knows
+        // exactly where that list ends, and a description that stops there is
+        // distinguishable from one that goes on to `;a` and a framed law: the
+        // encoding stays injective without a present/absent byte. Written this
+        // way so a producer ranking by no float arithmetic describes itself in
+        // exactly the bytes it did before arithmetic was a declared fact, while
+        // every producer that does rank by one names its law.
+        if let Some(arithmetic) = self.arithmetic {
+            out.push(';');
+            out.push('a');
+            push_canonical_field(&mut out, arithmetic.id());
         }
         out
     }
@@ -3198,5 +3305,30 @@ mod tests {
                 .contains("panicked while reporting its arity"),
             "got {error}"
         );
+    }
+
+    #[test]
+    fn the_composed_order_takes_the_worse_and_keeps_the_hosts_words() {
+        let derived = OrderFidelity::Perturbed {
+            evidence: Arc::from("the producer's own divergence"),
+        };
+        let host = OrderFidelity::Perturbed {
+            evidence: Arc::from("the host quantized its vectors"),
+        };
+        assert_eq!(
+            composed_order_fidelity(OrderFidelity::Faithful, OrderFidelity::Faithful),
+            OrderFidelity::Faithful,
+            "the valid neighbour: nothing perturbed is faithful"
+        );
+        assert_eq!(
+            composed_order_fidelity(derived.clone(), OrderFidelity::Faithful),
+            derived,
+            "a faithful host cannot upgrade a perturbing producer"
+        );
+        assert_eq!(
+            composed_order_fidelity(OrderFidelity::Faithful, host.clone()),
+            host
+        );
+        assert_eq!(composed_order_fidelity(derived, host.clone()), host);
     }
 }

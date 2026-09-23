@@ -849,6 +849,7 @@ mod tests {
             // Placement is about rendering arguments, not about fusion, so
             // these fixtures make the widest promise there is on both terms.
             fidelity: RankFidelity::EXACT,
+            arithmetic: None,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,

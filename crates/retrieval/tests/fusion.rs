@@ -8490,6 +8490,7 @@ fn registry_declaring_fidelity(
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity,
+            arithmetic: None,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,

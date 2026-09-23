@@ -779,6 +779,10 @@ impl TextSearchRelation {
             // claim in the lattice into the mouth of the one party that never
             // spoke.
             fidelity,
+            // BM25F here is fixed-point integer arithmetic: this relation
+            // ranks by no floating-point distance, so it names no distance law
+            // rather than one it does not run.
+            arithmetic: None,
             domains,
             // A text index answers with documents, a score and the matched
             // terms; it holds no notion of a host's partition, so there is no

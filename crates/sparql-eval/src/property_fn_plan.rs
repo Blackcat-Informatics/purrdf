@@ -1519,6 +1519,7 @@ mod content_fingerprint_tests {
             duplicates: DuplicatePolicy::Unique,
             // The fixture producer is an in-memory table read end to end.
             fidelity: RankFidelity::EXACT,
+            arithmetic: None,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,

@@ -98,6 +98,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,
+        arithmetic: None,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory,

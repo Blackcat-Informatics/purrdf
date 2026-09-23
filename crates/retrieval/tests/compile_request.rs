@@ -325,6 +325,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
                 candidate_position: spec.candidate,
                 duplicates: spec.duplicates,
                 fidelity: RankFidelity::EXACT,
+                arithmetic: None,
                 domains: spec.domains,
                 block_position: None,
                 mandatory: spec.mandatory,

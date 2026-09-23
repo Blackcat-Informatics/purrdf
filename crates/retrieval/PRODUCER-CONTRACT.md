@@ -1184,6 +1184,22 @@ producer is order-perturbed, and no loss contract reachable from the index
 records it. That is the parameter, and it composes with the derived value by
 taking the worse of the two, so a host can degrade the axis and never upgrade it.
 
+The reassociated kNN relation, `EmbeddingKnnRelation::new_reassociated`, adds the
+one fact about its order that is its own. Its scan is as exhaustive as the exact
+relation's, so the completeness axis is still the host's, unchanged. Its distances,
+though, are computed under the `Reassociated` arithmetic: sums may be reassociated
+and contracted to fused multiply-add along the dispatch path the relation resolved,
+so two near-tied rows may swap relative to the exact ranking, and a row can arrive
+at a better rank than it earned. That is an order-perturbed producer. The relation
+therefore composes the host's `OrderFidelity` with `Perturbed`, carrying the
+arithmetic's own evidence for that path verbatim, through the same
+`composed_order_fidelity` the HNSW relation uses: the host can degrade the axis and
+never upgrade it, and a host that declared a perturbation of its own keeps its
+words there. Either way the fused answer reports the stratum as having no finite
+bound. Both kNN relations, and the HNSW relation, also name their arithmetic in
+`RankedDeclaration::arithmetic`, which a compiled plan is identified by (below): an
+exact and a reassociated producer over one space are two plans.
+
 **This is not the attestation channel, and does not duplicate it.**
 `ServiceLevel::Incomplete` answers a different question — was the index *version*
 that served this invocation whole, given a shard that failed to load or a replica
@@ -1205,7 +1221,9 @@ index does and for the identical reason — see
 **It is part of a compiled plan's identity.** The declaration folds into the
 registry's content fingerprint and so into the plan id: a plan drawn from
 producers that approximate is not the plan drawn from producers that do not, and
-the two answers differ in what they may be read to claim. **A consequence worth
+the two answers differ in what they may be read to claim. The declared arithmetic
+folds in beside it, so the same holds for two producers that differ only in the
+law their distances are computed under. **A consequence worth
 knowing before you edit an evidence string:** changing that sentence changes
 every plan that names the producer.
 
@@ -1216,8 +1234,12 @@ Pinned by `the_declaration_carries_the_profile_evidence_byte_for_byte`,
 `the_composition_takes_the_worse_of_the_two_and_keeps_the_hosts_words` in
 `crates/hnsw/tests/ranked_declaration.rs`; by
 `the_ranked_declaration_carries_the_fidelity_the_caller_stated` in
-`crates/sparql-eval/src/knn/tests.rs`; by
+`crates/sparql-eval/src/knn/tests.rs`, with
+`reassociated_relation_declares_perturbed_order`, its control
+`exact_relation_names_exact_arithmetic` and
+`reassociated_and_exact_plans_differ` beside it; by
 `a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness` and its
 neighbour `a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores`
 in `tests/real_producers.rs`, which run the whole ladder over a real sealed
-artifact holding half a corpus; and by the `T8`/`T9` groups in `tests/fusion.rs`.
+artifact holding half a corpus, and `fusion_trailer_names_reassociated_kernel`
+there, whose exact-producer control carries no such evidence; and by the `T8`/`T9` groups in `tests/fusion.rs`.

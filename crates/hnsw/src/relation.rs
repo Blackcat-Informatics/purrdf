@@ -60,15 +60,16 @@
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_core::distance::Exact;
 use purrdf_core::{
     ContentDigest, EmbeddingView, IndexLossContract, Iri, TargetId, TargetSetId, TargetSetView,
     TermValue, VectorSpaceId, verify_embedding,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DuplicatePolicy, EvalError,
-    IndexGeneration, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankFidelity, Ranked, RankedDeclaration,
-    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, CandidateDomains, Completeness, DeclaredArithmetic, DepthPlacement,
+    DuplicatePolicy, EvalError, IndexGeneration, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankFidelity, Ranked,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 use crate::error::HnswError;
@@ -567,6 +568,10 @@ impl HnswRelation {
             // invocation.
             duplicates: DuplicatePolicy::Unique,
             fidelity: self.fidelity(vector_order),
+            // Every distance this relation ranks by is computed under the exact
+            // arithmetic, so the declaration names that law and the registry's
+            // content fingerprint binds it.
+            arithmetic: Some(DeclaredArithmetic::of::<Exact>()),
             domains,
             // This relation projects a neighbour and a distance; it knows
             // nothing of a host's partition, so it has no position to read a
@@ -890,40 +895,23 @@ pub fn order_fidelity(contract: &IndexLossContract, evidence: &Arc<str>) -> Orde
 /// The order fidelity of a search whose index may perturb the order **and**
 /// whose vectors the host may already have perturbed before the index saw them.
 ///
-/// The meet of the two on a two-element lattice: the result is
-/// [`OrderFidelity::Perturbed`] when either input is, and
-/// [`OrderFidelity::Faithful`] only when both are. It degrades and never
-/// upgrades, which is the property that matters — a host passing `Faithful`
-/// says "I did nothing to the vectors", not "the index is faithful", and cannot
-/// talk a transforming profile back up to the top of the axis.
+/// The one composition every ranked producer in the workspace uses, defined
+/// beside [`RankFidelity`] in `purrdf-sparql-eval` and re-exported here under the
+/// path this crate has always published it at. It is the meet of the two on the
+/// order axis: perturbed when either input is, faithful only when both are, and
+/// when both are perturbed the host's evidence is the one carried.
 ///
-/// # Which evidence survives, and why nothing is lost
+/// # Why nothing is lost here when the host's evidence wins the axis
 ///
-/// When both inputs are perturbed the host's evidence is the one carried, and
-/// the derived string is **not** concatenated onto it, re-worded, or summarized:
-/// an axis holds one disclosure and a consumer reads those bytes rather than a
-/// composition of them.
-///
-/// That costs the reader nothing, because the derived string is not the
-/// profile's disclosure to a consumer — it is a *second copy* of it.
-/// [`HnswRelation::fidelity`] derives both axes from one string, the space's
-/// own [`HnswSpace::evidence`], and publishes it on the completeness axis, which
-/// is [`Completeness::Lossy`] unconditionally and so always carries it. So the
-/// profile's evidence reaches a declaration, a stream contract and a fused
-/// trailer byte for byte on every path through this function, and the host's
-/// words reach them beside it instead of displacing them.
-///
-/// The host's is the one that must win the axis: it is the only one of the two a
-/// reader could otherwise never obtain, and A16 of the producer contract is
-/// exactly the rule that a consumer either receives such a fact from the
-/// producer or never has it.
-#[must_use]
-pub fn composed_order_fidelity(derived: OrderFidelity, host: OrderFidelity) -> OrderFidelity {
-    match host {
-        OrderFidelity::Perturbed { evidence } => OrderFidelity::Perturbed { evidence },
-        OrderFidelity::Faithful => derived,
-    }
-}
+/// The derived string is not the profile's disclosure to a consumer — it is a
+/// *second copy* of it. [`HnswRelation::fidelity`] derives both axes from one
+/// string, the space's own [`HnswSpace::evidence`], and publishes it on the
+/// completeness axis, which is [`Completeness::Lossy`] unconditionally and so
+/// always carries it. So the profile's evidence reaches a declaration, a stream
+/// contract and a fused trailer byte for byte on every path through this
+/// function, and the host's words reach them beside it instead of displacing
+/// them.
+pub use purrdf_sparql_eval::composed_order_fidelity;
 
 /// The content identity of a space over `index` bound to `terms`.
 ///
