@@ -100,7 +100,14 @@ enum Index {
     MovesUnderTheRead,
     /// Found short under the read: whole at open, short after [`MOVES_AFTER`] rows.
     FoundShortUnderTheRead,
+    /// Holds one candidate more than the producer declares it can return.
+    BeatsItsBound,
+    /// Fails, for this stratum alone, after handing out [`MOVES_AFTER`] rows.
+    FailsMidRead,
 }
+
+/// The reason a producer that fails mid-read gives.
+const FAULT_REASON: &str = "posting list 12 unreadable";
 
 /// The reason a short index gives.
 const SHORT_REASON: &str = "shard 3 rebuilding";
@@ -162,8 +169,15 @@ struct IndexedCursor {
 
 impl PfCursor for IndexedCursor {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        if self.emitted >= ROWS {
+        let holds = match self.index {
+            Index::BeatsItsBound => ROWS + 1,
+            _ => ROWS,
+        };
+        if self.emitted >= holds {
             return Ok(None);
+        }
+        if matches!(self.index, Index::FailsMidRead) && self.emitted == MOVES_AFTER {
+            return Err(EvalError::function(FAULT_REASON.to_owned()));
         }
         let row = vec![
             TermValue::iri(ex(&format!("shared/entity{:06}", self.emitted))),
@@ -313,15 +327,35 @@ fn profile() -> FusionProfile {
     .expect("the fixture profile is valid")
 }
 
+/// A profile that weights only the right stratum, so the left one runs and is read
+/// to its end without being fused.
+fn right_only_profile() -> FusionProfile {
+    FusionProfile::with_decay(
+        BTreeMap::from([(strata()[1].clone(), Fixed::ONE)]),
+        DecayRule::ReciprocalRank {
+            k: u32::try_from(RECIP_K).expect("the smoothing constant fits"),
+        },
+    )
+    .expect("the fixture profile is valid")
+}
+
 /// Run `search` over a registry whose left producer's index behaves as `left` says.
 fn searched(left: Index, dataset: &RdfDataset) -> Result<SearchResult, SearchError> {
+    searched_under(left, &profile(), dataset)
+}
+
+/// [`searched`], fused under `profile`.
+fn searched_under(
+    left: Index,
+    profile: &FusionProfile,
+    dataset: &RdfDataset,
+) -> Result<SearchResult, SearchError> {
     let registry = registry(left);
     let statistics = statistics();
-    let profile = profile();
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &statistics,
-        fusion_profile: Some(&profile),
+        fusion_profile: Some(profile),
     };
     block_on(search(
         &request(),
@@ -329,7 +363,7 @@ fn searched(left: Index, dataset: &RdfDataset) -> Result<SearchResult, SearchErr
         &statistics,
         dataset,
         &env,
-        &profile,
+        profile,
     ))
 }
 
@@ -469,6 +503,153 @@ fn an_index_that_moves_under_the_read_is_refused_when_the_read_settles() {
     // The neighbour, executed here too so the pair is one test's claim: the same
     // configuration over a stable index is admitted.
     searched(Index::Stable, dataset).expect("a stable index is admitted");
+}
+
+/// **An unweighted stratum whose index moves under its read is refused, not
+/// certified.**
+///
+/// The profile weights only the right stratum, so the left one is not fused: it is
+/// read to its end so that its status can say how it ended. That ending is a claim
+/// about the read its witness stands behind, so it is settled exactly as a fused
+/// stream is. An index rebuilt under the read, or found short after the open, is the
+/// same refusal it is on a weighted stratum — typed, naming the stratum and the rule —
+/// and never an `Exhausted` or `DepthReached` status for a read no one index
+/// generation answered.
+///
+/// The neighbours are the same unweighted stratum over a stable index and over one
+/// short from the start: both admitted, the stratum named unweighted, and its status
+/// the exhaustion of all four hundred rows — the read really was taken to its end —
+/// beside the answer the right stratum alone gives.
+#[test]
+fn an_unweighted_stratum_whose_index_moves_under_its_read_is_refused_not_certified() {
+    let dataset = common::empty_dataset();
+    let [left, right] = strata();
+    let profile = right_only_profile();
+
+    for (index, rule) in [
+        (Index::MovesUnderTheRead, "2 distinct index generations"),
+        (Index::FoundShortUnderTheRead, SHORT_REASON),
+    ] {
+        let error = protocol_error(searched_under(index.clone(), &profile, dataset));
+        let ProtocolError::AttestationMoved { stratum, reason } = &error else {
+            panic!("{index:?}: expected the read's attestation to be refused, got {error:?}");
+        };
+        assert_eq!(
+            stratum,
+            left.as_str(),
+            "{index:?}: the unweighted stratum is named"
+        );
+        assert!(
+            reason.contains(rule),
+            "{index:?}: the refusal names what moved: {reason}"
+        );
+    }
+
+    let stable = searched_under(Index::Stable, &profile, dataset)
+        .expect("a stable unweighted stratum is admitted");
+    for index in [Index::Stable, Index::ShortFromTheStart] {
+        let admitted = searched_under(index.clone(), &profile, dataset)
+            .unwrap_or_else(|error| panic!("{index:?}: admitted, got {error:?}"));
+        assert_eq!(
+            admitted.unweighted_strata,
+            vec![left.clone()],
+            "{index:?}: the left stratum ran unweighted"
+        );
+        assert_eq!(
+            admitted.trailer.statuses.get(&left),
+            Some(&purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: ROWS }),
+            "{index:?}: read to its end, and certified so"
+        );
+        assert!(
+            admitted.trailer.attestations.contains_key(&right)
+                && !admitted.trailer.attestations.contains_key(&left),
+            "{index:?}: only the fused stratum's evidence is on the answer — {:?}",
+            admitted.trailer.attestations
+        );
+        assert_eq!(
+            admitted.rows, stable.rows,
+            "{index:?}: the answer is the right stratum's alone"
+        );
+    }
+    assert!(!stable.rows.is_empty(), "the right stratum answers");
+}
+
+/// **An unweighted stratum whose producer beats its declared row bound fails the
+/// request; one whose producer fails mid-read is that stratum's status.**
+///
+/// Read to its end, the unweighted stratum reaches the row past its producer's
+/// declaration, and that breaks a number not confined to the stratum: it is refused
+/// by name, exactly as the materialised schedule refuses the same read for every
+/// stratum. The fused neighbour never reads that far — the fusion stops at the sixth
+/// rank — so it is admitted, which is what tells a refusal of the breach from a
+/// refusal of the producer.
+///
+/// The neighbour of the refusal is a producer failing for itself alone after three
+/// rows: nothing was merged out of the unweighted stream, so the failure is the
+/// stratum's status, with the producer's own reason, beside the right stratum's
+/// answer — as it is for a materialised read, whose unit fails as a whole.
+#[test]
+fn an_unweighted_stratum_that_beats_its_bound_fails_the_request_and_a_mid_read_fault_is_its_status()
+{
+    let dataset = common::empty_dataset();
+    let [left, _] = strata();
+    let profile = right_only_profile();
+
+    let error = protocol_error(searched_under(Index::BeatsItsBound, &profile, dataset));
+    let ProtocolError::ReadFailed {
+        stratum,
+        rows_before,
+        reason,
+    } = &error
+    else {
+        panic!("expected the breach to fail the request, got {error:?}");
+    };
+    assert_eq!(stratum, left.as_str(), "the unweighted stratum is named");
+    assert_eq!(*rows_before, ROWS, "after every row it declared");
+    assert!(
+        reason.contains(&format!("returned {}", ROWS + 1)),
+        "the refusal is the row-bound breach: {reason}"
+    );
+    let registry = registry(Index::BeatsItsBound);
+    let statistics = statistics();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+    let planned = plan(&request(), &registry, &statistics).expect("the fixture plans");
+    let compiled = compile(&planned, &env).expect("the fixture compiles");
+    assert!(
+        matches!(
+            block_on(execute(&compiled, &registry, dataset)),
+            Err(purrdf_retrieval::ExecutionError::RowBoundBreached { .. })
+        ),
+        "the materialised schedule refuses the same read"
+    );
+    searched(Index::BeatsItsBound, dataset)
+        .expect("fused, the stratum is stopped long before the row that breaks its bound");
+
+    let failed = searched_under(Index::FailsMidRead, &profile, dataset)
+        .expect("a fault confined to the unweighted stratum is its status, not a refusal");
+    let Some(purrdf_retrieval::ProducerStatus::ExecutionFailed { reason }) =
+        failed.trailer.statuses.get(&left)
+    else {
+        panic!(
+            "expected the stratum's own failure, got {:?}",
+            failed.trailer.statuses
+        );
+    };
+    assert!(
+        reason.contains(FAULT_REASON),
+        "with the producer's reason: {reason}"
+    );
+    assert_eq!(
+        failed.rows,
+        searched_under(Index::Stable, &profile, dataset)
+            .expect("a stable index answers")
+            .rows,
+        "beside the right stratum's answer"
+    );
 }
 
 /// **A shortfall found after the announcement is refused; one announced is not.**

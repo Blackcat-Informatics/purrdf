@@ -659,6 +659,15 @@ pub struct RankedStreamImpl<'d> {
     /// produced on demand counts its own, as it goes, and this field is not read
     /// for it.
     materialised: u64,
+    /// Whether the fault [`Self::next`] last refused with invalidates the whole run —
+    /// the producer beating its declared row bound — rather than only this stratum.
+    ///
+    /// Both reach a consumer as [`ProtocolError::ReadFailed`], because a fused stream
+    /// fails the request either way. A stream nothing fuses is the one consumer that
+    /// tells them apart: an isolated fault is that stratum's status, exactly as it is
+    /// for a materialised read, while a breach is refused for every stratum, weighted
+    /// or not, exactly as [`ExecutionError::RowBoundBreached`] is.
+    run_invalidated: bool,
 }
 
 /// Where a [`RankedStreamImpl`]'s rows come from.
@@ -1061,6 +1070,7 @@ impl<'d> RankedStreamImpl<'d> {
             exhausted: false,
             exclusion: None,
             materialised,
+            run_invalidated: false,
         }
     }
 
@@ -1076,6 +1086,7 @@ impl<'d> RankedStreamImpl<'d> {
             exhausted: false,
             exclusion: None,
             materialised: 0,
+            run_invalidated: false,
         }
     }
 
@@ -1170,6 +1181,13 @@ impl<'d> RankedStreamImpl<'d> {
         }
     }
 
+    /// Whether the fault [`Self::next`] refused with invalidates the whole run
+    /// rather than only this stratum: the producer returned more rows than its
+    /// registry declared it could.
+    pub(crate) const fn run_invalidated(&self) -> bool {
+        self.run_invalidated
+    }
+
     /// Attach the prepared exclusion lookup this stratum answers through.
     ///
     /// A builder step rather than a parameter of [`new`](Self::new), for the
@@ -1257,7 +1275,8 @@ impl<'d> RankedStreamImpl<'d> {
                         // After rows were handed out — or at any point, for a
                         // breach of the declared row bound — it fails the request by
                         // name, because those rows may already be in the answer.
-                        Err(ReadFault { reason, .. }) => {
+                        Err(ReadFault { reason, whole_run }) => {
+                            self.run_invalidated = whole_run;
                             return Err(ProtocolError::ReadFailed {
                                 stratum: read.stratum().to_owned(),
                                 rows_before: self.pulled,

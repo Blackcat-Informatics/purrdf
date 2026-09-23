@@ -799,6 +799,19 @@ async fn manual_composition(
                 .receipt()
                 .await
                 .expect("a stream read to its end has a receipt");
+            // Its ending is a claim about the read its witness stands behind, so it
+            // settles exactly as a fused stream does, and is held to what it
+            // announced before its first row.
+            let settled = stream
+                .stream
+                .settle()
+                .await
+                .expect("an unweighted stratum's witness is one attestation");
+            assert_eq!(
+                settled.as_ref(),
+                Some(&stream.attestation),
+                "an unweighted stratum settles to what it announced"
+            );
             statuses
                 .entry(stream.stratum.clone())
                 .or_insert_with(|| purrdf_retrieval::ProducerStatus::from(receipt));

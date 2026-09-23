@@ -231,7 +231,10 @@
 //! [`execute_within`](crate::execute_within)'s module header.
 //!
 //! A stratum the profile does not weight is still read to its end, because its
-//! status is how it ended and nothing but reading it can say that.
+//! status is how it ended and nothing but reading it can say that. It then settles
+//! exactly as a fused stream does, and a witness that moved under it is refused with
+//! the same [`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved)
+//! rather than reported as the stratum's ending.
 
 use std::collections::BTreeMap;
 
@@ -460,7 +463,13 @@ pub enum SearchError {
 ///
 /// [`FusionError::UnknownStratum`] additionally names `search`'s one refusal of
 /// its own: `profile` weights none of the strata that ran, so no row it produced
-/// could contribute to the answer.
+/// could contribute to the answer. And a stratum the profile does not weight, read
+/// to its end, whose witness moved under the read is refused as
+/// [`FusionError::Protocol`] carrying
+/// [`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved) —
+/// the error the same fact is refused with on a weighted stratum — and one whose
+/// producer beat its declared row bound, as [`FusionError::Protocol`] carrying
+/// [`ProtocolError::ReadFailed`](crate::ProtocolError::ReadFailed).
 // The composition is awaited in one task and never crosses a thread boundary, so
 // the `Send` bound this lint wants to express would buy nothing and would force a
 // `Sync` statistics provider and environment into every caller. The
@@ -563,7 +572,9 @@ where
             // it is read. So it is read to its end here — the read it would have
             // been given materialised — and its own receipt is its status.
             if !statuses.contains_key(&stratum) {
-                let status = read_to_its_end(stratum_stream.stream).await;
+                let status = read_to_its_end(stratum_stream.stream, &stratum, &attestation)
+                    .await
+                    .map_err(|error| SearchError::FusionError(error.into()))?;
                 statuses.insert(stratum.clone(), status);
             }
             unweighted_strata.push(stratum);
@@ -662,30 +673,84 @@ where
     })
 }
 
-/// Read a stream nothing will fuse to its end, and report how it ended.
+/// Read a stream nothing will fuse to its end, settle it, and report how it ended.
 ///
-/// A failure is that stratum's status rather than the request's: nothing was
-/// merged out of this stream, so there is no answer for its failure to be part of.
+/// A failure of the read is that stratum's status rather than the request's:
+/// nothing was merged out of this stream, so there is no answer for its failure to
+/// be part of. The one failure that is not is a producer returning more rows than
+/// its registry declared it could, which invalidates the run whichever stratum
+/// exposes it.
+///
+/// A settlement that refuses is not a status. A read that ended is settled exactly
+/// as a fused stream is when the fusion stops — its invocation's witness read under
+/// the sole-witness rule, and held to the attestation `announced` before its first
+/// row — because an ending is a claim about the read its witness stands behind. An
+/// index that moved under the read, or a service level that changed between the
+/// open and the end, is the snapshot moving under the query, and that invalidates
+/// the run rather than one stratum of it: the materialised schedule refuses the same
+/// witness for every stratum, weighted or not, and a weighted stratum read on demand
+/// is refused with [`ProtocolError::AttestationMoved`]. This one is refused with that
+/// same error, so one fact reaches a caller as one error whether or not the profile
+/// happens to weight the stratum that exposed it. Reported as the stratum's
+/// `Exhausted` or `DepthReached` instead, it would certify a read that no one index
+/// generation answered.
+///
+/// # Errors
+///
+/// [`ProtocolError::AttestationMoved`] when the witness is not one attestation, or is
+/// not the one `announced`; [`ProtocolError::ReadFailed`] when the producer beat its
+/// declared row bound.
 // Awaited in the one task `search` runs in; see the same allowance there.
 #[allow(clippy::future_not_send)]
-async fn read_to_its_end(mut stream: RankedStreamImpl<'_>) -> ProducerStatus {
+async fn read_to_its_end(
+    mut stream: RankedStreamImpl<'_>,
+    stratum: &Iri,
+    announced: &PfAttestation,
+) -> Result<ProducerStatus, ProtocolError> {
     loop {
         match stream.next().await {
             Ok(Some(_)) => {}
             Ok(None) => break,
+            // A producer that beat its declared row bound broke a number that is
+            // not confined to this stratum, so its read is refused for every
+            // stratum alike — the materialised schedule refuses the same read as
+            // `ExecutionError::RowBoundBreached`, whether or not the profile weights
+            // it.
+            Err(error) if stream.run_invalidated() => return Err(error),
             Err(error) => {
-                return ProducerStatus::ExecutionFailed {
+                return Ok(ProducerStatus::ExecutionFailed {
                     reason: error.to_string(),
-                };
+                });
             }
         }
     }
-    match stream.receipt().await {
-        Ok(receipt) => ProducerStatus::from(receipt),
-        Err(error) => ProducerStatus::ExecutionFailed {
-            reason: error.to_string(),
-        },
-    }
+    let receipt = match stream.receipt().await {
+        // A read that failed before its first row ended in no ranking at all, so
+        // there is no ending for a witness to stand behind; the failure is the status.
+        Ok(receipt @ ProducerReceipt::ExecutionFailed { .. }) => receipt,
+        Ok(receipt) => {
+            // `None` is a stream no read of this crate's produced, which has no
+            // witness to settle; every stream `execute_within` hands back has one.
+            if let Some(settled) = stream.settle().await?
+                && settled != *announced
+            {
+                return Err(ProtocolError::AttestationMoved {
+                    stratum: stratum.as_str().to_owned(),
+                    reason: format!(
+                        "announced {announced:?} before the first row, settled {settled:?} \
+                         when the read ended"
+                    ),
+                });
+            }
+            receipt
+        }
+        Err(error) => {
+            return Ok(ProducerStatus::ExecutionFailed {
+                reason: error.to_string(),
+            });
+        }
+    };
+    Ok(ProducerStatus::from(receipt))
 }
 
 /// What one read of a bundle, fused, came to.
