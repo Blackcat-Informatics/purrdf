@@ -546,16 +546,16 @@ impl PlanCache {
         // finds its capacity.
         let mut scratch = std::mem::take(&mut self.key_scratch);
         scratch.clear();
-        plan_cache_key_into(
-            &mut scratch,
+        PlanCacheKey {
             query,
             base_iri,
             options,
-            fingerprint,
-            agg_fingerprint,
+            relations: fingerprint,
+            aggregates: agg_fingerprint,
             parameters,
             reach,
-        );
+        }
+        .write_into(&mut scratch);
         if let Some(prepared) = self.entries.get(scratch.as_slice()) {
             self.key_scratch = scratch;
             return Ok(prepared);
@@ -600,72 +600,98 @@ impl PlanCache {
     }
 }
 
+/// Every component a plan-cache key is built from, borrowed for the duration of
+/// one prepare.
+///
 /// Length-prefixed fields cannot alias when a caller's configuration contains
 /// separator characters. List lengths distinguish namespace-set boundaries.
-///
-/// Appends to `out`, which the caller supplies already empty: the key is only
-/// needed for the lookup, so [`PlanCache`] hands its reusable buffer here rather
-/// than paying for a fresh one per prepare.
-fn plan_cache_key_into(
-    out: &mut Vec<u8>,
-    query: &str,
-    base_iri: Option<&str>,
-    options: &ParserOptions,
-    relations: &str,
-    aggregates: &str,
-    parameters: &[&str],
+struct PlanCacheKey<'a> {
+    /// The query text.
+    query: &'a str,
+    /// The base IRI the query is parsed against, if any.
+    base_iri: Option<&'a str>,
+    /// The parser options whose namespace and IRI lists shape the parse.
+    options: &'a ParserOptions,
+    /// The property-function registry's fingerprint.
+    relations: &'a str,
+    /// The aggregate registry's fingerprint.
+    aggregates: &'a str,
+    /// The declared execution parameters, sorted and without repeats.
+    parameters: &'a [&'a str],
+    /// Which rewrite the declared parameters are admitted under.
     reach: ShaclPrebinding,
-) {
-    fn length(out: &mut Vec<u8>, value: usize) {
-        out.extend_from_slice(&(value as u64).to_le_bytes());
-    }
-    fn field(out: &mut Vec<u8>, value: &str) {
-        length(out, value.len());
-        out.extend_from_slice(value.as_bytes());
-    }
-    let lists = [
-        &options.extension_fn_namespaces,
-        &options.property_fn_namespaces,
-        &options.property_fn_iris,
-    ];
-    let mut capacity = 2 + 8 * size_of::<u64>();
-    for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
-        capacity += value.len();
-    }
-    for list in lists {
-        for value in list {
+}
+
+impl PlanCacheKey<'_> {
+    /// The length prefixes every key carries whatever its lists hold: the base IRI
+    /// field, the three option lists' lengths, the parameter list's length, and the
+    /// relations, aggregates and query fields.
+    const FIXED_LENGTH_PREFIXES: usize = 8;
+
+    /// Append this key's bytes to `out`, which the caller supplies already empty:
+    /// the key is only needed for the lookup, so [`PlanCache`] hands its reusable
+    /// buffer here rather than paying for a fresh one per prepare.
+    fn write_into(&self, out: &mut Vec<u8>) {
+        fn length(out: &mut Vec<u8>, value: usize) {
+            out.extend_from_slice(&(value as u64).to_le_bytes());
+        }
+        fn field(out: &mut Vec<u8>, value: &str) {
+            length(out, value.len());
+            out.extend_from_slice(value.as_bytes());
+        }
+        let Self {
+            query,
+            base_iri,
+            options,
+            relations,
+            aggregates,
+            parameters,
+            reach,
+        } = *self;
+        let lists = [
+            &options.extension_fn_namespaces,
+            &options.property_fn_namespaces,
+            &options.property_fn_iris,
+        ];
+        let mut capacity = 2 + Self::FIXED_LENGTH_PREFIXES * size_of::<u64>();
+        for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
+            capacity += value.len();
+        }
+        for list in lists {
+            for value in list {
+                capacity += size_of::<u64>() + value.len();
+            }
+        }
+        for value in parameters {
             capacity += size_of::<u64>() + value.len();
         }
-    }
-    for value in parameters {
-        capacity += size_of::<u64>() + value.len();
-    }
-    // A no-op once the buffer has seen a key this size, which is the steady state.
-    out.reserve(capacity);
-    out.push(u8::from(base_iri.is_some()));
-    field(out, base_iri.unwrap_or(""));
-    for list in lists {
-        length(out, list.len());
-        for value in list {
+        // A no-op once the buffer has seen a key this size, which is the steady state.
+        out.reserve(capacity);
+        out.push(u8::from(base_iri.is_some()));
+        field(out, base_iri.unwrap_or(""));
+        for list in lists {
+            length(out, list.len());
+            for value in list {
+                field(out, value);
+            }
+        }
+        // The declared execution parameters, for the reason the registry fingerprints are
+        // here: the same text under a different declaration is admitted differently.
+        length(out, parameters.len());
+        for value in parameters {
             field(out, value);
         }
-    }
-    // The declared execution parameters, for the reason the registry fingerprints are
-    // here: the same text under a different declaration is admitted differently.
-    length(out, parameters.len());
-    for value in parameters {
-        field(out, value);
-    }
-    // Which rewrite the declared parameters were admitted under, for the same reason:
-    // the SHACL pre-binding rewrite reaches calls the ordinary one does not, so it
-    // admits calls the ordinary one cannot serve. Only meaningful with parameters, and
-    // written regardless so the key has one layout.
-    out.push(match reach {
-        ShaclPrebinding::Applied => 1,
-        ShaclPrebinding::None => 0,
-    });
-    for value in [relations, aggregates, query] {
-        field(out, value);
+        // Which rewrite the declared parameters were admitted under, for the same reason:
+        // the SHACL pre-binding rewrite reaches calls the ordinary one does not, so it
+        // admits calls the ordinary one cannot serve. Only meaningful with parameters, and
+        // written regardless so the key has one layout.
+        out.push(match reach {
+            ShaclPrebinding::Applied => 1,
+            ShaclPrebinding::None => 0,
+        });
+        for value in [relations, aggregates, query] {
+            field(out, value);
+        }
     }
 }
 

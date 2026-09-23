@@ -471,7 +471,7 @@ impl GraphSpec {
 #[derive(Clone, Debug)]
 struct Producer {
     /// The IRI the relation is registered under.
-    producer: String,
+    iri: String,
     /// The caller-supplied stratum its rows rank within.
     stratum: String,
     /// Which blocks of the candidate universe this producer promises its rows
@@ -809,7 +809,7 @@ fn build_registry(
     }
     let mut registry = PropertyFunctionRegistry::new();
     for producer in producers {
-        let subject = format!("{} <{}>", producer.kind.noun(), producer.producer);
+        let subject = format!("{} <{}>", producer.kind.noun(), producer.iri);
         let stratum = crate::iri::parse(&producer.stratum)
             .map_err(|e| format!("{subject}: stratum <{}>: {e}", producer.stratum))?;
         let domains = candidate_domains(&subject, producer.domains.as_deref())?;
@@ -901,7 +901,7 @@ fn build_registry(
                 }
             };
         registry.register_ranked(
-            &producer.producer,
+            &producer.iri,
             producer.attestation.clone().wrap(relation),
             declaration,
         );
@@ -1467,7 +1467,7 @@ fn collect_text_producers(
                 graph,
                 fidelity,
             },
-            producer,
+            iri: producer,
         });
     }
     Ok(())
@@ -1550,7 +1550,7 @@ fn collect_hnsw_producers(
                 },
                 order,
             },
-            producer,
+            iri: producer,
         });
     }
     Ok(())
@@ -1596,7 +1596,7 @@ fn collect_knn_producers(
                 space: read_vector_spec(&subject, &rows, &metric, &guard)?,
                 fidelity: read_fidelity(&subject, &fidelity)?.ok_or_else(shape)?,
             },
-            producer,
+            iri: producer,
         });
     }
     Ok(())
@@ -1627,18 +1627,15 @@ fn collect_producers(
     // it builds is a set: sorting makes the registration order a pure function
     // of the declarations, so the registry's content fingerprint — which the
     // plan records — cannot depend on how the maps were written.
-    declared.sort_by(|left, right| left.producer.cmp(&right.producer));
+    declared.sort_by(|left, right| left.iri.cmp(&right.iri));
     // One IRI registers one relation. Within a map a key is unique already; across
     // two maps it is not, and the registry would otherwise keep one of the two
     // relations and drop the other without a word.
-    if let Some(pair) = declared
-        .windows(2)
-        .find(|pair| pair[0].producer == pair[1].producer)
-    {
+    if let Some(pair) = declared.windows(2).find(|pair| pair[0].iri == pair[1].iri) {
         return Err(PyValueError::new_err(format!(
             "property function <{}> is declared twice, as a {} and as a {}; a relation may \
              not be silently shadowed",
-            pair[0].producer,
+            pair[0].iri,
             pair[0].kind.noun(),
             pair[1].kind.noun()
         )));
@@ -1664,7 +1661,7 @@ fn collect_producers(
                  inside ONE producer that merges them by score; producers that score by \
                  different laws belong in two strata, where the weighted sum across strata is \
                  the point of the fusion",
-                earlier.producer, later.producer, later.stratum
+                earlier.iri, later.iri, later.stratum
             )));
         }
     }

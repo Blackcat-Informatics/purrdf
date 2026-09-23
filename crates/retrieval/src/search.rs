@@ -869,6 +869,12 @@ impl<'d> RankedStreamAdapter<'d> {
 impl RankedStream for RankedStreamAdapter<'_> {
     type Item = Term;
 
+    #[expect(
+        clippy::future_not_send,
+        reason = "the adapted stream may hold an on-demand read, which shares its \
+                  candidate index through `Rc<RefCell<_>>`; the fusion awaits it in one \
+                  task, so the future is not `Send` by construction"
+    )]
     async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         let Some((rank, item, block)) = self.inner.next().await? else {
             return Ok(None);
@@ -907,6 +913,12 @@ impl RankedStream for RankedStreamAdapter<'_> {
         Ok(Some(RankedRow::new(rank, value, item, block)))
     }
 
+    #[expect(
+        clippy::future_not_send,
+        reason = "the adapted stream may hold an on-demand read, which shares its \
+                  candidate index through `Rc<RefCell<_>>`; the fusion awaits it in one \
+                  task, so the future is not `Send` by construction"
+    )]
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         self.inner.receipt().await
     }
@@ -923,6 +935,12 @@ impl RankedStream for RankedStreamAdapter<'_> {
     /// deriving one from the rows it has already seen — would be answering a
     /// question about a host's corpus out of a rank it was handed. The same rule
     /// that keeps it from inventing a contract keeps it from inventing this.
+    #[expect(
+        clippy::future_not_send,
+        reason = "the adapted stream may hold an on-demand read, which shares its \
+                  candidate index through `Rc<RefCell<_>>`; the fusion awaits it in one \
+                  task, so the future is not `Send` by construction"
+    )]
     async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
         self.inner.exclusion(candidate).await
     }
@@ -954,6 +972,12 @@ impl RankedStream for RankedStreamAdapter<'_> {
     /// finished, which the fusion holds to the announcement the same way; rows a
     /// caller handed the executor's stream type directly came from no read, and
     /// settle to the announcement itself.
+    #[expect(
+        clippy::future_not_send,
+        reason = "the adapted stream may hold an on-demand read, which shares its \
+                  candidate index through `Rc<RefCell<_>>`; the fusion awaits it in one \
+                  task, so the future is not `Send` by construction"
+    )]
     async fn settle(&mut self) -> Result<ReadSettlement, ProtocolError> {
         let attestation = match self.inner.settle().await? {
             Some(settled) => settled,

@@ -317,11 +317,11 @@ struct FixtureStatistics {
 }
 
 impl Statistics for FixtureStatistics {
-    fn source(&self) -> &str {
+    fn source(&self) -> &'static str {
         "example-statistics"
     }
 
-    fn revision(&self) -> &str {
+    fn revision(&self) -> &'static str {
         "r1"
     }
 
@@ -356,10 +356,14 @@ fn fixture_profile() -> FusionProfile {
 // The measurement
 // ---------------------------------------------------------------------------
 
+/// One row of a fused answer, reduced to the part a reader compares: the
+/// candidate, its fused score, and which stratum contributed what at which rank.
+type AnswerRow = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
+
 /// What one run cost and what it answered.
 struct Measured {
-    /// The fused answer, reduced to the part a reader compares.
-    answer: Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>,
+    /// The fused answer, row by row.
+    answer: Vec<AnswerRow>,
     /// Ranks fusion pulled off the text stream.
     text_ranks: u64,
     /// Ranks fusion pulled off the vector stream.
@@ -520,7 +524,7 @@ fn a_declared_basis_shortens_a_text_and_vector_read_without_moving_the_answer() 
     );
     assert_eq!(
         asked.answer.len(),
-        usize::try_from(TOP_K.get()).expect("the bound is small"),
+        TOP_K.get(),
         "the fixture must actually fill the bound, or the comparison above compares two \
          empty answers — {report}"
     );

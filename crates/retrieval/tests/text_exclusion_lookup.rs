@@ -463,11 +463,11 @@ struct FixtureStatistics {
 }
 
 impl Statistics for FixtureStatistics {
-    fn source(&self) -> &str {
+    fn source(&self) -> &'static str {
         "example-statistics"
     }
 
-    fn revision(&self) -> &str {
+    fn revision(&self) -> &'static str {
         "r1"
     }
 
@@ -555,11 +555,14 @@ fn registry_rebuilding(
     (registry, recorders)
 }
 
+/// One row of a fused answer, reduced to the part a reader compares: the
+/// candidate, its fused score, and which stratum contributed what at which rank.
+type AnswerRow = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
+
 /// What one run cost and what it answered.
 struct Measured {
-    /// The fused answer, reduced to the part a reader compares: the candidate,
-    /// its fused score, and which stratum contributed what at which rank.
-    answer: Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>,
+    /// The fused answer, row by row.
+    answer: Vec<AnswerRow>,
     /// Ranks fusion pulled off each stream, summed.
     ranks_pulled: u64,
     /// Exclusion lookups fusion performed against each stream, summed.
@@ -730,7 +733,7 @@ fn a_declared_basis_shortens_a_real_text_read_without_moving_the_answer() {
     );
     assert_eq!(
         asked.answer.len(),
-        usize::try_from(TOP_K.get()).expect("the bound is small"),
+        TOP_K.get(),
         "the fixture must actually fill the bound, or the comparison above compares two \
          empty answers"
     );
@@ -1015,7 +1018,7 @@ fn a_fused_read_over_blank_node_candidates_is_answered_by_its_lookups() {
     );
     assert_eq!(
         asked.answer.len(),
-        usize::try_from(TOP_K.get()).expect("the bound is small"),
+        TOP_K.get(),
         "the fixture must actually fill the bound — {report}"
     );
     assert!(

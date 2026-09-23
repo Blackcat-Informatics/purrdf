@@ -695,7 +695,7 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
     );
 
     let execution =
-        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("the unit runs");
     assert_eq!(
         execution.statuses[&iri(&ex("stratum/text"))],
         ProducerStatus::DepthReached { rank: 3 },
@@ -798,7 +798,7 @@ fn a_zero_statistic_still_plans_one_row_and_the_producer_reports_the_emptiness()
     };
     let compiled = compile(&planned, &env).expect("admits");
     let execution =
-        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("the unit runs");
     assert_eq!(
         execution.statuses[&iri(&ex("stratum/text"))],
         ProducerStatus::Exhausted { rows_emitted: 0 },
@@ -863,7 +863,7 @@ fn a_zero_selectivity_narrows_to_one_row_and_the_relation_is_still_invoked() {
         compiled.units[0].sparql()
     );
     let execution =
-        block_on(execute(&compiled, &holding, &*common::empty_dataset())).expect("the unit runs");
+        block_on(execute(&compiled, &holding, common::empty_dataset())).expect("the unit runs");
     // The read the provider would have eliminated returns a row — and says the
     // right thing about it. This producer holds ten rows and the floored depth
     // read one, so the stratum is emphatically NOT exhausted; reporting it that
@@ -909,7 +909,7 @@ fn a_zero_selectivity_narrows_to_one_row_and_the_relation_is_still_invoked() {
     };
     let compiled = compile(&planned, &env).expect("admits");
     let execution =
-        block_on(execute(&compiled, &empty, &*common::empty_dataset())).expect("the unit runs");
+        block_on(execute(&compiled, &empty, common::empty_dataset())).expect("the unit runs");
     assert_eq!(
         execution.statuses[&iri(&ex("stratum/text"))],
         ProducerStatus::Exhausted { rows_emitted: 0 }
@@ -1049,7 +1049,7 @@ fn a_mandatory_producer_under_a_zero_selectivity_plans_admits_and_runs() {
     };
     let compiled = compile(&planned, &env).expect("the mandatory producer is bound, so it admits");
     let execution =
-        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("the unit runs");
     // Ten rows held, one row read: the mandatory producer answered, and the
     // status names the floored depth as what stopped the read rather than
     // claiming the stratum was exhausted at one row.
@@ -1233,7 +1233,7 @@ fn a_declared_zero_is_read_past_rather_than_obeyed_and_a_wrong_one_is_refused() 
             compiled.units[0].sparql()
         );
         assert_eq!(compiled.units[0].declared_rows(), Some(0));
-        block_on(execute(&compiled, registry, &*common::empty_dataset()))
+        block_on(execute(&compiled, registry, common::empty_dataset()))
     };
 
     // The index that really is empty: nothing came back, and the read was allowed a
@@ -1498,7 +1498,7 @@ fn a_self_bounding_producer_reports_the_bound_that_stopped_it_and_still_catches_
         (
             depth,
             sparql,
-            block_on(execute(&compiled, registry, &*common::empty_dataset())),
+            block_on(execute(&compiled, registry, common::empty_dataset())),
         )
     };
 
@@ -1673,7 +1673,7 @@ fn a_bound_lowered_in_a_caller_supplied_text_reports_that_text_and_never_an_exha
     };
     let status =
         |compiled: &CompiledRetrieval, registry: &PropertyFunctionRegistry, stratum: &Iri| {
-            block_on(execute(compiled, registry, &*common::empty_dataset()))
+            block_on(execute(compiled, registry, common::empty_dataset()))
                 .expect("the unit runs")
                 .statuses[stratum]
                 .clone()
@@ -1802,7 +1802,7 @@ fn a_bound_lowered_in_a_caller_supplied_text_reports_that_text_and_never_an_exha
         &rendered,
         without_the_outer_bound(&rendered.units[0].sparql(), 4),
     );
-    let error = block_on(execute(&supplied, &registry, &*common::empty_dataset()))
+    let error = block_on(execute(&supplied, &registry, common::empty_dataset()))
         .expect_err("a fourth row from a producer that declared three");
     assert!(
         matches!(
@@ -1870,7 +1870,7 @@ fn a_prefixed_supplied_text_over_a_self_bounding_producer_reads_what_the_absolut
             compiled.fused_bound,
             compiled.resolution.clone(),
         );
-        block_on(execute(&bundle, &registry, &*common::empty_dataset()))
+        block_on(execute(&bundle, &registry, common::empty_dataset()))
             .expect("the unit runs")
             .statuses[&knn]
             .clone()
@@ -2950,7 +2950,7 @@ fn a_small_top_k_over_an_oversized_declaration_plans_admits_and_runs() {
         fusion_profile: None,
     };
     let compiled = compile(&planned, &env).expect("and it is admitted");
-    let execution = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
+    let execution = block_on(execute(&compiled, &registry, common::empty_dataset()))
         .expect("and the unit runs");
     assert_eq!(
         execution.statuses.get(&iri(&ex("stratum/deep"))),

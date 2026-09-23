@@ -2216,7 +2216,7 @@ fn a_membership_lookup_scans_nothing_and_a_ranked_read_does() {
         None,
     )
     .expect("answered");
-    assert!(rows.is_empty());
+    assert_eq!(rows, Vec::<PfRow>::new());
     assert_eq!(observed.membership_lookups(), 1, "{}", report());
     assert_eq!(observed.membership_distances(), 0, "{}", report());
     assert_eq!(observed.scans(), 0, "{}", report());

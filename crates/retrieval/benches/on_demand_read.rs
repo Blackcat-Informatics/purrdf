@@ -299,11 +299,11 @@ fn request() -> RetrievalRequest {
 struct Cardinalities(BTreeMap<Iri, u64>);
 
 impl Statistics for Cardinalities {
-    fn source(&self) -> &str {
+    fn source(&self) -> &'static str {
         "example-statistics"
     }
 
-    fn revision(&self) -> &str {
+    fn revision(&self) -> &'static str {
         "r1"
     }
 

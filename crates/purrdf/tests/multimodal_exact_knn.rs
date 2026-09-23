@@ -377,11 +377,11 @@ struct FixtureStatistics {
 }
 
 impl Statistics for FixtureStatistics {
-    fn source(&self) -> &str {
+    fn source(&self) -> &'static str {
         "example-statistics"
     }
 
-    fn revision(&self) -> &str {
+    fn revision(&self) -> &'static str {
         "r1"
     }
 
@@ -415,11 +415,15 @@ fn fixture_profile() -> FusionProfile {
 // The measurement
 // ---------------------------------------------------------------------------
 
+/// One row of a fused answer: the candidate, its fused score, and which stratum
+/// contributed what at which rank.
+type AnswerRow = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
+
 /// What one run cost and what it answered, every figure read off either the answer's
 /// trailer or a relation's own counter.
 #[derive(Debug, PartialEq, Eq)]
 struct Measured {
-    answer: Vec<(Term, Fixed, Vec<(Iri, u64, Fixed)>)>,
+    answer: Vec<AnswerRow>,
     /// The depth the plan recorded for the vector stratum — the `k` it is opened at.
     knn_planned_depth: u32,
     text_ranks: u64,
@@ -516,11 +520,7 @@ fn a_text_and_exact_knn_read_stops_early_on_lookups_and_scans_the_space_once() {
 
     // 1. The same answer, row for row, score for score, in order — and a full one.
     assert_eq!(asked.answer, control.answer, "{report}");
-    assert_eq!(
-        asked.answer.len(),
-        usize::try_from(TOP_K.get()).expect("small"),
-        "{report}"
-    );
+    assert_eq!(asked.answer.len(), TOP_K.get(), "{report}");
 
     // 2. The read: strictly shorter, and exactly as deep as the fusion pulled.
     assert_eq!(

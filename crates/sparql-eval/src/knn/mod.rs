@@ -1588,25 +1588,6 @@ fn neighbour_count(value: &TermValue, guard: KnnGuard) -> Result<usize, EvalErro
     })
 }
 
-/// The cursor [`EmbeddingKnnRelation::open`] returns: the ranked neighbours, filtered on
-/// every bound position and cut at the engine's licence.
-///
-/// # Why the search is lazy
-///
-/// The ranking runs on the first [`PfCursor::next`], not in `open`. The engine checks its
-/// own ceiling *before* pulling, so a call whose ceiling is already exhausted never pulls
-/// at all — and a search performed in `open` would have been done, and charged, for an
-/// answer nobody was going to read. Doing it here makes "no rows were wanted" and "no work
-/// was done" the same statement.
-///
-/// # The two properties that make the licence sound
-///
-/// * It filters on **every** bound position, including `?neighbour` and `?distance`, which
-///   the ranking cannot see. A relation may generate candidates and let the engine's own
-///   filter cut them, but a relation that also *spent a ceiling* on them would hand back
-///   fewer usable rows than the engine asked for.
-/// * It decrements the licence only on rows it actually **emits**. A skipped row disagrees
-///   with a bound position and the engine would have dropped it anyway.
 /// What one invocation is going to do, decided in [`EmbeddingKnnRelation::open`] from
 /// the access pattern it arrived in.
 ///
@@ -1630,6 +1611,25 @@ enum Answer {
     Membership(Option<(usize, usize)>),
 }
 
+/// The cursor [`EmbeddingKnnRelation::open`] returns: the ranked neighbours, filtered on
+/// every bound position and cut at the engine's licence.
+///
+/// # Why the search is lazy
+///
+/// The ranking runs on the first [`PfCursor::next`], not in `open`. The engine checks its
+/// own ceiling *before* pulling, so a call whose ceiling is already exhausted never pulls
+/// at all — and a search performed in `open` would have been done, and charged, for an
+/// answer nobody was going to read. Doing it here makes "no rows were wanted" and "no work
+/// was done" the same statement.
+///
+/// # The two properties that make the licence sound
+///
+/// * It filters on **every** bound position, including `?neighbour` and `?distance`, which
+///   the ranking cannot see. A relation may generate candidates and let the engine's own
+///   filter cut them, but a relation that also *spent a ceiling* on them would hand back
+///   fewer usable rows than the engine asked for.
+/// * It decrements the licence only on rows it actually **emits**. A skipped row disagrees
+///   with a bound position and the engine would have dropped it anyway.
 #[derive(Debug)]
 struct KnnCursor {
     /// The space being searched.

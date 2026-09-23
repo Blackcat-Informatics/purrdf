@@ -412,7 +412,7 @@ fn a_membership_lookup_computes_no_distance_and_visits_no_graph_node() {
     //    node, not a beam. A zero here is read off a counter rather than inferred from a
     //    timing, which a fixture this small could never distinguish.
     let (rows, work) = drain(&relation, Some(&seed), None, Some(&stranger));
-    assert!(rows.is_empty());
+    assert_eq!(rows, Vec::<PfRow>::new());
     assert_eq!(
         work, 0,
         "an excluded candidate examined no candidate at all"
@@ -443,7 +443,7 @@ fn a_membership_lookup_computes_no_distance_and_visits_no_graph_node() {
     //    traverses anything. The same relation, the same seed, a bound count and the
     //    candidate left free: the beam runs and the counters move.
     let (rows, work) = drain(&relation, Some(&seed), Some("8"), None);
-    assert!(!rows.is_empty());
+    assert_ne!(rows, Vec::<PfRow>::new());
     assert!(work > 0);
     assert_eq!(observed.searches(), 1, "{}", report(&observed));
     assert!(

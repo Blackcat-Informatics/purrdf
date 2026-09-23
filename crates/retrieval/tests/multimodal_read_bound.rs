@@ -47,6 +47,7 @@
 //! is fixture configuration, never a minted vocabulary.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::Write as _;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -921,11 +922,11 @@ struct FixtureStatistics {
 }
 
 impl Statistics for FixtureStatistics {
-    fn source(&self) -> &str {
+    fn source(&self) -> &'static str {
         "example-statistics"
     }
 
-    fn revision(&self) -> &str {
+    fn revision(&self) -> &'static str {
         "r1"
     }
 
@@ -1329,7 +1330,7 @@ fn ceiling_at(rank: u64) -> ProducerStatus {
 #[test]
 fn distinct_blocks_disjoint_results_read_only_what_the_bound_needs() {
     let dataset = common::empty_dataset();
-    let measured = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, &dataset);
+    let measured = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, dataset);
     let report = render(DISTINCT_BLOCKS_DISJOINT_RESULTS, &measured);
 
     assert_eq!(measured.rows.len(), 5, "the bound is what stopped this run");
@@ -1396,7 +1397,7 @@ fn distinct_blocks_disjoint_results_read_only_what_the_bound_needs() {
 #[test]
 fn shared_block_intersecting_results_answer_at_the_sixth_rank_reading_six_rows() {
     let dataset = common::empty_dataset();
-    let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS, &dataset);
+    let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS, dataset);
     let report = render(SHARED_BLOCK_INTERSECTING_RESULTS, &measured);
 
     assert_eq!(measured.rows.len(), 5, "the bound is what stopped this run");
@@ -1479,7 +1480,7 @@ fn shared_block_intersecting_results_answer_at_the_sixth_rank_reading_six_rows()
 #[test]
 fn shared_block_disjoint_results_drain_both_streams_unbounded_control() {
     let dataset = common::empty_dataset();
-    let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
     let report = render(SHARED_BLOCK_DISJOINT_RESULTS, &measured);
 
     assert_eq!(measured.rows.len(), 5, "the answer is still five rows");
@@ -1719,8 +1720,8 @@ fn a_lookup_from_an_index_found_short_is_refused_and_one_from_the_attested_short
 #[test]
 fn the_declaration_alone_moves_every_measured_number() {
     let dataset = common::empty_dataset();
-    let distinct = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, &dataset);
-    let shared = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let distinct = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, dataset);
+    let shared = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
 
     // First the sameness, so the difference below is known to come from the
     // declaration: the two runs return the same answer.
@@ -1803,7 +1804,7 @@ fn every_stratum_is_read_once_and_produces_exactly_the_rows_its_fusion_pulled() 
         UNDECLARED_BLOCKS_DISJOINT_RESULTS_WITH_LOOKUPS,
         SHARED_BLOCK_REVERSED_RESULTS_WITH_LOOKUPS,
     ] {
-        let measured = measure(config, &dataset);
+        let measured = measure(config, dataset);
         let report = render_with_lookups(config, &measured);
         for stratum in strata() {
             assert_eq!(
@@ -1849,7 +1850,7 @@ fn every_stratum_is_read_once_and_produces_exactly_the_rows_its_fusion_pulled() 
 fn no_configuration_reads_a_stratum_twice() {
     let dataset = common::empty_dataset();
 
-    let distinct = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, &dataset);
+    let distinct = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, dataset);
     assert_eq!(
         distinct.both("the reads", &distinct.reads),
         vec![4],
@@ -1857,7 +1858,7 @@ fn no_configuration_reads_a_stratum_twice() {
         render(DISTINCT_BLOCKS_DISJOINT_RESULTS, &distinct)
     );
 
-    let intersecting = measure(SHARED_BLOCK_INTERSECTING_RESULTS, &dataset);
+    let intersecting = measure(SHARED_BLOCK_INTERSECTING_RESULTS, dataset);
     assert_eq!(
         intersecting.both("the reads", &intersecting.reads),
         vec![6],
@@ -1865,7 +1866,7 @@ fn no_configuration_reads_a_stratum_twice() {
         render(SHARED_BLOCK_INTERSECTING_RESULTS, &intersecting)
     );
 
-    let disjoint = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let disjoint = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
     assert_eq!(
         disjoint.both("the reads", &disjoint.reads),
         vec![ROWS],
@@ -1888,7 +1889,7 @@ fn no_configuration_reads_a_stratum_twice() {
 #[test]
 fn a_stream_that_runs_out_is_exhausted_and_read_once() {
     let dataset = common::empty_dataset();
-    let measured = measure(SHARED_BLOCK_SHORT_STREAMS, &dataset);
+    let measured = measure(SHARED_BLOCK_SHORT_STREAMS, dataset);
     let report = render(SHARED_BLOCK_SHORT_STREAMS, &measured);
 
     // The premise: the planned depth is far deeper than the rows there are, so
@@ -1943,8 +1944,8 @@ fn the_on_demand_read_returns_the_answer_the_materialised_read_returns() {
         UNDECLARED_BLOCKS_DISJOINT_RESULTS_WITH_LOOKUPS,
         SHARED_BLOCK_REVERSED_RESULTS_WITH_LOOKUPS,
     ] {
-        let searched = measure(config, &dataset);
-        let full = measure_at_planned_depth(config, &dataset);
+        let searched = measure(config, dataset);
+        let full = measure_at_planned_depth(config, dataset);
 
         // The reference really did read in full, or the two agree for the
         // uninteresting reason.
@@ -2340,7 +2341,7 @@ fn a_stratum_sharing_a_block_with_another_is_never_licensed() {
             duplicates: DuplicatePolicy::Unique,
         },
     ];
-    let run = run_declared(&pair, ReadBound::Bounded(TOP_K), &dataset);
+    let run = run_declared(&pair, ReadBound::Bounded(TOP_K), dataset);
     assert_depths(
         "two strata sharing one block",
         &run,
@@ -2352,7 +2353,7 @@ fn a_stratum_sharing_a_block_with_another_is_never_licensed() {
 
     // The same, inside a request that also holds a stratum nobody shares with:
     // the sharers are still unlicensed, and sharing is still the reason.
-    let run = run_declared(&N3, ReadBound::Bounded(TOP_K), &dataset);
+    let run = run_declared(&N3, ReadBound::Bounded(TOP_K), dataset);
     assert_depths(
         "the sharing pair inside a three-stratum request",
         &run,
@@ -2377,7 +2378,7 @@ fn a_stratum_sharing_a_block_with_another_is_never_licensed() {
             duplicates: DuplicatePolicy::Unique,
         },
     ];
-    let run = run_declared(&unrestricted, ReadBound::Bounded(TOP_K), &dataset);
+    let run = run_declared(&unrestricted, ReadBound::Bounded(TOP_K), dataset);
     assert_depths(
         "an unrestricted stratum shares every block, including its own neighbour's",
         &run,
@@ -2401,7 +2402,7 @@ fn a_stratum_sharing_a_block_with_another_is_never_licensed() {
 #[test]
 fn pairwise_disjoint_unique_strata_are_each_licensed_the_requests_bound() {
     let dataset = common::empty_dataset();
-    let run = run_declared(&N1, ReadBound::Bounded(TOP_K), &dataset);
+    let run = run_declared(&N1, ReadBound::Bounded(TOP_K), dataset);
     assert_depths(
         "three pairwise-disjoint unique strata",
         &run,
@@ -2411,7 +2412,7 @@ fn pairwise_disjoint_unique_strata_are_each_licensed_the_requests_bound() {
             (&N1[2], licensed_depth(), DepthCause::LicensedPrefix),
         ],
     );
-    assert_narrowing_changed_no_answer("N1", &N1, &dataset);
+    assert_narrowing_changed_no_answer("N1", &N1, dataset);
 }
 
 /// **N2.** A single stratum restricting no block is licensed anyway: there is no
@@ -2420,13 +2421,13 @@ fn pairwise_disjoint_unique_strata_are_each_licensed_the_requests_bound() {
 #[test]
 fn a_single_unrestricted_unique_stratum_is_licensed_the_requests_bound() {
     let dataset = common::empty_dataset();
-    let run = run_declared(&N2, ReadBound::Bounded(TOP_K), &dataset);
+    let run = run_declared(&N2, ReadBound::Bounded(TOP_K), dataset);
     assert_depths(
         "one unrestricted unique stratum",
         &run,
         &[(&N2[0], licensed_depth(), DepthCause::LicensedPrefix)],
     );
-    assert_narrowing_changed_no_answer("N2", &N2, &dataset);
+    assert_narrowing_changed_no_answer("N2", &N2, dataset);
 }
 
 /// **N3.** A stratum whose block no other stratum names narrows, even though two
@@ -2440,7 +2441,7 @@ fn a_single_unrestricted_unique_stratum_is_licensed_the_requests_bound() {
 #[test]
 fn a_stratum_disjoint_from_a_sharing_pair_narrows_while_the_pair_does_not() {
     let dataset = common::empty_dataset();
-    let run = run_declared(&N3, ReadBound::Bounded(TOP_K), &dataset);
+    let run = run_declared(&N3, ReadBound::Bounded(TOP_K), dataset);
     assert_depths(
         "one disjoint stratum beside a sharing pair",
         &run,
@@ -2450,7 +2451,7 @@ fn a_stratum_disjoint_from_a_sharing_pair_narrows_while_the_pair_does_not() {
             (&N3[2], unlicensed_depth(), DepthCause::Declaration),
         ],
     );
-    assert_narrowing_changed_no_answer("N3", &N3, &dataset);
+    assert_narrowing_changed_no_answer("N3", &N3, dataset);
 }
 
 /// **N4.** A `Unique` stratum narrows beside an `Allowed` one whose blocks it does
@@ -2463,7 +2464,7 @@ fn a_stratum_disjoint_from_a_sharing_pair_narrows_while_the_pair_does_not() {
 #[test]
 fn a_unique_stratum_narrows_beside_a_disjoint_allowed_one() {
     let dataset = common::empty_dataset();
-    let run = run_declared(&N4, ReadBound::Bounded(TOP_K), &dataset);
+    let run = run_declared(&N4, ReadBound::Bounded(TOP_K), dataset);
     assert_depths(
         "a unique stratum beside a disjoint allowed one",
         &run,
@@ -2472,7 +2473,7 @@ fn a_unique_stratum_narrows_beside_a_disjoint_allowed_one() {
             (&N4[1], unlicensed_depth(), DepthCause::Declaration),
         ],
     );
-    assert_narrowing_changed_no_answer("N4", &N4, &dataset);
+    assert_narrowing_changed_no_answer("N4", &N4, dataset);
 }
 
 /// **Anti-vacuity for the whole section.** A single `Allowed` stratum, alone in its
@@ -2489,7 +2490,7 @@ fn a_lone_allowed_stratum_is_not_licensed_by_being_alone() {
         block: Some("lone-allowed"),
         duplicates: DuplicatePolicy::Allowed,
     }];
-    let run = run_declared(&lone, ReadBound::Bounded(TOP_K), &dataset);
+    let run = run_declared(&lone, ReadBound::Bounded(TOP_K), dataset);
     assert_depths(
         "one allowed stratum, alone",
         &run,
@@ -2830,7 +2831,7 @@ fn instances() -> Vec<Instance> {
                     items: items("doc", 1, 3)
                         .into_iter()
                         .zip(items("person", 1, 3))
-                        .flat_map(|(doc, person)| [doc, person])
+                        .flat_map(<[_; 2]>::from)
                         .collect(),
                 },
             ],
@@ -2963,7 +2964,7 @@ fn the_measured_table_is_what_it_was() {
         SHARED_BLOCK_DISJOINT_RESULTS,
     ]
     .into_iter()
-    .map(|config| render(config, &measure(config, &dataset)))
+    .map(|config| render(config, &measure(config, dataset)))
     .collect();
 
     assert_eq!(
@@ -3137,8 +3138,8 @@ fn total(field: &BTreeMap<Iri, u64>) -> u64 {
 #[test]
 fn membership_lookups_stop_the_drain_where_the_threshold_licenses() {
     let dataset = common::empty_dataset();
-    let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
-    let control = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, dataset);
+    let control = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
     let report = render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &measured);
 
     assert_eq!(measured.rows.len(), 5, "the answer is still five rows");
@@ -3375,8 +3376,8 @@ fn planned_stopping_ranks(config: Configuration) -> u64 {
 #[test]
 fn the_lookups_answer_the_drained_configuration_reading_only_the_ranks_the_fusion_pulls() {
     let dataset = common::empty_dataset();
-    let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
-    let control = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, dataset);
+    let control = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
     let report = format!(
         "declared={} control={}",
         render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &measured),
@@ -3459,7 +3460,7 @@ fn the_lookups_answer_the_drained_configuration_reading_only_the_ranks_the_fusio
     // contributions, intervals and threshold witnesses included — because the
     // fusion over the on-demand read is the fusion over the full one, up to the
     // rank it stopped at.
-    let full = measure_at_planned_depth(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
+    let full = measure_at_planned_depth(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, dataset);
     assert_eq!(
         full.both("the reads", &full.reads),
         vec![ROWS],
@@ -3482,8 +3483,8 @@ fn the_lookups_answer_the_drained_configuration_reading_only_the_ranks_the_fusio
 fn undeclared_domains_answering_lookups_read_once_and_answer_identically() {
     let dataset = common::empty_dataset();
     let config = UNDECLARED_BLOCKS_DISJOINT_RESULTS_WITH_LOOKUPS;
-    let measured = measure(config, &dataset);
-    let full = measure_at_planned_depth(config, &dataset);
+    let measured = measure(config, dataset);
+    let full = measure_at_planned_depth(config, dataset);
     let report = format!(
         "searched={} planned={}",
         render_with_lookups(config, &measured),
@@ -3524,7 +3525,7 @@ fn undeclared_domains_answering_lookups_read_once_and_answer_identically() {
     );
     assert_eq!(
         measured.rows,
-        measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset).rows,
+        measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, dataset).rows,
         "and it is the answer the declared-block twin gives — {report}"
     );
 }
@@ -3546,8 +3547,8 @@ fn undeclared_domains_answering_lookups_read_once_and_answer_identically() {
 fn a_stopping_rank_the_rows_overrun_is_read_past_in_the_same_read() {
     let dataset = common::empty_dataset();
     let config = SHARED_BLOCK_REVERSED_RESULTS_WITH_LOOKUPS;
-    let measured = measure(config, &dataset);
-    let full = measure_at_planned_depth(config, &dataset);
+    let measured = measure(config, dataset);
+    let full = measure_at_planned_depth(config, dataset);
     let report = format!(
         "searched={} planned={}",
         render_with_lookups(config, &measured),
@@ -3622,8 +3623,8 @@ fn a_stopping_rank_the_rows_overrun_is_read_past_in_the_same_read() {
 #[test]
 fn the_declared_basis_alone_buys_a_shallower_read_of_the_same_answer() {
     let dataset = common::empty_dataset();
-    let silent = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
-    let declaring = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
+    let silent = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
+    let declaring = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, dataset);
     let report = format!(
         "silent={} declaring={}",
         render(SHARED_BLOCK_DISJOINT_RESULTS, &silent),
@@ -3681,8 +3682,8 @@ fn the_declared_basis_alone_buys_a_shallower_read_of_the_same_answer() {
 #[test]
 fn a_candidate_that_cannot_win_is_never_looked_up() {
     let dataset = common::empty_dataset();
-    let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &dataset);
-    let control = measure(SHARED_BLOCK_INTERSECTING_RESULTS, &dataset);
+    let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, dataset);
+    let control = measure(SHARED_BLOCK_INTERSECTING_RESULTS, dataset);
     let report = render_with_lookups(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &measured);
 
     // Every lookup found its candidate, so every verdict was `Possible`. This is
@@ -3832,8 +3833,8 @@ fn naming_weights(measured: &Measured) -> Vec<Fixed> {
 #[test]
 fn the_ranks_and_the_read_work_both_move_between_a_cheap_run_and_a_corpus_cost_run() {
     let dataset = common::empty_dataset();
-    let cheap = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, &dataset);
-    let costly = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let cheap = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, dataset);
+    let costly = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
     let report = format!(
         "cheap={} costly={}",
         render(DISTINCT_BLOCKS_DISJOINT_RESULTS, &cheap),
@@ -3960,8 +3961,8 @@ fn the_work_never_exceeds_the_materialised_control_in_any_configuration() {
         (SHARED_BLOCK_SHORT_STREAMS, 4, 4, 8, 8),
     ];
     for (config, control_rows, rows, control_work, work) in expected {
-        let measured = measure(config, &dataset);
-        let control = measure_at_planned_depth(config, &dataset);
+        let measured = measure(config, dataset);
+        let control = measure_at_planned_depth(config, dataset);
         let report = format!(
             "on demand={} control={}",
             render_with_lookups(config, &measured),
@@ -4015,9 +4016,9 @@ fn the_work_never_exceeds_the_materialised_control_in_any_configuration() {
 #[test]
 fn the_exclusion_lookup_counter_moves_between_two_runs_that_both_ask() {
     let dataset = common::empty_dataset();
-    let disjoint = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
-    let shared = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &dataset);
-    let silent = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let disjoint = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, dataset);
+    let shared = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, dataset);
+    let silent = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
     let report = format!(
         "disjoint={} shared={} silent={}",
         render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &disjoint),
@@ -4073,7 +4074,7 @@ fn the_plan_surfaces_the_crossing_and_it_predicts_the_read_that_reaches_it() {
         SHARED_BLOCK_INTERSECTING_RESULTS,
         SHARED_BLOCK_DISJOINT_RESULTS,
     ] {
-        let measured = measure(config, &dataset);
+        let measured = measure(config, dataset);
         let report = render(config, &measured);
         let deepest = measured.deepest_emitted_rank();
         let naming = naming_weights(&measured);
@@ -4227,9 +4228,9 @@ fn a_host_learns_the_crossing_its_declarations_condemn_it_to_without_reading_a_r
 #[test]
 fn a_truthful_exhaustion_over_a_costly_answer_is_told_from_a_cheap_one_only_by_the_counter() {
     let dataset = common::empty_dataset();
-    let drained = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
-    let short = measure(SHARED_BLOCK_SHORT_STREAMS, &dataset);
-    let ceilinged = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, &dataset);
+    let drained = measure(SHARED_BLOCK_DISJOINT_RESULTS, dataset);
+    let short = measure(SHARED_BLOCK_SHORT_STREAMS, dataset);
+    let ceilinged = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, dataset);
     let report = format!(
         "drained={} short={} ceilinged={}",
         render(SHARED_BLOCK_DISJOINT_RESULTS, &drained),
@@ -4322,7 +4323,7 @@ fn a_truthful_exhaustion_over_a_costly_answer_is_told_from_a_cheap_one_only_by_t
 #[test]
 fn the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for() {
     let dataset = common::empty_dataset();
-    let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &dataset);
+    let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, dataset);
     let report = render_with_lookups(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &measured);
 
     // The premise this rendering is worth asserting over: the run really asked.
@@ -4366,13 +4367,15 @@ fn the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for() {
             .expect("the fixture profile weights every stratum")
             .rank()
             .map_or_else(|| "beyond-any-plan".to_owned(), |rank| rank.to_string());
-        expected.push_str(&format!(
+        writeln!(
+            expected,
             "{stratum} separates_to={separates_to} ranks_pulled={predicted_ranks} \
              collisions_observed=0 exclusion_lookups={lookups} \
-             rows_materialised={rows}\n",
+             rows_materialised={rows}",
             lookups = measured.served_lookups[&stratum],
             rows = served_rows(&measured, &stratum),
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
 
     assert_eq!(

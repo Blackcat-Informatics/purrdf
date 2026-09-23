@@ -305,6 +305,7 @@ use purrdf_sparql_eval::{
 use crate::admission::BoundMode;
 use crate::compile::{
     BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval, EXCLUSION_LIMIT, ReadReach, ReadSchedule,
+    StratumUnit,
 };
 use crate::fuse::TopK;
 use crate::fusion_stream::ProducerStatus;
@@ -1149,6 +1150,12 @@ impl<'d> RankedStreamImpl<'d> {
     /// count the rule refused.
     // Synchronous for the reason `next` is.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::future_not_send,
+        reason = "an on-demand read shares its candidate index with the stratum's \
+                  exclusion lookups through `Rc<RefCell<_>>` and is awaited in the one \
+                  task that fuses it, so the future is not `Send` by construction"
+    )]
     pub async fn settle(&mut self) -> Result<Option<PfAttestation>, ProtocolError> {
         match &self.source {
             RowSource::Materialised { attested, .. } => Ok(attested.clone()),
@@ -1194,6 +1201,12 @@ impl<'d> RankedStreamImpl<'d> {
     // Synchronous for the reason `next` is: the evaluator behind it is
     // synchronous, and the `async` shape is the fusion stage's protocol.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::future_not_send,
+        reason = "an on-demand read shares its candidate index with the stratum's \
+                  exclusion lookups through `Rc<RefCell<_>>` and is awaited in the one \
+                  task that fuses it, so the future is not `Send` by construction"
+    )]
     pub async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
         match self.exclusion.as_mut() {
             Some(lookup) => lookup.look_up(candidate),
@@ -1211,6 +1224,12 @@ impl<'d> RankedStreamImpl<'d> {
     // returning; the `async` shape is the ranked-stream contract the fusion stage
     // consumes, and a caller may compose it with genuinely asynchronous streams.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::future_not_send,
+        reason = "an on-demand read shares its candidate index with the stratum's \
+                  exclusion lookups through `Rc<RefCell<_>>` and is awaited in the one \
+                  task that fuses it, so the future is not `Send` by construction"
+    )]
     pub async fn next(&mut self) -> Result<Option<(u64, Term, RowBlock)>, ProtocolError> {
         let row = match &mut self.source {
             RowSource::Materialised { rows, .. } => rows.pop_front(),
@@ -1277,6 +1296,12 @@ impl<'d> RankedStreamImpl<'d> {
     /// drained, because a completeness claim from a partially read stream is
     /// exactly the falsifiable status the protocol forbids.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::future_not_send,
+        reason = "an on-demand read shares its candidate index with the stratum's \
+                  exclusion lookups through `Rc<RefCell<_>>` and is awaited in the one \
+                  task that fuses it, so the future is not `Send` by construction"
+    )]
     pub async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         if !self.exhausted {
             return Err(ProtocolError::NeverEndingSource);
@@ -1424,7 +1449,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
     let exclusions: Vec<Option<String>> = compiled
         .units
         .iter()
-        .map(|unit| unit.exclusion_sparql())
+        .map(StratumUnit::exclusion_sparql)
         .collect();
     let index_candidates = exclusions.iter().any(Option::is_some);
     let mut statuses = HashMap::with_capacity(compiled.units.len());
@@ -2460,7 +2485,7 @@ mod tests {
             };
             let refused = rank_candidates(
                 &variables(),
-                &[vec![Some(value.clone())]],
+                &[vec![Some(value)]],
                 &CandidateDomains::Unrestricted,
             )
             .expect_err("an unspellable literal is refused, not misnamed");

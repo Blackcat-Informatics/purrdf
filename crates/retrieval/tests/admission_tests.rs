@@ -2269,8 +2269,8 @@ fn one_stratum_failure_others_continue() {
     .expect("a well-formed query over an unresolvable function is still a unit");
     compiled.units[1] = broken;
 
-    let result = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
-        .expect("execution starts");
+    let result =
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("execution starts");
     match result.statuses.get(&failing) {
         Some(ProducerStatus::ExecutionFailed { reason }) => assert!(
             reason.contains(&ex("fn/absent")),
@@ -2311,7 +2311,7 @@ fn pinned_plan_replay_reproduces_candidate_set_and_ranks() {
         block_on(execute(
             &compile(&plan, &env).expect("admits"),
             &registry,
-            &*common::empty_dataset(),
+            common::empty_dataset(),
         ))
         .expect("runs"),
     );
@@ -2319,7 +2319,7 @@ fn pinned_plan_replay_reproduces_candidate_set_and_ranks() {
         block_on(execute(
             &compile(&plan, &env).expect("admits"),
             &registry,
-            &*common::empty_dataset(),
+            common::empty_dataset(),
         ))
         .expect("runs"),
     );
@@ -2355,7 +2355,7 @@ fn execute_refuses_a_different_registry_instance() {
     };
     let compiled = compile(&plan, &env).expect("admits");
     let other = fixture_registry();
-    let error = block_on(execute(&compiled, &other, &*common::empty_dataset()))
+    let error = block_on(execute(&compiled, &other, common::empty_dataset()))
         .expect_err("a foreign registry is refused");
     assert!(matches!(
         error,

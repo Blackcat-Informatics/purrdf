@@ -1143,8 +1143,8 @@ impl StratumUnit {
     ) -> Self {
         Self {
             stratum,
-            query,
             contract,
+            query,
             depth,
             declared_rows,
             declared_mode,

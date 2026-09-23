@@ -562,12 +562,10 @@ fn search_equals_manual_composition() {
     let request = mixed_request();
     let dataset = common::empty_dataset();
 
-    let direct = block_on(search(
-        &request, &registry, &stats, &*dataset, &env, &profile,
-    ))
-    .expect("the composed search answers");
+    let direct = block_on(search(&request, &registry, &stats, dataset, &env, &profile))
+        .expect("the composed search answers");
     let manual = block_on(manual_composition(
-        &request, &registry, &stats, &dataset, &env, &profile,
+        &request, &registry, &stats, dataset, &env, &profile,
     ));
 
     assert_eq!(
@@ -617,7 +615,7 @@ fn plan_error_propagates() {
         &RetrievalRequest::bounded(Vec::new(), TOP_K),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -646,7 +644,7 @@ fn admission_error_propagates() {
         &mixed_request(),
         &planned_against,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -697,7 +695,7 @@ fn fusion_error_propagates() {
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &disjoint,
     ))
@@ -751,7 +749,7 @@ fn search_answers_under_a_profile_that_cannot_separate_every_planned_rank() {
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &shallow,
     ))
@@ -764,7 +762,7 @@ fn search_answers_under_a_profile_that_cannot_separate_every_planned_rank() {
             &mixed_request(),
             &registry,
             &stats,
-            &*common::empty_dataset(),
+            common::empty_dataset(),
             &env,
             &fixture_profile(),
         ))
@@ -822,7 +820,7 @@ fn search_reports_the_planned_resolution_the_compiled_plan_recorded() {
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &shallow,
     ))
@@ -899,7 +897,7 @@ fn a_fully_separated_plan_reports_itself_as_separated_rather_than_as_an_absence(
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -960,7 +958,7 @@ fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &narrow,
     ))
@@ -1014,7 +1012,7 @@ fn a_profile_that_weights_every_stratum_sets_nothing_aside() {
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1043,7 +1041,7 @@ fn end_to_end_search_returns_expected_results() {
         &request,
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1196,7 +1194,7 @@ fn a_stratum_that_could_not_answer_is_named_in_the_trailer_beside_those_that_did
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1255,7 +1253,7 @@ fn every_contributor_is_named_when_none_fail() {
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1330,7 +1328,7 @@ fn a_term_that_reached_no_producer_is_visible_in_the_plan_and_in_the_answer() {
         &request,
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1382,7 +1380,7 @@ fn a_request_every_term_of_which_reached_a_producer_reports_nothing_unserved() {
         &request,
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1421,7 +1419,7 @@ fn a_request_carrying_a_term_only_a_placement_free_producer_accepts_reports_it()
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1459,7 +1457,7 @@ fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
             &mixed_request_at(top_k),
             &registry,
             &stats,
-            &*common::empty_dataset(),
+            common::empty_dataset(),
             &env,
             &profile,
         ))
@@ -1597,7 +1595,7 @@ fn an_answer_names_its_plan_even_when_no_stream_reached_the_fusion() {
         &request,
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1749,7 +1747,7 @@ fn a_repeating_unique_relation_is_refused_through_search_naming_the_item_and_str
         &RetrievalRequest::bounded(vec![lexical_term()], TopK::new(2)),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1771,7 +1769,7 @@ fn a_repeating_unique_relation_is_refused_through_search_naming_the_item_and_str
         &RetrievalRequest::bounded(vec![lexical_term()], TOP_K),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1813,7 +1811,7 @@ fn the_same_repeating_relation_declaring_allowed_answers_once_through_search() {
         &RetrievalRequest::bounded(vec![lexical_term()], TOP_K),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1958,7 +1956,7 @@ fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
         &mixed_request(),
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1998,7 +1996,7 @@ fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
         &mixed_request(),
         &undeclared,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &undeclared_env,
         &profile,
     ))
@@ -2086,7 +2084,7 @@ fn search_against(registry: &PropertyFunctionRegistry) -> Result<SearchResult, S
         &mixed_request(),
         registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &fixture_profile(),
     ))
@@ -2531,7 +2529,7 @@ fn docs_search_for(
         request,
         registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &docs_profile(),
     ))

@@ -543,7 +543,7 @@ fn stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path() {
     let compiled = compile(&planned, &env).expect("admits");
 
     let execution =
-        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("the units run");
     assert_eq!(execution.streams.len(), 1);
 
     let mut stream = execution
@@ -838,7 +838,7 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     // The COMPILED unit over this very producer, run first so the pair below is a
     // measurement of the query's provenance and of nothing else: three rows behind a
     // twelve-row declaration, read to their end, certified.
-    let rendered = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
+    let rendered = block_on(execute(&compiled, &registry, common::empty_dataset()))
         .expect("the compiled unit runs");
     assert_eq!(
         rendered.statuses[&stratum("hand")],
@@ -853,7 +853,7 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     // layer cannot see the bounds of, so the ending names that text.
     let bundle = bundle_of(vec![by_hand], &compiled);
     let execution =
-        block_on(execute(&bundle, &registry, &*common::empty_dataset())).expect("the unit runs");
+        block_on(execute(&bundle, &registry, common::empty_dataset())).expect("the unit runs");
     assert_eq!(
         execution.statuses[&stratum("hand")],
         ProducerStatus::SuppliedQueryEnded { rank: 3 },
@@ -889,7 +889,7 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     let cut = block_on(execute(
         &bundle_of(vec![shallow], &nine_compiled),
         &nine,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
     ))
     .expect("the unit runs");
     assert_eq!(
@@ -941,7 +941,7 @@ fn a_supplied_bound_is_not_destroyed_by_the_layers_own() {
     .expect("depth four inside a thousand-row declaration is admitted");
     let bundle = bundle_of(vec![unit], &compiled);
     let execution =
-        block_on(execute(&bundle, &registry, &*common::empty_dataset())).expect("the unit runs");
+        block_on(execute(&bundle, &registry, common::empty_dataset())).expect("the unit runs");
     assert_eq!(
         execution.statuses[&stratum("hand")],
         ProducerStatus::SuppliedQueryEnded { rank: 2 },
@@ -963,7 +963,7 @@ fn a_supplied_bound_is_not_destroyed_by_the_layers_own() {
     .expect("depth four inside a thousand-row declaration is admitted");
     let open = bundle_of(vec![unbounded], &compiled);
     let execution =
-        block_on(execute(&open, &registry, &*common::empty_dataset())).expect("the unit runs");
+        block_on(execute(&open, &registry, common::empty_dataset())).expect("the unit runs");
     assert_eq!(
         execution.statuses[&stratum("hand")],
         ProducerStatus::DepthReached { rank: 4 },
@@ -1024,7 +1024,7 @@ fn a_supplied_prologue_is_hoisted_over_the_wrap_and_a_non_query_is_refused() {
     let ending = |query: String| {
         let built = unit(query).expect("a query with a prologue is a query");
         let bundle = bundle_of(vec![built], &compiled);
-        block_on(execute(&bundle, &registry, &*common::empty_dataset()))
+        block_on(execute(&bundle, &registry, common::empty_dataset()))
             .expect("the unit runs")
             .statuses[&stratum("hand")]
             .clone()
@@ -1711,7 +1711,7 @@ fn unfused_rung_applies_no_threshold_to_its_rows() {
     };
     let compiled = compile(&planned, &env).expect("admits");
     let execution =
-        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("the units run");
 
     let mut stream = execution
         .streams
@@ -1814,7 +1814,7 @@ fn reporting_names_plan_and_profile() {
         &request,
         &registry,
         &stats,
-        &*common::empty_dataset(),
+        common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -1926,7 +1926,7 @@ fn no_stage_takes_a_selector() {
     let compiled = compile(&planned, &env).expect("admits");
     let dataset = common::empty_dataset();
 
-    let execution = block_on(execute_shape(&compiled, &registry, &*dataset)).expect("units run");
+    let execution = block_on(execute_shape(&compiled, &registry, dataset)).expect("units run");
     assert_eq!(execution.streams.len(), 1);
 
     let seam_profile = single_profile(&ex("stratum/seam"));
@@ -1945,7 +1945,7 @@ fn no_stage_takes_a_selector() {
         &request,
         &registry,
         &stats,
-        &*dataset,
+        dataset,
         &env,
         &seam_profile,
     ))
@@ -2076,7 +2076,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let planned = plan(&request, &registry, &stats).expect("plans");
     let compiled = compile(&planned, &env).expect("admits");
     let execution =
-        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("the units run");
 
     // A caller that stopped at `execute` resumes here, with no arithmetic of its
     // own: the weight and the smoothing constant are read from the profile by
@@ -2164,7 +2164,7 @@ fn executed_stream(
     let planned = plan(&request, &registry, &stats).expect("plans");
     let compiled = compile(&planned, &env).expect("admits");
     let execution =
-        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("the units run");
     let stream = execution
         .streams
         .into_iter()
@@ -2343,7 +2343,7 @@ fn executed_stream_bounded(
     let depth = planned.stratum_depths[&iri(&stratum_iri)];
     let compiled = compile(&planned, &env).expect("admits");
     let execution =
-        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("the units run");
     let stream = execution
         .streams
         .into_iter()
