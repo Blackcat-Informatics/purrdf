@@ -116,7 +116,7 @@ and the `CITATION.cff` citation record share **one** workspace version and ship 
 lockstep — CI runs a version-coherence check that fails if the four sources
 disagree.
 
-**MSRV.** The supported floor is `rust-version` in `Cargo.toml` (currently **1.96**)
+**MSRV.** The supported floor is `rust-version` in `Cargo.toml` (currently **1.98**)
 on the **stable** channel, and CI enforces it with a dedicated MSRV job. That floor
 is what you build against as a consumer; it is unaffected by the toolchain
 contributors run. Raising the MSRV is a notable, changelog-recorded change that

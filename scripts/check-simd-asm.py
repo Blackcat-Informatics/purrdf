@@ -105,7 +105,12 @@ configurations. A measure names ``configs``, ``crate`` and ``symbol`` and carrie
   cannot satisfy it;
 * exactly one of ``max_fma`` (exact arithmetic: 0) or ``min_fma`` (fast arithmetic);
 * ``forbid_relaxed`` -- stated explicitly on every measure;
-* ``single_copy`` -- the symbol exists exactly once, out of line.
+* ``single_copy`` -- the symbol exists exactly once, out of line, in every build graph
+  that emits it. A configuration is one ``cargo build`` plus one ``cargo rustc`` per
+  ``rlib_packages`` entry, and each is its own graph: a crate a second graph rebuilds
+  under different dependency features is a second, separate artifact, not a second
+  copy inside one program. Two copies in ONE graph (a generic body instantiated in two
+  downstream crates, or an inlined clone kept out of line) is the failure.
 
 A measure that matches no function fails: the symbol was renamed or inlined away, and
 either way the evidence is gone.
@@ -575,6 +580,7 @@ class Function:
     crate: str | None
     unit: str  # which .s it came from
     instructions: list[Instruction] = dataclasses.field(default_factory=list)
+    graph: int = 0  # which cargo invocation of the configuration emitted the unit
 
 
 def _split_operands(text: str) -> tuple[str, ...]:
@@ -662,20 +668,23 @@ def parse_asm(text: str, arch: str, unit: str, want=None) -> list[tuple[str, lis
 def collect_functions(units, arch: str, keep=None, select=None) -> list[Function]:
     """Every function of every unit, with LLVM clones folded under their parent.
 
-    ``units`` yields ``(unit name, asm text)``. ``select(Demangled)`` decides from the name
-    alone whether a function is parsed, and ``keep(Function)`` filters what was parsed, so
-    a whole-graph build is never held in memory -- only the functions something reads.
+    ``units`` yields ``(unit name, asm text)`` or ``(unit name, asm text, graph)``, where
+    ``graph`` numbers the cargo invocation that emitted the unit (0 when omitted).
+    ``select(Demangled)`` decides from the name alone whether a function is parsed, and
+    ``keep(Function)`` filters what was parsed, so a whole-graph build is never held in
+    memory -- only the functions something reads.
     """
     out: list[Function] = []
     want = None if select is None else (lambda raw: select(demangle(raw)))
-    for unit, text in units:
+    for unit, text, *rest in units:
+        graph = rest[0] if rest else 0
         by_base: dict[str, Function] = {}
         order: list[str] = []
         for raw, instructions in parse_asm(text, arch, unit, want):
             demangled = demangle(raw)
             func = by_base.get(demangled.base)
             if func is None:
-                func = Function(demangled.base, demangled.path, demangled.crate, unit)
+                func = Function(demangled.base, demangled.path, demangled.crate, unit, graph=graph)
                 by_base[demangled.base] = func
                 order.append(demangled.base)
             func.instructions.extend(instructions)
@@ -1052,9 +1061,15 @@ def evaluate(site: Site, measure: Measure, config: Config, functions: list[Funct
         )
         return Result(site.id, config.name, measure, 0, 0, 0, 0, tuple(problems))
     counted = [(f, count(f, config.arch)) for f in matched]
-    if measure.single_copy and len(matched) != 1:
-        units = ", ".join(sorted({f"{f.path} ({Path(f.unit).name})" for f in matched}))
-        problems.append(f"{where}: `single_copy` requires exactly one out-of-line copy, found {len(matched)}: {units}")
+    if measure.single_copy:
+        by_graph = Counter(f.graph for f in matched)
+        for graph, copies in sorted(by_graph.items()):
+            if copies != 1:
+                units = ", ".join(sorted({f"{f.path} ({Path(f.unit).name})" for f in matched if f.graph == graph}))
+                problems.append(
+                    f"{where}: `single_copy` requires exactly one out-of-line copy per build graph, "
+                    f"found {copies} in graph {graph}: {units}"
+                )
     for func, c in counted:
         name = f"{where}: `{func.path}`"
         if c.vector_ops < measure.min_vector_ops:
@@ -1328,16 +1343,18 @@ def build_config(config: Config, manifest: Manifest, scratch: Path, host: str, c
     print(f"== {config.name}: cargo build --target {config.triple} ({config.rustflags()})", flush=True)
     env = config_env(config, dict(os.environ), host, log=lambda line: print(line, flush=True))
     env["CARGO_TARGET_DIR"] = str(scratch)
-    paths: list[Path] = []
-    for cmd in build_commands(config, manifest.packages, manifest.rlib_packages):
+    paths: dict[Path, int] = {}
+    for graph, cmd in enumerate(build_commands(config, manifest.packages, manifest.rlib_packages)):
         proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             raise GateError(f"{config.name}: `{' '.join(cmd[:2])}` failed (exit {proc.returncode}):\n{failure_tail(proc.stderr)}")
         problems = verify_command_lines(proc.stderr, config)
         if problems:
             raise GateError("the build was not the configuration it claims:\n  " + "\n  ".join(problems))
-        paths += [p for p in asm_paths(proc.stdout, config) if p not in paths]
-    units = ((str(p), p.read_text(encoding="utf-8", errors="replace")) for p in paths)
+        # A unit an earlier graph already emitted (same crate, same hash) is that graph's.
+        for p in asm_paths(proc.stdout, config):
+            paths.setdefault(p, graph)
+    units = ((str(p), p.read_text(encoding="utf-8", errors="replace"), graph) for p, graph in paths.items())
     return collect_functions(units, config.arch, chooser.keep, chooser.select)
 
 
@@ -1816,8 +1833,12 @@ def _measure(**kw) -> Measure:
 
 
 def _problems(asm: str, arch: str, measure: Measure) -> tuple[str, ...]:
+    return _problems_in([("fixture.s", asm, 0)], arch, measure)
+
+
+def _problems_in(units: list[tuple[str, str, int]], arch: str, measure: Measure) -> tuple[str, ...]:
     config = next(c for c in CONFIGS if c.arch == arch)
-    funcs = collect_functions([("fixture.s", asm)], arch)
+    funcs = collect_functions(units, arch)
     return evaluate(Site("fixture", "fixture", (measure,)), measure, config, funcs).problems
 
 
@@ -1925,6 +1946,17 @@ def self_test() -> int:
     expect(not _problems(_X86_FAST_FMA, "x86", fast), "a fast fn with FMA (and a folded .cold clone) must pass")
     # -- single_copy
     expect(any("single_copy" in p for p in _problems(_X86_FAST_DUP, "x86", fast)), "a duplicated fast symbol must fail single_copy")
+    # Two units of one graph each holding a copy (a generic body instantiated in two
+    # downstream crates) is two copies in one program; the same crate rebuilt by a second
+    # graph is a separate artifact, and its one copy there is its own.
+    two_crates = [("demo_a-1111111111111111.s", _X86_FAST_FMA, 0), ("demo_b-2222222222222222.s", _X86_FAST_FMA, 0)]
+    expect(any("single_copy" in p for p in _problems_in(two_crates, "x86", fast)), "one copy in each of two units of one graph must fail single_copy")
+    two_graphs = [("demo-1111111111111111.s", _X86_FAST_FMA, 0), ("demo-2222222222222222.s", _X86_FAST_FMA, 1)]
+    expect(not _problems_in(two_graphs, "x86", fast), "one copy in each of two build graphs must pass single_copy")
+    expect(
+        any("single_copy" in p for p in _problems_in([("demo.s", _X86_FAST_DUP, 0), ("demo-2.s", _X86_FAST_FMA, 1)], "x86", fast)),
+        "a duplicate inside one graph fails even when another graph is clean",
+    )
     # -- presence
     expect(any("renamed or inlined away" in p for p in _problems(_X86_PACKED, "x86", _measure(symbol="kernel::gone"))), "a missing symbol must fail")
     expect(any("renamed or inlined away" in p for p in _problems(_X86_PACKED, "x86", _measure(crate="other"))), "the crate must match, not just the path")

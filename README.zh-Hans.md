@@ -27,7 +27,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   <a href="https://www.npmjs.com/package/@blackcatinformatics/purrdf"><img src="https://img.shields.io/npm/v/%40blackcatinformatics%2Fpurrdf.svg?label=npm" alt="npm"></a>
   <a href="https://doi.org/10.67342/pkg8gpp4no/v1"><img src="https://img.shields.io/badge/DOI-10.67342%2Fpkg8gpp4no%2Fv1-blue" alt="DOI: 10.67342/pkg8gpp4no/v1"></a>
   <a href="./LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg" alt="License: MIT OR Apache-2.0 OR MulanPSL-2.0"></a>
-  <img src="https://img.shields.io/badge/MSRV-1.96-orange.svg" alt="MSRV 1.96">
+  <img src="https://img.shields.io/badge/MSRV-1.98-orange.svg" alt="MSRV 1.98">
 </p>
 
 <p align="center">
@@ -659,13 +659,13 @@ SBOM——见 [`docs/RELEASE.md`](./docs/RELEASE.md)。
 读回。它与工作区分开编号，并保持 `0.x`：它并未冻结，工作区的 1.0.0 对它不作任何承诺。
 
 **MSRV 政策。**支持的最低 Rust 版本是根 `Cargo.toml` 中的 `rust-version`（当前为
-**1.96**），位于 **stable** 通道，由专门的 CI MSRV 作业强制执行，发布工件也在 stable
+**1.98**），位于 **stable** 通道，由专门的 CI MSRV 作业强制执行，发布工件也在 stable
 上构建。提高 MSRV 是一项记入变更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。
 README 中的 MSRV 徽章由人工维护，必须与 `rust-version` 一同更新。
 
 贡献者使用浮动的 nightly（`rust-toolchain.toml`）以获得更锐利的 clippy 与 rustdoc
 lint 覆盖面，以及更强的默认借用检查器，但工作区**不含任何 nightly 独有特性**——MSRV 作业正是在每次变更上
-证明这一点的手段。构建 PurRDF 只需要 stable 1.96，不需要其他任何东西。
+证明这一点的手段。构建 PurRDF 只需要 stable 1.98，不需要其他任何东西。
 
 ## GMEOW 家族
 

@@ -70,10 +70,11 @@ pub mod cover;
 pub mod dataset_view;
 pub mod describe;
 // The binary64 distance arithmetics every ranked-retrieval surface computes with: the
-// sealed `Arithmetic` contract, the fixed-lane `Exact` law, its batch kernels and their
-// once-per-scan dispatch, and the float-environment precondition. Outside `ir` on
-// purpose: dispatch needs `std`'s CPU detection and `unsafe` calls into
-// `#[target_feature]` compilations, neither of which belongs in the `no_std`-ready IR.
+// sealed `Arithmetic` contract, the fixed-lane `Exact` law, the target-dependent
+// reassociated law, their batch kernels and once-per-scan dispatch, and the
+// float-environment precondition. Outside `ir` on purpose: dispatch needs `std`'s CPU
+// detection and `unsafe` calls into `#[target_feature]` compilations, neither of which
+// belongs in the `no_std`-ready IR.
 /// Structured diagnostics: severity, source/GTS locations, conversion losses,
 /// and the [`RdfDiagnostic`] record callers translate to their reporting layer.
 pub mod diagnostic;

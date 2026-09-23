@@ -24,10 +24,10 @@
 # would be a defect in the serializer to fix, not a reason to stop bumping.
 #
 # What consumers actually need is `rust-version` in the root `Cargo.toml` (the
-# MSRV), which is a *lower* floor on the stable channel and is enforced by the
-# dedicated `msrv` CI job. That job — not this file — is the guard proving no
-# nightly-only feature has crept in; it pins its own toolchain via
-# `RUSTUP_TOOLCHAIN` precisely so this file cannot override it.
+# MSRV, currently 1.98), which is a *lower* floor on the stable channel and is
+# enforced by the dedicated `msrv` CI job. That job — not this file — is the
+# guard proving no nightly-only feature has crept in; it pins its own toolchain
+# via `RUSTUP_TOOLCHAIN` precisely so this file cannot override it.
 #
 # Every CI job that runs a workspace gate must name the same channel this file
 # names. A job left on another channel while developers run this one makes a

@@ -329,7 +329,7 @@ def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
 #
 # The first version was `(?:^|\s)make\s+([\w-]+)` over raw text, which is bypassable by an
 # English sentence. `.github/workflows/ci.yaml:299` reads "step above alone does not make
-# cargo use 1.96 inside this repo" and yielded the target `cargo` -- benign only because no
+# cargo use 1.98 inside this repo" and yielded the target `cargo` -- benign only because no
 # `cargo:` target exists. A workflow containing "run make check before opening a PR" in a
 # comment resolves the WHOLE `check` target, so every gate is reported as reached in CI and
 # direction 1 is defeated by a sentence. Demonstrated on a fixture: two gates in no workflow

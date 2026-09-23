@@ -717,9 +717,8 @@ fn big_magnitude_cmp(mantissa: u128, scale: u8, significand: u128, exponent: i32
 
 /// The number of bits in `value`'s binary representation (`0` for zero).
 fn bit_length(value: u64) -> i32 {
-    // `u64::BITS` is 64 and `leading_zeros() <= 64`, so the difference is in
-    // [0, 64] and the cast is exact.
-    (u64::BITS - value.leading_zeros()) as i32
+    // `bit_width()` is in [0, 64], so the cast is exact.
+    value.bit_width() as i32
 }
 
 /// The numeric value as `f64`, or `None` if `v` is not a numeric value.

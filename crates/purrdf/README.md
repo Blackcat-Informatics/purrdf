@@ -217,7 +217,7 @@ version.
 Full documentation, conformance scoreboards (W3C SPARQL, SHACL, shexTest, RDFC-1.0,
 frozen GTS vectors), benchmarks, and the crate map live in the
 [PurRDF repository](https://github.com/Blackcat-Informatics/purrdf). MSRV follows the
-workspace `rust-version` (currently 1.96, stable toolchain only).
+workspace `rust-version` (currently 1.98, stable toolchain only).
 
 ## License
 

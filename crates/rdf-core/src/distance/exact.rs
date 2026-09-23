@@ -182,7 +182,7 @@ pub(crate) fn distance<A: Scalar, B: Scalar>(
               wrapper compiles it under its own target features"
 )]
 #[inline(always)]
-fn cosine(dot: f64, a_norm: f64, b_norm: f64) -> f64 {
+pub(crate) fn cosine(dot: f64, a_norm: f64, b_norm: f64) -> f64 {
     let denominator = a_norm * b_norm;
     let quotient = dot / denominator;
     1.0 - quotient
@@ -220,7 +220,7 @@ pub(crate) fn distance_bounded<A: Scalar, B: Scalar>(
               wrapper compiles it under its own target features"
 )]
 #[inline(always)]
-fn finite(value: f64) -> Option<f64> {
+pub(crate) fn finite(value: f64) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 

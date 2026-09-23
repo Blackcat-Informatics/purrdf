@@ -566,7 +566,7 @@ msgstr ""
 
 #: src/getting-started/rust.md:21
 msgid ""
-"The MSRV is Rust **1.96** (stable toolchain only; the workspace is nightly-"
+"The MSRV is Rust **1.98** (stable toolchain only; the workspace is nightly-"
 "free by policy)."
 msgstr ""
 
@@ -11431,7 +11431,7 @@ msgstr ""
 #: src/project/design-rules.md:100
 msgid ""
 "**Nightly-free source, stable MSRV** — there are no `#![feature(...)]` "
-"attributes anywhere in the workspace and the MSRV floor (currently 1.96, on "
+"attributes anywhere in the workspace and the MSRV floor (currently 1.98, on "
 "the stable channel) is enforced by a dedicated CI job that builds on exactly "
 "that compiler. Contributors and the CI gates run a _floating_ nightly named in "
 "`rust-toolchain.toml` for its sharper clippy and rustdoc lints and its "
@@ -11893,9 +11893,9 @@ msgstr ""
 #: src/project/releases.md:33
 msgid ""
 "The supported minimum Rust is `rust-version` in the root `Cargo.toml` — "
-"currently **1.96** — on the **stable** channel, enforced by a dedicated CI "
+"currently **1.98** — on the **stable** channel, enforced by a dedicated CI "
 "MSRV job that sets `RUSTUP_TOOLCHAIN` explicitly and asserts the compiler it "
-"measured really is 1.96. Raising the MSRV is a notable change recorded in "
+"measured really is 1.98. Raising the MSRV is a notable change recorded in "
 "the changelog; it rides a **minor** bump and never ships in a patch release."
 msgstr ""
 

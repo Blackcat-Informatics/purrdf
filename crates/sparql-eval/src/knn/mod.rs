@@ -119,7 +119,7 @@ use crate::property_fn::{
 };
 use crate::user_fn::Volatility;
 
-pub use metric::{Bound, Bounded, Kernel, Ranked, Scalar, best, norm};
+pub use metric::{Bound, Bounded, Kernel, Ranked, Reassociated, Resolved, Scalar, best, norm};
 
 /// The `?neighbour` position: the retrieved term.
 const KNN_NEIGHBOUR: usize = 0;

@@ -595,7 +595,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# The kNN file runs twice: on the baseline build, and on a +simd128 build, where
 	@# LLVM packs the exact fold's sixteen lanes into f64x2 operations. Both assert the
 	@# same pinned lexicals, so the vectorized wasm compilation is held to the scalar
-	@# one's bits. +simd128 travels in CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS,
+	@# one's bits. The reassociated kNN file runs on the same two builds: its bits are
+	@# not pinned, so it asserts instead that each build resolves its own path
+	@# (wasm-scalar, wasm-simd128) and stays within the error bound of the exact
+	@# answer. +simd128 travels in CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS,
 	@# which Cargo ignores whenever RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS is set, so a
 	@# caller's RUSTFLAGS is folded into it and RUSTFLAGS unset for that one run, and
 	@# CARGO_ENCODED_RUSTFLAGS is refused. A target-scoped value also REPLACES
@@ -619,12 +622,12 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	else \
 		CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-sparql-eval --test knn_wasm_determinism \
+			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-sparql-eval --test knn_wasm_determinism \
+			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-text --test wasm_determinism \

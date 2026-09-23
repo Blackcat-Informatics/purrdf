@@ -48,6 +48,18 @@
 //! Its limit is stated where it belongs: on [`Kernel::distance`], which reports whether
 //! its result stayed finite rather than ranking by an infinity.
 //!
+//! # The reassociated entry points are a second contract, not a mode
+//!
+//! [`Kernel::distance_reassociated`] and [`Kernel::distance_bounded_reassociated`]
+//! compute the same metric under [`Reassociated`]: the sum is reassociated and may be
+//! contracted to fused multiply-add, so its last bits depend on the target, the build
+//! and the dispatch path, and near-ties may order differently. They are separate
+//! functions with their own names, they take the [`Resolved`] handle that
+//! `Reassociated::resolve` returned after checking the float environment and picking
+//! the path, and they never stand in for the exact entry points, nor those for them.
+//! The divergence is stated in words by `Resolved::evidence`, for every consumer that
+//! records it.
+//!
 //! # The metric definitions are PURREMB's, not this module's
 //!
 //! PURREMB v1 defines the three built-in metrics as `1 - dot(x, y) / (L2(x) · L2(y))`,
@@ -60,10 +72,11 @@ use core::cmp::Ordering;
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Exact, Measure};
 
-/// The stored-scalar width trait, the bound a partial fold is tested against, and the
-/// bounded outcome, re-exported from the arithmetic that defines them so a caller names
-/// one type for each.
-pub use purrdf_core::distance::{Bound, Bounded, Scalar};
+/// The stored-scalar width trait, the bound a partial fold is tested against, the
+/// bounded outcome, and the reassociated arithmetic with the resolved handle its entry
+/// points take, re-exported from the module that defines them so a caller names one
+/// type for each.
+pub use purrdf_core::distance::{Bound, Bounded, Reassociated, Resolved, Scalar};
 
 /// The three built-in metrics, decoded from a family contract's declaration.
 ///
@@ -178,6 +191,61 @@ impl Kernel {
         // Cosine is written exactly as PURREMB v1 states it -- one product, one quotient,
         // one subtraction, each rounded on its own -- inside the exact arithmetic.
         Exact::distance(self.measure(), query, query_norm, candidate, candidate_norm)
+    }
+
+    /// The distance from `query` to `candidate` under the [`Reassociated`] arithmetic,
+    /// or `None` when it left the finite range.
+    ///
+    /// The same metric as [`Kernel::distance`], computed under a different contract: the
+    /// sum is reassociated and may be contracted to fused multiply-add along the
+    /// `arithmetic` handle's dispatch path, so the result may differ in its last bits from
+    /// [`Kernel::distance`] and between dispatch paths or builds, the sign of a zero
+    /// result is unspecified, and near-ties may order differently
+    /// ([`Resolved::evidence`] says so in the words a consumer records). On one path in
+    /// one build it is a function of its operands. A non-finite result is refused
+    /// exactly as [`Kernel::distance`] refuses it.
+    ///
+    /// `arithmetic` comes from `Reassociated::resolve`, called once per scan, which
+    /// checked the float environment and chose the path.
+    #[must_use]
+    pub fn distance_reassociated<A: Scalar, B: Scalar>(
+        self,
+        arithmetic: Resolved<Reassociated>,
+        query: &[A],
+        query_norm: f64,
+        candidate: &[B],
+        candidate_norm: f64,
+    ) -> Option<f64> {
+        arithmetic.distance(self.measure(), query, query_norm, candidate, candidate_norm)
+    }
+
+    /// [`Kernel::distance_reassociated`], permitted to stop once the answer cannot clear
+    /// `bound`.
+    ///
+    /// A [`Bounded::Below`] value is bit-identical to what
+    /// [`Kernel::distance_reassociated`] returns on the same handle, and
+    /// [`Bounded::Beyond`] is returned only when that value meets the bound: the
+    /// reassociated fold combines its 64-element blocks in order, so every checkpoint is
+    /// a true prefix of the full value. As with [`Kernel::distance_bounded`], only
+    /// [`Kernel::SquaredEuclidean`] actually abandons.
+    #[must_use]
+    pub fn distance_bounded_reassociated<A: Scalar, B: Scalar>(
+        self,
+        arithmetic: Resolved<Reassociated>,
+        query: &[A],
+        query_norm: f64,
+        candidate: &[B],
+        candidate_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        arithmetic.distance_bounded(
+            self.measure(),
+            query,
+            query_norm,
+            candidate,
+            candidate_norm,
+            bound,
+        )
     }
 }
 
@@ -730,6 +798,112 @@ mod tests {
             Kernel::SquaredEuclidean.distance(&huge, 0.0, &zero, 0.0),
             None,
             "and the unbounded fold still refuses it too"
+        );
+    }
+
+    /// The reassociated arithmetic this process resolves.
+    fn reassociated() -> Resolved<Reassociated> {
+        use purrdf_core::distance::Arithmetic as _;
+        Reassociated::resolve().expect("the test thread runs the default float environment")
+    }
+
+    #[test]
+    fn the_reassociated_entry_points_compute_the_metric_within_the_error_bound() {
+        let fast = reassociated();
+        for len in [1_usize, 63, 64, 65, 200, 4_096] {
+            let a = stream(len, 0xFA57_0001);
+            let b = stream(len, 0xFA57_0002);
+            let (na, nb) = (norm(&a), norm(&b));
+            // Every term is at most 4 in magnitude (components are in [-1, 1)), so
+            // `Σ|tᵢ| ≤ 4·n` and the contract's `2·n·ε·Σ|tᵢ|` is at most `8·n²·ε`. Each
+            // arithmetic is within `n·ε·Σ|tᵢ|` of the true sum, so the two are within
+            // that bound of each other.
+            let bound = 8.0 * (len * len) as f64 * f64::EPSILON;
+            for kernel in [Kernel::SquaredEuclidean, Kernel::NegativeDot] {
+                let exact = kernel.distance(&a, na, &b, nb).expect("finite");
+                let reassociated = kernel
+                    .distance_reassociated(fast, &a, na, &b, nb)
+                    .expect("finite");
+                assert!(
+                    (exact - reassociated).abs() <= bound,
+                    "{kernel:?} at len {len} on {}: {exact} vs {reassociated}",
+                    fast.path()
+                );
+                assert_eq!(
+                    kernel.distance_bounded_reassociated(
+                        fast,
+                        &a,
+                        na,
+                        &b,
+                        nb,
+                        Bound::Above(f64::INFINITY)
+                    ),
+                    Bounded::Below(reassociated),
+                    "{kernel:?} at len {len}: the bounded form agrees bit for bit"
+                );
+            }
+            // Bounded abandonment agrees with the full reassociated value on both sides
+            // of it: one ulp above is not met, the value itself is `AtOrAbove`.
+            let full = Kernel::SquaredEuclidean
+                .distance_reassociated(fast, &a, na, &b, nb)
+                .expect("finite");
+            assert_eq!(
+                Kernel::SquaredEuclidean.distance_bounded_reassociated(
+                    fast,
+                    &a,
+                    na,
+                    &b,
+                    nb,
+                    Bound::AtOrAbove(full.next_up())
+                ),
+                Bounded::Below(full)
+            );
+            assert_eq!(
+                Kernel::SquaredEuclidean.distance_bounded_reassociated(
+                    fast,
+                    &a,
+                    na,
+                    &b,
+                    nb,
+                    Bound::AtOrAbove(full)
+                ),
+                Bounded::Beyond
+            );
+        }
+        assert!(
+            fast.evidence()
+                .is_some_and(|text| text.contains(fast.path().name())),
+            "the reassociated handle names its divergence and its path"
+        );
+    }
+
+    #[test]
+    fn the_reassociated_entry_points_refuse_an_overflow_as_the_exact_ones_do() {
+        let fast = reassociated();
+        let a = [f64::MAX, f64::MAX];
+        let b = [-f64::MAX, -f64::MAX];
+        assert_eq!(
+            Kernel::SquaredEuclidean.distance_reassociated(fast, &a, 0.0, &b, 0.0),
+            None
+        );
+        assert_eq!(
+            Kernel::SquaredEuclidean.distance_bounded_reassociated(
+                fast,
+                &a,
+                0.0,
+                &b,
+                0.0,
+                Bound::AtOrAbove(1.0)
+            ),
+            Bounded::NonFinite
+        );
+        // The valid neighbour ranks.
+        let c = [1e150_f64, 1e150];
+        let d = [0.0_f64, 0.0];
+        assert!(
+            Kernel::SquaredEuclidean
+                .distance_reassociated(fast, &c, 0.0, &d, 0.0)
+                .is_some_and(f64::is_finite)
         );
     }
 

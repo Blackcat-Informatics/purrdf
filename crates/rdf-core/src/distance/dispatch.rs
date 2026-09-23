@@ -147,11 +147,12 @@ pub(crate) mod avx2 {
     }
 }
 
-/// The message for a path this target cannot compile, which no [`Resolved`] carries.
-///
-/// [`Resolved`]: super::Resolved
-#[cfg(not(target_arch = "x86_64"))]
-const NO_AVX2: &str = "an AVX2 path exists only on x86_64, and only `exact_path` produces one";
+/// Refuse a path that is not one of this build's exact paths, which no
+/// `Resolved<Exact>` carries: only [`exact_path`] produces one.
+#[cold]
+fn not_exact(path: Path) -> ! {
+    unreachable!("{path} is not an exact path of this build; only `exact_path` produces one")
+}
 
 /// [`exact::distances`] along `path`.
 pub(crate) fn distances<Q: Scalar, T: Scalar>(
@@ -169,8 +170,7 @@ pub(crate) fn distances<Q: Scalar, T: Scalar>(
         // constructor for this path is `exact_path`, which returns it only after
         // `is_x86_feature_detected!("avx2")` reported the feature on this processor.
         Path::Avx2 => unsafe { avx2::distances(measure, query, query_norm, rows, out) },
-        #[cfg(not(target_arch = "x86_64"))]
-        Path::Avx2 => unreachable!("{NO_AVX2}"),
+        other => not_exact(other),
     }
 }
 
@@ -193,8 +193,7 @@ pub(crate) fn distances_indexed<Q: Scalar, T: Scalar>(
         Path::Avx2 => unsafe {
             avx2::distances_indexed(measure, query, query_norm, rows, ids, out);
         },
-        #[cfg(not(target_arch = "x86_64"))]
-        Path::Avx2 => unreachable!("{NO_AVX2}"),
+        other => not_exact(other),
     }
 }
 
@@ -212,8 +211,7 @@ pub(crate) fn distance<Q: Scalar, T: Scalar>(
         #[cfg(target_arch = "x86_64")]
         // SAFETY: as in `distances`; a `Path::Avx2` exists only after AVX2 was detected.
         Path::Avx2 => unsafe { avx2::distance(measure, a, a_norm, b, b_norm) },
-        #[cfg(not(target_arch = "x86_64"))]
-        Path::Avx2 => unreachable!("{NO_AVX2}"),
+        other => not_exact(other),
     }
 }
 
@@ -232,7 +230,6 @@ pub(crate) fn distance_bounded<Q: Scalar, T: Scalar>(
         #[cfg(target_arch = "x86_64")]
         // SAFETY: as in `distances`; a `Path::Avx2` exists only after AVX2 was detected.
         Path::Avx2 => unsafe { avx2::distance_bounded(measure, a, a_norm, b, b_norm, bound) },
-        #[cfg(not(target_arch = "x86_64"))]
-        Path::Avx2 => unreachable!("{NO_AVX2}"),
+        other => not_exact(other),
     }
 }

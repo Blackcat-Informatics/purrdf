@@ -77,6 +77,20 @@ The metric does not change with the arithmetic. `DistanceMetric` names *what* is
 measured, and the family-contract digest is computed from it alone; the arithmetic is
 recorded beside it, in the HNSW image header and profile.
 
+A second arithmetic sits beside the exact one under its own names:
+`Kernel::distance_reassociated` and `Kernel::distance_bounded_reassociated` compute
+the same metric under `purrdf_core::distance::Reassociated` (identifier
+`binary64-reassociated-v1`). Inside each 64-element block the sum is folded with the
+`algebraic_*` operations, so the compiler may reassociate it and contract multiplies
+into fused multiply-adds; block sums are combined in ascending order, so the bounded
+form's checkpoints are true prefixes of the full value. Its last bits depend on the
+target, the build and the dispatch path (SSE2, AVX2+FMA or AVX-512F on x86-64, chosen
+at run time; NEON on aarch64; `simd128` or scalar on wasm, as built), and the resolved
+handle's evidence says so in words. Each path compiles the body once, out of line, so
+every caller on one path gets the same bits for the same pair. The exact entry points
+never run it, and it never stands in for them; `knn_wasm_reassociated` executes it on
+both wasm32 builds and holds each result to the summation error bound of the exact one.
+
 ### The cross-target claim is executed, not argued
 
 Everything above is a reason to *expect* agreement between x86-64 and

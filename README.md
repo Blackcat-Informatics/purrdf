@@ -25,7 +25,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   <a href="https://www.npmjs.com/package/@blackcatinformatics/purrdf"><img src="https://img.shields.io/npm/v/%40blackcatinformatics%2Fpurrdf.svg?label=npm" alt="npm"></a>
   <a href="https://doi.org/10.67342/pkg8gpp4no/v1"><img src="https://img.shields.io/badge/DOI-10.67342%2Fpkg8gpp4no%2Fv1-blue" alt="DOI: 10.67342/pkg8gpp4no/v1"></a>
   <a href="./LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg" alt="License: MIT OR Apache-2.0 OR MulanPSL-2.0"></a>
-  <img src="https://img.shields.io/badge/MSRV-1.96-orange.svg" alt="MSRV 1.96">
+  <img src="https://img.shields.io/badge/MSRV-1.98-orange.svg" alt="MSRV 1.98">
 </p>
 
 <p align="center">
@@ -808,7 +808,7 @@ the version sources (`Cargo.toml`, `pyproject.toml`, `package.json`,
 `CITATION.cff`) disagree. The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](./crates/rdf-capi/include/purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.7**), bumped on every exported-signature change, pinned by `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through `purrdf_abi_version`. It is versioned separately from the workspace and stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise about it.
 
 **MSRV policy.** The supported minimum Rust is `rust-version` in the root
-`Cargo.toml` (currently **1.96**) on the **stable** channel, enforced by a dedicated
+`Cargo.toml` (currently **1.98**) on the **stable** channel, enforced by a dedicated
 CI MSRV job, and release artifacts are built on stable. Raising the MSRV is a
 notable change recorded in the changelog; it rides a **minor** bump and never
 ships in a patch release. The README MSRV badge is maintained by hand and must be bumped together with
@@ -818,7 +818,7 @@ Contributors run nightly (`rust-toolchain.toml`) for its sharper clippy and
 rustdoc lint surface and its stronger default borrow checker, but the workspace
 contains **no nightly-only features** — the
 MSRV job is what proves that on every change. Building PurRDF needs nothing beyond
-stable 1.96.
+stable 1.98.
 
 ## The GMEOW family
 

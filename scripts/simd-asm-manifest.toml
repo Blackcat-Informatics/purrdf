@@ -1494,6 +1494,870 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   forbid_relaxed = true
 
 [[site]]
+id = "distance.reassociated.dot"
+summary = "`reassociated::body::dot`, the reassociated dot fold, in its one out-of-line compilation per dispatch path and stored-width pair (`<path>::<query>_<row>::dot`)"
+
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v70·f0.
+  [[site.measure]]
+  label = "sse2 f64×f64"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::dot"
+  min_vector_ops = 35
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v13·f21 on all three x86_64 configurations.
+  [[site.measure]]
+  label = "avx2+fma f64×f64"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx2fma::f64_f64::dot"
+  min_vector_ops = 6
+  require_mnemonics = ["vfmadd231pd"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v15·f11.
+  [[site.measure]]
+  label = "avx512f f64×f64"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f64_f64::dot"
+  min_vector_ops = 7
+  require_mnemonics = ["vfmadd231pd %zmm"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v13·f21.
+  [[site.measure]]
+  label = "avx512f f64×f64 (v4 tuning)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f64_f64::dot"
+  min_vector_ops = 6
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v13·f21.
+  [[site.measure]]
+  label = "baseline f64×f64"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::dot"
+  min_vector_ops = 6
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path: `fmla v.2d` lanes. Measured v12·f33.
+  [[site.measure]]
+  label = "neon f64×f64"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::dot"
+  min_vector_ops = 6
+  require_mnemonics = ["fmla .2d"]
+  min_fma = 16
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v9·f11.
+  [[site.measure]]
+  label = "neon f64×f64 (neoverse-v1)"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::dot"
+  min_vector_ops = 4
+  require_mnemonics = ["fmla"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  [[site.measure]]
+  label = "wasm-scalar f64×f64"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::dot"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v69·f0.
+  [[site.measure]]
+  label = "wasm-simd128 f64×f64"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::dot"
+  min_vector_ops = 34
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v104·f0.
+  [[site.measure]]
+  label = "sse2 f64×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::dot"
+  min_vector_ops = 52
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
+  [[site.measure]]
+  label = "avx2+fma f64×f32"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx2fma::f64_f32::dot"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v26·f11.
+  [[site.measure]]
+  label = "avx512f f64×f32"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f64_f32::dot"
+  min_vector_ops = 13
+  require_mnemonics = ["vfmadd231pd %zmm"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v34·f21.
+  [[site.measure]]
+  label = "avx512f f64×f32 (v4 tuning)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f64_f32::dot"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
+  [[site.measure]]
+  label = "baseline f64×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::dot"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path: `fmla v.2d` lanes. Measured v66·f34.
+  [[site.measure]]
+  label = "neon f64×f32"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::dot"
+  min_vector_ops = 33
+  require_mnemonics = ["fmla .2d"]
+  min_fma = 17
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v10·f11.
+  [[site.measure]]
+  label = "neon f64×f32 (neoverse-v1)"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::dot"
+  min_vector_ops = 5
+  require_mnemonics = ["fmla"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  [[site.measure]]
+  label = "wasm-scalar f64×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::dot"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v13·f0.
+  [[site.measure]]
+  label = "wasm-simd128 f64×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::dot"
+  min_vector_ops = 6
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v104·f0.
+  [[site.measure]]
+  label = "sse2 f32×f64"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::dot"
+  min_vector_ops = 52
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
+  [[site.measure]]
+  label = "avx2+fma f32×f64"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx2fma::f32_f64::dot"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v26·f11.
+  [[site.measure]]
+  label = "avx512f f32×f64"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f32_f64::dot"
+  min_vector_ops = 13
+  require_mnemonics = ["vfmadd231pd %zmm"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v34·f21.
+  [[site.measure]]
+  label = "avx512f f32×f64 (v4 tuning)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f32_f64::dot"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
+  [[site.measure]]
+  label = "baseline f32×f64"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::dot"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path: `fmla v.2d` lanes. Measured v66·f34.
+  [[site.measure]]
+  label = "neon f32×f64"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::dot"
+  min_vector_ops = 33
+  require_mnemonics = ["fmla .2d"]
+  min_fma = 17
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v10·f11.
+  [[site.measure]]
+  label = "neon f32×f64 (neoverse-v1)"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::dot"
+  min_vector_ops = 5
+  require_mnemonics = ["fmla"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  [[site.measure]]
+  label = "wasm-scalar f32×f64"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::dot"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v13·f0.
+  [[site.measure]]
+  label = "wasm-simd128 f32×f64"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::dot"
+  min_vector_ops = 6
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v138·f0.
+  [[site.measure]]
+  label = "sse2 f32×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::dot"
+  min_vector_ops = 69
+  require_mnemonics = ["addpd", "mulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
+  [[site.measure]]
+  label = "avx2+fma f32×f32"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx2fma::f32_f32::dot"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v37·f11.
+  [[site.measure]]
+  label = "avx512f f32×f32"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f32_f32::dot"
+  min_vector_ops = 18
+  require_mnemonics = ["vfmadd231pd %zmm"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v55·f21.
+  [[site.measure]]
+  label = "avx512f f32×f32 (v4 tuning)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f32_f32::dot"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
+  [[site.measure]]
+  label = "baseline f32×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::dot"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path: `fmla v.2d` lanes. Measured v107·f34.
+  [[site.measure]]
+  label = "neon f32×f32"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::dot"
+  min_vector_ops = 53
+  require_mnemonics = ["fmla .2d"]
+  min_fma = 17
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v11·f11.
+  [[site.measure]]
+  label = "neon f32×f32 (neoverse-v1)"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::dot"
+  min_vector_ops = 5
+  require_mnemonics = ["fmla"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  [[site.measure]]
+  label = "wasm-scalar f32×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::dot"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v16·f0.
+  [[site.measure]]
+  label = "wasm-simd128 f32×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::dot"
+  min_vector_ops = 8
+  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+[[site]]
+id = "distance.reassociated.sqeuclid"
+summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squared-Euclidean fold with its per-block checkpoint, in its one out-of-line compilation per dispatch path and stored-width pair"
+
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v104·f0.
+  [[site.measure]]
+  label = "sse2 f64×f64"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 52
+  require_mnemonics = ["addpd", "mulpd", "subpd"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v34·f21 on all three x86_64 configurations.
+  [[site.measure]]
+  label = "avx2+fma f64×f64"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx2fma::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v26·f11.
+  [[site.measure]]
+  label = "avx512f f64×f64"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 13
+  require_mnemonics = ["vfmadd231pd %zmm"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v34·f21.
+  [[site.measure]]
+  label = "avx512f f64×f64 (v4 tuning)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v34·f21.
+  [[site.measure]]
+  label = "baseline f64×f64"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 17
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path: `fmla v.2d` lanes. Measured v48·f33.
+  [[site.measure]]
+  label = "neon f64×f64"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 24
+  require_mnemonics = ["fmla .2d"]
+  min_fma = 16
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v18·f11.
+  [[site.measure]]
+  label = "neon f64×f64 (neoverse-v1)"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 9
+  require_mnemonics = ["fmla"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  [[site.measure]]
+  label = "wasm-scalar f64×f64"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v13·f0.
+  [[site.measure]]
+  label = "wasm-simd128 f64×f64"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f64::squared_euclidean_bounded"
+  min_vector_ops = 6
+  require_mnemonics = ["f64x2.sub", "f64x2.mul", "f64x2.add"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v138·f0.
+  [[site.measure]]
+  label = "sse2 f64×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 69
+  require_mnemonics = ["addpd", "mulpd", "subpd"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
+  [[site.measure]]
+  label = "avx2+fma f64×f32"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx2fma::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v37·f11.
+  [[site.measure]]
+  label = "avx512f f64×f32"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 18
+  require_mnemonics = ["vfmadd231pd %zmm"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v55·f21.
+  [[site.measure]]
+  label = "avx512f f64×f32 (v4 tuning)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
+  [[site.measure]]
+  label = "baseline f64×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path: `fmla v.2d` lanes. Measured v107·f34.
+  [[site.measure]]
+  label = "neon f64×f32"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 53
+  require_mnemonics = ["fmla .2d"]
+  min_fma = 17
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v19·f11.
+  [[site.measure]]
+  label = "neon f64×f32 (neoverse-v1)"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 9
+  require_mnemonics = ["fmla"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  [[site.measure]]
+  label = "wasm-scalar f64×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v16·f0.
+  [[site.measure]]
+  label = "wasm-simd128 f64×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f64_f32::squared_euclidean_bounded"
+  min_vector_ops = 8
+  require_mnemonics = ["f64x2.sub", "f64x2.mul", "f64x2.add"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v138·f0.
+  [[site.measure]]
+  label = "sse2 f32×f64"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 69
+  require_mnemonics = ["addpd", "mulpd", "subpd"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v55·f21 on all three x86_64 configurations.
+  [[site.measure]]
+  label = "avx2+fma f32×f64"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx2fma::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v37·f11.
+  [[site.measure]]
+  label = "avx512f f32×f64"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 18
+  require_mnemonics = ["vfmadd231pd %zmm"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v55·f21.
+  [[site.measure]]
+  label = "avx512f f32×f64 (v4 tuning)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v55·f21.
+  [[site.measure]]
+  label = "baseline f32×f64"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 27
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path: `fmla v.2d` lanes. Measured v107·f34.
+  [[site.measure]]
+  label = "neon f32×f64"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 53
+  require_mnemonics = ["fmla .2d"]
+  min_fma = 17
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v19·f11.
+  [[site.measure]]
+  label = "neon f32×f64 (neoverse-v1)"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 9
+  require_mnemonics = ["fmla"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  [[site.measure]]
+  label = "wasm-scalar f32×f64"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v16·f0.
+  [[site.measure]]
+  label = "wasm-simd128 f32×f64"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f64::squared_euclidean_bounded"
+  min_vector_ops = 8
+  require_mnemonics = ["f64x2.sub", "f64x2.mul", "f64x2.add"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `sse2` path: the baseline compilation, packed `xmm` lanes and no FMA (SSE2 has none). Measured v172·f0.
+  [[site.measure]]
+  label = "sse2 f32×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 86
+  require_mnemonics = ["addpd", "mulpd", "subpd"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx2+fma` path: `#[target_feature(enable = "avx2,fma")]`, `ymm` lanes with the adds contracted into FMA. Measured v76·f21 on all three x86_64 configurations.
+  [[site.measure]]
+  label = "avx2+fma f32×f32"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx2fma::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 38
+  require_mnemonics = ["vfmadd231pd"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path under generic tuning: `zmm` lanes (`vextractf64x4` in the reduction), FMA. Measured v48·f11.
+  [[site.measure]]
+  label = "avx512f f32×f32"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 24
+  require_mnemonics = ["vfmadd231pd %zmm"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `avx512f` path in an x86-64-v4 build: that CPU model's tuning prefers 256-bit vectors, so LLVM keeps the body in `ymm` lanes here, the same shape as `avx2+fma`. Measured v76·f21.
+  [[site.measure]]
+  label = "avx512f f32×f32 (v4 tuning)"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::avx512f::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 38
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The baseline compilation in a consumer build that already assumes AVX2 and FMA: the `sse2` path's symbol is itself `ymm` FMA code there. Measured v76·f21.
+  [[site.measure]]
+  label = "baseline f32×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 38
+  require_mnemonics = ["vfmadd231pd %ymm"]
+  min_fma = 10
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path: `fmla v.2d` lanes. Measured v148·f34.
+  [[site.measure]]
+  label = "neon f32×f32"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 74
+  require_mnemonics = ["fmla .2d"]
+  min_fma = 17
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `neon` path in a neoverse-v1 build: LLVM folds the blocks with SVE `fmla` and an `faddv` reduction. Measured v20·f11.
+  [[site.measure]]
+  label = "neon f32×f32 (neoverse-v1)"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 10
+  require_mnemonics = ["fmla"]
+  min_fma = 5
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-scalar` path: wasm32 without a SIMD proposal, scalar `f64` operations and no fused op; the symbol still exists exactly once. Measured v0·f0.
+  [[site.measure]]
+  label = "wasm-scalar f32×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+  # The `wasm-simd128` path: `f64x2` lanes; wasm has no fused multiply-add outside relaxed SIMD, which is never enabled. Measured v19·f0.
+  [[site.measure]]
+  label = "wasm-simd128 f32×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::reassociated::baseline::f32_f32::squared_euclidean_bounded"
+  min_vector_ops = 9
+  require_mnemonics = ["f64x2.sub", "f64x2.mul", "f64x2.add"]
+  max_fma = 0
+  forbid_relaxed = true
+  single_copy = true
+
+[[site]]
 id = "knn.norm"
 summary = "`metric::norm`, the normative PURREMB L2 norm, measured in `hnsw::builder::compute_norms`"
 

@@ -65,7 +65,7 @@ fn reference_fold(terms: &[f64]) -> f64 {
 }
 
 /// The reference dot product: each product rounded once, then the reference fold.
-fn reference_dot(a: &[f64], b: &[f64]) -> f64 {
+pub(super) fn reference_dot(a: &[f64], b: &[f64]) -> f64 {
     let terms: Vec<f64> = a.iter().zip(b).map(|(x, y)| x * y).collect();
     reference_fold(&terms)
 }
@@ -111,10 +111,10 @@ fn bits(value: Option<f64>) -> Option<u64> {
 // ---- the fixture -----------------------------------------------------------
 
 /// A seeded splitmix64 stream.
-struct Stream(u64);
+pub(super) struct Stream(pub(super) u64);
 
 impl Stream {
-    fn next_u64(&mut self) -> u64 {
+    pub(super) fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -123,12 +123,12 @@ impl Stream {
     }
 
     /// A value in `[-1, 1)`.
-    fn signed(&mut self) -> f64 {
+    pub(super) fn signed(&mut self) -> f64 {
         ((self.next_u64() >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
     }
 
     /// One component of the adversarial class `class`.
-    fn component(&mut self, class: u64) -> f64 {
+    pub(super) fn component(&mut self, class: u64) -> f64 {
         match class {
             // Ordinary magnitudes.
             0 => self.signed(),
@@ -161,14 +161,14 @@ impl Stream {
         }
     }
 
-    fn vector(&mut self, len: usize) -> Vec<f64> {
+    pub(super) fn vector(&mut self, len: usize) -> Vec<f64> {
         let class = self.next_u64() % 5;
         (0..len).map(|_| self.component(class)).collect()
     }
 }
 
 /// A storage width a fixture can be written at.
-trait Store: Scalar {
+pub(super) trait Store: Scalar {
     fn store(value: f64) -> Self;
 }
 
@@ -186,13 +186,13 @@ impl Store for f32 {
 
 /// `values` at width `T`, starting `offset` elements into a padded buffer so the
 /// kernel sees every alignment the allocator does not promise.
-fn at_offset<T: Store>(values: &[f64], offset: usize) -> Vec<T> {
+pub(super) fn at_offset<T: Store>(values: &[f64], offset: usize) -> Vec<T> {
     let mut buffer: Vec<T> = (0..offset).map(|_| T::store(7.0)).collect();
     buffer.extend(values.iter().map(|&value| T::store(value)));
     buffer
 }
 
-fn widened<T: Scalar>(values: &[T]) -> Vec<f64> {
+pub(super) fn widened<T: Scalar>(values: &[T]) -> Vec<f64> {
     values.iter().map(|value| value.widen()).collect()
 }
 
@@ -640,7 +640,7 @@ fn family_contract_digest_unchanged_by_arithmetic() {
     // contract carries no arithmetic and every arithmetic reads the same digest. Pinned,
     // so a change that folded an arithmetic into the metric would move it.
     const PINNED: &str = "fe2d8e7942175db980a8c0ac308cf2d69077f74012c03d7ecf1cf3b282fa7333";
-    let arithmetic_ids = [Exact::ID];
+    let arithmetic_ids = [Exact::ID, Reassociated::ID];
     for id in arithmetic_ids {
         assert!(
             !family

@@ -14,10 +14,10 @@
 //! happened to be written in.
 //!
 //! [`Arithmetic`] is a sealed trait. Each implementation is one law with one stable
-//! identifier ([`Arithmetic::ID`]) and one code for the images that record it
-//! ([`Arithmetic::IMAGE_CODE`]). Every consumer is generic over it, so two arithmetics
-//! are two monomorphized functions rather than one function with a mode, and mixing
-//! them is a type error.
+//! identifier ([`Arithmetic::ID`]) and the codes images record it under
+//! ([`Arithmetic::IMAGE_CODES`], one per dispatch path whose bits it distinguishes).
+//! Every consumer is generic over it, so two arithmetics are two monomorphized
+//! functions rather than one function with a mode, and mixing them is a type error.
 //!
 //! # [`Exact`]: the fixed-lane law
 //!
@@ -45,6 +45,22 @@
 //! has. On a sequence shorter than one chunk the law is exactly the ascending
 //! sequential fold, since the tree of sixteen `+0.0` lanes is `+0.0`.
 //!
+//! # [`Reassociated`]: the fast law, whose bits depend on the target
+//!
+//! `Reassociated` gives up bit-identity across targets for the freedom the exact law
+//! withholds. Inside each 64-element block the terms are summed with the
+//! `algebraic_*` operations, which license the compiler to reassociate the sum and to
+//! contract a multiply into an add; the block sums are then combined with plain `+`
+//! in ascending block order. So the result may differ in its last bits from `Exact`,
+//! and between dispatch paths and builds, and the sign of a zero result is
+//! unspecified; [`Arithmetic::evidence`] says so in words every consumer records.
+//! Within one build and one dispatch path it is still a function: each path's body is
+//! compiled exactly once, out of line, so every caller that scores a pair on that path
+//! gets the same bits. And because the blocks combine in order, every bounded
+//! checkpoint is a true prefix of the full value, so the bounded form abandons only
+//! where the full form would have met the bound, exactly as in `Exact`. A non-finite
+//! result is refused as it is in `Exact`.
+//!
 //! # Dispatch happens once, inside one contract
 //!
 //! [`Arithmetic::resolve`] is called once per scan, relation or index and returns a
@@ -55,6 +71,12 @@
 //! a scalar reference model. `aarch64` NEON and wasm `simd128` are compile-time
 //! features of the one portable path. There is no exact AVX-512 path: at sixteen
 //! binary64 lanes AVX2 already holds the fold in four registers.
+//!
+//! `Reassociated` has its own paths and never shares one with `Exact`: on `x86_64` an
+//! AVX-512F, an AVX2+FMA and a baseline SSE2 compilation, chosen in that order by what
+//! the processor reports; on `aarch64` NEON, and on wasm the `simd128` or scalar
+//! compilation the build was made with, both fixed at compile time. Relaxed wasm SIMD
+//! is never used: its results are left to the engine.
 //!
 //! The batch kernels ([`Resolved::distances`], [`Resolved::distances_indexed`]) are the
 //! unit of dispatch. A per-pair call ([`Resolved::distance`]) runs the same body.
@@ -70,7 +92,10 @@
 mod dispatch;
 mod env;
 mod exact;
+mod reassociated;
 
+#[cfg(test)]
+mod reassociated_tests;
 #[cfg(test)]
 mod tests;
 
@@ -97,15 +122,34 @@ pub const EXACT_LANES: usize = exact::LANES;
 ///
 /// Narrowing is NOT offered and must not be added: `f64` to `f32` loses bits, so a
 /// genuine `binary64` artifact has to stay `binary64`.
-pub trait Scalar: Copy {
+///
+/// Sealed: `f32` and `f64` are PURREMB's two stored widths and the only implementations.
+/// The [`Reassociated`] arithmetic compiles one out-of-line body per dispatch path for
+/// each pair of these widths, so that every caller on a path gets the same bits, and
+/// that needs to know the concrete width behind a generic operand.
+pub trait Scalar: Copy + sealed::Stored {
     /// This value as an `f64`, exactly.
     fn widen(self) -> f64;
+}
+
+impl sealed::Stored for f32 {
+    #[inline]
+    fn width(values: &[Self]) -> sealed::Width<'_> {
+        sealed::Width::F32(values)
+    }
 }
 
 impl Scalar for f32 {
     #[inline]
     fn widen(self) -> f64 {
         f64::from(self)
+    }
+}
+
+impl sealed::Stored for f64 {
+    #[inline]
+    fn width(values: &[Self]) -> sealed::Width<'_> {
+        sealed::Width::F64(values)
     }
 }
 
@@ -173,17 +217,33 @@ pub enum Measure {
 ///
 /// A path is a compilation of an arithmetic's body, never a different arithmetic: every
 /// path of one arithmetic honours that arithmetic's whole contract. For [`Exact`] every
-/// path returns the same bits.
+/// path returns the same bits. Each path belongs to exactly one arithmetic: [`Exact`]
+/// runs `Portable` and `Avx2`, and [`Reassociated`] runs the other six.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Path {
-    /// The generic body compiled for the target's baseline features. On `aarch64` that
-    /// is NEON, and on a `wasm32` build with `+simd128` it is wasm SIMD; both are
-    /// compile-time features, so this is the only path those targets have.
+    /// [`Exact`]: the generic body compiled for the target's baseline features. On
+    /// `aarch64` that is NEON, and on a `wasm32` build with `+simd128` it is wasm SIMD;
+    /// both are compile-time features, so this is the only path those targets have.
     Portable,
-    /// The same generic body compiled with `#[target_feature(enable = "avx2")]`,
-    /// selected on `x86_64` when the processor reports AVX2.
+    /// [`Exact`]: the same generic body compiled with
+    /// `#[target_feature(enable = "avx2")]`, selected on `x86_64` when the processor
+    /// reports AVX2.
     Avx2,
+    /// [`Reassociated`] on `x86_64`: the body compiled for the baseline, SSE2.
+    Sse2,
+    /// [`Reassociated`] on `x86_64`: the body compiled with AVX2 and FMA enabled,
+    /// selected when the processor reports both.
+    Avx2Fma,
+    /// [`Reassociated`] on `x86_64`: the body compiled with AVX-512F enabled, selected
+    /// when the processor reports it along with AVX2 and FMA.
+    Avx512f,
+    /// [`Reassociated`] on `aarch64`: the body compiled for NEON, the baseline.
+    Neon,
+    /// [`Reassociated`] on wasm, in a build with `simd128` enabled.
+    WasmSimd128,
+    /// [`Reassociated`] on wasm, in a build without `simd128`.
+    WasmScalar,
 }
 
 impl Path {
@@ -193,6 +253,12 @@ impl Path {
         match self {
             Self::Portable => "portable",
             Self::Avx2 => "avx2",
+            Self::Sse2 => "sse2",
+            Self::Avx2Fma => "avx2+fma",
+            Self::Avx512f => "avx512f",
+            Self::Neon => "neon",
+            Self::WasmSimd128 => "wasm-simd128",
+            Self::WasmScalar => "wasm-scalar",
         }
     }
 }
@@ -274,6 +340,21 @@ impl<'a, T: Scalar> RowsRef<'a, T> {
 mod sealed {
     /// Only this module's arithmetics implement [`super::Arithmetic`].
     pub trait Sealed {}
+
+    /// Only PURREMB's two stored widths implement [`super::Scalar`].
+    pub trait Stored: Sized {
+        /// `values` at its concrete width.
+        fn width(values: &[Self]) -> Width<'_>;
+    }
+
+    /// A stored operand at its concrete width.
+    #[derive(Debug, Clone, Copy)]
+    pub enum Width<'a> {
+        /// `binary32` components.
+        F32(&'a [f32]),
+        /// `binary64` components.
+        F64(&'a [f64]),
+    }
 }
 
 /// An arithmetic contract: one law for the order of every rounded operation in a
@@ -292,11 +373,18 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
     /// no vocabulary.
     const ID: &'static str;
 
-    /// The code an image records this arithmetic under.
+    /// Every code an image may record this arithmetic under, ascending.
     ///
-    /// Zero is never a code, so a field that was reserved and zero in an older format
-    /// can never be read as naming an arithmetic.
-    const IMAGE_CODE: u32;
+    /// An arithmetic whose bits are the same on every path has one code; one whose bits
+    /// depend on the path has one code per path, so an image records the compilation
+    /// its distances came from. No two arithmetics share a code, and zero is never a
+    /// code, so a field that was reserved and zero in an older format can never be read
+    /// as naming an arithmetic.
+    const IMAGE_CODES: &'static [u32];
+
+    /// The code an image records for results computed along `path`, or `None` when
+    /// `path` is not one of this arithmetic's.
+    fn image_code(path: Path) -> Option<u32>;
 
     /// The divergence this arithmetic's results carry along `path`, or `None` for an
     /// arithmetic whose bits are the same on every path and target.
@@ -405,6 +493,19 @@ impl<A: Arithmetic> Resolved<A> {
         A::evidence(self.path)
     }
 
+    /// The code an image records for results computed by this handle; see
+    /// [`Arithmetic::image_code`].
+    #[must_use]
+    pub fn image_code(self) -> u32 {
+        A::image_code(self.path).unwrap_or_else(|| {
+            unreachable!(
+                "{} resolved to {}, which is not one of its paths",
+                A::ID,
+                self.path
+            )
+        })
+    }
+
     /// See [`Arithmetic::distances`].
     pub fn distances<Q: Scalar, T: Scalar>(
         self,
@@ -486,6 +587,10 @@ pub struct Exact;
 impl sealed::Sealed for Exact {}
 
 impl Exact {
+    /// The one code an image records the exact arithmetic under: every path computes
+    /// the same bits, so the path is not recorded.
+    pub const IMAGE_CODE: u32 = 1;
+
     /// The exact distance from `a` to `b`, computed by the portable compilation of the
     /// law, for a per-pair caller that holds no [`Resolved`] handle.
     ///
@@ -523,7 +628,11 @@ impl Exact {
 
 impl Arithmetic for Exact {
     const ID: &'static str = "binary64-lane16-tree-v1";
-    const IMAGE_CODE: u32 = 1;
+    const IMAGE_CODES: &'static [u32] = &[Self::IMAGE_CODE];
+
+    fn image_code(path: Path) -> Option<u32> {
+        matches!(path, Path::Portable | Path::Avx2).then_some(Self::IMAGE_CODE)
+    }
 
     fn evidence(_path: Path) -> Option<&'static str> {
         None
@@ -578,6 +687,93 @@ impl Arithmetic for Exact {
         bound: Bound,
     ) -> Bounded {
         dispatch::distance_bounded(resolved.path, measure, a, a_norm, b, b_norm, bound)
+    }
+}
+
+/// The reassociated arithmetic: within each 64-element block the terms are summed with
+/// the `algebraic_*` operations, so the compiler may reassociate the sum and contract
+/// multiplies into adds; block sums are combined with plain `+` in ascending order.
+///
+/// Its bits depend on the target, the build and the dispatch path; they are a function
+/// of the inputs only within one build on one path. See the
+/// [module documentation](self) and [`Arithmetic::evidence`] for what it gives up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Reassociated;
+
+impl sealed::Sealed for Reassociated {}
+
+impl Arithmetic for Reassociated {
+    const ID: &'static str = "binary64-reassociated-v1";
+    const IMAGE_CODES: &'static [u32] = &[2, 3, 4, 5, 6, 7];
+
+    fn image_code(path: Path) -> Option<u32> {
+        match path {
+            Path::Sse2 => Some(2),
+            Path::Avx2Fma => Some(3),
+            Path::Avx512f => Some(4),
+            Path::Neon => Some(5),
+            Path::WasmSimd128 => Some(6),
+            Path::WasmScalar => Some(7),
+            Path::Portable | Path::Avx2 => None,
+        }
+    }
+
+    fn evidence(path: Path) -> Option<&'static str> {
+        Some(reassociated::evidence(path))
+    }
+
+    fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError> {
+        env::check()?;
+        let path = reassociated::path().ok_or(FloatEnvironmentError::Uninspectable {
+            target_arch: std::env::consts::ARCH,
+        })?;
+        Ok(Resolved::on(path))
+    }
+
+    fn distances<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        query: &[Q],
+        query_norm: f64,
+        rows: RowsRef<'_, T>,
+        out: &mut [Option<f64>],
+    ) {
+        reassociated::distances(resolved.path, measure, query, query_norm, rows, out);
+    }
+
+    fn distances_indexed<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        query: &[Q],
+        query_norm: f64,
+        rows: RowsRef<'_, T>,
+        ids: &[usize],
+        out: &mut [Option<f64>],
+    ) {
+        reassociated::distances_indexed(resolved.path, measure, query, query_norm, rows, ids, out);
+    }
+
+    fn distance_on<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+    ) -> Option<f64> {
+        reassociated::distance(resolved.path, measure, a, a_norm, b, b_norm)
+    }
+
+    fn distance_bounded_on<Q: Scalar, T: Scalar>(
+        resolved: Resolved<Self>,
+        measure: Measure,
+        a: &[Q],
+        a_norm: f64,
+        b: &[T],
+        b_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        reassociated::distance_bounded(resolved.path, measure, a, a_norm, b, b_norm, bound)
     }
 }
 

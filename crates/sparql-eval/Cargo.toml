@@ -127,10 +127,12 @@ proptest = { workspace = true }
 criterion = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-# The wasm32 test harness, for `tests/knn_wasm_determinism.rs` — the one test in this
-# crate that must EXECUTE on wasm32-unknown-unknown rather than merely compile for it,
-# because the embedding kNN surface ranks by binary64 arithmetic and "the same answer on
-# every target" is a claim two runs on one target cannot check. Run by `make wasm-test`.
+# The wasm32 test harness, for `tests/knn_wasm_determinism.rs` and
+# `tests/knn_wasm_reassociated.rs` — the tests in this crate that must EXECUTE on
+# wasm32-unknown-unknown rather than merely compile for it, because the embedding kNN
+# surface ranks by binary64 arithmetic: "the same answer on every target" (exact) and
+# "within the error bound on every target" (reassociated) are claims two runs on one
+# target cannot check. Run by `make wasm-test`.
 wasm-bindgen-test = { workspace = true }
 
 [[bench]]
