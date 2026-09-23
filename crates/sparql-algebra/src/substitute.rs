@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Variable **pre-binding** by algebra rewrite (purrdf S5,  GAP-A).
+//! Variable **pre-binding** by algebra rewrite (purrdf S5).
 //!
 //! This is the native replacement for the oxigraph-family
 //! `PreparedSparqlQuery::substitute_variable`, which SHACL-AF uses to inject the
@@ -58,15 +58,28 @@ impl Query {
     /// spelling rather than literally — see that variant's doc for the exact
     /// contract and how to spell a label that must be read literally.
     #[must_use]
-    pub fn substitute_variable(self, var: &Variable, value: GroundTerm) -> Self {
+    pub fn substitute_variable(mut self, var: &Variable, value: GroundTerm) -> Self {
+        self.substitute_variable_mut(var, value);
+        self
+    }
+
+    /// [`Self::substitute_variable`], in place.
+    ///
+    /// The owning form above is a wrapper over this one, so the seed is built and
+    /// positioned in exactly one place. A caller pre-binding several variables in a
+    /// loop — which is what a repeated variable name forces — would otherwise rebuild
+    /// the whole modifier wrapper stack once per binding.
+    pub fn substitute_variable_mut(&mut self, var: &Variable, value: GroundTerm) {
         let seed = GraphPattern::Values {
             variables: vec![var.clone()],
             bindings: vec![vec![Some(value)]],
         };
-        self.map_core_pattern(|core| GraphPattern::Join {
-            left: Box::new(seed),
-            right: Box::new(core),
-        })
+        self.map_core_pattern_mut(|core| {
+            take_and_replace(core, |core| GraphPattern::Join {
+                left: Box::new(seed),
+                right: Box::new(core),
+            });
+        });
     }
 
     /// Replace the **core** `WHERE` pattern — the one reached by descending through
@@ -77,64 +90,30 @@ impl Query {
     /// also the hook the evaluator's blank-node pre-binding reuses (it descends the
     /// same wrappers to join its singleton seed at the identical position).
     #[must_use]
-    pub fn map_core_pattern(self, f: impl FnOnce(GraphPattern) -> GraphPattern) -> Self {
+    pub fn map_core_pattern(mut self, f: impl FnOnce(GraphPattern) -> GraphPattern) -> Self {
+        self.map_core_pattern_mut(|core| take_and_replace(core, f));
+        self
+    }
+
+    /// [`Self::map_core_pattern`], in place.
+    ///
+    /// The owning form above is a wrapper over this one. Both reach the same four
+    /// query forms through the same field, so a query form added later cannot be
+    /// handled by one and missed by the other.
+    pub fn map_core_pattern_mut(&mut self, f: impl FnOnce(&mut GraphPattern)) {
         match self {
-            Self::Select {
-                pattern,
-                dataset,
-                base_iri,
-                version,
-            } => Self::Select {
-                pattern: map_core_pattern(pattern, f),
-                dataset,
-                base_iri,
-                version,
-            },
-            Self::Construct {
-                template,
-                pattern,
-                dataset,
-                base_iri,
-                version,
-            } => Self::Construct {
-                template,
-                pattern: map_core_pattern(pattern, f),
-                dataset,
-                base_iri,
-                version,
-            },
-            Self::Describe {
-                pattern,
-                targets,
-                dataset,
-                base_iri,
-                version,
-            } => Self::Describe {
-                pattern: map_core_pattern(pattern, f),
-                targets,
-                dataset,
-                base_iri,
-                version,
-            },
-            Self::Ask {
-                pattern,
-                dataset,
-                base_iri,
-                version,
-            } => Self::Ask {
-                pattern: map_core_pattern(pattern, f),
-                dataset,
-                base_iri,
-                version,
-            },
+            Self::Select { pattern, .. }
+            | Self::Construct { pattern, .. }
+            | Self::Describe { pattern, .. }
+            | Self::Ask { pattern, .. } => map_core_pattern_mut(pattern, f),
         }
     }
 }
 
 /// Descend through the outer solution-modifier/filter wrappers of `pattern` to its
-/// core `WHERE` pattern, apply `f` there, and rebuild the wrapper stack around the
-/// result. A pattern that is *itself* the core (a bare BGP/Join/etc. with no
-/// wrapper) is handed straight to `f`.
+/// core `WHERE` pattern and apply `f` there, leaving the wrapper stack in place. A
+/// pattern that is *itself* the core (a bare BGP/Join/etc. with no wrapper) is
+/// handed straight to `f`.
 ///
 /// The recursion descends the single-child wrappers that evaluate expressions over
 /// their inner rows. `Filter` is included even though it is a graph-pattern node:
@@ -143,56 +122,17 @@ impl Query {
 /// It deliberately stops at the first multi-child graph-pattern node (`Join`,
 /// `Union`, `LeftJoin`, `Graph`, …): that node *is* the core `WHERE` pattern, and
 /// the seed must join onto the whole of it.
-fn map_core_pattern(
-    pattern: GraphPattern,
-    f: impl FnOnce(GraphPattern) -> GraphPattern,
-) -> GraphPattern {
+///
+/// This is the **only** implementation of the descent; [`Query::map_core_pattern`]
+/// is a wrapper over it. Two independent walks over the same wrapper stack, both
+/// carrying the rule about where the core begins, would mean a `GraphPattern`
+/// variant added later has to be handled twice — and a walk that missed it would
+/// still compile and still return an answer, silently seeding at the wrong node.
+///
+/// Every arm below recurses into a uniquely-owned `Box`, so no `mem::replace` and
+/// no copy-on-write step is needed to get a `&mut` to a child.
+pub(crate) fn map_core_pattern_mut(pattern: &mut GraphPattern, f: impl FnOnce(&mut GraphPattern)) {
     match pattern {
-        GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: Box::new(map_core_pattern(*inner, f)),
-            variables,
-        },
-        GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Box::new(map_core_pattern(*inner, f)),
-        },
-        GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Box::new(map_core_pattern(*inner, f)),
-        },
-        GraphPattern::Slice {
-            inner,
-            start,
-            length,
-        } => GraphPattern::Slice {
-            inner: Box::new(map_core_pattern(*inner, f)),
-            start,
-            length,
-        },
-        GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Box::new(map_core_pattern(*inner, f)),
-            expression,
-        },
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => GraphPattern::Group {
-            inner: Box::new(map_core_pattern(*inner, f)),
-            variables,
-            aggregates,
-        },
-        GraphPattern::Extend {
-            inner,
-            variable,
-            expression,
-        } => GraphPattern::Extend {
-            inner: Box::new(map_core_pattern(*inner, f)),
-            variable,
-            expression,
-        },
-        GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr,
-            inner: Box::new(map_core_pattern(*inner, f)),
-        },
         // `UNFOLD` stacks above the pattern before it exactly as `BIND` does, so
         // it is descended through for the same reason `Extend` is: the pre-bound
         // seed belongs BENEATH it, where its expression can read `?this`. Left to
@@ -200,20 +140,33 @@ fn map_core_pattern(
         // would be seeded as `Join(Values{?this}, Unfold(...))` — the expression
         // then sees `$this` unbound, denotes no composite, and the constraint
         // quietly reports nothing rather than reporting a violation.
-        GraphPattern::Unfold {
-            inner,
-            expression,
-            element,
-            companion,
-        } => GraphPattern::Unfold {
-            inner: Box::new(map_core_pattern(*inner, f)),
-            expression,
-            element,
-            companion,
-        },
+        GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner, .. }
+        | GraphPattern::Reduced { inner, .. }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Filter { inner, .. }
+        | GraphPattern::Unfold { inner, .. } => map_core_pattern_mut(inner, f),
         // The first non-modifier node is the core WHERE pattern.
         core => f(core),
     }
+}
+
+/// Run a by-value rewrite through a `&mut` slot.
+///
+/// The sentinel is the empty BGP — the identity table `Z` — which is the correct
+/// stand-in for "no pattern yet" and, being an empty `Vec`, allocates nothing. The
+/// slot is only observable as the sentinel if `f` panics, which unwinds anyway.
+pub fn take_and_replace(slot: &mut GraphPattern, f: impl FnOnce(GraphPattern) -> GraphPattern) {
+    let taken = std::mem::replace(
+        slot,
+        GraphPattern::Bgp {
+            patterns: Vec::new(),
+        },
+    );
+    *slot = f(taken);
 }
 
 #[cfg(test)]

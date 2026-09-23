@@ -225,7 +225,7 @@ pub fn project_construct_view<D: DatasetView + Sync>(
     let prepared = engine
         .prepare_query(config.query(), config.base_iri())
         .map_err(|error| ProjectionError::syntax(format!("prepare CONSTRUCT query: {error}")))?;
-    if !matches!(prepared.query, Query::Construct { .. }) {
+    if !matches!(prepared.query(), Query::Construct { .. }) {
         return Err(ProjectionError::configuration(
             "dataset-description query must be SPARQL CONSTRUCT",
         ));
@@ -1253,7 +1253,7 @@ mod tests {
 
     #[test]
     fn property_function_predicate_is_refused_only_when_parser_options_recognize_it() {
-        // GAP-9 coverage: `parse_construct` used to parse with `ParserOptions::default`
+        // `parse_construct` used to parse with `ParserOptions::default`
         // unconditionally, so `GraphPattern::PropertyFunction` could never be produced
         // and the `pattern_reaches_non_reproducible_builtin` arm documenting the
         // conservative refusal was dead code. This pins both halves.

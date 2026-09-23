@@ -594,7 +594,7 @@ fn union_branch_order<T>(
         // Discarded, not concatenated. An empty schema unions to the left schema, so the
         // concatenation downstream reproduces the sequential body's output exactly.
         right.rows = Vec::new();
-        right.schema = Arc::new(VarSchema::new());
+        right.schema = VarSchema::empty_shared();
         right.certificate = None;
         // The attestations of a branch whose rows are discarded go with them, for the
         // SAME reason the rows do. The sequential body never starts the right branch once

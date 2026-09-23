@@ -2063,7 +2063,7 @@ mod tests {
         assert_eq!(rows, col1(&["a", "b"]));
     }
 
-    // ---- same-variable reflexive short-circuit (Gap D) ---------------------
+    // ---- same-variable reflexive short-circuit -----------------------------
 
     #[test]
     fn same_var_reflexive_star() {
@@ -2174,7 +2174,7 @@ mod tests {
         assert_eq!(ids(&first), ids(&second));
     }
 
-    // ---- negated property set under transitive closure (Gap F) -------------
+    // ---- negated property set under transitive closure ---------------------
 
     #[test]
     fn negated_under_one_or_more() {
@@ -2188,7 +2188,7 @@ mod tests {
         assert_eq!(reach_locals(&ds, &plus, "a", true), vec!["b", "c"]);
     }
 
-    // ---- ground endpoint absent from the dataset (Gap: zero-length identity) --
+    // ---- ground endpoint absent from the dataset: zero-length identity ------
 
     #[test]
     fn zero_or_more_reflexive_ground_endpoint_absent_from_empty_dataset() {

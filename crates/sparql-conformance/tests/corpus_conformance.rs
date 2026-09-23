@@ -264,7 +264,7 @@ fn purrdf_regression_corpus() {
 }
 
 // ---------------------------------------------------------------------------
-// GAP-A substitution sub-gate (goldens/substitution/).
+// `$this`-substitution sub-gate (goldens/substitution/).
 // ---------------------------------------------------------------------------
 
 /// Parse one `<name>.subst` line of the form `var={TermValue:?}`. The capture only

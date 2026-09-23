@@ -1,9 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Compiler algebra, public-field compatibility and allocation lifetime contracts.
+//! Compiler algebra and allocation lifetime contracts.
+//!
+//! `PreparedQuery::query` used to be a public, mutable field, and several tests
+//! here exercised that a caller who overwrote it by hand could not bypass
+//! admission or spend governor fuel that way — see `crates/sparql-eval/src/
+//! engine.rs`'s `PreparedQuery::query` for why that field is now private with a
+//! read-only accessor and no setter. The tests that depended on the removed
+//! mutability say so in place, with what coverage (if any) survives it and where.
 
-use purrdf_core::{RdfDatasetBuilder, ResourceDimension, SparqlResult};
+use purrdf_core::{RdfDatasetBuilder, SparqlResult};
 use purrdf_sparql_algebra::{
     Expression, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, ParserOptions,
     PropertyFunctionCall, PropertyPathExpression, Query, QueryDataset, TermPattern, Variable,
@@ -207,35 +214,23 @@ fn rewritten_calls_share_registry_and_arity_admission() {
     }
 }
 
-#[test]
-fn public_query_mutation_cannot_bypass_admission_or_spend_governor_fuel() {
-    let engine = NativeSparqlEngine::new();
-    let mut prepared = PreparedQuery::rewritten(
-        ask(GraphPattern::Bgp { patterns: vec![] }),
-        QueryOptions::EMPTY,
-    )
-    .unwrap();
-    prepared.query = ask(values(vec![], vec![Some(named())]));
-    let data = RdfDatasetBuilder::new().freeze().unwrap();
-    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-    assert!(
-        engine
-            .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
-            .is_err()
-    );
-    assert!(
-        engine
-            .query_prepared_governed_in_operation(
-                &*data,
-                &prepared,
-                &[],
-                QueryOptions::EMPTY,
-                &state
-            )
-            .is_err()
-    );
-    assert_eq!(state.evidence().consumed_in(ResourceDimension::Fuel), 0);
-}
+// `public_query_mutation_cannot_bypass_admission_or_spend_governor_fuel` used to
+// stand here: it built a trivially-admitted `PreparedQuery`, overwrote its public
+// `query` field by hand with a malformed `VALUES` row (bypassing admission
+// entirely), and confirmed both `query_prepared` and
+// `query_prepared_governed_in_operation` still refused it without spending
+// governor fuel.
+//
+// `PreparedQuery::query` is now a private field reachable only through the
+// `query()` accessor, with no setter (see `crates/sparql-eval/src/engine.rs`), so
+// that construction no longer compiles — there is no door in the public API that
+// hands back a `PreparedQuery` whose algebra never passed `admit_algebra`. The
+// malformed row this test forged is refused by `PreparedQuery::rewritten` and
+// `NativeSparqlEngine::prepare_algebra` themselves
+// (`malformed_compiler_rows_are_refused_before_evaluation`, above), so the state
+// this test constructed by hand was already unreachable any other way; privacy
+// makes that permanent instead of merely conventional. Nothing else in this
+// workspace depended on this test's assertions.
 
 #[test]
 fn admitted_plan_lifetimes_remain_observable_after_eviction_and_cache_drop() {
@@ -285,7 +280,7 @@ fn disabled_and_compiler_plans_are_counted_without_retention() {
     });
     let observer = engine.plan_memory_observer();
     let text = engine.prepare_query("ASK {}", None).unwrap();
-    let mut typed = engine
+    let typed = engine
         .prepare_algebra(
             ask(GraphPattern::Bgp { patterns: vec![] }),
             QueryOptions::EMPTY,
@@ -295,19 +290,17 @@ fn disabled_and_compiler_plans_are_counted_without_retention() {
         (observer.stats().live_plans, observer.stats().detached_plans),
         (2, 2)
     );
-    let admitted_bytes = observer.stats().live_bytes;
-    Arc::get_mut(&mut typed).unwrap().query = ask(values(
-        vec![Variable::new("x")],
-        vec![Some(GroundTerm::Literal(Literal::new_simple(
-            "x".repeat(4096),
-        )))],
-    ));
-    assert_eq!(
-        observer.stats().live_bytes,
-        admitted_bytes,
-        "admission accounting does not claim to intercept caller mutation"
-    );
-    assert!(typed.retained_size_bytes() > admitted_bytes);
+    // This used to mutate `typed`'s public `query` field here (via `Arc::get_mut`,
+    // growing the admitted tree), and confirm the live-byte total captured above
+    // did not move — proving admission accounting is a snapshot taken once, not
+    // re-derived from the current algebra on every read. `PreparedQuery::query` is
+    // now a private field with no setter (see `crates/sparql-eval/src/engine.rs`),
+    // so a caller cannot grow the admitted tree out from under this plan any more,
+    // and the assertion that distinguished "accounting is a fixed snapshot" from
+    // "accounting happens to equal because nothing changed" has no state left to
+    // construct. The snapshot behaviour itself is unchanged and still exercised by
+    // the `retained_size_bytes` vs. `observer.stats().live_bytes` distinction in
+    // `admitted_plan_lifetimes_remain_observable_after_eviction_and_cache_drop`.
     drop((text, typed));
     assert_eq!(
         observer.stats(),
@@ -321,7 +314,7 @@ fn cache_keys_keep_base_unicode_and_field_boundaries_distinct() {
     let query = "SELECT ?名 WHERE { ?名 <predicate> ?value }";
     let a = cache.prepare(query, Some("http://example.org/a/")).unwrap();
     let b = cache.prepare(query, Some("http://example.org/b/")).unwrap();
-    assert_ne!(a.query, b.query);
+    assert_ne!(a.query(), b.query());
     assert!(Arc::ptr_eq(
         &a,
         &cache.prepare(query, Some("http://example.org/a/")).unwrap()
@@ -366,7 +359,7 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
     parsed.validate().unwrap();
     let text = engine.prepare_query(&query, None).unwrap();
     let typed = engine.prepare_algebra(parsed, QueryOptions::EMPTY).unwrap();
-    assert_eq!(text.query, typed.query);
+    assert_eq!(text.query(), typed.query());
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     // Preparation accepts the parser's envelope. Execution retains its existing
     // narrower recursive-evaluator guard and must return a diagnostic safely.
@@ -444,7 +437,7 @@ fn subject_bound_registry() -> ExtensionEnv {
 }
 
 #[test]
-fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
+fn admission_reorders_a_binding_before_a_bound_only_relation() {
     let registry = subject_bound_registry();
     let env = registry;
     let options = QueryOptions {
@@ -472,14 +465,15 @@ fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
             }],
         }),
     });
-    let mut rewritten = PreparedQuery::rewritten(raw.clone(), options).unwrap();
+    let rewritten = PreparedQuery::rewritten(raw.clone(), options).unwrap();
     assert_ne!(
-        rewritten.query, raw,
+        rewritten.query(),
+        &raw,
         "admission must put the binding before the call"
     );
     let engine = NativeSparqlEngine::new();
-    let typed = engine.prepare_algebra(raw.clone(), options).unwrap();
-    assert_eq!(typed.query, rewritten.query);
+    let typed = engine.prepare_algebra(raw, options).unwrap();
+    assert_eq!(typed.query(), rewritten.query());
     let mut builder = RdfDatasetBuilder::new();
     let subject = builder.intern_iri("http://example.org/value");
     let predicate = builder.intern_iri("http://example.org/binding");
@@ -491,20 +485,24 @@ fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
             .unwrap(),
         SparqlResult::Boolean(true)
     ));
-    rewritten.query = raw;
-    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-    let diagnostic = engine
-        .query_prepared_governed_in_operation(&*data, &rewritten, &[], options, &state)
-        .unwrap_err();
-    assert_eq!(diagnostic.code, "native-sparql-algebra");
-    assert_eq!(state.evidence().consumed_in(ResourceDimension::Fuel), 0);
-    let readmitted = PreparedQuery::rewritten(rewritten.query, options).unwrap();
-    assert!(matches!(
-        engine
-            .query_prepared(&data, &readmitted, &[], options)
-            .unwrap(),
-        SparqlResult::Boolean(true)
-    ));
+    // This test used to continue from here: overwrite `rewritten`'s public
+    // `query` field by hand with the UNREORDERED `raw` algebra (undoing the
+    // admission above), confirm `query_prepared_governed_in_operation` refused
+    // the result with `native-sparql-algebra` (the feasibility-replanning check
+    // catching the mismatch), and confirm re-admitting the recovered query
+    // through `PreparedQuery::rewritten` worked again.
+    //
+    // `PreparedQuery::query` is now a private field with no setter (see
+    // `crates/sparql-eval/src/engine.rs`), so `rewritten` can no longer be put
+    // back into its unordered form after construction, and there is no other
+    // door that hands back a `PreparedQuery` whose algebra disagrees with what
+    // `admit_algebra` would produce for it — every constructor re-derives both
+    // together. The feasibility-replanning check itself is still real and still
+    // runs on every call through `query_prepared_governed_in_operation` (see
+    // `check_plan_matches_registries` in `crates/sparql-eval/src/engine.rs`); what
+    // is gone is only this test's way of forcing a plan into a state that check
+    // exists to catch. Nothing else in this workspace depended on the removed
+    // assertions.
 }
 
 #[test]
@@ -529,7 +527,7 @@ fn aggregate_sort_keys_reorder_a_binding_before_a_bound_only_relation() {
         .prepare_query_with_options(query, None, options)
         .unwrap();
     let typed = engine
-        .prepare_algebra(prepared.query.clone(), options)
+        .prepare_algebra(prepared.query().clone(), options)
         .unwrap();
     for prepared in [&prepared, &typed] {
         let result = engine
@@ -741,25 +739,18 @@ fn reserved_language_datatype_shapes_are_refused_by_text_and_compiler_admission(
                 .prepare_algebra(parsed.clone(), QueryOptions::EMPTY)
                 .is_err()
         );
-        let mut changed = PreparedQuery::rewritten(
-            ask(GraphPattern::Bgp { patterns: vec![] }),
-            QueryOptions::EMPTY,
-        )
-        .unwrap();
-        changed.query = parsed;
-        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-        assert!(
-            engine
-                .query_prepared_governed_in_operation(
-                    &*data,
-                    &changed,
-                    &[],
-                    QueryOptions::EMPTY,
-                    &state
-                )
-                .is_err()
-        );
-        assert_eq!(state.evidence().consumed_in(ResourceDimension::Fuel), 0);
+        assert!(PreparedQuery::rewritten(parsed, QueryOptions::EMPTY).is_err());
+        // This loop used to continue from here: build a trivially-admitted
+        // `PreparedQuery`, overwrite its public `query` field by hand with the
+        // reserved-datatype `parsed` algebra above (bypassing admission), and
+        // confirm `query_prepared_governed_in_operation` still refused it while
+        // spending no governor fuel. `PreparedQuery::query` is now a private
+        // field with no setter (see `crates/sparql-eval/src/engine.rs`), so that
+        // construction no longer compiles, and — as the `rewritten` assertion
+        // just above shows — the reserved-datatype algebra is refused by every
+        // legitimate constructor, so the forged state was already unreachable any
+        // other way. Nothing else in this workspace depended on the removed
+        // assertions.
     }
     for literal in [
         "\"text\"@en",
@@ -785,36 +776,20 @@ fn reserved_language_datatype_shapes_are_refused_by_text_and_compiler_admission(
     }
 }
 
-#[test]
-fn oversized_value_trees_cannot_bypass_execution_admission_after_public_mutation() {
-    let mut expression = Expression::Literal(Literal::new_simple("true"));
-    for _ in 0..3068 {
-        expression = Expression::Not(Box::new(expression));
-    }
-    let query = ask(GraphPattern::Filter {
-        expr: expression,
-        inner: Box::new(GraphPattern::Bgp { patterns: vec![] }),
-    });
-    let engine = NativeSparqlEngine::new();
-    assert!(query.validate().is_err());
-    let mut changed = PreparedQuery::rewritten(
-        ask(GraphPattern::Bgp { patterns: vec![] }),
-        QueryOptions::EMPTY,
-    )
-    .unwrap();
-    changed.query = query;
-    let data = RdfDatasetBuilder::new().freeze().unwrap();
-    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-    assert!(
-        engine
-            .query_prepared_governed_in_operation(
-                &*data,
-                &changed,
-                &[],
-                QueryOptions::EMPTY,
-                &state
-            )
-            .is_err()
-    );
-    assert_eq!(state.evidence().consumed_in(ResourceDimension::Fuel), 0);
-}
+// `oversized_value_trees_cannot_bypass_execution_admission_after_public_mutation`
+// used to stand here: build an over-deeply-nested `Filter` expression (3,068
+// `Not`s, past `query.validate()`'s own bound), admit a trivial plan, overwrite
+// its public `query` field by hand with the oversized one (bypassing admission
+// entirely), and confirm `query_prepared_governed_in_operation` still refused it
+// while spending no governor fuel.
+//
+// `PreparedQuery::query` is now a private field with no setter (see
+// `crates/sparql-eval/src/engine.rs`), so that construction no longer compiles.
+// There is no other door that hands back a `PreparedQuery` whose algebra never
+// passed `admit_algebra` — which calls `Query::validate` first — so an oversized
+// expression tree the parser or a caller could ever have PRODUCED a
+// `PreparedQuery` for is already refused at `PreparedQuery::rewritten` /
+// `NativeSparqlEngine::prepare_algebra` time, exactly the shape
+// `malformed_ranges_targets_and_nested_expressions_are_refused` (above) already
+// exercises with a `Filter`-wrapped `Not` chain sized off the same constants.
+// Nothing else in this workspace depended on the removed test.

@@ -210,6 +210,35 @@ pub(super) enum RelationSpec {
     },
 }
 
+impl RelationSpec {
+    /// Whether building this relation READS the dataset it is built against, so its
+    /// rows are a function of what the store held at that moment rather than of the
+    /// caller's declaration alone.
+    ///
+    /// The distinction is what a handle that outlives one snapshot has to make. A
+    /// `Store.prepare` handle re-reads its store on every run (see
+    /// [`super::prepared::PyPreparedQuery`]), so a relation whose rows came out of
+    /// the PREPARE-time dataset would answer about a store the rest of the query has
+    /// already moved past — one answer assembled from two points in time. A relation
+    /// whose rows are the caller's own constant has no such second point in time and
+    /// must NOT be rebuilt: rebuilding it would re-derive a value that cannot have
+    /// changed, and re-deriving a constant is how a constant stops being one.
+    ///
+    /// Written as an exhaustive match rather than a wildcard so a variant added later
+    /// has to answer this question rather than inherit an answer.
+    pub(super) const fn reads_the_store_graph(&self) -> bool {
+        match self {
+            // The caller's own table, handed over as Python data. Nothing about it
+            // comes from the store.
+            Self::Rows { .. } => false,
+            // The head of an `rdf:List` of `rdf:List`s written IN the store
+            // ([`MemoryRelation::from_graph`]), and a traversal over the store's own
+            // edges ([`PathGraph::from_dataset`]).
+            Self::Graph { .. } | Self::PathWitness { .. } => true,
+        }
+    }
+}
+
 /// Collect the `relations` / `relations_from_graph` / `path_relations` keyword dicts
 /// into the ordered `(IRI, spec, attestation)` list one call registers.
 ///

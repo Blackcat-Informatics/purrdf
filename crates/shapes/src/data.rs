@@ -187,6 +187,28 @@ impl ShaclData {
         DatasetIdentity(Arc::as_ptr(&self.core).cast::<()>() as usize)
     }
 
+    /// Whether the view SHACL-SPARQL runs against addresses the same id space
+    /// [`Self::core_view`] does.
+    ///
+    /// Every id-native surface in this crate resolves against the Core view, and
+    /// every SPARQL surface EXECUTES against [`Self::sparql_view`]. Those are the
+    /// same view whenever the two datasets were the same `Arc` — the common case,
+    /// and what [`Self::from_views`] checks when it decides whether to share one
+    /// class-membership index. They are DIFFERENT views when a shapes graph is
+    /// exposed under a named graph IRI, and then a Core id handed to the SPARQL view
+    /// is in range, resolves, and denotes another term entirely: the composite view
+    /// installs a dense handle remapping, so the id is not merely unfound, it is
+    /// wrong.
+    ///
+    /// So this is the predicate that decides whether an id may cross from one
+    /// surface to the other. A caller that cannot answer `true` here keeps the
+    /// owned-term door, which carries no dataset-local identity and is correct in
+    /// both configurations.
+    #[inline]
+    pub(crate) fn sparql_view_shares_core_ids(&self) -> bool {
+        Arc::ptr_eq(&self.core, &self.sparql)
+    }
+
     /// Retain the native validation carrier for repeated prepared bindings.
     pub fn core_view_arc(&self) -> Arc<ShaclDatasetView> {
         Arc::clone(&self.core)
@@ -316,4 +338,54 @@ pub fn native_quads(
         out.push((s, predicate, object));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **`sparql_view_shares_core_ids` answers the question it is asked.**
+    ///
+    /// It gates the id-native `$this` binding: every SPARQL-bearing validator
+    /// resolves its focus nodes against [`ShaclData::core_view`] and EXECUTES
+    /// against [`ShaclData::sparql_view`], and a term id may cross between them only
+    /// when those are one view. When they are two — which is what exposing a shapes
+    /// graph under a named-graph IRI produces — the SPARQL side is a composite view
+    /// with its own handle mapping, so a Core id handed to it is in range and
+    /// denotes another term. That is the silently-wrong-answer shape, and it is the
+    /// whole reason the predicate exists.
+    ///
+    /// Both directions, because a predicate that always said `false` would be
+    /// equally safe and would silently give the saving back, and a predicate that
+    /// always said `true` would be the defect itself.
+    #[test]
+    fn the_id_crossing_predicate_distinguishes_one_view_from_two() {
+        let mut b = ::purrdf::RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        b.push_quad(s, p, o, None);
+        let dataset = b.freeze().expect("freeze");
+
+        // One dataset for both roles: the views are the same `Arc`, so a Core id
+        // means the same term on the SPARQL side and may cross.
+        let shared = ShaclData::new(Arc::clone(&dataset), Arc::clone(&dataset), None);
+        assert!(
+            shared.sparql_view_shares_core_ids(),
+            "one retained view addressed from both roles is one id space"
+        );
+
+        // Two views over the SAME BYTES are still two views. This is the case worth
+        // pinning rather than an obviously-unrelated pair: the term tables here are
+        // identical, so a predicate that compared CONTENT would say `true` and let an
+        // id cross a boundary whose whole hazard is a handle remapping the content
+        // cannot see.
+        let core = Arc::new(ShaclDatasetView::native(Arc::clone(&dataset)));
+        let sparql = Arc::new(ShaclDatasetView::native(dataset));
+        let split = ShaclData::from_views(core, sparql, Some("http://example.org/g".to_owned()));
+        assert!(
+            !split.sparql_view_shares_core_ids(),
+            "two retained views are two id spaces, however alike their contents"
+        );
+    }
 }

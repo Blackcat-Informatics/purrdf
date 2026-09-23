@@ -1172,7 +1172,7 @@ mod tests {
         assert_ne!(first, "");
     }
 
-    /// GAP (registry instance identity): two INDEPENDENTLY constructed registries
+    /// Registry instance identity: two INDEPENDENTLY constructed registries
     /// that register the SAME IRI to the SAME declared metadata (arity, volatility,
     /// algebraic class, state bound) — byte-identical `describe()` output — must
     /// still produce DIFFERENT fingerprints, because nothing about identical

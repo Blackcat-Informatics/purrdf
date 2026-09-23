@@ -47,11 +47,12 @@ use pretty_assertions::assert_eq;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, Fixed, FusedRow, FusionProfile,
-    Iri, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics, Term, TopK, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionVerdict, Fixed,
+    FusedRow, FusionProfile, Iri, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics,
+    StratumStream, Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
-    EvalError, ExclusionBasis, PfArgs, PfArity, PfCursor, PropertyFunction,
+    EvalError, ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
     PropertyFunctionRegistry, RankedDeclaration, Volatility,
 };
 use purrdf_text::{
@@ -224,7 +225,8 @@ fn index(dataset: &RdfDataset, side: Side) -> Arc<TextIndex> {
 // ---------------------------------------------------------------------------
 
 /// A relation that delegates everything to a real [`TextSearchRelation`] while
-/// recording, per invocation, whether the candidate position was bound.
+/// recording, per invocation, whether the candidate position was bound, and how
+/// many rows the relation served to candidate-bound invocations.
 ///
 /// Delegation rather than a stand-in matters twice over: the declared modes and
 /// row bounds are the real ones, so the registry's admission of the basis is the
@@ -243,6 +245,13 @@ struct Recorder {
     candidate_bound: AtomicU64,
     /// Invocations whose candidate position was free: the ranked reads.
     candidate_free: AtomicU64,
+    /// Rows the relation served to candidate-bound invocations, counted as the
+    /// evaluator pulls them off the cursor rather than as the relation says it
+    /// would produce them.
+    served_bound: Arc<AtomicU64>,
+    /// Rows the relation served to candidate-free invocations, counted the same
+    /// way.
+    served_free: Arc<AtomicU64>,
 }
 
 impl Recorder {
@@ -251,7 +260,17 @@ impl Recorder {
             inner: TextSearchRelation::new(index),
             candidate_bound: AtomicU64::new(0),
             candidate_free: AtomicU64::new(0),
+            served_bound: Arc::new(AtomicU64::new(0)),
+            served_free: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    fn served_bound(&self) -> u64 {
+        self.served_bound.load(Ordering::Relaxed)
+    }
+
+    fn served_free(&self) -> u64 {
+        self.served_free.load(Ordering::Relaxed)
     }
 
     fn observations(&self) -> Arc<SearchObservations> {
@@ -289,13 +308,33 @@ impl PropertyFunction for Recorder {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        let counter = if args.get(TextSearchRelation::DOC).is_some() {
-            &self.candidate_bound
+        let (counter, served) = if args.get(TextSearchRelation::DOC).is_some() {
+            (&self.candidate_bound, &self.served_bound)
         } else {
-            &self.candidate_free
+            (&self.candidate_free, &self.served_free)
         };
         counter.fetch_add(1, Ordering::Relaxed);
-        self.inner.open(args, ceiling)
+        Ok(Box::new(Served {
+            inner: self.inner.open(args, ceiling)?,
+            served: Arc::clone(served),
+        }))
+    }
+}
+
+/// The cursor [`Recorder::open`] hands out: the real relation's own, with every
+/// row it serves counted on the way past.
+struct Served {
+    inner: Box<dyn PfCursor>,
+    served: Arc<AtomicU64>,
+}
+
+impl PfCursor for Served {
+    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        let row = self.inner.next()?;
+        if row.is_some() {
+            self.served.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(row)
     }
 }
 
@@ -606,6 +645,148 @@ fn a_declared_basis_shortens_a_real_text_read_without_moving_the_answer() {
             asked.candidate_free[at] > 0,
             "{side:?}: the ranked read itself must have happened, or the equality above \
              holds over two zeroes"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One lookup, one point read
+// ---------------------------------------------------------------------------
+
+/// The stream `execute` produced for `side`'s stratum.
+fn stream_for<'s, 'd>(
+    streams: &'s mut [StratumStream<'d>],
+    side: Side,
+) -> &'s mut StratumStream<'d> {
+    let stratum = iri(&side.stratum());
+    streams
+        .iter_mut()
+        .find(|stream| stream.stratum == stratum)
+        .expect("every stratum of the fixture runs")
+}
+
+/// **An exclusion lookup is a point read: the producer is invoked once, with the
+/// candidate bound, and serves at most the one row that candidate is.**
+///
+/// The lookup is prepared once per stratum with the candidate as its parameter,
+/// and bound per candidate. The binding has to reach the producer's call as a
+/// BOUND argument: left in the text as a variable and joined against afterwards,
+/// the producer would be invoked with its candidate position free and would serve
+/// its whole ranking for the join to discard all but one row of — once per
+/// frontier candidate, which is the drain the lookup exists to remove, disguised
+/// as a lookup that answers correctly.
+///
+/// So each lookup below is measured against the relation's own served-row count,
+/// taken around that one call. Three candidates are asked, and each is the case a
+/// different part of the lookup answers:
+///
+/// * a candidate the OTHER stratum ranked, which this producer holds a
+///   non-matching document for — `Excluded`, having searched, and serving nothing;
+/// * a candidate THIS stratum ranked — `Possible`, serving exactly its one row;
+/// * a candidate no ranking read of this execution named — `Excluded`, bound by
+///   value rather than by the id a ranking read resolved, and serving nothing.
+///
+/// Every one of them must arrive as one candidate-bound invocation and no free
+/// one, and none may serve more than one row.
+#[test]
+fn an_exclusion_lookup_is_one_bound_invocation_serving_at_most_one_row() {
+    let dataset = dataset();
+    let (registry, recorders) = registry(&dataset, ExclusionBasis::Membership);
+    let statistics = fixture_statistics();
+    let profile = fixture_profile();
+    let request = RetrievalRequest::bounded(request_terms(), TOP_K);
+    let planned = plan(&request, &registry, &statistics).expect("the fixture request plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+    let bundle = compile(&planned, &env).expect("the fixture plan is admitted");
+    let mut execution =
+        block_on(execute(&bundle, &registry, &*dataset)).expect("the fixture units run");
+    let right = &recorders[1];
+    // The first row each stratum ranked: candidates a ranking read of this very
+    // execution named, so the lookup binds them by the dataset id that read resolved.
+    let mut first = |side| {
+        block_on(stream_for(&mut execution.streams, side).stream.next())
+            .expect("the stream reads")
+            .expect("the stratum ranked at least one row")
+            .1
+    };
+    let left_first = first(Side::Left);
+    let right_first = first(Side::Right);
+    assert!(
+        left_first
+            .as_str()
+            .starts_with(&format!("<{}", ex(Side::Left.prefix())))
+            && right_first
+                .as_str()
+                .starts_with(&format!("<{}", ex(Side::Right.prefix()))),
+        "each stratum ranks its own side's documents first: {left_first} / {right_first}"
+    );
+    let stream = &mut stream_for(&mut execution.streams, Side::Right).stream;
+
+    let cases = [
+        (
+            left_first,
+            ExclusionVerdict::Excluded,
+            0,
+            "a candidate the left stratum ranked, which the right index holds only a \
+             non-matching document for",
+        ),
+        (
+            right_first,
+            ExclusionVerdict::Possible,
+            1,
+            "a candidate the right stratum ranked itself",
+        ),
+        (
+            Term::new(format!("<{}>", ex("never-ranked"))),
+            ExclusionVerdict::Excluded,
+            0,
+            "a candidate no ranking read of this execution named",
+        ),
+    ];
+    for (candidate, verdict, rows, case) in cases {
+        let bound_before = right.candidate_bound();
+        let free_before = right.candidate_free();
+        let served_bound_before = right.served_bound();
+        let served_free_before = right.served_free();
+
+        let answered = block_on(stream.exclusion(&candidate)).expect("the lookup answers");
+
+        let report = format!(
+            "{case}: bound invocations +{}, free invocations +{}, rows served bound +{}, \
+             rows served free +{}",
+            right.candidate_bound() - bound_before,
+            right.candidate_free() - free_before,
+            right.served_bound() - served_bound_before,
+            right.served_free() - served_free_before,
+        );
+        assert_eq!(answered, verdict, "{report}");
+        assert_eq!(
+            right.candidate_free() - free_before,
+            0,
+            "the lookup never reached the producer with its candidate free — {report}"
+        );
+        assert_eq!(
+            right.served_free() - served_free_before,
+            0,
+            "so the producer served no row to a free invocation — {report}"
+        );
+        assert_eq!(
+            right.candidate_bound() - bound_before,
+            1,
+            "it reached the producer exactly once, with the candidate bound — {report}"
+        );
+        assert_eq!(
+            right.served_bound() - served_bound_before,
+            rows,
+            "and the producer served that candidate's own row and nothing else — {report}"
+        );
+        assert!(
+            right.served_bound() - served_bound_before <= 1,
+            "a lookup is a point read — {report}"
         );
     }
 }

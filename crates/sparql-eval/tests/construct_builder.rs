@@ -298,12 +298,12 @@ fn successive_appends_keep_minted_blanks_fresh_against_destination_only_nodes() 
 }
 
 #[test]
-fn mutated_construct_is_depth_admitted_before_survey_or_substitution() {
+fn deeply_joined_construct_is_depth_admitted_before_survey_or_substitution() {
     use purrdf_sparql_algebra::{GraphPattern, Query};
     let engine = NativeSparqlEngine::new();
     let data = dataset();
     let prepared = engine.prepare_query("CONSTRUCT { ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }",None).expect("plan");
-    let mut algebra = prepared.query.clone();
+    let mut algebra = prepared.query().clone();
     let Query::Construct { pattern, .. } = &mut algebra else {
         panic!("construct")
     };
@@ -323,11 +323,14 @@ fn mutated_construct_is_depth_admitted_before_survey_or_substitution() {
     algebra
         .validate()
         .expect("structurally valid algebra still requires execution-depth admission");
-    // Public algebra remains mutable, so the publication entry must re-admit it.
-    let mut prepared =
-        purrdf_sparql_eval::PreparedQuery::rewritten(prepared.query.clone(), QueryOptions::EMPTY)
-            .expect("owned admitted plan");
-    prepared.query = algebra;
+    // `algebra` was built as a fresh, owned `Query` — never spliced into an
+    // already-admitted `PreparedQuery` (that field is private with no setter; see
+    // `crates/sparql-eval/src/engine.rs`). `PreparedQuery::rewritten` admits it
+    // legitimately: `Query::validate`'s structural bound is looser than the
+    // execution-depth check the publication entry runs, so admission succeeds here
+    // and the refusal below is entirely the publication entry's own, later check.
+    let prepared = purrdf_sparql_eval::PreparedQuery::rewritten(algebra, QueryOptions::EMPTY)
+        .expect("structurally valid algebra is admitted; only execution depth refuses it");
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let before = state.evidence();
     let mut target = RdfDatasetBuilder::new();
@@ -417,55 +420,36 @@ fn typed_publication_preserves_nested_directional_terms_and_named_statement_meta
 }
 
 #[test]
-fn mutated_construct_literal_is_refused_before_spending_or_publication() {
+fn a_construct_template_with_a_malformed_literal_is_refused_at_admission() {
     use purrdf_sparql_algebra::{Literal, Query, TermPattern};
     use purrdf_sparql_eval::PreparedQuery;
 
     let engine = NativeSparqlEngine::new();
-    let data = dataset();
     let original = engine.prepare_query(
         "CONSTRUCT { ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }",
         None,
     ).expect("plan");
-    let mut prepared = PreparedQuery::rewritten(original.query.clone(), QueryOptions::EMPTY)
-        .expect("admitted plan");
-    let Query::Construct { template, .. } = &mut prepared.query else {
+    // A fresh, owned clone of the admitted algebra — never spliced into the
+    // `PreparedQuery` itself, which carries no such field to splice into any more
+    // (see `crates/sparql-eval/src/engine.rs`'s `PreparedQuery::query`).
+    let mut malformed = original.query().clone();
+    let Query::Construct { template, .. } = &mut malformed else {
         panic!("construct")
     };
     template[0].triple.object = TermPattern::Literal(Literal::new_lang("claim", "en--rtl", None));
-    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-    let before = state.evidence();
-    let mut target = RdfDatasetBuilder::new();
-    let existing = target.intern_iri("https://example.org/existing");
-    let predicate = target.intern_iri(VALUE);
-    target.push_quad(existing, predicate, existing, None);
-    let result = engine.construct_prepared_in_operation_into_view(
-        data.as_ref(),
-        &prepared,
-        &[("s".to_owned(), TermValue::blank("c1"))],
-        QueryOptions::EMPTY,
-        &state,
-        &mut target,
-    );
-    let Err(GraphBuildError::Query(diagnostic)) = result else {
-        panic!("malformed public algebra must be refused")
-    };
+    let diagnostic = PreparedQuery::rewritten(malformed, QueryOptions::EMPTY)
+        .expect_err("a malformed template literal must be refused before a PreparedQuery exists");
     assert_eq!(diagnostic.code, "native-sparql-algebra");
-    assert_eq!(
-        state.evidence(),
-        before,
-        "admission must precede governor work"
-    );
-    let output = target.freeze().expect("unchanged destination");
-    assert_eq!(
-        output.term_count(),
-        2,
-        "no staged terms reached the destination"
-    );
-    assert_eq!(output.quad_count(), 1);
-    assert!(
-        output
-            .quads()
-            .all(|quad| quad.s == existing && quad.o == existing)
-    );
+
+    // This test used to continue from here: forge a `PreparedQuery` carrying the
+    // malformed template directly (bypassing admission via the field's former
+    // public setter) and confirm `construct_prepared_in_operation_into_view`
+    // refused it too, before spending governor fuel or staging any terms. That
+    // downstream re-check is real and unchanged — `check_plan_soundness` runs
+    // `Query::validate` (the very check that just refused `malformed` above) on
+    // every call — but there is no longer a way to hand it a `PreparedQuery` this
+    // check would need to catch: the assertion above shows every legitimate
+    // constructor already refuses this algebra, so no `PreparedQuery` bearing it
+    // can exist to reach that entry point at all. Nothing else in this workspace
+    // depended on the removed assertions.
 }

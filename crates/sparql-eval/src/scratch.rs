@@ -241,6 +241,58 @@ impl ScratchInterner {
         Self::default()
     }
 
+    /// Empty this interner while KEEPING the tables it has already grown.
+    ///
+    /// Observationally a fresh [`Self::new`] — every id it could answer is gone, the
+    /// next mint is [`ScratchId`] zero again, and the minted-byte total the scratch
+    /// ceiling is charged against restarts at zero — and that equality is the whole
+    /// safety argument. A run that reads this interner after another run cleared it
+    /// sees exactly what it would have seen from a brand-new one; what it does not
+    /// pay for is the two allocations growing those tables from empty costs.
+    ///
+    /// # Exhaustiveness is the property, and the compiler holds it
+    ///
+    /// The destructuring `let` below names EVERY field with no `..` rest pattern, so
+    /// a field added to [`ScratchInterner`] later and not cleared here does not
+    /// compile. That matters more than it usually does: a table retained across runs
+    /// and not cleared leaks one run's answer into the next, which is a silently
+    /// wrong answer rather than a visible failure, and it is the exact defect a
+    /// reviewer reading a hand-written list of `.clear()` calls cannot see is
+    /// missing.
+    ///
+    /// `minted_bytes` is reset rather than carried for the same reason, and it is
+    /// the field a careless clear would most plausibly keep "because it is only a
+    /// counter": [`crate::eval::EvalCtx::charge_scratch_growth`] charges the
+    /// DIFFERENCE between this total and what the governor has already consumed, so
+    /// carrying it across runs would silently re-charge one run's minting to the
+    /// next and change where a `ScratchBytes` ceiling trips.
+    pub(crate) fn clear(&mut self) {
+        let Self {
+            values,
+            index,
+            minted_bytes,
+        } = self;
+        values.clear();
+        index.clear();
+        *minted_bytes = 0;
+    }
+
+    /// A conservative byte charge for the tables this interner is RETAINING — the
+    /// capacity it keeps across a [`Self::clear`], not the values it held.
+    ///
+    /// Reported so a retained interner can be charged to
+    /// [`crate::plan_memory::interner_memory_observer`] the way the per-worker
+    /// interners are: retained capacity is retained memory whether or not anything
+    /// is currently in it, and a host that can see a plan's bytes should be able to
+    /// see these too. Excludes allocator overhead and the values' own payloads,
+    /// which a cleared interner no longer owns.
+    pub(crate) fn retained_capacity_bytes(&self) -> usize {
+        self.values
+            .capacity()
+            .saturating_mul(size_of::<TermValue>())
+            .saturating_add(self.index.capacity().saturating_mul(size_of::<ScratchId>()))
+    }
+
     /// Intern a dataset-independent value to a [`SolutionTerm`], **promoting** it to
     /// [`SolutionTerm::Existing`] if `dataset` already contains the term.
     ///

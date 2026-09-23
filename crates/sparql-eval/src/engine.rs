@@ -29,6 +29,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::Arc;
 
+use crate::execution::PreparedExecution;
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, MutableDataset, RdfDataset, RdfDiagnostic,
     SparqlEngine, SparqlRequest, SparqlResult, TermValue, ViewOperationStatus,
@@ -60,8 +61,9 @@ mod prepared_fallible;
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
 pub struct PreparedQuery {
-    /// The parsed algebra.
-    pub query: Query,
+    /// The parsed algebra. Private — see [`Self::query`] for why, and for the
+    /// guarantee that privacy buys.
+    query: Query,
     /// The identity of the property-function registry this plan was parsed and
     /// feasibility-ordered against — empty when there was none.
     ///
@@ -84,17 +86,6 @@ pub struct PreparedQuery {
     /// `check_plan_matches_relations`, which now checks this alongside
     /// [`Self::relations`].
     aggregates: String,
-    /// The variable names an execution of this plan **must** supply through the
-    /// substitution channel, sorted and deduplicated. Empty for every ordinary
-    /// prepare, which promises nothing.
-    ///
-    /// This is a promise the plan was ADMITTED on, not a hint: the feasibility pass
-    /// treated each of these as bound, so a call reached by one of them may have been
-    /// admitted in an access pattern the query text alone does not show. Running the
-    /// plan without supplying one would therefore invoke a relation in a mode it never
-    /// declared, with the argument free — which is why
-    /// [`check_plan_matches_relations`] refuses it by name rather than evaluating it.
-    parameters: Vec<String>,
     memory: PlanCharge,
 }
 
@@ -106,10 +97,9 @@ impl PreparedQuery {
     /// reparses it. Pass the registries under which the rewrite will execute;
     /// their identities are retained with the admitted plan.
     ///
-    /// The public [`Self::query`] field remains mutable for compatibility.
-    /// Prepared execution revalidates its current contents before charging any
-    /// governor and refuses changes that need feasibility replanning. Call this
-    /// constructor again to admit and order such a changed query.
+    /// The admitted algebra is read-only after this returns — see [`Self::query`].
+    /// Call this constructor again to admit and order a changed query; there is no
+    /// way to edit one in place.
     ///
     /// # Errors
     ///
@@ -129,7 +119,7 @@ impl PreparedQuery {
             &query,
             options.property_functions(),
             options.aggregates(),
-            &[],
+            &crate::DetHashSet::default(),
         )?;
         let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions())
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
@@ -139,7 +129,6 @@ impl PreparedQuery {
             planned.unwrap_or(query),
             relations,
             aggregates,
-            Vec::new(),
             memory,
         ))
     }
@@ -148,45 +137,44 @@ impl PreparedQuery {
         query: Query,
         relations: String,
         aggregates: String,
-        parameters: Vec<String>,
         memory: &PlanMemoryObserver,
     ) -> Self {
-        let bytes = plan_payload_bytes(
-            &query,
-            relations.capacity(),
-            aggregates.capacity(),
-            &parameters,
-        );
+        let bytes = plan_payload_bytes(&query, relations.capacity(), aggregates.capacity());
         Self {
             query,
             relations,
             aggregates,
-            parameters,
             memory: PlanCharge::new(memory, bytes),
         }
     }
 
-    /// The variable names an execution of this plan must supply, sorted and
-    /// deduplicated — empty for a plan that declared none.
+    /// The admitted algebra.
     ///
-    /// A caller reads this to find out what a plan it was handed still needs; the
-    /// engine reads it to refuse an execution that did not supply one. See
-    /// [`NativeSparqlEngine::prepare_query_with_parameters`].
+    /// Read-only by construction: this plan's `relations` and `aggregates`
+    /// fingerprints were computed from — and its feasibility order was derived
+    /// against — exactly this tree, at admission time. An earlier revision of this
+    /// type exposed the field this returns as `pub query: Query`, so a caller could
+    /// overwrite it and produce a `PreparedQuery` whose algebra disagreed with its
+    /// own fingerprints or had never passed admission at all; every entry point
+    /// that accepts a `&PreparedQuery` had to defend against that by revalidating
+    /// in full on every call. Privatizing the field removes the forgery rather than
+    /// only detecting it: there is no longer a constructor or a setter that can
+    /// hand back a `PreparedQuery` whose fields disagree, so a caller holding one
+    /// holds a value that was admitted, in full, exactly once.
     #[must_use]
-    pub fn parameters(&self) -> &[String] {
-        &self.parameters
+    pub fn query(&self) -> &Query {
+        &self.query
     }
 
-    /// Conservative current payload charge, including caller changes to the algebra.
-    /// Shared strings are charged per occurrence. Excludes allocator overhead,
-    /// the outer plan's `Arc` header, and shared accounting storage.
+    /// Conservative current payload charge for this admitted plan. Shared strings
+    /// are charged per occurrence. Excludes allocator overhead, the outer plan's
+    /// `Arc` header, and shared accounting storage.
     #[must_use]
     pub fn retained_size_bytes(&self) -> usize {
         plan_payload_bytes(
             &self.query,
             self.relations.capacity(),
             self.aggregates.capacity(),
-            &self.parameters,
         )
     }
 
@@ -201,7 +189,6 @@ fn plan_payload_bytes(
     query: &Query,
     relations_capacity: usize,
     aggregates_capacity: usize,
-    parameters: &[String],
 ) -> usize {
     size_of::<PreparedQuery>()
         .saturating_add(
@@ -211,60 +198,63 @@ fn plan_payload_bytes(
         )
         .saturating_add(relations_capacity)
         .saturating_add(aggregates_capacity)
-        .saturating_add(parameters.len().saturating_mul(size_of::<String>()))
-        .saturating_add(
-            parameters
-                .iter()
-                .fold(0_usize, |total, name| total.saturating_add(name.capacity())),
-        )
 }
 
+/// Admit `query`: structurally valid, and feasibility ordered against the supplied
+/// registries.
+///
+/// # Why the evaluator's nesting guard is deliberately NOT here
+///
+/// [`crate::governor::soundness::validate_graph_pattern_depth`] refuses an algebra
+/// nested past `MAX_GRAPH_PATTERN_DEPTH`, and running it here would look like the
+/// obvious place: admission is once, and the plan is immutable afterwards. It is
+/// the wrong place, and the reason is an acceptance boundary this crate states and
+/// tests — `prepared_admission.rs`'s
+/// `parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance`.
+/// Preparation accepts **the parser's envelope**; the evaluator's narrower guard
+/// belongs to EXECUTION. A flat `OPTIONAL {} OPTIONAL {} …` spine uses two brace
+/// levels, is inside the parser's combinator budget, and lowers to a left-nested
+/// `LeftJoin` chain far deeper than the evaluator's limit: preparing it must
+/// succeed and evaluating it must return a typed diagnostic. Moving the guard here
+/// was tried and turned preparing that query — and one of this workspace's own
+/// generated corpus queries — into a refusal. That is over-refusal: nothing looks
+/// broken, a refusal reads as strictness, and a caller that only prepares a plan
+/// gets an error for a plan that was always legal to prepare.
+///
+/// The stack-safety backstop admission DOES need is already here and is a different,
+/// looser bound: [`purrdf_sparql_algebra::Query::validate`] refuses past
+/// `MAX_GRAPH_PATTERN_NODES + 8 * MAX_GRAPH_PATTERN_DEPTH` structural nodes,
+/// iteratively, before the recursive feasibility pass below descends the tree.
+///
+/// `parameters` are the variables a prepared execution will bind on every run — see
+/// [`NativeSparqlEngine::prepare_execution`] — and are counted as bound where that
+/// binding lands. Every other admission passes the empty set and assumes nothing.
 fn admit_algebra(
     query: &Query,
     relations: &crate::property_fn::PropertyFunctionRegistry,
     aggregates: &crate::agg_fn::AggregateRegistry,
-    parameters: &[String],
+    parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
 ) -> Result<Option<Query>, RdfDiagnostic> {
     query
         .validate()
         .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))?;
-    crate::property_fn_plan::plan_query(
-        query,
-        relations,
-        aggregates,
-        &crate::property_fn_plan::parameter_set(parameters),
-    )
-    .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
-}
-
-/// The declared-parameter list a prepare retains, from the names a caller supplied:
-/// sorted and deduplicated.
-///
-/// Both normalizations are load-bearing rather than tidiness. The list joins the plan
-/// cache key, so two callers spelling the same promise in two orders — or one of them
-/// twice — must reach the same entry rather than two entries holding identical plans.
-/// And the list is what an execution's refusal names, so a duplicate would report the
-/// same missing parameter twice.
-fn declared_parameters(names: &[&str]) -> Vec<String> {
-    let mut declared: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
-    declared.sort_unstable();
-    declared.dedup();
-    declared
+    crate::property_fn_plan::plan_query(query, relations, aggregates, parameters)
+        .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
 }
 
 /// A parse-memoizing cache keyed on `(base IRI, extension-function namespace set,
 /// property-function namespace set, property-function exact-IRI set,
-/// property-function registry fingerprint, declared parameters, query text)`.
+/// property-function registry fingerprint, declared execution parameters, query text)`.
 ///
-/// The declared parameters are there for the same reason the fingerprints are, one step
-/// further on: a plan admitted on the promise that `?x` will be substituted
-/// ([`NativeSparqlEngine::prepare_query_with_parameters`]) may have ordered — or
-/// admitted at all — a call the same text without that promise cannot serve. A key
-/// without them would hand a caller who promises nothing a plan that only runs when a
-/// promise is kept.
+/// The declared execution parameters are there for the reason the fingerprints are,
+/// one step further on: a plan [`NativeSparqlEngine::prepare_execution`] admits counts
+/// its parameters as bound, so it may have ordered — or admitted at all — a
+/// property-function call the same text prepared with no parameters cannot serve. A
+/// key without them would hand a caller that binds nothing a plan that is only sound
+/// when every parameter is bound. Every entry but `prepare_execution` declares none.
 ///
-/// The registry fingerprints are there because a cached entry is not merely a parse: a
-/// query carrying a property-function call is also **feasibility-ordered** against the
+/// The registry fingerprints are there because a cached entry is not merely a parse: a query
+/// carrying a property-function call is also **feasibility-ordered** against the
 /// registry's declarations before it is stored (the feasibility-ordering pass). Two
 /// differently-configured registries can order the same text differently, so a key
 /// without the registry's fingerprint would hand the second host the first host's plan.
@@ -450,26 +440,29 @@ impl PlanCache {
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_in_env_with_parameters(query, base_iri, env, &[])
+        self.prepare_execution_plan(query, base_iri, env, &[])
     }
 
-    /// [`Self::prepare_in_env`], admitting the query on the caller's promise that
-    /// every name in `parameters` will be supplied through the substitution channel
-    /// at execution.
+    /// [`Self::prepare_in_env`] for a prepared execution that will bind every name in
+    /// `parameters` on every run, admitted with those names counted as bound.
     ///
-    /// See [`NativeSparqlEngine::prepare_query_with_parameters`] for what the promise
-    /// buys, what it costs, and how it is enforced.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::prepare_with_relations`].
-    pub fn prepare_in_env_with_parameters(
+    /// `parameters` must be sorted and free of repeats, so that one set of declared
+    /// names reaches one cache entry whatever order a caller spelled it in —
+    /// [`NativeSparqlEngine::prepare_execution`] is the caller that establishes both.
+    /// Crate-private because a plan admitted on that promise is only sound behind a
+    /// handle that refuses to run with a parameter unbound, and
+    /// [`PreparedExecution`] is that handle.
+    pub(crate) fn prepare_execution_plan(
         &mut self,
         query: &str,
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
         parameters: &[&str],
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        debug_assert!(
+            parameters.windows(2).all(|pair| pair[0] < pair[1]),
+            "declared execution parameters reach the plan cache sorted and without repeats"
+        );
         self.prepare_keyed(
             query,
             base_iri,
@@ -478,7 +471,7 @@ impl PlanCache {
             env.aggregates(),
             env.relations_fingerprint(),
             env.aggregates_fingerprint(),
-            &declared_parameters(parameters),
+            parameters,
         )
     }
 
@@ -505,7 +498,7 @@ impl PlanCache {
         aggregates: &crate::agg_fn::AggregateRegistry,
         fingerprint: &str,
         agg_fingerprint: &str,
-        parameters: &[String],
+        parameters: &[&str],
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         // The key is built into the cache's own reusable buffer and probed as a
         // borrowed slice, so a hit costs no allocation at all. The buffer is moved
@@ -538,12 +531,16 @@ impl PlanCache {
         let parsed = parser
             .parse_query_with(query, options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
-        let planned = admit_algebra(&parsed, relations, aggregates, parameters)?;
+        let planned = admit_algebra(
+            &parsed,
+            relations,
+            aggregates,
+            &crate::property_fn_plan::parameter_set(parameters),
+        )?;
         let prepared = Arc::new(PreparedQuery::admitted(
             planned.unwrap_or(parsed),
             fingerprint.to_owned(),
             agg_fingerprint.to_owned(),
-            parameters.to_vec(),
             &self.memory,
         ));
         let bytes = key
@@ -575,7 +572,7 @@ fn plan_cache_key_into(
     options: &ParserOptions,
     relations: &str,
     aggregates: &str,
-    parameters: &[String],
+    parameters: &[&str],
 ) {
     fn length(out: &mut Vec<u8>, value: usize) {
         out.extend_from_slice(&(value as u64).to_le_bytes());
@@ -611,11 +608,8 @@ fn plan_cache_key_into(
             field(out, value);
         }
     }
-    // The declared parameters join the key for the reason the registry fingerprints
-    // do: the same text under a different promise is admitted differently. A plan
-    // prepared on the promise that `?x` is supplied may have ordered — or admitted at
-    // all — a call the same text without that promise cannot serve, so a key without
-    // them would hand the second caller the first caller's plan.
+    // The declared execution parameters, for the reason the registry fingerprints are
+    // here: the same text under a different declaration is admitted differently.
     length(out, parameters.len());
     for value in parameters {
         field(out, value);
@@ -786,60 +780,6 @@ impl NativeSparqlEngine {
         self.prepare_for(query, base_iri, options.env)
     }
 
-    /// [`Self::prepare_query_with_options`], admitted on the caller's **declaration**
-    /// that every name in `parameters` will be supplied through the substitution
-    /// channel when the plan is run.
-    ///
-    /// # What the declaration is for
-    ///
-    /// A property-function call is admitted HERE, at prepare, in the access pattern
-    /// the query text shows — a position is bound when its term is a constant or a
-    /// variable an earlier atom binds, and free otherwise. A caller that prepares once
-    /// and then runs the plan many times, substituting a different term for the same
-    /// variable each time, is in a bind that no reading of the text can resolve: the
-    /// variable is free in the text and bound in every execution. Admitted as free, the
-    /// call is matched against the relation's general mode, and the relation is then
-    /// handed a bound argument in a pattern it never declared — which is a different
-    /// question from the one it declared an answer to.
-    ///
-    /// Naming those variables here closes that gap. They enter the feasibility pass as
-    /// bound, at the point the substitution really binds them (the core `WHERE`
-    /// pattern), so the call is admitted in the pattern it is actually invoked in, and
-    /// a relation that declares a mode for that pattern answers the question that
-    /// pattern asks.
-    ///
-    /// # The declaration is enforced, because otherwise it would be unsound
-    ///
-    /// A plan admitted on this promise is refused at execution unless every name is
-    /// supplied — see [`Self::query_prepared_governed_view`] and every other prepared
-    /// entry, which all check it before any evaluation. The refusal names the
-    /// parameter that was missing. Running such a plan with the variable left free
-    /// would invoke a relation in a mode nobody declared, and that is exactly what the
-    /// promise was traded for.
-    ///
-    /// The plan is cached under a key that includes the declaration, so it can never be
-    /// confused with the same text prepared without one.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if a
-    /// property-function call cannot be admitted against the registry — including one
-    /// that is infeasible even with the declared parameters treated as bound.
-    pub fn prepare_query_with_parameters(
-        &self,
-        query: &str,
-        base_iri: Option<&str>,
-        options: QueryOptions<'_>,
-        parameters: &[&str],
-    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.cache.borrow_mut().prepare_in_env_with_parameters(
-            query,
-            base_iri,
-            options.env,
-            parameters,
-        )
-    }
-
     /// Evaluate a plan returned by [`Self::prepare_query`] or
     /// [`Self::prepare_query_with_options`].
     ///
@@ -885,7 +825,7 @@ impl NativeSparqlEngine {
         substitutions: &[(String, TermValue)],
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        check_plan_matches_relations(prepared, options, Prebindings::Owned(substitutions))?;
+        check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
@@ -935,7 +875,7 @@ impl NativeSparqlEngine {
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
             (|| {
-                check_plan_matches_relations(prepared, options, Prebindings::Owned(substitutions))?;
+                check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
                 let ctx = self.eval_ctx(dataset);
                 let mut ctx = apply_query_options(ctx, options)?;
                 let outcome = match options.prebinding {
@@ -1126,7 +1066,7 @@ impl NativeSparqlEngine {
         source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        check_plan_matches_relations(prepared, options, Prebindings::Owned(substitutions))?;
+        check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
         // `prepared.relations` is the registry fingerprint computed once at prepare and
         // just validated against `options.property_functions()` above — reused rather than
         // re-derived, so this receipt's identity and the plan cache's key never disagree.
@@ -2093,6 +2033,315 @@ impl NativeSparqlEngine {
         Ok(materialize(outcome, &ctx))
     }
 
+    /// Prepare `query` once as a **parameterized execution** that can be bound and
+    /// run many times.
+    ///
+    /// This is the object [`PlanCache`]'s documentation points callers at: pass
+    /// changing data as substitutions to a prepared plan rather than splicing it into
+    /// query text. Splicing mints a new query, and a new query misses the plan cache,
+    /// is re-parsed and is re-admitted; binding a parameter writes a cell.
+    ///
+    /// `parameters` names the variables the caller will bind. They are interned here,
+    /// once, so running never rebuilds a `Variable` from a borrow.
+    ///
+    /// They are also what a property-function call in `query` is admitted against. A
+    /// call is admitted HERE, once, in the access pattern the text shows — and a
+    /// parameter is a variable in the text but bound on every run, since a run with a
+    /// parameter unbound is refused. So a call whose argument is a parameter is
+    /// admitted with that argument bound, wherever a run's rewrite really binds it: in
+    /// the leaves the value is written into, and in expressions over the rows it is
+    /// joined onto. A relation that declares a mode for that bound pattern is invoked
+    /// in it, which is what lets one prepared execution ask a producer a point
+    /// question per run rather than scan it. Elsewhere — an `OPTIONAL`'s right arm, a
+    /// nested sub-`SELECT` — the parameter is free as far as the call can tell, and it
+    /// is admitted as free.
+    ///
+    /// # Errors
+    ///
+    /// [`RdfDiagnostic`] if `query` does not parse or is refused admission, or if
+    /// `parameters` repeats a name — a repeated parameter has no single slot to bind
+    /// and would make [`PreparedExecution::bind`] ambiguous about which occurrence it
+    /// set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    /// let engine = NativeSparqlEngine::new();
+    /// let execution = engine.prepare_execution(
+    ///     "SELECT ?o WHERE { ?this <http://example.org/p> ?o }",
+    ///     None,
+    ///     &["this"],
+    ///     QueryOptions::EMPTY,
+    /// )?;
+    /// assert_eq!(execution.parameters().len(), 1);
+    /// assert_eq!(execution.slot("this"), Some(0));
+    /// assert_eq!(execution.slot("absent"), None);
+    /// # Ok::<(), purrdf_core::RdfDiagnostic>(())
+    /// ```
+    pub fn prepare_execution(
+        &self,
+        query: &str,
+        base_iri: Option<&str>,
+        parameters: &[&str],
+        options: QueryOptions<'_>,
+    ) -> Result<PreparedExecution, RdfDiagnostic> {
+        for (index, name) in parameters.iter().enumerate() {
+            if parameters[..index].contains(name) {
+                return Err(RdfDiagnostic::error(
+                    "native-sparql-execution-parameter",
+                    format!("parameter {name:?} is declared more than once"),
+                ));
+            }
+        }
+        // Sorted for the plan cache key, so one declaration reaches one entry whatever
+        // order it was spelled in; the handle below keeps declaration order, which is
+        // what its slots are numbered by.
+        let mut declared = parameters.to_vec();
+        declared.sort_unstable();
+        let prepared = self.cache.borrow_mut().prepare_execution_plan(
+            query,
+            base_iri,
+            options.env,
+            &declared,
+        )?;
+        // The whole admission check, run ONCE here rather than on every run of this
+        // execution: the algebra soundness walk, the feasibility replanning walk,
+        // and the agreement between this plan and `options`' registries. Nothing it
+        // establishes can come undone — the plan behind the `Arc` is immutable and
+        // unreachable for mutation, and a later run that supplied DIFFERENT registries
+        // is caught by the fingerprint comparison the run still performs. This is the
+        // same refusal a first run would have produced, raised earlier; see
+        // [`check_prepared_registries_unchanged`]. The replanning walk runs under the
+        // same declared parameters the plan was admitted under.
+        check_plan_matches_relations(
+            &prepared,
+            options,
+            &crate::property_fn_plan::parameter_set(&declared),
+        )?;
+        Ok(PreparedExecution::new(
+            prepared,
+            parameters
+                .iter()
+                .map(|name| crate::substitute::interned_variable(name))
+                .collect(),
+        ))
+    }
+
+    /// Run `execution` against `dataset` with its current bindings.
+    ///
+    /// The plan is already prepared and admitted, so this does no cache probe and no
+    /// parse; and the bindings are read from the execution's own parallel slices, so
+    /// passing them costs no list to build. It still checks the ONE thing prepare
+    /// could not have fixed in advance: that `options` names the SAME
+    /// property-function and custom-aggregate registries
+    /// [`Self::prepare_execution`] admitted the plan against (see the internal
+    /// `check_plan_matches_relations`). `execution` and `options` are supplied by
+    /// two different calls, so nothing else stops a caller from preparing under one
+    /// registry and running under another; without this check that disagreement
+    /// would evaluate silently rather than refuse, because a plan prepared with no
+    /// registry has already lowered every registered relation's predicate to an
+    /// ordinary triple pattern, and a `Custom` aggregate call was admitted (its
+    /// arity checked) against whichever registry resolved its IRI at prepare time.
+    ///
+    /// `&mut execution` is what makes an execution already in flight unreachable —
+    /// see [`crate::execution`] for why that is a guarantee rather than a limitation.
+    ///
+    /// A `compile_fail` block alone passes for *any* error, including a typo, so the
+    /// pair below follows the precedent at [`crate::property_fn::RankFidelity`]: the
+    /// twin that differs only in the field under test — here, whether the nested
+    /// call reaches the SAME handle or a DIFFERENT one — is the half that shows the
+    /// handle is the reason the first one fails to compile.
+    ///
+    /// Re-entering the same handle from inside its own run is a borrow-check error:
+    ///
+    /// ```compile_fail,E0499
+    /// # use purrdf_core::RdfDatasetBuilder;
+    /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    /// let engine = NativeSparqlEngine::new();
+    /// let data = RdfDatasetBuilder::new().freeze().unwrap();
+    /// let mut execution = engine
+    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .unwrap();
+    /// engine
+    ///     .execute(&mut execution, &*data, QueryOptions::EMPTY, |_outcome| {
+    ///         // The SAME handle, borrowed again while the outer call above still
+    ///         // holds it: `cannot borrow `execution` as mutable more than once`.
+    ///         engine
+    ///             .execute(&mut execution, &*data, QueryOptions::EMPTY, |_| ())
+    ///             .unwrap();
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// — while the byte-identical twin, differing only in reaching a SECOND,
+    /// DISTINCT handle from the nested call, compiles and runs:
+    ///
+    /// ```
+    /// # use purrdf_core::RdfDatasetBuilder;
+    /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    /// let engine = NativeSparqlEngine::new();
+    /// let data = RdfDatasetBuilder::new().freeze().unwrap();
+    /// let mut execution_a = engine
+    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .unwrap();
+    /// let mut execution_b = engine
+    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .unwrap();
+    /// engine
+    ///     .execute(&mut execution_a, &*data, QueryOptions::EMPTY, |_outcome| {
+    ///         // A DIFFERENT handle, borrowed while the outer call above holds
+    ///         // `execution_a`: two distinct borrows, so this is unremarkable.
+    ///         engine
+    ///             .execute(&mut execution_b, &*data, QueryOptions::EMPTY, |_| ())
+    ///             .unwrap();
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`RdfDiagnostic`] if any parameter is still unbound, if `options` supplies a
+    /// property-function or custom-aggregate registry that disagrees with the one
+    /// `execution` was prepared against (`native-sparql-property-function` or
+    /// `native-sparql-aggregate-function`), or if evaluation fails. An unbound
+    /// parameter is refused rather than treated as unrestricted: running a query
+    /// whose focus was never supplied would answer over every subject, which is a
+    /// silently wider answer rather than a visible mistake.
+    pub fn execute<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<R, RdfDiagnostic> {
+        let unbound = execution.unbound();
+        if !unbound.is_empty() {
+            return Err(RdfDiagnostic::error(
+                "native-sparql-execution-parameter",
+                format!("parameters still unbound: {}", unbound.join(", ")),
+            ));
+        }
+        check_prepared_registries_unchanged(&execution.prepared, options)?;
+        let ctx = self.eval_ctx(dataset);
+        let mut ctx = apply_query_options(ctx, options)?;
+        // This run's scratch interner comes from the execution's retained workspace
+        // rather than from the context's own lazy one — emptied by the previous run
+        // but still holding its tables. See `execution::ExecutionWorkspace`.
+        ctx.scratch = execution.check_out_workspace();
+        let evaluated = {
+            // The substituted plan, from the execution's own retained tree where it
+            // has one. Both lanes reach it through the same call, so which rewrite
+            // ran is a property of `options` in one place rather than of two call
+            // sites. Scoped so its borrow of `execution` ends before the workspace
+            // goes back.
+            match execution.substituted(options.prebinding) {
+                Ok(substituted) => evaluate_query(substituted.query(), &mut ctx).map_err(|e| {
+                    RdfDiagnostic::error(
+                        eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                        e.to_string(),
+                    )
+                }),
+                Err(refused) => Err(refused),
+            }
+        };
+        // `visit` runs BEFORE the workspace goes back, because the outcome it reads
+        // resolves `SolutionTerm::Computed` ids through this context's scratch.
+        let answer = evaluated.map(|outcome| visit(borrow_outcome(&outcome, &ctx)));
+        execution.check_in_workspace(&mut ctx.scratch);
+        answer
+    }
+
+    /// [`Self::execute`] under an operation budget: the governed twin, and the entry
+    /// a SHACL validation running with governors installed uses.
+    ///
+    /// [`Self::execute`] is to [`Self::query_interned_view`] exactly what this is to
+    /// [`Self::query_governed_interned_in_operation`] — same admission, same budget,
+    /// same receipt, and the only difference from the `&str` door is where the plan
+    /// and the bindings come from.
+    ///
+    /// # Why this exists rather than a flag on [`Self::execute`]
+    ///
+    /// A caller that can run governed or ungoverned has to be able to spell BOTH on
+    /// the prepared door, or it keeps the `&str` door alive for one of the two
+    /// branches — and a module whose queries reach the engine through two different
+    /// doors can grow a third that quietly runs ungoverned. The SHACL side collapses
+    /// every one of its queries into a single function precisely so governor
+    /// inheritance is a property of the module rather than of separately-remembered
+    /// call sites; without a governed prepared entry, preparing anything would split
+    /// that door back open.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::execute`]: [`RdfDiagnostic`] if any parameter is still unbound, if
+    /// `options` names a property-function or custom-aggregate registry that
+    /// disagrees with the one `execution` was prepared against, or if evaluation
+    /// fails. A tripped governor is **not** an error — it surfaces as
+    /// [`InternedGoverned::BudgetExhausted`] carrying its certified partial answers,
+    /// and `visit` does not run, exactly as on the `&str` door.
+    pub fn execute_governed_in_operation<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d>,
+        state: &Arc<GovernorState>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
+        let unbound = execution.unbound();
+        if !unbound.is_empty() {
+            return Err(RdfDiagnostic::error(
+                "native-sparql-execution-parameter",
+                format!("parameters still unbound: {}", unbound.join(", ")),
+            ));
+        }
+        check_prepared_registries_unchanged(&execution.prepared, options)?;
+        let prepared = Arc::clone(&execution.prepared);
+        let identity = relation_identity(&prepared, options.property_functions())?;
+        if let Some(refused) = self.admit_refusal(
+            dataset,
+            &prepared.query,
+            options.property_functions(),
+            state,
+            &identity,
+        ) {
+            return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
+        }
+        let mut ctx = self.governed_ctx(dataset, None, state, options)?;
+        // The retained workspace, exactly as on the ungoverned twin — and taken
+        // here rather than inside `governed_ctx` so both lanes spell it at the same
+        // level, beside the `substituted` call whose borrow it has to sit outside.
+        ctx.scratch = execution.check_out_workspace();
+        let evaluated = match execution.substituted(options.prebinding) {
+            Ok(substituted) => {
+                evaluate_query_evaluated(substituted.query(), &mut ctx).map_err(|e| {
+                    RdfDiagnostic::error(
+                        eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                        e.to_string(),
+                    )
+                })
+            }
+            Err(refused) => Err(refused),
+        };
+        let answer = evaluated.map(|evaluated| {
+            match resolve_governed(evaluated, &mut ctx, state, identity) {
+                GovernedResolution::Complete {
+                    outcome,
+                    evidence,
+                    relations,
+                } => InternedGoverned::Complete {
+                    value: visit(borrow_outcome(&outcome, &ctx)),
+                    evidence,
+                    relations,
+                },
+                GovernedResolution::Exhausted(exhausted) => {
+                    InternedGoverned::BudgetExhausted(Box::new(exhausted))
+                }
+            }
+        });
+        execution.check_in_workspace(&mut ctx.scratch);
+        answer
+    }
+
     /// [`Self::query_with_options_view`] on the **interned** egress: `visit` is
     /// handed the result while this evaluation is still alive.
     ///
@@ -2166,11 +2415,7 @@ impl NativeSparqlEngine {
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
         let prepared = self.prepare_for(request.query, request.base_iri, options.env)?;
-        check_plan_matches_relations(
-            &prepared,
-            options,
-            Prebindings::Borrowed(request.substitutions),
-        )?;
+        check_plan_matches_relations(&prepared, options, &crate::DetHashSet::default())?;
         let identity = relation_identity(&prepared, options.property_functions())?;
         if let Some(refused) = self.admit_refusal(
             dataset,
@@ -2378,7 +2623,7 @@ pub(crate) fn eval_diagnostic_code(
     e.diagnostic_code().unwrap_or(fallback)
 }
 
-/// Evaluate `prepared`, applying any pre-binding `substitutions` first (GAP-A).
+/// Evaluate `prepared`, applying any pre-binding `substitutions` first.
 ///
 /// When there are no substitutions the cached parse is evaluated directly (the hot
 /// path). Otherwise the cached parse is **cloned** and rewritten — the substitution
@@ -2605,90 +2850,161 @@ impl Default for QueryOptions<'_> {
 /// `native-sparql-aggregate-function`) when either identity differs, or when a relation or
 /// an aggregate panics while its declaration is read to compute the supplied registry's
 /// fingerprint.
-/// Hold an execution to the declaration its plan was admitted on: every name in
-/// [`PreparedQuery::parameters`] must appear in `substitutions`.
 ///
-/// # Why this is a refusal and not a shrug
-///
-/// [`NativeSparqlEngine::prepare_query_with_parameters`] admits a call in the access
-/// pattern the promised substitution produces — a position the text leaves free is
-/// treated as bound, and the relation's declaration is read for THAT pattern. An
-/// execution that then leaves the variable free invokes the relation in a pattern it
-/// may never have declared, asking it a question it did not offer an answer to. Nothing
-/// downstream can notice: the relation receives a free argument, answers whatever its
-/// general mode answers, and the rows look like rows. So the check belongs here, at the
-/// gate every prepared execution passes through, and it names the parameter rather than
-/// reporting that something was wrong.
-///
-/// The ordinary plan declares nothing and this returns immediately, having read one
-/// length.
-///
-/// # Errors
-///
-/// An [`RdfDiagnostic`] (`native-sparql-prepared-parameter`) naming the first missing
-/// parameter in the plan's own sorted order, so the same omission reports the same way
-/// on every run.
-fn check_parameters_supplied(
-    prepared: &PreparedQuery,
-    substitutions: Prebindings<'_>,
-) -> Result<(), RdfDiagnostic> {
-    if prepared.parameters.is_empty() {
-        return Ok(());
-    }
-    // Linear in the product on purpose: a declaration is the handful of variables one
-    // prepared lookup substitutes per call, and a set would cost an allocation per
-    // execution to avoid a comparison that never runs more than a few times — the same
-    // trade `crate::substitute::has_repeated_variable` makes over the same list.
-    let Some(missing) = prepared.parameters.iter().find(|declared| {
-        !substitutions
-            .iter()
-            .any(|(supplied, _)| supplied == *declared)
-    }) else {
-        return Ok(());
-    };
-    let declared = prepared.parameters.join(", ");
-    Err(RdfDiagnostic::error(
-        "native-sparql-prepared-parameter",
-        format!(
-            "this plan was prepared on the declaration that [{declared}] would be supplied as \
-             substitutions, and `{missing}` was not supplied; the declaration is what admitted \
-             its property-function calls in the access pattern a bound `{missing}` produces, so \
-             running it without one would invoke a relation in a mode nobody declared. Supply \
-             every declared parameter, or prepare the query with \
-             `NativeSparqlEngine::prepare_query_with_options`, which declares none"
-        ),
-    ))
-}
-
+/// `parameters` is the set the plan was ADMITTED with — the declared parameters of a
+/// [`PreparedExecution`], empty for every other plan. The replanning walk asks whether
+/// the admitted algebra is still the algebra these registries produce, and it was
+/// produced under that set; replanning without it would refuse a sound plan whose calls
+/// were admitted on a parameter being bound, or order it differently and report the
+/// difference as a plan that needs replanning.
 fn check_plan_matches_relations(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
-    substitutions: Prebindings<'_>,
+    parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
 ) -> Result<(), RdfDiagnostic> {
-    check_parameters_supplied(prepared, substitutions)?;
+    check_plan_soundness(prepared)?;
+    check_plan_matches_registries(prepared, options, parameters)
+}
+
+/// A prepared execution's per-run admission check: the registries have not changed
+/// since [`NativeSparqlEngine::prepare_execution`] admitted this plan against them.
+///
+/// # Why this is the whole check here, and would not be anywhere else
+///
+/// [`check_plan_matches_relations`] does three things: a soundness walk over the
+/// algebra, a feasibility replanning walk, and a comparison of `options`' registry
+/// fingerprints against the ones the prepared query carries. The first two allocate a
+/// traversal stack each and
+/// grow it with the query, and on a prepared execution they are pure waste — they
+/// re-derive per run a fact that was established before the first run and cannot have
+/// come undone. `prepare_execution` runs all three, once; a
+/// [`PreparedExecution`] then holds that plan behind an `Arc<PreparedQuery>` it never
+/// hands out mutably, so the algebra those walks were performed over is the algebra
+/// every run evaluates.
+///
+/// What a run CAN change is its `options`, which arrive from the run rather than from
+/// the preparation. So the fingerprints are compared every time, and a run that
+/// supplies different registries is refused by name exactly as before. Fingerprint
+/// equality is already this module's standard for "the same registry for planning
+/// purposes" — it is the criterion [`check_plan_matches_relations`] itself ends with —
+/// so equal fingerprints mean the admission that passed at preparation is the
+/// admission this run needs.
+///
+/// **This reasoning is available here and nowhere else in this file.** It rests
+/// entirely on `PreparedExecution`'s construction: its plan was parsed and admitted
+/// under the fingerprints it carries, [`PreparedQuery::query`] cannot be replaced
+/// afterwards (the field behind it is private — there is no setter), and
+/// `PreparedExecution` itself hands its plan out only behind a shared reference. So
+/// the fingerprints on the plan a run reaches are guaranteed to be the ones
+/// `prepare_execution` admitted it under, and a run that finds them still equal to
+/// `options`' fingerprints has re-derived exactly the fact `prepare_execution`
+/// already established.
+///
+/// Every OTHER entry takes a bare `&PreparedQuery` with no such tie: the same
+/// admitted plan is documented to be reusable across calls that name DIFFERENT
+/// registries (see [`PreparedQuery::relations`]), which is a deliberately supported
+/// pattern, not a hazard — a host that resolves its property functions once and
+/// then queries under several registry configurations relies on it. A fingerprint
+/// match at one of those calls says only that THIS call's registry happens to agree
+/// with the one the plan was admitted under; it carries none of `PreparedExecution`'s
+/// guarantee that no OTHER registry could have been supplied in between, because
+/// nothing stops the very next call on the same `&PreparedQuery` from naming a third
+/// registry entirely. So those entries must keep running the full check — the
+/// soundness walk and the replanning walk, not just the fingerprint comparison —
+/// and do.
+///
+/// # Errors
+///
+/// An [`RdfDiagnostic`] (`native-sparql-property-function` or
+/// `native-sparql-aggregate-function`) when either registry differs from the one this
+/// plan was admitted against, or when reading a registry's declarations to compute its
+/// fingerprint fails.
+fn check_prepared_registries_unchanged(
+    prepared: &PreparedQuery,
+    options: QueryOptions<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions())
+        .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+    if supplied != prepared.relations {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-property-function",
+            "this prepared execution was prepared against a different property-function \
+             registry than the one supplied for its evaluation; prepare it with \
+             `NativeSparqlEngine::prepare_execution` under the SAME `QueryOptions` the \
+             evaluation uses, because the registry is what decides which predicates are calls",
+        ));
+    }
+    let supplied_aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
+        .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+    if supplied_aggregates != prepared.aggregates {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-aggregate-function",
+            "this prepared execution was prepared against a different custom-aggregate \
+             registry than the one supplied for its evaluation; prepare it with \
+             `NativeSparqlEngine::prepare_execution` under the SAME `QueryOptions` the \
+             evaluation uses, because the registry is what a `Custom` aggregate IRI resolves \
+             against",
+        ));
+    }
+    Ok(())
+}
+
+/// The **plan-only** half of [`check_plan_matches_relations`]: the structural
+/// soundness walk over the algebra itself, which depends on nothing but the plan.
+///
+/// # The nesting guard that used to sit beside this walk is gone, not moved
+///
+/// [`crate::governor::soundness::validate_graph_pattern_depth`] ran here too, over
+/// `prepared.query` — and then ran AGAIN, per evaluation, inside
+/// [`crate::eval::prepare_query_context`]. Two walks of a tree whose answer cannot
+/// differ between them, one of which allocated and grew a traversal stack on every
+/// call of every `&PreparedQuery` entry.
+///
+/// Exactly one of the two could go, and it is this one, because the other is not a
+/// duplicate of it: `prepare_query_context` walks the tree actually being
+/// EVALUATED, which on a pre-binding run is the substituted tree — the admitted
+/// plan plus a seed `VALUES` and the join onto it, deeper than what this ever saw.
+/// Dropping THAT one would let an over-deep substituted tree reach the recursive
+/// evaluator.
+///
+/// Acceptance is unchanged by the removal, which is the property that matters:
+/// every entry that reached this walk goes on to evaluate, and evaluation still
+/// refuses the same trees with the same diagnostic. It is refused once instead of
+/// twice. It is deliberately NOT relocated to [`admit_algebra`] — see there for the
+/// acceptance boundary that forbids it.
+///
+/// # Errors
+///
+/// An [`RdfDiagnostic`] if the algebra is invalid (`native-sparql-algebra`).
+fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
     prepared
         .query
         .validate()
-        .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))?;
-    // The evaluator's existing recursive-depth guard must precede the governor's
-    // survey and substitution cloning, which also traverse the plan recursively.
-    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(&prepared.query))
-        .map_err(|e| {
-            RdfDiagnostic::error(
-                eval_diagnostic_code(&e, "native-sparql-query-eval"),
-                e.to_string(),
-            )
-        })?;
+        .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))
+}
+
+/// The **options-dependent** half of [`check_plan_matches_relations`]: the plan must
+/// agree with the registries supplied for this evaluation.
+///
+/// This is the half a prepared execution must still run per call, because `options`
+/// is supplied by the run rather than by the preparation — see
+/// [`NativeSparqlEngine::execute`], which runs it once at PREPARATION and then only
+/// confirms per run that the registries have not changed — see
+/// [`check_prepared_registries_unchanged`].
+///
+/// # Errors
+///
+/// As [`check_plan_matches_relations`], for the registry half.
+fn check_plan_matches_registries(
+    prepared: &PreparedQuery,
+    options: QueryOptions<'_>,
+    parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
+) -> Result<(), RdfDiagnostic> {
     let planned = crate::property_fn_plan::plan_query(
         &prepared.query,
         options.property_functions(),
         options.aggregates(),
-        // The plan's OWN declaration, not the caller's substitutions: this re-plan
-        // asks whether the admitted algebra is still the algebra this registry
-        // produces, and it was produced under that declaration. Replanning without it
-        // would either refuse a plan that is perfectly sound or order it differently
-        // and report the difference as a plan that needs replanning.
-        &crate::property_fn_plan::parameter_set(&prepared.parameters),
+        parameters,
     )
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     if planned
@@ -3190,7 +3506,7 @@ mod tests {
             .expect("query")
     }
 
-    // ── substitution / pre-binding (GAP-A) ────────────────────────────────
+    // ── substitution / pre-binding ─────────────────────────────────────────
 
     /// A dataset for substitution tests:
     ///   :a   :p  :x    (IRI subject)
@@ -3370,6 +3686,293 @@ mod tests {
         assert!(got[0].contains("http://ex/x"), "?o = :x : {got:?}");
     }
 
+    // ── the repeated-variable fallback ────────────────────────────────────────
+    //
+    // `apply_substitutions` carries every pre-binding on ONE seed row, which two
+    // bindings of the SAME variable cannot spell: a single `Values` row has one cell
+    // per variable. That case keeps the original per-variable path — one
+    // `substitute_variable` per pre-binding, each its own single-row `Values` join —
+    // and the two tests below are its pair. The first is the shape the combined seed
+    // cannot represent; the second is its NEIGHBOUR, a repeat that is satisfiable,
+    // and it is here because "the repeated-variable branch works" and "the
+    // repeated-variable branch refuses everything" are indistinguishable from the
+    // first test alone.
+
+    #[test]
+    fn prebinding_repeats_a_variable_incompatibly_and_yields_nothing() {
+        // $this pre-bound to :a AND to :b. Two single-row `Values` joins binding one
+        // variable to two different terms are incompatible, so the join is empty and
+        // so is the answer.
+        let got = run_subst(
+            "SELECT ?o WHERE { ?this <http://ex/p> ?o }",
+            &[
+                ("this".to_owned(), TermValue::Iri("http://ex/a".to_owned())),
+                ("this".to_owned(), TermValue::Iri("http://ex/b".to_owned())),
+            ],
+        );
+        assert!(
+            got.is_empty(),
+            "binding one variable to two distinct terms is unsatisfiable; a non-empty \
+             answer means one of the two pre-bindings was dropped rather than joined: \
+             {got:?}"
+        );
+    }
+
+    #[test]
+    fn prebinding_repeats_a_variable_compatibly_and_still_matches() {
+        // The neighbour of the case above: the SAME variable twice, to the SAME term.
+        // This still takes the repeated-variable path — `has_repeated_variable` looks
+        // at names, not values — and the two seeds are compatible, so the row
+        // survives and carries :a's object.
+        //
+        // :x is the control that makes this test able to fail for its stated reason.
+        // The other two subjects' objects are :y and :z, so an answer of :x cannot
+        // have come from a dropped pre-binding widening the match.
+        let got = run_subst(
+            "SELECT ?o WHERE { ?this <http://ex/p> ?o }",
+            &[
+                ("this".to_owned(), TermValue::Iri("http://ex/a".to_owned())),
+                ("this".to_owned(), TermValue::Iri("http://ex/a".to_owned())),
+            ],
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "a variable repeated to the SAME term is satisfiable, so the repeated-\
+             variable path must still answer: {got:?}"
+        );
+        assert!(
+            got[0].contains("http://ex/x"),
+            "?o = :x, :a's object — :y or :z would mean the pre-binding stopped \
+             narrowing: {got:?}"
+        );
+    }
+
+    // ── the rewrite's STRUCTURE, asserted directly ────────────────────────────
+    //
+    // The boundary tests above read the rewrite through its ANSWER, which is the
+    // right instrument where the two sides of the boundary disagree about what the
+    // answer IS. Two clauses of the envelope do not have that property. A `LATERAL`
+    // is an INNER correlated join, so restricting its right arm and filtering above
+    // it agree on the bag; and once both the pushdown and the seed have run, the
+    // ORDER they ran in is invisible in the result. An answer-shaped test for either
+    // would pass whether or not the rule held — which is a test that cannot fail for
+    // the reason it states — so both are asserted against the algebra the rewrite
+    // actually produces.
+
+    /// Parse `query`, run the pre-binding rewrite over it, and return the rewritten
+    /// root pattern.
+    fn prebound_pattern(query: &str, substitutions: &[(String, TermValue)]) -> GraphPattern {
+        let parsed = SparqlParser::new()
+            .parse_query(query)
+            .expect("the fixture query must parse");
+        let rewritten =
+            crate::substitute::apply_substitutions(parsed, Prebindings::Owned(substitutions))
+                .expect("the fixture's pre-bindings must be groundable");
+        match rewritten {
+            Query::Select { pattern, .. } => pattern,
+            other => panic!("the fixture is a SELECT, got {other:?}"),
+        }
+    }
+
+    /// The first `Lateral` node at or below `pattern`, as `(left, right)`.
+    fn find_lateral(pattern: &GraphPattern) -> Option<(&GraphPattern, &GraphPattern)> {
+        match pattern {
+            GraphPattern::Lateral { left, right } => Some((left, right)),
+            GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner } => find_lateral(inner),
+            GraphPattern::Filter { inner, .. } | GraphPattern::Graph { inner, .. } => {
+                find_lateral(inner)
+            }
+            GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+                find_lateral(left).or_else(|| find_lateral(right))
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn prebinding_is_not_pushed_into_a_lateral_right_arm() {
+        // `?this :p ?o LATERAL { ?this :p ?v }` with $this := :a.
+        //
+        // `push_probes` descends a `Lateral`'s LEFT operand only. Unlike `OPTIONAL`
+        // and `MINUS`, whose right arms diverge on the ANSWER, a `LATERAL` is an
+        // inner join and restricting its right arm would agree with the seed's filter
+        // — so what is pinned here is the rewrite itself, not a bag difference: the
+        // right arm must come out BYTE-IDENTICAL to the way it parsed.
+        //
+        // That matters because a `LATERAL`'s right arm is re-evaluated per left row
+        // through `crate::expr`'s substitution walk, which keys on node identity; a
+        // rewrite here would hand that machinery a different subtree than the one the
+        // plan was admitted with.
+        const QUERY: &str =
+            "SELECT ?o WHERE { ?this <http://ex/p> ?o LATERAL { ?this <http://ex/p> ?v } }";
+        let subs = [("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))];
+
+        let parsed = SparqlParser::new().parse_query(QUERY).expect("parse");
+        let Query::Select {
+            pattern: original, ..
+        } = parsed
+        else {
+            panic!("the fixture is a SELECT");
+        };
+        let (_, original_right) = find_lateral(&original).expect("the fixture has a LATERAL");
+
+        let rewritten = prebound_pattern(QUERY, &subs);
+        let (rewritten_left, rewritten_right) =
+            find_lateral(&rewritten).expect("the rewrite must not remove the LATERAL");
+
+        assert_eq!(
+            rewritten_right, original_right,
+            "the LATERAL's right arm must be untouched by the pushdown"
+        );
+        // Non-vacuity: the LEFT arm really was rewritten, so the assertion above is
+        // reading a boundary rather than a rewrite that never ran at all.
+        let (_, original_left) = find_lateral(&original)
+            .map(|(l, r)| (r, l))
+            .expect("lateral");
+        assert_ne!(
+            rewritten_left, original_left,
+            "the LATERAL's LEFT arm must carry the pushed constant; if it does not, \
+             this test's right-arm assertion is vacuous because nothing was pushed \
+             anywhere"
+        );
+    }
+
+    #[test]
+    fn prebinding_pushdown_runs_before_the_seed() {
+        // `SELECT ?o WHERE { ?this :p ?o }` with $this := :a lowers to
+        // `Project(Bgp)`, and `map_core_pattern` hands the `Bgp` to the rewrite as
+        // the core root.
+        //
+        // Pushdown FIRST, seed second, produces:
+        //     Project(Join { left: Values{$this = :a}, right: Bgp(<a> :p ?o) })
+        // The right arm is a BARE `Bgp`: `at_core_root` is true for the node the seed
+        // is about to wrap, so the leaf needs no restoring `Values` of its own.
+        //
+        // Seed first, pushdown second, would produce:
+        //     Project(Join { left: Values, right: Join { Bgp(<a> :p ?o), Values } })
+        // because the pushdown would then meet a `Join` rather than the core root,
+        // descend with `at_core_root = false`, and emit the restoring `Values` the
+        // peephole exists to suppress. The presence of that second `Values` is the
+        // observable difference between the two orderings.
+        let pattern = prebound_pattern(
+            "SELECT ?o WHERE { ?this <http://ex/p> ?o }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))],
+        );
+        let GraphPattern::Project { inner, .. } = &pattern else {
+            panic!("a SELECT lowers to a Project, got {pattern:?}");
+        };
+        let GraphPattern::Join { left, right } = inner.as_ref() else {
+            panic!("the seed joins a Values onto the core, got {inner:?}");
+        };
+        assert!(
+            matches!(left.as_ref(), GraphPattern::Values { .. }),
+            "the seed is the Join's LEFT operand, got {left:?}"
+        );
+        assert!(
+            matches!(right.as_ref(), GraphPattern::Bgp { .. }),
+            "the seeded core must be a BARE Bgp. A `Join {{ Bgp, Values }}` here means \
+             the seed was built before the pushdown descended, so the pushdown saw a \
+             Join instead of the core root and emitted the restoring Values that \
+             `at_core_root` exists to suppress: {right:?}"
+        );
+        // And the constant really is in the leaf — otherwise "bare Bgp" would be
+        // satisfied by a rewrite that pushed nothing.
+        let GraphPattern::Bgp { patterns } = right.as_ref() else {
+            unreachable!("asserted above");
+        };
+        assert_eq!(patterns.len(), 1, "one triple pattern: {patterns:?}");
+        assert!(
+            format!("{:?}", patterns[0].subject).contains("http://ex/a"),
+            "the pushdown must have written :a into the subject position: {:?}",
+            patterns[0]
+        );
+    }
+
+    /// Build a graph through the CONSTRUCT staging path with `substitutions` applied
+    /// on `prebinding`'s lane, and return its quad count.
+    fn construct_subst_quads(prebinding: ShaclPrebinding, focus: &str) -> usize {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let result = engine
+            .query_with_options_view(
+                &*ds,
+                SparqlRequest {
+                    query: "CONSTRUCT { ?this <http://ex/derived> ?o } \
+                            WHERE { ?this <http://ex/p> ?o }",
+                    base_iri: None,
+                    substitutions: &[("this".to_owned(), TermValue::Iri(focus.to_owned()))],
+                },
+                QueryOptions {
+                    prebinding,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("construct");
+        let SparqlResult::Graph(graph) = result else {
+            panic!("CONSTRUCT must return a graph");
+        };
+        graph.quad_count()
+    }
+
+    #[test]
+    fn construct_staging_pre_binds_on_both_lanes() {
+        // `stage_construct` takes `Cow::Borrowed(&prepared.query)` when there are no
+        // substitutions and only clones-and-rewrites when there are, so every
+        // CONSTRUCT test that passes an empty substitution list leaves the rewriting
+        // branch — both of its lanes — unexercised. This drives it.
+        //
+        // The fixture's three subjects each have one `:p` object, so an un-narrowed
+        // CONSTRUCT emits three quads. Pre-binding $this to :a must emit exactly one.
+        // Three is the control: it is what this test sees if the substitution is
+        // dropped on the floor, and it is distinguishable from the one quad a working
+        // pre-binding produces.
+        for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+            assert_eq!(
+                construct_subst_quads(lane, "http://ex/a"),
+                1,
+                "{lane:?}: pre-binding $this := :a must narrow the template to :a's \
+                 one row; three quads would mean the CONSTRUCT staging path ignored \
+                 the substitutions"
+            );
+        }
+    }
+
+    #[test]
+    fn construct_staging_pre_binding_selects_the_named_focus() {
+        // The neighbour of the count assertion: a DIFFERENT focus must produce a
+        // different quad, so "one quad" cannot be satisfied by a rewrite that narrows
+        // to a fixed row regardless of which focus was supplied.
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let object_for = |focus: &str| -> String {
+            let result = engine
+                .query_with_options_view(
+                    &*ds,
+                    SparqlRequest {
+                        query: "CONSTRUCT { ?this <http://ex/derived> ?o } \
+                                WHERE { ?this <http://ex/p> ?o }",
+                        base_iri: None,
+                        substitutions: &[("this".to_owned(), TermValue::Iri(focus.to_owned()))],
+                    },
+                    QueryOptions {
+                        prebinding: ShaclPrebinding::Applied,
+                        ..QueryOptions::EMPTY
+                    },
+                )
+                .expect("construct");
+            let SparqlResult::Graph(graph) = result else {
+                panic!("CONSTRUCT must return a graph");
+            };
+            let quad = graph.quads().next().expect("exactly one quad");
+            format!("{:?}", graph.resolve(quad.o))
+        };
+        assert!(object_for("http://ex/a").contains("http://ex/x"), ":a → :x");
+        assert!(object_for("http://ex/b").contains("http://ex/y"), ":b → :y");
+    }
+
     #[test]
     fn substitute_ask_is_pre_binding() {
         // ASK over the blank focus: true (it has a :p edge); a focus absent from the
@@ -3490,6 +4093,285 @@ mod tests {
             "the UNION branch with FILTER($this = :a) must match"
         );
         assert!(got[0].contains("http://ex/a"), "{got:?}");
+    }
+
+    // ── the `GRAPH` name is the narrowest refusal, so it gets the pair ──
+
+    /// Two NAMED graphs on one predicate with DIFFERENT objects, and nothing in the
+    /// default graph.
+    ///
+    /// Different objects are what let a `GRAPH ?g` answer name which graph it came
+    /// from, so the tests below read a term rather than a row count.
+    fn graph_name_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let g1 = b.intern_iri("http://ex/g1");
+        let g2 = b.intern_iri("http://ex/g2");
+        let s = b.intern_iri("http://ex/s");
+        let p = b.intern_iri("http://ex/p");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
+        let q = b.intern_iri("http://ex/q");
+        b.push_quad(s, p, x, Some(g1));
+        b.push_quad(s, p, y, Some(g2));
+        // One quad in the DEFAULT graph, so the query below can put a second
+        // operand beside its sub-`SELECT` — see [`GRAPH_NAME_QUERY`] for why that
+        // matters. Exactly one, so it multiplies the inner answer by one and the
+        // row count below reads the sub-`SELECT` alone.
+        b.push_quad(s, q, x, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// The `GRAPH ?g` is inside a sub-`SELECT` that does NOT project `?g`, and the
+    /// sub-`SELECT` sits BESIDE another operand.
+    ///
+    /// Both halves of that shape are load-bearing, and together they are what makes
+    /// the graph-name rewrite observable in the ANSWER rather than merely present in
+    /// the tree.
+    ///
+    /// The sub-`SELECT` is a separate scope, so the single-row `VALUES` seed the
+    /// rewrite also injects cannot correlate with the inner `?g`: it binds an outer
+    /// variable of the same name, compatible with every inner row. Only the SHACL
+    /// lane's expression-position walk reaches inside, which is divergence 1 in
+    /// `crate::enf`'s module doc.
+    ///
+    /// The second operand is what keeps the seed OUTSIDE. `map_core_pattern`
+    /// descends every single-child solution modifier, `Project` included, so a query
+    /// whose whole body is one sub-`SELECT` has its seed injected INSIDE it, where
+    /// the seed alone narrows the answer and this test would pass with the
+    /// substitution removed. A `Join` is a multi-child node and is therefore the
+    /// core: the seed wraps it, and `push_probes` does not descend a `Project`, so
+    /// nothing else reaches the inner scope either.
+    const GRAPH_NAME_QUERY: &str = "SELECT ?o WHERE { ?a <http://ex/q> ?b . \
+         { SELECT ?o WHERE { GRAPH ?g { ?s <http://ex/p> ?o } } } }";
+
+    /// [`GRAPH_NAME_QUERY`] with `?g` pre-bound to `value`, on the SHACL lane (the
+    /// only lane that rewrites a `GRAPH` name at all).
+    fn graph_name_answer(value: TermValue) -> Vec<String> {
+        let ds = graph_name_ds();
+        let engine = NativeSparqlEngine::new();
+        let result = engine
+            .query_with_options_view(
+                &*ds,
+                SparqlRequest {
+                    query: GRAPH_NAME_QUERY,
+                    base_iri: None,
+                    substitutions: &[("g".to_owned(), value)],
+                },
+                QueryOptions {
+                    prebinding: ShaclPrebinding::Applied,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("the pre-binding must be groundable");
+        col0(result)
+    }
+
+    /// **A `GRAPH` name still takes an IRI, and still answers that graph.**
+    ///
+    /// The ACCEPTED half of the pair. `substitute_in_named_node_pattern` is the
+    /// narrowest of the four positions the pushability classifier serves — an IRI
+    /// and nothing else — which makes it the one where a refactor of the decision is
+    /// most likely to over-refuse, and over-refusal is invisible: the query simply
+    /// answers less, and nothing looks broken.
+    ///
+    /// So this reads the REAL ANSWER rather than merely asserting the rewrite fired.
+    /// The two graphs carry different objects, so `:x` could only have come from
+    /// `:g1` — an empty answer would mean the IRI stopped being substituted, and
+    /// `:y` would mean it was substituted with the wrong graph.
+    #[test]
+    fn a_graph_name_pre_bound_to_an_iri_is_substituted_and_answers_that_graph() {
+        let got = graph_name_answer(TermValue::Iri("http://ex/g1".to_owned()));
+        assert_eq!(
+            got.len(),
+            1,
+            "the substituted name pins the sub-SELECT to :g1, which holds one quad. \
+             TWO rows means the IRI was refused from a position that admits it, so \
+             the inner GRAPH stayed a variable and enumerated both graphs: {got:?}"
+        );
+        assert!(
+            got[0].contains("http://ex/x"),
+            "?o = :x, which only :g1 holds — :y would mean the wrong graph was named: \
+             {got:?}"
+        );
+    }
+
+    /// **A `GRAPH` name pre-bound to a LITERAL is still refused.**
+    ///
+    /// The REFUSED half of the same pair. A graph is named by an IRI, so a literal
+    /// has no business in this position: it rides the `VALUES` seed, where no named
+    /// graph is compatible with it, and the answer is empty.
+    ///
+    /// The literal's lexical form is deliberately `:g2`'s IRI, which is what makes
+    /// this test able to fail for the reason it states. Had the refusal been widened
+    /// to admit a literal by its lexical form, the query would name `:g2` and answer
+    /// `:y` — a DIFFERENT, non-empty answer — rather than staying empty the way a
+    /// literal that merely fails to match any graph does. Without that choice, "the
+    /// literal was refused" and "the literal was substituted and matched nothing"
+    /// would be the same observation.
+    #[test]
+    fn a_graph_name_pre_bound_to_a_literal_is_still_refused() {
+        let got = graph_name_answer(TermValue::typed_literal(
+            "http://ex/g2",
+            "http://www.w3.org/2001/XMLSchema#string",
+        ));
+        assert_eq!(
+            got.len(),
+            2,
+            "a literal names no graph, so the inner GRAPH stays a variable and \
+             enumerates BOTH of them: {got:?}"
+        );
+        assert!(
+            got.iter().any(|row| row.contains("http://ex/x"))
+                && got.iter().any(|row| row.contains("http://ex/y")),
+            "both graphs' objects must survive: {got:?}"
+        );
+    }
+
+    // ── the id door and the value door are the same binding ────────────
+
+    /// **Binding a parameter by the dataset's own term id substitutes the
+    /// IDENTICAL plan as binding the same term by value — for every term kind, on
+    /// both lanes.**
+    ///
+    /// The id door exists to skip a round trip, not to take a different route, so
+    /// "identical" is the whole claim and it is proved rather than asserted: two
+    /// handles over one query, one bound through each door, and their SUBSTITUTED
+    /// ALGEBRA compared node for node. Comparing answers would be far weaker — two
+    /// different trees can answer the same rows.
+    ///
+    /// Five term kinds because the two doors reach the algebra by different code:
+    /// the value door grounds a `TermValue`, the id door resolves a `TermRef`, and
+    /// they must agree on a blank node's scope qualification, on a literal's
+    /// datatype-id expansion, on a language tag, and on a quoted triple's recursion
+    /// — each of which is a separate arm in each of the two functions.
+    #[test]
+    fn the_id_door_and_the_value_door_substitute_the_identical_plan() {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://ex/p");
+        let iri = b.intern_iri("http://ex/a");
+        let blank = b.intern_blank("bn", BlankScope::DEFAULT);
+        let plain = b.intern_literal(RdfLiteral::typed(
+            "hello",
+            "http://www.w3.org/2001/XMLSchema#string",
+        ));
+        let tagged = b.intern_literal(RdfLiteral::language_tagged("bonjour", "fr"));
+        let quoted = b.intern_triple(iri, p, plain);
+        b.push_quad(iri, p, plain, None);
+        b.push_quad(blank, p, tagged, None);
+        // A quoted triple is an OBJECT: an asserted statement cannot have one as
+        // its subject, and the id only has to exist for the doors to resolve it.
+        b.push_quad(blank, p, quoted, None);
+        let ds = b.freeze().expect("freeze");
+
+        let engine = NativeSparqlEngine::new();
+        // A body that exercises every position the rewrite writes into: a matched
+        // triple-pattern position, an expression, a `BOUND()`, and — on the SHACL
+        // lane — a nested sub-SELECT the seed alone could not reach.
+        const QUERY: &str = "SELECT ?o WHERE { ?this <http://ex/p> ?o \
+                             FILTER(bound(?this) && ?this = ?this) }";
+
+        for (kind, id) in [
+            ("iri", iri),
+            ("blank", blank),
+            ("plain literal", plain),
+            ("language-tagged literal", tagged),
+            ("quoted triple", quoted),
+        ] {
+            let value = crate::scratch::term_id_to_value(&*ds, id);
+            let mut by_value = engine
+                .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                .expect("prepare");
+            let mut by_id = engine
+                .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                .expect("prepare");
+            by_value.bind(0, value).expect("the value door");
+            by_id.bind_id(0, &*ds, id).expect("the id door");
+
+            for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+                let from_value = by_value
+                    .substituted(lane)
+                    .expect("the value door grounds")
+                    .query()
+                    .clone();
+                let from_id = by_id
+                    .substituted(lane)
+                    .expect("the id door grounds")
+                    .query()
+                    .clone();
+                assert_eq!(
+                    from_value, from_id,
+                    "the id door and the value door must substitute the identical plan \
+                     for a {kind} on lane {lane:?}"
+                );
+            }
+
+            // Non-vacuity: the substituted plan is not the admitted plan, so the
+            // equality above is comparing two REWRITES rather than two copies of a
+            // tree neither door touched.
+            let rewritten = by_id
+                .substituted(ShaclPrebinding::None)
+                .expect("the id door grounds")
+                .query()
+                .clone();
+            assert_ne!(
+                &rewritten,
+                by_id.prepared.query(),
+                "a {kind} pre-binding must actually rewrite the admitted plan"
+            );
+        }
+    }
+
+    /// **The two doors also answer the same rows, over a dataset where a wrong
+    /// binding would answer different ones.**
+    ///
+    /// The tree comparison above is the strong claim; this is the one that says the
+    /// tree is evaluated. Three subjects with three distinct objects, so a door that
+    /// resolved an id to the wrong term answers a neighbour's object rather than
+    /// failing.
+    #[test]
+    fn the_id_door_and_the_value_door_answer_the_same_rows() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        const QUERY: &str = "SELECT ?o WHERE { ?this <http://ex/p> ?o }";
+
+        for (kind, value) in [
+            ("iri", TermValue::Iri("http://ex/a".to_owned())),
+            ("blank", TermValue::blank("bn")),
+        ] {
+            let id = ds
+                .term_id_by_value(&value)
+                .expect("the fixture interns this term");
+            let answer = |bind: &dyn Fn(&mut PreparedExecution) -> Result<(), RdfDiagnostic>| {
+                let mut execution = engine
+                    .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                    .expect("prepare");
+                bind(&mut execution).expect("bind");
+                engine
+                    .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+                        let InternedOutcome::Solutions(solutions) = outcome else {
+                            panic!("expected solutions");
+                        };
+                        solutions
+                            .rows()
+                            .iter()
+                            .map(|row| format!("{:?}", solutions.cell(row, 0)))
+                            .collect::<Vec<_>>()
+                    })
+                    .expect("execute")
+            };
+            let from_value = answer(&|execution| execution.bind(0, value.clone()));
+            let from_id = answer(&|execution| execution.bind_id(0, &*ds, id));
+            assert_eq!(
+                from_value, from_id,
+                "the two doors must answer identically for a {kind}"
+            );
+            assert_eq!(
+                from_value.len(),
+                1,
+                "each fixture subject carries exactly one object, so an answer of any \
+                 other size means the pre-binding stopped narrowing ({kind})"
+            );
+        }
     }
 
     #[test]
@@ -4636,7 +5518,7 @@ mod tests {
         );
     }
 
-    /// GAP 3 regression: the UPDATE path must thread the SAME `EvalCtx` wiring the
+    /// Regression guard: the UPDATE path must thread the SAME `EvalCtx` wiring the
     /// query path uses, so a `NOW()` bound inside a `DELETE/INSERT … WHERE` is the
     /// live wall clock — not some frozen/epoch default — mirroring
     /// `default_engine_now_is_current_wall_clock` but through `engine.update`.
@@ -4674,11 +5556,11 @@ mod tests {
         }
     }
 
-    /// GAP 3 regression: `heldIn` inside an UPDATE `WHERE` must see the engine's
+    /// Regression guard: `heldIn` inside an UPDATE `WHERE` must see the engine's
     /// configured [`StandpointPredicates`] table, the same as the query path
-    /// (`gmeow_namespace_and_predicate_table_flow_through_configuration`). Before the
-    /// fix, `engine::update` dropped the table on the floor and any `heldIn` in a
-    /// `DELETE/INSERT … WHERE` hard-errored even on a standpoint-configured engine.
+    /// (`gmeow_namespace_and_predicate_table_flow_through_configuration`). If
+    /// `engine::update` ever drops the table on the floor again, any `heldIn` in a
+    /// `DELETE/INSERT … WHERE` hard-errors even on a standpoint-configured engine.
     #[test]
     fn heldin_in_update_where_uses_configured_standpoint_predicates() {
         let ds = gmeow_standpoint_ds();
@@ -5121,8 +6003,12 @@ mod tests {
             .expect("parses under no registry at all");
 
         assert!(
-            check_plan_matches_relations(&prepared, QueryOptions::EMPTY, Prebindings::Owned(&[]))
-                .is_ok(),
+            check_plan_matches_relations(
+                &prepared,
+                QueryOptions::EMPTY,
+                &crate::DetHashSet::default()
+            )
+            .is_ok(),
             "a plan prepared registry-free must match QueryOptions::EMPTY"
         );
 
@@ -5140,7 +6026,7 @@ mod tests {
                     .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
-                Prebindings::Owned(&[])
+                &crate::DetHashSet::default()
             )
             .is_ok(),
             "an independently constructed EMPTY registry must be interchangeable with EMPTY"
@@ -5164,10 +6050,196 @@ mod tests {
                     .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
-                Prebindings::Owned(&[])
+                &crate::DetHashSet::default()
             )
             .is_err(),
             "plan identity must still refuse a genuinely different, non-empty registry"
+        );
+    }
+
+    /// `SELECT ?o WHERE { <http://ex/a> `predicate` ?o }` as caller-built algebra,
+    /// with `predicate` spelled verbatim and NOT checked on the way in.
+    ///
+    /// `NamedNode::new_unchecked` is the point: an algebra assembled by a compiler
+    /// rather than by the parser is exactly the input
+    /// [`purrdf_sparql_algebra::Query::validate`] exists to admit or refuse, so the
+    /// fixture has to be able to spell a predicate the parser could never produce.
+    fn select_over_predicate(predicate: &str) -> Query {
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, QueryDataset, TermPattern, TriplePattern, Variable,
+        };
+        let object = Variable::new("o");
+        Query::Select {
+            pattern: GraphPattern::Project {
+                inner: Box::new(GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::NamedNode(NamedNode::new_unchecked("http://ex/a")),
+                        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(predicate)),
+                        object: TermPattern::Variable(object.clone()),
+                    }],
+                }),
+                variables: vec![object],
+            },
+            dataset: QueryDataset::default(),
+            base_iri: None,
+            version: None,
+        }
+    }
+
+    /// **The IRI admission in `Query::validate` still refuses what it refused and
+    /// still accepts what it accepted — and the accepted one still answers.**
+    ///
+    /// `validate`'s IRI check stopped building an owned `purrdf_iri::Iri` per IRI in
+    /// the query and now asks `purrdf_iri::is_absolute`, which runs the identical
+    /// grammar over a borrow. That is an ALLOCATION change, and the way an
+    /// allocation change goes wrong is by quietly becoming a VALIDATION change — a
+    /// refusal that looks like strictness and is a bug. A test that only drove the
+    /// rejected case would pass just as happily if the new path refused everything.
+    ///
+    /// So three cases, and the middle one is the one that matters:
+    ///
+    /// 1. a **relative** predicate IRI — must still be refused, by name;
+    /// 2. the **neighbouring absolute** one, differing only by its scheme and
+    ///    authority — must still be admitted, and the admitted plan is then
+    ///    EVALUATED and its row inspected, so "admitted" cannot stand in for
+    ///    "admitted and then silently answered nothing";
+    /// 3. a **malformed** absolute one (`<` is not legal in a path) — must still be
+    ///    refused by the grammar rather than waved through, since a scan that
+    ///    stopped at the scheme would accept it.
+    #[test]
+    fn the_borrowed_iri_scan_refuses_and_accepts_exactly_what_the_owned_one_did() {
+        let relative =
+            PreparedQuery::rewritten(select_over_predicate("knows"), QueryOptions::EMPTY)
+                .expect_err("a relative predicate IRI is not evaluable algebra");
+        assert!(
+            relative
+                .to_string()
+                .contains("relative IRI in query algebra"),
+            "the relative case must still be refused BY NAME, not by some other \
+             failure that happens to be an error: {relative}"
+        );
+
+        let malformed = PreparedQuery::rewritten(
+            select_over_predicate("http://ex/<bad>"),
+            QueryOptions::EMPTY,
+        )
+        .expect_err("`<` is not a legal path character, scheme or no scheme");
+
+        // The neighbour that must still work, and must still ANSWER. The fixture's
+        // `:a :knows :b` is the row; a validator that had started over-refusing
+        // would fail at `expect`, and one that had started admitting-but-dropping
+        // would fail on the row.
+        let prepared = PreparedQuery::rewritten(
+            select_over_predicate("http://ex/knows"),
+            QueryOptions::EMPTY,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "the absolute neighbour of the refused predicate must still be \
+                 admitted — over-refusal is the mirror of the silent drop, and the \
+                 malformed case above ({malformed}) proves nothing on its own: {e}"
+            )
+        });
+        let answer = NativeSparqlEngine::new()
+            .query_prepared(&social(), &prepared, &[], QueryOptions::EMPTY)
+            .expect("the admitted plan evaluates");
+        let SparqlResult::Solutions { rows, .. } = answer else {
+            panic!("a SELECT answers with solutions, got {answer:?}");
+        };
+        assert_eq!(
+            rows.len(),
+            1,
+            "the accepted query must still produce its real answer — one `:a :knows :b` \
+             row — rather than merely being accepted: {rows:?}"
+        );
+    }
+
+    /// **Removing the per-call nesting walk moved no acceptance boundary: an
+    /// over-deep plan is still refused at evaluation, and the one node shallower is
+    /// still evaluated and still answers.**
+    ///
+    /// [`check_plan_soundness`] used to run
+    /// [`crate::governor::soundness::validate_graph_pattern_depth`] on every
+    /// evaluation of a `&PreparedQuery`, and [`crate::eval::prepare_query_context`]
+    /// ran it again inside that same evaluation. One of the two went. Removing a
+    /// refusal is where a refusal changes without anyone meaning it to, and it can
+    /// go wrong in both directions: the guard could stop firing at all (and a deep
+    /// tree would reach the recursive evaluator), or the surviving copy could fire
+    /// somewhere else.
+    ///
+    /// It can also go wrong at a boundary nobody was looking at, which is what
+    /// happened on the first attempt at this change. Relocating the walk to
+    /// [`admit_algebra`] passed every test in this module and turned PREPARING a
+    /// flat `OPTIONAL {} OPTIONAL {} …` spine into a refusal —
+    /// `prepared_admission.rs` states that spine as an acceptance the crate keeps,
+    /// and a whole generated corpus query stopped preparing with it. So this test
+    /// drives the boundary through the door that decides it, EVALUATION, and its
+    /// neighbouring case is checked for its answer rather than for merely not
+    /// erroring.
+    #[test]
+    fn removing_the_duplicate_nesting_walk_moved_no_acceptance_boundary() {
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, QueryDataset, TermPattern, TriplePattern, Variable,
+        };
+        /// `depth` nested `Project`s over `:a :knows ?o`, projecting `?o` throughout.
+        fn nested(depth: usize) -> Query {
+            let object = Variable::new("o");
+            let mut pattern = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::NamedNode(NamedNode::new_unchecked("http://ex/a")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/knows",
+                    )),
+                    object: TermPattern::Variable(object.clone()),
+                }],
+            };
+            for _ in 1..depth {
+                pattern = GraphPattern::Project {
+                    inner: Box::new(pattern),
+                    variables: vec![object.clone()],
+                };
+            }
+            Query::Select {
+                pattern,
+                dataset: QueryDataset::default(),
+                base_iri: None,
+                version: None,
+            }
+        }
+
+        let limit = purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH;
+        let engine = NativeSparqlEngine::new();
+
+        // Both sides PREPARE: admission is the parser's envelope, which is looser
+        // than the evaluator's depth limit, and that is the boundary the first
+        // attempt at this change moved.
+        let over = PreparedQuery::rewritten(nested(limit + 1), QueryOptions::EMPTY)
+            .expect("preparation admits the parser's envelope, over-deep or not");
+        let at = PreparedQuery::rewritten(nested(limit), QueryOptions::EMPTY)
+            .expect("the documented limit itself prepares");
+
+        // The refusal is at EVALUATION, and it is still the nesting guard's own
+        // rather than some other failure that happens to reject the same tree.
+        let refused = engine
+            .query_prepared(&social(), &over, &[], QueryOptions::EMPTY)
+            .expect_err("one node past the documented limit is still refused");
+        assert_eq!(
+            refused.code, "native-sparql-graph-pattern-depth-exceeded",
+            "the refusal must still be the nesting guard's own: {refused}"
+        );
+
+        // The neighbour, at exactly the limit, still ANSWERS — which is the half a
+        // test that only drove the refusal would have passed without.
+        let answer = engine
+            .query_prepared(&social(), &at, &[], QueryOptions::EMPTY)
+            .expect("a plan at the limit must still evaluate");
+        let SparqlResult::Solutions { rows, .. } = answer else {
+            panic!("a SELECT answers with solutions, got {answer:?}");
+        };
+        assert_eq!(
+            rows.len(),
+            1,
+            "the admitted neighbour must still produce its real `:a :knows :b` row: {rows:?}"
         );
     }
 
@@ -5227,7 +6299,7 @@ mod tests {
         }
     }
 
-    /// GAP-7 (registry fingerprint): two registries that agree on IRI, arity, and every
+    /// Registry fingerprint: two registries that agree on IRI, arity, and every
     /// declared mode — differing ONLY in volatility — must not share a plan-cache entry.
     ///
     /// Volatility is not read by the feasibility-ordering pass at all (it decides
@@ -5287,7 +6359,7 @@ mod tests {
         );
     }
 
-    /// GAP-7 (governed receipt): two relation implementations registered under the SAME
+    /// Governed receipt: two relation implementations registered under the SAME
     /// IRI, differing only in declared volatility, must produce DISTINGUISHABLE governed
     /// receipts and distinguishable explanations — never bytes that could be mistaken for
     /// the same execution.

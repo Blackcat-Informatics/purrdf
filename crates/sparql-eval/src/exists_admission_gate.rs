@@ -1319,9 +1319,9 @@ mod tests {
     fn exists_collision_shape_hard_errors_without_the_parser_fresh_target_control() {
         // The control: `EXISTS { BIND(:fixed AS ?fresh) }` — `?fresh` is NOT the
         // outer row's `?x`, so this is a genuinely fresh target, not a collision.
-        // Wiring the gap-R2 hard-fail must not touch this shape at all — it still
-        // evaluates through the SAME public engine entry point used by the two
-        // collision tests above.
+        // Wiring the SELECT-list projection-target hard-fail (SEP-0007 Part 3) must
+        // not touch this shape at all — it still evaluates through the SAME public
+        // engine entry point used by the two collision tests above.
         let mut b = RdfDatasetBuilder::new();
         let tag = b.intern_iri(&format!("{EX}tag"));
         let anything = b.intern_literal(RdfLiteral::simple("x"));

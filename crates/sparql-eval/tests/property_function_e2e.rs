@@ -261,7 +261,7 @@ fn the_same_text_without_the_namespace_is_an_ordinary_triple_pattern() {
     );
 }
 
-/// THE data-predicate-hijack regression (GAP-3): registering a relation must not
+/// The data-predicate-hijack regression: registering a relation must not
 /// turn a merely prefix-sharing, unregistered, LONGER predicate into a
 /// hard-erroring property-function call.
 ///
@@ -361,7 +361,7 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
 }
 
 // ---------------------------------------------------------------------------
-// The GOVERNED lane (GAP-2)
+// The GOVERNED lane
 // ---------------------------------------------------------------------------
 //
 // Every test below drives `NativeSparqlEngine::query_governed` — the headline governed
@@ -853,8 +853,8 @@ fn query_prepared_with_a_mismatched_registry_is_refused_and_the_matched_registry
     assert_eq!(rows_of(&result).len(), 3);
 }
 
-/// GAP (registry instance identity — the property-function sibling of the
-/// custom-aggregate registry-identity gap): a plan prepared under one relation
+/// Registry instance identity — the property-function sibling of the
+/// custom-aggregate registry-identity check in `agg_fn`: a plan prepared under one relation
 /// registry must not be silently executed under a DIFFERENT registry that
 /// resolves the SAME IRI to a DIFFERENT relation, even when the two registries
 /// declare IDENTICALLY (same arity, volatility, modes, and row bound). Declared

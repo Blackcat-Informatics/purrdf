@@ -757,11 +757,11 @@ fn values_quoted_triple_iri_reaches_dependency_walk() {
     );
 }
 
-// ── Property-function seam (GAP-9): caller-supplied ParserOptions ─────────────
+// ── Property-function seam: caller-supplied ParserOptions ─────────────────────
 
 #[test]
 fn property_function_relation_iri_is_excluded_from_dependency_walk_when_configured() {
-    // GAP-9: `OwnershipAnalyzer::analyze` used to parse every query artifact
+    // `OwnershipAnalyzer::analyze` used to parse every query artifact
     // under `ParserOptions::default`, so `GraphPattern::PropertyFunction` could
     // never be produced and the `walk_graph_pattern` arm documenting that a
     // relation IRI is "NOT a dependency edge" was dead code — the relation

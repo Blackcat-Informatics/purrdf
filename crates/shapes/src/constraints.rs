@@ -2410,9 +2410,19 @@ fn eval_constraint<'a, S: ResultSink>(
             // this arm materializes the focus node — beside a query evaluation
             // that dwarfs it, and only for shapes that carry a `sh:sparql`.
             let focus_term = focus_node.to_term(ds);
+            // The id door for `$this`, taken only when the view the query runs
+            // against is the very view the target resolution addressed. With a
+            // shapes graph exposed the two are different views and a Core id would
+            // be in range and WRONG there, so that configuration keeps the owned
+            // term it just materialized for the report anyway.
+            let focus_id = store
+                .sparql_view_shares_core_ids()
+                .then(|| focus_node.id())
+                .flatten();
             let produced = crate::sparql::eval_sparql_constraint_view(
                 store.sparql_view(),
                 &focus_term,
+                focus_id,
                 &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 source_shape,
@@ -2650,10 +2660,17 @@ fn eval_constraint<'a, S: ResultSink>(
             // As `sh:sparql`: the validators speak owned terms, so the focus node
             // is materialized here, once, for a shape that declares one.
             let focus_term = focus_node.to_term(ds);
+            // As for `sh:sparql`: `$this` takes the id door when the run view and
+            // the resolution view are one view, and the owned term otherwise.
+            let focus_id = store
+                .sparql_view_shares_core_ids()
+                .then(|| focus_node.id())
+                .flatten();
             let produced = match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
                     dataset,
                     &focus_term,
+                    focus_id,
                     &value_terms,
                     validator,
                     bindings,
@@ -2668,6 +2685,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
                     dataset,
                     &focus_term,
+                    focus_id,
                     validator,
                     bindings,
                     component,
@@ -2694,19 +2712,33 @@ fn eval_constraint<'a, S: ResultSink>(
 /// shape's path rendered in SPARQL property-path surface syntax. A node-shape
 /// constraint (`path == None`) and a query without the placeholder pass
 /// through unchanged.
-pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> String {
+///
+/// "Unchanged" is returned BORROWED, and that is the point of the [`Cow`]. This runs
+/// once per focus node, and both pass-through cases are the common ones — every node
+/// shape takes the first, and every property shape whose query does not mention the
+/// placeholder takes the second. Returning `String` charged each of those focus nodes
+/// a fresh copy of the entire query text, which for the shapes that carry a
+/// `sh:sparql` is the largest single allocation on the path.
+///
+/// [`Cow`]: std::borrow::Cow
+pub(crate) fn substitute_path_placeholder<'q>(
+    select: &'q str,
+    path: Option<&Path>,
+) -> Cow<'q, str> {
     static PATH_PLACEHOLDER: OnceLock<regex::Regex> = OnceLock::new();
     let Some(path) = path else {
-        return select.to_owned();
+        return Cow::Borrowed(select);
     };
     let re = PATH_PLACEHOLDER
         .get_or_init(|| regex::Regex::new(r"[$?]PATH\b").expect("static regex is valid"));
     if !re.is_match(select) {
-        return select.to_owned();
+        return Cow::Borrowed(select);
     }
     let rendered = path::path_to_sparql(path);
-    re.replace_all(select, regex::NoExpand(&rendered))
-        .into_owned()
+    Cow::Owned(
+        re.replace_all(select, regex::NoExpand(&rendered))
+            .into_owned(),
+    )
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
@@ -5398,7 +5430,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("MinCount"));
     }
 
-    // ── xsd lexical validators (Gap D fix) ────────────────────────────────────
+    // ── xsd lexical validators ─────────────────────────────────────────────────
 
     #[test]
     fn xsd_integer_accepts_large_value() {

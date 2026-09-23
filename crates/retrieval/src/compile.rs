@@ -343,8 +343,9 @@
 //! The candidate goes the other way. It is left as the one variable a caller binds per
 //! lookup, and it is **declared** to the prepare rather than merely substituted into it
 //! — [`execute`](crate::execute) prepares the lookup through
-//! [`prepare_query_with_parameters`](purrdf_sparql_eval::NativeSparqlEngine::prepare_query_with_parameters)
-//! — so the feasibility pass sees the candidate bound and the depth free, and admits the
+//! [`prepare_execution`](purrdf_sparql_eval::NativeSparqlEngine::prepare_execution)
+//! with the candidate as its parameter — so the feasibility pass sees the candidate
+//! bound and the depth free, and admits the
 //! call in the producer's membership mode rather than in its ranked one. That pairing is
 //! the whole of what makes a lookup against a self-bounding producer a lookup.
 
@@ -529,15 +530,14 @@ impl RenderedQuery {
     ///
     /// # Why the candidate is a variable and not a constant
     ///
-    /// Because the text is prepared **once** per stratum and run once per
-    /// candidate, through the evaluator's substitution channel. A text with the
-    /// candidate spelled into it would be a fresh parse and a fresh feasibility
-    /// pass per lookup — the cost this whole mechanism exists to avoid paying in
-    /// rows. Substituting it instead lands a single-row `VALUES` seed on the
-    /// left of the call, which is exactly the shape the evaluator drives a
-    /// property-function call from, so the producer receives the candidate as a
-    /// **bound argument** rather than generating its rows and letting a join
-    /// filter them.
+    /// Because the text is prepared **once** per stratum, as a prepared
+    /// execution whose one parameter is the candidate, and run once per
+    /// candidate with that parameter bound. A text with the candidate spelled
+    /// into it would be a fresh parse and a fresh feasibility pass per lookup —
+    /// the cost this whole mechanism exists to avoid paying in rows. Binding it
+    /// instead writes the candidate into the call's own candidate position, so
+    /// the producer receives it as a **bound argument** rather than generating
+    /// its rows and letting a join filter them.
     ///
     /// # Why the bound is two rows
     ///

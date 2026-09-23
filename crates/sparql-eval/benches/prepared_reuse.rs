@@ -9,10 +9,24 @@ use purrdf_core::ir::pack::dataset_from_view;
 use purrdf_core::{
     BlankScope, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, canonical_relabel,
 };
-use purrdf_sparql_eval::{NativeSparqlEngine, PlanCache, QueryOptions};
+use purrdf_sparql_eval::{InternedOutcome, NativeSparqlEngine, PlanCache, QueryOptions};
 use std::hint::black_box;
 
 const QUERY: &str = "SELECT ?s ?value WHERE { ?s <http://example.org/p> ?value } ORDER BY ?s";
+
+/// The IDENTICAL text to [`QUERY`] — same `SELECT` list, same `ORDER BY` — used
+/// for [`NativeSparqlEngine::prepare_execution`] with `?s` declared a
+/// parameter. The only axis that then differs between `execute_prepared_parameterized`
+/// and `execute_warm_text` below is HOW `?s` is bound: a prepared execution
+/// grounds it via [`PreparedExecution::bind`] before evaluation (so the `WHERE`
+/// matches exactly the one row that subject names), while `execute_warm_text`
+/// leaves it to the `WHERE` clause to match from the graph (all 64 rows, then
+/// sorted). A prior revision gave this arm a different `SELECT` list and no
+/// `ORDER BY`, which additionally varied the query SHAPE (one fewer projected
+/// column, no sort) on top of the binding difference the arm exists to show —
+/// making the two arms measure different queries, not just different binding
+/// strategies. Keeping the text identical removes that confound.
+const PARAMETERIZED: &str = QUERY;
 
 fn bench(c: &mut Criterion) {
     let mut builder = RdfDatasetBuilder::new();
@@ -47,6 +61,35 @@ fn bench(c: &mut Criterion) {
                     .query_prepared(black_box(&data), &prepared, &[], QueryOptions::EMPTY)
                     .expect("execute"),
             )
+        });
+    });
+    // Build once, bind and run many: the shape a caller running one query per row
+    // has. Directly comparable to `execute_warm_text` below — see [`PARAMETERIZED`]'s
+    // doc comment — because the two run the IDENTICAL query text and differ only
+    // in whether `?s` is a bound parameter or a `WHERE`-matched variable.
+    // Report-only, like every arm here — nothing in this file asserts a
+    // threshold, and a figure from it is evidence for a reader rather than a gate.
+    let mut execution = engine
+        .prepare_execution(PARAMETERIZED, None, &["s"], QueryOptions::EMPTY)
+        .expect("prepare execution");
+    group.bench_function("execute_prepared_parameterized", |b| {
+        let mut index = 0_usize;
+        b.iter(|| {
+            index = (index + 1) % 64;
+            execution
+                .bind(
+                    0,
+                    purrdf_core::TermValue::Iri(format!("http://example.org/s{index}")),
+                )
+                .expect("bind");
+            engine
+                .execute(
+                    &mut execution,
+                    black_box(&*data),
+                    QueryOptions::EMPTY,
+                    |outcome| black_box(matches!(outcome, InternedOutcome::Solutions(_))),
+                )
+                .expect("execute");
         });
     });
     group.bench_function("execute_warm_text", |b| {

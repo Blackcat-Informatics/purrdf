@@ -807,8 +807,9 @@ where
 /// Refuse a manually constructed algebra whose nesting exceeds the parser's bound.
 ///
 /// Parsed queries have already passed the same limit. This iterative validation keeps
-/// the public `PreparedQuery { query }` and `eval(&GraphPattern, ..)` surfaces safe when a
-/// caller constructs algebra directly instead of using [`purrdf_sparql_algebra::SparqlParser`].
+/// the `eval(&GraphPattern, ..)` surface safe when a caller constructs algebra
+/// directly via [`crate::engine::PreparedQuery::rewritten`] instead of using
+/// [`purrdf_sparql_algebra::SparqlParser`].
 pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
     let mut stack = vec![(root, 1_usize)];
     while let Some((node, depth)) = stack.pop() {

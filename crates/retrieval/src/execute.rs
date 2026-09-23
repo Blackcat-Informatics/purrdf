@@ -240,13 +240,14 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, ExtensionEnv, GovernedOutcome, NativeSparqlEngine, PfAttestation,
-    PreparedQuery, PropertyFunctionRegistry, QueryGovernors, QueryOptions, RegistryId,
-    RelationWitness, ServiceLevel,
+    CandidateDomains, DomainTag, ExtensionEnv, GovernedOutcome, InternedOutcome,
+    NativeSparqlEngine, PfAttestation, PreparedExecution, PropertyFunctionRegistry, QueryGovernors,
+    QueryOptions, RegistryId, RelationWitness, ServiceLevel,
 };
 
 use crate::admission::BoundMode;
@@ -611,37 +612,74 @@ pub(crate) trait ExclusionLookup: fmt::Debug {
     /// fail — the term did not decode, the dataset read was refused, the
     /// producer answered with more rows than its declared bound admits. None of
     /// them degrades to a verdict.
-    fn look_up(&self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError>;
+    ///
+    /// `&mut self` because a lookup is a prepared execution that is bound and run
+    /// once per candidate, and a prepared execution is bound and run through a
+    /// unique borrow — see [`PreparedExecution`].
+    fn look_up(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError>;
 }
 
-/// The exclusion lookup [`execute`] compiles: one prepared query, run against
+/// How a candidate this execution read is bound into an exclusion lookup, decided
+/// once at the ranking read that named it rather than once per lookup.
+///
+/// The fusion stage asks for verdicts by [`Term`], the canonical lexical the
+/// frontier keys candidates by. Turning that text back into a term on every lookup
+/// would re-parse, per candidate, a term the ranking read already held as a value;
+/// and binding it by value would then re-ground it. The ranking read is where the
+/// term is in hand, so that is where this is decided: the dataset's own id for it
+/// where the dataset holds the term — bound through
+/// [`PreparedExecution::bind_id`], which resolves it against the same view the
+/// lookup runs over — and the value itself where the dataset does not, which is the
+/// honest case for a producer whose index names terms the graph never mentions.
+#[derive(Clone, Debug)]
+enum CandidateBinding<I> {
+    /// The dataset holds the term, at this id.
+    Id(I),
+    /// The dataset does not hold the term; it is bound by value.
+    Value(TermValue),
+}
+
+/// Every candidate the ranking reads of one [`execute_within`] call named, keyed by
+/// the [`Term`] the fusion stage will ask about. Shared by that call's lookups.
+type CandidateIndex<I> = HashMap<Term, CandidateBinding<I>>;
+
+/// The exclusion lookup [`execute`] compiles: one prepared execution, run against
 /// the caller's dataset once per candidate.
 ///
-/// Prepared **once** per stratum and substituted per candidate, which is the
-/// whole reason this is a value rather than a closure over a query string: a
-/// text re-parsed per candidate would pay a parse and a feasibility pass for a
-/// question whose answer is a row count.
+/// Prepared **once** per stratum and bound per candidate, which is the whole
+/// reason this is a value rather than a closure over a query string: a text
+/// re-parsed per candidate would pay a parse and a feasibility pass for a question
+/// whose answer is a row count. The candidate is bound into the handle's one
+/// declared parameter, by the dataset id the ranking read already resolved where
+/// there is one (see [`CandidateBinding`]), and the substitution pushes it into the
+/// producer's call, so the producer is invoked with the candidate position bound
+/// and answers the one question asked — a point read, not a scan of its index.
 struct DatasetExclusion<'d, D: DatasetView + Sync> {
     /// The stratum this lookup answers for, so its refusals name a producer
     /// rather than a query.
     stratum: Iri,
-    /// The engine the prepared plan is run on. Owned, because the stream outlives
-    /// the `execute` call that built it and an engine is not a fact about the
-    /// dataset.
-    engine: NativeSparqlEngine,
-    /// The extension environment the plan was prepared against, shared with the
-    /// run that produced the rows. A plan prepared against one registry and run
-    /// under another is refused by the evaluator, so the same value must reach
-    /// both calls — see [`execute_within`]'s own single-environment note.
+    /// The engine the execution was prepared on, shared by every lookup the same
+    /// [`execute_within`] call compiled. Shared rather than owned per stratum
+    /// because the stream outlives that call, and an engine is not a fact about
+    /// any one stratum.
+    engine: Rc<NativeSparqlEngine>,
+    /// The extension environment the execution was prepared against, shared with
+    /// the run that produced the rows. An execution prepared against one registry
+    /// and run under another is refused by the evaluator, so the same value must
+    /// reach both calls — see [`execute_within`]'s own single-environment note.
     env: Arc<ExtensionEnv>,
-    /// The plan itself, prepared once.
-    prepared: Arc<PreparedQuery>,
+    /// The lookup itself, prepared once, with the candidate as its one parameter.
+    execution: PreparedExecution,
+    /// The candidate parameter's slot in [`Self::execution`], resolved once.
+    slot: usize,
+    /// How each candidate this execution read is bound, shared by its lookups.
+    candidates: Rc<CandidateIndex<D::Id>>,
     /// The caller's dataset, read exactly as the ranking read it.
     dataset: &'d D,
 }
 
 impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
-    /// Names the stratum and nothing else. A prepared plan has no `Debug` a
+    /// Names the stratum and nothing else. A prepared execution has no `Debug` a
     /// reader could act on, and a dataset's is unbounded — printing either would
     /// make a stream's `{:?}` a dump of the store it was read from.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -652,55 +690,51 @@ impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
 }
 
 impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
-    fn look_up(&self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+    fn look_up(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        let stratum = &self.stratum;
         let failed = |reason: String| ProtocolError::ExclusionLookupFailed {
-            stratum: self.stratum.as_str().to_owned(),
+            stratum: stratum.as_str().to_owned(),
             reason,
         };
-        // The frontier keys candidates by their canonical lexical, so the term
-        // is read back through the crate's own decoder rather than rebuilt from
-        // a copy kept for the purpose. A term this layer wrote and cannot read
-        // back is a defect in one of the two halves, and it is reported as the
-        // failed lookup it is rather than answered as `Possible`.
-        let value = decode_term(candidate.as_str())
-            .map_err(|reason| failed(format!("candidate {candidate} did not decode: {reason}")))?;
+        let bound = match self.candidates.get(candidate) {
+            Some(CandidateBinding::Id(id)) => self.execution.bind_id(self.slot, self.dataset, *id),
+            Some(CandidateBinding::Value(value)) => self.execution.bind(self.slot, value.clone()),
+            // A candidate no ranking read of this execution named: one from a
+            // stream assembled elsewhere and fused beside these. Its canonical
+            // lexical is the only form it arrives in, so it is read back through the
+            // crate's own decoder. A term this layer wrote and cannot read back is a
+            // defect in one of the two halves, and it is reported as the failed
+            // lookup it is rather than answered as `Possible`.
+            None => {
+                let value = decode_term(candidate.as_str()).map_err(|reason| {
+                    failed(format!("candidate {candidate} did not decode: {reason}"))
+                })?;
+                self.execution.bind(self.slot, value)
+            }
+        };
+        bound.map_err(|diagnostic| failed(diagnostic.to_string()))?;
         let options = QueryOptions {
             env: &self.env,
             ..QueryOptions::EMPTY
         };
-        let outcome = self
+        // Ungoverned, and the governed ranking read's reasoning is why that is no
+        // loss: that lane declines every caller-settable ceiling and is taken for
+        // its receipt, and a lookup's receipt is its row count, which the visitor
+        // reads here.
+        let rows = self
             .engine
-            .query_prepared_governed_view(
+            .execute(
+                &mut self.execution,
                 self.dataset,
-                &self.prepared,
-                &[(CANDIDATE_NAME.to_owned(), value)],
                 options,
-                &QueryGovernors::UNBOUNDED,
+                |outcome| match outcome {
+                    InternedOutcome::Solutions(solutions) => Some(solutions.len()),
+                    InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => None,
+                },
             )
-            .map_err(|diagnostic| failed(diagnostic.to_string()))?;
-        let rows = match outcome {
-            GovernedOutcome::Complete {
-                result: SparqlResult::Solutions { rows, .. },
-                ..
-            } => rows,
-            GovernedOutcome::Complete { .. } => {
-                return Err(failed(
-                    "the exclusion lookup did not return solutions".to_owned(),
-                ));
-            }
-            GovernedOutcome::BudgetExhausted(exhausted) => {
-                // The same refusal, and the same argument, `execute_within`
-                // makes for the ranking read: this lane declines every
-                // caller-settable ceiling, so a trip means something other than
-                // this call's governors stopped it — and a stopped lookup has
-                // measured nothing.
-                return Err(failed(format!(
-                    "the lookup declined every ceiling, yet {} stopped it",
-                    exhausted.tripped
-                )));
-            }
-        };
-        let pulled = u64::try_from(rows.len()).unwrap_or(u64::MAX);
+            .map_err(|diagnostic| failed(diagnostic.to_string()))?
+            .ok_or_else(|| failed("the exclusion lookup did not return solutions".to_owned()))?;
+        let pulled = u64::try_from(rows).unwrap_or(u64::MAX);
         // The point bound a declared exclusion basis rests on, derived from the
         // ceiling the lookup is read under rather than written twice: the text
         // asks for one row past the bound precisely so a producer that beats it
@@ -729,7 +763,7 @@ impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
             };
             return Err(failed(breach.to_string()));
         }
-        Ok(if rows.is_empty() {
+        Ok(if pulled == 0 {
             ExclusionVerdict::Excluded
         } else {
             ExclusionVerdict::Possible
@@ -811,7 +845,7 @@ impl<'d> RankedStreamImpl<'d> {
     /// The stream answers no exclusion lookup. That is the honest state for a
     /// caller-built stream: an exclusion verdict is a measurement against a
     /// dataset, and this constructor is handed rows rather than a dataset to
-    /// take one from. [`with_exclusion`](Self::with_exclusion) is where
+    /// take one from. [`attach_exclusion`](Self::attach_exclusion) is where
     /// [`execute`] attaches the prepared lookup it compiled.
     #[must_use]
     pub fn new(rows: Vec<(u64, Term, RowBlock)>, ending: StreamEnding) -> Self {
@@ -834,7 +868,7 @@ impl<'d> RankedStreamImpl<'d> {
     /// Record how many rows the read that produced these rows really returned.
     ///
     /// A builder step rather than a parameter of [`new`](Self::new) for the
-    /// reason [`with_exclusion`](Self::with_exclusion) is: only the party that
+    /// reason [`attach_exclusion`](Self::attach_exclusion) is: only the party that
     /// ran the read knows the number, and the rows reach this type after the
     /// depth has already been applied to them. A caller-assembled stream
     /// attaches nothing and reports the rows it was handed.
@@ -861,9 +895,13 @@ impl<'d> RankedStreamImpl<'d> {
     /// only where the producer declared a basis and only where this layer
     /// rendered the query, and a stream without one is not a stream missing
     /// anything.
-    pub(crate) fn with_exclusion(mut self, lookup: Box<dyn ExclusionLookup + 'd>) -> Self {
+    ///
+    /// On a stream already in place rather than as a consuming builder step:
+    /// [`execute_within`] attaches its lookups after every stratum has been read,
+    /// because a lookup binds candidates any stratum of the call may have named,
+    /// and those are only all known once the last ranking read is in.
+    pub(crate) fn attach_exclusion(&mut self, lookup: Box<dyn ExclusionLookup + 'd>) {
         self.exclusion = Some(lookup);
-        self
     }
 
     /// Ask this stratum's producer whether `candidate` is out of its reach.
@@ -879,7 +917,7 @@ impl<'d> RankedStreamImpl<'d> {
     // synchronous, and the `async` shape is the fusion stage's protocol.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
-        match self.exclusion.as_ref() {
+        match self.exclusion.as_mut() {
             Some(lookup) => lookup.look_up(candidate),
             None => Err(ProtocolError::ExclusionUnavailable),
         }
@@ -1034,8 +1072,22 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
     // identity before the check could be reached.
     compiled.tagged_as_assembled()?;
 
-    let engine = NativeSparqlEngine::new();
+    // One engine for the whole call, shared with the exclusion lookups it
+    // compiles: they run after this call returns, on executions prepared here.
+    let engine = Rc::new(NativeSparqlEngine::new());
     let mut streams = Vec::with_capacity(compiled.units.len());
+    // The lookups this call compiled, attached once every ranking read is in —
+    // see `CandidateIndex` — beside the index of each candidate those reads named.
+    // The index is filled only when some stratum compiled a lookup, because it is
+    // read by lookups and by nothing else.
+    let mut lookups: Vec<(usize, Iri, PreparedExecution, usize)> = Vec::new();
+    let mut candidates: CandidateIndex<D::Id> = HashMap::new();
+    let exclusions: Vec<Option<String>> = compiled
+        .units
+        .iter()
+        .map(|unit| unit.exclusion_sparql())
+        .collect();
+    let index_candidates = exclusions.iter().any(Option::is_some);
     let mut statuses = HashMap::with_capacity(compiled.units.len());
     // The registry is named identically at prepare and at evaluation: the
     // evaluator refuses a plan prepared against a different registry than the
@@ -1063,7 +1115,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         ..QueryOptions::EMPTY
     };
 
-    for unit in &compiled.units {
+    for (unit, exclusion) in compiled.units.iter().zip(exclusions) {
         // There is no empty-text arm here, and there is nothing left for one to catch.
         // An empty supplied text is not a query, so `StratumUnit::new` refuses it
         // outright (`UnitError::NotAQuery`), and a rendered text is assembled from a
@@ -1088,39 +1140,40 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         // here and contributing no stream, rather than carried to a lookup that
         // fails once per candidate at read time.
         //
-        // The candidate is DECLARED to the prepare, not merely substituted at run
-        // time. A lookup is one prepared plan run once per candidate, so the
-        // admission pass sees `?candidate` as a free variable unless it is told
-        // otherwise — and for a producer that takes a depth, a free candidate beside
-        // a free depth is a call no mode serves at all, while a free candidate beside
-        // a BOUND depth is the ranked question whose absences are not exclusions.
-        // Declaring it here is what puts the call in the candidate-bound mode a
-        // membership basis is admitted against. The declaration is enforced at
-        // execution: the same name is supplied for every lookup, and a plan that
-        // declared it and did not supply it is refused rather than run free.
-        let exclusion = match unit.exclusion_sparql() {
+        // The candidate is DECLARED to the prepare as the execution's parameter, not
+        // merely substituted at run time. A lookup is one prepared execution run
+        // once per candidate, so the admission pass sees `?candidate` as a free
+        // variable unless it is told otherwise — and for a producer that takes a
+        // depth, a free candidate beside a free depth is a call no mode serves at
+        // all, while a free candidate beside a BOUND depth is the ranked question
+        // whose absences are not exclusions. Declaring it is what puts the call in
+        // the candidate-bound mode a membership basis is admitted against, and the
+        // execution refuses to run with it unbound, so it cannot be run free.
+        let exclusion = match exclusion {
             None => None,
-            Some(text) => match engine.prepare_query_with_parameters(
-                &text,
-                None,
-                options(),
-                &[CANDIDATE_NAME],
-            ) {
-                Ok(prepared) => Some(prepared),
-                Err(diagnostic) => {
-                    statuses.insert(
-                        unit.stratum.clone(),
-                        ProducerStatus::ExecutionFailed {
-                            reason: format!(
-                                "stratum {}: the exclusion lookup its producer declared could not \
-                                 be prepared: {diagnostic}",
-                                unit.stratum
-                            ),
-                        },
-                    );
-                    continue;
+            Some(text) => {
+                match engine.prepare_execution(&text, None, &[CANDIDATE_NAME], options()) {
+                    Ok(execution) => {
+                        let slot = execution
+                            .slot(CANDIDATE_NAME)
+                            .expect("the one parameter this execution was prepared with");
+                        Some((execution, slot))
+                    }
+                    Err(diagnostic) => {
+                        statuses.insert(
+                            unit.stratum.clone(),
+                            ProducerStatus::ExecutionFailed {
+                                reason: format!(
+                                    "stratum {}: the exclusion lookup its producer declared \
+                                     could not be prepared: {diagnostic}",
+                                    unit.stratum
+                                ),
+                            },
+                        );
+                        continue;
+                    }
                 }
-            },
+            }
         };
         let sparql = unit.sparql_at(depth);
         let prepared = match engine.prepare_query_with_options(&sparql, None, options()) {
@@ -1169,6 +1222,15 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                     })?;
                 match rank_candidates(&variables, &rows, &unit.contract.domains) {
                     Ok(ranked) => {
+                        if index_candidates {
+                            index_candidates_into(
+                                &mut candidates,
+                                &variables,
+                                &rows,
+                                &ranked,
+                                dataset,
+                            );
+                        }
                         // `?`, not a per-stratum status: a producer that beat
                         // its own declaration broke the number every other
                         // stratum's admission and ordering rested on, and the
@@ -1188,16 +1250,10 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                         // off, and a figure read after it would report every
                         // bounded read as one row cheaper than it was.
                         let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
-                        let mut stream = RankedStreamImpl::new(ranked, ending)
+                        let stream = RankedStreamImpl::new(ranked, ending)
                             .with_materialised_rows(materialised);
-                        if let Some(prepared) = exclusion {
-                            stream = stream.with_exclusion(Box::new(DatasetExclusion {
-                                stratum: unit.stratum.clone(),
-                                engine: NativeSparqlEngine::new(),
-                                env: Arc::clone(&env),
-                                prepared,
-                                dataset,
-                            }));
+                        if let Some((execution, slot)) = exclusion {
+                            lookups.push((streams.len(), unit.stratum.clone(), execution, slot));
                         }
                         streams.push(StratumStream {
                             stratum: unit.stratum.clone(),
@@ -1260,7 +1316,54 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         }
     }
 
+    let candidates = Rc::new(candidates);
+    for (position, stratum, execution, slot) in lookups {
+        streams[position]
+            .stream
+            .attach_exclusion(Box::new(DatasetExclusion {
+                stratum,
+                engine: Rc::clone(&engine),
+                env: Arc::clone(&env),
+                execution,
+                slot,
+                candidates: Rc::clone(&candidates),
+                dataset,
+            }));
+    }
+
     Ok(ExecutionResult { streams, statuses })
+}
+
+/// Record how each of `ranked`'s candidates is bound into an exclusion lookup —
+/// see [`CandidateBinding`].
+///
+/// `ranked` is [`rank_candidates`]' answer over `rows`, one entry per row in row
+/// order, so the two are zipped rather than the lexical being rendered a second
+/// time. A candidate several strata named is recorded once: the dataset's id for a
+/// term does not depend on which read found it.
+fn index_candidates_into<D: DatasetView>(
+    index: &mut CandidateIndex<D::Id>,
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+    ranked: &[(u64, Term, RowBlock)],
+    dataset: &D,
+) {
+    let Some(column) = variables.iter().position(|name| name == CANDIDATE_NAME) else {
+        return;
+    };
+    for ((_, term, _), row) in ranked.iter().zip(rows) {
+        if index.contains_key(term) {
+            continue;
+        }
+        let Some(value) = row.get(column).and_then(Option::as_ref) else {
+            continue;
+        };
+        let binding = dataset.term_id_by_value(value).map_or_else(
+            || CandidateBinding::Value(value.clone()),
+            CandidateBinding::Id,
+        );
+        index.insert(term.clone(), binding);
+    }
 }
 
 /// What one stratum's read came to: the rows that reach the stream, how the read

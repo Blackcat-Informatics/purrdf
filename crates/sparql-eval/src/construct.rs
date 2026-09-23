@@ -38,7 +38,10 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::solution::{Solution, VarSchema};
-use crate::template::{instantiate_predicate, instantiate_term, positionally_ill_formed};
+use crate::template::{
+    PredicateOrdinal, TermOrdinal, TripleOrdinal, instantiate_predicate, instantiate_term,
+    positionally_ill_formed, resolve_predicate, resolve_term, resolve_triple,
+};
 use crate::{DetHashMap, DetHashSet};
 
 /// The `rdf:reifies` predicate IRI — the reification-layer indirection edge.
@@ -411,17 +414,27 @@ enum GraphSlot<'a> {
     Default,
     /// A ground IRI, interned once before the row loop.
     Fixed(TermId),
-    /// A graph variable, resolved against each row's bindings.
-    Bound(&'a NamedNodePattern),
+    /// A graph variable, resolved against each row's bindings. The column ordinal
+    /// is resolved once here, at plan time — see [`TermOrdinal`]'s doc comment —
+    /// so [`Self::resolve`] never scans the schema per row.
+    Bound(&'a NamedNodePattern, PredicateOrdinal),
 }
 
 impl<'a> GraphSlot<'a> {
-    /// Classify one template quad's graph term, interning a ground IRI now.
-    fn new(graph: Option<&'a NamedNodePattern>, builder: &mut RdfDatasetBuilder) -> Self {
+    /// Classify one template quad's graph term, interning a ground IRI now and
+    /// resolving a graph VARIABLE's column ordinal against `schema` now — both
+    /// before the row loop starts.
+    fn new(
+        graph: Option<&'a NamedNodePattern>,
+        schema: &VarSchema,
+        builder: &mut RdfDatasetBuilder,
+    ) -> Self {
         match graph {
             None => Self::Default,
             Some(NamedNodePattern::NamedNode(n)) => Self::Fixed(builder.intern_iri(n.as_str())),
-            Some(pattern @ NamedNodePattern::Variable(_)) => Self::Bound(pattern),
+            Some(pattern @ NamedNodePattern::Variable(_)) => {
+                Self::Bound(pattern, resolve_predicate(pattern, schema))
+            }
         }
     }
 
@@ -437,15 +450,14 @@ impl<'a> GraphSlot<'a> {
     fn resolve<D: DatasetView + Sync>(
         &self,
         row: &Solution<D::Id>,
-        schema: &VarSchema,
         builder: &mut RdfDatasetBuilder,
         ctx: &EvalCtx<'_, D>,
     ) -> Option<GraphId> {
         match self {
             Self::Default => Some(GraphId::DEFAULT),
             Self::Fixed(id) => Some(GraphId(Some(*id))),
-            Self::Bound(pattern) => {
-                let value = instantiate_predicate(pattern, row, schema, ctx)?;
+            Self::Bound(pattern, ordinal) => {
+                let value = instantiate_predicate(pattern, ordinal, row, ctx)?;
                 if !matches!(value, TermValue::Iri(_)) {
                     return None;
                 }
@@ -460,7 +472,7 @@ impl<'a> GraphSlot<'a> {
     fn ground_graph(&self) -> GraphId {
         match self {
             Self::Fixed(id) => GraphId(Some(*id)),
-            Self::Default | Self::Bound(_) => GraphId::DEFAULT,
+            Self::Default | Self::Bound(_, _) => GraphId::DEFAULT,
         }
     }
 }
@@ -501,10 +513,27 @@ fn build_construct_graph<D: DatasetView + Sync>(
     // the previous `push_quad(.., None)` calls exactly.
     let graph_slots: Vec<GraphSlot<'_>> = template
         .iter()
-        .map(|quad| GraphSlot::new(quad.graph.as_ref(), &mut builder))
+        .map(|quad| GraphSlot::new(quad.graph.as_ref(), schema, &mut builder))
         .collect();
     // The projection-wide graph (loss declarations, folded `rdf:List` cells).
-    let uniform_slot = GraphSlot::new(plan.uniform_graph, &mut builder);
+    let uniform_slot = GraphSlot::new(plan.uniform_graph, schema, &mut builder);
+
+    // Each template quad's subject/predicate/object column ordinals, resolved
+    // ONCE against `schema` — the schema is a plan constant for this whole pass,
+    // so this is the row loop's `index_of` cost paid exactly once per template
+    // position, not once per (row, position) pair. See `TermOrdinal`'s doc
+    // comment.
+    let template_ordinals: Vec<TripleOrdinal> = template
+        .iter()
+        .map(|quad| resolve_triple(&quad.triple, schema))
+        .collect();
+    // Each dropped-reifier's inner triple-term pattern, ordinal-resolved once the
+    // same way — `emit_dropped_losses` runs inside the row loop below.
+    let dropped_ordinals: Vec<TermOrdinal> = plan
+        .dropped
+        .iter()
+        .map(|d| resolve_term(&d.inner, schema))
+        .collect();
 
     let has_reifier_decls = !plan.reifier_decl_indices.is_empty();
     // Template-position membership mask for pass 2's "already declared in pass 1"
@@ -529,17 +558,18 @@ fn build_construct_graph<D: DatasetView + Sync>(
 
         if !has_reifier_decls {
             // FAST NO-OP PATH: no rdf:reifies triple in the template → plain quads.
-            for (quad, slot) in template.iter().zip(&graph_slots) {
+            for ((quad, slot), ordinal) in template.iter().zip(&graph_slots).zip(&template_ordinals)
+            {
                 // The graph is resolved FIRST: a statement its graph slot skips
                 // is not instantiated at all, so it mints no blank labels and
                 // consumes no counter values on the way to being dropped.
-                let Some(graph_id) = slot.resolve(row, schema, &mut builder, ctx) else {
+                let Some(graph_id) = slot.resolve(row, &mut builder, ctx) else {
                     continue;
                 };
                 if let Some((s, p, o)) = instantiate(
                     &quad.triple,
+                    ordinal,
                     row,
-                    schema,
                     &mut builder,
                     &mut blanks,
                     ctx,
@@ -557,12 +587,13 @@ fn build_construct_graph<D: DatasetView + Sync>(
             let instantiated: Vec<Option<Instantiated>> = template
                 .iter()
                 .zip(&graph_slots)
-                .map(|(quad, slot)| {
-                    let graph = slot.resolve(row, schema, &mut builder, ctx)?;
+                .zip(&template_ordinals)
+                .map(|((quad, slot), ordinal)| {
+                    let graph = slot.resolve(row, &mut builder, ctx)?;
                     let (s, p, o) = instantiate(
                         &quad.triple,
+                        ordinal,
                         row,
-                        schema,
                         &mut builder,
                         &mut blanks,
                         ctx,
@@ -629,12 +660,12 @@ fn build_construct_graph<D: DatasetView + Sync>(
             // a non-IRI) skips the declaration exactly as it skips a statement:
             // the row emitted nothing into a graph, so there is no graph to
             // declare the loss in.
-            && let Some(graph_id) = uniform_slot.resolve(row, schema, &mut builder, ctx)
+            && let Some(graph_id) = uniform_slot.resolve(row, &mut builder, ctx)
         {
             emit_dropped_losses(
                 plan.dropped,
+                &dropped_ordinals,
                 row,
-                schema,
                 &mut builder,
                 ctx,
                 ids,
@@ -1064,8 +1095,8 @@ fn collect_term_pattern_vars(term: &TermPattern, out: &mut BTreeSet<String>) {
 /// see [`ConstructPlan::uniform_graph`].
 fn emit_dropped_losses<D: DatasetView + Sync>(
     dropped: &[DroppedReifier],
+    ordinals: &[TermOrdinal],
     row: &Solution<D::Id>,
-    schema: &VarSchema,
     builder: &mut RdfDatasetBuilder,
     ctx: &mut EvalCtx<'_, D>,
     (proj_loss_id, loss_code_id, lost_reifies_id): (TermId, TermId, TermId),
@@ -1074,12 +1105,12 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
     // One blank-label scope per dropped reifier, exactly as before — CLEARED per
     // iteration rather than reallocated (`mint_blank` only `get`s and inserts here).
     let mut blanks: DetHashMap<String, String> = DetHashMap::default();
-    for d in dropped {
+    for (d, ordinal) in dropped.iter().zip(ordinals) {
         // Materialize the concrete reified triple term for this row. An unbound
         // inner variable yields `None` — there is no concrete triple to declare
         // lost, so the declaration is (correctly) skipped for this row.
         blanks.clear();
-        let Some(inner_term) = instantiate_term(&d.inner, row, schema, &mut blanks, ctx) else {
+        let Some(inner_term) = instantiate_term(&d.inner, ordinal, row, &mut blanks, ctx) else {
             continue;
         };
 
@@ -1169,16 +1200,16 @@ fn loss_node_label(code: &str, inner: &TermValue) -> String {
 /// than as a parameter here, so this signature stays independent of it.
 fn instantiate<D: DatasetView + Sync>(
     tp: &TriplePattern,
+    ordinal: &TripleOrdinal,
     row: &Solution<D::Id>,
-    schema: &VarSchema,
     builder: &mut RdfDatasetBuilder,
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
     tracker: &mut MintTracker,
 ) -> Option<(TermId, TermId, TermId)> {
-    let s = instantiate_term(&tp.subject, row, schema, blanks, ctx)?;
-    let p = instantiate_predicate(&tp.predicate, row, schema, ctx)?;
-    let o = instantiate_term(&tp.object, row, schema, blanks, ctx)?;
+    let s = instantiate_term(&tp.subject, &ordinal.subject, row, blanks, ctx)?;
+    let p = instantiate_predicate(&tp.predicate, &ordinal.predicate, row, ctx)?;
+    let o = instantiate_term(&tp.object, &ordinal.object, row, blanks, ctx)?;
 
     // Positional validity (§16.2): the asserted subject must be an IRI or a blank
     // node, the predicate must be an IRI, and an object triple term must itself be
@@ -1347,6 +1378,58 @@ mod tests {
         for q in out.quads() {
             assert!(matches!(out.resolve(q.p), TermRef::Iri(p) if p == RELATED));
         }
+    }
+
+    /// `n` distinct `:s{i} :knows :o{i}` edges, so a `CONSTRUCT` over
+    /// `?s :knows ?o` produces exactly `n` solution rows, each with a distinct
+    /// subject/object pair (so no row-independent join collapses them).
+    fn knows_graph_n(n: usize) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri(KNOWS);
+        for i in 0..n {
+            let s = b.intern_iri(&format!("http://ex/s{i}"));
+            let o = b.intern_iri(&format!("http://ex/o{i}"));
+            b.push_quad(s, knows, o, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// Regression guard: `instantiate_term`/`instantiate_predicate` must
+    /// resolve a template's column ordinals ONCE per template (before the
+    /// `for row in &seq.rows` loop in `build_construct_graph`), never once per
+    /// (row, position) pair. `VarSchema::index_of` is `O(columns)` below
+    /// `INDEXED_ABOVE`, so a per-row caller would make `CONSTRUCT`'s per-row cost
+    /// scale with row count — exactly the false claim the `INDEXED_ABOVE` doc
+    /// comment used to make. Running the SAME two-variable, two-position template
+    /// (`?s :related ?o`, below `INDEXED_ABOVE`) over two different row counts and
+    /// asserting the `index_of` call delta is IDENTICAL both times is a guard that
+    /// fails loudly — not silently — if a future edit reintroduces `index_of` into
+    /// either row loop.
+    #[test]
+    fn index_of_is_not_called_per_construct_row() {
+        let template = related_template();
+
+        let small = knows_graph_n(3);
+        let mut ctx = EvalCtx::new(&small);
+        VarSchema::reset_index_of_calls();
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 3);
+        let small_calls = VarSchema::index_of_call_count();
+
+        let large = knows_graph_n(300);
+        let mut ctx = EvalCtx::new(&large);
+        VarSchema::reset_index_of_calls();
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 300);
+        let large_calls = VarSchema::index_of_call_count();
+
+        assert_eq!(
+            small_calls, large_calls,
+            "index_of call count must be independent of solution-row count \
+             (3 rows: {small_calls} calls, 300 rows: {large_calls} calls) — a \
+             per-row caller of index_of has come back, so CONSTRUCT's cost \
+             now scales with the row count instead of staying constant per template"
+        );
     }
 
     // ── CONSTRUCT GRAPH <iri>: quads, not triples ───────────────────────────

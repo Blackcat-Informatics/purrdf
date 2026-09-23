@@ -411,10 +411,11 @@ the bound beside it is the one you will be held to.
 
 There is a second condition, and it is the one that decides whether a basis is
 declarable at all: **the lookup must arrive in the mode that answers it.** An
-exclusion lookup is your own call with the candidate supplied through the
-evaluator's substitution channel, and the plan is prepared once per stratum. The
-candidate is therefore a *variable* at the moment the call is admitted, and
-whatever mode that admission selects is the mode your relation is invoked in.
+exclusion lookup is your own call with the candidate bound as the parameter of a
+prepared execution, and that execution is prepared once per stratum. The
+candidate is therefore a *variable* in the text at the moment the call is
+admitted, and whatever mode that admission selects is the mode your relation is
+invoked in.
 
 For the lexical relation this is settled by its general mode alone: `fbffff`
 leaves every position but the needle free, so a candidate-bound call has one
@@ -438,14 +439,16 @@ a lookup is not asking for an offer to be filled.
 
 **The candidate is declared to the prepare, not merely substituted.** The
 consumer prepares the lookup through
-[`prepare_query_with_parameters`](purrdf_sparql_eval::NativeSparqlEngine::prepare_query_with_parameters),
-naming the candidate variable, and the feasibility pass treats it as bound at the
-point the substitution really binds it. So the admission pass sees the
-candidate-bound, depth-free pattern, and that is the mode your relation receives.
-The declaration is **enforced**: a plan admitted on it is refused, by name, if an
-execution does not supply the parameter — because running it with the position
-free would invoke a relation in a mode nobody declared, which is the whole thing
-the promise was traded for.
+[`prepare_execution`](purrdf_sparql_eval::NativeSparqlEngine::prepare_execution),
+naming the candidate variable as the execution's parameter, and the feasibility
+pass treats it as bound at the point the binding really lands. So the admission
+pass sees the candidate-bound, depth-free pattern, and that is the mode your
+relation receives: the bound candidate is written into your call's candidate
+position, so each lookup is one point read rather than a scan a join narrows.
+The declaration is **enforced**: an execution refuses to run, by name, while
+its parameter is unbound — because running it with the position free would
+invoke a relation in a mode nobody declared, which is the whole thing the
+promise was traded for.
 
 Both shipped vector relations sit on exactly that footing. Each declares the
 count-free membership mode `bbff` beside its general `fbbf`, each answers it by a

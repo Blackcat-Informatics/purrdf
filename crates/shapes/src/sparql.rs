@@ -11,7 +11,7 @@
 //! Both run the [`NativeSparqlEngine`] over the borrowed `Arc<RdfDataset>` — there is
 //! no oxigraph SPARQL engine and no materialized `Store`. Focus-node substitution
 //! uses [`Prebinding`] (the native replacement for oxigraph's
-//! `PreparedSparqlQuery::substitute_variable`,  GAP-A) — the borrowed-name
+//! `PreparedSparqlQuery::substitute_variable`) — the borrowed-name
 //! pre-binding list the evaluator's interned entry points take, so a validation
 //! does not re-allocate the shape's variable names once per focus node.
 
@@ -21,13 +21,13 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use ::purrdf::TermValue;
-use ::purrdf::{DatasetView, RdfDataset};
+use ::purrdf::{DatasetView, FastMap, RdfDataset};
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
     AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, InternedGoverned,
     InternedOutcome, InternedRequest, InternedSolutions, NativeSparqlEngine, Prebinding,
-    PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, UserFunctionRegistry, ValueAggregate,
-    fold_values, order_values,
+    PreparedExecution, PropertyFunctionRegistry, QueryOptions, ShaclPrebinding,
+    UserFunctionRegistry, ValueAggregate, fold_values, order_values,
 };
 
 use crate::report::{Severity, ValidationResult};
@@ -134,9 +134,12 @@ pub fn eval_sparql_constraint(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
+    // No id: this door takes an owned focus term from a caller who never resolved
+    // one, so there is nothing to hand the id door. See [`bind_focus`].
     eval_sparql_constraint_view(
         dataset,
         focus,
+        None,
         select,
         component,
         source_shape,
@@ -148,10 +151,14 @@ pub fn eval_sparql_constraint(
 }
 
 /// Internal view-generic implementation of [`eval_sparql_constraint`].
+///
+/// `focus_id` is `dataset`'s own id for `focus` when the caller holds one in THIS
+/// view's id space, and `None` otherwise; [`bind_focus`] is what it reaches.
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
 pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     focus: &Term,
+    focus_id: Option<D::Id>,
     select: &str,
     component: &NamedNode,
     source_shape: &Term,
@@ -160,21 +167,29 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
-    // Pre-bind `$this` to THIS focus node (GAP-A substitution — the native
-    // replacement for oxigraph's per-focus `PreparedSparqlQuery::substitute_variable`).
+    // Pre-bind `$this` to THIS focus node (the native replacement for oxigraph's
+    // per-focus `PreparedSparqlQuery::substitute_variable`).
     // This MUST be per-focus substitution, not an unsubstituted run grouped by a free
     // `$this`: a constraint whose `$this` appears only inside a `FILTER NOT EXISTS`/
     // negation has no positive binding for `$this` when run unsubstituted, so the
     // unsubstituted query returns no rows and silently drops the violation. The parse
     // is memoized by the thread-local engine's plan cache, so per-focus evaluation
     // re-runs the plan, not the parse.
-    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3);
-    subs.push(Prebinding {
-        variable: "this",
-        value: focus.to_term_value(),
-    });
-    push_shape_context(&mut subs, shapes_graph_iri, current_shape);
-    run_select_with_shacl_prebinding_view(dataset, select, &subs, |solutions| {
+    //
+    // The pre-bindings are written straight into a PREPARED handle's slots rather
+    // than into a per-focus-node list: the parameter names are shape text, constant
+    // across every focus node, and the query text is constant too, so a `&str` run
+    // would re-hash the whole query to probe the plan cache and re-intern the same
+    // names on every focus node. The handle is this worker's, checked out and put
+    // back around the run, because focus nodes are fanned across `rayon` workers and
+    // no single handle can span the focus set.
+    let parameters = this_and_shape_context_names(shapes_graph_iri, current_shape);
+    let bind = |execution: &mut ShaclExecution| {
+        bind_focus(execution, 0, dataset, focus, focus_id)?;
+        bind_shape_context(execution, 1, shapes_graph_iri, current_shape)?;
+        Ok(())
+    };
+    let project = |solutions: &InternedSolutions<'_, '_, D>| {
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
 
@@ -241,8 +256,9 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
             });
         }
         Ok(out)
-    })
-    .map_err(|e| format!("SPARQLConstraint {e}"))
+    };
+    run_cached_select_with_shacl_prebinding_view(dataset, select, parameters, bind, project)
+        .map_err(|e| format!("SPARQLConstraint {e}"))
 }
 
 /// Evaluate a single SPARQL scalar expression against `dataset`, with `args`
@@ -322,24 +338,51 @@ pub(crate) fn eval_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
             value: term.to_term_value(),
         })
         .collect();
-    run_select_generic_view(dataset, select, &subs, |solutions| {
-        if solutions.len() > 1 {
-            return Err(format!(
-                "produced {} solution rows (expected exactly one)",
-                solutions.len()
-            ));
-        }
-        let Some(row) = solutions.rows().first() else {
-            // No row at all is a degenerate/undef result → no value.
-            return Ok(None);
-        };
-        Ok(solutions
-            .column("result")
-            .and_then(|i| solutions.cell(row, i))
-            .as_ref()
-            .map(term_value_to_native))
-    })
-    .map_err(|e| format!("scalar expression {e}"))
+    run_select_generic_view(dataset, select, &subs, project_scalar)
+        .map_err(|e| format!("scalar expression {e}"))
+}
+
+/// The single `?result` binding a scalar expression's wrapper SELECT produces.
+///
+/// Shared by the `&str` scalar door and both prepared ones, so "no row at all is a
+/// degenerate/undef result" and "more than one row is a hard error" are one decision
+/// rather than three copies of one.
+fn project_scalar<D: DatasetView + Sync>(
+    solutions: &InternedSolutions<'_, '_, D>,
+) -> Result<Option<Term>, String> {
+    if solutions.len() > 1 {
+        return Err(format!(
+            "produced {} solution rows (expected exactly one)",
+            solutions.len()
+        ));
+    }
+    let Some(row) = solutions.rows().first() else {
+        // No row at all is a degenerate/undef result → no value.
+        return Ok(None);
+    };
+    Ok(solutions
+        .column("result")
+        .and_then(|i| solutions.cell(row, i))
+        .as_ref()
+        .map(term_value_to_native))
+}
+
+/// [`eval_scalar_query_view`] on this worker's cached prepared handle.
+///
+/// The door for a scalar probe reached once per focus node from a loop `rayon` fans
+/// across workers, where no single handle can span the focus set.
+///
+/// # Errors
+///
+/// As [`eval_scalar_query_view`].
+pub(crate) fn eval_cached_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
+    dataset: &D,
+    select: &str,
+    parameters: &[&str],
+    bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
+) -> Result<Option<Term>, String> {
+    run_cached_select_generic_view(dataset, select, parameters, bind, project_scalar)
+        .map_err(|e| format!("scalar expression {e}"))
 }
 
 /// Run a SHACL 1.2 SPARQL-based node expression (SPARQL Extensions §6.1
@@ -709,51 +752,15 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     bnode_mint_prefix: Option<&str>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    // Snapshot both ambient scopes (an `Arc` clone each) BEFORE evaluating, so no
-    // `RefCell` borrow is held across the query: a `sh:sparql` body whose evaluation
-    // re-enters SHACL validation (a nested shape / SHACL-AF function) installs its own
-    // scopes via `borrow_mut`, which would panic ("already borrowed") if an outer
-    // immutable borrow were still live.
-    let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
-    let env = current_env().map_err(|e| format!("query evaluation error: {e}"))?;
-    let governors = current_governors();
-    // The ambient thread-local scope is genuinely optional (no `sh:sparql` body has
-    // ever installed one); an absent scope and the canonical `EMPTY` registry are the
-    // SAME value for every purpose `QueryOptions` cares about (see
-    // `AggregateRegistry::EMPTY`'s docs), so there is no longer a separate
-    // "empty but present" case to normalize away here — the old `.filter(|reg|
-    // !reg.is_empty())` step this replaced existed only to collapse that redundant
-    // second spelling, which the non-optional field no longer has.
-    //
-    // `static`, not a bare `&Registry::EMPTY` temporary: a `HashMap`-backed registry
-    // carries drop glue, which blocks Rust's rvalue static promotion for a reference
-    // that must outlive this one statement (it is read again below, once per branch),
-    // so it needs a genuine `'static` place to borrow from.
-    static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
-    let registry = functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS);
+    let scopes = AmbientScopes::snapshot()?;
     let request = InternedRequest {
         query,
         base_iri: None,
         substitutions,
     };
-    let options = QueryOptions {
-        prebinding: prebind,
-        functions: registry,
-        env: &env,
-        bnode_mint_prefix,
-        // The graph THIS query is reading, handed to any expression-bodied function
-        // it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a fixpoint round
-        // that rebuilt its dataset supplies the rebuilt one.
-        focus_graph: registry
-            .requires_focus_graph()
-            .then(|| dataset.focus_graph())
-            .flatten(),
-        // The custom-function call depth in force, so a recursion that reaches SPARQL
-        // and comes back keeps counting instead of restarting at zero.
-        call_depth: current_call_depth(),
-    };
+    let options = scopes.options(dataset, prebind, bnode_mint_prefix);
 
-    let Some(state) = governors else {
+    let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
             .with(|engine| engine.query_interned_view(dataset, request, options, visit))
             .map_err(|e| format!("query evaluation error: {e}"))?;
@@ -761,9 +768,22 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
 
     let outcome = SPARQL_ENGINE
         .with(|engine| {
-            engine.query_governed_interned_in_operation(dataset, request, options, &state, visit)
+            engine.query_governed_interned_in_operation(dataset, request, options, state, visit)
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
+    certify_governed(outcome)
+}
+
+/// Read a governed run's receipt and reduce it to the answer a conformance verdict
+/// may be computed from, or to the reason it may not be.
+///
+/// Shared by the `&str` door ([`run_query_view`]) and the prepared one
+/// ([`run_bound_view`]) rather than written out in each, because the two
+/// conditions it refuses are exactly the two a second copy could quietly stop
+/// checking. A `conforms` computed over a truncated bag, or over a relation that
+/// declared its index was not whole, is not a verdict; both are refused here by
+/// name.
+fn certify_governed<R>(outcome: InternedGoverned<Result<R, String>>) -> Result<R, String> {
     match outcome {
         InternedGoverned::Complete {
             value, relations, ..
@@ -800,6 +820,733 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
             exhausted.tripped
         )),
     }
+}
+
+/// An absent [`BoundFunctionRegistry`] scope, as a place a `'static` borrow can name.
+///
+/// `static`, not a bare `&Registry::EMPTY` temporary: a `HashMap`-backed registry
+/// carries drop glue, which blocks Rust's rvalue static promotion for a reference
+/// that must outlive the statement that spells it.
+static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
+
+/// Every ambient scope a SHACL query runs under, read once.
+///
+/// The scopes are snapshotted (an `Arc` clone each) BEFORE evaluating, so no
+/// `RefCell` borrow is held across the query: a `sh:sparql` body whose evaluation
+/// re-enters SHACL validation (a nested shape / SHACL-AF function) installs its own
+/// scopes via `borrow_mut`, which would panic ("already borrowed") if an outer
+/// immutable borrow were still live.
+///
+/// A struct rather than a handful of locals because there are now TWO doors onto the engine
+/// — the `&str` one and the prepared one — and the options they build must be the
+/// same options. Reading the scopes in one place is what makes that a fact about the
+/// type rather than a resemblance between two blocks.
+///
+/// The relation registry, the custom-aggregate registry and the parser options are
+/// not held separately here: they are three components of ONE value, the
+/// [`ExtensionEnv`] [`current_env`] derives and memoizes per thread, and a door that
+/// held them apart is a door that can forget one of them. See that module's
+/// documentation for why the separateness was the bug.
+struct AmbientScopes {
+    /// The SHACL-AF function table in scope, if a validation installed one. Bound
+    /// against `env` already — see [`bind_in_current_env`].
+    functions: Option<Arc<BoundFunctionRegistry>>,
+    /// The extension environment this query's text is interpreted relative to.
+    env: Arc<ExtensionEnv>,
+    /// The operation budget in force, if a validation installed one.
+    governors: Option<Arc<GovernorState>>,
+    /// The custom-function call depth, so a recursion that reaches SPARQL and comes
+    /// back keeps counting instead of restarting at zero.
+    call_depth: u32,
+}
+
+impl AmbientScopes {
+    /// Read every scope in force on this thread.
+    ///
+    /// Fallible where the rest of the snapshot is not, because deriving the
+    /// environment asks every registered relation and aggregate to describe itself
+    /// and a declaration that refuses is a configuration error rather than an empty
+    /// environment. It is reported here, in the wording the engine's own failures
+    /// carry, rather than swallowed into a run over a seam that was never wired.
+    ///
+    /// # Errors
+    ///
+    /// `Err(String)` if the extension environment cannot be derived.
+    fn snapshot() -> Result<Self, String> {
+        Ok(Self {
+            functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
+            env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
+            governors: current_governors(),
+            call_depth: current_call_depth(),
+        })
+    }
+
+    /// The function registry this query resolves call-position IRIs against.
+    ///
+    /// The ambient thread-local scope is genuinely optional (no `sh:sparql` body has
+    /// ever installed one); an absent scope and the canonical `EMPTY` registry are
+    /// the SAME value for every purpose `QueryOptions` cares about (see
+    /// `AggregateRegistry::EMPTY`'s docs), so there is no "empty but present" case to
+    /// normalize away.
+    fn functions(&self) -> &BoundFunctionRegistry {
+        self.functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS)
+    }
+
+    /// The [`QueryOptions`] a SHACL query over `dataset` runs under.
+    fn options<'a, D: FocusGraphSource>(
+        &'a self,
+        dataset: &'a D,
+        prebinding: ShaclPrebinding,
+        bnode_mint_prefix: Option<&'a str>,
+    ) -> QueryOptions<'a> {
+        let functions = self.functions();
+        QueryOptions {
+            prebinding,
+            functions,
+            env: &self.env,
+            bnode_mint_prefix,
+            // The graph THIS query is reading, handed to any expression-bodied
+            // function it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a
+            // fixpoint round that rebuilt its dataset supplies the rebuilt one.
+            focus_graph: functions
+                .requires_focus_graph()
+                .then(|| dataset.focus_graph())
+                .flatten(),
+            call_depth: self.call_depth,
+        }
+    }
+
+    /// The configuration a prepared plan's admission depends on, held so a handle
+    /// can tell whether it is still running under it.
+    fn plan_configuration(&self) -> PlanConfiguration {
+        PlanConfiguration {
+            env: Arc::clone(&self.env),
+        }
+    }
+}
+
+/// The environment a plan was ADMITTED under, kept beside the handle that holds it.
+///
+/// A prepared plan is only valid under the extension environment it was prepared
+/// against: the environment is what decides which predicates are relation calls,
+/// which table such a call resolves in, and what a `Custom` aggregate IRI resolves
+/// to, so the evaluator refuses — correctly — to run a plan under an environment
+/// that disagrees with the one it was admitted under.
+///
+/// That refusal is the reason this exists. A handle cached per worker outlives the
+/// validation that minted it, and the next validation on that worker may install
+/// different registries; a cache keyed on query text alone would hand that validation
+/// a plan the evaluator then refuses, turning a query that should work into a hard
+/// error. So the configuration travels WITH the handle, and a handle whose
+/// configuration no longer matches is re-prepared rather than run — the refusal is
+/// avoided by making the claim true again, not by suppressing it.
+///
+/// Compared by `Arc` identity rather than by value: an environment's registries are
+/// not cheaply comparable, and the `Arc` is held here, so the pointer cannot be an
+/// address a freed allocation has since handed to something else. Identity is
+/// conservative in the safe direction — two structurally equal environments at
+/// different addresses re-prepare, and answer identically. That direction is the
+/// only one that matters here, because the evaluator's own guard compares
+/// content-derived FINGERPRINTS rather than identity: a re-preparation this misses
+/// would still be refused there, and a re-preparation this asks for needlessly
+/// costs a parse rather than an answer.
+///
+/// Comparing the environment rather than the registries separately also closes a
+/// gap: a change to the ambient parser options, which a registry-by-registry
+/// comparison could not see at all, now re-prepares. It is conservative in the
+/// other direction too — [`current_env`] memoizes ONE environment per thread, so a
+/// nested validation that installs different registries and then restores them
+/// leaves the outer validation building a fresh environment, and the handle
+/// re-prepares although nothing it depends on changed. That is the same
+/// re-preparation the cost note below describes, reached by one more route.
+///
+/// # What that costs, measured
+///
+/// One preparation per CHANGE of configuration, not one in total, because
+/// [`PREPARED_EXECUTIONS`] holds a single handle per (query text, parameter list)
+/// and a re-preparation replaces whatever was there. Two validations that share a
+/// query text and run under different environments therefore re-parse and re-admit
+/// that query on every alternation between them, and the replaced handle takes any
+/// per-run state it had accumulated with it — including
+/// `purrdf_sparql_eval`'s prebind memo, which is rebuilt from scratch afterwards.
+/// Every `PreparedShapes` binding carries its own aggregate-registry `Arc`, so
+/// "different environments" is the norm between two validators rather than an
+/// unusual configuration.
+///
+/// Batched use never notices: a validation runs its query once per focus node, so
+/// one re-preparation at a validator boundary amortizes over that validator's whole
+/// focus set. What pays the full price is per-run alternation between two
+/// configurations on one worker — two validators live at once, as a `sh:sparql`
+/// body that re-enters validation produces. The cost there is a re-parse and
+/// re-admission per run, which is strictly larger than the memo state it also
+/// discards; a cache that kept one handle per configuration rather than one per
+/// query text would close both, at the price of holding more caller environments
+/// alive than the one this holds today.
+struct PlanConfiguration {
+    /// The extension environment in scope when the plan was admitted.
+    env: Arc<ExtensionEnv>,
+}
+
+impl PlanConfiguration {
+    /// Whether `scopes` still names the environment this plan was admitted under.
+    fn still_current(&self, scopes: &AmbientScopes) -> bool {
+        Arc::ptr_eq(&self.env, &scopes.env)
+    }
+}
+
+/// A SHACL query prepared once, with its parameters bound and re-bound per run.
+///
+/// The handle behind [`run_bound_view`]. A `sh:sparql` body, a component
+/// validator and a `sh:SPARQLRule` CONSTRUCT all run the SAME query text once per
+/// focus node (or per value node, or per argument tuple), changing only the terms
+/// pre-bound into it — which is precisely the shape
+/// [`purrdf_sparql_eval::PreparedExecution`] exists for. Reaching the engine through
+/// `&str` re-probed its plan cache per run, hashing the whole query text to be handed
+/// back the same plan every time; reaching it through a handle parses and admits once
+/// and binds a cell thereafter.
+///
+/// **This does not remove the per-run rewrite.** The pre-binding substitution still
+/// clones the admitted algebra and rewrites it on every execution, because the handle
+/// caches the plan rather than the substituted plan. What it removes is the query-text
+/// hash and cache probe per run, the re-interning of the parameter NAMES, and the
+/// per-run pre-binding list the `&str` door has to build.
+pub(crate) struct ShaclExecution {
+    /// The prepared plan and its parameter slots.
+    execution: PreparedExecution,
+    /// The registries `execution`'s plan was admitted under.
+    prepared_under: PlanConfiguration,
+}
+
+impl ShaclExecution {
+    /// Bind the parameter in `slot` to `value`.
+    ///
+    /// # Errors
+    ///
+    /// `Err(String)` if `slot` is not a declared parameter — a caller mistake about
+    /// this query's own shape, refused rather than ignored.
+    pub(crate) fn bind(&mut self, slot: usize, value: TermValue) -> Result<(), String> {
+        self.execution.bind(slot, value).map_err(|e| e.to_string())
+    }
+
+    /// Bind the parameter in `slot` to the term `dataset` interns at `id`.
+    ///
+    /// The id door onto the same slot. A SHACL target resolves its focus nodes as
+    /// term ids, so every `$this` binding used to pay for a `Term` and then a
+    /// `TermValue` spelling of a term the dataset already holds — and the evaluator
+    /// then hashed that spelling back to the very id it started from. This hands the
+    /// id over instead.
+    ///
+    /// `dataset` must be the view this handle is about to be executed against, which
+    /// is what makes the id meaningful; see
+    /// [`purrdf_sparql_eval::PreparedExecution::bind_id`] for why that pairing cannot
+    /// be deferred and [`crate::data::ShaclData::sparql_view_shares_core_ids`] for the
+    /// one configuration in which a Core id must NOT be handed to it.
+    ///
+    /// # Errors
+    ///
+    /// `Err(String)` if `slot` is not a declared parameter — the identical refusal
+    /// [`Self::bind`] gives — or if the term at `id` cannot become an algebra term.
+    pub(crate) fn bind_id<D: DatasetView>(
+        &mut self,
+        slot: usize,
+        dataset: &D,
+        id: D::Id,
+    ) -> Result<(), String> {
+        self.execution
+            .bind_id(slot, dataset, id)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Prepare `query` with `parameters` under the registries in `scopes`.
+    fn prepare(query: &str, parameters: &[&str], scopes: &AmbientScopes) -> Result<Self, String> {
+        debug_assert!(
+            parameters_are_distinct(parameters),
+            "a repeated parameter name has no single slot to bind and must fall back to the \
+             `&str` door, which keeps a per-variable path for it"
+        );
+        let options = QueryOptions {
+            prebinding: ShaclPrebinding::None,
+            functions: scopes.functions(),
+            env: &scopes.env,
+            bnode_mint_prefix: None,
+            focus_graph: None,
+            call_depth: 0,
+        };
+        let execution = SPARQL_ENGINE
+            .with(|engine| engine.prepare_execution(query, None, parameters, options))
+            .map_err(|e| format!("query evaluation error: {e}"))?;
+        Ok(Self {
+            execution,
+            prepared_under: scopes.plan_configuration(),
+        })
+    }
+}
+
+/// Bind a focus node into `slot`: through the id door when this run's view is the
+/// one the id was resolved against, and through the owned-term door otherwise.
+///
+/// One function rather than a conditional at each of the three validator entry
+/// points, because the two doors must agree about what they bind and the cheapest
+/// way to make them agree is to have one place choose. `focus_id` is `Some` exactly
+/// when the caller holds an id in THIS view's id space — see
+/// [`crate::data::ShaclData::sparql_view_shares_core_ids`], which is what the callers
+/// ask before they fill it in.
+///
+/// The `None` arm is not a degraded path: a focus node that came from a
+/// `sh:target`/`sh:targetNode` term, or from a SHACL-AF node expression, never had an
+/// id, and the owned-term door is the correct and only door for it. What the two arms
+/// differ in is cost, not answer.
+///
+/// # Errors
+///
+/// `Err(String)` if `slot` is not a declared parameter, or if the focus node cannot
+/// become an algebra term.
+pub(crate) fn bind_focus<D: DatasetView>(
+    execution: &mut ShaclExecution,
+    slot: usize,
+    dataset: &D,
+    focus: &Term,
+    focus_id: Option<D::Id>,
+) -> Result<(), String> {
+    match focus_id {
+        Some(id) => execution.bind_id(slot, dataset, id),
+        None => execution.bind(slot, focus.to_term_value()),
+    }
+}
+
+/// Whether `parameters` names every variable at most once.
+///
+/// A repeated name is the one pre-binding shape a handle cannot express: it has no
+/// single slot to bind, so `prepare_execution` refuses it. The `&str` door SUPPORTS
+/// it and has a defined answer — two seeds binding the same variable to different
+/// terms are incompatible, so it keeps a per-variable path and yields the empty
+/// solution.
+///
+/// A custom component really can produce one. Its `sh:parameter` local names are
+/// checked at shapes load against a ban list holding `this`, `path`, `PATH` and
+/// `value`, so those four never arrive — but `shapesGraph` and `currentShape` are not
+/// on it, and SHACL pre-binds both around every validator. A parameter named either
+/// reaches a validator's pre-binding list twice.
+///
+/// Every prepared call site therefore asks this FIRST and routes a repeated name back
+/// to the `&str` door unchanged, so the handle never turns a query with a defined
+/// answer into an error.
+pub(crate) fn parameters_are_distinct(parameters: &[&str]) -> bool {
+    parameters
+        .iter()
+        .enumerate()
+        .all(|(index, name)| !parameters[..index].contains(name))
+}
+
+/// Run an already-bound `handle` against `dataset`, under this validation's governors
+/// when one is installed.
+///
+/// The prepared twin of [`run_query_view`], and the ONLY place a prepared SHACL query
+/// reaches the engine. It exists beside `run_query_view` rather than inside it because
+/// the two doors take their plan and their bindings from different places, and it
+/// routes through the same [`AmbientScopes`] and the same [`certify_governed`] so the
+/// governed receipt, the registry snapshot and the trip refusal are literally the same
+/// code on both.
+///
+/// `handle` must already carry this run's bindings. Binding is the CALLER's step
+/// rather than this one's because a call site that runs the same query several times
+/// over mostly-identical bindings — a component validator over a focus node's value
+/// nodes, say — binds its invariant slots once and rewrites only the varying one per
+/// run, and a bind callback here would force it to re-materialize every term every
+/// time. What protects that is [`with_cached_execution`], which clears every slot at
+/// CHECKOUT: a slot no one has written since is `None`, and the engine refuses to run
+/// with a parameter unbound rather than answering from whatever a previous focus node
+/// left there.
+///
+/// # Errors
+///
+/// `Err(String)` if the extension environment cannot be derived, if evaluation
+/// fails, if a parameter is still unbound, or if the governed receipt says no
+/// conformance verdict may be computed from this run.
+fn run_bound_view<D: DatasetView + Sync + FocusGraphSource, R>(
+    dataset: &D,
+    handle: &mut ShaclExecution,
+    prebind: ShaclPrebinding,
+    bnode_mint_prefix: Option<&str>,
+    visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
+) -> Result<R, String> {
+    let scopes = AmbientScopes::snapshot()?;
+    let options = scopes.options(dataset, prebind, bnode_mint_prefix);
+
+    let Some(state) = scopes.governors.as_ref() else {
+        return SPARQL_ENGINE
+            .with(|engine| engine.execute(&mut handle.execution, dataset, options, visit))
+            .map_err(|e| format!("query evaluation error: {e}"))?;
+    };
+
+    let outcome = SPARQL_ENGINE
+        .with(|engine| {
+            engine.execute_governed_in_operation(
+                &mut handle.execution,
+                dataset,
+                options,
+                state,
+                visit,
+            )
+        })
+        .map_err(|e| format!("query evaluation error: {e}"))?;
+    certify_governed(outcome)
+}
+
+/// How many distinct query texts one worker keeps prepared.
+///
+/// The plan cache beside this one is keyed on query TEXT and never evicts, which is
+/// correct for a fixed set of authored `sh:select` / `sh:ask` bodies and wrong for any
+/// path that manufactures query text out of operand data. This cache is keyed the same
+/// way and is reached from a path that DOES manufacture text — `$PATH` substitution
+/// renders the shape's path into the query — so it is capped. Reaching the cap clears
+/// rather than evicts, because the table is a memo of a pure preparation and losing it
+/// costs re-preparation rather than a wrong answer.
+const PREPARED_EXECUTION_CAP: usize = 1_024;
+
+/// One cached handle: the parameter names it was prepared with, and the handle itself
+/// when it is not checked out.
+struct CachedExecution {
+    /// The parameter names, in bind order. Owned, because the caller's names can be
+    /// borrowed from text the caller itself minted.
+    parameters: Box<[Box<str>]>,
+    /// The handle, or `None` while a run holds it — see [`checkout_execution`].
+    handle: Option<ShaclExecution>,
+}
+
+impl CachedExecution {
+    /// Whether this entry was prepared with exactly `parameters`, in order.
+    ///
+    /// Compared against the BORROWED names, so a hit allocates nothing.
+    fn declares(&self, parameters: &[&str]) -> bool {
+        self.parameters.len() == parameters.len()
+            && self
+                .parameters
+                .iter()
+                .zip(parameters)
+                .all(|(held, wanted)| &**held == *wanted)
+    }
+}
+
+thread_local! {
+    /// Prepared handles for the queries this worker runs, keyed by query text and
+    /// parameter list.
+    ///
+    /// Per-worker for the same reason [`SPARQL_ENGINE`] is: SHACL fans focus nodes
+    /// over `rayon`, a handle is `!Sync` by construction, and the engine a handle's
+    /// plan belongs to is itself held per worker.
+    ///
+    /// Two levels rather than one composite key, because the key is a query text AND
+    /// a parameter list and a hit must allocate nothing: `Box<str>: Borrow<str>` lets
+    /// the outer map be probed by the borrowed text exactly as the evaluator's
+    /// variable interner is, and the inner list is scanned with borrowed comparisons.
+    /// A query text carries at most a handful of parameter shapes (the shape context
+    /// is present or not), so the scan is over a vector of one or two.
+    ///
+    /// # The value is an `Option`, and that is the re-entrancy guarantee
+    ///
+    /// A `sh:sparql` body can re-enter SHACL validation, reach this module again, and
+    /// probe this very map for the very query the outer call is mid-evaluation over.
+    /// A cache that LENT its handle would hand the inner call a tree the outer call is
+    /// still reading. So a run TAKES the handle out — the slot becomes `None` — and
+    /// puts it back when it is done. An inner call finds `None`, reads it as a miss,
+    /// and prepares its own handle; two handles for one query are simply two equal
+    /// plans, and whichever is restored last is the one the next run finds.
+    static PREPARED_EXECUTIONS: RefCell<FastMap<Box<str>, Vec<CachedExecution>>> =
+        RefCell::new(FastMap::default());
+}
+
+/// Take this worker's handle for `(query, parameters)`, preparing one on a miss.
+///
+/// The `RefCell` borrow is released before preparation and before the caller runs:
+/// nothing in this module may hold it across an evaluation.
+fn checkout_execution(
+    query: &str,
+    parameters: &[&str],
+    scopes: &AmbientScopes,
+) -> Result<ShaclExecution, String> {
+    let cached = PREPARED_EXECUTIONS.with(|cache| {
+        cache.borrow_mut().get_mut(query).and_then(|entries| {
+            entries
+                .iter_mut()
+                .find(|entry| entry.declares(parameters))
+                .and_then(|entry| entry.handle.take())
+        })
+    });
+    let Some(mut handle) = cached else {
+        // A fresh preparation starts with every slot `None` already.
+        return ShaclExecution::prepare(query, parameters, scopes);
+    };
+    if !handle.prepared_under.still_current(scopes) {
+        return ShaclExecution::prepare(query, parameters, scopes);
+    }
+    // Every slot back to unbound, HERE, before the caller writes any of them. This is
+    // what stops one focus node's term being answered for the next: a cached handle
+    // still holds whatever the last checkout bound, and a caller that binds four slots
+    // where the previous one bound five would otherwise run with a stale fifth. Clearing
+    // at checkout makes that slot `None`, and the engine refuses an unbound parameter
+    // rather than answering from it.
+    handle.execution.unbind_all();
+    Ok(handle)
+}
+
+/// Put `handle` back for the next run of `(query, parameters)`.
+///
+/// Called on BOTH the `Ok` and `Err` paths of a run: a handle dropped on the error
+/// path would silently turn every later run of that query into a fresh preparation,
+/// which is a performance defect that no test asserting an ANSWER could see.
+///
+/// Restoring into an existing slot allocates nothing; only a genuinely new
+/// `(query, parameters)` pair owns its key.
+fn restore_execution(query: &str, parameters: &[&str], handle: ShaclExecution) {
+    PREPARED_EXECUTIONS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(entries) = cache.get_mut(query) {
+            if let Some(entry) = entries.iter_mut().find(|entry| entry.declares(parameters)) {
+                entry.handle = Some(handle);
+            } else {
+                entries.push(CachedExecution {
+                    parameters: own_parameters(parameters),
+                    handle: Some(handle),
+                });
+            }
+            return;
+        }
+        if cache.len() >= PREPARED_EXECUTION_CAP {
+            cache.clear();
+        }
+        cache.insert(
+            Box::from(query),
+            vec![CachedExecution {
+                parameters: own_parameters(parameters),
+                handle: Some(handle),
+            }],
+        );
+    });
+}
+
+/// The parameter names, owned, for a cache entry that is genuinely new.
+fn own_parameters(parameters: &[&str]) -> Box<[Box<str>]> {
+    parameters.iter().map(|name| Box::from(*name)).collect()
+}
+
+/// Check out this worker's handle for `(query, parameters)`, run `body` with it, and
+/// put it back.
+///
+/// The entry for a call site that CANNOT hold a handle across its focus set — one
+/// reached per focus node from a loop `rayon` fans across workers. `body` may run the
+/// handle any number of times, which is what lets a validator that loops over a focus
+/// node's value nodes bind its invariant slots ONCE and rewrite only the varying one
+/// per run.
+///
+/// Every slot is unbound before `body` sees the handle; see [`checkout_execution`].
+///
+/// # Errors
+///
+/// `Err(String)` if the extension environment cannot be derived, if preparation
+/// fails, or whatever `body` returns. The handle is restored on BOTH paths:
+/// dropping it on the error path would silently turn every later run of that query
+/// into a fresh preparation, a performance defect no test asserting an ANSWER could
+/// see.
+pub(crate) fn with_cached_execution<R>(
+    query: &str,
+    parameters: &[&str],
+    body: impl FnOnce(&mut ShaclExecution) -> Result<R, String>,
+) -> Result<R, String> {
+    debug_assert!(
+        parameters_are_distinct(parameters),
+        "a repeated parameter name must fall back to the `&str` door"
+    );
+    let scopes = AmbientScopes::snapshot()?;
+    let mut handle = checkout_execution(query, parameters, &scopes)?;
+    let outcome = body(&mut handle);
+    restore_execution(query, parameters, handle);
+    outcome
+}
+
+/// [`run_bound_view`] once, over this worker's cached handle for
+/// `(query, parameters)`.
+///
+/// The single-run shape of [`with_cached_execution`], for a call site that runs its
+/// query exactly once per checkout: `bind` writes the slots, the run follows.
+///
+/// # Errors
+///
+/// As [`with_cached_execution`] and [`run_bound_view`].
+#[allow(clippy::too_many_arguments)] // The prepared door needs its key, its options and its two callbacks.
+fn run_cached_prepared_view<D: DatasetView + Sync + FocusGraphSource, R>(
+    dataset: &D,
+    query: &str,
+    parameters: &[&str],
+    prebind: ShaclPrebinding,
+    bnode_mint_prefix: Option<&str>,
+    bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
+    visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
+) -> Result<R, String> {
+    with_cached_execution(query, parameters, |handle| {
+        bind(handle)?;
+        run_bound_view(dataset, handle, prebind, bnode_mint_prefix, visit)
+    })
+}
+
+/// Project a SELECT outcome through `project`, refusing any other query form.
+///
+/// A free function rather than a closure written out at each door, so the three
+/// refusal wordings stay one wording however many doors there are.
+fn project_solutions<'a, 'd, D: DatasetView + Sync, R>(
+    outcome: InternedOutcome<'a, 'd, D>,
+    project: impl FnOnce(&InternedSolutions<'a, 'd, D>) -> Result<R, String>,
+) -> Result<R, String> {
+    match outcome {
+        InternedOutcome::Solutions(solutions) => project(&solutions),
+        InternedOutcome::Boolean(_) => {
+            Err("query must be a SELECT, got a boolean (ASK) result".to_owned())
+        }
+        InternedOutcome::Graph(_) => {
+            Err("query must be a SELECT, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
+        }
+    }
+}
+
+/// Take an ASK outcome's boolean, refusing any other query form. See
+/// [`project_solutions`].
+// By value because this is passed AS a `FnOnce(InternedOutcome<'_, '_, D>) -> R`, the
+// shape every run entry's `visit` has; a reference would not satisfy that bound.
+#[allow(clippy::needless_pass_by_value)]
+fn project_boolean<D: DatasetView + Sync>(
+    outcome: InternedOutcome<'_, '_, D>,
+) -> Result<bool, String> {
+    match outcome {
+        InternedOutcome::Boolean(answer) => Ok(answer),
+        InternedOutcome::Solutions(_) => {
+            Err("query must be an ASK, got a SELECT result".to_owned())
+        }
+        InternedOutcome::Graph(_) => {
+            Err("query must be an ASK, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
+        }
+    }
+}
+
+/// Take a CONSTRUCT outcome's frozen graph, refusing any other query form. See
+/// [`project_solutions`].
+// By value for the same reason as [`project_boolean`].
+#[allow(clippy::needless_pass_by_value)]
+fn project_graph<D: DatasetView + Sync>(
+    outcome: InternedOutcome<'_, '_, D>,
+) -> Result<Arc<RdfDataset>, String> {
+    match outcome {
+        // The graph is already frozen and shared by `Arc`; taking it out of the
+        // evaluation is a handle clone, not a copy of the derived triples.
+        InternedOutcome::Graph(graph) => Ok(Arc::clone(graph)),
+        InternedOutcome::Solutions(_) => {
+            Err("query must be a CONSTRUCT, got a SELECT result".to_owned())
+        }
+        InternedOutcome::Boolean(_) => {
+            Err("query must be a CONSTRUCT, got a boolean (ASK) result".to_owned())
+        }
+    }
+}
+
+/// Run a SELECT under SHACL-SPARQL pre-binding on this worker's cached handle.
+///
+/// For a call site reached per focus node from a loop `rayon` fans across workers,
+/// where no single handle can span the focus set.
+///
+/// # Errors
+///
+/// As [`run_cached_prepared_view`], plus a non-SELECT result.
+pub(crate) fn run_cached_select_with_shacl_prebinding_view<
+    D: DatasetView + Sync + FocusGraphSource,
+    R,
+>(
+    dataset: &D,
+    select: &str,
+    parameters: &[&str],
+    bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
+    project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
+) -> Result<R, String> {
+    run_cached_prepared_view(
+        dataset,
+        select,
+        parameters,
+        ShaclPrebinding::Applied,
+        None,
+        bind,
+        |outcome| project_solutions(outcome, project),
+    )
+}
+
+/// Run a generic-substitution SELECT on this worker's cached handle.
+///
+/// The SHACL-AF node-expression path's prepared door: no SHACL pre-binding rewrite,
+/// exactly as [`run_select_generic_view`].
+///
+/// # Errors
+///
+/// As [`run_cached_prepared_view`], plus a non-SELECT result.
+pub(crate) fn run_cached_select_generic_view<D: DatasetView + Sync + FocusGraphSource, R>(
+    dataset: &D,
+    select: &str,
+    parameters: &[&str],
+    bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
+    project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
+) -> Result<R, String> {
+    run_cached_prepared_view(
+        dataset,
+        select,
+        parameters,
+        ShaclPrebinding::None,
+        None,
+        bind,
+        |outcome| project_solutions(outcome, project),
+    )
+}
+
+/// Run an ASK under SHACL-SPARQL pre-binding on an already-bound handle.
+///
+/// The door inside a [`with_cached_execution`] body, for a validator that runs its ASK
+/// once per value node over slots it bound before the loop.
+///
+/// # Errors
+///
+/// As [`run_bound_view`], plus a non-ASK result.
+pub(crate) fn run_bound_ask_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
+    dataset: &D,
+    handle: &mut ShaclExecution,
+) -> Result<bool, String> {
+    run_bound_view(
+        dataset,
+        handle,
+        ShaclPrebinding::Applied,
+        None,
+        project_boolean,
+    )
+}
+
+/// Run a CONSTRUCT under SHACL-SPARQL pre-binding on an already-bound handle.
+///
+/// `bnode_mint_prefix` is per-RUN rather than per-handle: a `sh:SPARQLRule` mints its
+/// template blanks under a prefix derived from the focus node, and that prefix is
+/// evaluation configuration, not part of the plan. One handle therefore serves a whole
+/// focus set whose members each mint under their own prefix.
+///
+/// # Errors
+///
+/// As [`run_bound_view`], plus a non-CONSTRUCT result.
+pub(crate) fn run_bound_construct_with_shacl_prebinding_view<
+    D: DatasetView + Sync + FocusGraphSource,
+>(
+    dataset: &D,
+    handle: &mut ShaclExecution,
+    bnode_mint_prefix: Option<&str>,
+) -> Result<Arc<RdfDataset>, String> {
+    run_bound_view(
+        dataset,
+        handle,
+        ShaclPrebinding::Applied,
+        bnode_mint_prefix,
+        project_graph,
+    )
 }
 
 /// An RAII scope that installs `registry` as the current SHACL-AF function table for
@@ -1190,6 +1937,71 @@ pub(crate) fn push_shape_context(
     }
 }
 
+/// The shape-context parameter NAMES, appended in exactly the order
+/// [`push_shape_context`] pushes their values.
+///
+/// The prepared door needs the name list before it has any values, and the two lists
+/// must agree position for position or a run binds `$currentShape`'s term into
+/// `$shapesGraph`'s slot. Kept immediately beside [`push_shape_context`] for that
+/// reason, and checked against it by `shape_context_names_match_push_shape_context`.
+pub(crate) fn push_shape_context_names(
+    names: &mut Vec<&str>,
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
+) {
+    if shapes_graph_iri.is_some() {
+        names.push("shapesGraph");
+    }
+    if current_shape.is_some() {
+        names.push("currentShape");
+    }
+}
+
+/// The parameter names for a query whose pre-bindings are `$this` and the shape
+/// context — the shape [`eval_sparql_constraint_view`] has.
+///
+/// Returned as one of four `'static` slices rather than built, because this is read
+/// once per FOCUS NODE and building a two-element list there is the per-focus-node
+/// allocation the prepared door exists to remove.
+pub(crate) fn this_and_shape_context_names(
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
+) -> &'static [&'static str] {
+    match (shapes_graph_iri.is_some(), current_shape.is_some()) {
+        (false, false) => &["this"],
+        (true, false) => &["this", "shapesGraph"],
+        (false, true) => &["this", "currentShape"],
+        (true, true) => &["this", "shapesGraph", "currentShape"],
+    }
+}
+
+/// Bind the shape-context VALUES into `execution`, starting at `slot`, in exactly the
+/// order [`push_shape_context_names`] declared their names.
+///
+/// Returns the next free slot, so a caller with trailing parameters can continue.
+///
+/// # Errors
+///
+/// `Err(String)` if a slot is not a declared parameter of `execution` — which means
+/// the name list and the value list disagree, the one mistake this pairing exists to
+/// make impossible.
+pub(crate) fn bind_shape_context(
+    execution: &mut ShaclExecution,
+    mut slot: usize,
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
+) -> Result<usize, String> {
+    if let Some(iri) = shapes_graph_iri {
+        execution.bind(slot, TermValue::Iri(iri.to_owned()))?;
+        slot += 1;
+    }
+    if let Some(shape) = current_shape {
+        execution.bind(slot, shape.to_term_value())?;
+        slot += 1;
+    }
+    Ok(slot)
+}
+
 /// Run a SELECT query and project its interned solutions through `project`.
 ///
 /// `prebind` selects the rewrite: [`ShaclPrebinding::None`] is the generic
@@ -1207,22 +2019,9 @@ fn run_select_view<D: DatasetView + Sync + FocusGraphSource, R>(
     prebind: ShaclPrebinding,
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    run_query_view(
-        dataset,
-        select,
-        substitutions,
-        prebind,
-        None,
-        |outcome| match outcome {
-            InternedOutcome::Solutions(solutions) => project(&solutions),
-            InternedOutcome::Boolean(_) => {
-                Err("query must be a SELECT, got a boolean (ASK) result".to_owned())
-            }
-            InternedOutcome::Graph(_) => {
-                Err("query must be a SELECT, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
-            }
-        },
-    )
+    run_query_view(dataset, select, substitutions, prebind, None, |outcome| {
+        project_solutions(outcome, project)
+    })
 }
 
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path
@@ -1266,51 +2065,6 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + Focu
     )
 }
 
-/// Run a CONSTRUCT query using SHACL-SPARQL pre-binding semantics, returning the
-/// frozen graph of derived triples.
-///
-/// This is the SHACL-AF `sh:SPARQLRule` execution path: `$this` (and, when known,
-/// `$shapesGraph` / `$currentShape`) are pre-bound, then the CONSTRUCT template is
-/// instantiated over the WHERE solutions. CONSTRUCT already yields a frozen
-/// `Arc<RdfDataset>`, so this is the sibling of
-/// [`run_select_with_shacl_prebinding_view`] that returns the `Graph` arm.
-///
-/// `bnode_mint_prefix` is the deterministic blank-mint prefix installed on the
-/// evaluation ([`purrdf_sparql_eval::QueryOptions::bnode_mint_prefix`]): the
-/// rules engine passes a per-focus-node identity tag so every blank the CONSTRUCT
-/// mints carries the focus's identity at mint time, while data blanks carried
-/// through variables pass through untouched.
-///
-/// # Errors
-///
-/// Returns `Err(String)` if execution fails or if the result is not a CONSTRUCT
-/// (`Solutions` / `Boolean` are rejected).
-pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
-    dataset: &D,
-    construct: &str,
-    substitutions: &[Prebinding<'_>],
-    bnode_mint_prefix: Option<&str>,
-) -> Result<Arc<RdfDataset>, String> {
-    run_query_view(
-        dataset,
-        construct,
-        substitutions,
-        ShaclPrebinding::Applied,
-        bnode_mint_prefix,
-        |outcome| match outcome {
-            // The graph is already frozen and shared by `Arc`; taking it out of the
-            // evaluation is a handle clone, not a copy of the derived triples.
-            InternedOutcome::Graph(graph) => Ok(Arc::clone(graph)),
-            InternedOutcome::Solutions(_) => {
-                Err("query must be a CONSTRUCT, got a SELECT result".to_owned())
-            }
-            InternedOutcome::Boolean(_) => {
-                Err("query must be a CONSTRUCT, got a boolean (ASK) result".to_owned())
-            }
-        },
-    )
-}
-
 /// Run an ASK query using SHACL-SPARQL pre-binding semantics.
 ///
 /// An ASK materializes NO rows on any path: the evaluator answers the boolean from
@@ -1332,15 +2086,7 @@ pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGr
         substitutions,
         ShaclPrebinding::Applied,
         None,
-        |outcome| match outcome {
-            InternedOutcome::Boolean(b) => Ok(b),
-            InternedOutcome::Solutions(_) => {
-                Err("query must be an ASK, got a SELECT result".to_owned())
-            }
-            InternedOutcome::Graph(_) => {
-                Err("query must be an ASK, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
-            }
-        },
+        project_boolean,
     )
 }
 
@@ -1387,6 +2133,74 @@ mod tests {
 
     fn dummy_component() -> NamedNode {
         NamedNode::new_unchecked("http://www.w3.org/ns/shacl#SPARQLConstraintComponent")
+    }
+
+    // ── the shape-context name/value pairing ─────────────────────────────────
+
+    /// **The name list and the value list agree, position for position, in all four
+    /// shapes the context can take.**
+    ///
+    /// [`push_shape_context`] pushes VALUES and [`push_shape_context_names`] pushes
+    /// NAMES, for the `&str` door and the prepared door respectively. Nothing in the
+    /// type system relates them: they are two functions that happen to contain the
+    /// same two `if let`s in the same order. If one gains a pre-binding the other
+    /// does not, or gains it in the other order, a prepared run binds
+    /// `$currentShape`'s term into `$shapesGraph`'s slot and answers a query nobody
+    /// wrote — silently, because both terms are perfectly valid IRIs and the query
+    /// still runs.
+    ///
+    /// [`this_and_shape_context_names`] is the third spelling, four `'static` slices
+    /// chosen by a match, and it must agree with both.
+    #[test]
+    fn shape_context_names_match_push_shape_context() {
+        let shape = dummy_shape();
+        let iri = "http://example.org/shapes-graph";
+        for graph in [None, Some(iri)] {
+            for current in [None, Some(&shape)] {
+                let mut values: Vec<Prebinding<'_>> = Vec::new();
+                push_shape_context(&mut values, graph, current);
+
+                let mut names: Vec<&str> = Vec::new();
+                push_shape_context_names(&mut names, graph, current);
+
+                let pushed: Vec<&str> = values.iter().map(|sub| sub.variable).collect();
+                assert_eq!(
+                    pushed,
+                    names,
+                    "push_shape_context and push_shape_context_names disagree for \
+                     (shapes_graph = {graph:?}, current_shape = {})",
+                    current.is_some()
+                );
+
+                let combined = this_and_shape_context_names(graph, current);
+                let mut expected: Vec<&str> = vec!["this"];
+                expected.extend_from_slice(&names);
+                assert_eq!(
+                    combined,
+                    expected.as_slice(),
+                    "this_and_shape_context_names disagrees for (shapes_graph = \
+                     {graph:?}, current_shape = {})",
+                    current.is_some()
+                );
+            }
+        }
+    }
+
+    /// **A repeated parameter name is detected, and a neighbouring distinct one is
+    /// not.**
+    ///
+    /// The predicate every prepared call site consults before choosing its door. The
+    /// false case is the one that matters: over-reporting a duplicate would route a
+    /// perfectly ordinary component down the `&str` door forever, which nothing else
+    /// here would notice.
+    #[test]
+    fn parameters_are_distinct_separates_a_repeat_from_a_neighbour() {
+        assert!(parameters_are_distinct(&[]));
+        assert!(parameters_are_distinct(&["this", "value", "flag"]));
+        assert!(!parameters_are_distinct(&["this", "value", "value"]));
+        assert!(!parameters_are_distinct(&["this", "value", "this"]));
+        // A name that merely CONTAINS another is not a repeat.
+        assert!(parameters_are_distinct(&["value", "values", "value2"]));
     }
 
     // ── eval_target ───────────────────────────────────────────────────────────
@@ -2235,6 +3049,173 @@ mod tests {
         assert_eq!(
             report.results[0].focus_node,
             named_term("http://example.org/Node")
+        );
+    }
+
+    // ── PlanConfiguration::still_current ─────────────────────────────────────
+
+    /// The relation IRI both environments below register. Held fixed across the
+    /// swap so the two environments differ ONLY in which registry instance answers
+    /// it, never in which predicate is a call at all.
+    const STILL_CURRENT_REL: &str = "http://example.org/still-current/flag";
+
+    /// A relation whose DECLARATION never varies — arity, mode, volatility are
+    /// identical for every instance — but whose one ROW does. Two registries built
+    /// from this describe themselves identically to a content-only fingerprint;
+    /// only the row tells them apart. That is deliberate: it is exactly the
+    /// environment-swap shape [`PlanConfiguration`]'s own documentation calls out,
+    /// and it is what makes this test depend on `still_current`'s `Arc::ptr_eq`
+    /// rather than on some other, coarser signal a broken predicate could ride on.
+    #[derive(Debug)]
+    struct FixedRowRelation {
+        modes: [purrdf_sparql_eval::BindingPattern; 1],
+        row: Vec<TermValue>,
+    }
+
+    #[derive(Debug)]
+    struct FixedRowCursor {
+        rows: std::vec::IntoIter<purrdf_sparql_eval::PfRow>,
+    }
+
+    impl purrdf_sparql_eval::PfCursor for FixedRowCursor {
+        fn next(
+            &mut self,
+        ) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+            Ok(self.rows.next())
+        }
+
+        fn generation(&self) -> purrdf_sparql_eval::IndexGeneration {
+            purrdf_sparql_eval::IndexGeneration::declared("still-current-test@1")
+        }
+    }
+
+    impl purrdf_sparql_eval::PropertyFunction for FixedRowRelation {
+        fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+            purrdf_sparql_eval::Volatility::Stable
+        }
+
+        fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            purrdf_sparql_eval::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+            1
+        }
+
+        fn open(
+            &self,
+            _args: &purrdf_sparql_eval::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+            Ok(Box::new(FixedRowCursor {
+                rows: vec![self.row.clone()].into_iter(),
+            }))
+        }
+    }
+
+    /// A fresh registry declaring [`STILL_CURRENT_REL`] with one row naming
+    /// `flagged`. Each call returns a NEW `Arc`, so callers that want the SAME
+    /// environment across two runs must hold one `Arc` and clone it, not call this
+    /// twice — that distinction is exactly what `still_current`'s `Arc::ptr_eq`
+    /// tests.
+    fn still_current_registry(flagged: &str) -> Arc<PropertyFunctionRegistry> {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            STILL_CURRENT_REL.to_owned(),
+            Arc::new(FixedRowRelation {
+                modes: [purrdf_sparql_eval::BindingPattern::from_code("ff")],
+                row: vec![
+                    TermValue::Iri(flagged.to_owned()),
+                    TermValue::Iri("http://example.org/still-current/yes".to_owned()),
+                ],
+            }),
+        );
+        Arc::new(registry)
+    }
+
+    /// Run `ASK { ?this <STILL_CURRENT_REL> ?why }` with `?this` pre-bound to
+    /// `focus`, under `registry`, through the SAME prepared-handle door every SHACL
+    /// validator reaches a cached [`ShaclExecution`] through
+    /// ([`with_cached_execution`] → [`checkout_execution`] →
+    /// [`PlanConfiguration::still_current`]). Not a shortcut around the code under
+    /// test — the production call sites in `components.rs` and `rules.rs` differ
+    /// from this only in which parameters they declare.
+    fn still_current_ask(
+        registry: Arc<PropertyFunctionRegistry>,
+        focus: &str,
+    ) -> Result<bool, String> {
+        let _scope = enter_property_function_scope(registry);
+        let dataset = dataset_from_ntriples(&[]);
+        let query = format!("ASK {{ ?this <{STILL_CURRENT_REL}> ?why }}");
+        with_cached_execution(&query, &["this"], |execution| {
+            execution.bind(0, TermValue::Iri(focus.to_owned()))?;
+            run_bound_ask_with_shacl_prebinding_view(&dataset, execution)
+        })
+    }
+
+    /// **The soundness-critical predicate behind the prepared-handle cache,
+    /// exercised against a genuine environment swap on one worker.**
+    ///
+    /// `checkout_execution` caches one [`ShaclExecution`] per `(query text,
+    /// parameters)` per worker thread (see [`PREPARED_EXECUTIONS`]), and
+    /// [`PlanConfiguration::still_current`] is the only thing standing between a
+    /// worker that validates under one extension environment and, on the very next
+    /// call, under a different one, reusing the first environment's compiled plan
+    /// for the second's run. Before this test, `rg` finds exactly two references to
+    /// `still_current` in this crate: its definition and its one call site.
+    ///
+    /// The two environments register a relation built so a CONTENT-only comparison
+    /// could not tell them apart ([`FixedRowRelation`]: identical IRI, arity, mode,
+    /// volatility across both) — only the registered ROW differs, and only
+    /// `still_current`'s `Arc::ptr_eq` on the environment itself can catch the swap
+    /// before the wrong plan runs.
+    ///
+    /// The SAME query text runs four times on this one thread, alternating
+    /// environments: A, A (same environment, same registry `Arc`, so `still_current`
+    /// should report "current" and reuse the handle), B (a genuinely different
+    /// registry `Arc`, so `still_current` should report "stale" and re-prepare), and
+    /// A again (round-tripping back). Every answer is asserted, and each answer is a
+    /// MEMBERSHIP fact only the currently-installed registry could supply — a run
+    /// that silently kept the wrong plan would flip at least one of these from a
+    /// distinguishing answer to its opposite, never merely to "nothing changed".
+    #[test]
+    fn still_current_reprepares_across_an_environment_change_on_one_worker() {
+        let node_a = "http://example.org/still-current/a";
+        let node_b = "http://example.org/still-current/b";
+        let registry_a = still_current_registry(node_a);
+        let registry_b = still_current_registry(node_b);
+
+        // Environment A, checked for both candidate focus nodes.
+        assert!(
+            still_current_ask(Arc::clone(&registry_a), node_a).expect("environment A answers"),
+            "environment A's one row names `.../a`"
+        );
+        assert!(
+            !still_current_ask(Arc::clone(&registry_a), node_b).expect("environment A answers"),
+            "`.../b` is not the row environment A's relation names"
+        );
+
+        // Environment B: a DIFFERENT registry `Arc`, run on the SAME worker
+        // immediately after A — the exact alternation `still_current` exists to
+        // catch. A wrongly-reused handle here would still be running A's plan.
+        assert!(
+            !still_current_ask(Arc::clone(&registry_b), node_a).expect("environment B answers"),
+            "under environment B, `.../a` is no longer the flagged row"
+        );
+        assert!(
+            still_current_ask(Arc::clone(&registry_b), node_b).expect("environment B answers"),
+            "under environment B, the relation's one row now names `.../b`"
+        );
+
+        // And back to A, so the alternation is shown both ways rather than once.
+        assert!(
+            still_current_ask(Arc::clone(&registry_a), node_a)
+                .expect("environment A answers again"),
+            "swapping back to environment A must answer as environment A again"
         );
     }
 }

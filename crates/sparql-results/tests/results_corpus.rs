@@ -420,7 +420,7 @@ fn select_books_json_and_xml_drop_provenance_without_a_namespace() {
 
 // ---------------------------------------------------------------------------
 // 5. EDGE CASES — directional (rtl/ltr) language literals + escaping triggers,
-//    across all four formats.  Verifies Gap 3 (direction suffix) flows through
+//    across all four formats.  Verifies the direction suffix flows through
 //    TSV/CSV/JSON/XML, and that escaping-trigger characters render correctly per
 //    each format's spec.
 // ---------------------------------------------------------------------------
@@ -490,7 +490,7 @@ fn edge_cases_csv() {
 #[test]
 fn edge_cases_tsv() {
     // TSV uses bare LF line ends (no CR); the direction suffix (--rtl/--ltr)
-    // must appear in the output — this is the proof Gap 3 flows through TSV.
+    // must appear in the output — this is the proof the direction suffix flows through TSV.
     let outcome = serialize(
         &edge_cases(),
         SparqlResultsFormat::Tsv,
@@ -505,7 +505,7 @@ fn edge_cases_tsv() {
     );
     assert!(
         raw.contains("--rtl") || raw.contains("--ltr"),
-        "TSV must carry direction suffix from Gap 3 kernel fix: {raw:?}"
+        "TSV must carry direction suffix from the serializer kernel: {raw:?}"
     );
     insta::assert_snapshot!(raw);
 }

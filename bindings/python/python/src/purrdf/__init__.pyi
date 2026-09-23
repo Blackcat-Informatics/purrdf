@@ -604,6 +604,30 @@ class UpdateOutcome:
     @property
     def evidence(self) -> GovernorEvidence: ...
 
+# A SPARQL query parsed and admitted once, run many times with different bindings.
+# Built by `Store.prepare`. What is prepared is the PLAN, not the data: the object
+# holds a reference to the store it was prepared against and re-reads its CURRENT
+# contents on every `run`, so a mutation made after `prepare` — including one made
+# between two `run` calls on the same handle — is visible to the next run. That is
+# what a rule fixpoint or an incremental SHACL revalidation needs, since both mutate
+# their store every round.
+#
+# Not thread-safe, and deliberately so: a run borrows this object uniquely, because a
+# query body can re-enter the evaluator and a handle reachable a second time while a
+# run is in flight is a handle two evaluations could disagree about.
+class PreparedQuery:
+    # The declared parameter names, in declaration order.
+    @property
+    def parameters(self) -> list[str]: ...
+    # Bind every declared parameter and run, returning the results exactly as
+    # `Store.query` does. Each keyword names a declared parameter; an unknown keyword
+    # raises, and so does a parameter left unbound — an unbound focus would answer
+    # over every subject, which is a silently wider answer rather than a visible
+    # mistake.
+    def run(
+        self, **bindings: _Term
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
+
 # ── Store / Dataset ─────────────────────────────────────────────────────────────
 
 class QuadIter:
@@ -647,6 +671,44 @@ class Store:
     # `shapes.PreparedShapes.validate_store_changes` expands, readable without
     # validating anything.
     def change_size(self) -> tuple[int, int]: ...
+    # Prepare a SPARQL query once, to be bound and run many times: `query` parses and
+    # admits its text on every call, so a caller running one query per row pays that
+    # cost per row for the same plan. `parameters` names the variables `run` will
+    # bind, without the `?`/`$` sigil — each behaves exactly as a `query`
+    # `substitutions` entry, so a parameter reaches inside `OPTIONAL`, `MINUS`,
+    # `EXISTS` and sub-`SELECT`s by ordinary correlation.
+    #
+    # The returned `PreparedQuery` holds a reference to THIS store and re-reads its
+    # current contents on every `run` rather than freezing a snapshot now, so a later
+    # mutation is visible to the next run. It is not thread-safe — see
+    # `PreparedQuery`.
+    #
+    # Engine configuration and relation/aggregate registration behave exactly as on
+    # `query` below — `extension_namespaces`, `property_fn_namespaces`,
+    # `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
+    # and `aggregate_namespace` all admit the plan and are then CARRIED by the
+    # returned `PreparedQuery`, so `PreparedQuery.run` evaluates under the SAME
+    # registries the plan was admitted under. The two axes that read the store's own
+    # graph — `relations_from_graph`, which reads a table written in it, and
+    # `path_relations`, which traverses its edges — are REBUILT from each run's
+    # dataset and the plan re-admitted under them, so a relation's rows are as fresh
+    # as an ordinary triple pattern's and one answer is never assembled from two
+    # points in time. `substitutions` has no seat here: a prepared query's whole point
+    # is that the values that change between runs arrive per-run through `parameters`
+    # / `PreparedQuery.run`'s bindings.
+    def prepare(
+        self,
+        query: str,
+        *,
+        parameters: list[str] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
+        aggregate_namespace: str | None = ...,
+    ) -> PreparedQuery: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
     # enables the closed extension-function set under the caller's namespaces (OFF
     # by default), `property_fn_namespaces` does the same for property-function

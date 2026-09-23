@@ -218,20 +218,43 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
     assert!(error.diagnostic().is_none());
 
     // The failed view is now latched. Its preflight must outrank both a cancelled
-    // governor and caller-mutated malformed algebra without charging execution.
-    let mut malformed = purrdf_sparql_eval::PreparedQuery::rewritten(
-        purrdf_sparql_algebra::SparqlParser::new()
-            .parse_query("ASK {}")
-            .unwrap(),
-        QueryOptions::EMPTY,
-    )
-    .unwrap();
-    if let purrdf_sparql_algebra::Query::Ask { pattern, .. } = &mut malformed.query {
-        *pattern = purrdf_sparql_algebra::GraphPattern::Values {
-            variables: vec![],
-            bindings: vec![vec![None]],
-        };
-    }
+    // governor and an admission failure without charging execution.
+    //
+    // The admission failure used to be forged: an "ASK {}" plan whose public
+    // `query` field was overwritten by hand with a malformed zero-arity `VALUES`
+    // row, bypassing admission entirely. `PreparedQuery::query` is now a private
+    // field with no setter (see `crates/sparql-eval/src/engine.rs`), so that
+    // construction no longer compiles — and, as
+    // `crates/sparql-eval/tests/prepared_admission.rs`'s
+    // `malformed_compiler_rows_are_refused_before_evaluation` already shows, this
+    // exact malformed row is refused by every legitimate constructor, so no
+    // `PreparedQuery` carrying it could ever have reached this call. A REAL
+    // admission failure reached legitimately stands in its place: a plan admitted
+    // under a property-function registry, then handed to this call under
+    // `QueryOptions::EMPTY` — the same registry-mismatch shape
+    // `check_plan_matches_relations` refuses on every non-`PreparedExecution`
+    // entry (see `crates/sparql-eval/tests/prepared_execution.rs`'s
+    // `executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_…`).
+    // What this test needs from it is unchanged: an admission failure to outrank
+    // with the latched view's operational one.
+    let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::new();
+    registry.register(
+        "http://example.org/relation",
+        Arc::new(purrdf_sparql_eval::MemoryRelation::new(1, 1, vec![]).unwrap()),
+    );
+    let relation_env = purrdf_sparql_eval::ExtensionEnv::over_relations(registry)
+        .expect("the fixture relation declares without panicking");
+    let relation_options = QueryOptions {
+        env: &relation_env,
+        ..QueryOptions::EMPTY
+    };
+    let admission_mismatched = engine
+        .prepare_query_with_options(
+            "ASK { ?s <http://example.org/relation> ?o }",
+            None,
+            relation_options,
+        )
+        .expect("admits under the relation registry");
     let stop = Arc::new(CancellationFlag::new());
     stop.cancel();
     let cancelled = Arc::new(GovernorState::new(
@@ -240,7 +263,7 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
     let error = engine
         .query_prepared_governed_fallible_in_operation(
             &view,
-            &malformed,
+            &admission_mismatched,
             &[],
             QueryOptions::EMPTY,
             &cancelled,

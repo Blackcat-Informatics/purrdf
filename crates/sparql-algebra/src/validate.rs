@@ -120,12 +120,23 @@ fn invalid(message: impl Into<String>) -> ParseError {
     ParseError::syntax(message, 0)
 }
 
+/// Accept `value` iff it is a well-formed **absolute** IRI.
+///
+/// `purrdf_iri::is_absolute` rather than `parse(..)?.has_scheme()`: the two run the
+/// same grammar and return the same errors, but `parse` owns a copy of `value` so
+/// its component accessors can hand back slices, and this reads one bit and drops
+/// it. That copy is a heap `String` per IRI in the query, charged on every
+/// `Query::validate` — which a governed SHACL change path used to reach once per
+/// focus node. The swap is an ALLOCATION change and not a validation one: what is
+/// accepted and what is rejected here is unchanged, which
+/// `tests::absolute_iris_are_still_accepted_and_relative_ones_still_refused` pins
+/// from both sides.
 fn iri(value: &str) -> Result<()> {
-    let parsed = purrdf_iri::parse(value).map_err(|e| invalid(e.to_string()))?;
-    if !parsed.has_scheme() {
-        return Err(invalid("relative IRI in query algebra"));
+    if purrdf_iri::is_absolute(value).map_err(|e| invalid(e.to_string()))? {
+        Ok(())
+    } else {
+        Err(invalid("relative IRI in query algebra"))
     }
-    Ok(())
 }
 
 fn variable(value: &Variable) -> Result<()> {

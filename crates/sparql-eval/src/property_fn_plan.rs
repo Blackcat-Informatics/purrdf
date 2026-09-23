@@ -118,10 +118,11 @@ impl core::fmt::Display for PlanError {
 /// from the names a prepare declared.
 ///
 /// Derived here rather than at each caller so "a declared parameter" has one spelling:
-/// the name without its sigil, exactly as `crate::substitute::apply_substitutions`
-/// reads it off a substitution pair.
-pub(crate) fn parameter_set(names: &[String]) -> DetHashSet<Variable> {
-    names.iter().map(Variable::new).collect()
+/// the name without its sigil, exactly as
+/// [`NativeSparqlEngine::prepare_execution`](crate::NativeSparqlEngine::prepare_execution)
+/// declares it and `crate::substitute` binds it.
+pub(crate) fn parameter_set(names: &[&str]) -> DetHashSet<Variable> {
+    names.iter().map(|name| Variable::new(*name)).collect()
 }
 
 /// Rewrite every property-function chain in `query` into a feasible order.
@@ -184,15 +185,10 @@ pub(crate) fn plan_query(
 ///
 /// # Where a promised parameter counts as bound
 ///
-/// `parameters` names the variables an execution will supply through the substitution
-/// channel, and they are seeded exactly where that channel binds them.
-/// `crate::substitute::apply_substitutions` joins a single-row `VALUES` at the **core
-/// `WHERE` pattern** — the first node beneath the solution-modifier wrappers
-/// `Query::map_core_pattern` descends — so that is where they enter the bound set here,
-/// and the descent below follows the same wrapper list rather than a second reading of
-/// it. Above the core they are carried down unspent; a sub-`SELECT` the substitution
-/// does not reach still empties its scope, because a variable of that name inside it is
-/// a different variable and nothing will bind it.
+/// `parameters` names the variables a prepared execution binds on every run, and each
+/// counts as bound exactly where a run's rewrite really binds it — see [`Promise`] for
+/// the two places that is, and why a call anywhere else is admitted as though the
+/// parameter were free.
 ///
 /// # Errors
 ///
@@ -218,7 +214,116 @@ pub(crate) fn plan_where_pattern(
     // execution envelope before cloning or traversing an admitted call chain.
     crate::governor::soundness::validate_graph_pattern_depth(pattern)
         .map_err(PlanError::property_function)?;
-    plan_pattern(pattern, relations, agg_registry, parameters, parameters).map(Some)
+    plan_pattern(
+        pattern,
+        relations,
+        agg_registry,
+        &DetHashSet::default(),
+        Promise::descent(parameters),
+    )
+    .map(Some)
+}
+
+/// Where a prepared execution's declared parameters count as bound while a call is
+/// admitted, and where they do not.
+///
+/// A run binds its parameters in two ways at once (`crate::substitute::apply_probes`),
+/// and a parameter is honestly "bound" only where one of them reaches:
+///
+/// * **The seed.** A single-row `VALUES` is joined onto the core `WHERE` pattern —
+///   the first node beneath the solution-modifier wrappers `Query::map_core_pattern`
+///   descends. Every row a wrapper ABOVE the core sees therefore carries the
+///   parameters, so an expression there (a correlated `EXISTS`, say) sees them bound.
+///   That is [`Self::Descent`]. The seed is joined, not correlated: nothing at or
+///   below the core is evaluated with its row in hand.
+/// * **The pushdown.** At and below the core, the rewrite writes each parameter's
+///   value INTO the leaves it can reach — triple patterns, paths, and
+///   property-function calls — so a call there is invoked with that argument bound.
+///   That is [`Self::Pushed`], and it follows the pushdown's own reach exactly: into
+///   both operands of a `Join` and a `UNION`, the inner of a `GRAPH`, `FILTER` and
+///   `BIND`, the left operand of an `OPTIONAL`, a `MINUS` and a `LATERAL`, and the
+///   call a `LATERAL` drives. Everywhere else — an `OPTIONAL`'s or a `MINUS`'s right
+///   arm, the body of an `EXISTS` beneath the core, a nested sub-`SELECT` — the
+///   pushdown does not write, and a call there is invoked with the parameter free.
+///   Admitting it as though it were bound would exchange a refusal at prepare for a
+///   refusal on every run.
+///
+/// Neither half extends `outer`, which stays the set of variables the pattern ITSELF
+/// certainly binds: a promise is consulted only where a call is admitted, and only
+/// where it holds.
+#[derive(Clone, Copy, Debug)]
+enum Promise<'a> {
+    /// Nothing is promised here.
+    None,
+    /// On the solution-modifier descent to the core, which the seed will be joined
+    /// beneath.
+    Descent(&'a DetHashSet<Variable>),
+    /// At or below the core, at a position the pushdown writes these into.
+    Pushed(&'a DetHashSet<Variable>),
+}
+
+impl<'a> Promise<'a> {
+    /// The promise a plan starts from: `parameters` on the descent, or nothing.
+    fn descent(parameters: &'a DetHashSet<Variable>) -> Self {
+        if parameters.is_empty() {
+            Self::None
+        } else {
+            Self::Descent(parameters)
+        }
+    }
+
+    /// The promise at a node that is not a solution-modifier wrapper — which, if the
+    /// descent is still under way, makes this node the core the seed is joined onto
+    /// and the pushdown starts from.
+    const fn at_node(self) -> Self {
+        match self {
+            Self::Descent(parameters) => Self::Pushed(parameters),
+            other => other,
+        }
+    }
+
+    /// The parameters a row seen by an expression at this node carries, which is the
+    /// seed's on the descent and nothing anywhere else.
+    const fn in_rows(self) -> Option<&'a DetHashSet<Variable>> {
+        match self {
+            Self::Descent(parameters) => Some(parameters),
+            Self::None | Self::Pushed(_) => None,
+        }
+    }
+
+    /// The parameters a call admitted at this node may count as bound.
+    const fn for_calls(self) -> Option<&'a DetHashSet<Variable>> {
+        match self {
+            Self::Pushed(parameters) => Some(parameters),
+            Self::None | Self::Descent(_) => None,
+        }
+    }
+}
+
+/// `bound`, widened by the parameters `promise` lets a call count as bound here.
+///
+/// Borrowed whenever there is nothing to add, so an ordinary prepare — which promises
+/// nothing — builds no set.
+fn call_scope<'s>(
+    bound: &'s DetHashSet<Variable>,
+    promise: Promise<'_>,
+) -> std::borrow::Cow<'s, DetHashSet<Variable>> {
+    match promise.for_calls() {
+        Some(parameters) if !parameters.iter().all(|variable| bound.contains(variable)) => {
+            let mut widened = bound.clone();
+            widened.extend(parameters.iter().cloned());
+            std::borrow::Cow::Owned(widened)
+        }
+        _ => std::borrow::Cow::Borrowed(bound),
+    }
+}
+
+/// `scope`, widened by the parameters rows at this node carry — see
+/// [`Promise::in_rows`].
+fn with_rows(scope: &mut DetHashSet<Variable>, promise: Promise<'_>) {
+    if let Some(parameters) = promise.in_rows() {
+        scope.extend(parameters.iter().cloned());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,23 +347,20 @@ struct Atom<'a> {
 /// `outer` is the set of variables CERTAINLY bound by the enclosing context — see
 /// [`collect_certainly_bound`] for what earns a variable a place in it.
 ///
-/// `seed` is the promised-parameter set still travelling down towards the core `WHERE`
-/// pattern, and it is non-empty only while this node is one of the solution-modifier
-/// wrappers a substitution descends through. It exists for exactly one arm — a
-/// sub-`SELECT`'s scope reset — because that is the only place along that descent where
-/// `outer` is discarded, and the outermost projection is on the descent rather than
-/// inside a scope of its own. See [`plan_where_pattern`].
+/// `promise` is where a prepared execution's declared parameters count as bound — see
+/// [`Promise`].
 fn plan_pattern(
     pattern: &GraphPattern,
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
-    seed: &DetHashSet<Variable>,
+    promise: Promise<'_>,
 ) -> Result<GraphPattern, PlanError> {
     // Compiler-produced algebra may be a bare call, without the parser's Lateral
     // wrapper. Apply the same admission as a chain member before cloning it.
     if let GraphPattern::PropertyFunction(call) = pattern {
-        if admitted_row_bound(call, relations, outer)?.is_none() {
+        let scope = call_scope(outer, promise.at_node());
+        if admitted_row_bound(call, relations, &scope)?.is_none() {
             return Err(stuck(
                 &[Atom {
                     pattern,
@@ -266,7 +368,7 @@ fn plan_pattern(
                     position: 0,
                 }],
                 relations,
-                outer,
+                &scope,
             ));
         }
         return Ok(pattern.clone());
@@ -277,9 +379,9 @@ fn plan_pattern(
     // structurally.
     let mut atoms = Vec::new();
     if collect_chain(pattern, &mut atoms) && atoms.iter().any(|atom| atom.call.is_some()) {
-        return order_chain(atoms, relations, agg_registry, outer);
+        return order_chain(atoms, relations, agg_registry, outer, promise.at_node());
     }
-    map_children(pattern, relations, agg_registry, outer, seed)
+    map_children(pattern, relations, agg_registry, outer, promise)
 }
 
 /// Peel the chain spine, pushing its atoms in TEXTUAL order (base first).
@@ -346,22 +448,26 @@ fn push_atom<'a>(
 /// atom can never be infeasible and can only ever ADD bindings, so running it first
 /// maximizes the access patterns available to the calls that follow — and it costs
 /// nothing, because a chain member is evaluated once regardless of where it sits.
+///
+/// A call is admitted with `promise`'s parameters counted as bound too: every atom of
+/// a chain is a place the pushdown writes into — the first atom and each `Join`
+/// operand, and each call a `Lateral` drives — so they are handed on to every atom.
 fn order_chain(
     atoms: Vec<Atom<'_>>,
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
+    promise: Promise<'_>,
 ) -> Result<GraphPattern, PlanError> {
     let mut bound = outer.clone();
     let mut remaining: Vec<Atom<'_>> = atoms;
     let mut ordered: Vec<&GraphPattern> = Vec::with_capacity(remaining.len());
     let mut is_call: Vec<bool> = Vec::with_capacity(remaining.len());
     // The set `bound` held at the moment each atom was CHOSEN — i.e. exactly the
-    // variables its own subtree is allowed to see when it is recursively planned
-    // below. Capturing it here (rather than reusing the fully-accumulated `bound`
-    // after the loop) is what keeps a call NESTED inside an earlier atom (a `Union`
-    // arm's own chain, say) from being planned as though sibling atoms chosen AFTER
-    // it — and everything they bind — were already in scope.
+    // variables a CALL atom is driven with when it is re-admitted below. Capturing it
+    // here (rather than reusing the fully-accumulated `bound` after the loop) is what
+    // keeps a call from being admitted as though sibling atoms chosen AFTER it — and
+    // everything they bind — were already in scope.
     let mut bound_before: Vec<DetHashSet<Variable>> = Vec::with_capacity(remaining.len());
 
     while !remaining.is_empty() {
@@ -374,7 +480,9 @@ fn order_chain(
                 }
                 continue;
             };
-            let Some(rows_bound) = admitted_row_bound(call, relations, &bound)? else {
+            let Some(rows_bound) =
+                admitted_row_bound(call, relations, &call_scope(&bound, promise))?
+            else {
                 continue;
             };
             let key = (rows_bound, call.iri.as_str(), atom.position);
@@ -383,7 +491,7 @@ fn order_chain(
             }
         }
         let Some((index, _)) = best else {
-            return Err(stuck(&remaining, relations, &bound));
+            return Err(stuck(&remaining, relations, &call_scope(&bound, promise)));
         };
         let atom = remaining.remove(index);
         bound_before.push(bound.clone());
@@ -394,20 +502,19 @@ fn order_chain(
 
     // Rebuild the left-deep spine in the chosen order: a call re-attaches through a
     // `Lateral` (it depends on what is to its left), everything else through a `Join`.
-    // Each atom is planned against ITS OWN `bound_before` snapshot — never the final,
-    // fully-accumulated `bound` — so a chain nested inside atom i sees exactly the
-    // variables atoms `0..i` bound, matching the set it was chosen against above.
     let mut chain: Option<GraphPattern> = None;
     for ((pattern, call), scope) in ordered.into_iter().zip(is_call).zip(bound_before) {
-        // A chain member is at or below the core `WHERE` pattern, so any promised
-        // parameter is already inside `scope`; there is no further projection for a
-        // seed to survive.
+        // A call is re-attached through a `Lateral`, which drives it with the rows of
+        // every atom before it, so it is admitted against `scope`. Any other atom is
+        // re-attached through a `Join`, which evaluates it on its own — so a call
+        // NESTED inside it (a `UNION` arm's own chain, say) sees only what the chain's
+        // enclosing context binds.
         let planned = plan_pattern(
             pattern,
             relations,
             agg_registry,
-            &scope,
-            &DetHashSet::default(),
+            if call { &scope } else { outer },
+            promise,
         )?;
         chain = Some(match chain {
             None => planned,
@@ -592,67 +699,65 @@ fn map_children(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
-    seed: &DetHashSet<Variable>,
+    promise: Promise<'_>,
 ) -> Result<GraphPattern, PlanError> {
-    // Two recursions, because a child is either ON the descent a substitution takes to
-    // the core `WHERE` pattern or it is not, and only the former may keep the promised
-    // parameters alive across a projection. `descend` is used by exactly the wrappers
-    // `Query::map_core_pattern` descends; every other child takes `recurse`, which
-    // spends the seed. See [`plan_pattern`].
-    let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>| {
-        plan_pattern(
-            child,
-            relations,
-            agg_registry,
-            outer,
-            &DetHashSet::default(),
-        )
-        .map(Box::new)
+    let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>, promise: Promise<'_>| {
+        plan_pattern(child, relations, agg_registry, outer, promise).map(Box::new)
     };
-    let descend = |child: &GraphPattern, outer: &DetHashSet<Variable>| {
-        plan_pattern(child, relations, agg_registry, outer, seed).map(Box::new)
+    // A solution-modifier wrapper passes the descent on to its inner pattern; beneath
+    // the core, only the wrappers the pushdown descends pass on what it writes. See
+    // [`Promise`].
+    let wrapped = match promise {
+        Promise::Descent(_) => promise,
+        Promise::None | Promise::Pushed(_) => Promise::None,
     };
+    // The node itself, when it is not a wrapper: the core if the descent is still
+    // under way.
+    let here = promise.at_node();
     Ok(match pattern {
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
         | GraphPattern::Values { .. }
         | GraphPattern::PropertyFunction(_) => pattern.clone(),
-        // The right side of a join sees what the left side certainly binds; a `Lateral`
-        // makes that correlation explicit, and an ordinary `Join` is evaluated with the
-        // same left-to-right binding availability.
-        GraphPattern::Join { left, right } => {
-            let mut inner = outer.clone();
-            collect_certainly_bound(left, &mut inner);
-            GraphPattern::Join {
-                left: recurse(left, outer)?,
-                right: recurse(right, &inner)?,
-            }
-        }
+        // An ordinary `Join` evaluates its operands independently and joins the results,
+        // so a call inside the right operand is invoked with nothing the left operand
+        // binds: it sees what the enclosing context binds and no more. Only a `Lateral`
+        // hands its right operand the left rows — which is why a call that depends on
+        // an earlier atom is rebuilt through one (see [`order_chain`]).
+        GraphPattern::Join { left, right } => GraphPattern::Join {
+            left: recurse(left, outer, here)?,
+            right: recurse(right, outer, here)?,
+        },
+        // The right side of a `Lateral` is evaluated once per left row with that row in
+        // hand, so it sees what the left side certainly binds. A `Lateral` whose right
+        // operand is a call is a chain and never reaches this arm, so the right operand
+        // here is a pattern the pushdown does not enter.
         GraphPattern::Lateral { left, right } => {
             let mut inner = outer.clone();
             collect_certainly_bound(left, &mut inner);
             GraphPattern::Lateral {
-                left: recurse(left, outer)?,
-                right: recurse(right, &inner)?,
+                left: recurse(left, outer, here)?,
+                right: recurse(right, &inner, Promise::None)?,
             }
         }
-        // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated against the
-        // left, but their own bindings do NOT escape as certain, which
-        // `certainly_bound` accounts for; the correlation INTO them is still real.
+        // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated independently
+        // of the left and then matched against it, exactly as a `Join`'s right operand
+        // is, so a call inside either sees only what the enclosing context binds. Their
+        // own bindings do not escape as certain either, which `certainly_bound`
+        // accounts for. Neither right arm is one the pushdown writes into.
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => {
-            let mut inner = outer.clone();
-            collect_certainly_bound(left, &mut inner);
             // The inline condition is evaluated only on candidate JOINED rows, so
             // both sides' bindings are available to it.
-            let mut condition_scope = inner.clone();
+            let mut condition_scope = outer.clone();
+            collect_certainly_bound(left, &mut condition_scope);
             collect_certainly_bound(right, &mut condition_scope);
             GraphPattern::LeftJoin {
-                left: recurse(left, outer)?,
-                right: recurse(right, &inner)?,
+                left: recurse(left, outer, here)?,
+                right: recurse(right, outer, Promise::None)?,
                 expression: expression
                     .as_ref()
                     .map(|expr| plan_expression(expr, relations, agg_registry, &condition_scope))
@@ -660,13 +765,13 @@ fn map_children(
             }
         }
         GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: recurse(left, outer)?,
-            right: recurse(right, outer)?,
+            left: recurse(left, outer, here)?,
+            right: recurse(right, outer, Promise::None)?,
         },
         // A `UNION` branch cannot rely on its sibling.
         GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: recurse(left, outer)?,
-            right: recurse(right, outer)?,
+            left: recurse(left, outer, here)?,
+            right: recurse(right, outer, here)?,
         },
         // A `FILTER`'s expression is evaluated over the rows its inner pattern
         // produced, so an `EXISTS` inside it sees everything that pattern certainly
@@ -675,9 +780,11 @@ fn map_children(
         GraphPattern::Filter { expr, inner } => {
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
+            with_rows(&mut scope, promise);
             GraphPattern::Filter {
                 expr: plan_expression(expr, relations, agg_registry, &scope)?,
-                inner: descend(inner, outer)?,
+                // The pushdown descends a `FILTER` beneath the core as well as above it.
+                inner: recurse(inner, outer, promise)?,
             }
         }
         GraphPattern::Extend {
@@ -687,8 +794,23 @@ fn map_children(
         } => {
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
+            with_rows(&mut scope, promise);
+            // The pushdown descends a `BIND` beneath the core as well as above it, and
+            // does not carry the variable the `BIND` itself binds into its operand.
+            let narrowed: DetHashSet<Variable>;
+            let into = match promise {
+                Promise::Pushed(parameters) if parameters.contains(variable) => {
+                    narrowed = parameters
+                        .iter()
+                        .filter(|parameter| *parameter != variable)
+                        .cloned()
+                        .collect();
+                    Promise::Pushed(&narrowed)
+                }
+                other => other,
+            };
             GraphPattern::Extend {
-                inner: descend(inner, outer)?,
+                inner: recurse(inner, outer, into)?,
                 variable: variable.clone(),
                 expression: plan_expression(expression, relations, agg_registry, &scope)?,
             }
@@ -701,8 +823,9 @@ fn map_children(
         } => {
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
+            with_rows(&mut scope, promise);
             GraphPattern::Unfold {
-                inner: descend(inner, outer)?,
+                inner: recurse(inner, outer, wrapped)?,
                 expression: plan_expression(expression, relations, agg_registry, &scope)?,
                 element: element.clone(),
                 companion: companion.clone(),
@@ -710,13 +833,14 @@ fn map_children(
         }
         GraphPattern::Graph { name, inner } => GraphPattern::Graph {
             name: name.clone(),
-            inner: recurse(inner, outer)?,
+            inner: recurse(inner, outer, here)?,
         },
         GraphPattern::OrderBy { inner, expression } => {
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
+            with_rows(&mut scope, promise);
             GraphPattern::OrderBy {
-                inner: descend(inner, outer)?,
+                inner: recurse(inner, outer, wrapped)?,
                 expression: expression
                     .iter()
                     .map(|order| {
@@ -739,28 +863,26 @@ fn map_children(
             }
         }
         // A sub-`SELECT` is its own scope: a variable bound outside it is not visible
-        // inside, so the correlation set is emptied on the way in — emptied to `seed`,
-        // which is the empty set everywhere a substitution does not reach, and the
-        // promised parameters on the one descent where it does. The projection a
-        // caller's own `SELECT` produces sits on that descent, so a parameter survives
-        // it; a sub-`SELECT` reached through any other node does not, and there the
-        // reset is total exactly as before.
+        // inside, so the correlation set is emptied on the way in. The projection a
+        // caller's own `SELECT` produces sits on the descent to the core, so the
+        // promise survives it there; a sub-`SELECT` anywhere else is a scope nothing
+        // binds a parameter in.
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: descend(inner, seed)?,
+            inner: recurse(inner, &DetHashSet::default(), wrapped)?,
             variables: variables.clone(),
         },
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: descend(inner, outer)?,
+            inner: recurse(inner, outer, wrapped)?,
         },
         GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: descend(inner, outer)?,
+            inner: recurse(inner, outer, wrapped)?,
         },
         GraphPattern::Slice {
             inner,
             start,
             length,
         } => GraphPattern::Slice {
-            inner: descend(inner, outer)?,
+            inner: recurse(inner, outer, wrapped)?,
             start: *start,
             length: *length,
         },
@@ -771,8 +893,9 @@ fn map_children(
         } => {
             let mut scope = outer.clone();
             collect_certainly_bound(inner, &mut scope);
+            with_rows(&mut scope, promise);
             GraphPattern::Group {
-                inner: descend(inner, outer)?,
+                inner: recurse(inner, outer, wrapped)?,
                 variables: variables.clone(),
                 aggregates: aggregates
                     .iter()
@@ -820,16 +943,16 @@ fn plan_expression(
         |expr: &Expression| plan_expression(expr, relations, agg_registry, outer).map(Box::new);
     Ok(match expr {
         // A correlated `EXISTS` sees its enclosing group's bindings, so `outer` carries
-        // straight in: that is what lets a relation inside one be invoked bound.
-        // A substitution's seed lands at the enclosing group's core, never inside the
-        // `EXISTS` body's own pattern, so no seed travels in here: what a promised
-        // parameter contributes is already in `outer`.
+        // straight in: that is what lets a relation inside one be invoked bound. A
+        // prepared execution's parameters are in `outer` here exactly when the rows the
+        // expression is evaluated over carry them (see [`Promise::in_rows`]); the
+        // pushdown never writes into an `EXISTS` body, so nothing more is promised.
         Expression::Exists(pattern) => Expression::Exists(Box::new(plan_pattern(
             pattern,
             relations,
             agg_registry,
             outer,
-            &DetHashSet::default(),
+            Promise::None,
         )?)),
         Expression::Or(a, b) => Expression::Or(sub(a)?, sub(b)?),
         Expression::And(a, b) => Expression::And(sub(a)?, sub(b)?),
@@ -1407,7 +1530,7 @@ mod registry_fingerprint_tests {
         assert_eq!(registry_fingerprint(&fresh).expect("ok"), "");
     }
 
-    /// GAP (registry instance identity): two INDEPENDENTLY constructed registries
+    /// Registry instance identity: two INDEPENDENTLY constructed registries
     /// that register the SAME IRI to relations with byte-identical declared
     /// metadata (arity, volatility, modes, row bounds) — [`MemoryRelation`]s
     /// holding the SAME NUMBER of rows, so `describe()` reports identically, but
