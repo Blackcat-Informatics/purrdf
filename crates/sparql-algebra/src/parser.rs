@@ -1290,6 +1290,35 @@ impl<'a> Parser<'a, '_> {
 
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
 
+        // A `GROUP BY (expr AS ?v)` target must be fresh too — not in scope in the
+        // `WHERE` clause, and not an earlier condition's target. §18.2.1 makes `?v`
+        // in scope by that very form and requires it not to be in scope already at
+        // the point of an `(expr AS ?v)`, and the condition lowers to an `Extend`
+        // (§18.2.4.1), which §18.5 leaves undefined for a variable the solution
+        // already binds: `BIND`'s and the `SELECT` list's rule, on the third place
+        // the grammar writes the form. A synthetic target (`GROUP BY (expr)`) is
+        // minted outside every name a query can write and never collides.
+        if !modifiers.group_extends.is_empty() {
+            // A PRODUCTION consultation of the whole WHERE pattern's scope — once
+            // per SELECT with expression-valued GROUP BY conditions (see
+            // `Parser::scope_consultations`'s doc).
+            self.note_scope_consultation();
+            let mut in_scope: std::collections::HashSet<Variable> =
+                visible_variables(&where_pat).into_iter().collect();
+            for (variable, _) in &modifiers.group_extends {
+                if !in_scope.insert(variable.clone()) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "GROUP BY target ?{} is already in scope in the WHERE clause or \
+                             an earlier GROUP BY condition",
+                            variable.as_str()
+                        ),
+                        self.span(),
+                    ));
+                }
+            }
+        }
+
         // §19.8: each SELECT `(expr AS ?v)` target must be fresh — not already in
         // scope. When the query aggregates (an explicit `GROUP BY` or any
         // aggregate ⇒ implicit single group), only the grouping keys and
@@ -8902,6 +8931,55 @@ mod tests {
         SparqlParser::new()
             .parse_query(&ok)
             .expect("fresh BIND target parses");
+    }
+
+    /// A `GROUP BY (expr AS ?v)` target already in scope is refused exactly as a
+    /// `BIND` or `SELECT`-list target is: in the `WHERE` clause, behind a nested
+    /// group, in a sub-`SELECT`'s own `WHERE`, and as an earlier condition's target.
+    /// The neighbours — the same conditions over a fresh target, the W3C
+    /// `grouping/group04` and `aggregates/agg-group-builtin` shapes, a plain key over
+    /// the in-scope variable, and a target that a sub-`SELECT` below hides — parse,
+    /// and lower to the `Extend` beneath the `Group`.
+    #[test]
+    fn group_by_target_already_in_scope_is_rejected() {
+        for query in [
+            "SELECT ?c WHERE { ?c purrdf:p ?o } GROUP BY (purrdf:x AS ?c)",
+            "SELECT ?c WHERE { ?c purrdf:p ?o } GROUP BY (?o AS ?c)",
+            "SELECT ?c WHERE { { ?c purrdf:p ?o } } GROUP BY (COALESCE(?nope, 1) AS ?c)",
+            "SELECT ?k WHERE { ?c purrdf:p ?o } GROUP BY (?o AS ?k) (?c AS ?k)",
+            "SELECT ?c WHERE { { SELECT ?c WHERE { ?c purrdf:p ?o } GROUP BY (purrdf:x AS ?c) } }",
+        ] {
+            let q = format!("{GM}{query}");
+            let err = SparqlParser::new()
+                .parse_query(&q)
+                .expect_err("a GROUP BY target over an in-scope variable must fail");
+            assert!(
+                matches!(&err, ParseError::Syntax { reason, .. }
+                    if reason.contains("GROUP BY target ?") && reason.contains("already in scope")),
+                "expected the GROUP BY scope refusal for {query:?}, got {err:?}"
+            );
+        }
+        for query in [
+            "SELECT ?k WHERE { ?c purrdf:p ?o } GROUP BY (purrdf:x AS ?k)",
+            "SELECT ?X (SAMPLE(?v) AS ?S) { ?s purrdf:p ?v OPTIONAL { ?s purrdf:q ?w } } \
+             GROUP BY (COALESCE(?w, 1) AS ?X)",
+            "SELECT ?d (COUNT(*) AS ?n) WHERE { ?s ?p ?o } GROUP BY (DATATYPE(?o) AS ?d)",
+            "SELECT ?c WHERE { ?c purrdf:p ?o } GROUP BY ?c",
+            "SELECT ?k ?j WHERE { ?c purrdf:p ?o } GROUP BY (?o AS ?k) (?c AS ?j)",
+            "SELECT ?h WHERE { { SELECT ?o WHERE { ?h purrdf:p ?o } } } GROUP BY (?o AS ?h)",
+        ] {
+            let q = format!("{GM}{query}");
+            let parsed = SparqlParser::new()
+                .parse_query(&q)
+                .unwrap_or_else(|err| panic!("a fresh GROUP BY target parses: {query:?}: {err}"));
+            let Query::Select { pattern, .. } = parsed else {
+                panic!("a SELECT: {query:?}");
+            };
+            assert!(
+                format!("{pattern:?}").contains("Group {"),
+                "the condition lowers beneath a Group: {query:?}"
+            );
+        }
     }
 
     /// The group-parsing loop's scope set is a genuinely incremental structure,

@@ -820,11 +820,22 @@ struct PendingLookup {
     position: usize,
     /// The stratum the lookups answer for.
     stratum: Iri,
-    /// The lookups, each prepared once with the candidate as its one parameter,
-    /// beside that parameter's slot — see [`DatasetExclusion::lookups`].
-    lookups: Vec<(PreparedExecution, usize)>,
+    /// The lookups, one list per alternative — see [`DatasetExclusion::lookups`].
+    lookups: Vec<Vec<PreparedLookup>>,
     /// What the stratum's ranked read pinned, which every lookup is held to.
     pinned: PfAttestation,
+}
+
+/// One exclusion lookup, prepared once with the candidate as its one parameter.
+struct PreparedLookup {
+    /// The prepared execution.
+    execution: PreparedExecution,
+    /// The candidate parameter's slot, resolved once.
+    slot: usize,
+    /// Whether its call is driven by patterns of the caller's text, and so invoked
+    /// once per distinct binding of its inputs rather than once — see
+    /// [`LookupText::driven`](crate::compile::LookupText).
+    driven: bool,
 }
 
 /// The exclusion lookup [`execute`] compiles: one prepared execution per qualifying
@@ -842,16 +853,21 @@ struct PendingLookup {
 /// # Several calls, one verdict
 ///
 /// A rendered unit has one call, and so one lookup. A caller's text may draw its
-/// `?candidate` column from several calls — a join of calls on it — and every one of
-/// them that the registry qualifies is a proof of absence on its own
-/// ([`StratumUnit::exclusion_sparql`](crate::StratumUnit)): the column holds only
-/// values each of them emitted. So the lookups are asked in order and the first that
-/// finds no row answers `Excluded`; `Possible` needs every one of them to find its
-/// candidate. Each is held, before its row count is read at all, to the one
-/// attestation the stratum's ranked read pinned — the sole-witness rule makes that one
-/// attestation cover every call the text made, since every call of a conforming unit
-/// invokes the one relation at one generation — so a verdict from any lookup answered
-/// by another index generation is refused, whichever lookup it was.
+/// `?candidate` column from several calls, grouped into **alternatives**
+/// ([`StratumUnit::exclusion_sparql`](crate::StratumUnit)): every solution naming a
+/// candidate is one in which every call of some alternative emitted it. Within an
+/// alternative — a join of calls on the column — any one call finding no row proves
+/// the alternative never names the candidate; across alternatives — the branches of
+/// a `UNION` — the candidate is out of the text's reach only when every alternative
+/// is. So the verdict is `Excluded` exactly when each alternative, asked in order,
+/// has a lookup that finds no row, its lookups asked in order and the first such
+/// ending that alternative; the first alternative all of whose lookups find the
+/// candidate answers `Possible`. Each lookup is held, before its rows are read at all,
+/// to the one attestation the stratum's ranked read pinned — the sole-witness rule
+/// makes that one attestation cover every call the text made, in every branch, since
+/// every call of a conforming unit invokes the one relation at one generation — so a
+/// verdict from any lookup answered by another index generation is refused, whichever
+/// alternative and lookup it was.
 struct DatasetExclusion<'d, D: DatasetView + Sync> {
     /// The stratum this lookup answers for, so its refusals name a producer
     /// rather than a query.
@@ -866,11 +882,11 @@ struct DatasetExclusion<'d, D: DatasetView + Sync> {
     /// and run under another is refused by the evaluator, so the same value must
     /// reach both calls — see [`execute_within`]'s own single-environment note.
     env: Arc<ExtensionEnv>,
-    /// The lookups themselves, one per qualifying call in the order
+    /// The lookups themselves, one list per alternative and one lookup per
+    /// qualifying call of it, in the order
     /// [`StratumUnit::exclusion_sparql`](crate::StratumUnit) derived them, each
-    /// prepared once with the candidate as its one parameter and beside that
-    /// parameter's slot, resolved once.
-    lookups: Vec<(PreparedExecution, usize)>,
+    /// prepared once with the candidate as its one parameter.
+    lookups: Vec<Vec<PreparedLookup>>,
     /// How each candidate this execution read is bound, shared by its lookups and
     /// written by the reads that name candidates — on demand, as each row is pulled.
     candidates: Rc<RefCell<CandidateIndex<D::Id>>>,
@@ -896,20 +912,30 @@ impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
 impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
     fn look_up(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
         let binding = self.candidates.borrow().get(candidate).cloned();
-        for index in 0..self.lookups.len() {
-            if self.ask(index, candidate, binding.as_ref())? == ExclusionVerdict::Excluded {
-                return Ok(ExclusionVerdict::Excluded);
+        for alternative in 0..self.lookups.len() {
+            let mut excluded = false;
+            for index in 0..self.lookups[alternative].len() {
+                if self.ask(alternative, index, candidate, binding.as_ref())?
+                    == ExclusionVerdict::Excluded
+                {
+                    excluded = true;
+                    break;
+                }
+            }
+            if !excluded {
+                return Ok(ExclusionVerdict::Possible);
             }
         }
-        Ok(ExclusionVerdict::Possible)
+        Ok(ExclusionVerdict::Excluded)
     }
 }
 
 impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
-    /// Ask the `index`-th lookup whether `candidate`, bound as `binding` says, is out
-    /// of its call's reach.
+    /// Ask the `index`-th lookup of the `alternative`-th alternative whether
+    /// `candidate`, bound as `binding` says, is out of its call's reach.
     fn ask(
         &mut self,
+        alternative: usize,
         index: usize,
         candidate: &Term,
         binding: Option<&CandidateBinding<D::Id>>,
@@ -919,8 +945,12 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
             stratum: stratum.as_str().to_owned(),
             reason,
         };
-        let (execution, slot) = &mut self.lookups[index];
-        let slot = *slot;
+        let PreparedLookup {
+            execution,
+            slot,
+            driven,
+        } = &mut self.lookups[alternative][index];
+        let (slot, driven) = (*slot, *driven);
         let bound = match binding {
             Some(CandidateBinding::Id(id)) => execution.bind_id(slot, self.dataset, *id),
             Some(CandidateBinding::Value(value)) => execution.bind(slot, value.clone()),
@@ -947,14 +977,30 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
         // its receipt. A lookup's receipt is two facts — its row count, which the
         // visitor reads here, and the witness of the index generation that
         // answered, which the witnessed door hands back beside it.
+        //
+        // A driven lookup projects the candidate and the inputs it was invoked with,
+        // one invocation per distinct binding of them, so the most rows any one
+        // invocation answered is the most times one row repeats.
         let (rows, witness) = self
             .engine
             .execute_witnessed(execution, self.dataset, options, |outcome| match outcome {
-                InternedOutcome::Solutions(solutions) => Some(solutions.len()),
+                InternedOutcome::Solutions(solutions) => Some(if driven {
+                    let mut answered: HashMap<&[_], u64> = HashMap::new();
+                    for row in solutions.rows() {
+                        *answered.entry(row.as_slice()).or_default() += 1;
+                    }
+                    (
+                        solutions.len(),
+                        answered.values().copied().max().unwrap_or(0),
+                    )
+                } else {
+                    let rows = solutions.len();
+                    (rows, u64::try_from(rows).unwrap_or(u64::MAX))
+                }),
                 InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => None,
             })
             .map_err(|diagnostic| failed(diagnostic.to_string()))?;
-        let rows =
+        let (rows, pulled) =
             rows.ok_or_else(|| failed("the exclusion lookup did not return solutions".to_owned()))?;
         // Held to the read before its verdict is read at all. A verdict is only a
         // statement about the rows the ranked read would have gone on to name if it
@@ -975,11 +1021,13 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
                 self.pinned, answered
             )));
         }
-        let pulled = u64::try_from(rows).unwrap_or(u64::MAX);
         // The point bound a declared exclusion basis rests on, derived from the
         // ceiling the lookup is read under rather than written twice: the text
         // asks for one row past the bound precisely so a producer that beats it
-        // is observed instead of truncated into looking conforming.
+        // is observed instead of truncated into looking conforming. A driven
+        // lookup is read whole instead, and `pulled` is then the most rows any one
+        // of its invocations answered — each distinct binding of its inputs is one
+        // invocation, so a row repeated is an invocation answering twice.
         const POINT_BOUND: u64 = EXCLUSION_LIMIT - 1;
         if pulled > POINT_BOUND {
             // A producer that declared an exclusion basis declared, through the
@@ -1004,7 +1052,7 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
             };
             return Err(failed(breach.to_string()));
         }
-        Ok(if pulled == 0 {
+        Ok(if rows == 0 {
             ExclusionVerdict::Excluded
         } else {
             ExclusionVerdict::Possible
@@ -1597,18 +1645,32 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                 );
                 continue;
             }
-            Some(Ok(texts)) => {
-                let prepared_lookups: Result<Vec<(PreparedExecution, usize)>, _> = texts
+            Some(Ok(alternatives)) => {
+                let prepared_lookups: Result<Vec<Vec<PreparedLookup>>, _> = alternatives
                     .iter()
-                    .map(|text| {
-                        engine
-                            .prepare_execution(text, None, &[CANDIDATE_NAME], options())
-                            .map(|execution| {
-                                let slot = execution
-                                    .slot(CANDIDATE_NAME)
-                                    .expect("the one parameter this execution was prepared with");
-                                (execution, slot)
+                    .map(|alternative| {
+                        alternative
+                            .iter()
+                            .map(|lookup| {
+                                engine
+                                    .prepare_execution(
+                                        &lookup.text,
+                                        None,
+                                        &[lookup.parameter.as_str()],
+                                        options(),
+                                    )
+                                    .map(|execution| {
+                                        let slot = execution.slot(&lookup.parameter).expect(
+                                            "the one parameter this execution was prepared with",
+                                        );
+                                        PreparedLookup {
+                                            execution,
+                                            slot,
+                                            driven: lookup.driven,
+                                        }
+                                    })
                             })
+                            .collect()
                     })
                     .collect();
                 match prepared_lookups {

@@ -18,9 +18,14 @@
 //!
 //! The refusals are pinned beside admitted neighbours: a text whose `?candidate`
 //! column can take a value no call emitted — through a `UNION`, an `OPTIONAL` or a
-//! `MINUS` over `VALUES`, an aggregate, a `GRAPH` name, a data triple — and declares
-//! a basis is refused by name, and the neighbour differing in that one operator is
-//! admitted and answers its lookups.
+//! `MINUS` over `VALUES`, an aggregate, a computed `GROUP BY` condition, a `GRAPH`
+//! name, a data triple — and declares a basis is refused by name, a condition
+//! rebinding the call's own `?candidate` does not parse, and the neighbour differing
+//! in that one operator is admitted and answers its lookups. A `UNION` whose every
+//! branch draws the candidate from a call is admitted and asks every branch; a call
+//! whose needle the text reads out of the data — over the real text relation — keeps
+//! that pattern in its lookup. And every admitted shape is run twice, with its
+//! lookups and as a full read with none, to one answer.
 //!
 //! Fixtures use `example.org` throughout; every IRI is fixture configuration.
 
@@ -34,10 +39,11 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, DomainTag,
-    DuplicatePolicy, ExclusionVerdict, ExecutionResult, Fixed, FusedRow, FusionError,
-    FusionProfile, FusionTrailer, Iri, ProducerStatus, ProtocolError, RECIP_K, RankFidelity,
-    RankedStreamAdapter, ReadSchedule, RequestTerm, RetrievalRequest, Statistics, StratumUnit,
-    StreamContract, Term, TopK, UnitError, compile, contribution_under, execute_within, fuse, plan,
+    DuplicatePolicy, ExclusionVerdict, ExecutionError, ExecutionResult, Fixed, FusedRow,
+    FusionError, FusionProfile, FusionTrailer, Iri, ProducerStatus, ProtocolError, RECIP_K,
+    RankFidelity, RankedStreamAdapter, ReadSchedule, RequestTerm, RetrievalRequest, Statistics,
+    StratumUnit, StreamContract, Term, TopK, UnitError, compile, contribution_under,
+    execute_within, fuse, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity,
@@ -1286,13 +1292,22 @@ type Holds<'a> = Box<dyn Fn(&str) -> Vec<String> + 'a>;
 /// Execute `bundle` on demand and ask every stream about a foreign and an own
 /// candidate, then read it to its end.
 fn asked(bundle: &CompiledRetrieval, registry: &PropertyFunctionRegistry) -> Asked {
+    asked_over(bundle, registry, common::empty_dataset())
+}
+
+/// [`asked`], over `dataset`.
+fn asked_over(
+    bundle: &CompiledRetrieval,
+    registry: &PropertyFunctionRegistry,
+    dataset: &RdfDataset,
+) -> Asked {
     let ExecutionResult {
         mut streams,
         statuses,
     } = block_on(execute_within(
         bundle,
         registry,
-        common::empty_dataset(),
+        dataset,
         ReadSchedule::OnDemand,
     ))
     .expect("the bundle runs");
@@ -1745,4 +1760,1431 @@ fn a_supplied_basis_the_registry_does_not_declare_fails_its_own_stratum() {
         ReadSchedule::OnDemand,
     );
     assert!(admitted.fused_lookups().values().all(|&count| count > 0));
+}
+
+// ---------------------------------------------------------------------------
+// A column rebound over a call's: refused where it is written, and never read as
+// the call's.
+// ---------------------------------------------------------------------------
+
+/// The call a caller writes for `predicate`, binding `variable` to its candidate.
+fn call_binding(predicate: &str, variable: &str) -> String {
+    format!(
+        "( ?{variable} ) <{}> ( \"quick brown fox\"@en )",
+        producer_iri(predicate)
+    )
+}
+
+/// The first candidate the producer behind `predicate` names.
+fn first_of(predicate: &str) -> String {
+    if predicate == "title" {
+        ex("left/entity000000")
+    } else {
+        ex("right/entity000000")
+    }
+}
+
+/// **A `GROUP BY` condition rebinding the call's `?candidate` is a syntax error, as
+/// the `BIND` over it is; the same computation under a fresh key and carried to the
+/// column is refused by name; the plain key and a renaming condition get their
+/// lookups and answer what the full read answers.**
+///
+/// The rebinding text swaps the producer's first candidate for an intruder no
+/// producer names. Were it admitted and its `?candidate` read as the call's, the
+/// lookups would answer for a column that holds the intruder, and the fused answer
+/// would differ from the full read's — the defect pinned here. It is refused at
+/// construction instead: `?candidate` is in scope where the condition binds it, and
+/// the parser refuses that exactly as it refuses the `BIND` beside it.
+///
+/// The legal spelling of the same computation — the condition binding a fresh `?k`,
+/// projected as `?candidate` — is a column no call is a source of, and declaring a
+/// basis over it is refused naming the computed condition. The neighbours are the
+/// plain `GROUP BY ?candidate` and the renaming `GROUP BY (?hit AS ?k)` projected as
+/// `?candidate`: both admitted, both ask their lookups and stop at the sixty-sixth
+/// rank, and both answer exactly what the same text answers read in full with no
+/// lookup — the observing oracle, which would hold the intruder had the swap been
+/// honoured.
+#[test]
+fn a_group_by_condition_rebinding_the_candidate_is_refused_and_its_neighbours_answer_as_the_full_read()
+ {
+    let (registry, _) = fixture_registry(ExclusionBasis::Membership, None);
+    let rendered = compiled(&registry);
+    let intruder = ex("intruder");
+    let shadowed = |predicate: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ {} }} GROUP BY (IF(?candidate = <{}>, <{intruder}>, \
+             ?candidate) AS ?candidate)",
+            call_binding(predicate, "candidate"),
+            first_of(predicate)
+        )
+    };
+    let bound = |predicate: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ {} BIND(<{intruder}> AS ?candidate) }}",
+            call_binding(predicate, "candidate")
+        )
+    };
+    for (name, text) in [
+        ("GROUP BY", &shadowed as &dyn Fn(&str) -> String),
+        ("BIND", &bound),
+    ] {
+        let refusal = supplied(rendered.clone(), text).expect_err("a rebinding does not parse");
+        let UnitError::NotAQuery { reason } = &refusal else {
+            panic!("{name}: expected NotAQuery, got {refusal:?}");
+        };
+        assert!(
+            reason.contains("?candidate is already in scope"),
+            "{name}: the parser names the rebinding: {reason}"
+        );
+    }
+
+    let computed = |predicate: &str| {
+        format!(
+            "SELECT (?k AS ?candidate) WHERE {{ {} }} GROUP BY (IF(?hit = <{}>, <{intruder}>, \
+             ?hit) AS ?k)",
+            call_binding(predicate, "hit"),
+            first_of(predicate)
+        )
+    };
+    let refusal = supplied(rendered, computed).expect_err("a computed key has no source");
+    let UnitError::ExclusionNotRenderable { basis, reason } = &refusal else {
+        panic!("expected ExclusionNotRenderable, got {refusal:?}");
+    };
+    assert_eq!(*basis, "membership");
+    assert!(
+        reason.contains("a computed BIND, SELECT expression or GROUP BY condition"),
+        "the refusal names the computed column: {reason}"
+    );
+    // The same text with no basis declared runs, and holds the intruder: the swap is
+    // real, so a lookup answering for the call would have been answering for a
+    // column the call does not fill.
+    let swapped = measured(
+        ExclusionBasis::Unavailable,
+        Some(&computed),
+        ReadSchedule::Materialised,
+    );
+    assert!(
+        answer(&swapped)
+            .iter()
+            .any(|(entity, _)| *entity == format!("<{intruder}>")),
+        "the computed column holds the intruder: {:?}",
+        answer(&swapped)
+    );
+
+    let keyed = |predicate: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ {} }} GROUP BY ?candidate ORDER BY ?candidate",
+            call_binding(predicate, "candidate")
+        )
+    };
+    let renamed = |predicate: &str| {
+        format!(
+            "SELECT (?k AS ?candidate) WHERE {{ {} }} GROUP BY (?hit AS ?k) ORDER BY ?k",
+            call_binding(predicate, "hit")
+        )
+    };
+    for (name, text) in [
+        ("GROUP BY ?candidate", &keyed as &dyn Fn(&str) -> String),
+        ("GROUP BY (?hit AS ?k)", &renamed),
+    ] {
+        let looked_up = measured(
+            ExclusionBasis::Membership,
+            Some(text),
+            ReadSchedule::OnDemand,
+        );
+        let full = measured(
+            ExclusionBasis::Unavailable,
+            Some(text),
+            ReadSchedule::Materialised,
+        );
+        assert_eq!(
+            looked_up.fused_lookups(),
+            both(65),
+            "{name}: the lookups were asked"
+        );
+        assert_eq!(
+            looked_up.served,
+            both(65),
+            "{name}: and served by the producer"
+        );
+        assert_eq!(
+            looked_up.ranks_pulled(),
+            both(66),
+            "{name}: they settled finality"
+        );
+        assert_eq!(
+            full.ranks_pulled(),
+            both(ROWS),
+            "{name}: the full read drains"
+        );
+        assert_eq!(
+            answer(&looked_up),
+            answer(&full),
+            "{name}: the full read's answer"
+        );
+        assert_eq!(
+            looked_up.trailer.exactness, full.trailer.exactness,
+            "{name}: as exactly"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A UNION of calls: one alternative per branch.
+// ---------------------------------------------------------------------------
+
+/// Each branch of the `UNION` the call under a `FILTER`, the two halves of the
+/// producer's candidates between them.
+fn union_of_calls(predicate: &str) -> String {
+    let cut = if predicate == "title" {
+        ex("left/entity000200")
+    } else {
+        ex("right/entity000200")
+    };
+    format!(
+        "SELECT ?candidate WHERE {{ {{ {call} FILTER(STR(?candidate) < \"{cut}\") }} UNION \
+         {{ {call} FILTER(STR(?candidate) >= \"{cut}\") }} }}",
+        call = call_binding(predicate, "candidate")
+    )
+}
+
+/// **A `UNION` whose branches each draw the candidate from a call asks both calls,
+/// stops where the one-call text stops, and answers what the full read answers; a
+/// branch that binds it from `VALUES` is refused; and an alternative that holds the
+/// candidate keeps it `Possible` however the other answers.**
+///
+/// Every value either branch gives `?candidate` is a value that branch's call
+/// emitted, so each branch is an alternative, and a candidate is out of the text's
+/// reach when each branch's call excludes it. The run asks both per verdict — each
+/// verdict two producer invocations, both exclusions of the other producer's
+/// candidate — pulls sixty-six ranks where the same text with no basis drains four
+/// hundred, and answers exactly what that full read answers.
+///
+/// Refused beside it: the same `UNION` with a `VALUES` branch naming the intruder,
+/// whose values are no call's. And the rule is *every* alternative, not *any*: with
+/// one branch asking the `"everything"` needle, whose lookup holds every candidate,
+/// the other producer's candidate is `Possible` — though the first branch's call
+/// excludes it — while the two-call `UNION` answers `Excluded` for the same
+/// candidate.
+#[test]
+fn a_union_of_calls_asks_every_branch_and_answers_as_the_full_read() {
+    let text: &dyn Fn(&str) -> String = &union_of_calls;
+    let looked_up = measured(
+        ExclusionBasis::Membership,
+        Some(text),
+        ReadSchedule::OnDemand,
+    );
+    let drained = measured(
+        ExclusionBasis::Unavailable,
+        Some(text),
+        ReadSchedule::OnDemand,
+    );
+    let full = measured(
+        ExclusionBasis::Unavailable,
+        Some(text),
+        ReadSchedule::Materialised,
+    );
+    let plain = measured(
+        ExclusionBasis::Membership,
+        Some(&one_call),
+        ReadSchedule::OnDemand,
+    );
+
+    assert_eq!(looked_up.fused_lookups(), both(65), "both strata asked");
+    assert_eq!(
+        looked_up.served,
+        both(2 * 65),
+        "each verdict asked both branches' calls"
+    );
+    assert_eq!(looked_up.found, both(0), "and each call excluded");
+    assert_eq!(
+        looked_up.ranks_pulled(),
+        both(66),
+        "the lookups settled finality"
+    );
+    assert_eq!(
+        drained.ranks_pulled(),
+        both(ROWS),
+        "with no basis it drains"
+    );
+    assert_eq!(drained.fused_lookups(), both(0));
+    assert_eq!(answer(&looked_up), answer(&full), "the full read's answer");
+    assert_eq!(
+        answer(&looked_up),
+        answer(&plain),
+        "the one-call text's answer"
+    );
+    assert_eq!(looked_up.trailer.exactness, full.trailer.exactness);
+    assert_eq!(looked_up.trailer.statuses, plain.trailer.statuses);
+
+    // The refused neighbour: a branch binding the candidate from VALUES.
+    let (registry, _) = fixture_registry(ExclusionBasis::Membership, None);
+    let rendered = compiled(&registry);
+    let valued = |predicate: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ {{ {} }} UNION {{ VALUES ?candidate {{ <{}> }} }} }}",
+            call_binding(predicate, "candidate"),
+            ex("intruder")
+        )
+    };
+    let refusal = supplied(rendered.clone(), valued).expect_err("a VALUES branch is no call");
+    let UnitError::ExclusionNotRenderable { reason, .. } = &refusal else {
+        panic!("expected ExclusionNotRenderable, got {refusal:?}");
+    };
+    assert!(reason.contains("a UNION"), "naming the UNION: {reason}");
+
+    // Every alternative, not any: the other producer's first candidate. The
+    // `"everything"` branch names nothing — its FILTER drops every row, which keeps
+    // the text inside the producer's declared bound — yet its call, asked with the
+    // candidate bound, holds it, and that alone keeps the verdict `Possible`.
+    let with_everything = |predicate: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ {{ {} }} UNION {{ ( ?candidate ) <{}> ( \
+             \"everything\"@en ) FILTER(false) }} }}",
+            call_binding(predicate, "candidate"),
+            producer_iri(predicate)
+        )
+    };
+    for (text, foreign) in [
+        (
+            &with_everything as &dyn Fn(&str) -> String,
+            ExclusionVerdict::Possible,
+        ),
+        (&union_of_calls, ExclusionVerdict::Excluded),
+    ] {
+        let bundle = supplied(rendered.clone(), text).expect("admitted");
+        for (stratum, answered) in asked(&bundle, &registry) {
+            let (verdict, own, _) =
+                answered.unwrap_or_else(|reason| panic!("{stratum} failed: {reason}"));
+            assert_eq!(
+                verdict, foreign,
+                "{stratum}: the other producer's candidate"
+            );
+            assert_eq!(own, ExclusionVerdict::Possible, "{stratum}: its own");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Every admitted shape: with lookups and without, one answer.
+// ---------------------------------------------------------------------------
+
+/// **Every supplied text this file admits answers the same with its lookups as
+/// without: the answer and its exactness of the on-demand run declaring the basis
+/// are those of the full, materialised read declaring none.**
+///
+/// The run with no lookup reads every row and needs no verdict to answer, so it is
+/// the oracle for what the text says; the run with lookups stops wherever they let
+/// it. A lookup that answered `Excluded` for a candidate the text names would move a
+/// row or its score, or leave the fusion's exactness different, and no shape here is
+/// allowed to. Each shape that asks lookups is pinned as asking them — and pulling
+/// fewer ranks than the oracle — so the comparison is between a shortened read and a
+/// full one, not two full reads.
+#[test]
+fn every_admitted_supplied_shape_answers_with_its_lookups_as_the_full_read_without() {
+    let own = |predicate: &str| {
+        if predicate == "title" {
+            "left/"
+        } else {
+            "right/"
+        }
+    };
+    let other = |predicate: &str| {
+        if predicate == "title" {
+            "right/"
+        } else {
+            "left/"
+        }
+    };
+    let call = |predicate: &str, variable: &str| call_binding(predicate, variable);
+    let select = |body: String| format!("SELECT ?candidate WHERE {{ {body} }}");
+    // (name, text, whether the shortened read asks lookups)
+    let shapes: Vec<(&str, Text<'_>, bool)> = vec![
+        ("one call", Box::new(one_call), true),
+        (
+            "a renaming projection",
+            Box::new(move |p: &str| {
+                select(format!(
+                    "{{ SELECT (?hit AS ?candidate) WHERE {{ {} }} }}",
+                    call(p, "hit")
+                ))
+            }),
+            true,
+        ),
+        (
+            "a renaming BIND",
+            Box::new(move |p: &str| select(format!("{} BIND(?hit AS ?candidate)", call(p, "hit")))),
+            true,
+        ),
+        ("a FILTER", Box::new(filtered), true),
+        (
+            "a FILTER removing ten",
+            Box::new(move |p: &str| {
+                select(format!(
+                    "{} FILTER(!STRSTARTS(STR(?candidate), \"{}\"))",
+                    call(p, "candidate"),
+                    ex("left/entity00000")
+                ))
+            }),
+            true,
+        ),
+        ("a join of calls", Box::new(joined), true),
+        ("a UNION of calls", Box::new(union_of_calls), true),
+        (
+            "VALUES joined with the call",
+            Box::new(move |p: &str| {
+                select(format!(
+                    "{{ VALUES ?candidate {{ <{}> <{}> <{}> }} }} {{ {} }}",
+                    ex(&format!("{}entity000000", own(p))),
+                    ex(&format!("{}entity000001", own(p))),
+                    ex(&format!("{}entity000000", other(p))),
+                    call(p, "candidate")
+                ))
+            }),
+            false,
+        ),
+        (
+            "the call on the required side of an OPTIONAL",
+            Box::new(move |p: &str| {
+                select(format!(
+                    "{{ {} }} OPTIONAL {{ VALUES ?candidate {{ <{}> }} }}",
+                    call(p, "candidate"),
+                    ex("intruder")
+                ))
+            }),
+            true,
+        ),
+        (
+            "the call on the left of a MINUS",
+            Box::new(move |p: &str| {
+                select(format!(
+                    "{{ {} }} MINUS {{ VALUES ?candidate {{ <{}> }} }}",
+                    call(p, "candidate"),
+                    ex(&format!("{}entity000000", own(p)))
+                ))
+            }),
+            true,
+        ),
+        (
+            "a GROUP BY sub-SELECT projecting its key",
+            Box::new(move |p: &str| {
+                select(format!(
+                    "{{ SELECT (?hit AS ?candidate) WHERE {{ {} }} GROUP BY ?hit }}",
+                    call(p, "hit")
+                ))
+            }),
+            true,
+        ),
+        (
+            "GROUP BY ?candidate",
+            Box::new(move |p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} }} GROUP BY ?candidate",
+                    call(p, "candidate")
+                )
+            }),
+            true,
+        ),
+        (
+            "a renaming GROUP BY condition",
+            Box::new(move |p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} }} GROUP BY (?hit AS ?candidate)",
+                    call(p, "hit")
+                )
+            }),
+            true,
+        ),
+        (
+            "a DISTINCT sub-SELECT",
+            Box::new(move |p: &str| {
+                select(format!(
+                    "{{ SELECT DISTINCT ?candidate WHERE {{ {} }} }}",
+                    call(p, "candidate")
+                ))
+            }),
+            true,
+        ),
+        (
+            "an ORDER BY and LIMIT sub-SELECT",
+            Box::new(move |p: &str| {
+                select(format!(
+                    "{{ SELECT ?candidate WHERE {{ {} }} ORDER BY ?candidate LIMIT 300 }}",
+                    call(p, "candidate")
+                ))
+            }),
+            true,
+        ),
+    ];
+    for (name, text, asks) in &shapes {
+        let looked_up = measured(
+            ExclusionBasis::Membership,
+            Some(text),
+            ReadSchedule::OnDemand,
+        );
+        let full = measured(
+            ExclusionBasis::Unavailable,
+            Some(text),
+            ReadSchedule::Materialised,
+        );
+        assert_eq!(
+            answer(&looked_up),
+            answer(&full),
+            "{name}: the answer with lookups is the full read's"
+        );
+        assert_eq!(
+            looked_up.trailer.exactness, full.trailer.exactness,
+            "{name}: and as exact"
+        );
+        assert_eq!(
+            full.fused_lookups(),
+            both(0),
+            "{name}: the oracle asks nothing"
+        );
+        let asked = looked_up.fused_lookups();
+        if *asks {
+            assert!(
+                asked.values().all(|&count| count > 0),
+                "{name}: the lookups were asked: {asked:?}"
+            );
+            assert!(
+                looked_up
+                    .ranks_pulled()
+                    .iter()
+                    .all(|(stratum, ranks)| *ranks < full.ranks_pulled()[stratum]),
+                "{name}: and shortened the read: {:?} against {:?}",
+                looked_up.ranks_pulled(),
+                full.ranks_pulled()
+            );
+        } else {
+            assert_eq!(
+                looked_up.ranks_pulled(),
+                full.ranks_pulled(),
+                "{name}: a stream that runs out needs no verdict"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A call its text drives: the real text relation, its needle read out of the data.
+// ---------------------------------------------------------------------------
+
+/// The real text relation's side of this file: two single-partition indexes, one per
+/// stratum, each holding `TEXT_MATCHING` documents the needle reaches under its own
+/// subject prefix — the right one also holding a document per left subject that the
+/// needle does not reach — and one configuration triple naming the needle.
+mod text_relation {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+    use purrdf_text::{
+        GraphSelector, SearchObservations, TextIndex, TextIndexConfig, TextSearchRelation,
+    };
+
+    /// The needle both producers search.
+    pub(super) const NEEDLE: &str = "alpha beta";
+    /// Documents the needle reaches, per side.
+    const TEXT_MATCHING: usize = 100;
+
+    /// `(stratum, predicate the index is built over, producer IRI, subject prefix)`.
+    pub(super) fn sides() -> [(Iri, String, String, &'static str); 2] {
+        let [left, right] = strata();
+        [
+            (left, ex("text/left"), ex("pf/text-left"), "a"),
+            (right, ex("text/right"), ex("pf/text-right"), "b"),
+        ]
+    }
+
+    /// Each side's `(subject, text)` rows.
+    fn rows(side: usize) -> Vec<(String, String)> {
+        let prefix = sides()[side].3;
+        let mut out: Vec<(String, String)> = (0..TEXT_MATCHING)
+            .map(|at| {
+                (
+                    ex(&format!("{prefix}{at}")),
+                    format!("alpha beta gamma {}", "alpha ".repeat(at % 4 + 1).trim()),
+                )
+            })
+            .collect();
+        if side == 1 {
+            out.extend(
+                (0..TEXT_MATCHING)
+                    .map(|at| (ex(&format!("a{at}")), "zulu yankee xray whiskey".to_owned())),
+            );
+        }
+        out
+    }
+
+    /// Both sides' documents, and `<config> ex:needle "alpha beta"`.
+    pub(super) fn dataset() -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let config = builder.intern_iri(&ex("config"));
+        let needle = builder.intern_iri(&ex("needle"));
+        let value = builder.intern_literal(RdfLiteral::simple(NEEDLE));
+        builder.push_quad(config, needle, value, None);
+        for (side, (_, predicate, _, _)) in sides().iter().enumerate() {
+            let predicate = builder.intern_iri(predicate);
+            for (subject, text) in rows(side) {
+                let subject = builder.intern_iri(&subject);
+                let object = builder.intern_literal(RdfLiteral::simple(&text));
+                builder.push_quad(subject, predicate, object, None);
+            }
+        }
+        builder.freeze().expect("the fixture dataset is valid")
+    }
+
+    struct TextStatistics;
+
+    impl Statistics for TextStatistics {
+        fn source(&self) -> &'static str {
+            "example-statistics"
+        }
+
+        fn revision(&self) -> &'static str {
+            "r1"
+        }
+
+        fn cardinality(&self, predicate: &Iri) -> Option<u64> {
+            sides()
+                .iter()
+                .enumerate()
+                .find(|(_, (stratum, text, _, _))| {
+                    stratum == predicate || text == predicate.as_str()
+                })
+                .map(|(side, _)| rows(side).len() as u64)
+        }
+
+        fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
+            None
+        }
+    }
+
+    /// Both relations registered over `dataset`, each declaring its own ranked
+    /// order with `basis` written in, beside each relation's observations.
+    pub(super) fn registry(
+        dataset: &RdfDataset,
+        basis: ExclusionBasis,
+    ) -> (PropertyFunctionRegistry, [Arc<SearchObservations>; 2]) {
+        let shared = DomainTag::parse(&ex("domain/shared")).expect("the fixture tag is an IRI");
+        let mut registry = PropertyFunctionRegistry::new();
+        let observed = sides().map(|(stratum, predicate, producer, _)| {
+            let config =
+                TextIndexConfig::new(vec![TermValue::iri(predicate.clone())], GraphSelector::Any)
+                    .expect("the fixture configuration is well formed");
+            let index =
+                Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture indexes"));
+            let relation = TextSearchRelation::new(index);
+            let mut declaration = relation
+                .ranked_declaration(
+                    purrdf_core::parse_iri(stratum.as_str()).expect("fixture IRI"),
+                    Some(predicate),
+                    RankFidelity::EXACT,
+                    CandidateDomains::within([shared.clone()]),
+                )
+                .expect("a single-partition index declares a ranked order");
+            assert_eq!(
+                declaration.exclusion,
+                ExclusionBasis::Membership,
+                "the relation's own basis; the fixture varies it rather than inventing it"
+            );
+            declaration.exclusion = basis;
+            let observations = relation.observations();
+            registry.register_ranked(producer, Arc::new(relation), declaration);
+            observations
+        });
+        (registry, observed)
+    }
+
+    /// What `search` would compile for the needle over both sides.
+    pub(super) fn compiled(registry: &PropertyFunctionRegistry) -> CompiledRetrieval {
+        let statistics = TextStatistics;
+        let profile = profile();
+        let env = AdmissionEnvironment {
+            registry,
+            statistics: &statistics,
+            fusion_profile: Some(&profile),
+        };
+        let terms = sides()
+            .into_iter()
+            .map(|(_, predicate, _, _)| RequestTerm::Lexical {
+                text: NEEDLE.to_owned(),
+                language: None,
+                predicate: Some(iri(&predicate)),
+            })
+            .collect();
+        let planned = plan(
+            &RetrievalRequest::bounded(terms, TOP_K),
+            registry,
+            &statistics,
+        )
+        .expect("the fixture plans");
+        compile(&planned, &env).expect("a fresh plan is admitted")
+    }
+
+    /// What one run over the text relations answered and cost.
+    #[derive(Debug)]
+    pub(super) struct TextRun {
+        pub(super) answer: Vec<(String, Fixed)>,
+        pub(super) exactness: purrdf_retrieval::ScoreExactness,
+        pub(super) statuses: BTreeMap<Iri, ProducerStatus>,
+        pub(super) ranks_pulled: BTreeMap<Iri, u64>,
+        pub(super) fused_lookups: BTreeMap<Iri, u64>,
+        /// Membership lookups each relation performed, by stratum.
+        pub(super) membership_lookups: BTreeMap<Iri, u64>,
+    }
+
+    /// Run `text(producer)` for both strata under `basis` and `schedule`, or the
+    /// rendered bundle for `None`.
+    pub(super) fn run(
+        basis: ExclusionBasis,
+        text: Option<&dyn Fn(&str) -> String>,
+        schedule: ReadSchedule,
+    ) -> Result<TextRun, FusionError> {
+        let dataset = dataset();
+        let (registry, observed) = registry(&dataset, basis);
+        let mut bundle = compiled(&registry);
+        if let Some(text) = text {
+            for (unit, (_, _, producer, _)) in bundle.units.iter_mut().zip(sides()) {
+                *unit = StratumUnit::new(
+                    unit.stratum.clone(),
+                    text(&producer),
+                    unit.contract.clone(),
+                    unit.depth(),
+                    unit.declared_rows(),
+                )
+                .expect("the text is admitted at construction");
+            }
+        }
+        let profile = profile();
+        let ExecutionResult { streams, statuses } =
+            block_on(execute_within(&bundle, &registry, &*dataset, schedule))
+                .expect("the bundle runs");
+        let mut adapters = Vec::new();
+        for stream in streams {
+            let adapter =
+                RankedStreamAdapter::new(stream.stream, stream.contract, &profile, &stream.stratum)
+                    .expect("the profile weights every stratum");
+            adapters.push((
+                stream.stratum,
+                adapter
+                    .with_plan_id(stream.plan_id)
+                    .with_fused_bound(stream.fused_bound)
+                    .with_attestation(stream.attestation),
+            ));
+        }
+        let fused = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
+            adapters,
+            &profile,
+            bundle.fused_bound,
+        ))?;
+        let trailer = fused.trailer.completed_with(statuses);
+        let per = |read: &dyn Fn(&purrdf_retrieval::StratumResolution) -> u64| {
+            trailer
+                .resolution
+                .iter()
+                .map(|(stratum, resolution)| (stratum.clone(), read(resolution)))
+                .collect::<BTreeMap<_, _>>()
+        };
+        Ok(TextRun {
+            answer: fused
+                .rows
+                .iter()
+                .map(|row| (row.entity.as_str().to_owned(), row.score))
+                .collect(),
+            exactness: trailer.exactness.clone(),
+            statuses: trailer.statuses.clone(),
+            ranks_pulled: per(&|resolution| resolution.ranks_pulled),
+            fused_lookups: per(&|resolution| resolution.exclusion_lookups),
+            membership_lookups: sides()
+                .into_iter()
+                .zip(&observed)
+                .map(|((stratum, _, _, _), observed)| (stratum, observed.membership_lookups()))
+                .collect(),
+        })
+    }
+}
+
+/// **A needle the text reads out of the data drives its call, and the lookup keeps
+/// the pattern that binds it: asked, answered by the relation's membership test, the
+/// read stopped where the rendered text's stops, and the answer the full read's.**
+///
+/// `<config> ex:needle ?q . ?candidate <pf> ( ?q ?score ?rank ?lang ?matched )`
+/// against the real text relation, which cannot be invoked without its needle. A
+/// lookup that blanked `?q` asks a mode the relation never declared, and the stratum
+/// failed to prepare it; the lookup instead keeps the configuration triple, in a
+/// `DISTINCT` sub-`SELECT` exporting `?q`, and invokes the call once per needle it
+/// binds — here one — with the candidate bound, as a membership test.
+///
+/// Pinned against three runs: the same text declaring no basis (no lookup, and it
+/// drains every row the needle reaches); the rendered bundle, whose lookups are the
+/// reference price; and the constant-needle neighbour, which derives the undriven
+/// lookup it always did and pays exactly the rendered price. The data-needle run asks
+/// lookups on both strata, each answered by a membership test and not a ranking,
+/// pulls the rendered run's ranks, and answers what the drained run answers, as
+/// exactly.
+#[test]
+fn a_needle_read_out_of_the_data_drives_its_lookup_and_answers_as_the_full_read() {
+    use text_relation::{NEEDLE, run};
+
+    let data_needle = |producer: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ <{}> <{}> ?q . ?candidate <{producer}> ( ?q ?score ?rank \
+             ?lang ?matched ) }}",
+            ex("config"),
+            ex("needle")
+        )
+    };
+    let constant_needle = |producer: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ ?candidate <{producer}> ( \"{NEEDLE}\" ?score ?rank \
+             ?lang ?matched ) }}"
+        )
+    };
+    let looked_up = run(
+        ExclusionBasis::Membership,
+        Some(&data_needle),
+        ReadSchedule::OnDemand,
+    )
+    .expect("the data needle fuses with its lookups");
+    let drained = run(
+        ExclusionBasis::Unavailable,
+        Some(&data_needle),
+        ReadSchedule::Materialised,
+    )
+    .expect("the data needle fuses without lookups");
+    let rendered = run(ExclusionBasis::Membership, None, ReadSchedule::OnDemand)
+        .expect("the rendered bundle fuses");
+    let constant = run(
+        ExclusionBasis::Membership,
+        Some(&constant_needle),
+        ReadSchedule::OnDemand,
+    )
+    .expect("the constant needle fuses");
+
+    // Nothing failed: both strata read, and the fusion stopped them.
+    assert!(
+        looked_up
+            .statuses
+            .values()
+            .all(|status| !matches!(status, ProducerStatus::ExecutionFailed { .. })),
+        "{:?}",
+        looked_up.statuses
+    );
+    assert_eq!(
+        looked_up.statuses, rendered.statuses,
+        "stopped where the rendered run stops"
+    );
+
+    // The lookups: asked on both strata, each a membership test of the relation.
+    assert!(
+        looked_up.fused_lookups.values().all(|&count| count > 0),
+        "both strata asked: {:?}",
+        looked_up.fused_lookups
+    );
+    assert_eq!(
+        looked_up.fused_lookups, rendered.fused_lookups,
+        "as often as the rendered bundle asks"
+    );
+    assert_eq!(
+        looked_up.membership_lookups, rendered.membership_lookups,
+        "answered by the relation's membership tests, exactly as the rendered lookups are"
+    );
+    assert!(
+        looked_up
+            .membership_lookups
+            .values()
+            .any(|&tests| tests > 0),
+        "a membership test really ran: {:?}",
+        looked_up.membership_lookups
+    );
+
+    // The price and the answer.
+    assert_eq!(
+        looked_up.ranks_pulled, rendered.ranks_pulled,
+        "the rendered price"
+    );
+    assert_eq!(
+        looked_up.ranks_pulled,
+        both(66),
+        "the rank the fusion certifies at"
+    );
+    assert!(
+        drained
+            .ranks_pulled
+            .iter()
+            .all(|(stratum, ranks)| *ranks > looked_up.ranks_pulled[stratum]),
+        "without lookups the read drains further: {:?}",
+        drained.ranks_pulled
+    );
+    assert_eq!(
+        drained.ranks_pulled,
+        both(100),
+        "every document the needle reaches"
+    );
+    assert_eq!(drained.fused_lookups, both(0), "the oracle asks nothing");
+    assert_eq!(looked_up.answer, drained.answer, "the full read's answer");
+    assert_eq!(
+        looked_up.answer, rendered.answer,
+        "and the rendered bundle's"
+    );
+    assert_eq!(looked_up.exactness, drained.exactness, "as exactly");
+
+    // The constant-needle neighbour: the undriven lookup, at the rendered price.
+    assert_eq!(constant.fused_lookups, rendered.fused_lookups);
+    assert_eq!(constant.membership_lookups, rendered.membership_lookups);
+    assert_eq!(constant.ranks_pulled, rendered.ranks_pulled);
+    assert_eq!(constant.answer, rendered.answer);
+}
+
+/// **A lookup driven by several needle bindings asks the call once per distinct
+/// binding, answers `Excluded` only when every one excludes, and reads a producer
+/// answering each invocation with one row as the conforming producer it is.**
+///
+/// The data names three `(configuration, needle)` pairs — two configurations asking
+/// `"quick brown fox"`, one asking `"lazy dog"` — and the text reads the needle out
+/// of it, keeping one pair with a `FILTER` so its ranked read names each candidate
+/// once. The `FILTER` is over the whole group, not a conjunct of the call's join, so
+/// the lookup does not keep it: its driving pattern binds both needles, which only
+/// widens what it asks. For the other producer's candidate both needles' invocations
+/// find nothing: `Excluded`, two invocations. For the stratum's own candidate both find
+/// it: `Possible`, two rows — one per distinct needle, not three, because the driving
+/// pattern is read `DISTINCT`, so the duplicate needle is one invocation and two
+/// identical rows never reach the point-bound check.
+///
+/// The neighbour asks `"everything"` in place of `"lazy dog"`: that needle's lookup
+/// holds every candidate, so the other producer's candidate — which the
+/// `"quick brown fox"` invocation excludes — is `Possible`. A candidate is out of
+/// reach only when every needle binding puts it there.
+#[test]
+fn a_lookup_driven_by_several_needles_asks_each_distinct_one_and_needs_all_to_exclude() {
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+
+    let dataset_with = |second: &str| {
+        let mut builder = RdfDatasetBuilder::new();
+        let needle = builder.intern_iri(&ex("needle"));
+        for (config, text) in [
+            ("config/one", "quick brown fox"),
+            ("config/two", "quick brown fox"),
+            ("config/one", second),
+        ] {
+            let config = builder.intern_iri(&ex(config));
+            let value = builder.intern_literal(RdfLiteral::language_tagged(text, "en"));
+            builder.push_quad(config, needle, value, None);
+        }
+        builder.freeze().expect("the fixture dataset is valid")
+    };
+    let text = |predicate: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ ?config <{}> ?q . ( ?candidate ) <{}> ( ?q ) \
+             FILTER(?q = \"quick brown fox\"@en && ?config = <{}>) }}",
+            ex("needle"),
+            producer_iri(predicate),
+            ex("config/one")
+        )
+    };
+    for (second, foreign, lookups) in [
+        ("lazy dog", ExclusionVerdict::Excluded, 2 + 2),
+        ("everything", ExclusionVerdict::Possible, 2 + 2),
+    ] {
+        let dataset = dataset_with(second);
+        let (registry, counters) = fixture_registry(ExclusionBasis::Membership, None);
+        let bundle = supplied(compiled(&registry), text).expect("admitted");
+        for ((stratum, answered), reads) in asked_over(&bundle, &registry, &dataset)
+            .into_iter()
+            .zip(&counters)
+        {
+            let (verdict, own, held) =
+                answered.unwrap_or_else(|reason| panic!("{second}: {stratum} failed: {reason}"));
+            assert_eq!(
+                verdict, foreign,
+                "{second}: the other producer's candidate — {stratum}"
+            );
+            assert_eq!(
+                own,
+                ExclusionVerdict::Possible,
+                "{second}: its own — {stratum}"
+            );
+            assert_eq!(
+                held.len(),
+                usize::try_from(ROWS).expect("small"),
+                "{second}: the ranked read names each candidate once — {stratum}"
+            );
+            assert_eq!(
+                reads.lookups.load(Ordering::SeqCst),
+                lookups,
+                "{second}: one invocation per distinct needle, per verdict — {stratum}"
+            );
+        }
+    }
+}
+
+/// **A needle a `VALUES` table or a `BIND` supplies drives the lookup the same way:
+/// kept, asked, and answered as the rendered bundle answers.**
+///
+/// The two other conjuncts a caller writes a needle with. Each is kept in its
+/// lookup's driving sub-`SELECT` exactly as the data triple is, so each run asks the
+/// rendered bundle's lookups, pulls its ranks and answers its answer — and the same
+/// text declaring no basis, read in full, answers the same.
+#[test]
+fn a_needle_from_values_or_bind_drives_its_lookup_as_the_data_needle_does() {
+    use text_relation::{NEEDLE, run};
+
+    let rendered = run(ExclusionBasis::Membership, None, ReadSchedule::OnDemand)
+        .expect("the rendered bundle fuses");
+    let values = |producer: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ VALUES ?q {{ \"{NEEDLE}\" }} ?candidate <{producer}> ( \
+             ?q ?score ?rank ?lang ?matched ) }}"
+        )
+    };
+    let bound = |producer: &str| {
+        format!(
+            "SELECT ?candidate WHERE {{ BIND(\"{NEEDLE}\" AS ?q) ?candidate <{producer}> ( ?q \
+             ?score ?rank ?lang ?matched ) }}"
+        )
+    };
+    for (name, text) in [
+        ("VALUES", &values as &dyn Fn(&str) -> String),
+        ("BIND", &bound),
+    ] {
+        let looked_up = run(
+            ExclusionBasis::Membership,
+            Some(text),
+            ReadSchedule::OnDemand,
+        )
+        .unwrap_or_else(|error| panic!("{name}: fuses with its lookups: {error:?}"));
+        let full = run(
+            ExclusionBasis::Unavailable,
+            Some(text),
+            ReadSchedule::Materialised,
+        )
+        .unwrap_or_else(|error| panic!("{name}: fuses without lookups: {error:?}"));
+        assert_eq!(
+            looked_up.statuses, rendered.statuses,
+            "{name}: stopped where the rendered run stops"
+        );
+        assert_eq!(
+            looked_up.fused_lookups, rendered.fused_lookups,
+            "{name}: the rendered lookups"
+        );
+        assert_eq!(
+            looked_up.membership_lookups, rendered.membership_lookups,
+            "{name}: each a membership test"
+        );
+        assert_eq!(
+            looked_up.ranks_pulled,
+            both(66),
+            "{name}: the rendered price"
+        );
+        assert_eq!(full.ranks_pulled, both(100), "{name}: the full read drains");
+        assert_eq!(
+            looked_up.answer, full.answer,
+            "{name}: the full read's answer"
+        );
+        assert_eq!(
+            looked_up.answer, rendered.answer,
+            "{name}: the rendered answer"
+        );
+        assert_eq!(looked_up.exactness, full.exactness, "{name}: as exactly");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Soundness over data: no verdict excludes a candidate the stream names.
+// ---------------------------------------------------------------------------
+
+/// Both producers' first forty candidates tagged in the default graph and in a named
+/// graph, an intruder no producer names tagged too and aliased from each producer's
+/// fourth candidate.
+fn tagged_dataset() -> Arc<RdfDataset> {
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+    let mut builder = RdfDatasetBuilder::new();
+    let tag = builder.intern_iri(&ex("data/tag"));
+    let alias = builder.intern_iri(&ex("data/alias"));
+    let graph = builder.intern_iri(&ex("g1"));
+    let value = builder.intern_literal(RdfLiteral::simple("t"));
+    let intruder = builder.intern_iri(&ex("intruder"));
+    for prefix in DISJOINT {
+        for index in 0..40_u64 {
+            let subject = builder.intern_iri(&ex(&format!("{prefix}entity{index:06}")));
+            builder.push_quad(subject, tag, value, None);
+            builder.push_quad(subject, tag, value, Some(graph));
+        }
+        let fourth = builder.intern_iri(&ex(&format!("{prefix}entity000003")));
+        builder.push_quad(fourth, alias, intruder, None);
+    }
+    builder.push_quad(intruder, tag, value, None);
+    builder.push_quad(intruder, tag, value, Some(graph));
+    builder.freeze().expect("the fixture dataset is valid")
+}
+
+/// What a shape of the soundness sweep does when a basis is declared over it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sweep {
+    /// Admitted, and both strata run and answer verdicts.
+    Runs,
+    /// Refused at construction, under the widest reading of its predicates.
+    Refused,
+    /// Admitted at construction, and each stratum fails at execution: no call the
+    /// registry registers is a source of its column.
+    FailsItsStratum,
+    /// Admitted, and the text itself names more rows than its producer declares —
+    /// a refusal of the read, reached before any verdict is asked.
+    BreachesItsBound,
+}
+
+/// **Over a dataset the text's patterns really read, every shape a caller can write
+/// around the call is either refused or answers no verdict the stream contradicts.**
+///
+/// Each text is built into a bundle declaring membership, executed over
+/// [`tagged_dataset`] on demand, and every stream is asked about the intruder and
+/// candidates on both sides of each producer's range *before* it is read; then it is
+/// read to its end. A verdict of `Excluded` for a candidate the stream then names
+/// would be a lookup answering for a column its call does not fill — the defect the
+/// shape description exists to rule out. A text refused at construction, or a
+/// stratum failed at execution, answers nothing and so contradicts nothing; the
+/// shapes that must be admitted are pinned as admitted, so the sweep cannot pass by
+/// refusing everything.
+#[test]
+fn no_admitted_shape_excludes_a_candidate_its_stream_names() {
+    let tag = ex("data/tag");
+    let alias = ex("data/alias");
+    let intruder = ex("intruder");
+    let call = |p: &str, v: &str| call_binding(p, v);
+    let pf = |p: &str| producer_iri(p);
+    let shapes: Vec<(&str, Text<'_>, Sweep)> = vec![
+        (
+            "join data after",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} . ?candidate <{tag}> ?t }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "join data before",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ ?candidate <{tag}> ?t . {} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "alias data candidate",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} . ?c <{alias}> ?candidate }}",
+                    call(p, "c")
+                )
+            }),
+            Sweep::FailsItsStratum,
+        ),
+        (
+            "alias joined with the call",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} . ?c <{alias}> ?candidate . {} }}",
+                    call(p, "c"),
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "call on the optional side",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ ?candidate <{tag}> ?t OPTIONAL {{ {} }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::FailsItsStratum,
+        ),
+        (
+            "nested optional",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {{ ?x <{tag}> ?t OPTIONAL {{ {} }} }} OPTIONAL {{ ?x <{alias}> ?candidate }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::FailsItsStratum,
+        ),
+        (
+            "required call, data optional",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} OPTIONAL {{ ?candidate <{alias}> ?o }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "GRAPH ?g over the call and data",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ GRAPH ?g {{ {} . ?candidate <{tag}> ?t }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "FILTER EXISTS",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} FILTER EXISTS {{ ?candidate <{tag}> ?t }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "FILTER NOT EXISTS",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} FILTER NOT EXISTS {{ ?candidate <{alias}> ?t }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "ORDER BY and LIMIT sub-select",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {{ SELECT ?candidate WHERE {{ {} }} ORDER BY DESC(?candidate) LIMIT 50 }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "DISTINCT over GROUP BY",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT DISTINCT ?candidate WHERE {{ {} }} GROUP BY ?candidate",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "MINUS data",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} MINUS {{ ?candidate <{tag}> ?t }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "VALUES with the intruder joined",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ VALUES ?candidate {{ <{intruder}> <{}> }} {} }}",
+                    ex("left/entity000003"),
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "renaming BIND then data",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {{ {} BIND(?c AS ?candidate) }} ?candidate <{tag}> ?t }}",
+                    call(p, "c")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "UNION of data joined with the call",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {{ ?candidate <{tag}> ?t }} UNION {{ ?z <{alias}> ?w }} {} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::BreachesItsBound,
+        ),
+        (
+            "sub-select hiding the candidate",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {{ SELECT ?x WHERE {{ {} . ?candidate <{alias}> ?x }} }} ?x <{tag}> ?t . ?candidate <{tag}> ?t2 }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::FailsItsStratum,
+        ),
+        (
+            "candidate in the needle too",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ ( ?candidate ) <{}> ( ?candidate ) }}",
+                    pf(p)
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "LATERAL call",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ ?candidate <{tag}> ?t LATERAL {{ {} }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "LATERAL sub-select rebinding",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} LATERAL {{ SELECT ?candidate WHERE {{ ?candidate <{alias}> ?o }} }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Runs,
+        ),
+        (
+            "VALUES after an optional call",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {{ ?x <{tag}> ?t OPTIONAL {{ {} }} }} VALUES ?candidate {{ <{intruder}> }} }}",
+                    call(p, "candidate")
+                )
+            }),
+            Sweep::Refused,
+        ),
+        ("UNION of calls", Box::new(union_of_calls), Sweep::Runs),
+        (
+            "GROUP BY rebinding the candidate",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} }} GROUP BY (IF(?candidate = <{}>, <{intruder}>, ?candidate) AS ?candidate)",
+                    call(p, "candidate"),
+                    first_of(p)
+                )
+            }),
+            Sweep::Refused,
+        ),
+        (
+            "renaming GROUP BY condition",
+            Box::new(|p: &str| {
+                format!(
+                    "SELECT ?candidate WHERE {{ {} }} GROUP BY (?hit AS ?candidate)",
+                    call(p, "hit")
+                )
+            }),
+            Sweep::Runs,
+        ),
+    ];
+    let mut probes = vec![format!("<{intruder}>")];
+    for prefix in DISJOINT {
+        for index in [0_u64, 3, 7, 39, 45, 399] {
+            probes.push(format!("<{}>", ex(&format!("{prefix}entity{index:06}"))));
+        }
+    }
+    let dataset = tagged_dataset();
+    for (name, text, expected) in &shapes {
+        let (registry, _) = fixture_registry(ExclusionBasis::Membership, None);
+        let Ok(bundle) = supplied(compiled(&registry), text) else {
+            assert_eq!(*expected, Sweep::Refused, "{name}: refused at construction");
+            continue;
+        };
+        assert_ne!(
+            *expected,
+            Sweep::Refused,
+            "{name}: admitted at construction"
+        );
+        let executed = block_on(execute_within(
+            &bundle,
+            &registry,
+            &*dataset,
+            ReadSchedule::OnDemand,
+        ));
+        let ExecutionResult {
+            mut streams,
+            statuses,
+        } = match executed {
+            Ok(executed) => executed,
+            Err(error) => {
+                assert_eq!(
+                    *expected,
+                    Sweep::BreachesItsBound,
+                    "{name}: the bundle runs: {error:?}"
+                );
+                assert!(
+                    matches!(error, ExecutionError::RowBoundBreached { .. }),
+                    "{name}: the text names more rows than its producer declares: {error:?}"
+                );
+                continue;
+            }
+        };
+        match expected {
+            Sweep::Runs => assert_eq!(streams.len(), 2, "{name}: both strata run: {statuses:?}"),
+            Sweep::FailsItsStratum => assert!(
+                streams.is_empty()
+                    && statuses.values().all(|status| matches!(
+                        status,
+                        ProducerStatus::ExecutionFailed { reason }
+                            if reason.contains("could not be derived from its query")
+                    )),
+                "{name}: no registered call is a source, so each stratum fails: {statuses:?}"
+            ),
+            Sweep::Refused | Sweep::BreachesItsBound => {
+                panic!("{name}: expected {expected:?}, and it ran: {statuses:?}")
+            }
+        }
+        for stream in &mut streams {
+            let verdicts: Vec<(String, ExclusionVerdict)> = probes
+                .iter()
+                .map(|probe| {
+                    let verdict = block_on(stream.stream.exclusion(&Term::new(probe.clone())))
+                        .unwrap_or_else(|error| panic!("{name}: the lookup answers: {error:?}"));
+                    (probe.clone(), verdict)
+                })
+                .collect();
+            let mut held = Vec::new();
+            while let Some((_, term, _)) = block_on(stream.stream.next()).unwrap_or_else(|error| {
+                panic!("{name}: the stream reads after its verdicts: {error:?}")
+            }) {
+                held.push(term.as_str().to_owned());
+            }
+            let contradicted: Vec<&String> = verdicts
+                .iter()
+                .filter(|(probe, verdict)| {
+                    *verdict == ExclusionVerdict::Excluded && held.contains(probe)
+                })
+                .map(|(probe, _)| probe)
+                .collect();
+            assert!(
+                contradicted.is_empty(),
+                "{name}: {} excluded candidates it names: {contradicted:?}",
+                stream.stratum
+            );
+            // And the lookups really answered: the other producer's first candidate,
+            // which no call of this stratum emits, is excluded.
+            let foreign = if stream.stratum == strata()[0] {
+                format!("<{}>", ex("right/entity000000"))
+            } else {
+                format!("<{}>", ex("left/entity000000"))
+            };
+            assert!(
+                verdicts.contains(&(foreign, ExclusionVerdict::Excluded)),
+                "{name}: {} excluded the other producer's candidate: {verdicts:?}",
+                stream.stratum
+            );
+        }
+    }
 }

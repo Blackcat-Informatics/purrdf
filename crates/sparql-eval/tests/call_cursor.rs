@@ -612,11 +612,13 @@ fn the_shape_predicate_agrees_with_the_open_and_opens_nothing() {
 /// registry could draw a column from a call for.
 ///
 /// Admitted: a renaming projection and `BIND`, a `FILTER`, and a join of two calls on
-/// the column — each call a source, because each binds it in every solution. Refused
-/// beside them: the same two calls under `UNION` (either branch's value can reach the
-/// column, so neither call's absence proves anything), a column only a `VALUES` block
-/// binds, and a computed `BIND`. The join and the dataset clause are not read on
-/// demand, and say so, while still naming their sources.
+/// the column — each call a source, because each binds it in every solution, so the
+/// join is one alternative of two calls — and the same two calls under `UNION`, two
+/// alternatives of one call each, because every value either branch gives the column
+/// is a value that branch's call emitted. Refused beside them: a `UNION` whose other
+/// branch binds the column from `VALUES` (that branch's values are no call's), a
+/// column only a `VALUES` block binds, and a computed `BIND`. The join and the dataset
+/// clause are not read on demand, and say so, while still naming their sources.
 #[test]
 fn the_shape_names_the_calls_each_columns_values_come_from_before_and_after_planning() {
     use purrdf_sparql_algebra::{ParserOptions, SparqlParser, TermPattern, Variable};
@@ -637,15 +639,23 @@ fn the_shape_names_the_calls_each_columns_values_come_from_before_and_after_plan
             .prepare_query_with_options(query, None, options(&env))
             .expect("the query prepares")
     };
-    // Each column, beside the argument lists of the calls it is drawn from and the
-    // call variable each carries it in.
+    // Each column's alternatives, each the argument lists of the calls it is drawn
+    // from beside the call variable each carries it in.
     let sources = |shape: &CallReadShape<'_>, column: &str| {
-        shape.sources_of(column).map(|sources| {
-            sources
+        shape.sources_of(column).map(|alternatives| {
+            alternatives
                 .into_iter()
-                .map(|(call, variable)| {
-                    assert_eq!(call.iri, REL);
-                    (call.object_args.clone(), variable.as_str().to_owned())
+                .map(|alternative| {
+                    alternative
+                        .into_iter()
+                        .map(|source| {
+                            assert_eq!(source.call().iri, REL);
+                            (
+                                source.call().object_args.clone(),
+                                source.variable().as_str().to_owned(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>()
         })
@@ -660,28 +670,42 @@ fn the_shape_names_the_calls_each_columns_values_come_from_before_and_after_plan
                  LIMIT 3 }} }}"
             ),
             vec![
-                ("x", vec![(vec![variable("b")], "a".to_owned())]),
-                ("b", vec![(vec![variable("b")], "b".to_owned())]),
+                ("x", vec![vec![(vec![variable("b")], "a".to_owned())]]),
+                ("b", vec![vec![(vec![variable("b")], "b".to_owned())]]),
             ],
             true,
         ),
         (
             format!("SELECT ?y ?b WHERE {{ ( ?a ) <{REL}> ( ?b ) BIND(?a AS ?y) }}"),
-            vec![("y", vec![(vec![variable("b")], "a".to_owned())])],
+            vec![("y", vec![vec![(vec![variable("b")], "a".to_owned())]])],
             true,
         ),
         (
             format!("SELECT ?a WHERE {{ ( ?a ) <{REL}> ( ?b ) FILTER(?a != ?b) }}"),
-            vec![("a", vec![(vec![variable("b")], "a".to_owned())])],
+            vec![("a", vec![vec![(vec![variable("b")], "a".to_owned())]])],
             true,
         ),
         (
             format!("SELECT ?a WHERE {{ ( ?a ) <{REL}> ( \"q\" ) . ( ?a ) <{REL}> ( \"r\" ) }}"),
             vec![(
                 "a",
-                vec![
+                vec![vec![
                     (vec![literal("q")], "a".to_owned()),
                     (vec![literal("r")], "a".to_owned()),
+                ]],
+            )],
+            false,
+        ),
+        (
+            format!(
+                "SELECT ?a WHERE {{ {{ ( ?a ) <{REL}> ( \"q\" ) }} UNION {{ ( ?a ) <{REL}> \
+                 ( \"r\" ) }} }}"
+            ),
+            vec![(
+                "a",
+                vec![
+                    vec![(vec![literal("q")], "a".to_owned())],
+                    vec![(vec![literal("r")], "a".to_owned())],
                 ],
             )],
             false,
@@ -696,9 +720,11 @@ fn the_shape_names_the_calls_each_columns_values_come_from_before_and_after_plan
             for (column, expected) in &columns {
                 let mut found = sources(shape, column)
                     .unwrap_or_else(|refusal| panic!("?{column} of {query}: {refusal}"));
-                // Planning may put the calls of a join in either order; the sources
-                // are a set of calls, compared as one.
-                found.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+                // Planning may put the calls of a join in either order; an
+                // alternative is a set of calls, compared as one.
+                for alternative in &mut found {
+                    alternative.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+                }
                 assert_eq!(&found, expected, "column ?{column} of {query}");
             }
             assert_eq!(
@@ -723,7 +749,8 @@ fn the_shape_names_the_calls_each_columns_values_come_from_before_and_after_plan
             .sources_of("s")
             .expect("the call binds ?s")
             .into_iter()
-            .map(|(_, variable)| variable.clone())
+            .flatten()
+            .map(|source| source.variable().clone())
             .collect::<Vec<_>>(),
         vec![Variable::new("s")],
         "{quoted}"
@@ -732,8 +759,8 @@ fn the_shape_names_the_calls_each_columns_values_come_from_before_and_after_plan
     let refused = [
         (
             format!(
-                "SELECT ?a WHERE {{ {{ ( ?a ) <{REL}> ( \"q\" ) }} UNION {{ ( ?a ) <{REL}> \
-                 ( \"r\" ) }} }}"
+                "SELECT ?a WHERE {{ {{ ( ?a ) <{REL}> ( \"q\" ) }} UNION {{ VALUES ?a {{ <{}> }} }} }}",
+                ex("entity00")
             ),
             "a UNION",
         ),

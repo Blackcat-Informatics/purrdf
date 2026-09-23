@@ -1044,17 +1044,24 @@ impl std::error::Error for CallReadRefusal {}
 ///
 /// # Which calls a column's values come from
 ///
-/// A call is a **source** of a column when every value the column takes, in every
-/// solution of the query, is a value that call emitted for the variable the column is
-/// carried from. Then a call that never emits a term there proves the term absent from
-/// the column. The walk derives this per node, and each rule is the node's own
-/// definition:
+/// A column's sources are a set of **alternatives**, each a set of calls: in every
+/// solution of the query that binds the column, there is an alternative every call of
+/// which emitted the column's value for the variable the column is carried from. So a
+/// term that some call of *each* alternative never emits there is a term the column
+/// never holds — within one alternative any call's absence is proof, and the proof
+/// must be had in every alternative. A column drawn from one call has one alternative
+/// of one call; a `UNION` of two branches, each drawing it from a call, has two. The
+/// walk derives this per node, and each rule is the node's own definition:
 ///
-/// * a call is the source of each of its variables;
+/// * a call is the one source of each of its variables;
 /// * a join (`Join`, and the `Lateral` a triples block of calls plans into) merges two
 ///   sides whose shared variables must agree, so a variable one side binds in every
-///   solution keeps that side's sources — and a variable both sides always bind keeps
-///   both sides' sources;
+///   solution keeps that side's sources, and a variable both sides always bind keeps
+///   both sides' together — one side's single alternative joined into each of the
+///   other's, or, where both sides have several, the side with fewer, so a join never
+///   multiplies the alternatives it is handed. A variable neither side always binds
+///   takes its value from whichever side bound it, and keeps either side's
+///   alternatives only where both sides have some;
 /// * `FILTER`, `DISTINCT`, `REDUCED`, `ORDER BY`, `LIMIT` and `OFFSET` only drop,
 ///   merge or reorder the solutions beneath them, so they keep every source; so do
 ///   `GRAPH` (a relation is handed no graph, so the rows it emits do not depend on
@@ -1062,16 +1069,35 @@ impl std::error::Error for CallReadRefusal {}
 /// * `OPTIONAL` keeps its required side's sources for a variable that side always
 ///   binds, and its optional side's for a variable only that side binds; a variable
 ///   both sides can bind, where the required side does not always, can take a value
-///   from either, and keeps no source;
+///   from either, and keeps both sides' alternatives where both have some;
 /// * `MINUS` answers solutions of its left side only, so it keeps the left side's
 ///   sources and none of the subtracted side's;
 /// * `UNION` answers solutions of either branch, so a variable both branches bind
-///   keeps no source — no one call emitted the other branch's values;
-/// * a projection keeps the sources of the names it keeps, a renaming `BIND` gives
-///   the new name its source's sources, and a `GROUP BY` key keeps the sources of the
-///   variable it groups on;
-/// * a computed `BIND`, an aggregate, a `GRAPH` name, a triple pattern, a path,
-///   `VALUES` and `SERVICE` produce values no call emitted, and give none.
+///   keeps both branches' alternatives where each branch has some, and none where
+///   either branch binds it from something that is not a call;
+/// * a projection keeps the sources of the names it keeps, a renaming `BIND` or
+///   `GROUP BY (?v AS ?w)` gives the new name its source's sources, and a `GROUP BY`
+///   key keeps the sources of the variable it groups on;
+/// * a computed `BIND`, `SELECT` expression or `GROUP BY` condition, an aggregate, a
+///   `GRAPH` name, a triple pattern, a path, `VALUES` and `SERVICE` produce values no
+///   call emitted, and give none.
+///
+/// A node that binds a variable its operand already binds **replaces** that
+/// variable's sources rather than adding a second column beside them: the evaluator
+/// overwrites the value, so the sources of what it overwrote say nothing about the
+/// value the column now holds. The parser refuses every such rebinding a text can
+/// write (`BIND`, a `SELECT` expression and a `GROUP BY` condition over an in-scope
+/// variable are all syntax errors), and algebra built some other way is described
+/// by what it evaluates to.
+///
+/// # What drives a call
+///
+/// Beside each source the shape names the patterns that **drive** it — the
+/// conjuncts evaluated before the call whose rows feed its input positions — and the
+/// call variables they bind ([`ColumnSource::driving_patterns`],
+/// [`ColumnSource::driven_variables`]). Asking the call the same question with its
+/// column bound needs them: a needle read out of the data is a position the call
+/// cannot be invoked without.
 ///
 /// # Which queries read on demand
 ///
@@ -1092,6 +1118,10 @@ pub struct CallReadShape<'q> {
     /// Every call of the query's pattern outside an `EXISTS` or a `SERVICE`, in walk
     /// order.
     calls: Vec<&'q PropertyFunctionCall>,
+    /// For each call of [`Self::calls`], the patterns evaluated before it whose rows
+    /// the call is invoked with: the atoms of every `Lateral` left operand between the
+    /// call and the nearest sub-`SELECT` above it, in evaluation order.
+    contexts: Vec<Vec<&'q GraphPattern>>,
     /// The root pattern's variables, with the calls each one's values come from.
     columns: Vec<Provenance<'q>>,
     /// Variables a node dropped from the solutions while a call bound them, beside the
@@ -1108,12 +1138,66 @@ struct Provenance<'q> {
     name: Variable,
     /// Whether every solution of the subtree binds it.
     always: bool,
-    /// The calls every value it takes was emitted by, as indices into
-    /// [`CallReadShape::calls`], each beside the call variable that carries it.
-    sources: Vec<(usize, &'q Variable)>,
+    /// The alternatives its values were emitted by (see [`CallReadShape`]): in every
+    /// solution binding it, every call of at least one alternative emitted its value.
+    /// Each call is an index into [`CallReadShape::calls`] beside the call variable
+    /// that carries it. Empty when no call is a source; no alternative is empty.
+    sources: Vec<Alternative<'q>>,
     /// The operator that let it take a value no source emitted, where a call bound it
     /// below that operator.
     lost: Option<String>,
+}
+
+/// One alternative of a column's sources: calls, each beside the call variable that
+/// carries the column, every one of which emitted the column's value.
+type Alternative<'q> = Vec<(usize, &'q Variable)>;
+
+/// One call a column's values were emitted by, as [`CallReadShape::sources_of`] names
+/// it: the call, the call variable that carries the column, and what drives the call.
+#[derive(Clone, Debug)]
+pub struct ColumnSource<'q> {
+    call: &'q PropertyFunctionCall,
+    variable: &'q Variable,
+    driving: Vec<GraphPattern>,
+    driven: Vec<&'q Variable>,
+}
+
+impl<'q> ColumnSource<'q> {
+    /// The call.
+    #[must_use]
+    pub const fn call(&self) -> &'q PropertyFunctionCall {
+        self.call
+    }
+
+    /// The call variable whose values the column carries.
+    #[must_use]
+    pub const fn variable(&self) -> &'q Variable {
+        self.variable
+    }
+
+    /// The patterns evaluated before the call, in evaluation order, whose rows bind
+    /// one of its other variables — directly, or through a variable another such
+    /// pattern shares — and so drive the invocations the query makes of it. Empty for
+    /// a call whose other positions nothing before it binds.
+    ///
+    /// Each is a conjunct of the call's join — a triple of a basic graph pattern read
+    /// on its own, or a whole atom of any other kind: a solution the query answers
+    /// satisfies every one, so the values they bind the call's inputs to in that
+    /// solution are among the values they bind on their own. A conjunct whose
+    /// variables reach none of the call's is left out, and leaving it out only widens
+    /// that set. The column's own variable is not followed: a pattern connected to
+    /// the call only through it constrains the column, not the call's inputs.
+    #[must_use]
+    pub fn driving_patterns(&self) -> &[GraphPattern] {
+        &self.driving
+    }
+
+    /// The call's variables, other than [`Self::variable`], that
+    /// [`Self::driving_patterns`] bind, in the order the call first writes them.
+    #[must_use]
+    pub fn driven_variables(&self) -> &[&'q Variable] {
+        &self.driven
+    }
 }
 
 /// One call under the operators a read on demand passes rows through.
@@ -1173,6 +1257,7 @@ impl<'q> CallReadShape<'q> {
         };
         Ok(Self {
             calls: walk.calls,
+            contexts: walk.contexts,
             columns,
             dropped: walk.dropped,
             read,
@@ -1188,22 +1273,24 @@ impl<'q> CallReadShape<'q> {
         &self.calls
     }
 
-    /// The calls every value of the projected column `column` was emitted by, each
-    /// beside the call variable that carries it to the column — through every renaming
-    /// the query wrote — in the order [`Self::calls`] lists them.
+    /// The alternatives the values of the projected column `column` were emitted by
+    /// (see the type's docs): each a set of calls, each call beside the call variable
+    /// that carries it to the column — through every renaming the query wrote — and
+    /// the patterns that drive it. Alternatives are in walk order, and the calls of
+    /// one in the order [`Self::calls`] lists them.
     ///
-    /// Every call returned is a proof of absence: a term one of them never emits for
-    /// its variable is a term the column never holds.
+    /// The alternatives together are a proof of absence: a term that, in every
+    /// alternative, some call never emits for its variable is a term the column never
+    /// holds. A column drawn from calls without a `UNION` or `OPTIONAL` choosing
+    /// between them has exactly one alternative, and then any one of its calls is
+    /// proof on its own.
     ///
     /// # Errors
     ///
     /// [`CallReadRefusal`] when the query projects no such column, or when no call is a
     /// source of it — naming the operator that lets it take a value no call emitted
     /// where one is to blame, and otherwise saying that nothing binding it is a call.
-    pub fn sources_of(
-        &self,
-        column: &str,
-    ) -> Result<Vec<(&'q PropertyFunctionCall, &'q Variable)>, CallReadRefusal> {
+    pub fn sources_of(&self, column: &str) -> Result<Vec<Vec<ColumnSource<'q>>>, CallReadRefusal> {
         let refused = |reason: String| CallReadRefusal { reason };
         let Some(provenance) = self
             .columns
@@ -1242,7 +1329,12 @@ impl<'q> CallReadShape<'q> {
         Ok(provenance
             .sources
             .iter()
-            .map(|&(call, variable)| (self.calls[call], variable))
+            .map(|alternative| {
+                alternative
+                    .iter()
+                    .map(|&(call, variable)| self.source(call, variable))
+                    .collect()
+            })
             .collect())
     }
 
@@ -1263,6 +1355,109 @@ impl<'q> CallReadShape<'q> {
                 reason: reason.clone(),
             })
     }
+
+    /// The `index`-th call as the source of a column carried by its `variable`, with
+    /// the patterns that drive it.
+    ///
+    /// The driving patterns are the connected part of the call's context, read one
+    /// conjunct at a time — each triple of a basic graph pattern on its own, every
+    /// other atom whole: starting from the call's variables other than `variable`, a
+    /// conjunct any of whose variables is reached is kept, and its variables —
+    /// `variable` excepted — are reached in turn, until nothing changes. The kept
+    /// triples of one basic graph pattern stay one pattern, in their written order.
+    fn source(&self, index: usize, variable: &'q Variable) -> ColumnSource<'q> {
+        let call = self.calls[index];
+        let context = &self.contexts[index];
+        let mut call_vars = Vec::new();
+        for term in call.subject_args.iter().chain(&call.object_args) {
+            call_variables(term, &mut call_vars);
+        }
+        let mut reached: Vec<Variable> = call_vars
+            .iter()
+            .map(|(name, _)| (*name).clone())
+            .filter(|name| name != variable)
+            .collect();
+        // One conjunct per triple of a basic graph pattern, one per other atom: the
+        // atom it is drawn from, the triple where it is one, and its variables.
+        let mut conjuncts: Vec<(usize, Option<usize>, Vec<Variable>)> = Vec::new();
+        for (at, atom) in context.iter().enumerate() {
+            match atom {
+                GraphPattern::Bgp { patterns } => {
+                    for (triple, pattern) in patterns.iter().enumerate() {
+                        let alone = GraphPattern::Bgp {
+                            patterns: vec![pattern.clone()],
+                        };
+                        let vars = crate::eval::syntactic_schema(&alone).vars().to_vec();
+                        conjuncts.push((at, Some(triple), vars));
+                    }
+                }
+                _ => {
+                    let vars = crate::eval::syntactic_schema(atom).vars().to_vec();
+                    conjuncts.push((at, None, vars));
+                }
+            }
+        }
+        let mut kept = vec![false; conjuncts.len()];
+        loop {
+            let mut changed = false;
+            for (index, (_, _, vars)) in conjuncts.iter().enumerate() {
+                if kept[index] || !vars.iter().any(|name| reached.contains(name)) {
+                    continue;
+                }
+                kept[index] = true;
+                changed = true;
+                for name in vars {
+                    if name != variable && !reached.contains(name) {
+                        reached.push(name.clone());
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut driving: Vec<GraphPattern> = Vec::new();
+        for (at, atom) in context.iter().enumerate() {
+            let chosen = conjuncts
+                .iter()
+                .zip(&kept)
+                .filter(|((from, _, _), kept)| **kept && *from == at)
+                .map(|((_, triple, _), _)| *triple);
+            match atom {
+                GraphPattern::Bgp { patterns } => {
+                    let triples: Vec<_> = chosen
+                        .flatten()
+                        .map(|triple| patterns[triple].clone())
+                        .collect();
+                    if !triples.is_empty() {
+                        driving.push(GraphPattern::Bgp { patterns: triples });
+                    }
+                }
+                _ => {
+                    if chosen.count() > 0 {
+                        driving.push((*atom).clone());
+                    }
+                }
+            }
+        }
+        let driven = call_vars
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| {
+                *name != variable
+                    && conjuncts
+                        .iter()
+                        .zip(&kept)
+                        .any(|((_, _, vars), kept)| *kept && vars.contains(name))
+            })
+            .collect();
+        ColumnSource {
+            call,
+            variable,
+            driving,
+            driven,
+        }
+    }
 }
 
 /// The walk behind [`CallReadShape::of`]: the calls it met, in order, and the variables
@@ -1271,6 +1466,12 @@ impl<'q> CallReadShape<'q> {
 struct ShapeWalk<'q> {
     /// Every call of the pattern outside an `EXISTS` or a `SERVICE`, in walk order.
     calls: Vec<&'q PropertyFunctionCall>,
+    /// Each call's context, parallel to [`Self::calls`].
+    contexts: Vec<Vec<&'q GraphPattern>>,
+    /// The context of the node being walked: the atoms of every `Lateral` left operand
+    /// above it, up to the nearest sub-`SELECT` — the rows a call here is invoked
+    /// with, exactly as the planner hands them to it.
+    context: Vec<&'q GraphPattern>,
     /// Variables dropped beneath an operator that does not answer them.
     dropped: Vec<(Variable, String)>,
 }
@@ -1291,6 +1492,7 @@ impl<'q> ShapeWalk<'q> {
             GraphPattern::PropertyFunction(call) => {
                 let index = self.calls.len();
                 self.calls.push(call);
+                self.contexts.push(self.context.clone());
                 let mut visible = Vec::new();
                 for term in call.subject_args.iter().chain(&call.object_args) {
                     call_variables(term, &mut visible);
@@ -1300,7 +1502,7 @@ impl<'q> ShapeWalk<'q> {
                     .map(|(variable, _)| Provenance {
                         name: variable.clone(),
                         always: true,
-                        sources: vec![(index, variable)],
+                        sources: vec![vec![(index, variable)]],
                         lost: None,
                     })
                     .collect();
@@ -1313,7 +1515,11 @@ impl<'q> ShapeWalk<'q> {
                 )
             }
             GraphPattern::Project { inner, variables } => {
+                // A sub-`SELECT` is its own scope: nothing bound outside it is handed
+                // to a call inside it, which is how the planner reads it too.
+                let outer = std::mem::take(&mut self.context);
                 let (below, read) = self.walk(inner);
+                self.context = outer;
                 let columns = variables
                     .iter()
                     .filter_map(|variable| below.iter().find(|column| column.name == *variable))
@@ -1355,6 +1561,13 @@ impl<'q> ShapeWalk<'q> {
                 expression,
             } => {
                 let (mut columns, read) = self.walk(inner);
+                // The evaluator writes the expression's value into the variable's
+                // column, overwriting whatever the operand bound there, and leaves it
+                // unbound where the expression errors. So the column this node answers
+                // is the expression's alone: a renaming carries its source's
+                // provenance, a computed expression carries none, and a renaming of a
+                // variable the operand does not bind leaves the column unbound in
+                // every solution.
                 let (column, read) = match expression {
                     Expression::Variable(source) => (
                         columns
@@ -1371,32 +1584,32 @@ impl<'q> ShapeWalk<'q> {
                             name: variable.clone(),
                             always: false,
                             sources: Vec::new(),
-                            lost: Some("a computed BIND".to_owned()),
+                            lost: Some(COMPUTED.to_owned()),
                         }),
                         Err(not_one_call("a computed BIND")),
                     ),
                 };
-                columns.extend(column);
+                match column {
+                    Some(column) => bind_column(&mut columns, column),
+                    None => columns.retain(|column| column.name != *variable),
+                }
                 (columns, read)
             }
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            GraphPattern::Join { left, right } => {
                 let (left_columns, _) = self.walk(left);
                 let (right_columns, right_read) = self.walk(right);
-                // The parser's own spelling of a triples block that is one call and
-                // nothing else: the call laterally joined onto the empty pattern
-                // written before it. The empty pattern is the join identity, so this
-                // is the call itself — exactly what planning reduces it to — and the
-                // shape of a text read before any registry planned it is the shape of
-                // the plan it becomes.
-                let read = if matches!(&**left, GraphPattern::Bgp { patterns } if patterns.is_empty())
-                {
-                    right_read
-                } else {
-                    Err(not_one_call(&format!(
-                        "a join of the call with another pattern (a {} node)",
-                        node_kind(pattern)
-                    )))
-                };
+                let read = join_read(pattern, left, right_read);
+                (conjunction(left_columns, right_columns), read)
+            }
+            GraphPattern::Lateral { left, right } => {
+                let (left_columns, _) = self.walk(left);
+                // The right operand is evaluated once per row of the left, with that
+                // row in hand: every atom of the left drives a call beneath the right.
+                let depth = self.context.len();
+                lateral_atoms(left, &mut self.context);
+                let (right_columns, right_read) = self.walk(right);
+                self.context.truncate(depth);
+                let read = join_read(pattern, left, right_read);
                 (conjunction(left_columns, right_columns), read)
             }
             GraphPattern::LeftJoin { left, right, .. } => {
@@ -1470,12 +1683,17 @@ impl<'q> ShapeWalk<'q> {
                     .filter_map(|variable| below.iter().find(|column| column.name == *variable))
                     .cloned()
                     .collect();
-                columns.extend(aggregates.iter().map(|(variable, _)| Provenance {
-                    name: variable.clone(),
-                    always: false,
-                    sources: Vec::new(),
-                    lost: Some("an aggregate".to_owned()),
-                }));
+                for (variable, _) in aggregates {
+                    bind_column(
+                        &mut columns,
+                        Provenance {
+                            name: variable.clone(),
+                            always: false,
+                            sources: Vec::new(),
+                            lost: Some("an aggregate".to_owned()),
+                        },
+                    );
+                }
                 (columns, Err(not_one_call("a Group node")))
             }
             GraphPattern::Unfold {
@@ -1485,14 +1703,17 @@ impl<'q> ShapeWalk<'q> {
                 ..
             } => {
                 let (mut columns, _) = self.walk(inner);
-                columns.extend(std::iter::once(element).chain(companion).map(|variable| {
-                    Provenance {
-                        name: variable.clone(),
-                        always: false,
-                        sources: Vec::new(),
-                        lost: Some("an UNFOLD".to_owned()),
-                    }
-                }));
+                for variable in std::iter::once(element).chain(companion) {
+                    bind_column(
+                        &mut columns,
+                        Provenance {
+                            name: variable.clone(),
+                            always: false,
+                            sources: Vec::new(),
+                            lost: Some("an UNFOLD".to_owned()),
+                        },
+                    );
+                }
                 (columns, Err(not_one_call("an Unfold node")))
             }
             // Nodes no call beneath can be a source through: data, inline values, and a
@@ -1525,6 +1746,54 @@ impl<'q> ShapeWalk<'q> {
     }
 }
 
+/// Why a column bound by an expression keeps no source, in a refusal's words.
+const COMPUTED: &str = "a computed BIND, SELECT expression or GROUP BY condition";
+
+/// Write `column` into `columns`, replacing the column of that name if the operand
+/// already bound one: a node that binds a variable decides the value the column holds
+/// from then on, so the provenance of what it overwrote is gone with it.
+fn bind_column<'q>(columns: &mut Vec<Provenance<'q>>, column: Provenance<'q>) {
+    match columns.iter_mut().find(|held| held.name == column.name) {
+        Some(held) => *held = column,
+        None => columns.push(column),
+    }
+}
+
+/// Push the atoms of a `Lateral`'s left operand onto `context`: the leaves of its
+/// `Join`/`Lateral` spine, in evaluation order, without the empty group the parser
+/// opens a triples block of calls with.
+fn lateral_atoms<'q>(pattern: &'q GraphPattern, context: &mut Vec<&'q GraphPattern>) {
+    match pattern {
+        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            lateral_atoms(left, context);
+            lateral_atoms(right, context);
+        }
+        GraphPattern::Bgp { patterns } if patterns.is_empty() => {}
+        atom => context.push(atom),
+    }
+}
+
+/// Whether a join node (`Join` or `Lateral`) is read on demand: only the parser's own
+/// spelling of a triples block that is one call and nothing else, the call laterally
+/// joined onto the empty pattern written before it. The empty pattern is the join
+/// identity, so this is the call itself — exactly what planning reduces it to — and
+/// the shape of a text read before any registry planned it is the shape of the plan
+/// it becomes.
+fn join_read<'q>(
+    pattern: &'q GraphPattern,
+    left: &GraphPattern,
+    right_read: Result<OneCall<'q>, String>,
+) -> Result<OneCall<'q>, String> {
+    if matches!(left, GraphPattern::Bgp { patterns } if patterns.is_empty()) {
+        right_read
+    } else {
+        Err(not_one_call(&format!(
+            "a join of the call with another pattern (a {} node)",
+            node_kind(pattern)
+        )))
+    }
+}
+
 /// `read` with `operator` above it, where the operator passes rows through a read on
 /// demand.
 fn extended<'q>(
@@ -1537,26 +1806,78 @@ fn extended<'q>(
     })
 }
 
+/// The alternatives of a variable whose value, in every solution, satisfies both
+/// `left`'s alternatives and `right`'s — a join of two sides that both bind it.
+///
+/// One side's single alternative is joined into each of the other side's, which is
+/// exact. Where both sides have several, the side with fewer is kept on its own: each
+/// side's alternatives already cover every solution, so either is sound, and keeping
+/// one rather than every pairing keeps the count at most the larger of the two.
+fn both_hold<'q>(left: &[Alternative<'q>], right: &[Alternative<'q>]) -> Vec<Alternative<'q>> {
+    let joined = |one: &Alternative<'q>, many: &[Alternative<'q>]| {
+        many.iter()
+            .map(|other| {
+                let mut merged = one.clone();
+                for source in other {
+                    if !merged.contains(source) {
+                        merged.push(*source);
+                    }
+                }
+                merged.sort_by_key(|(call, _)| *call);
+                merged
+            })
+            .collect::<Vec<_>>()
+    };
+    let alternatives = match (left, right) {
+        ([], other) | (other, []) => other.to_vec(),
+        ([one], many) | (many, [one]) => joined(one, many),
+        (many_left, many_right) if many_right.len() < many_left.len() => many_right.to_vec(),
+        (many_left, _) => many_left.to_vec(),
+    };
+    deduplicated(alternatives)
+}
+
+/// The alternatives of a variable whose value, in every solution, satisfies `left`'s
+/// alternatives or `right`'s — either one side's value or the other's. Empty where
+/// either side has none: a value that side bound came from something that is not a
+/// call.
+fn either_holds<'q>(left: &[Alternative<'q>], right: &[Alternative<'q>]) -> Vec<Alternative<'q>> {
+    if left.is_empty() || right.is_empty() {
+        return Vec::new();
+    }
+    deduplicated(left.iter().chain(right).cloned().collect())
+}
+
+/// `alternatives` with each repeated alternative kept once, first occurrence first.
+fn deduplicated(alternatives: Vec<Alternative<'_>>) -> Vec<Alternative<'_>> {
+    let mut kept: Vec<Alternative<'_>> = Vec::with_capacity(alternatives.len());
+    for alternative in alternatives {
+        if !kept.contains(&alternative) {
+            kept.push(alternative);
+        }
+    }
+    kept
+}
+
 /// The variables of a join of two sides whose solutions must agree where both bind.
 ///
 /// A variable a side binds in every solution takes that side's value in every joined
-/// solution, so it keeps that side's sources — both sides' where both always bind it.
-/// One neither side always binds takes its value from whichever side bound it, and
-/// keeps no source unless one call is a source on both, which two distinct calls never
-/// are.
+/// solution, so it keeps that side's sources — both sides' together where both always
+/// bind it ([`both_hold`]). One neither side always binds takes its value from
+/// whichever side bound it, so it keeps the alternatives of both where both have some
+/// ([`either_holds`]), and none otherwise.
 fn conjunction<'q>(left: Vec<Provenance<'q>>, right: Vec<Provenance<'q>>) -> Vec<Provenance<'q>> {
     let mut merged = left;
     for right in right {
         match merged.iter_mut().find(|left| left.name == right.name) {
             None => merged.push(right),
             Some(left) => {
-                let mut sources = Vec::new();
-                if left.always {
-                    sources.extend(left.sources.iter().copied());
-                }
-                if right.always {
-                    sources.extend(right.sources.iter().copied());
-                }
+                let sources = match (left.always, right.always) {
+                    (true, true) => both_hold(&left.sources, &right.sources),
+                    (true, false) => left.sources.clone(),
+                    (false, true) => right.sources.clone(),
+                    (false, false) => either_holds(&left.sources, &right.sources),
+                };
                 let lost = if sources.is_empty()
                     && (!left.sources.is_empty() || !right.sources.is_empty())
                 {
@@ -1597,10 +1918,11 @@ fn optional<'q>(left: Vec<Provenance<'q>>, right: Vec<Provenance<'q>>) -> Vec<Pr
             }
             // Either side may supply it.
             Some(left) => {
-                if !left.sources.is_empty() || !right.sources.is_empty() {
+                let sources = either_holds(&left.sources, &right.sources);
+                if sources.is_empty() && (!left.sources.is_empty() || !right.sources.is_empty()) {
                     left.lost = Some(OPTIONAL.to_owned());
                 }
-                left.sources.clear();
+                left.sources = sources;
             }
         }
     }
@@ -1608,8 +1930,8 @@ fn optional<'q>(left: Vec<Provenance<'q>>, right: Vec<Provenance<'q>>) -> Vec<Pr
 }
 
 /// The variables of a `UNION`: every solution is one branch's, so a variable both
-/// branches bind can take either branch's value, and one branch binds alone keeps
-/// that branch's sources.
+/// branches bind takes one branch's value or the other's, and one branch binds alone
+/// keeps that branch's sources.
 fn union<'q>(left: Vec<Provenance<'q>>, right: Vec<Provenance<'q>>) -> Vec<Provenance<'q>> {
     const UNION: &str = "a UNION, whose other branch binds it without that call";
     let right_names: Vec<Variable> = right.iter().map(|column| column.name.clone()).collect();
@@ -1633,10 +1955,11 @@ fn union<'q>(left: Vec<Provenance<'q>>, right: Vec<Provenance<'q>>) -> Vec<Prove
                 ..right
             }),
             Some(left) => {
-                if !left.sources.is_empty() || !right.sources.is_empty() {
+                let sources = either_holds(&left.sources, &right.sources);
+                if sources.is_empty() && (!left.sources.is_empty() || !right.sources.is_empty()) {
                     left.lost = Some(UNION.to_owned());
                 }
-                left.sources.clear();
+                left.sources = sources;
                 left.always &= right.always;
             }
         }
@@ -3704,5 +4027,249 @@ mod tests {
         // Re-running the first configuration reproduces its own order, so the two are
         // cached independently rather than the last one winning.
         assert_eq!(rows_under(&registry_with(1, 2)), split_first);
+    }
+
+    // ---- the shape's column provenance ------------------------------------
+
+    /// `query` parsed with `PF_TAG` read as a call.
+    fn shaped(query: &str) -> Query {
+        let options = purrdf_sparql_algebra::ParserOptions {
+            property_fn_iris: vec![PF_TAG.to_owned()],
+            ..purrdf_sparql_algebra::ParserOptions::default()
+        };
+        purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query_with(query, &options)
+            .expect("the fixture query parses")
+    }
+
+    /// `query` with `rebind` wrapped around the pattern beneath its root projection.
+    fn rebound(query: &Query, rebind: impl FnOnce(GraphPattern) -> GraphPattern) -> Query {
+        let Query::Select {
+            pattern,
+            dataset,
+            base_iri,
+            version,
+        } = query.clone()
+        else {
+            panic!("a SELECT");
+        };
+        let GraphPattern::Project { inner, variables } = pattern else {
+            panic!("a projection at the root");
+        };
+        Query::Select {
+            pattern: GraphPattern::Project {
+                inner: Box::new(rebind(*inner)),
+                variables,
+            },
+            dataset,
+            base_iri,
+            version,
+        }
+    }
+
+    /// **A node binding a variable its operand already binds replaces the column: a
+    /// computed value leaves it no source, a renaming gives it the renamed column's.**
+    ///
+    /// The parser refuses every such rebinding a text can write, so the algebra is
+    /// built by hand: an `Extend` over `?c` where the call already bound `?c`. The
+    /// evaluator overwrites the column, so the call is not a source of what the
+    /// column then holds — and a second column of the same name, carrying the call's
+    /// provenance beside the overwritten value, is exactly the defect this pins.
+    /// The neighbours: the unwrapped query keeps its call; a renaming `Extend` of
+    /// `?c` from the call's other variable keeps a source, that variable's; and the
+    /// same rebinding of a variable the operand does not bind is a fresh column.
+    #[test]
+    fn a_rebinding_replaces_the_column_it_overwrites() {
+        let plain = shaped(&format!(
+            "SELECT ?c ?t WHERE {{ ( ?c ) <{PF_TAG}> ( ?t ) }}"
+        ));
+        let sources = |query: &Query, column: &str| {
+            CallReadShape::of(query)
+                .expect("a SELECT")
+                .sources_of(column)
+                .map(|alternatives| {
+                    alternatives
+                        .into_iter()
+                        .map(|alternative| {
+                            alternative
+                                .into_iter()
+                                .map(|source| source.variable().as_str().to_owned())
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|refusal| refusal.reason().to_owned())
+        };
+        assert_eq!(sources(&plain, "c"), Ok(vec![vec!["c".to_owned()]]));
+
+        let computed = rebound(&plain, |inner| GraphPattern::Extend {
+            inner: Box::new(inner),
+            variable: Variable::new("c"),
+            expression: Expression::NamedNode(purrdf_sparql_algebra::NamedNode::new_unchecked(
+                format!("{EX}intruder"),
+            )),
+        });
+        let refused = sources(&computed, "c").expect_err("the call is no source of ?c now");
+        assert!(refused.contains(COMPUTED), "{refused}");
+        assert_eq!(
+            CallReadShape::of(&computed)
+                .expect("a SELECT")
+                .columns
+                .len(),
+            2,
+            "one ?c column and one ?t column, never a second ?c"
+        );
+
+        let renamed = rebound(&plain, |inner| GraphPattern::Extend {
+            inner: Box::new(inner),
+            variable: Variable::new("c"),
+            expression: Expression::Variable(Variable::new("t")),
+        });
+        assert_eq!(
+            sources(&renamed, "c"),
+            Ok(vec![vec!["t".to_owned()]]),
+            "the renamed column's source, carried by ?t"
+        );
+
+        let fresh = rebound(&plain, |inner| GraphPattern::Extend {
+            inner: Box::new(inner),
+            variable: Variable::new("t2"),
+            expression: Expression::Variable(Variable::new("c")),
+        });
+        assert_eq!(sources(&fresh, "c"), Ok(vec![vec!["c".to_owned()]]));
+    }
+
+    /// **The same replacement holds under a `GROUP BY` and through an aggregate or an
+    /// `UNFOLD` target, and a `UNION` of calls keeps one alternative per branch.**
+    #[test]
+    fn group_keys_aggregates_and_unions_are_read_per_node() {
+        let sources = |query: &str, column: &str| {
+            CallReadShape::of(&shaped(query))
+                .expect("a SELECT")
+                .sources_of(column)
+                .map(|alternatives| alternatives.iter().map(Vec::len).collect::<Vec<_>>())
+                .map_err(|refusal| refusal.reason().to_owned())
+        };
+        // A plain key and a renaming condition keep the call.
+        for query in [
+            format!("SELECT ?c WHERE {{ ( ?c ) <{PF_TAG}> ( ?t ) }} GROUP BY ?c"),
+            format!("SELECT ?k WHERE {{ ( ?c ) <{PF_TAG}> ( ?t ) }} GROUP BY (?c AS ?k)"),
+        ] {
+            let column = if query.contains("?k") { "k" } else { "c" };
+            assert_eq!(sources(&query, column), Ok(vec![1]), "{query}");
+        }
+        // A computed condition does not.
+        let refused = sources(
+            &format!("SELECT ?k WHERE {{ ( ?c ) <{PF_TAG}> ( ?t ) }} GROUP BY (STR(?c) AS ?k)"),
+            "k",
+        )
+        .expect_err("a computed key");
+        assert!(refused.contains(COMPUTED), "{refused}");
+        // Two branches, each a call: two alternatives. A VALUES branch: none.
+        assert_eq!(
+            sources(
+                &format!(
+                    "SELECT ?c WHERE {{ {{ ( ?c ) <{PF_TAG}> ( \"a\" ) }} UNION \
+                     {{ ( ?c ) <{PF_TAG}> ( \"b\" ) }} }}"
+                ),
+                "c"
+            ),
+            Ok(vec![1, 1])
+        );
+        let refused = sources(
+            &format!(
+                "SELECT ?c WHERE {{ {{ ( ?c ) <{PF_TAG}> ( \"a\" ) }} UNION \
+                 {{ VALUES ?c {{ <{EX}intruder> }} }} }}"
+            ),
+            "c",
+        )
+        .expect_err("a VALUES branch");
+        assert!(refused.contains("a UNION"), "{refused}");
+        // A union joined with a call: that call joined into each branch's alternative.
+        assert_eq!(
+            sources(
+                &format!(
+                    "SELECT ?c WHERE {{ {{ ( ?c ) <{PF_TAG}> ( \"a\" ) }} UNION \
+                     {{ ( ?c ) <{PF_TAG}> ( \"b\" ) }} ( ?c ) <{PF_TAG}> ( \"z\" ) }}"
+                ),
+                "c"
+            ),
+            Ok(vec![2, 2])
+        );
+    }
+
+    /// **A call's driving patterns are the conjuncts planned before it that reach its
+    /// other variables, and only those.**
+    ///
+    /// Read off the plan, which is where a call's join is ordered: `?cfg ex:needle ?q`
+    /// binds the call's `?q`, and `?cfg ex:on true` reaches it through `?cfg`;
+    /// `?c ex:tag ?x` reaches the call only through the column's own variable, and
+    /// `?z ex:other ?y` not at all. A call no pattern precedes has none.
+    #[test]
+    fn a_calls_driving_patterns_are_the_conjuncts_reaching_its_inputs() {
+        let registry = registry_of(vec![(PF_TAG, Arc::new(split_table()))]);
+        let env = crate::extension_env::ExtensionEnv::over_relations(registry)
+            .expect("the fixture declarations read cleanly");
+        let prepare = |query: &str| {
+            NativeSparqlEngine::new()
+                .prepare_query_with_options(
+                    query,
+                    None,
+                    crate::engine::QueryOptions {
+                        env: &env,
+                        ..crate::engine::QueryOptions::EMPTY
+                    },
+                )
+                .expect("the fixture query prepares")
+        };
+        let prepared = prepare(&format!(
+            "SELECT ?c WHERE {{ {{ ?cfg <{EX}needle> ?q }} {{ ?cfg <{EX}on> true }} \
+             {{ ?c <{EX}tag> ?x }} {{ ?z <{EX}other> ?y }} ( ?c ) <{PF_TAG}> ( ?q ) }}"
+        ));
+        let shape = prepared.call_read_shape().expect("a SELECT");
+        let alternatives = shape.sources_of("c").expect("the call binds ?c");
+        let [alternative] = alternatives.as_slice() else {
+            panic!("one alternative: {alternatives:?}");
+        };
+        let [source] = alternative.as_slice() else {
+            panic!("one call: {alternative:?}");
+        };
+        let driving: Vec<String> = source
+            .driving_patterns()
+            .iter()
+            .map(|pattern| format!("{pattern:?}"))
+            .collect();
+        // The four groups merge into one basic graph pattern; its two reaching
+        // triples are kept, as one pattern, and the other two are not.
+        let [driving] = driving.as_slice() else {
+            panic!("one pattern: {driving:#?}");
+        };
+        assert!(
+            driving.contains("/needle>") && driving.contains("/on>"),
+            "{driving}"
+        );
+        assert!(
+            !driving.contains("/tag>") && !driving.contains("/other>"),
+            "{driving}"
+        );
+        assert_eq!(
+            source
+                .driven_variables()
+                .iter()
+                .map(|variable| variable.as_str())
+                .collect::<Vec<_>>(),
+            vec!["q"]
+        );
+
+        let prepared = prepare(&format!(
+            "SELECT ?c WHERE {{ ( ?c ) <{PF_TAG}> ( \"q\" ) }}"
+        ));
+        let shape = prepared.call_read_shape().expect("a SELECT");
+        let alternatives = shape.sources_of("c").expect("the call binds ?c");
+        assert_eq!(
+            alternatives[0][0].driving_patterns(),
+            &[] as &[GraphPattern]
+        );
+        assert_eq!(alternatives[0][0].driven_variables(), &[] as &[&Variable]);
     }
 }

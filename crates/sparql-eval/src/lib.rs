@@ -237,7 +237,7 @@ pub use property_fn_eval::CallCursor;
 // read on demand. Returned by
 // `PreparedQuery::call_read_shape`, and asked of raw algebra by a layer that must tell
 // what a caller's text is drawn from before any registry is in hand.
-pub use property_fn_eval::{CallReadRefusal, CallReadShape};
+pub use property_fn_eval::{CallReadRefusal, CallReadShape, ColumnSource};
 // The registry instance identity, re-exported alongside the registry that mints
 // it: a composition layer must be able to tell two independently built registries
 // apart even when they declare identically (`PropertyFunctionRegistry::instance_id`),

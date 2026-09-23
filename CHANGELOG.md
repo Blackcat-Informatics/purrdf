@@ -54,23 +54,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   will not prepare is that stratum's `ExecutionFailed` status. A unit built from a
   caller-supplied query gets the same lookup whenever every value its `?candidate`
   column takes was emitted by one of its property-function calls: through
-  projections, `FILTER`s, `DISTINCT`, `ORDER BY`, `LIMIT`/`OFFSET`, renaming `BIND`s,
-  a join with any other pattern, the required side of an `OPTIONAL`, the left side of
-  a `MINUS`, a `GROUP BY` key or `GRAPH`. `PreparedQuery::call_read_shape` (new,
-  beside `CallReadShape` and `CallReadRefusal`) describes which calls those are
-  (`CallReadShape::sources_of`) and whether the query is one call read on demand
-  (`CallReadShape::read_on_demand`, which `is_call_read` asks). One lookup is
-  derived per call whose ranked declaration states the unit's basis at the position
-  the column is read from: that position is the parameter and a declared depth
-  position is freed. The stream answers `Excluded` at the first of them that
-  excludes the candidate and `Possible` only when none does, each held to the
-  attestation the stratum's read pinned. A stratum none of whose calls qualify fails
-  by name. A supplied query whose `?candidate` column can take a value no call
-  emitted — a `UNION`, an `OPTIONAL` whose required side can bind it, a call only
-  on the subtracted side of a `MINUS`, a computed `BIND`, an aggregate, a `GRAPH`
-  name, `VALUES` — cannot declare a basis (`UnitError::ExclusionNotRenderable`,
-  whose `reason` names what is in the way), and registration refuses a declared basis on a relation with no candidate-bound
-  access mode whose row bound is one. `FusionTrailer::exclusion_bases` records each
+  projections, `FILTER`s, `DISTINCT`, `ORDER BY`, `LIMIT`/`OFFSET`, renaming `BIND`s
+  and `GROUP BY` conditions, a join with any other pattern, the required side of an
+  `OPTIONAL`, the left side of a `MINUS`, a `GROUP BY` key, `GRAPH`, or a `UNION`
+  each of whose branches binds it from a call. `PreparedQuery::call_read_shape` (new,
+  beside `CallReadShape`, `CallReadRefusal` and `ColumnSource`) describes which calls
+  those are (`CallReadShape::sources_of`: alternatives, one per `UNION` branch, each a
+  set of calls with the patterns that drive each) and whether the query is one call
+  read on demand (`CallReadShape::read_on_demand`, which `is_call_read` asks). A node
+  rebinding a variable its operand bound replaces that column's sources rather than
+  adding a second column beside them. One lookup is derived per call whose ranked
+  declaration states the unit's basis at the position the column is read from: that
+  position is the parameter and a declared depth position is freed; where patterns
+  before the call bind its inputs — a needle read out of the data — the lookup keeps
+  them, as a `DISTINCT` sub-select, and invokes the call once per binding of them.
+  The stream answers `Excluded` only when every alternative excludes the candidate —
+  an alternative excluding it when any of its lookups finds no row — each lookup held
+  to the attestation the stratum's read pinned. A stratum with an alternative none of
+  whose calls qualify fails by name. A supplied query whose `?candidate` column can
+  take a value no call emitted — a `UNION` branch binding it from something that is
+  not a call, an `OPTIONAL` whose required side can bind it, a call only on the
+  subtracted side of a `MINUS`, a computed `BIND`, `SELECT` expression or `GROUP BY`
+  condition, an aggregate, a `GRAPH` name, `VALUES` — cannot declare a basis
+  (`UnitError::ExclusionNotRenderable`, whose `reason` names what is in the way), and
+  registration refuses a declared basis on a relation with no candidate-bound access
+  mode whose row bound is one. `FusionTrailer::exclusion_bases` records each
   stream's basis, and `FusionTrailer::evidence_id` now also covers which strata
   answered lookups; an answer that asked none keeps its evidence id byte for byte.
 
@@ -182,6 +190,14 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **sparql-algebra:** a `GROUP BY (expr AS ?v)` condition whose `?v` is already in
+  scope — bound in the `WHERE` clause, or by an earlier condition — is refused as a
+  syntax error, as the same rebinding by `BIND` or a `SELECT` expression already was.
+  It was parsed and lowered to an `Extend` over a variable its operand bound, which
+  the algebra leaves undefined and which the evaluator answered by overwriting the
+  column. A fresh target, a plain key over the variable, and a target a sub-select
+  hides still parse.
 
 - **sparql-eval:** a property-function call inside a nested group or an `OPTIONAL`'s
   right arm was admitted at prepare as though the variables bound to its left were

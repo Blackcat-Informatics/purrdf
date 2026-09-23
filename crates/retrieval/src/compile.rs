@@ -361,8 +361,8 @@ use purrdf_sparql_algebra::{
     SparqlParser, TermPattern, TriplePattern, Variable, pattern_to_select_query,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, CallReadShape, CandidateDomains, ExclusionBasis, PfDescriptor, PreparedQuery,
-    PropertyFunctionRegistry, RankedDeclaration, RegistryId,
+    BindingPattern, CallReadShape, CandidateDomains, ColumnSource, ExclusionBasis, PfDescriptor,
+    PreparedQuery, PropertyFunctionRegistry, RankedDeclaration, RegistryId,
 };
 use purrdf_text::Fixed;
 
@@ -801,12 +801,15 @@ pub enum UnitError {
     /// `BIND`s, a join with any other pattern, the required side of an `OPTIONAL`,
     /// the left side of a `MINUS`, a `GROUP BY` key, and `GRAPH` — each of which only
     /// drops, merges, reorders or extends the solutions beneath it — and a text with
-    /// several such calls asks each. A text whose `?candidate` column no call is a
-    /// source of is refused, and the `reason` names why: a `UNION` whose other
-    /// branch can bind it, an `OPTIONAL` whose required side can bind it where the
-    /// call on its optional side does not, a call only on the subtracted side of a
-    /// `MINUS`, a computed `BIND` or an aggregate, or a column only data, `VALUES` or
-    /// an expression binds.
+    /// several such calls asks each. A `UNION` each of whose branches binds the
+    /// column from a call is one too, each branch an alternative a candidate must be
+    /// excluded from. A text whose `?candidate` column no call is a source of is
+    /// refused, and the `reason` names why: a `UNION` whose other branch binds it
+    /// from something that is not a call, an `OPTIONAL` whose required side can bind
+    /// it where the call on its optional side does not, a call only on the subtracted
+    /// side of a `MINUS`, a computed `BIND`, `SELECT` expression or `GROUP BY`
+    /// condition, or an aggregate, or a column only data, `VALUES` or an expression
+    /// binds.
     ///
     /// Refused rather than quietly dropped, because dropping it is the silent
     /// half of the same defect: the contract would keep promising a lookup, the
@@ -1077,8 +1080,8 @@ impl StratumUnit {
     /// on-demand read also reads ([`CallReadShape`]). A registry can only read some of
     /// those calls as triple patterns instead, and a triple pattern is never a
     /// source, so what that reading refuses every registry refuses: a `?candidate`
-    /// column a `UNION`, an `OPTIONAL`, a `MINUS`, a computed `BIND`, an aggregate or
-    /// `VALUES` keeps from any call. What it admits is checked again at execution,
+    /// column a `UNION` branch, an `OPTIONAL`, a `MINUS`, a computed expression, an
+    /// aggregate or `VALUES` keeps from any call. What it admits is checked again at execution,
     /// against the registry the unit runs under: a column no registered call is a
     /// source of, or one whose calls the registry holds no ranked declaration for,
     /// declares another basis for, or fills the declared candidate position of with
@@ -1278,32 +1281,44 @@ impl StratumUnit {
     /// [`ExclusionBasis::Unavailable`](purrdf_sparql_eval::ExclusionBasis) and
     /// answers none.
     ///
-    /// For a query this layer rendered there is one lookup, rendered from the parts
-    /// it was assembled from ([`RenderedQuery::exclusion_text`]), and `ranking` and
-    /// `registry` decide nothing.
+    /// The lookups come as **alternatives**, each a list of lookups: a candidate is
+    /// excluded when every alternative excludes it, and an alternative excludes it
+    /// when any of its lookups finds no row.
     ///
-    /// For a query a caller supplied there is one lookup per **qualifying call**,
-    /// derived from `ranking` — that query's own text, prepared against `registry`
-    /// for its ranking read — through the one shape description an on-demand read
-    /// also reads
+    /// For a query this layer rendered there is one alternative of one lookup,
+    /// rendered from the parts it was assembled from
+    /// ([`RenderedQuery::exclusion_text`]), and `ranking` and `registry` decide
+    /// nothing.
+    ///
+    /// For a query a caller supplied the lookups are derived from `ranking` — that
+    /// query's own text, prepared against `registry` for its ranking read — through
+    /// the one shape description an on-demand read also reads
     /// ([`PreparedQuery::call_read_shape`](purrdf_sparql_eval::PreparedQuery::call_read_shape)).
-    /// It names the calls every value of the text's `?candidate` column was emitted
-    /// by, each beside the call variable carrying it through whatever projections,
-    /// `FILTER`s, joins and renamings the caller wrote. A call qualifies when the
-    /// registry holds a ranked declaration for it stating the unit's basis, and the
-    /// call fills that declaration's candidate position with the variable the column
-    /// is drawn from. Each lookup is that call with that variable's positions left as
-    /// the one parameter a lookup binds, every other variable and blank node a blank
-    /// of its own, the producer's declared depth position freed whatever the caller
-    /// wrote there, every other constant the caller's own, and `LIMIT 2` — exactly the
-    /// lookup [`RenderedQuery::exclusion_text`] renders out of a rendered unit's parts,
-    /// asked of a call the caller wrote.
+    /// It names the alternatives every value of the text's `?candidate` column was
+    /// emitted by — one per branch of a `UNION` that binds it from a call, one in
+    /// all for a text without such a choice — each a set of calls beside the call
+    /// variable carrying the column through whatever projections, `FILTER`s, joins
+    /// and renamings the caller wrote. A call qualifies when the registry holds a
+    /// ranked declaration for it stating the unit's basis, and the call fills that
+    /// declaration's candidate position with the variable the column is drawn from;
+    /// each alternative's lookups are those of its qualifying calls, and an
+    /// alternative with none refuses the derivation. A lookup is that call with that
+    /// variable's positions left as the one parameter a lookup binds, the producer's
+    /// declared depth position freed whatever the caller wrote there, every other
+    /// constant the caller's own, and every other variable and blank node a blank of
+    /// its own — exactly the lookup [`RenderedQuery::exclusion_text`] renders out of a
+    /// rendered unit's parts, asked of a call the caller wrote, under `LIMIT 2` —
+    /// except where the text **drives** the call: where patterns before it bind its
+    /// inputs, those patterns are kept and the call is asked once per distinct binding
+    /// of them (see [`qualifying_lookup`]).
     ///
-    /// Every qualifying call is a proof of absence on its own: the column holds only
-    /// values that call emitted, so a candidate any one of them excludes is a
-    /// candidate the text never names. The stream answers `Excluded` as soon as one
-    /// does, asking them in the order returned here, and `Possible` only when none
-    /// does.
+    /// Within an alternative, every qualifying call is a proof of absence on its own:
+    /// the alternative names only values each of its calls emitted. Across
+    /// alternatives, each covers only the solutions of its own branch. So the stream
+    /// asks the alternatives in the order returned here, each alternative's lookups
+    /// in order until one finds no row, and answers `Possible` at the first
+    /// alternative none of whose lookups excludes the candidate, and `Excluded` only
+    /// when every alternative has one that does.
     ///
     /// # Why this is read from the prepared text and not at construction
     ///
@@ -1319,9 +1334,10 @@ impl StratumUnit {
     ///
     /// `Some(Err(reason))` for a supplied text whose `?candidate` column no call of
     /// the prepared plan is a source of (a predicate the registry does not register
-    /// reads as a triple pattern, which is none), or whose source calls none
-    /// qualify — the reason naming, for each, the declaration it lacks, the basis it
-    /// declares instead, or the position it fills differently.
+    /// reads as a triple pattern, which is none), or which has an alternative none of
+    /// whose calls qualifies — the reason naming, for each of its calls, the
+    /// declaration it lacks, the basis it declares instead, or the position it fills
+    /// differently.
     /// [`execute`](crate::execute) reports it as the stratum's own
     /// [`ProducerStatus::ExecutionFailed`](crate::ProducerStatus), exactly as it
     /// reports a rendered lookup that will not prepare.
@@ -1329,12 +1345,14 @@ impl StratumUnit {
         &self,
         ranking: &PreparedQuery,
         registry: &PropertyFunctionRegistry,
-    ) -> Option<Result<Vec<String>, String>> {
+    ) -> Option<Result<Vec<Vec<LookupText>>, String>> {
         if !self.declares_exclusion() {
             return None;
         }
         Some(match &self.query {
-            UnitQuery::Rendered(rendered) => Ok(vec![rendered.exclusion_text()]),
+            UnitQuery::Rendered(rendered) => {
+                Ok(vec![vec![LookupText::point(rendered.exclusion_text())]])
+            }
             UnitQuery::Supplied { .. } => {
                 supplied_exclusion_texts(ranking, registry, self.contract.exclusion)
             }
@@ -2017,10 +2035,48 @@ fn candidate_drawn_from_calls(text: &str) -> Result<(), String> {
         .map_err(|refusal| refusal.reason().to_owned())
 }
 
+/// One exclusion lookup: its text, the parameter the candidate is bound through, and
+/// whether one candidate asks it one invocation or several.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LookupText {
+    /// The lookup's whole text.
+    pub(crate) text: String,
+    /// The one variable the text leaves for a caller to bind: the candidate.
+    pub(crate) parameter: String,
+    /// Whether the call is driven by patterns of the caller's text (see
+    /// [`supplied_exclusion_texts`]): then the text projects the call's driven inputs
+    /// beside the candidate, invokes the call once per distinct binding of them, and is
+    /// read whole — a conforming producer answers each invocation with at most one
+    /// row, so two identical rows are a breach of that bound. An undriven lookup is one
+    /// invocation read under [`EXCLUSION_LIMIT`].
+    pub(crate) driven: bool,
+}
+
+impl LookupText {
+    /// An undriven lookup whose parameter is [`CANDIDATE_NAME`].
+    fn point(text: String) -> Self {
+        Self {
+            text,
+            parameter: CANDIDATE_NAME.to_owned(),
+            driven: false,
+        }
+    }
+}
+
 /// The exclusion lookups of a caller's text, derived from `ranking` — that text as
-/// prepared against `registry` — for a unit whose contract declares `basis`: one per
-/// qualifying call its `?candidate` column is drawn from, in the order the shape
-/// description names them.
+/// prepared against `registry` — for a unit whose contract declares `basis`: for each
+/// alternative its `?candidate` column is drawn from (see
+/// [`CallReadShape::sources_of`]), one lookup per qualifying call of that alternative,
+/// in the order the shape description names them.
+///
+/// A candidate is excluded when **every** alternative excludes it, and an alternative
+/// excludes it when **any** of its lookups does: every solution naming a candidate is
+/// one some alternative's calls all emitted it in. So every alternative must keep a
+/// qualifying call, or no verdict could be proof — an alternative none of whose calls
+/// qualifies refuses the whole derivation, naming each call's reason. Within an
+/// alternative, a call that does not qualify is simply not asked: asking fewer of an
+/// alternative's calls can only turn an exclusion into a `Possible`, never the other
+/// way.
 ///
 /// See [`StratumUnit::exclusion_sparql`]. Each lookup is written as algebra and
 /// serialised by the algebra crate's own writer, so the caller's constants reach it
@@ -2030,34 +2086,83 @@ fn supplied_exclusion_texts(
     ranking: &PreparedQuery,
     registry: &PropertyFunctionRegistry,
     basis: ExclusionBasis,
-) -> Result<Vec<String>, String> {
-    let sources = ranking
+) -> Result<Vec<Vec<LookupText>>, String> {
+    let shape = ranking
         .call_read_shape()
-        .and_then(|shape| shape.sources_of(CANDIDATE_NAME))
         .map_err(|refusal| refusal.reason().to_owned())?;
-    let mut lookups = Vec::with_capacity(sources.len());
-    let mut unqualified = Vec::new();
-    for (call, source) in sources {
-        match qualifying_lookup(call, source, registry, basis) {
-            Ok(lookup) => lookups.push(lookup),
-            Err(reason) => unqualified.push(reason),
+    let alternatives = shape
+        .sources_of(CANDIDATE_NAME)
+        .map_err(|refusal| refusal.reason().to_owned())?;
+    let several = alternatives.len() > 1;
+    let mut derived = Vec::with_capacity(alternatives.len());
+    for (at, alternative) in alternatives.iter().enumerate() {
+        let mut lookups = Vec::with_capacity(alternative.len());
+        let mut unqualified = Vec::new();
+        for source in alternative {
+            match qualifying_lookup(source, registry, basis) {
+                Ok(lookup) => lookups.push(lookup),
+                Err(reason) => unqualified.push(reason),
+            }
         }
+        if lookups.is_empty() {
+            let reasons = unqualified.join("; ");
+            return Err(if several {
+                format!(
+                    "its ?{CANDIDATE_NAME} column is drawn from {} alternatives, one per branch \
+                     that binds it, and a candidate is excluded only when every alternative \
+                     excludes it; no call of alternative {} qualifies: {reasons}",
+                    alternatives.len(),
+                    at + 1
+                )
+            } else {
+                reasons
+            });
+        }
+        derived.push(lookups);
     }
-    if lookups.is_empty() {
-        return Err(unqualified.join("; "));
-    }
-    Ok(lookups)
+    Ok(derived)
 }
 
-/// The exclusion lookup of `call`, whose variable `source` carries the text's
-/// `?candidate` column — or why the registry does not make `call` one a lookup of
+/// The exclusion lookup of `source`'s call, whose variable carries the text's
+/// `?candidate` column — or why the registry does not make that call one a lookup of
 /// `basis` may be asked of.
+///
+/// # A call its text drives
+///
+/// Where patterns of the text bind the call's other positions before it is invoked —
+/// a needle read out of the data, a `VALUES` row, a `BIND` —
+/// ([`ColumnSource::driving_patterns`]), the lookup keeps them: the call cannot be
+/// invoked without those inputs, and blanking them asks it in a mode it never
+/// declared. The lookup is
+///
+/// ```text
+/// SELECT ?candidate ?in… WHERE {
+///   { SELECT DISTINCT ?in… WHERE { driving patterns } }
+///   call, the candidate the parameter, the inputs by name, every other position blank
+/// }
+/// ```
+///
+/// and it answers `Excluded` only when no row comes back. That is sound: every
+/// solution of the text naming a candidate `c` is one in which the call, invoked with
+/// the inputs the text bound, emitted `c`, and that solution satisfies every driving
+/// pattern — each is a conjunct of the call's join — so the inputs it bound are among
+/// the rows of the sub-`SELECT`. So if the call, invoked once per such row with `c`
+/// bound, emits `c` for none of them, no solution of the text names `c`. Every row of
+/// the sub-`SELECT` must fail, not one: a candidate one needle binding excludes and
+/// another names is a candidate the text names. The sub-`SELECT` projects the inputs
+/// only, so a pattern that also constrains the candidate is read as the wider set of
+/// inputs it binds for any candidate — a looser question, never a wrong one — and it
+/// is `DISTINCT`, so each binding of the inputs is one invocation and the declared
+/// point bound holds per row of it: a conforming producer answers each with at most
+/// one row, the text projects the candidate and the inputs, and two identical rows are
+/// one invocation answering twice.
 fn qualifying_lookup(
-    call: &PropertyFunctionCall,
-    source: &Variable,
+    source: &ColumnSource<'_>,
     registry: &PropertyFunctionRegistry,
     basis: ExclusionBasis,
-) -> Result<String, String> {
+) -> Result<LookupText, String> {
+    let call = source.call();
+    let source_var = source.variable();
     let declaration = registry.ranked_declaration(&call.iri).ok_or_else(|| {
         format!(
             "the registry holds no ranked declaration for <{}>, so nothing declares the {} basis \
@@ -2082,23 +2187,18 @@ fn qualifying_lookup(
     let arguments: Vec<&TermPattern> = call.subject_args.iter().chain(&call.object_args).collect();
     if !matches!(
         arguments.get(declaration.candidate_position),
-        Some(TermPattern::Variable(variable)) if variable == source
+        Some(TermPattern::Variable(variable)) if variable == source_var
     ) {
         return Err(format!(
             "its ?{CANDIDATE_NAME} column reads ?{} of the call to <{}>, and the registry declared \
              the {} basis for the candidate at argument position {}, which the text does not fill \
              with that variable",
-            source.as_str(),
+            source_var.as_str(),
             call.iri,
             basis.as_str(),
             declaration.candidate_position
         ));
     }
-    // Each position the candidate's variable fills is the lookup's one parameter.
-    // Every other variable and blank node becomes a blank labelled by the first
-    // position it fills outside the depth's — so two positions the caller made equal stay equal — which
-    // is SPARQL's spelling of "nothing reads this" and what the engine reports to the
-    // producer as an unobserved position. Constants are the caller's own terms.
     // The depth position, where the producer declared one, is freed whatever the
     // caller wrote there: a depth is an offer of how many rows to rank, and a lookup
     // handed one asks "is this candidate among your best n", whose absences are not
@@ -2109,11 +2209,66 @@ fn qualifying_lookup(
         .depth_placement
         .as_ref()
         .map(|placement| placement.position);
+    // The inputs the text drives: the driven variables written at some position the
+    // lookup keeps — a variable seen only at the freed depth position drives nothing
+    // the lookup asks.
+    let inputs: Vec<&Variable> = source
+        .driven_variables()
+        .iter()
+        .copied()
+        .filter(|variable| {
+            arguments.iter().enumerate().any(|(position, term)| {
+                depth_position != Some(position) && term_mentions(term, variable)
+            })
+        })
+        .collect();
+    if inputs.is_empty() {
+        return Ok(LookupText::point(point_lookup(
+            call,
+            source_var,
+            &arguments,
+            depth_position,
+        )));
+    }
+    Ok(driven_lookup(
+        call,
+        source,
+        &arguments,
+        depth_position,
+        &inputs,
+    ))
+}
+
+/// Whether `term` writes `variable`, at its top level or inside a quoted triple.
+fn term_mentions(term: &TermPattern, variable: &Variable) -> bool {
+    match term {
+        TermPattern::Variable(written) => written == variable,
+        TermPattern::Triple(triple) => {
+            matches!(&triple.predicate, NamedNodePattern::Variable(written) if written == variable)
+                || term_mentions(&triple.subject, variable)
+                || term_mentions(&triple.object, variable)
+        }
+        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => false,
+    }
+}
+
+/// The lookup of a call nothing in its text drives: the call alone, one invocation.
+fn point_lookup(
+    call: &PropertyFunctionCall,
+    source: &Variable,
+    arguments: &[&TermPattern],
+    depth_position: Option<usize>,
+) -> String {
+    // Each position the candidate's variable fills is the lookup's one parameter.
+    // Every other variable and blank node becomes a blank labelled by the first
+    // position it fills outside the depth's — so two positions the caller made equal stay equal — which
+    // is SPARQL's spelling of "nothing reads this" and what the engine reports to the
+    // producer as an unobserved position. Constants are the caller's own terms.
     // A variable or blank node that also occurs inside a quoted-triple argument keeps
     // a name of its own everywhere, so the equality the caller wrote between it and
     // the triple's inside survives; every other one is a top-level blank.
     let mut nested: Vec<(bool, &str)> = Vec::new();
-    for term in &arguments {
+    for term in arguments {
         if let TermPattern::Triple(triple) = term {
             nested_names(triple, &mut nested);
         }
@@ -2163,7 +2318,195 @@ fn qualifying_lookup(
             variables: vec![Variable::new(CANDIDATE_NAME)],
         }),
     };
-    Ok(pattern_to_select_query(&lookup))
+    pattern_to_select_query(&lookup)
+}
+
+/// The lookup of a call its text drives — see [`qualifying_lookup`] for the text and
+/// why it is sound.
+///
+/// Every name is chosen so nothing the lookup writes can meet a name the driving
+/// patterns use: the driving patterns sit inside a sub-`SELECT` that exports only the
+/// inputs, so beside the inputs the only names the rest of the lookup shares a scope
+/// with are its own. The candidate's variable is renamed to a parameter no input and
+/// no quoted-triple variable of the call is called; the call's other variables keep
+/// their names — an input so, to be joined to the sub-`SELECT`, a variable inside a
+/// quoted triple so its equalities survive; and every blank the lookup writes carries
+/// a label prefix the driving patterns' text never writes.
+fn driven_lookup(
+    call: &PropertyFunctionCall,
+    source: &ColumnSource<'_>,
+    arguments: &[&TermPattern],
+    depth_position: Option<usize>,
+    inputs: &[&Variable],
+) -> LookupText {
+    let source_var = source.variable();
+    let driving = source
+        .driving_patterns()
+        .iter()
+        .cloned()
+        .reduce(|left, right| {
+            // The atoms are re-attached as the planner attached them: a call through
+            // a `Lateral`, because it is invoked with the rows before it, and
+            // anything else through a `Join`.
+            if matches!(right, GraphPattern::PropertyFunction(_)) {
+                GraphPattern::Lateral {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }
+            } else {
+                GraphPattern::Join {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }
+            }
+        })
+        .unwrap_or(GraphPattern::Bgp { patterns: vec![] });
+    let driving_text = pattern_to_select_query(&driving);
+    let mut nested: Vec<(bool, &str)> = Vec::new();
+    for term in arguments {
+        if let TermPattern::Triple(triple) = term {
+            nested_names(triple, &mut nested);
+        }
+    }
+    // The parameter shares its scope with the inputs and the call's quoted-triple
+    // variables only; the blank labels with the driving patterns' text, which a
+    // sub-`SELECT` does not hide from a blank label.
+    let mut parameter = CANDIDATE_NAME.to_owned();
+    while inputs.iter().any(|input| input.as_str() == parameter)
+        || nested.contains(&(false, parameter.as_str()))
+    {
+        parameter.push('_');
+    }
+    let unwritten = |base: &str| {
+        let mut prefix = base.to_owned();
+        while driving_text.contains(&format!("_:{prefix}")) {
+            prefix.push('_');
+        }
+        prefix
+    };
+    // Distinct first characters, so no label under one prefix is one under the other.
+    let blank = unwritten("c");
+    let kept_blank = unwritten("b_");
+    let rename = |term: &TermPattern| -> TermPattern {
+        match term {
+            TermPattern::BlankNode(label) => {
+                TermPattern::BlankNode(BlankNode::new(format!("{kept_blank}{}", label.as_str())))
+            }
+            other => other.clone(),
+        }
+    };
+    let mut labels: Vec<(&TermPattern, usize)> = Vec::new();
+    let mut rewritten: Vec<TermPattern> = Vec::with_capacity(arguments.len());
+    for (position, &term) in arguments.iter().enumerate() {
+        rewritten.push(match term {
+            TermPattern::Variable(variable) if variable == source_var => {
+                TermPattern::Variable(Variable::new(parameter.as_str()))
+            }
+            _ if depth_position == Some(position) => {
+                TermPattern::BlankNode(BlankNode::new(format!("{blank}{position}")))
+            }
+            TermPattern::Variable(variable) if inputs.contains(&variable) => term.clone(),
+            TermPattern::Variable(_) | TermPattern::BlankNode(_)
+                if free_name(term).is_some_and(|name| nested.contains(&name)) =>
+            {
+                rename(term)
+            }
+            TermPattern::Variable(_) | TermPattern::BlankNode(_) => {
+                let first = match labels.iter().find(|(seen, _)| *seen == term) {
+                    Some(&(_, first)) => first,
+                    None => {
+                        labels.push((term, position));
+                        position
+                    }
+                };
+                TermPattern::BlankNode(BlankNode::new(format!("{blank}{first}")))
+            }
+            TermPattern::Triple(triple) => TermPattern::Triple(Box::new(driven_nested_rewrite(
+                triple,
+                source_var,
+                &parameter,
+                &kept_blank,
+            ))),
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => term.clone(),
+        });
+    }
+    let object_args = rewritten.split_off(call.subject_args.len());
+    let subject_args = rewritten;
+    let input_vars: Vec<Variable> = inputs.iter().map(|input| (*input).clone()).collect();
+    let projected = GraphPattern::Project {
+        // The sub-`SELECT` and then the call, written in one group as a caller
+        // writes a needle pattern before its call: the planner orders the group's
+        // atoms and drives the call with the sub-`SELECT`'s rows — the parameter
+        // counted bound there too, which a `LATERAL` block's inside is not.
+        inner: Box::new(GraphPattern::Join {
+            left: Box::new(GraphPattern::Distinct {
+                inner: Box::new(GraphPattern::Project {
+                    inner: Box::new(driving),
+                    variables: input_vars.clone(),
+                }),
+            }),
+            right: Box::new(GraphPattern::Lateral {
+                left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
+                right: Box::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                    iri: call.iri.clone(),
+                    subject_args,
+                    object_args,
+                })),
+            }),
+        }),
+        variables: std::iter::once(Variable::new(parameter.as_str()))
+            .chain(input_vars)
+            .collect(),
+    };
+    // Written as the query's own top-level `SELECT`, where the prepare's parameter
+    // pushdown reaches the call, rather than as a sub-`SELECT` of a `SELECT *` — a
+    // scope a parameter is not pushed into, which would leave the call's candidate
+    // position free when its modes are checked. A slice with no length and no offset
+    // is the writer's spelling of exactly that, and bounds nothing: the lookup is read
+    // whole.
+    let lookup = GraphPattern::Slice {
+        start: 0,
+        length: None,
+        inner: Box::new(projected),
+    };
+    LookupText {
+        text: pattern_to_select_query(&lookup),
+        parameter,
+        driven: true,
+    }
+}
+
+/// `triple` as a driven lookup writes it: the candidate's variable is the parameter
+/// wherever it occurs, every other variable keeps its name, and every blank node its
+/// label behind `kept_blank`.
+fn driven_nested_rewrite(
+    triple: &TriplePattern,
+    source: &Variable,
+    parameter: &str,
+    kept_blank: &str,
+) -> TriplePattern {
+    let term = |term: &TermPattern| match term {
+        TermPattern::Variable(variable) if variable == source => {
+            TermPattern::Variable(Variable::new(parameter))
+        }
+        TermPattern::Triple(inner) => TermPattern::Triple(Box::new(driven_nested_rewrite(
+            inner, source, parameter, kept_blank,
+        ))),
+        TermPattern::BlankNode(label) => {
+            TermPattern::BlankNode(BlankNode::new(format!("{kept_blank}{}", label.as_str())))
+        }
+        other => other.clone(),
+    };
+    TriplePattern {
+        subject: term(&triple.subject),
+        predicate: match &triple.predicate {
+            NamedNodePattern::Variable(variable) if variable == source => {
+                NamedNodePattern::Variable(Variable::new(parameter))
+            }
+            other => other.clone(),
+        },
+        object: term(&triple.object),
+    }
 }
 
 /// Every variable and blank node written inside the quoted triple `triple`, its
@@ -2407,7 +2750,9 @@ mod tests {
         RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
     };
 
-    use super::{CANDIDATE_NAME, RenderedQuery, UnitArgument, supplied_exclusion_texts};
+    use super::{
+        CANDIDATE_NAME, LookupText, RenderedQuery, UnitArgument, supplied_exclusion_texts,
+    };
     use crate::admission::ProbedDepth;
 
     const NEIGHBOURS: &str = "https://example.org/pf/neighbours";
@@ -2503,12 +2848,16 @@ mod tests {
             .prepare_query_with_options(text, None, options())
             .expect("the caller's text prepares");
         let lookups = supplied_exclusion_texts(&prepared, registry, ExclusionBasis::Membership)?;
-        let [lookup] = <[String; 1]>::try_from(lookups)
+        let [lookup] = <[LookupText; 1]>::try_from(lookups.concat())
             .unwrap_or_else(|lookups| panic!("one call, one lookup: {lookups:?}"));
+        assert_eq!(lookup.parameter, CANDIDATE_NAME);
+        assert!(!lookup.driven, "nothing in the text drives the call");
         engine
-            .prepare_execution(&lookup, None, &[CANDIDATE_NAME], options())
-            .unwrap_or_else(|error| panic!("the derived lookup prepares: {error}\n{lookup}"));
-        Ok(lookup)
+            .prepare_execution(&lookup.text, None, &[CANDIDATE_NAME], options())
+            .unwrap_or_else(|error| {
+                panic!("the derived lookup prepares: {error}\n{}", lookup.text)
+            });
+        Ok(lookup.text)
     }
 
     /// **A caller's one-call text derives the lookup the rendered unit would: the
@@ -2597,6 +2946,67 @@ mod tests {
             "the candidate bound inside the triple, the depth freed, ?w one variable: \
              {lookup}"
         );
+    }
+
+    /// **A call whose seed the text reads out of the data keeps the pattern that binds
+    /// it: a `DISTINCT` sub-`SELECT` exporting the seed, the call invoked with the
+    /// candidate and the seed bound, the depth and the score free, and no row
+    /// ceiling.**
+    ///
+    /// A lookup that blanked the seed would ask the producer in a mode it never
+    /// declared — the candidate alone bound beside a free seed is one of its modes
+    /// here only because the fixture declares `[0]`, so the prepared lookup is also
+    /// checked to be the seed-bound question. The data triple unrelated to the call
+    /// is not kept.
+    #[test]
+    fn a_driven_call_keeps_the_pattern_binding_its_seed() {
+        let registry = neighbours_registry(ExclusionBasis::Membership);
+        let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
+        let options = || QueryOptions {
+            env: &env,
+            ..QueryOptions::EMPTY
+        };
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine
+            .prepare_query_with_options(
+                &format!(
+                    "SELECT ?candidate WHERE {{ <https://example.org/d/cfg> \
+                     <https://example.org/d/seedOf> ?seed . ?other <https://example.org/d/p> ?o . \
+                     ?candidate <{NEIGHBOURS}> ( ?seed \"5\"^^<{INTEGER}> ?score ) }}"
+                ),
+                None,
+                options(),
+            )
+            .expect("the caller's text prepares");
+        let lookups = supplied_exclusion_texts(&prepared, &registry, ExclusionBasis::Membership)
+            .expect("the driven call derives its lookup");
+        let [lookup] = <[LookupText; 1]>::try_from(lookups.concat())
+            .unwrap_or_else(|lookups| panic!("one call, one lookup: {lookups:?}"));
+        assert!(lookup.driven, "the seed drives the call");
+        assert_eq!(lookup.parameter, CANDIDATE_NAME);
+        let text = &lookup.text;
+        assert!(
+            text.contains("SELECT DISTINCT ?seed")
+                && text.contains("<https://example.org/d/seedOf>"),
+            "the seed's pattern, distinct, exporting the seed: {text}"
+        );
+        assert!(
+            !text.contains("<https://example.org/d/p>"),
+            "the unrelated pattern is not kept: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "?{CANDIDATE_NAME} <{NEIGHBOURS}> ( ?seed _:c2 _:c3 )"
+            )),
+            "candidate and seed bound, depth and score free: {text}"
+        );
+        assert!(
+            !text.contains("LIMIT"),
+            "read whole, one row per seed: {text}"
+        );
+        engine
+            .prepare_execution(text, None, &[CANDIDATE_NAME], options())
+            .unwrap_or_else(|error| panic!("the driven lookup prepares: {error}\n{text}"));
     }
 
     /// A four-position call shaped like the two shipped vector producers': the candidate
