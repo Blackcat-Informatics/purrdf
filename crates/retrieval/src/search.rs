@@ -185,59 +185,48 @@
 //! such assertion on the caller's behalf — it decides which streams to hand over
 //! and reports what it left out.
 //!
-//! # The read is attempted narrow, and is thrown away rather than patched
+//! # Each stratum is read as far as the fusion asks, once
 //!
 //! A stratum whose depth the planner could not narrow is planned at its
-//! producer's whole declared length, and the executor materialises all of it
-//! before the fusion pulls its first rank. Two strata sharing one block are that
-//! shape, and the fusion routinely certifies such a run inside the first handful
-//! of ranks: the read was hundreds of rows, the answer needed six of them.
+//! producer's whole declared length. Two strata sharing one block are that shape,
+//! and the fusion routinely certifies such a run inside the first handful of
+//! ranks: the plan admitted hundreds of rows, the answer needs six of them.
 //!
 //! The planner cannot fix that, because the depth is a *sound* bound — the
-//! narrowing argument really does fail there — and the fusion cannot, because the
-//! rank it stops at is not knowable until it has stopped. So `search` reads
-//! **twice at most**, and the second read is not a continuation of the first:
+//! narrowing argument really does fail there — and no depth chosen before the
+//! first row is read can, because the rank the fusion stops at is not knowable
+//! until it has stopped. So the bound travels the other way: `search` executes
+//! under [`ReadSchedule::OnDemand`], which opens every stratum this layer rendered
+//! as **one invocation at its planned depth, held open**, and produces a row each
+//! time the fusion pulls one. A fusion that certifies at its sixth rank has caused
+//! six rows to be produced; one that needs the four hundredth goes on reading the
+//! same invocation to it. Nothing is ever read twice and nothing is ever
+//! re-opened, so there is no misprediction to recover from: the read is exactly as
+//! deep as the fusion's own stop, plus the probe row past the planned depth when
+//! the fusion reads that far.
 //!
-//! 1. every stratum is read at [`ReadCeiling::Speculative`] — the depth
-//!    [`CompiledRetrieval::speculative_read_depth`] derives: the `k + strata`
-//!    frontier the fusion stage already bounds itself by, deepened to the rank
-//!    [`PlannedResolution::stopping_rank`] proves the fusion cannot pull past
-//!    wherever every stratum sharing a block answers exclusion lookups, and
-//!    never past the planned depth — and those streams are fused;
-//! 2. if that fusion certified, the answer is that answer and the run is over. It
-//!    certified exactly when no stream ends at a rank below the depth its plan
-//!    recorded: every stream either ran out ([`ProducerStatus::Exhausted`]) or
-//!    was stopped by the fusion itself ([`ProducerStatus::CeilingReached`]), and
-//!    neither of those had any more to give;
-//! 3. otherwise some stream was cut by the speculative ceiling. The whole attempt
-//!    is **discarded** — every row, every status, every attestation — and the
-//!    bundle is read again at [`ReadCeiling::Planned`], which is byte for byte
-//!    the read this function always took.
+//! What makes that servable is the receipt. Each stream announces, before its
+//! first row, what its invocation attested the instant it opened — the generation
+//! it pinned, the service level it reported — and the fusion certifies every row
+//! under that announcement exactly as it does for a read that finished first. When
+//! the fusion stops, every stream settles
+//! ([`RankedStream::settle`](crate::RankedStream::settle)): the invocation's
+//! witness is read as it stands then, under the sole-witness rule a finished run is
+//! read under, and held to the announcement. An index that moved under the read,
+//! or a service level that changed between the open and the stop, is refused
+//! ([`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved)),
+//! never relabelled; and the rows the stream says it handed out are held to the
+//! rows the fusion pulled. So the evidence on the answer describes exactly the
+//! read that produced it, and the answer, its order and its evidence are the ones
+//! the same invocation read to its planned depth would have given.
 //!
-//! Discarding rather than resuming is what keeps the answer verifiable. A
-//! [`PfAttestation`] exists only on a *completed* governed run, the fusion reads
-//! it before it pulls a row, and two runs of one stratum attest separately — so
-//! an answer spliced from a narrow prefix and a deeper continuation would be an
-//! answer whose evidence describes neither read. Each attempt here is one
-//! complete governed run of the whole bundle, so there is no prefix to stabilise,
-//! no two attestations to reconcile, and nothing a receipt could be wrong about.
+//! The cost is reported, not inferred: every stratum's
+//! [`StratumResolution::rows_materialised`](crate::StratumResolution::rows_materialised)
+//! is taken at that settlement, beside the ranks the fusion pulled.
 //!
-//! Deepening the read to the proven stopping rank is what lets a configuration
-//! whose candidates only become final by lookup — strata sharing a block, each
-//! naming candidates the others do not hold — be answered by its first read: its
-//! fusion stops at the threshold crossing, which lies far past `k + strata`, and
-//! a frontier-deep attempt there would be cut every time. Where the declarations
-//! do not let finality settle before a stream runs out, the read stays at the
-//! frontier, because no depth short of the plan's own would be kept.
-//!
-//! The cost of a discarded attempt is bounded by the speculative depth — a
-//! constant in `k`, the weights and the declarations, beside the declared length
-//! that made the narrowing worth attempting — and it is **reported**, as
-//! [`SearchResult::read_attempts`], rather than left to be inferred from a
-//! timing. Nothing else about the answer can tell the two paths apart, and
-//! deliberately: a narrowed read that certified certified under exactly the law
-//! and the bound the planned read would have, which is why it may be served at
-//! all.
+//! A stratum the profile does not weight is still read to its end, because its
+//! status is how it ended and nothing but reading it can say that; a unit running a
+//! caller's own text is read materialised, as [`execute`](crate::execute) reads it.
 
 use std::collections::BTreeMap;
 
@@ -246,7 +235,7 @@ use purrdf_sparql_eval::{PfAttestation, PropertyFunctionRegistry};
 use purrdf_text::Fixed;
 
 use crate::admission::{AdmissionEnvironment, AdmissionError};
-use crate::compile::{CompiledRetrieval, PlannedResolution, ReadCeiling, compile};
+use crate::compile::{CompiledRetrieval, PlannedResolution, ReadSchedule, compile};
 use crate::error::{FusionError, PlanError};
 use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute_within};
 use crate::fuse::{TopK, fuse};
@@ -257,7 +246,8 @@ use crate::iri::{Iri, Term};
 use crate::plan::UnservedTerm;
 use crate::planner::plan;
 use crate::ranked_stream::{
-    ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, StreamContract,
+    ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, ReadSettlement,
+    StreamContract,
 };
 use crate::reciprocal_rank::contribution_under;
 use crate::request::RetrievalRequest;
@@ -374,54 +364,6 @@ pub struct SearchResult {
     /// list always accompanies at least one fused stratum. See this module's
     /// header.
     pub unweighted_strata: Vec<Iri>,
-    /// How many complete reads of the compiled bundle this answer cost.
-    ///
-    /// [`ReadAttempts::Once`] is every run whose first, speculative read
-    /// certified — and every run that had nothing to speculate about, because a
-    /// plan whose depths are already inside the speculative depth narrows to
-    /// itself.
-    /// [`ReadAttempts::Twice`] is a speculative read that some stratum's ceiling
-    /// cut, discarded whole, and the planned read that replaced it.
-    ///
-    /// It is on the answer because it is the one thing the two paths differ by.
-    /// The rows, their order, the trailer and every identity are the same either
-    /// way — that is the soundness claim the fallback exists to keep — so a
-    /// caller that wants to know what its declarations cost it has nothing else
-    /// to read. A run reporting [`ReadAttempts::Twice`] paid a speculative read
-    /// on top of the planned one for a narrowing that did not hold, and the fix
-    /// is in the declarations the read depths are derived from — a disjoint
-    /// block, or an exclusion basis on every stratum sharing one — never here.
-    pub read_attempts: ReadAttempts,
-}
-
-/// How many complete reads of one compiled bundle an answer cost.
-///
-/// Two values, because [`search`] takes at most two reads: a speculative one, and
-/// — only if some stratum's read was cut by the speculation — the planned one
-/// that replaces it. There is no third, and nothing is ever spliced from both;
-/// see [`search`]'s module header.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadAttempts {
-    /// One read produced this answer.
-    ///
-    /// Either the speculative read certified, or the plan's own depths were
-    /// already inside the speculative depth and the speculative read *was* the
-    /// planned read.
-    Once,
-    /// Two: a speculative read a stratum's ceiling cut, discarded entirely, and
-    /// the planned read that produced this answer.
-    Twice,
-}
-
-impl ReadAttempts {
-    /// The count itself, for a caller adding it up across requests.
-    #[must_use]
-    pub const fn count(self) -> u8 {
-        match self {
-            Self::Once => 1,
-            Self::Twice => 2,
-        }
-    }
 }
 
 /// A failure of any stage of the search composition, tagged with the stage that
@@ -499,10 +441,10 @@ pub enum SearchError {
 /// not have to run a search at all — [`compile`](crate::compile) against an
 /// environment naming `profile` answers it without executing anything.
 ///
-/// Stages three and four are run at a speculative ceiling first and re-run at the
-/// planned depths only if that read was cut, which is at most two complete reads
-/// and is reported as [`SearchResult::read_attempts`]. It changes no answer: see
-/// this module's header for why a cut read is discarded rather than continued.
+/// Stage three runs under [`ReadSchedule::OnDemand`]: each stratum is one
+/// invocation held open and read as far as the fusion pulls it, never re-read,
+/// and every stream's receipt is taken when the fusion stops. It changes no
+/// answer: see this module's header.
 ///
 /// # Errors
 ///
@@ -547,35 +489,9 @@ where
     };
     let compiled = compile(&plan, &env).map_err(SearchError::AdmissionError)?;
 
-    // 3. Read and fuse, speculatively. The narrow read is attempted first
-    //    because it is the cheap one and because taking it is how its own
-    //    soundness becomes observable: a stratum the ceiling cut says so, at the
-    //    rank it was cut at.
-    let attempt = read_and_fuse(
-        &compiled,
-        registry,
-        dataset,
-        profile,
-        ReadCeiling::Speculative,
-    )
-    .await?;
-
-    // 3b. And keep it, or throw the whole of it away. Nothing is spliced and
-    //     nothing is patched: the fallback re-reads the bundle at the depths the
-    //     plan recorded, which is one complete governed run exactly as the
-    //     attempt it replaces was. See this module's header.
-    let (answer, read_attempts) = if cut_below_the_plan(&compiled, &attempt.trailer) {
-        let mut planned =
-            read_and_fuse(&compiled, registry, dataset, profile, ReadCeiling::Planned).await?;
-        // The rows of the discarded attempt are discarded as *evidence* and not
-        // as *cost*: they were read, and this is the one place both reads are
-        // known. Folding them in here is what keeps a fallback from being
-        // invisible in every number the answer carries but one.
-        carry_discarded_read_work(&attempt.trailer, &mut planned.trailer);
-        (planned, ReadAttempts::Twice)
-    } else {
-        (attempt, ReadAttempts::Once)
-    };
+    // 3. Read and fuse. Each stratum is read on demand, so the read goes exactly
+    //    as deep as the fusion's own stop; see this module's header.
+    let answer = read_and_fuse(&compiled, registry, dataset, profile).await?;
 
     Ok(SearchResult {
         rows: answer.rows,
@@ -591,81 +507,13 @@ where
         planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata: answer.unweighted_strata,
-        read_attempts,
     })
 }
 
-/// Add the rows a discarded read materialised into the read-work figure of the
-/// read that replaced it.
+/// One read of `compiled`, on demand, fused under `profile`.
 ///
-/// The one field of a trailer this function touches, and the one field of a
-/// trailer that is about *price* rather than about the arithmetic of the answer.
-/// [`StratumResolution::ranks_pulled`], the collisions and the lookups all
-/// describe the single governed read the answer was assembled from — splicing a
-/// discarded attempt into any of them would describe a read that never happened
-/// — while [`StratumResolution::rows_materialised`] answers "what did this
-/// stratum cost this call", and this call paid for both reads.
-///
-/// A stratum the discarded attempt reports no figure for adds nothing, and a
-/// stratum the kept read reports no figure for stays silent: `None` is "no read
-/// to count", so a sum that turned it into a number would be inventing the
-/// measurement the absence exists to decline.
-fn carry_discarded_read_work(discarded: &FusionTrailer, kept: &mut FusionTrailer) {
-    for (stratum, resolution) in &mut kept.resolution {
-        let Some(spent) = discarded
-            .resolution
-            .get(stratum)
-            .and_then(|discarded| discarded.rows_materialised)
-        else {
-            continue;
-        };
-        resolution.rows_materialised = resolution
-            .rows_materialised
-            .map(|kept_rows| kept_rows.saturating_add(spent));
-    }
-}
-
-/// Whether any stratum of `trailer` ended at a rank shallower than the depth its
-/// unit's plan recorded.
-///
-/// This is the whole of the fallback test, and it is a reading of the run rather
-/// than a re-derivation of the ceiling that produced it. A stream the speculative
-/// depth cut reports [`ProducerStatus::DepthReached`] at that depth, and a
-/// stream stopped by its producer's own declared row bound reports
-/// [`ProducerStatus::RowBoundReached`] at the rank it stopped on; either, below
-/// the planned depth, is a read that had more to give and was not allowed to give
-/// it.
-///
-/// Every other ending is a read with nothing more to offer. A stream the *fusion*
-/// stopped ([`ProducerStatus::CeilingReached`]) was stopped because the answer
-/// was already certified, and one that ran out ([`ProducerStatus::Exhausted`])
-/// ran out at its real length — which is emphatically not the ceiling's doing, and
-/// falling back over it would re-read a stratum that has already been read to its
-/// end. A stratum that failed, or that the profile does not weight, would fail or
-/// go unweighted identically at the planned depth.
-///
-/// At [`ReadCeiling::Planned`] this is false by construction: a cut there reports
-/// the planned depth itself, which is not below it. So the test guards the
-/// fallback against firing twice as much as it selects for it.
-fn cut_below_the_plan(compiled: &CompiledRetrieval, trailer: &FusionTrailer) -> bool {
-    compiled.units.iter().any(|unit| {
-        matches!(
-            trailer.statuses.get(&unit.stratum),
-            Some(
-                ProducerStatus::DepthReached { rank }
-                    | ProducerStatus::RowBoundReached { rank },
-            ) if *rank < u64::from(unit.depth())
-        )
-    })
-}
-
-/// One complete read of `compiled` at `ceiling`, fused under `profile`.
-///
-/// Stages three to six of the composition, as one value: the answer a single
-/// governed read of the whole bundle produced, with the identities read back off
-/// it. [`search`] calls this at most twice and keeps at most one result, so
-/// everything here is derived per attempt — an attempt that is discarded takes
-/// its rows, its statuses, its attestations and its evidence identity with it.
+/// Stages three to six of the composition, as one value: the answer the read
+/// produced, with the identities read back off it.
 // The composition is awaited in one task and never crosses a thread boundary; see
 // the same allowance on `search`.
 #[allow(clippy::future_not_send)]
@@ -674,14 +522,13 @@ async fn read_and_fuse<D>(
     registry: &PropertyFunctionRegistry,
     dataset: &D,
     profile: &FusionProfile,
-    ceiling: ReadCeiling,
 ) -> Result<Attempt, SearchError>
 where
     D: DatasetView + Sync,
 {
     // 3. Execute. Each stratum runs independently against the caller's dataset; a
     //    failed stratum is a status, not a stream.
-    let execution = execute_within(compiled, registry, dataset, ceiling)
+    let execution = execute_within(compiled, registry, dataset, ReadSchedule::OnDemand)
         .await
         .map_err(SearchError::ExecutionError)?;
 
@@ -692,7 +539,7 @@ where
     //    whole request down with it. See this module's header.
     let ExecutionResult {
         streams: executed,
-        statuses,
+        mut statuses,
     } = execution;
     let mut streams: Vec<(Iri, RankedStreamAdapter<'_>)> = Vec::with_capacity(executed.len());
     let mut unweighted_strata: Vec<Iri> = Vec::new();
@@ -705,6 +552,18 @@ where
         // does: it is the producer's own declaration, read at the admission
         // waist and carried, so the promise fusion holds this stream to is the
         // one its producer made and not one re-read off a registry afterwards.
+        if profile.weight(&stratum).is_none() {
+            // Not fused, and still an applicable producer that ran: its status is
+            // how its read ended, and a stream read on demand has not ended until
+            // it is read. So it is read to its end here — the read it would have
+            // been given materialised — and its own receipt is its status.
+            if !statuses.contains_key(&stratum) {
+                let status = read_to_its_end(stratum_stream.stream).await;
+                statuses.insert(stratum.clone(), status);
+            }
+            unweighted_strata.push(stratum);
+            continue;
+        }
         let Some(adapter) = RankedStreamAdapter::new(
             stratum_stream.stream,
             stratum_stream.contract,
@@ -798,13 +657,38 @@ where
     })
 }
 
-/// What one complete read of a bundle, fused, came to.
+/// Read a stream nothing will fuse to its end, and report how it ended.
+///
+/// A failure is that stratum's status rather than the request's: nothing was
+/// merged out of this stream, so there is no answer for its failure to be part of.
+// Awaited in the one task `search` runs in; see the same allowance there.
+#[allow(clippy::future_not_send)]
+async fn read_to_its_end(mut stream: RankedStreamImpl<'_>) -> ProducerStatus {
+    loop {
+        match stream.next().await {
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(error) => {
+                return ProducerStatus::ExecutionFailed {
+                    reason: error.to_string(),
+                };
+            }
+        }
+    }
+    match stream.receipt().await {
+        Ok(receipt) => ProducerStatus::from(receipt),
+        Err(error) => ProducerStatus::ExecutionFailed {
+            reason: error.to_string(),
+        },
+    }
+}
+
+/// What one read of a bundle, fused, came to.
 ///
 /// Everything in a [`SearchResult`] that is a fact about the *read* rather than
 /// about the plan behind it. The fields the plan and the waist supply —
 /// the unserved terms, the planned resolution, the profile identity — are not
-/// here, because they are the same whichever attempt is kept and deriving them
-/// per attempt would be deriving them twice.
+/// here, because they are the plan's and the waist's rather than the read's.
 struct Attempt {
     /// The fused rows, in the profile's declared final order.
     rows: Vec<FusedRow>,
@@ -1054,5 +938,23 @@ impl RankedStream for RankedStreamAdapter<'_> {
     /// knows it: this bridge is handed rows, not a read.
     fn rows_materialised(&self) -> Option<u64> {
         Some(self.inner.rows_materialised())
+    }
+
+    /// The executor's stream settles its own read; this bridge adds nothing to it.
+    ///
+    /// A read produced on demand settles to the attestation its invocation's
+    /// witness now stands behind, which the fusion holds to the one this adapter
+    /// announced ([`Self::with_attestation`]). A materialised read has nothing
+    /// left to learn and settles to the announcement itself.
+    async fn settle(&mut self) -> Result<ReadSettlement, ProtocolError> {
+        let attestation = match self.inner.settle().await? {
+            Some(settled) => settled,
+            None => self.attestation.clone(),
+        };
+        Ok(ReadSettlement {
+            attestation,
+            rows_materialised: Some(self.inner.rows_materialised()),
+            rows_emitted: Some(self.inner.rows_emitted()),
+        })
     }
 }

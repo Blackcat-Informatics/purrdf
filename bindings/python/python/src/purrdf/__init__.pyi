@@ -2711,17 +2711,12 @@ class retrieval:
     # what it cost. `"exclusion_lookups"` counts the point queries the fusion
     # spent settling finality — a different read of a different question, never
     # added into the rank — and `"rows_materialised"` counts the rows the
-    # producers' reads returned, cumulative over EVERY read this call took. It
-    # is `None` only for a stream with no materialised read behind it, which is
+    # stratum's one read produced. Every stratum is read on demand, one
+    # invocation read a row per pull, so this is the ranks the fusion pulled plus
+    # the probe row where it read past the planned depth — never a row read
+    # twice. It is `None` only for a stream with no read behind it, which is
     # never one this module builds; the absence means "there is no read to
     # count", never "the read was free".
-    #
-    # `"read_attempts"` is `1` or `2`: a run whose speculative read certified,
-    # or a speculative read some stratum's ceiling cut, discarded whole, and the
-    # planned read that replaced it. The rows, their order and every identity are
-    # the same either way — that is the soundness claim the fallback exists to
-    # keep — so this and `"rows_materialised"` are the only things that differ,
-    # and the discarded read's rows are in the second.
     #
     # `"statuses"` maps a stratum to its producer's own terminal status, and the
     # `"status"` string has exactly seven spellings. `"exhausted"` (with

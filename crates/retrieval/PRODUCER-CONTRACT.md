@@ -914,6 +914,18 @@ the value is tagged onto the stream, read by
 [`FusionTrailer::attestations`] and digested
 into [`EvidenceId`].
 
+[`search`] reads each stratum **on demand** — one invocation held open and read a
+row per pull — so the stream it announces is what the invocation attested *the
+instant it opened*: the generation, and the service level asked at that instant
+too. When the fusion stops, the stream settles to the witness the invocation
+stands behind then, under the same rule, and is held to the announcement. A
+relation whose cursor reports a different generation at the stop than at the
+open, or a different service level, has its answer refused
+([`ProtocolError::AttestationMoved`]) — every row was certified under the
+announcement, so relabelling the trailer would keep rows ordered under a claim
+the read did not end with. A relation over a snapshot pinned at `open`, which
+answers both questions the same way at both instants, never meets this.
+
 **Both shipped producers attest a content-derived generation**, and each value is
 pinned against its own source rather than merely asserted non-empty.
 

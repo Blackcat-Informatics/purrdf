@@ -2230,12 +2230,11 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         //
         // `"exclusion_lookups"` is the point queries this fusion spent settling
         // finality -- a different read of a different question, never added
-        // into the rank above -- and `"rows_materialised"` is the rows the reads
-        // behind this stratum returned. The second is cumulative over every read
-        // the call took: a plan the planner could not narrow is read
-        // speculatively first and that read is discarded whole if some
-        // stratum's ceiling cut it, and the discarded rows were still paid for.
-        // `"read_attempts"` below says how many reads that was.
+        // into the rank above -- and `"rows_materialised"` is the rows the one
+        // read behind this stratum produced. Each stratum is read on demand, one
+        // invocation read a row per pull, so it is the rows the fusion pulled
+        // plus the probe row where the fusion read past the planned depth, and
+        // it is taken when the fusion stops.
         //
         // `"rows_materialised"` is `None` only for a stream with no
         // materialised read behind it, which no stream this surface builds is:
@@ -2247,15 +2246,6 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     }
     out.set_item("observed_resolution", observed)?;
     out.set_item("cut_on_a_tie", result.trailer.cut_on_a_tie)?;
-
-    // How many complete reads of the compiled bundle this answer cost: `1` for
-    // every run whose speculative read certified (and every run that had nothing
-    // to speculate about), `2` for a speculative read a stratum's ceiling cut,
-    // discarded whole, and the planned read that replaced it. It changes no
-    // answer -- the rows, their order and every identity are the same either way
-    // -- so it is the one thing on this dict that tells the two paths apart, and
-    // the rows the discarded read cost are in `"rows_materialised"` above.
-    out.set_item("read_attempts", u32::from(result.read_attempts.count()))?;
 
     out.set_item(
         "unserved_terms",
@@ -2598,11 +2588,10 @@ fn compile<'py>(
 /// a cheap answer over a small corpus. `"exclusion_lookups"` is the point
 /// queries this fusion spent settling finality — a different read of a different
 /// question, never folded into the rank — and `"rows_materialised"` is the rows
-/// the reads behind the stratum returned, cumulative over every read this call
-/// took. `"read_attempts"` on the answer says how many reads that was: `1`, or
-/// `2` where a speculative read was cut and discarded whole and the planned read
-/// replaced it. The answer is the same either way, so those two are the only
-/// things that say what it cost.
+/// the stratum's one read produced — read on demand, so exactly the ranks the
+/// fusion pulled, plus the probe row where it read past the planned depth. The
+/// answer is the same however deep a read went, so these are the only things
+/// that say what it cost.
 ///
 /// Every `"statuses"` entry spells its own ending, and there are exactly seven
 /// spellings. `"exhausted"` (with `"rows_emitted"`) is the only one of the seven

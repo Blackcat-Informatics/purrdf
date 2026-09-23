@@ -1589,6 +1589,7 @@ version = "2.0.2"
 dependencies = [
  "ahash",
  "blake3",
+ "criterion",
  "pretty_assertions",
  "purrdf-alloc-probe",
  "purrdf-core",

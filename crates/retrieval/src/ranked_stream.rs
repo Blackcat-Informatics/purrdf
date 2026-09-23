@@ -1041,6 +1041,93 @@ pub enum ProtocolError {
     /// fabricated [`ExclusionVerdict::Possible`] — that is reported.
     #[error("stream was asked for an exclusion verdict but declares no exclusion basis")]
     ExclusionUnavailable,
+
+    /// The read behind a stream failed after the consumer had started merging its
+    /// rows, or failed in a way that invalidates the whole run.
+    ///
+    /// A stream read on demand produces each row when it is pulled, so a producer's
+    /// failure at its fortieth row surfaces at the fortieth pull — after thirty-nine
+    /// rows have already been merged and, possibly, emitted. Those rows cannot be
+    /// taken back, and a failed stratum reported as an ordinary status beside an
+    /// answer built partly out of it would be the answer claiming a stratum it did
+    /// not have. So such a failure fails the fused request, naming the stratum, how
+    /// far the read had got, and the producer's own reason. A failure *before* the
+    /// first row is not this: it is reported as that stratum's
+    /// [`ProducerReceipt::ExecutionFailed`], exactly as a materialised read's
+    /// failure is, and every other stratum answers.
+    ///
+    /// The one failure that is this at any depth is a producer that returned more
+    /// rows than its registry declared it could — the whole-run refusal a
+    /// materialised read reports as
+    /// [`ExecutionError::RowBoundBreached`](crate::ExecutionError::RowBoundBreached),
+    /// because the broken number is not confined to the stratum that exposed it.
+    ///
+    /// It is not [`Self::ErrorAfterRows`], which is a hand-built stream's own report
+    /// and carries no reason: a producer read through this layer always has one, and
+    /// dropping it would leave a host with a count and nothing to fix.
+    #[error("stratum {stratum}: the read failed after {rows_before} row(s): {reason}")]
+    ReadFailed {
+        /// The stratum whose read failed.
+        stratum: String,
+        /// How many rows the stream had handed out before the failure.
+        rows_before: u64,
+        /// The producer's or the executor's own refusal, rendered.
+        reason: String,
+    },
+
+    /// The read behind a stream ended under a different attestation from the one it
+    /// announced before its first row.
+    ///
+    /// A consumer reads a stream's [`RankedStream::attestation`] before it pulls a
+    /// row and certifies every row under it — an attested-short index widens the
+    /// intervals it certifies against, and the trailer's exactness and evidence
+    /// identity are derived from it. A read held open while its consumer merges is
+    /// therefore held to that announcement when it stops
+    /// ([`RankedStream::settle`]): the generation it pinned must be the only
+    /// generation it served from, and the service level it reports at the stop must
+    /// be the one it reported at the open. Either moving means the rows were
+    /// certified under evidence the read did not end with — an index rebuilt under
+    /// the read, or a shortfall discovered after the rows it affects were merged as
+    /// whole. The answer is refused rather than relabelled, because relabelling
+    /// would keep rows that were certified under the wrong law.
+    ///
+    /// The same family as [`Self::ContributionMismatch`] and for the same reason: a
+    /// value the consumer holds is checked against the value the producer ends up
+    /// standing behind, and a disagreement is named with both sides, repaired never.
+    #[error(
+        "stratum {stratum}: the read ended under a different attestation from the one it \
+         announced before its first row: {reason}"
+    )]
+    AttestationMoved {
+        /// The stratum whose read moved.
+        stratum: String,
+        /// Both sides of the disagreement, or the witness rule the read's own receipt
+        /// broke, rendered.
+        reason: String,
+    },
+}
+
+/// What a stream's read stands behind at the instant its consumer stops reading it.
+///
+/// Returned by [`RankedStream::settle`]. A read materialised before its first row
+/// was readable settles to what it already said; a read produced on demand settles
+/// here, because this is the first instant at which how far it was read is known.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadSettlement {
+    /// What the index behind the rows attests now that the read has stopped.
+    ///
+    /// Held against [`RankedStream::attestation`], which the consumer read before the
+    /// first row; see [`ProtocolError::AttestationMoved`].
+    pub attestation: PfAttestation,
+    /// How many rows the read behind the stream produced, when the stream knows:
+    /// [`RankedStream::rows_materialised`] as of this instant.
+    pub rows_materialised: Option<u64>,
+    /// How many rows the stream handed its consumer, when the stream counts them.
+    ///
+    /// Held against the rows the consumer pulled
+    /// ([`ProtocolError::ForgedReceipt`]), so a settlement cannot describe a read the
+    /// consumer did not take. `None` for a stream that keeps no such count.
+    pub rows_emitted: Option<u64>,
 }
 
 /// A producer's ranked rows, pulled one at a time.
@@ -1220,6 +1307,14 @@ pub trait RankedStream {
     /// by travelling with the stream instead of being re-fetched from the
     /// registry at the end.
     ///
+    /// A read produced on demand announces here what its invocation attested the
+    /// instant it opened, and is then **held to it** when the fusion stops
+    /// ([`settle`](Self::settle)): an index that moved under the read, or a
+    /// service level that changed between the open and the stop, is refused
+    /// ([`ProtocolError::AttestationMoved`]) rather than reported. So reading the
+    /// announcement first loses nothing a read discovered later: a later discovery
+    /// that would change the announcement fails the answer built on it.
+    ///
     /// # Why this is not a [`ProducerReceipt`] variant
     ///
     /// An incomplete index is not a read ending. Every [`ProducerReceipt`]
@@ -1273,11 +1368,12 @@ pub trait RankedStream {
     /// paid for, and a figure that excluded it would report a read as cheaper
     /// than it was by exactly the row that makes its ending observable.
     ///
-    /// Read once by [`FusionStream::new`](crate::FusionStream::new), before any
-    /// row is pulled, for the reason [`attestation`](Self::attestation) is read
-    /// there: it is a fact about the read that produced the stream, true from
-    /// the instant the stream exists, and asking at the end would ask a stream a
-    /// bounded fusion may have stopped.
+    /// Read by [`FusionStream::trailer`](crate::FusionStream::trailer), through
+    /// [`settle`](Self::settle), when the fusion stops — not when it starts. For a
+    /// read materialised before its first row was readable the two instants give
+    /// the same number; for a read produced on demand only the second is the cost,
+    /// because the rows it produced are exactly the rows the fusion asked for, and
+    /// the fusion decides that by stopping.
     ///
     /// # Why the default is `None` and not zero
     ///
@@ -1295,5 +1391,39 @@ pub trait RankedStream {
     /// because it is the party that made the read.
     fn rows_materialised(&self) -> Option<u64> {
         None
+    }
+
+    /// What the read behind this stream stands behind now that its consumer has
+    /// stopped reading it: the attestation it ends under, what it cost, and how many
+    /// rows it handed out.
+    ///
+    /// Called by [`FusionStream::trailer`](crate::FusionStream::trailer) on **every**
+    /// stream — one that ran out and one a bounded fusion stopped alike — because the
+    /// trailer is the instant each read's extent is final. A stream the fusion stopped
+    /// never returns a receipt, so this is the one report such a stream makes about
+    /// its own end, and it is where a read produced on demand closes its evidence:
+    /// the witness of an invocation held open while the fusion merged is only
+    /// complete once the merging stops.
+    ///
+    /// Non-consuming: a caller that reads the trailer and then pulls further rows may
+    /// settle again, and the later settlement describes the longer read.
+    ///
+    /// # Default
+    ///
+    /// The attestation the stream already announced, its
+    /// [`rows_materialised`](Self::rows_materialised), and no emitted-row count — the
+    /// true settlement of a stream whose read finished before its first row was
+    /// readable, which has nothing left to learn about itself.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::AttestationMoved`] when the read's own receipt cannot be a
+    /// single attestation — the index it served from moved under it.
+    async fn settle(&mut self) -> Result<ReadSettlement, ProtocolError> {
+        Ok(ReadSettlement {
+            attestation: self.attestation(),
+            rows_materialised: self.rows_materialised(),
+            rows_emitted: None,
+        })
     }
 }

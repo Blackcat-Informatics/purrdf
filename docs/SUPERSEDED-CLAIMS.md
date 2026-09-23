@@ -183,10 +183,11 @@ it *inside* the stream, which now borrows the caller's dataset — that is where
 `RankedStreamImpl<'d>`'s lifetime parameter comes from — and the lookup query
 runs during `fuse`.
 
-**The rule now.** The two halves are stated apart. The **rows** are still fully
-materialized before the first one is readable, so stopping at `execute` still
+**The rule now.** The two halves are stated apart. Under `execute` the **rows**
+are still fully materialized before the first one is readable, so stopping there
 buys no laziness in the rows and a consumer that reads one has paid for all of
-them. The **stream** is a live handle: `execute` is the only stage that runs a
+them; the read `search` takes is lazy in its rows, and the entry *The evaluator
+exposes no cursor* below records that reversal. The **stream** is a live handle: `execute` is the only stage that runs a
 ranked read and the only stage that compiles a query, but it is not the only
 place a query runs. Pinned by
 `multimodal_read_bound::membership_lookups_stop_the_drain_where_the_threshold_licenses`,
@@ -353,9 +354,132 @@ arithmetic of the answer, and it is counted in exactly one number: the rows a
 read materialized. The exception is principled rather than an erosion — that
 number asks what the read *cost* rather than what the answer is made of, and it
 is the only number in the trailer that does. Pinned by
-`multimodal_read_bound::shared_block_intersecting_results_answer_at_the_sixth_rank_inside_the_speculative_read`,
-which asserts the materialized figure is the frontier *plus its probe row* while
-the planned depth and the ranks pulled stay where they were, and by
+`multimodal_read_bound::the_work_never_exceeds_the_materialised_control_in_any_configuration`,
+whose materialized control for the licensed configuration reads its five rows
+*and the probe row*, six, while the planned depth and the ranks pulled stay where
+they were; by
+`multimodal_read_bound::every_stratum_is_read_once_and_produces_exactly_the_rows_its_fusion_pulled`,
+which counts the probe row in an on-demand read exactly where the fusion read past
+the planned depth and nowhere else; and by
 `multimodal_read_bound::the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for`,
 which holds the rendered trailer against a figure assembled from the producers'
 own counters rather than from the trailer.
+
+### A read that is not read to its end cannot carry a verifiable receipt
+
+**Was stated in** `crates/retrieval/src/search.rs`, the module header on the read
+`search` takes, and in the same words in §7 of
+`docs/design/purrdf-retrieval-ladder.md`:
+
+> Discarding rather than resuming is what keeps the answer verifiable. A
+> [`PfAttestation`] exists only on a *completed* governed run, the fusion reads
+> it before it pulls a row, and two runs of one stratum attest separately — so
+> an answer spliced from a narrow prefix and a deeper continuation would be an
+> answer whose evidence describes neither read.
+
+and, as the reason a lazily driven cursor was set aside, that a witness exists
+only on a completed `GovernedOutcome`, so a cursor pulled on demand has no run
+behind it and no attestation to announce.
+
+**Why it was believed.** It was true of the one channel the executor read
+evidence from. The witness a unit's attestation is read off travelled on the
+governed lane's `GovernedOutcome`, which exists only once the evaluator has
+drained every invocation into a bag; the fusion reads a stream's attestation
+before its first row; so the only read with evidence to announce at that
+instant was one that had already finished. Given that channel, a read stopped
+early — or taken in two parts — had nothing a receipt could be about, and
+throwing a short read away whole and taking the planned one looked like the
+price of verifiability.
+
+**What changed.** The premise conflated where the witness was *carried* with
+when its two facts are *known*. The evaluator's own witness rule reads the
+generation the instant a cursor opens and the service level when the
+invocation ends; neither needs the bag. `NativeSparqlEngine::open_call_cursor`
+opens a rendered unit's one call as an invocation held open, and its
+`CallCursor` announces what the invocation attested at the open and builds its
+witness when the consumer stops (`CallCursor::settle`): the generation pinned at
+open, the service level read then, and a second generation if the cursor now
+reports one. The fusion reads the announcement before the first row, exactly as
+before, and at the trailer every stream settles
+(`RankedStream::settle`): the witness is read under the same sole-witness rule a
+finished run is read under and held to the announcement, and a settlement that
+disagrees is refused (`ProtocolError::AttestationMoved`). The receipt therefore
+covers exactly the read that produced the rows — however far the fusion took it
+— and is pinned to one generation across the whole of it.
+
+**The rule now.** `search` reads every stratum it rendered on demand: one
+invocation per stratum, opened at the planned depth, read a row per pull and
+never re-opened, with its receipt taken when the read stops. Nothing is
+discarded and nothing is read twice; a fusion that needs more reads on in the
+same invocation. Pinned by
+`on_demand_receipt::a_read_stopped_mid_invocation_carries_a_verified_receipt_identical_to_the_materialised_one`,
+which stops a four-hundred-row read at its sixth row and holds its
+attestations, evidence identity, exactness and rows to the materialized read's;
+by `on_demand_receipt::an_index_that_moves_under_the_read_is_refused_when_the_read_settles`
+and `on_demand_receipt::a_forged_announcement_is_refused_at_the_settlement_and_the_true_one_is_admitted`,
+each beside its admitted neighbour; and by
+`multimodal_read_bound::a_stopping_rank_the_rows_overrun_is_read_past_in_the_same_read`,
+which reads past the plan's own prediction and pays for the planned total once.
+
+### The evaluator exposes no cursor, and incremental enumeration is separate, larger work
+
+**Was stated in** `docs/design/purrdf-retrieval-ladder.md` §7, on the unfused
+rung:
+
+> There is no windowed or incremental execution to rest a claim on: the
+> evaluator exposes no cursor, stream or iterator surface at all, and is
+> materialized at every operator. […] (Making enumeration incremental is
+> separate, larger work; this paragraph records what ships.)
+
+**Why it was believed.** Every query entry the evaluator offered returned a
+finished answer, and every algebra node hands its parent a bag. A per-row
+evaluator for SPARQL in general is a rewrite of every operator, and the
+sentence read that as the only way to read anything incrementally.
+
+**What changed.** The read this layer needs incrementally is not SPARQL in
+general. A unit this layer renders is one property-function call under
+row-for-row operators — projections, `OFFSET`-free `LIMIT`s and renaming
+`BIND`s — and a relation's `PfCursor` is already per-row at the seam. So the
+evaluator reads exactly that shape on demand, through the same admission,
+unification and containment the governed lane uses, and refuses every other
+shape by name rather than materializing it behind a cursor's back.
+
+**The rule now.** `execute` still materializes each stratum before its first
+row is readable; `execute_within` at `ReadSchedule::OnDemand` — the read
+`search` takes — produces each row when its stream is pulled. A consumer that
+stops at the sixth rank of a four-hundred-row plan has caused six rows to be
+produced. Pinned by
+`multimodal_read_bound::every_stratum_is_read_once_and_produces_exactly_the_rows_its_fusion_pulled`
+and `multimodal_read_bound::the_work_never_exceeds_the_materialised_control_in_any_configuration`,
+which hold every configuration's rows and producer-reported work exactly, and
+never above the materialized control's.
+
+### A stream's ending is fixed before its first row, or a caller that stopped early would be told something different
+
+**Was stated in** `crates/retrieval/src/execute.rs`, on `StreamEnding`:
+
+> It is fixed at construction rather than computed in
+> [`RankedStreamImpl::receipt`] because the fact is about the evaluator's
+> answer, not about how much of the stream a consumer chose to pull: a stream
+> whose ending were derived at the end would say something different to a
+> caller that stopped early, which is precisely the falsifiable status the
+> ranked-stream protocol forbids.
+
+**Why it was believed.** For a materialized read the ending is a fact about the
+evaluator's finished answer, knowable before the first row; deriving it later
+looked like letting a consumer's stop change a status.
+
+**What changed.** A read produced on demand learns its ending only when it gets
+there — the probe row arriving, or the producer running out — so its ending is
+decided at that pull. The feared failure cannot happen, and could not before:
+`RankedStreamImpl::receipt` refuses to answer until the stream has returned its
+last row (`ProtocolError::NeverEndingSource`), so a caller that stopped early is
+told no ending at all rather than a different one, and a caller that read to the
+end is told the ending the same rows reach under either schedule.
+
+**The rule now.** A materialized read's ending is fixed when its stream is
+built; an on-demand read's is decided at the pull that reaches it, and is the
+same ending for the same rows. Pinned by
+`multimodal_read_bound::the_on_demand_read_returns_the_answer_the_materialised_read_returns`,
+which holds every configuration's terminal statuses, and its rows, to the
+materialized read's.

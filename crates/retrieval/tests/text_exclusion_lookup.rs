@@ -48,8 +48,8 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionVerdict, Fixed,
-    FusedRow, FusionProfile, Iri, RECIP_K, RankFidelity, ReadAttempts, RequestTerm,
-    RetrievalRequest, Statistics, StratumStream, Term, TopK, compile, execute, plan, search,
+    FusedRow, FusionProfile, Iri, RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics,
+    StratumStream, Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     EvalError, ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
@@ -496,12 +496,11 @@ struct Measured {
     candidate_bound: [u64; 2],
     /// Invocations of each relation whose candidate position was free.
     candidate_free: [u64; 2],
-    /// How many invocations of each relation entered the partition ranker.
+    /// How many invocations of each relation entered the partition ranker — the
+    /// relation's own work counter: each entry scores the whole candidate set.
     rankings: [u64; 2],
-    /// How many complete reads of the compiled bundle the answer cost.
-    read_attempts: ReadAttempts,
-    /// The read-work figure the trailer reports for each side's stratum:
-    /// the rows its reads returned, cumulative over every read the call took.
+    /// The read-work figure the trailer reports for each side's stratum: the rows
+    /// its one read produced.
     rows_materialised: [Option<u64>; 2],
     /// The rows each relation really served to its ranked reads, counted off the
     /// cursor as the evaluator pulled them — the producer's end of the seam the
@@ -516,7 +515,7 @@ impl Measured {
         format!(
             "{name}: rows={rows} ranks_pulled={ranks} fused_lookups={fused} \
              candidate_bound={bound:?} candidate_free={free:?} rankings={rankings:?} \
-             membership_lookups={membership:?} read_attempts={attempts:?} \
+             membership_lookups={membership:?} \
              rows_materialised={materialised:?} served_free={served:?}",
             rows = self.answer.len(),
             ranks = self.ranks_pulled,
@@ -525,7 +524,6 @@ impl Measured {
             free = self.candidate_free,
             rankings = self.rankings,
             membership = self.membership_lookups,
-            attempts = self.read_attempts,
             materialised = self.rows_materialised,
             served = self.served_free,
         )
@@ -579,7 +577,6 @@ fn measure(dataset: &RdfDataset, basis: ExclusionBasis) -> Measured {
         ],
         candidate_free: [recorders[0].candidate_free(), recorders[1].candidate_free()],
         rankings: [observed[0].rankings(), observed[1].rankings()],
-        read_attempts: result.read_attempts,
         rows_materialised: SIDES.map(|side| {
             result
                 .trailer
@@ -653,43 +650,43 @@ fn a_declared_basis_shortens_a_real_text_read_without_moving_the_answer() {
          asked — {report}"
     );
 
-    // 2b. And it is paid for once. Both sides declare the shared block and answer
-    //     lookups, so the plan proves, before a row is read, that the fusion
-    //     cannot pull either head past rank 71: the fifth row is worth at least
-    //     one stream's fifth contribution, `c(5) = ⌊10¹²/65⌋`, and both heads
-    //     together, `2·c(r)`, first fall strictly below it at `r = 71` (at 70 they
-    //     tie). Each side is therefore read to depth 71 with its probe row — 72
-    //     rows — in ONE read, and the trailer and the relation agree on it.
+    // 2b. And it is paid for once, and only as far as the fusion pulled. Each
+    //     side is one ranked invocation read a row per pull: the fusion stops at
+    //     rank 66 — the fifth row, at rank three, crossing a threshold both
+    //     heads share — so each side's read produced 66 rows, which the trailer
+    //     and the relation agree on. The plan's proven ceiling, rank 71, bounds
+    //     it and is never paid for.
     assert_eq!(
-        asked.read_attempts,
-        ReadAttempts::Once,
-        "the deepened read certified, so it is the answer — {report}"
+        asked.ranks_pulled, 132,
+        "sixty-six ranks from each side — {report}"
     );
     assert_eq!(
         asked.rows_materialised,
-        [Some(72), Some(72)],
-        "the proven stopping rank and its probe row, per side — {report}"
+        [Some(66), Some(66)],
+        "the ranks the fusion pulled, per side, and not a row more — {report}"
     );
     assert_eq!(
         asked.served_free,
-        [72, 72],
+        [66, 66],
         "and the relations served exactly those rows to their one ranked read — {report}"
     );
     // The control, on record beside it: no basis, so nothing settles finality
-    // before a stream runs out, the frontier read (`k + strata = 7` and its
-    // probe row, 8) is cut and discarded, and each side's every matching
-    // document (100) is read again.
-    assert_eq!(
-        control.read_attempts,
-        ReadAttempts::Twice,
-        "with no basis the speculative read is cut — {report}"
-    );
+    // before a stream runs out, and each side's one read goes on through every
+    // matching document (100) — once.
     assert_eq!(
         control.rows_materialised,
-        [Some(108), Some(108)],
-        "the discarded frontier read and the drain — {report}"
+        [Some(100), Some(100)],
+        "every matching document, read once — {report}"
     );
-    assert_eq!(control.served_free, [108, 108], "{report}");
+    assert_eq!(control.served_free, [100, 100], "{report}");
+    // 2c. The relation's own work counter: one ranking per side, in the declaring
+    //     run and in the control alike. A read that was begun again would rank
+    //     again, however few rows either attempt produced.
+    assert_eq!(
+        (asked.rankings, control.rankings),
+        ([1, 1], [1, 1]),
+        "each side is ranked once per search — {report}"
+    );
 
     // 3. The lookups really happened, and really reached the relation.
     assert!(
@@ -704,8 +701,7 @@ fn a_declared_basis_shortens_a_real_text_read_without_moving_the_answer() {
         asked.candidate_bound.iter().sum::<u64>(),
         asked.fused_lookups,
         "every lookup fusion counted arrived at a relation as a candidate-bound invocation, \
-         and the search read once, so no lookup was spent on a discarded attempt — invoked \
-         = {:?}, counted = {}",
+         and every one a relation served is on the trailer — invoked = {:?}, counted = {}",
         asked.candidate_bound,
         asked.fused_lookups
     );
@@ -789,19 +785,24 @@ fn a_fused_read_over_blank_node_candidates_is_answered_by_its_lookups() {
         "fusion asked about blank-node candidates and the answers shortened the read — \
          {report}"
     );
-    // The same bill as the IRI-subject run: one read to the proven stopping rank
-    // and its probe row, against the control's discarded frontier and drain.
-    assert_eq!(asked.read_attempts, ReadAttempts::Once, "{report}");
-    assert_eq!(asked.rows_materialised, [Some(72), Some(72)], "{report}");
-    assert_eq!(control.read_attempts, ReadAttempts::Twice, "{report}");
+    // The same bill as the IRI-subject run: one read per side, as deep as the
+    // fusion pulled it, against the control's one read of every document.
+    assert_eq!(asked.rows_materialised, [Some(66), Some(66)], "{report}");
     assert_eq!(
         control.rows_materialised,
-        [Some(108), Some(108)],
+        [Some(100), Some(100)],
         "{report}"
     );
-    assert!(
-        asked.candidate_bound.iter().sum::<u64>() >= asked.fused_lookups,
-        "every lookup reached a relation with its blank-node candidate bound — {report}"
+    assert_eq!(
+        (asked.rankings, control.rankings),
+        ([1, 1], [1, 1]),
+        "{report}"
+    );
+    assert_eq!(
+        asked.candidate_bound.iter().sum::<u64>(),
+        asked.fused_lookups,
+        "every lookup reached a relation with its blank-node candidate bound, and every \
+         one is on the trailer — {report}"
     );
     assert!(
         asked.membership_lookups[1] > 0,

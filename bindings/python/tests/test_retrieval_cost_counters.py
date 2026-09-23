@@ -15,13 +15,11 @@ apart, which is why they are on the answer and not behind a verbosity switch:
 * ``"ranks_pulled"`` — how far down each producer's ranking the fusion walked;
 * ``"exclusion_lookups"`` — the point queries it spent settling finality, a
   different read of a different question and never added into the rank;
-* ``"rows_materialised"`` — the rows the producers' reads returned, cumulative
-  over every read the call took;
+* ``"rows_materialised"`` — the rows the stratum's one read produced: each
+  stratum is read on demand, a row per pull, so this is the ranks the fusion
+  walked plus the probe row where it read past the planned depth;
 * ``"collisions_observed"`` — adjacent ranks the fused score could not tell
   apart, counted by observation.
-
-and ``"read_attempts"`` on the answer, which says how many complete reads of the
-bundle were paid for.
 
 **Every test here is a TWO-RUN test.** A single run's counter is satisfied by a
 counter that is always zero, always the corpus size, or always whatever this
@@ -178,6 +176,13 @@ def _counter(answer: dict[str, Any], stratum: str, name: str) -> int:
     return int(value)
 
 
+def _probe(answer: dict[str, Any], stratum: str) -> int:
+    """The probe row a stratum's read produced: one where the read reached past
+    its planned depth — its status says the depth stopped it — and none
+    otherwise."""
+    return 1 if answer["statuses"][stratum]["status"] == "depth_reached" else 0
+
+
 def test_the_read_counters_move_between_a_cheap_run_and_a_corpus_cost_run() -> None:
     """The same answer, twice, for two very different prices.
 
@@ -231,17 +236,31 @@ def test_the_read_counters_move_between_a_cheap_run_and_a_corpus_cost_run() -> N
             "number a headline about materialised rows is a headline about"
         )
 
-        # The read work is never below the ranks: the fusion cannot walk rows the
-        # read did not return. Stated because it is the one relation between the
-        # two counters that must hold whatever either of them says.
-        assert cheap_rows >= cheap_ranks, stratum
-        assert costly_rows >= costly_ranks, stratum
+        # The read produced exactly what the fusion walked: each stratum is one
+        # read taken a row per pull, so its rows are its ranks, plus the probe
+        # row only where the fusion read past the planned depth. A read begun
+        # again, or read ahead of the fusion, would show here as rows the ranks
+        # do not account for.
+        assert cheap_rows == cheap_ranks + _probe(cheap, stratum), stratum
+        assert costly_rows == costly_ranks + _probe(costly, stratum), stratum
 
-    # And the number of complete reads, which is the other thing a cost can hide
-    # in: a run reported as one read that really took two would have its second
-    # read's rows in `"rows_materialised"` and nowhere else.
-    for answer in (cheap, costly):
-        assert answer["read_attempts"] in (1, 2), answer["read_attempts"]
+    # And the exact values, per configuration, as a pair: the declared run reads
+    # three rows per stratum for a three-row answer, and the undeclared run —
+    # which settles finality by asking — reads each stratum's forty once.
+    assert [
+        (
+            _counter(cheap, stratum, "ranks_pulled"),
+            _counter(cheap, stratum, "rows_materialised"),
+        )
+        for stratum in (NOTE_STRATUM, TITLE_STRATUM)
+    ] == [(3, 3), (3, 3)]
+    assert [
+        (
+            _counter(costly, stratum, "ranks_pulled"),
+            _counter(costly, stratum, "rows_materialised"),
+        )
+        for stratum in (NOTE_STRATUM, TITLE_STRATUM)
+    ] == [(40, 40), (40, 40)]
 
 
 def test_the_exclusion_lookup_counter_moves_with_what_the_producers_declared() -> None:

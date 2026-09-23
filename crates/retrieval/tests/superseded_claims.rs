@@ -65,6 +65,7 @@ const CORPUS: &[(&str, &str)] = &[
     ),
     ("src/compile.rs", include_str!("../src/compile.rs")),
     ("src/execute.rs", include_str!("../src/execute.rs")),
+    ("src/search.rs", include_str!("../src/search.rs")),
 ];
 
 /// One reversal: the ledger entry that records it, the wording that is now
@@ -195,6 +196,43 @@ fn reversals() -> Vec<Reversal> {
                 "counted in exactly one number — the rows a read materialized",
             ],
         },
+        Reversal {
+            entry: "A read that is not read to its end cannot carry a verifiable receipt",
+            superseded: &[
+                "Discarding rather than resuming is what keeps the answer verifiable",
+                "exists only on a *completed* governed run",
+                "an attestation exists only on a completed run",
+                "the one-call entry point reads at most **twice**",
+            ],
+            replacement: &[
+                "The answer stays verifiable because the receipt is taken when the read stops \
+                 rather than before its first row",
+                "# Each stratum is read as far as the fusion asks, once",
+                "# A stratum may be read on demand, and its receipt is taken when the reading \
+                 stops",
+            ],
+        },
+        Reversal {
+            entry: "The evaluator exposes no cursor, and incremental enumeration is separate, \
+                    larger work",
+            superseded: &[
+                "the evaluator exposes no cursor, stream or iterator surface at all",
+                "Making enumeration incremental is separate, larger work",
+            ],
+            replacement: &[
+                "The same unit can be read **on demand**",
+                "`NativeSparqlEngine::open_call_cursor`",
+            ],
+        },
+        Reversal {
+            entry: "A stream's ending is fixed before its first row, or a caller that stopped \
+                    early would be told something different",
+            superseded: &[
+                "a stream whose ending were derived at the end would say something different to \
+                 a caller that stopped early",
+            ],
+            replacement: &["it says nothing to such a caller at all"],
+        },
     ]
 }
 
@@ -321,8 +359,8 @@ fn the_ladder_names_the_api_and_the_tallies_the_crate_actually_has() {
 fn every_ledger_entry_states_the_claim_the_belief_the_change_and_the_rule() {
     let entries: Vec<&str> = LEDGER.split("\n### ").skip(1).collect();
     assert!(
-        entries.len() >= 10,
-        "the ledger holds {} entries; this branch added five to the five already \
+        entries.len() >= 13,
+        "the ledger holds {} entries; this branch added eight to the five already \
          there, so a smaller count means one was dropped rather than superseded",
         entries.len()
     );

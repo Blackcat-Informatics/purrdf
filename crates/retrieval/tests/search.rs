@@ -21,9 +21,9 @@ use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, DecayRule, ExecutionError, Fixed, FusionError,
     FusionProfile, Iri, Metric, PlanError, ProducerStatus, ProtocolError, RankFidelity,
-    RankedStreamAdapter, ReadAttempts, RequestTerm, RetrievalRequest, SearchError, SearchResult,
-    Statistics, StratumUnit, Term, TopK, UnservedReason, UnservedTerm, compile, execute, fuse,
-    plan, search,
+    RankedStreamAdapter, ReadSchedule, RequestTerm, RetrievalRequest, SearchError, SearchResult,
+    Statistics, StratumUnit, Term, TopK, UnservedReason, UnservedTerm, compile, execute_within,
+    fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError,
@@ -409,13 +409,38 @@ async fn manual_composition(
         fusion_profile: Some(profile),
     };
     let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
-    let execution = execute(&compiled, registry, dataset)
+    // The schedule `search` reads under, which a caller composing by hand names
+    // as well: each stratum is one invocation held open and read as far as the
+    // fusion pulls it.
+    let execution = execute_within(&compiled, registry, dataset, ReadSchedule::OnDemand)
         .await
         .expect("the fixture registry executes");
+    let mut statuses = execution.statuses;
 
     let mut streams = Vec::new();
     let mut unweighted_strata = Vec::new();
-    for stream in execution.streams {
+    for mut stream in execution.streams {
+        if profile.weight(&stream.stratum).is_none() {
+            // Not fused: its status is how its read ended, and a read produced on
+            // demand has ended only once it is read, so it is read to its end.
+            while stream
+                .stream
+                .next()
+                .await
+                .expect("an unweighted stratum reads cleanly")
+                .is_some()
+            {}
+            let receipt = stream
+                .stream
+                .receipt()
+                .await
+                .expect("a stream read to its end has a receipt");
+            statuses
+                .entry(stream.stratum.clone())
+                .or_insert_with(|| ProducerStatus::from(receipt));
+            unweighted_strata.push(stream.stratum);
+            continue;
+        }
         let plan_id = stream.plan_id;
         let fused_bound = stream.fused_bound;
         let attestation = stream.attestation.clone();
@@ -439,7 +464,7 @@ async fn manual_composition(
     let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
         .await
         .expect("the surviving streams fuse");
-    let trailer = fused.trailer.completed_with(execution.statuses);
+    let trailer = fused.trailer.completed_with(statuses);
     let evidence_id = trailer.evidence_id;
     SearchResult {
         rows: fused.rows,
@@ -450,13 +475,6 @@ async fn manual_composition(
         planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata,
-        // One read, at the depths the plan recorded, because that is the read a
-        // caller composing `execute` by hand takes. `search` attempts a narrower
-        // one first and keeps it only when it certified, so a run that agrees with
-        // this composition on everything else must agree here too: either the
-        // narrowed read was the whole answer, or it was discarded and this very
-        // read replaced it.
-        read_attempts: ReadAttempts::Once,
     }
 }
 

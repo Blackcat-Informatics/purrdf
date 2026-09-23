@@ -227,6 +227,10 @@ pub use property_fn::{
 // kind it covers. Its two siblings need no re-export: `agg_fn` and `user_fn` are
 // already public modules.
 pub use property_fn_plan::content_fingerprint as property_function_content_fingerprint;
+// The on-demand read of one property-function call, returned by
+// `NativeSparqlEngine::open_call_cursor`: a composition layer that stops reading a
+// ranked relation as soon as it has what it needs holds one of these.
+pub use property_fn_eval::CallCursor;
 // The registry instance identity, re-exported alongside the registry that mints
 // it: a composition layer must be able to tell two independently built registries
 // apart even when they declare identically (`PropertyFunctionRegistry::instance_id`),

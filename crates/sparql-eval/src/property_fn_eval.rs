@@ -92,11 +92,12 @@ use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::property_fn::{
-    PfArgs, PfArity, PropertyFunction, ServiceLevel, generation_contained, next_contained,
-    open_contained, service_level_contained, take_work_contained,
+    PfArgs, PfArity, PfAttestation, PfCursor, PropertyFunction, ServiceLevel, generation_contained,
+    next_contained, open_contained, service_level_contained, take_work_contained,
 };
 use crate::row_ingest::{GovernedRowIngest, RowAdmission};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::witness::RelationWitness;
 
 /// Evaluate a property-function node that is NOT the right operand of a `Lateral` —
 /// a call with nothing written before it in its group.
@@ -764,6 +765,361 @@ fn unify_term(arg: &Arg, value: &TermValue, values: &mut [Option<TermValue>]) ->
             }
             _ => false,
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One call, read on demand
+// ---------------------------------------------------------------------------
+
+/// A query that is exactly one property-function call, read one solution at a time as
+/// its consumer asks, with the invocation held open between reads.
+///
+/// [`eval_call_over`] drains an invocation into a bag before the first row leaves it,
+/// because a node of the algebra hands its parent a bag. A consumer that stops reading
+/// as soon as it has what it needs — a fused top-`k`, whose stopping rank is not
+/// knowable until it has stopped — pays for every row the bag held and it never read.
+/// This is the same invocation, opened with the same arguments, the same declared-mode
+/// admission and the same row ceiling the governed lane would give it, and pulled
+/// through the same containment, width check and unification: a prefix of what it
+/// yields is exactly a prefix of what that bag would have held, row for row. What it
+/// changes is only *when* each row is produced — never which rows, and never their
+/// order.
+///
+/// # The witness is built when the read stops, and it pins the index
+///
+/// The governed lane records one witness entry per invocation: the generation read the
+/// instant the cursor opened and the service level read when it ended. A read held
+/// open across its consumer's decisions has two instants that matter — the open, whose
+/// attestation the consumer is told before it pulls a row
+/// ([`Self::opened`]), and the moment the consumer stops, however far it read. So
+/// [`Self::settle`] builds the witness then: the generation pinned at open, the service
+/// level read now, and — if the cursor now reports a different generation than it
+/// opened on — that second generation too. A consumer reading the witness under the
+/// sole-witness rule therefore sees an index that moved under the read as exactly what
+/// it is, two generations for one invocation, and a service level that changed between
+/// the announcement and the stop as a witness that disagrees with what it was told.
+/// Nothing about the read is attested before it is known, and nothing known at the stop
+/// is lost to the consumer having stopped early.
+///
+/// # What is not here
+///
+/// No governor. The lane this replaces declines every caller-settable ceiling
+/// ([`QueryGovernors::UNBOUNDED`](crate::QueryGovernors)), so there is no budget a
+/// charge could exhaust and no stop signal to poll; the relation's reported work is
+/// summed in [`Self::work`] instead of being charged, which is the one use that lane
+/// made of it.
+pub struct CallCursor {
+    /// The called relation's registered IRI, naming every contained host call.
+    iri: String,
+    /// The call's compiled positions, against an empty driving row.
+    plan: CallPlan,
+    /// The relation's declared arity, which every emitted row is checked against.
+    declared: PfArity,
+    /// The open invocation.
+    cursor: Box<dyn PfCursor>,
+    /// What the invocation attested the instant it opened.
+    opened: PfAttestation,
+    /// The projected variable names, in projection order.
+    variables: Vec<String>,
+    /// For each projected variable, the call slot it reads, or `None` for a projected
+    /// variable the call never binds.
+    columns: Vec<Option<usize>>,
+    /// The per-row unification buffer, re-seeded (all free) before every row.
+    values: Vec<Option<TermValue>>,
+    /// The query's `LIMIT`, if it carried one: the solutions this read may yield.
+    limit: Option<usize>,
+    /// Solutions yielded so far.
+    yielded: usize,
+    /// The work the relation has reported, summed over every pull.
+    work: u64,
+    /// Whether the invocation has ended — drained, or stopped at the `LIMIT`.
+    ended: bool,
+}
+
+impl std::fmt::Debug for CallCursor {
+    /// Names the relation and the read's position. A cursor is host code with no
+    /// `Debug` of its own, so nothing past the counts is printed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallCursor")
+            .field("iri", &self.iri)
+            .field("variables", &self.variables)
+            .field("yielded", &self.yielded)
+            .field("ended", &self.ended)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Open the one call `pattern` consists of, against `registry`, as a [`CallCursor`].
+///
+/// `pattern` is a `SELECT` query's root, and it must be one property-function call
+/// under nothing but **row-for-row** operators: projections, `LIMIT`s with no
+/// `OFFSET`, and `BIND`s that rename a variable. Those are the operators a nested
+/// `SELECT (?c AS ?x) WHERE { call } LIMIT n` is made of, and each one maps the
+/// call's `i`-th row to the answer's `i`-th row or stops — so the answer can be
+/// produced one row per pull by carrying each row through them. Anything else is
+/// refused with a diagnostic naming the node: an operator that could reorder,
+/// merge, drop or compute over rows would need reading on demand itself, and this
+/// entry reads the call and nothing else.
+pub(crate) fn open_call_cursor(
+    pattern: &GraphPattern,
+    registry: &crate::property_fn::PropertyFunctionRegistry,
+) -> Result<CallCursor, EvalError> {
+    let not_one_call = |node: &str| {
+        EvalError::unsupported(format!(
+            "an on-demand call read is one property-function call under projections, \
+             OFFSET-free LIMITs and variable-renaming BINDs; this query has {node} there"
+        ))
+    };
+    // Walk down to the call, remembering every operator on the way.
+    let mut operators: Vec<&GraphPattern> = Vec::new();
+    let mut node = pattern;
+    let call = loop {
+        match node {
+            GraphPattern::PropertyFunction(call) => break call,
+            GraphPattern::Slice {
+                start: 0, inner, ..
+            }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Extend {
+                inner,
+                expression: purrdf_sparql_algebra::Expression::Variable(_),
+                ..
+            } => {
+                operators.push(node);
+                node = inner;
+            }
+            GraphPattern::Slice { .. } => return Err(not_one_call("an OFFSET")),
+            GraphPattern::Extend { .. } => return Err(not_one_call("a computed BIND")),
+            other => {
+                let name = format!("{other:?}");
+                let kind = name.split([' ', '(', '{']).next().unwrap_or("an operator");
+                return Err(not_one_call(&format!("a {kind} node")));
+            }
+        }
+    };
+    // The tightest `LIMIT` on the way down bounds the answer, whichever level wrote
+    // it: every operator between them is row-for-row.
+    let limit = operators
+        .iter()
+        .filter_map(|operator| match operator {
+            GraphPattern::Slice { length, .. } => *length,
+            _ => None,
+        })
+        .min();
+    let relation = registry.resolve(&call.iri).map(Arc::clone).ok_or_else(|| {
+        EvalError::function(format!(
+            "no property function is registered for <{}>",
+            call.iri
+        ))
+    })?;
+    let plan = CallPlan::compile(call, &VarSchema::new())?;
+    let declared =
+        crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())?;
+    let supplied = PfArity::new(plan.subject_len, plan.args.len() - plan.subject_len);
+    if declared != supplied {
+        return Err(EvalError::function(format!(
+            "property function <{}> is declared with {declared} argument(s); the call site \
+             supplies {supplied}",
+            call.iri
+        )));
+    }
+    let modes = crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
+        relation.modes().to_vec()
+    })?;
+    // No driving row: every slot is free, so a position is bound exactly when the call
+    // site wrote a constant there — the invocation the governed lane makes for a call
+    // with nothing before it in its group.
+    let free: Vec<Option<TermValue>> = vec![None; plan.slot_count()];
+    let args: Vec<Option<TermValue>> = plan.args.iter().map(|arg| arg_value(arg, &free)).collect();
+    let refs: smallvec::SmallVec<[Option<&TermValue>; 4]> =
+        args.iter().map(Option::as_ref).collect();
+    let (subject, object) = refs.split_at(plan.subject_len);
+    let pf_args = PfArgs::new(subject, object);
+    admit_mode(&modes, &call.iri, pf_args.mode())?;
+    // The licence the governed lane offers the same call: the node's whole `LIMIT`,
+    // withheld unless the call is admission-transparent. See `eval_call_over`.
+    let ceiling = limit
+        .filter(|_| plan.ceiling_is_offerable)
+        .map(|limit| u64::try_from(limit).unwrap_or(u64::MAX));
+    let cursor = open_contained(relation.as_ref(), &call.iri, &pf_args, ceiling)?;
+    // Both facts read the instant the cursor opens: the generation because that is the
+    // instant it is true of every row to come, and the service level because the
+    // consumer is told it before its first row. `settle` reads both again at the stop.
+    let opened = PfAttestation {
+        generation: generation_contained(&*cursor, &call.iri)?,
+        service: service_level_contained(&*cursor, &call.iri)?,
+    };
+    // Carry the call's variables out through the operators, innermost first: each
+    // visible name is bound to the call slot it reads, and a name no slot reaches is
+    // projected unbound, exactly as the materialising evaluator leaves it.
+    let mut visible: Vec<(Variable, Option<usize>)> = plan
+        .bound_cols
+        .iter()
+        .filter_map(|&(slot, column)| {
+            plan.schema
+                .vars()
+                .get(column)
+                .map(|variable| (variable.clone(), Some(slot)))
+        })
+        .collect();
+    let lookup = |visible: &[(Variable, Option<usize>)], variable: &Variable| {
+        visible
+            .iter()
+            .find(|(name, _)| name == variable)
+            .and_then(|(_, slot)| *slot)
+    };
+    let mut projection: Option<Vec<(Variable, Option<usize>)>> = None;
+    for operator in operators.iter().rev() {
+        match operator {
+            GraphPattern::Extend {
+                variable,
+                expression: purrdf_sparql_algebra::Expression::Variable(source),
+                ..
+            } => {
+                let slot = lookup(&visible, source);
+                visible.push((variable.clone(), slot));
+            }
+            GraphPattern::Project { variables, .. } => {
+                let projected: Vec<(Variable, Option<usize>)> = variables
+                    .iter()
+                    .map(|variable| (variable.clone(), lookup(&visible, variable)))
+                    .collect();
+                visible.clone_from(&projected);
+                projection = Some(projected);
+            }
+            _ => {}
+        }
+    }
+    let Some(projection) = projection else {
+        return Err(not_one_call("no projection"));
+    };
+    Ok(CallCursor {
+        iri: call.iri.clone(),
+        declared,
+        cursor,
+        opened,
+        variables: projection
+            .iter()
+            .map(|(variable, _)| variable.as_str().to_owned())
+            .collect(),
+        columns: projection.iter().map(|(_, slot)| *slot).collect(),
+        values: free,
+        limit,
+        yielded: 0,
+        work: 0,
+        ended: false,
+        plan,
+    })
+}
+
+impl CallCursor {
+    /// The projected variable names, in projection order — the columns every row
+    /// [`Self::next_row`] yields is laid out in.
+    #[must_use]
+    pub fn variables(&self) -> &[String] {
+        &self.variables
+    }
+
+    /// What the invocation attested the instant it opened: the generation it pinned,
+    /// and the service level it reported then.
+    ///
+    /// This is the attestation a consumer is told before it reads a row, and the one
+    /// [`Self::settle`]'s witness is measured against.
+    #[must_use]
+    pub const fn opened(&self) -> &PfAttestation {
+        &self.opened
+    }
+
+    /// The work the relation has reported so far, summed over every pull
+    /// ([`PfCursor::take_work`]).
+    #[must_use]
+    pub const fn work(&self) -> u64 {
+        self.work
+    }
+
+    /// The next solution, in the relation's emission order, or `None` once the
+    /// invocation has ended.
+    ///
+    /// A row the relation emits that disagrees with a constant the call site wrote is
+    /// filtered, exactly as the governed lane filters it, and never counted. A cell
+    /// whose language tag no writer can spell is unbound, exactly as the governed
+    /// lane's interner leaves it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the relation raises from its cursor, and a row whose width
+    /// contradicts the declared arity. The read is not resumable past an error.
+    pub fn next_row(&mut self) -> Result<Option<Vec<Option<TermValue>>>, EvalError> {
+        loop {
+            if self.ended {
+                return Ok(None);
+            }
+            if self.limit.is_some_and(|limit| self.yielded >= limit) {
+                self.ended = true;
+                return Ok(None);
+            }
+            let pulled = next_contained(&mut *self.cursor, &self.iri)?;
+            // After every pull, the terminating one included, as the governed lane
+            // reads it — so a relation that searched lazily on its first pull and one
+            // that searched eagerly in `open` report the same total.
+            let work = take_work_contained(&mut *self.cursor, &self.iri)?;
+            self.work = self.work.saturating_add(work);
+            let Some(emitted) = pulled else {
+                self.ended = true;
+                return Ok(None);
+            };
+            if emitted.len() != self.declared.total() {
+                self.ended = true;
+                return Err(EvalError::function(format!(
+                    "property function <{}> emitted a row of {} value(s); its declared arity \
+                     ({}) requires {}",
+                    self.iri,
+                    emitted.len(),
+                    self.declared,
+                    self.declared.total()
+                )));
+            }
+            self.values.fill(None);
+            if !unify_row(&self.plan.args, &emitted, &mut self.values) {
+                continue;
+            }
+            self.yielded += 1;
+            let values = &self.values;
+            return Ok(Some(
+                self.columns
+                    .iter()
+                    .map(|slot| {
+                        slot.and_then(|slot| values[slot].clone())
+                            .filter(crate::scratch::language_tags_well_formed)
+                    })
+                    .collect(),
+            ));
+        }
+    }
+
+    /// The witness of this invocation as it stands now: the relation it invoked, the
+    /// generation it pinned at open, and the service level it reports at this instant —
+    /// with the generation it reports now recorded beside the pinned one if the two
+    /// differ.
+    ///
+    /// Callable at any point and as often as a consumer stops, because a consumer that
+    /// stopped reading has ended the invocation from its own side whether or not the
+    /// relation ran out. See the type's docs for why this is the instant the witness is
+    /// true of.
+    ///
+    /// # Errors
+    ///
+    /// A relation whose generation or service-level declaration panics.
+    pub fn settle(&self) -> Result<RelationWitness, EvalError> {
+        let generation = generation_contained(&*self.cursor, &self.iri)?;
+        let service = service_level_contained(&*self.cursor, &self.iri)?;
+        let mut witness = RelationWitness::default();
+        witness.record(&self.iri, self.opened.generation.clone(), service.clone());
+        if generation != self.opened.generation {
+            witness.record(&self.iri, generation, service);
+        }
+        Ok(witness)
     }
 }
 

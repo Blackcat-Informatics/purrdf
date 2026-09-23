@@ -430,8 +430,7 @@ pub mod producer_contract {}
 
 pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
 pub use compile::{
-    CompiledRetrieval, PlannedResolution, ReadCeiling, StratumUnit, UnitError, compile,
-    speculative_depth,
+    CompiledRetrieval, PlannedResolution, ReadSchedule, StratumUnit, UnitError, compile,
 };
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
@@ -457,8 +456,8 @@ pub use plan::{
 };
 pub use planner::{depth_cause, depth_from, plan};
 pub use ranked_stream::{
-    ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock,
-    StreamContract,
+    ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, ReadSettlement,
+    RowBlock, StreamContract,
 };
 pub use reciprocal_rank::{ClassWidth, CrossingRank, MonotoneDepth, ToleratedDepth};
 pub use reciprocal_rank::{
@@ -466,7 +465,7 @@ pub use reciprocal_rank::{
 };
 pub use render::observed_resolution;
 pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
-pub use search::{RankedStreamAdapter, ReadAttempts, SearchError, SearchResult, search};
+pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
 pub use statistics::Statistics;
 
 // The exact fixed-point type a fusion profile's weights and the fused scores

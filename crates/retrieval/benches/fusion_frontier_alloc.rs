@@ -803,18 +803,17 @@ fn main() {
             ExclusionBasis::Membership,
         );
     }
-    // The speculative read, as the two reads it chooses between. A narrowed read
-    // hands the fusion a stream the length of the speculative depth; the planned
-    // read hands it the producer's whole declared length. The fusion consumes
-    // the same ranks either way — that is the soundness claim — and `work` is
-    // what the two reads cost, which is the number a narrowing is actually
-    // about and the number `pulled` alone cannot show.
+    // The length of the read behind a stream, against the rows the fusion
+    // takes from it. The fusion consumes the same ranks whatever the stream
+    // holds past them — that is the soundness claim — and `work` is what each
+    // stream's read reports it cost, which is the number `pulled` alone cannot
+    // show.
     println!(
-        "[fusion_frontier_alloc] --- speculative read against planned read, rows fused fixed at 32 ---"
+        "[fusion_frontier_alloc] --- read length against rows fused, rows fused fixed at 32 ---"
     );
     for total in [35_u64, 1_000, 100_000] {
         shared_block_phase(
-            &format!("strata=3 rows=32 read={total} speculative-vs-planned"),
+            &format!("strata=3 rows=32 read={total} read-length"),
             total,
             32,
             ExclusionBasis::Membership,

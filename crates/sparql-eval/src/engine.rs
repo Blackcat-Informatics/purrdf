@@ -1044,6 +1044,69 @@ impl NativeSparqlEngine {
         )
     }
 
+    /// Open `prepared` — a `SELECT` that projects exactly one property-function call,
+    /// under an optional `LIMIT` — as a [`CallCursor`](crate::CallCursor): the call's
+    /// solutions read one at a time as the caller asks, with the invocation held open
+    /// between reads, instead of drained into an answer before the first is readable.
+    ///
+    /// The invocation is the one [`Self::query_prepared_governed_view`] makes for the
+    /// same plan under [`QueryGovernors::UNBOUNDED`]: the same registry admission, the
+    /// same arguments, the same declared-mode check, the same row licence, the same
+    /// per-row width check and unification. So every prefix of what the cursor yields
+    /// is a prefix of that answer, row for row; what the caller decides is how much of
+    /// it is ever produced. Its receipt is taken when the caller stops —
+    /// [`CallCursor::settle`](crate::CallCursor::settle) — rather than when the
+    /// relation runs out, because a caller that stopped early is exactly the caller the
+    /// receipt must still describe.
+    ///
+    /// `options` must name the registry the plan was prepared against, as for every
+    /// prepared-plan entry.
+    ///
+    /// # Errors
+    ///
+    /// A plan whose registry disagrees with `options`, a query that is not one
+    /// projected call (an `OFFSET`, a dataset clause, any operator between the call and
+    /// the root), and every failure the governed lane raises before the invocation's
+    /// first row: an unregistered relation, an arity or access mode it does not
+    /// declare, a relation that refuses to open.
+    pub fn open_call_cursor(
+        &self,
+        prepared: &PreparedQuery,
+        options: QueryOptions<'_>,
+    ) -> Result<crate::CallCursor, RdfDiagnostic> {
+        check_plan_matches_relations(
+            prepared,
+            options,
+            &crate::DetHashSet::default(),
+            ShaclPrebinding::None,
+        )?;
+        let refused = |what: &str| {
+            RdfDiagnostic::error(
+                "native-sparql-query-eval",
+                format!(
+                    "an on-demand call read is a SELECT over the default dataset; this is {what}"
+                ),
+            )
+        };
+        let Query::Select {
+            pattern, dataset, ..
+        } = &prepared.query
+        else {
+            return Err(refused("not a SELECT"));
+        };
+        if !dataset.default.is_empty() || !dataset.named.is_empty() {
+            return Err(refused("a query with a dataset clause"));
+        }
+        crate::property_fn_eval::open_call_cursor(pattern, options.property_functions()).map_err(
+            |e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                    e.to_string(),
+                )
+            },
+        )
+    }
+
     /// The context every governed lane evaluates in: governors attached, a federated
     /// source injected where the entry has one, `options` applied, and witnessing armed.
     ///
