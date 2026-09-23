@@ -2499,33 +2499,33 @@ fn a_lone_allowed_stratum_is_not_licensed_by_being_alone() {
 }
 
 // ---------------------------------------------------------------------------
-// 1d. Instance optimality, against a brute-forced certificate.
+// 1d. Instance optimality, against a brute-forced shallowest prefix.
 // ---------------------------------------------------------------------------
 
-/// How far past the certificate the engine's total read may sit.
+/// How far past the shallowest prefix the engine's total read may sit.
 ///
 /// **What it bounds:** the ratio of the *total* ranks the engine pulled across
 /// every stream of a generated instance to the total depth of that instance's
-/// certificate — the shallowest per-stream prefix from which the answer is
-/// entailed. It is a per-instance bound, asserted on each instance below, not an
+/// shallowest prefix — the per-stream prefix of least total depth from which the
+/// answer is entailed. It is a per-instance bound, asserted on each instance below, not an
 /// average over them.
 ///
-/// The certificate is computed by an oracle that already knows where every
+/// The shallowest prefix is computed by an oracle that already knows where every
 /// stream ends. The engine knows neither, so it pays for two things the
-/// certificate does not: one unmerged head per open stream, which is the only
+/// shallowest prefix does not: one unmerged head per open stream, which is the only
 /// thing that makes the threshold fall at all, and — where a candidate is named
 /// by one stream but shares its block with others — a threshold summed over
 /// every sharer, which its single contribution has to outlast.
 ///
 /// Six is the pinned value because the worst instance below reaches 16 ranks
-/// against a certificate of 3, which is 5⅓. The gap is concentrated in
+/// against a shallowest prefix of 3, which is 5⅓. The gap is concentrated in
 /// `one_block_disjoint_items`, where finality — not the threshold — forbids the
 /// stop: exactly the configuration the four-hundred-row control pins at full
 /// scale. Every other instance sits at or below 2.
-const CERTIFICATE_FACTOR: u64 = 6;
+const SHALLOWEST_PREFIX_FACTOR: u64 = 6;
 
 /// One stratum of a generated instance.
-struct CertStratum {
+struct OracleStratum {
     name: &'static str,
     /// The blocks this stream declares. Every item it holds lies in one of them.
     tags: Vec<&'static str>,
@@ -2537,7 +2537,7 @@ struct CertStratum {
 /// A generated instance: a handful of short streams and a bound.
 struct Instance {
     name: &'static str,
-    strata: Vec<CertStratum>,
+    strata: Vec<OracleStratum>,
     top_k: TopK,
 }
 
@@ -2561,7 +2561,7 @@ fn items(prefix: &str, first: u64, count: u64) -> Vec<String> {
         .collect()
 }
 
-/// A scripted stream for the certificate oracle: a prefix of one stratum's
+/// A scripted stream for the shallowest-prefix oracle: a prefix of one stratum's
 /// items, ending in whatever receipt the caller states.
 struct ScriptedStream {
     rows: VecDeque<RankedRow<Term>>,
@@ -2587,7 +2587,7 @@ impl RankedStream for ScriptedStream {
         self.contract.clone()
     }
 
-    /// The certificate oracle's streams declare no exclusion basis, so being
+    /// The shallowest-prefix oracle's streams declare no exclusion basis, so being
     /// asked for a verdict is the disagreement
     /// [`ProtocolError::ExclusionUnavailable`] names rather than a question
     /// they could answer. The oracle's whole question is what a fusion could
@@ -2605,15 +2605,15 @@ impl RankedStream for ScriptedStream {
     }
 }
 
-fn cert_stratum_iri(name: &str) -> Iri {
+fn oracle_stratum_iri(name: &str) -> Iri {
     iri(&ex(&format!("stratum/{name}")))
 }
 
-fn cert_profile(instance: &Instance) -> FusionProfile {
+fn oracle_profile(instance: &Instance) -> FusionProfile {
     let weights = instance
         .strata
         .iter()
-        .map(|entry| (cert_stratum_iri(entry.name), entry.weight))
+        .map(|entry| (oracle_stratum_iri(entry.name), entry.weight))
         .collect();
     FusionProfile::with_decay(weights, decay()).expect("the generated profile is valid")
 }
@@ -2623,9 +2623,9 @@ fn cert_profile(instance: &Instance) -> FusionProfile {
 ///
 /// An oracle's prefix ends because the oracle chose to cut it, and a cut prefix
 /// that claimed a deeper stream would be a different question. `Exhausted` is
-/// therefore the honest receipt: the certificate asks what a fusion could
+/// therefore the honest receipt: the oracle asks what a fusion could
 /// conclude from exactly these rows.
-fn cert_streams(instance: &Instance, depths: &[usize]) -> Vec<(Iri, ScriptedStream)> {
+fn oracle_streams(instance: &Instance, depths: &[usize]) -> Vec<(Iri, ScriptedStream)> {
     instance
         .strata
         .iter()
@@ -2652,7 +2652,7 @@ fn cert_streams(instance: &Instance, depths: &[usize]) -> Vec<(Iri, ScriptedStre
                 .collect();
             let emitted = u64::try_from(rows.len()).expect("generated row counts fit");
             (
-                cert_stratum_iri(entry.name),
+                oracle_stratum_iri(entry.name),
                 ScriptedStream {
                     rows,
                     receipt: ProducerReceipt::Exhausted {
@@ -2672,16 +2672,16 @@ fn cert_streams(instance: &Instance, depths: &[usize]) -> Vec<(Iri, ScriptedStre
         .collect()
 }
 
-fn cert_fuse(instance: &Instance, depths: &[usize]) -> FusionResult<Term> {
+fn fuse_at_depths(instance: &Instance, depths: &[usize]) -> FusionResult<Term> {
     block_on(fuse::<ScriptedStream, Term>(
-        cert_streams(instance, depths),
-        &cert_profile(instance),
+        oracle_streams(instance, depths),
+        &oracle_profile(instance),
         instance.top_k,
     ))
     .expect("the generated streams obey the protocol")
 }
 
-/// The answer a fusion returned, as the thing a certificate has to reproduce:
+/// The answer a fusion returned, as the thing a shallowest prefix has to reproduce:
 /// the rows, their scores, and their order.
 fn answer_of(result: &FusionResult<Term>) -> Vec<(String, Fixed)> {
     result
@@ -2708,7 +2708,7 @@ fn depth_vectors(lengths: &[usize]) -> Vec<Vec<usize>> {
     vectors
 }
 
-/// The certificate: the cheapest per-stream prefix from which this instance's
+/// The shallowest prefix: the cheapest per-stream prefix from which this instance's
 /// answer is entailed.
 ///
 /// Brute force over every prefix vector, keeping those whose fusion reproduces
@@ -2716,17 +2716,17 @@ fn depth_vectors(lengths: &[usize]) -> Vec<Vec<usize>> {
 /// them the one with the smallest total depth. Ties are settled by the shallower
 /// deepest stream, then lexically, so the answer is one vector and not an
 /// arbitrary member of a set.
-fn certificate(instance: &Instance) -> Vec<usize> {
+fn shallowest_prefixes(instance: &Instance) -> Vec<usize> {
     let lengths: Vec<usize> = instance
         .strata
         .iter()
         .map(|entry| entry.items.len())
         .collect();
-    let full = cert_fuse(instance, &lengths);
+    let full = fuse_at_depths(instance, &lengths);
     let target = answer_of(&full);
     let mut best: Option<Vec<usize>> = None;
     for candidate in depth_vectors(&lengths) {
-        if answer_of(&cert_fuse(instance, &candidate)) != target {
+        if answer_of(&fuse_at_depths(instance, &candidate)) != target {
             continue;
         }
         let key = |vector: &[usize]| {
@@ -2744,7 +2744,7 @@ fn certificate(instance: &Instance) -> Vec<usize> {
     best.expect("the full prefix always entails the answer it produced")
 }
 
-/// The instances the certificate is brute-forced over: two and three strata, at
+/// The instances the shallowest prefix is brute-forced over: two and three strata, at
 /// most a dozen items each, across the overlap patterns a declaration can take.
 fn instances() -> Vec<Instance> {
     vec![
@@ -2753,13 +2753,13 @@ fn instances() -> Vec<Instance> {
         Instance {
             name: "two_disjoint_blocks",
             strata: vec![
-                CertStratum {
+                OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
                     items: items("doc", 1, 8),
                 },
-                CertStratum {
+                OracleStratum {
                     name: "people",
                     tags: vec![BLOCK_PEOPLE],
                     weight: Fixed::ONE,
@@ -2773,13 +2773,13 @@ fn instances() -> Vec<Instance> {
         Instance {
             name: "one_block_reversed_agreement",
             strata: vec![
-                CertStratum {
+                OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
                     items: items("doc", 1, 8),
                 },
-                CertStratum {
+                OracleStratum {
                     name: "titles",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
@@ -2792,13 +2792,13 @@ fn instances() -> Vec<Instance> {
         Instance {
             name: "one_block_partial_overlap",
             strata: vec![
-                CertStratum {
+                OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
                     items: items("doc", 1, 8),
                 },
-                CertStratum {
+                OracleStratum {
                     name: "titles",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
@@ -2812,19 +2812,19 @@ fn instances() -> Vec<Instance> {
         Instance {
             name: "cross_cutting_prior",
             strata: vec![
-                CertStratum {
+                OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
                     items: items("doc", 1, 6),
                 },
-                CertStratum {
+                OracleStratum {
                     name: "people",
                     tags: vec![BLOCK_PEOPLE],
                     weight: Fixed::ONE,
                     items: items("person", 1, 6),
                 },
-                CertStratum {
+                OracleStratum {
                     name: "prior",
                     tags: vec![BLOCK_DOCS, BLOCK_PEOPLE],
                     weight: Fixed::ONE,
@@ -2842,13 +2842,13 @@ fn instances() -> Vec<Instance> {
         Instance {
             name: "uneven_disjoint_blocks",
             strata: vec![
-                CertStratum {
+                OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
                     items: items("doc", 1, 4),
                 },
-                CertStratum {
+                OracleStratum {
                     name: "people",
                     tags: vec![BLOCK_PEOPLE],
                     weight: Fixed::ONE,
@@ -2862,13 +2862,13 @@ fn instances() -> Vec<Instance> {
         Instance {
             name: "one_block_disjoint_items",
             strata: vec![
-                CertStratum {
+                OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
                     items: items("doc", 1, 8),
                 },
-                CertStratum {
+                OracleStratum {
                     name: "titles",
                     tags: vec![BLOCK_DOCS],
                     weight: Fixed::ONE,
@@ -2880,56 +2880,56 @@ fn instances() -> Vec<Instance> {
     ]
 }
 
-/// The engine reads within a pinned constant factor of the certificate on every
+/// The engine reads within a pinned constant factor of the shallowest prefix on every
 /// generated instance.
 #[test]
-fn the_engine_reads_within_a_pinned_factor_of_the_certificate() {
+fn the_engine_reads_within_a_pinned_factor_of_the_shallowest_prefixes() {
     for instance in instances() {
         let lengths: Vec<usize> = instance
             .strata
             .iter()
             .map(|entry| entry.items.len())
             .collect();
-        let run = cert_fuse(&instance, &lengths);
+        let run = fuse_at_depths(&instance, &lengths);
         let engine: u64 = instance
             .strata
             .iter()
             .map(|entry| {
                 run.trailer
                     .resolution
-                    .get(&cert_stratum_iri(entry.name))
+                    .get(&oracle_stratum_iri(entry.name))
                     .expect("the generated profile weights every generated stratum")
                     .ranks_pulled
             })
             .sum();
 
-        let prefix_depths = certificate(&instance);
+        let prefix_depths = shallowest_prefixes(&instance);
         let prefix_depth_total: u64 = prefix_depths
             .iter()
             .map(|depth| u64::try_from(*depth).expect("generated depths fit"))
             .sum();
 
-        // A certificate of zero would make the ratio meaningless, and an answer
+        // A shallowest prefix of zero would make the ratio meaningless, and an answer
         // of `k` rows cannot be entailed by no rows at all.
         assert!(
             prefix_depth_total > 0,
-            "{}: the certificate reads nothing, which cannot entail an answer",
+            "{}: the shallowest prefix reads nothing, which cannot entail an answer",
             instance.name
         );
         assert!(
-            engine <= CERTIFICATE_FACTOR * prefix_depth_total,
-            "{}: the engine pulled {engine} ranks against a certificate of \
+            engine <= SHALLOWEST_PREFIX_FACTOR * prefix_depth_total,
+            "{}: the engine pulled {engine} ranks against a shallowest prefix of \
              {prefix_depth_total} ({prefix_depths:?}), which is past the pinned factor of \
-             {CERTIFICATE_FACTOR}",
+             {SHALLOWEST_PREFIX_FACTOR}",
             instance.name
         );
 
-        // And the certificate really is a certificate: reading it reproduces the
+        // And the shallowest prefix really is one: reading it reproduces the
         // answer, and every strictly shallower prefix does not.
         assert_eq!(
-            answer_of(&cert_fuse(&instance, &prefix_depths)),
+            answer_of(&fuse_at_depths(&instance, &prefix_depths)),
             answer_of(&run),
-            "{}: the certificate must reproduce the answer it certifies",
+            "{}: the shallowest prefix must reproduce the answer it was chosen for",
             instance.name
         );
         for (index, depth) in prefix_depths.iter().enumerate() {
@@ -2939,10 +2939,10 @@ fn the_engine_reads_within_a_pinned_factor_of_the_certificate() {
             let mut shallower = prefix_depths.clone();
             shallower[index] -= 1;
             assert_ne!(
-                answer_of(&cert_fuse(&instance, &shallower)),
+                answer_of(&fuse_at_depths(&instance, &shallower)),
                 answer_of(&run),
                 "{}: {shallower:?} already entails the answer, so {prefix_depths:?} is \
-                 not the certificate",
+                 not the shallowest prefix",
                 instance.name
             );
         }
