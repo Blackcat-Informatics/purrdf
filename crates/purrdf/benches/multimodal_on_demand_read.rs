@@ -44,6 +44,23 @@
 //! Each shape runs at two corpus sizes, because A and C's on-demand cost is close to
 //! flat in the corpus and the materialised cost is not.
 //!
+//! # The three arms
+//!
+//! Every shape is read three ways over the same fixture:
+//!
+//! * **`on_demand`** — `search`, with each producer registered under its own
+//!   declaration, which is [`ExclusionBasis::Membership`]: fusion may ask an open stream
+//!   whether a frontier candidate is excluded from it.
+//! * **`on_demand_without_lookups`** — the same `search` over the same producers, whose
+//!   declarations differ in one field only: [`ExclusionBasis::Unavailable`]. Nothing may
+//!   be asked, so a stream that shares a candidate's block holds the candidate back
+//!   until it ends. Against `on_demand` this is the with-lookups against without-lookups
+//!   contrast over real producers; in A the two should sit together, because the merge
+//!   argument already releases every stream and no lookup is ever made, and in C the
+//!   difference is what the lookups buy.
+//! * **`materialised`** — `execute` at the planned depths, then `fuse`, under the
+//!   with-lookups registration.
+//!
 //! # The single lookup
 //!
 //! `single_lookup` isolates the cost the umbrella's own exclusion-lookup tests could
@@ -74,9 +91,9 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use purrdf::hnsw::relation::{HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf::retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, Fixed, FusionProfile, Iri,
-    OrderFidelity, RECIP_K, RankFidelity, RankedStreamAdapter, RequestTerm, RetrievalRequest,
-    Statistics, Term, TopK, compile, execute, fuse, plan, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, ExclusionBasis, Fixed,
+    FusionProfile, Iri, OrderFidelity, RECIP_K, RankFidelity, RankedStreamAdapter, RequestTerm,
+    RetrievalRequest, Statistics, Term, TopK, compile, execute, fuse, plan, search,
 };
 use purrdf::sparql::{KnnGuard, PropertyFunctionRegistry, RankedDeclaration, TermKind};
 use purrdf::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
@@ -399,7 +416,14 @@ fn text_pair_dataset(pair: &TextPair) -> Arc<RdfDataset> {
     builder.freeze().expect("the fixture dataset is valid")
 }
 
-fn text_pair_registry(dataset: &RdfDataset, pair: &TextPair) -> PropertyFunctionRegistry {
+/// Both text producers registered under their own declarations, with only the
+/// exclusion basis replaced by `basis` — so a with-lookups and a without-lookups
+/// registration of one pair differ in that field and nothing else.
+fn text_pair_registry(
+    dataset: &RdfDataset,
+    pair: &TextPair,
+    basis: ExclusionBasis,
+) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
     let sides = [
         (
@@ -417,7 +441,7 @@ fn text_pair_registry(dataset: &RdfDataset, pair: &TextPair) -> PropertyFunction
     ];
     for (predicate, producer, stratum, block) in sides {
         let relation = TextSearchRelation::new(text_index(dataset, &predicate));
-        let declaration: RankedDeclaration = relation
+        let mut declaration: RankedDeclaration = relation
             .ranked_declaration(
                 kernel_iri(&stratum),
                 Some(predicate),
@@ -425,6 +449,7 @@ fn text_pair_registry(dataset: &RdfDataset, pair: &TextPair) -> PropertyFunction
                 CandidateDomains::within([block]),
             )
             .expect("a single-partition index declares a ranked order");
+        declaration.exclusion = basis;
         registry.register_ranked(producer, Arc::new(relation), declaration);
     }
     registry
@@ -463,7 +488,9 @@ fn text_text_reads(c: &mut Criterion) {
         for &rows in &SIZES {
             let pair = text_pair(shape, rows);
             let dataset = text_pair_dataset(&pair);
-            let registry = text_pair_registry(&dataset, &pair);
+            let registry = text_pair_registry(&dataset, &pair, ExclusionBasis::Membership);
+            let registry_without_lookups =
+                text_pair_registry(&dataset, &pair, ExclusionBasis::Unavailable);
             let statistics = text_pair_statistics(&pair);
             let request = text_pair_request();
             let profile = text_pair_profile();
@@ -478,6 +505,21 @@ fn text_text_reads(c: &mut Criterion) {
                     ))
                 });
             });
+            group.bench_with_input(
+                BenchmarkId::new("on_demand_without_lookups", rows),
+                &rows,
+                |b, _| {
+                    b.iter(|| {
+                        black_box(on_demand(
+                            &registry_without_lookups,
+                            &statistics,
+                            &dataset,
+                            &request,
+                            &profile,
+                        ))
+                    });
+                },
+            );
             group.bench_with_input(BenchmarkId::new("materialised", rows), &rows, |b, _| {
                 b.iter(|| {
                     black_box(materialised(
@@ -580,11 +622,17 @@ fn hnsw_pair(shape: Shape, rows: usize) -> HnswPair {
     }
 }
 
-fn hnsw_pair_registry(dataset: &RdfDataset, pair: &HnswPair) -> PropertyFunctionRegistry {
+/// The text and vector producers registered under their own declarations, with only
+/// the exclusion basis replaced by `basis`, as [`text_pair_registry`] does.
+fn hnsw_pair_registry(
+    dataset: &RdfDataset,
+    pair: &HnswPair,
+    basis: ExclusionBasis,
+) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
 
     let text_relation = TextSearchRelation::new(text_index(dataset, &note_predicate()));
-    let text_declaration: RankedDeclaration = text_relation
+    let mut text_declaration: RankedDeclaration = text_relation
         .ranked_declaration(
             kernel_iri(&ex("stratum/text")),
             Some(note_predicate()),
@@ -592,16 +640,18 @@ fn hnsw_pair_registry(dataset: &RdfDataset, pair: &HnswPair) -> PropertyFunction
             CandidateDomains::within([pair.text_block.clone()]),
         )
         .expect("a single-partition index declares a ranked order");
+    text_declaration.exclusion = basis;
     registry.register_ranked(ex("pf/text"), Arc::new(text_relation), text_declaration);
 
     let vector_relation = HnswRelation::new(vector_space_of(&pair.vector_terms));
-    let vector_declaration = vector_relation.ranked_declaration(
+    let mut vector_declaration = vector_relation.ranked_declaration(
         kernel_iri(&ex("stratum/vector")),
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
         OrderFidelity::Faithful,
         CandidateDomains::within([pair.vector_block.clone()]),
     );
+    vector_declaration.exclusion = basis;
     registry.register_ranked(
         ex("pf/vector"),
         Arc::new(vector_relation),
@@ -647,7 +697,9 @@ fn text_hnsw_reads(c: &mut Criterion) {
         for &rows in &SIZES {
             let pair = hnsw_pair(shape, rows);
             let dataset = build_dataset(&pair.text_rows, &note_predicate());
-            let registry = hnsw_pair_registry(&dataset, &pair);
+            let registry = hnsw_pair_registry(&dataset, &pair, ExclusionBasis::Membership);
+            let registry_without_lookups =
+                hnsw_pair_registry(&dataset, &pair, ExclusionBasis::Unavailable);
             let statistics = hnsw_pair_statistics(&pair);
             let request = hnsw_pair_request(&pair.seed);
             let profile = hnsw_pair_profile();
@@ -662,6 +714,21 @@ fn text_hnsw_reads(c: &mut Criterion) {
                     ))
                 });
             });
+            group.bench_with_input(
+                BenchmarkId::new("on_demand_without_lookups", rows),
+                &rows,
+                |b, _| {
+                    b.iter(|| {
+                        black_box(on_demand(
+                            &registry_without_lookups,
+                            &statistics,
+                            &dataset,
+                            &request,
+                            &profile,
+                        ))
+                    });
+                },
+            );
             group.bench_with_input(BenchmarkId::new("materialised", rows), &rows, |b, _| {
                 b.iter(|| {
                     black_box(materialised(
@@ -706,7 +773,7 @@ fn single_lookup(c: &mut Criterion) {
     {
         let pair = text_pair(Shape::SharedDisjoint, LOOKUP_ROWS);
         let dataset = text_pair_dataset(&pair);
-        let registry = text_pair_registry(&dataset, &pair);
+        let registry = text_pair_registry(&dataset, &pair, ExclusionBasis::Membership);
         let statistics = text_pair_statistics(&pair);
         let request = text_pair_request();
         let profile = text_pair_profile();
@@ -761,7 +828,7 @@ fn single_lookup(c: &mut Criterion) {
     {
         let pair = hnsw_pair(Shape::SharedDisjoint, LOOKUP_ROWS);
         let dataset = build_dataset(&pair.text_rows, &note_predicate());
-        let registry = hnsw_pair_registry(&dataset, &pair);
+        let registry = hnsw_pair_registry(&dataset, &pair, ExclusionBasis::Membership);
         let statistics = hnsw_pair_statistics(&pair);
         let request = hnsw_pair_request(&pair.seed);
         let profile = hnsw_pair_profile();
