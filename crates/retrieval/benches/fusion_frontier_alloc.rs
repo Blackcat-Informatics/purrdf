@@ -426,8 +426,7 @@ fn phase(label: &str, total: u64, rows: usize) {
 fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, &pulls, weight);
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the bench contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
 
     let rss_before = rss_kb();
     let window = WholeProcessWindow::open();
@@ -514,8 +513,7 @@ fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity)
         // rank-one contribution to and strata to charge only their open heads.
         &[fidelity.clone(), RankFidelity::EXACT, RankFidelity::EXACT],
     );
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the bench contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
 
     let rss_before = rss_kb();
     let window = WholeProcessWindow::open();
@@ -608,8 +606,7 @@ fn disjoint_fixture(
 fn disjoint_phase(label: &str, total: u64, rows: usize) {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = disjoint_fixture(total, &pulls);
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the bench contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
 
     let rss_before = rss_kb();
     let window = WholeProcessWindow::open();
@@ -694,8 +691,7 @@ fn shared_block_phase(label: &str, total: u64, rows: usize, basis: ExclusionBasi
     let pulls = Arc::new(AtomicUsize::new(0));
     let lookups = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = shared_block_fixture(total, &pulls, &lookups, basis);
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the bench contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
 
     let rss_before = rss_kb();
     let window = WholeProcessWindow::open();

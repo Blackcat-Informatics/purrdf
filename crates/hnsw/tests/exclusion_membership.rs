@@ -28,7 +28,6 @@
 //! Fixtures use `example.org` throughout; every IRI below is fixture configuration, never
 //! a minted vocabulary.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
@@ -152,13 +151,12 @@ fn report(observed: &HnswObservations) -> String {
 // What this producer may and may not declare
 // ---------------------------------------------------------------------------
 
-/// **A lossy producer is refused a `Search` basis, is admitted a `Membership` one, and
-/// declares exactly that.**
+/// **A lossy producer is admitted a `Membership` basis, and declares exactly that.**
 ///
-/// Three registrations, all executed, because the interesting fact is that the middle one
-/// succeeds. Keying the refusal on the completeness axis would reject `Membership` too,
-/// and that would reject a provably exact answer: a term the matrix holds no row for is a
-/// term no beam reaches at any `ef`. The registry does not make that mistake.
+/// The registration is executed, because the interesting fact is that it succeeds.
+/// Keying a refusal on the completeness axis would reject it, and that would reject a
+/// provably exact answer: a term the matrix holds no row for is a term no beam reaches at
+/// any `ef`. The registry does not make that mistake.
 ///
 /// The relation's own declaration is read off the declaration rather than assumed, and it
 /// is `Membership` — the same verdict the registry gives, arrived at independently. The
@@ -166,7 +164,7 @@ fn report(observed: &HnswObservations) -> String {
 /// declare and what it does declare are different questions, and a test that checked only
 /// the registry would pass over a relation that declared nothing at all.
 #[test]
-fn a_membership_basis_is_declared_and_admitted_and_a_search_one_refused() {
+fn a_membership_basis_is_declared_and_admitted_from_a_lossy_producer() {
     let relation = HnswRelation::new(space());
     let declared = declaration(&relation);
 
@@ -202,21 +200,6 @@ fn a_membership_basis_is_declared_and_admitted_and_a_search_one_refused() {
         ExclusionBasis::Membership,
         "the registry admits membership from a producer that is lossy on every request, \
          which is the refusal that must NOT exist"
-    );
-
-    // The refusal, executed: the SAME producer, the same modes, the same row bounds, and
-    // the one field changed. A lossy search that did not find a candidate has not said
-    // the candidate is absent.
-    let mut searching = declaration(&relation);
-    searching.exclusion = ExclusionBasis::Search;
-    let refused = catch_unwind(AssertUnwindSafe(|| {
-        let mut registry = PropertyFunctionRegistry::new();
-        registry.register_ranked(PREDICATE, Arc::new(HnswRelation::new(space())), searching);
-    }));
-    assert!(
-        refused.is_err(),
-        "a search basis from a producer whose completeness is lossy converts a gap in the \
-         beam into a certainty about the corpus, and must be refused where it is written"
     );
 }
 

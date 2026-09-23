@@ -588,6 +588,107 @@ pub struct StratumResolution {
     pub rows_materialised: Option<u64>,
 }
 
+/// How many cost counters one stratum of an observed resolution carries.
+///
+/// The length of [`StratumResolution::counters`], named so the array type states
+/// it once rather than as a bare literal a reader has to count.
+pub const OBSERVED_COUNTER_COUNT: usize = 5;
+
+/// One named cost counter of a [`StratumResolution`], as every surface that
+/// reports a trailer spells it.
+///
+/// # Why the counters are produced here, once
+///
+/// The observed resolution is written out in more than one place — as text by
+/// [`observed_resolution`](crate::observed_resolution), and as a keyed mapping by
+/// every language binding that hands a trailer to a host. Each of those used to
+/// pick the fields out of the struct itself, which let a counter added to the
+/// struct reach one surface and silently miss another: the missing one would
+/// still render, still pass its tests, and simply never tell its readers what
+/// the new counter says the answer cost. [`StratumResolution::counters`] is the
+/// one place the fields are read, by an exhaustive destructuring that stops
+/// compiling when a field is added, and every surface renders what it returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObservedCounter {
+    /// The counter's name, identical on every surface that reports it.
+    pub name: &'static str,
+    /// What the trailer holds for it.
+    pub reading: CounterReading,
+}
+
+/// What a trailer holds for one [`ObservedCounter`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CounterReading {
+    /// A number: a count this run took, or a rank the law fixes.
+    Number(u64),
+    /// No number exists, and `word` says why in the spelling a text surface
+    /// writes in its place.
+    ///
+    /// Two counters can be absent, for two different reasons, and neither is
+    /// spelled as a digit because neither is a measurement: `beyond-any-plan`
+    /// for a separation that never stops inside an expressible depth, and
+    /// `unreported` for a stream with no materialised read behind it. A surface
+    /// with a native absence (a Python `None`) writes that instead of the word.
+    Absent {
+        /// The text a surface writes where the number would be.
+        word: &'static str,
+    },
+}
+
+impl StratumResolution {
+    /// Every cost counter this stratum's resolution carries, named, in the one
+    /// fixed order every surface reports them in.
+    ///
+    /// The order is separation, ranks pulled, collisions observed, exclusion
+    /// lookups, rows materialised: the price of the answer in the order a
+    /// reader needs it, with [`Self::ranks_pulled`] second only to the law it is
+    /// judged against. See [`ObservedCounter`] for why this is the only place
+    /// the fields are read.
+    #[must_use]
+    pub fn counters(&self) -> [ObservedCounter; OBSERVED_COUNTER_COUNT] {
+        // Exhaustive on purpose: a field added to the struct is a compile error
+        // here until it is given a name and a place in the array, and from here
+        // it reaches every surface at once.
+        let Self {
+            separation,
+            ranks_pulled,
+            collisions_observed,
+            exclusion_lookups,
+            rows_materialised,
+        } = *self;
+        [
+            ObservedCounter {
+                name: "separates_to",
+                reading: separation.rank().map_or(
+                    CounterReading::Absent {
+                        word: "beyond-any-plan",
+                    },
+                    CounterReading::Number,
+                ),
+            },
+            ObservedCounter {
+                name: "ranks_pulled",
+                reading: CounterReading::Number(ranks_pulled),
+            },
+            ObservedCounter {
+                name: "collisions_observed",
+                reading: CounterReading::Number(collisions_observed),
+            },
+            ObservedCounter {
+                name: "exclusion_lookups",
+                reading: CounterReading::Number(exclusion_lookups),
+            },
+            ObservedCounter {
+                name: "rows_materialised",
+                reading: rows_materialised.map_or(
+                    CounterReading::Absent { word: "unreported" },
+                    CounterReading::Number,
+                ),
+            },
+        ]
+    }
+}
+
 /// Where a row's true score lies, given what its producers declared.
 ///
 /// [`ScoreExactness`] answers the same question once for the whole answer;
@@ -1983,17 +2084,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// that for its caller, reading the identity off the streams themselves
     /// through [`RankedStream::plan_id`]. No stream is pulled until the first
     /// [`next`](Self::next) call.
-    ///
-    /// # Errors
-    ///
-    /// [`ProtocolError::SearchExclusionFromLossySearch`] when a stream's
-    /// contract declares [`ExclusionBasis::Search`] beside a lossy search. This
-    /// is the one place every stream passes through on its way to being asked a
-    /// lookup, so it is where the pairing is refused for all of them — a stream
-    /// built from a registered declaration was already refused at registration
-    /// by the same predicate, [`ExclusionBasis::is_exact_under`], and one a
-    /// caller assembled by hand is refused here, before a row is pulled.
-    pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Result<Self, FusionError> {
+    pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Self {
         let count = streams.len();
         // One read of each contract, both terms taken from it. Asking twice
         // would let a stream answer differently the second time and leave the
@@ -2002,23 +2093,6 @@ impl<S: RankedStream> FusionStream<S> {
             .iter()
             .map(|(_, stream)| stream.contract())
             .collect();
-        // Checked before anything is derived from the declarations: an
-        // `Excluded` from a lossy search would retire a residual this engine is
-        // otherwise bound to charge, so the declaration that licenses asking for
-        // one is refused rather than believed.
-        for ((stratum, _), contract) in streams.iter().zip(&contracts) {
-            if !contract.exclusion.is_exact_under(&contract.fidelity) {
-                return Err(ProtocolError::SearchExclusionFromLossySearch {
-                    stratum: stratum.as_str().to_owned(),
-                    evidence: contract
-                        .fidelity
-                        .evidence()
-                        .next()
-                        .map_or_else(String::new, |evidence| evidence.as_ref().to_owned()),
-                }
-                .into());
-            }
-        }
         let seen_items = contracts
             .iter()
             .map(|contract| match contract.duplicates {
@@ -2111,7 +2185,7 @@ impl<S: RankedStream> FusionStream<S> {
                 stratum_index,
             })
         });
-        Ok(Self {
+        Self {
             streams,
             profile,
             plan_id: None,
@@ -2136,7 +2210,7 @@ impl<S: RankedStream> FusionStream<S> {
             emitted: EmittedTable::default(),
             threshold: Fixed::ZERO,
             last_row_won_a_tie: false,
-        })
+        }
     }
 
     /// Attach the pinned plan identity these streams came from.

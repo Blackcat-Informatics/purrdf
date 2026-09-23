@@ -646,9 +646,9 @@ that would let a candidate certify.
 
 **The observational half** is a question the consumer asks. A producer may
 declare an **exclusion basis** — that it can answer, for one named
-candidate, whether that candidate is out of its reach, and what such an
-answer means: membership in its term universe, or the result of its own
-complete search. Fusion then asks, once per `(candidate, stream)` pair
+candidate, whether that candidate is out of its reach — answered from its
+own index, which holds no entry through which the request could reach the
+candidate, and so exact however lossy its search is. Fusion then asks, once per `(candidate, stream)` pair
 that is actually blocking a candidate worth emitting, and reads
 `Excluded` as "this stream will never name it". That is a *measurement*
 against the producer's own index, not a promise about rows nobody read,

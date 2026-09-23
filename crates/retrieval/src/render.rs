@@ -52,7 +52,7 @@ use std::collections::BTreeMap;
 use purrdf_core::iri_escape::is_iriref_escape_required;
 use purrdf_core::{RdfTextDirection, TermValue};
 
-use crate::fusion_stream::StratumResolution;
+use crate::fusion_stream::{CounterReading, StratumResolution};
 use crate::iri::Iri;
 
 /// `xsd:string`, the datatype a plain literal carries in the kernel's term
@@ -693,7 +693,9 @@ impl<'a> Cursor<'a> {
 ///
 /// One line per stratum, in ascending stratum order — the order the engine's own
 /// map carries, so the text is a pure function of the trailer. Each line is the
-/// stratum IRI followed by `name=value` for every counter, in a fixed order. A
+/// stratum IRI followed by `name=value` for every counter
+/// [`StratumResolution::counters`] returns, in the order it returns them — the
+/// same names and the same order every language binding reports. A
 /// value a trailer does not carry is written as a word rather than as a number:
 /// `separates_to=beyond-any-plan` for a law that never stops separating inside
 /// an expressible depth, and `rows_materialised=unreported` for a stream with no
@@ -706,22 +708,17 @@ pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> Str
         // `write!` into a `String` cannot fail; the `Result` is discarded here
         // rather than unwrapped so a formatting error can never abort a caller's
         // process over a report.
-        let _ = writeln!(
-            out,
-            "{stratum} separates_to={separates_to} ranks_pulled={ranks_pulled} \
-             collisions_observed={collisions_observed} exclusion_lookups={exclusion_lookups} \
-             rows_materialised={rows_materialised}",
-            separates_to = measured
-                .separation
-                .rank()
-                .map_or_else(|| "beyond-any-plan".to_owned(), |rank| rank.to_string()),
-            ranks_pulled = measured.ranks_pulled,
-            collisions_observed = measured.collisions_observed,
-            exclusion_lookups = measured.exclusion_lookups,
-            rows_materialised = measured
-                .rows_materialised
-                .map_or_else(|| "unreported".to_owned(), |rows| rows.to_string()),
-        );
+        let _ = write!(out, "{stratum}");
+        // The counters, and their names, come from the trailer's one reading of
+        // its own fields — the same one every binding renders — so this text
+        // cannot carry a different set of counters from any other surface.
+        for counter in measured.counters() {
+            let _ = match counter.reading {
+                CounterReading::Number(value) => write!(out, " {}={value}", counter.name),
+                CounterReading::Absent { word } => write!(out, " {}={word}", counter.name),
+            };
+        }
+        out.push('\n');
     }
     out
 }
@@ -918,5 +915,69 @@ mod tests {
         for text in ["<http://example.org/s>", "_:b0", "\"x\"@en", "\"x\""] {
             assert!(decode_term(text).is_ok(), "{text:?} is one canonical term");
         }
+    }
+
+    /// The counter names every surface reports, written out as the whole set.
+    ///
+    /// The Python binding's cost-counter test holds its dict keys to this same
+    /// list, so a counter added to [`StratumResolution::counters`] fails both
+    /// tests until both documented sets name it — and, because the text below
+    /// and the binding's dict are both rendered from that one method, neither
+    /// surface can carry it without the other.
+    const DOCUMENTED_COUNTERS: [&str; crate::OBSERVED_COUNTER_COUNT] = [
+        "separates_to",
+        "ranks_pulled",
+        "collisions_observed",
+        "exclusion_lookups",
+        "rows_materialised",
+    ];
+
+    fn resolution(
+        separation: crate::MonotoneDepth,
+        rows_materialised: Option<u64>,
+    ) -> crate::StratumResolution {
+        crate::StratumResolution {
+            separation,
+            ranks_pulled: 66,
+            collisions_observed: 2,
+            exclusion_lookups: 65,
+            rows_materialised,
+        }
+    }
+
+    #[test]
+    fn the_counters_are_the_documented_set_in_the_documented_order() {
+        let measured = resolution(crate::MonotoneDepth::SeparatesTo(400), Some(67));
+        let names: Vec<&str> = measured.counters().iter().map(|c| c.name).collect();
+        assert_eq!(names, DOCUMENTED_COUNTERS);
+        let readings: Vec<crate::CounterReading> =
+            measured.counters().iter().map(|c| c.reading).collect();
+        assert_eq!(
+            readings,
+            [400, 66, 2, 65, 67].map(crate::CounterReading::Number),
+            "every field reaches its own counter, none swapped for a neighbour's"
+        );
+    }
+
+    #[test]
+    fn the_rendering_is_the_counters_and_nothing_else() {
+        let stratum = crate::Iri::parse("http://example.org/stratum/text").expect("valid");
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            stratum,
+            resolution(crate::MonotoneDepth::SeparatesBeyondAnyPlan, None),
+        );
+        let text = super::observed_resolution(&map);
+        assert_eq!(
+            text,
+            "http://example.org/stratum/text separates_to=beyond-any-plan ranks_pulled=66 \
+             collisions_observed=2 exclusion_lookups=65 rows_materialised=unreported\n"
+        );
+        let rendered_names: Vec<&str> = text
+            .split_whitespace()
+            .skip(1)
+            .map(|pair| pair.split_once('=').expect("name=value").0)
+            .collect();
+        assert_eq!(rendered_names, DOCUMENTED_COUNTERS);
     }
 }

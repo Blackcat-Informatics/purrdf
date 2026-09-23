@@ -699,9 +699,8 @@ impl HnswRelation {
             // SEARCH IS. That is the whole reason the axis this declaration is
             // lossy on does not decide this one: a term the matrix holds no row
             // for is a term no beam reaches at any `ef`, so refusing the basis on
-            // completeness would reject a provably exact answer. The registry
-            // makes exactly that distinction, and `Search` — where "not found" and
-            // "not present" really do differ — is the basis it refuses here.
+            // completeness would reject a provably exact answer, and the registry
+            // does not.
             //
             // The basis is not the ranked question. `is this candidate among your
             // best n` has absences that are not exclusions: a candidate outside

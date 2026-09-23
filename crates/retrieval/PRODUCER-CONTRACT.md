@@ -457,9 +457,17 @@ graph traversal, and each declares `ExclusionBasis::Membership`. For the
 approximate one that basis is admitted *despite* an unconditionally
 `Completeness::Lossy` declaration, and deliberately so: a term the matrix holds
 no row for is a term no beam reaches at any `ef`, so the verdict is a fact about
-the matrix rather than about what the search found. `ExclusionBasis::Search` is
-still refused from it, because there "not found" and "not present" really do
-differ.
+the matrix rather than about what the search found.
+
+`Membership` is the only basis there is, and it is not the weaker of two. The
+verdict is whatever your candidate-bound call answers, so what an exclusion can
+rule out is decided by what your index is keyed on. The lexical relation's
+index is keyed by the needle: its lookup excludes every document with no
+posting under a needle term, including documents it holds under other terms
+only — which is every document its complete ranking would leave unnamed. A
+basis meaning *my search did not find it* would change no verdict such a
+relation gives, and would be sound only where the search is complete, so none
+is offered.
 
 Declaring several modes also decides which row bound your read is held to, because that
 bound is a function of the mode — see

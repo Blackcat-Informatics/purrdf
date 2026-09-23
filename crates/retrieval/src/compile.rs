@@ -362,16 +362,14 @@ use crate::admission::{
     AdmissionEnvironment, AdmissionError, BoundMode, MAX_READ_DEPTH, ProbedDepth, RowBound,
     Unprobeable, admit_plan,
 };
-use crate::error::FusionError;
 use crate::execute::ExecutionError;
 use crate::fuse::TopK;
-use crate::fusion_profile::DecayRule;
 use crate::id::PlanId;
 use crate::iri::Iri;
 use crate::matching::{Invocation, UnitArgument, render_slots};
 use crate::plan::{Plan, ProducerBinding};
 use crate::ranked_stream::StreamContract;
-use crate::reciprocal_rank::{CrossingRank, MonotoneDepth, crossing_rank_at};
+use crate::reciprocal_rank::MonotoneDepth;
 use crate::render::{self, RenderError};
 use crate::request::ReadBound;
 
@@ -1461,15 +1459,6 @@ pub struct PlannedResolution {
     pub separation: MonotoneDepth,
     /// The per-stratum depth the plan recorded.
     pub requested_depth: u32,
-    /// The decay law the answer will be fused under, carried so the crossing
-    /// derivation below is a fact about *this* plan under *this* law rather than
-    /// one a caller has to re-supply the profile for.
-    pub decay: DecayRule,
-    /// This stratum's own weight under the profile, carried for the reason
-    /// [`Self::decay`] is: [`Self::stopping_rank`] is a fact about this
-    /// stratum's contributions, and [`Self::sharing_weights`] holds this weight
-    /// only among its sharers', at a position nothing names.
-    pub weight: Fixed,
     /// The weights of every stratum of this bundle whose declared blocks meet
     /// this one's, this stratum's own included, in ascending stratum order.
     ///
@@ -1481,6 +1470,16 @@ pub struct PlannedResolution {
     /// Ascending stratum order rather than sorted by value, so the list is a
     /// pure function of the plan and two compilations of one plan cannot
     /// disagree about it.
+    ///
+    /// It is the `sharing` argument of
+    /// [`crossing_rank_at`](crate::crossing_rank_at): handed there with the
+    /// profile's decay rule and the weights of the strata that name a candidate,
+    /// it answers — at plan time, with no row read — the head rank at which that
+    /// candidate first beats the threshold this stratum's sharers impose. Over
+    /// strata whose blocks do not meet, that is a rank past the deepest row of
+    /// the answer; over strata that share a block, it is a rank past the
+    /// profile's smoothing constant, and only the declaration this set was
+    /// derived from moves it.
     ///
     /// Empty only for a stratum this plan gave a depth and no producer, which
     /// emits no unit, contributes no stream and therefore has no declaration to
@@ -1500,146 +1499,6 @@ impl PlannedResolution {
     #[must_use]
     pub const fn fully_separated(&self) -> bool {
         self.separation.covers(self.requested_depth as u64)
-    }
-
-    /// The head rank at which a candidate of this stratum, sitting at `at_rank`
-    /// in each of the `naming` strata that named it, first beats the threshold
-    /// this stratum's sharers impose.
-    ///
-    /// A property of the law and the declarations, in exactly the sense
-    /// [`Self::separation`] is one, and independent of how deep any run reads —
-    /// which is why it is here, at the waist, rather than only in the trailer. A
-    /// host that asks it at plan time, with no rows read and no dataset open,
-    /// learns what its own declarations have committed it to: over strata whose
-    /// blocks do not meet, a head one rank past the deepest row of the answer is
-    /// enough, and over strata that share a block it is a rank past the profile's
-    /// smoothing constant. The second is a deep read no fusion can stop short
-    /// of, and the only thing that moves it is the declaration it was derived
-    /// from. It is not, though, a read that has to be paid for up front: every
-    /// stratum is read on demand, so a run pays for the ranks its fusion actually
-    /// pulls, and where the strata sharing the block answer exclusion lookups
-    /// [`Self::stopping_rank`] bounds how far that is.
-    ///
-    /// `naming` is the caller's, and it has to be: which strata actually named a
-    /// given candidate is a fact about rows, not about the plan, so the pessimism
-    /// is the caller's to choose. `&[own_weight]` is the worst case — one namer
-    /// measured against every sharer — and the weights of every sharer is the
-    /// best.
-    ///
-    /// This bounds the *threshold* gate only. A candidate must also be final,
-    /// and a configuration whose candidates never become final drains its
-    /// streams regardless of what this says; see [`CrossingRank`].
-    ///
-    /// # Errors
-    ///
-    /// Whatever [`crossing_rank_at`] refuses: a non-positive weight in either
-    /// list, or a rank the decay rule cannot evaluate.
-    pub fn crossing_rank_at(
-        &self,
-        naming: &[Fixed],
-        at_rank: u64,
-    ) -> Result<CrossingRank, FusionError> {
-        crossing_rank_at(self.decay, naming, at_rank, &self.sharing_weights)
-    }
-
-    /// [`Self::crossing_rank_at`] for the head of a stream: a candidate at rank
-    /// one, which is the shallowest — and so the most favourable — position it
-    /// can be asked about.
-    ///
-    /// # Errors
-    ///
-    /// Whatever [`Self::crossing_rank_at`] refuses.
-    pub fn crossing_rank(&self, naming: &[Fixed]) -> Result<CrossingRank, FusionError> {
-        self.crossing_rank_at(naming, 1)
-    }
-
-    /// The deepest rank a fusion at `bound` can pull this stratum's head to,
-    /// when no block is admitted by more than `heaviest_block` fused streams
-    /// and every candidate the answer holds is final by the time its lower
-    /// bound clears the threshold.
-    ///
-    /// This is the crossing derivation asked the one question the read depends
-    /// on and that no row is needed to answer: [`crossing_rank_at`] with this
-    /// stratum's own weight naming a candidate at rank `k`, against
-    /// `heaviest_block` copies of that same weight sharing its block. The
-    /// derivation below is why it is an upper bound on the ranks pulled rather
-    /// than a guess at them — and, because a stratum is read on demand, on the
-    /// rows its read produces short of its probe row.
-    ///
-    /// # Derivation
-    ///
-    /// Write `c(r)` for this stratum's contribution at rank `r`, `k` for
-    /// `bound`, and `m` for `heaviest_block`. Two premises. The first is a
-    /// declaration: the stratum declared `DuplicatePolicy::Unique`. The second
-    /// is what the declarations make *possible* and only the rows make true:
-    /// every candidate a stream names becomes final as soon as the fusion asks
-    /// about it — each other stream able to name it has named it already or
-    /// holds it nowhere, so its lookup answers `Excluded`. The caller takes the
-    /// derivation only where every stratum sharing a block with another answers
-    /// lookups, which is the condition under which the second premise *can*
-    /// hold; where the rows break it the fusion simply reads on, and the bound is
-    /// not a bound for that run. A stratum holding fewer than `k` rows runs out
-    /// before any depth this returns — the result is always past `k` — so it is
-    /// assumed to hold at least `k`.
-    ///
-    /// 1. **The `k`-th row is worth at least `c(k)`.** The stratum's first `k`
-    ///    rows name `k` distinct candidates, and each has collected at least its
-    ///    contribution from this stratum. So `k` candidates end at `c(k)` or
-    ///    more, and the `k`-th best final score `L_k` is at least `c(k)`.
-    /// 2. **When this stratum is pulled from rank `r`, the threshold is at most
-    ///    `m · c(r)`.** The engine pulls the stream whose head contributes most,
-    ///    so every open head is then at most `c(r)`; its threshold is the
-    ///    largest, over blocks, of the heads admitting one block, which is at
-    ///    most `m` heads. The bound is summed in the same truncated terms
-    ///    [`threshold_at`](crate::threshold_at) sums, so the tie the engine's
-    ///    strict comparison refuses is refused here too.
-    /// 3. **A pull happens only while the threshold is at least `L_k`.** Were it
-    ///    below, every candidate worth `L_k` or more would already be named — a
-    ///    candidate no stream has named is worth at most the threshold — and
-    ///    each would clear it. Every named candidate whose ceiling still beats
-    ///    the threshold is asked about before the certification pass, so by the
-    ///    second premise each is final and none can block another on a ceiling
-    ///    it will never reach: the `k`-th row would have been certified instead
-    ///    of a row pulled.
-    ///
-    /// Together: a pull from rank `r` needs `m · c(r) >= L_k >= c(k)`, so the
-    /// head never passes the first rank at which `c(k) > m · c(r)` — the rank
-    /// returned. The fusion never asks past it, so an on-demand read of this
-    /// stratum produces no row past it either.
-    ///
-    /// # Why the threshold is not [`Self::sharing_weights`] here
-    ///
-    /// [`Self::crossing_rank_at`] models every sharer's head at one common rank,
-    /// which is the right model for *where a given candidate crosses*, and not a
-    /// bound on *how deep this stratum is read*. The engine equalises heads by
-    /// contribution rather than by rank — a lighter sharer's head can sit at its
-    /// first rank while this one is pulled deep — and its threshold is a maximum
-    /// over **every** block, including blocks this stratum never admits. Either
-    /// can hold the threshold above the common-rank sum, and a prediction taken
-    /// from that sum could stop short of the read the engine takes.
-    ///
-    /// # What `k` and the naming are, and why no row is needed
-    ///
-    /// The crossing a candidate reaches depends on which strata named it and at
-    /// what rank — facts about rows. Step 1 replaces both with the one bound the
-    /// declarations do fix: whatever the rows are, this stratum alone supplies
-    /// `k` candidates worth `c(k)`. The bound is attained, not merely safe: two
-    /// strata of equal weight sharing a block, both naming the same `k - 1`
-    /// candidates first and then one candidate each that the other does not
-    /// hold, leave the `k`-th row single-named at rank `k`.
-    ///
-    /// # Errors
-    ///
-    /// Whatever [`crossing_rank_at`] refuses: a non-positive weight, a `k` the
-    /// decay rule cannot evaluate, or an out-of-range sum.
-    pub fn stopping_rank(
-        &self,
-        bound: TopK,
-        heaviest_block: usize,
-    ) -> Result<CrossingRank, FusionError> {
-        let k = u64::try_from(bound.get()).unwrap_or(u64::MAX);
-        let sharing = vec![self.weight; heaviest_block];
-        crossing_rank_at(self.decay, &[self.weight], k, &sharing)
     }
 }
 
@@ -1753,7 +1612,6 @@ pub fn compile(
             .stratum_depths
             .iter()
             .filter_map(|(stratum, depth)| {
-                let weight = profile.weight(stratum)?;
                 profile.monotone_depth(stratum).map(|separation| {
                     // Every stratum whose declared blocks meet this one's, this
                     // one included — a producer's declaration always meets
@@ -1778,8 +1636,6 @@ pub fn compile(
                         PlannedResolution {
                             separation,
                             requested_depth: depth.get(),
-                            decay: profile.decay(),
-                            weight,
                             sharing_weights,
                         },
                     )

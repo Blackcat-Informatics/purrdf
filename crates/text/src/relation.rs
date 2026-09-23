@@ -753,9 +753,10 @@ impl TextSearchRelation {
     ///   bounds it with `LIMIT`, which is what "bounded by the consumer's row
     ///   ceiling" means in [`RankedDeclaration::depth_placement`].
     /// * **[`ExclusionBasis::Membership`]** — this producer answers *do you hold
-    ///   this document*, and an `Excluded` from it means the document holds a
-    ///   posting for no needle term. That is a fact about the index's own term
-    ///   universe rather than about what a search found, so it is exact whatever
+    ///   this document for this needle*, and an `Excluded` from it means the
+    ///   document holds a posting for no needle term — including a document the
+    ///   index holds under other terms only. That is a fact about the index's
+    ///   own postings rather than about what a search found, so it is exact whatever
     ///   `fidelity` the host declares: a document that is in no posting list of
     ///   any needle term is in no candidate set, so it is named at no rank, so
     ///   its contribution to a fused score is exactly zero. The lookup is a
@@ -892,9 +893,12 @@ impl TextSearchRelation {
             // `RankedDeclaration::block_position`.
             block_position: None,
 
-            // An exclusion from this producer is a fact about its own term
-            // universe, which is what `Membership` means and why it is the true
-            // basis here rather than `Search`.
+            // An exclusion from this producer is a fact about its own index: the
+            // document holds no posting under any needle term. That is what
+            // `Membership` means for an index keyed by the request, and it is
+            // already the sharpest answer a lookup here could give — a document
+            // held under other terms only is excluded by it, exactly as a
+            // complete ranking would leave it unnamed.
             //
             // A document that holds no posting for any needle term is not a
             // candidate: `score::select` builds its candidate set out of the

@@ -507,55 +507,30 @@ fn the_declared_basis_is_membership_and_it_registers() {
     );
 }
 
-/// **`Search` is admissible from this relation under an exhaustive fidelity, and
-/// refused under a lossy one — and `Membership` survives the lossy one.**
+/// **`Membership` is admitted whatever fidelity the host declares.**
 ///
 /// There is no text-specific refusal to assert here, and inventing one would be
 /// the over-refusal this workspace treats as the mirror of a silent drop.
 /// `TextSearchRelation::ranked_declaration` takes `fidelity` as a **parameter**:
 /// BM25 over the index is exhaustive, but whether the index covers what the host
-/// means by its corpus is a fact only the host holds, so this relation declares
-/// no completeness of its own and cannot be the party that makes `Search` wrong.
-///
-/// What is asserted instead is the honest shape of it. A host that declares its
-/// text producer exhaustive may declare either basis, because for such a producer
-/// "my search did not find it" and "I do not hold it" are the same fact. A host
-/// that declares it lossy may not declare `Search` — a sampled index that did not
-/// find a document has not said the corpus lacks it — and may still declare
-/// `Membership`, which is exact about the sample it does hold however lossy the
-/// search over it is. That last one is the case a completeness check applied to
-/// the wrong axis would wrongly refuse, so it is executed rather than reasoned
-/// about.
+/// means by its corpus is a fact only the host holds. The basis does not depend
+/// on that fact. An exclusion from this relation is a document holding no
+/// posting under any needle term — a fact about the index, exact about the
+/// sample a host indexed however lossy the host declares its coverage — so the
+/// same basis registers under both declarations, and both are executed.
 #[test]
-fn search_is_admissible_from_an_exhaustive_host_and_not_from_a_lossy_one() {
+fn membership_is_admitted_from_an_exhaustive_host_and_from_a_lossy_one() {
     let relation = TextSearchRelation::new(index());
-
-    let mut exhaustive_search = declaration(&relation, RankFidelity::EXACT);
-    exhaustive_search.exclusion = ExclusionBasis::Search;
     assert_eq!(
-        refusal(&relation, exhaustive_search),
+        refusal(&relation, declaration(&relation, RankFidelity::EXACT)),
         None,
-        "this relation declares no completeness of its own, so a host that declares its \
-         search exhaustive may declare the basis that rests on exactly that"
+        "the relation's own declaration registers under an exhaustive fidelity"
     );
-
-    let mut lossy_search = declaration(&relation, lossy());
-    lossy_search.exclusion = ExclusionBasis::Search;
-    let refused = refusal(&relation, lossy_search)
-        .expect("a lossy search that did not find a document has not said it is absent");
-    assert!(
-        refused.contains("exclusion basis of search")
-            && refused.contains("completeness lossy")
-            && refused.contains("ExclusionBasis::Membership"),
-        "the refusal names the basis, the axis it conflicts with, and the registration the \
-         host probably meant: {refused}"
-    );
-
     assert_eq!(
         refusal(&relation, declaration(&relation, lossy())),
         None,
-        "and the neighbour differing in exactly that one term is admitted: a membership \
-         answer is about this index's own term universe, which a host's lossy coverage of \
-         its corpus does not make less exact"
+        "and the neighbour differing only in the host's fidelity is admitted too: a \
+         membership answer is about this index's own postings, which a host's lossy \
+         coverage of its corpus does not make less exact"
     );
 }

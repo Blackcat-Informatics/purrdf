@@ -66,10 +66,16 @@ K = 60
 # how much of a forty-row-per-stratum corpus a three-row answer has to read.
 TOP_K = 3
 
-# Every key an ``"observed_resolution"`` entry must carry. Written as the whole
-# set rather than as four separate lookups: a key that went missing is the
+# Every key an ``"observed_resolution"`` entry carries, and no other. Written as
+# the whole set rather than as separate lookups: a key that went missing is the
 # failure this file exists to prevent, and a test that checked them one at a
 # time would report the first and go quiet about the rest.
+#
+# It is the same documented set the Rust rendering's own test holds
+# ``StratumResolution::counters`` to. The dict and the Rust text are both built
+# from that one method, so the two sets are held EQUAL here rather than one
+# contained in the other: a counter that reached the Rust surface and not this
+# one, or this one and not the Rust surface, fails one of the two tests.
 OBSERVED_KEYS = frozenset(
     {
         "separates_to",
@@ -164,9 +170,10 @@ def _counter(answer: dict[str, Any], stratum: str, name: str) -> int:
     being compared as a zero.
     """
     observed = answer["observed_resolution"][stratum]
-    assert OBSERVED_KEYS <= set(observed), (
+    assert set(observed) == OBSERVED_KEYS, (
         f"the observed resolution for {stratum} is missing "
-        f"{sorted(OBSERVED_KEYS - set(observed))}"
+        f"{sorted(OBSERVED_KEYS - set(observed))} and carries undocumented "
+        f"{sorted(set(observed) - OBSERVED_KEYS)}"
     )
     value = observed[name]
     assert value is not None, (
@@ -181,6 +188,30 @@ def _probe(answer: dict[str, Any], stratum: str) -> int:
     its planned depth — its status says the depth stopped it — and none
     otherwise."""
     return 1 if answer["statuses"][stratum]["status"] == "depth_reached" else 0
+
+
+def test_every_stratum_reports_exactly_the_documented_counters() -> None:
+    """The observed resolution names the documented counters, and only those.
+
+    Held over both configurations this file compares, and over every stratum of
+    each, so an entry built differently for one of them cannot hide behind the
+    other. The values are read too: a key that is present with a ``None`` where
+    the trailer holds a number is a counter this surface stopped reporting.
+    """
+    corpus = _corpus()
+    for producers in (_declared(), _undeclared()):
+        answer = _search(corpus, producers, retrieval.SCALE)
+        assert set(answer["observed_resolution"]) == {NOTE_STRATUM, TITLE_STRATUM}
+        for stratum, observed in answer["observed_resolution"].items():
+            assert set(observed) == OBSERVED_KEYS, (
+                f"{stratum}: missing {sorted(OBSERVED_KEYS - set(observed))}, "
+                f"undocumented {sorted(set(observed) - OBSERVED_KEYS)}"
+            )
+            for name in OBSERVED_KEYS - {"separates_to"}:
+                assert isinstance(observed[name], int), (
+                    f"{stratum}: {name} is {observed[name]!r}, and every stratum "
+                    "this module builds has a number for it"
+                )
 
 
 def test_the_read_counters_move_between_a_cheap_run_and_a_corpus_cost_run() -> None:

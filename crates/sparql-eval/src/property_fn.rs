@@ -599,10 +599,26 @@ impl DuplicatePolicy {
 /// that is the whole of what this field declares.
 ///
 /// There is deliberately no `Default`. A producer either answers such a lookup
-/// or it does not, and if it does, the two ways of answering are not
-/// interchangeable — so a defaulted value would be this layer putting a claim
-/// in the mouth of a producer that made none, which is the refusal
+/// or it does not, and a defaulted value would be this layer putting a claim in
+/// the mouth of a producer that made none, which is the refusal
 /// [`RankFidelity`] and [`CandidateDomains`] already make for the same reason.
+///
+/// # Why there is no basis of *my search did not find it*
+///
+/// The verdict is not computed from this field. A lookup is the producer's own
+/// call with the candidate bound, so `Excluded` means exactly what that
+/// call's empty answer means, and the field only says which kind of fact that
+/// is. A search-result basis would claim more than [`Self::Membership`] only for
+/// a producer whose lookup reran its search and reported the candidate missing
+/// from what it found — and that answer is exact only where the search is
+/// complete, while an index-keyed answer is exact whatever the search dropped.
+/// Every relation in this workspace that answers lookups answers them from its
+/// index, and where the index is keyed by the request, that answer already
+/// excludes every candidate a complete search would not name: the lexical
+/// relation answers from the needle's own posting lists, and its ranker scores
+/// exactly the documents those lists hold. A second basis would change no
+/// verdict any of them gives, would read no shorter, and would add one
+/// declaration a lossy producer could make unsoundly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExclusionBasis {
     /// This producer answers no exclusion lookup at all.
@@ -612,15 +628,22 @@ pub enum ExclusionBasis {
     /// this one*. A consumer holding this learns nothing and reads the stream
     /// exactly as it always did.
     Unavailable,
-    /// An exclusion is a fact about the producer's own **term universe**: the
-    /// candidate has no row, no posting, no entry of any kind.
+    /// An exclusion is a fact about the producer's own **index**: it holds no
+    /// entry through which this request could reach the candidate.
     ///
-    /// Exact **independently of [`Completeness`]**, and that independence is the
-    /// reason this variant exists separately from [`Self::Search`]. A term the
-    /// producer's universe does not contain is a term it will not name at any
-    /// rank, whatever a beam width, a candidate cut or a probe budget does to
-    /// the *order* it would have named things in. So a lossy producer's
-    /// membership answer is as sound as an exhaustive one's, and refusing it on
+    /// What counts as such an entry is the index's own structure. For a vector
+    /// space it is a row for the term, whatever the query vector. For an index
+    /// keyed by the request itself it is narrower, and the verdict sharper for
+    /// it: the lexical relation's entry for a document is a posting under one
+    /// of the needle's terms, so a document it holds under other terms only is
+    /// excluded too — it is in no candidate set for this needle, and so named
+    /// at no rank.
+    ///
+    /// Exact **independently of [`Completeness`]**. A candidate the index holds
+    /// no such entry for is one the producer will not name at any rank,
+    /// whatever a beam width, a candidate cut or a probe budget does to the
+    /// *order* it would have named things in. So a lossy producer's membership
+    /// answer is as sound as an exhaustive one's, and refusing it on
     /// completeness grounds would throw away a provably exact answer.
     ///
     /// It is exact about the universe the index *holds*, and that is all. An
@@ -632,17 +655,6 @@ pub enum ExclusionBasis {
     /// missing documents to the candidate's score, because the answer is silent
     /// about exactly them.
     Membership,
-    /// An exclusion means *my search did not find it*.
-    ///
-    /// Exact only where the search is complete, which is why
-    /// [`PropertyFunctionRegistry::register_ranked`] refuses this variant from a
-    /// producer that declared [`Completeness::Lossy`], and a fusion consumer
-    /// refuses it again from a stream handed to it directly (see
-    /// [`Self::is_exact_under`]). For such a producer "not found" and "not
-    /// present" are different facts, and the gap between them is charged as the
-    /// score interval's residual by the consumer rather than silently converted
-    /// into a certainty here.
-    Search,
 }
 
 impl ExclusionBasis {
@@ -652,7 +664,6 @@ impl ExclusionBasis {
         match self {
             Self::Unavailable => "unavailable",
             Self::Membership => "membership",
-            Self::Search => "search",
         }
     }
 
@@ -663,29 +674,6 @@ impl ExclusionBasis {
     #[must_use]
     pub const fn is_declared(self) -> bool {
         !matches!(self, Self::Unavailable)
-    }
-
-    /// Whether an `Excluded` answer under this basis is an exact fact about a
-    /// producer whose search has `fidelity`.
-    ///
-    /// False for exactly one pairing: [`Self::Search`] from a producer that
-    /// declared [`Completeness::Lossy`], where "my search did not find it" and
-    /// "it is not there" are different facts. [`Self::Membership`] is exact
-    /// whatever the search dropped, and [`Self::Unavailable`] answers nothing and
-    /// so claims nothing.
-    ///
-    /// # One predicate, read at both places the pairing is refused
-    ///
-    /// [`PropertyFunctionRegistry::register_ranked`] refuses the pairing at
-    /// registration, where the declaration is authored and a host can be told
-    /// which basis it meant. A fusion consumer refuses it again when it is handed
-    /// a stream, because a stream assembled by hand never passed through a
-    /// registry, and the fusion is the party that would act on the answer. Both
-    /// ask this, so the two refusals cannot come to disagree about which
-    /// pairings are sound.
-    #[must_use]
-    pub const fn is_exact_under(self, fidelity: &RankFidelity) -> bool {
-        !matches!(self, Self::Search) || !fidelity.may_omit()
     }
 }
 
@@ -1939,18 +1927,13 @@ impl PropertyFunctionRegistry {
     ///   name nothing is not a narrow domain, it is a producer that should not
     ///   be registered; a host that does not want to restrict its candidates
     ///   declares [`CandidateDomains::Unrestricted`].
-    /// * `decl.exclusion` declares a basis
-    ///   ([`ExclusionBasis::Membership`] or [`ExclusionBasis::Search`]) and
+    /// * `decl.exclusion` declares a basis ([`ExclusionBasis::Membership`]) and
     ///   `relation` declares no access mode binding `decl.candidate_position`
     ///   whose [`PropertyFunction::rows_per_invocation`] is a point bound. A
     ///   producer that cannot answer *do you hold this one* cheaply must never
-    ///   be looked up into a table scan.
-    /// * `decl.exclusion` is [`ExclusionBasis::Search`] while
-    ///   `decl.fidelity.completeness` is [`Completeness::Lossy`] — for a lossy
-    ///   search "not found" and "not present" are different facts.
-    ///   [`ExclusionBasis::Membership`] is deliberately admitted from a lossy
-    ///   producer, because a term its universe does not contain is one it names
-    ///   at no rank whatever its search dropped.
+    ///   be looked up into a table scan. Completeness is deliberately not
+    ///   consulted: a candidate the producer's index holds no entry for is one
+    ///   it names at no rank, whatever its search dropped.
     /// * `decl.stratum` is already claimed by another registered producer — one
     ///   stratum carries one producer, because a rank means something only inside
     ///   the list that assigned it. The panic message carries the whole argument:
@@ -2425,25 +2408,23 @@ fn validate_declaration(iri: &str, decl: &RankedDeclaration, relation: &dyn Prop
     validate_exclusion(iri, decl, relation, total);
 }
 
-/// Hold [`RankedDeclaration::exclusion`] to the two things a declared basis
-/// requires of the producer that declared it.
+/// Hold [`RankedDeclaration::exclusion`] to the one thing a declared basis
+/// requires of the producer that declared it: a cheap way to answer.
 ///
 /// Split out of [`validate_declaration`] because it asks a different kind of
-/// question: every check above is about *positions*, and both of these are about
-/// what the relation and the declaration already say elsewhere — the modes and
-/// row bounds the registry holds, and the completeness axis of the fidelity.
+/// question: every check above is about *positions*, and this one is about what
+/// the relation already says elsewhere — the modes and row bounds the registry
+/// holds.
 ///
 /// # What is NOT checked here, and why that is the point
 ///
 /// [`ExclusionBasis::Membership`] is admitted from any producer, a
-/// [`Completeness::Lossy`] one included. Keying that refusal on completeness
-/// would be the mirror of a silent drop: it would refuse a provably exact answer
-/// — a term the producer's universe does not contain is a term it never names,
-/// at any rank, whatever its search dropped — and the refusal would look like
-/// correct strictness while quietly costing every lossy producer the only
-/// evidence that can settle finality for it. The completeness question belongs
-/// to [`ExclusionBasis::Search`] alone, where "not found" and "not present"
-/// really are different facts.
+/// [`Completeness::Lossy`] one included. Keying a refusal on completeness would
+/// be the mirror of a silent drop: it would refuse a provably exact answer — a
+/// candidate the producer's index holds no entry for is a candidate it never
+/// names, at any rank, whatever its search dropped — and the refusal would look
+/// like correct strictness while quietly costing every lossy producer the only
+/// evidence that can settle finality for it.
 ///
 /// # Panics
 ///
@@ -2479,18 +2460,6 @@ fn validate_exclusion(
          honest statement that this producer answers no such lookup",
         decl.candidate_position
     );
-    if !decl.exclusion.is_exact_under(&decl.fidelity) {
-        panic!(
-            "ranked declaration for <{iri}> declares an exclusion basis of search while declaring \
-             its completeness lossy; a lossy search that did not find a candidate has not said \
-             the candidate is absent, so `excluded` from this producer would convert a gap in \
-             the search into a certainty about the corpus. Declare \
-             ExclusionBasis::Membership if the answer is really about this producer's own term \
-             universe — which is exact however lossy the search is — or \
-             ExclusionBasis::Unavailable, and let the score interval keep charging the residual \
-             the loss earns"
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -415,8 +415,7 @@ fn checked_addition_overflow_is_refused() {
             MockStream::new(vec![row(1, huge, 1, "c")], exhausted(1)),
         ),
     ];
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the fixture contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
     let result = block_on(fusion.next());
     assert!(
         matches!(result, Err(FusionError::Overflow)),
@@ -446,8 +445,7 @@ fn a_checked_addition_inside_the_range_is_not_refused() {
             MockStream::new(vec![row(1, large, 1, "c")], exhausted(1)),
         ),
     ];
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the fixture contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
     let row = block_on(fusion.next()).expect("three heads at a quarter of the range still sum");
     assert!(row.is_some(), "the fusion certifies a row rather than none");
 }
@@ -890,8 +888,7 @@ fn drop_cancellation_and_receipts() {
             ),
         ),
     ];
-    let mut fusion =
-        FusionStream::new(streams, profile.clone()).expect("the fixture contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile.clone());
     let first = block_on(fusion.next())
         .expect("next succeeds")
         .expect("a row");
@@ -1000,9 +997,7 @@ fn trailer_names_the_pinned_plan() {
         stratum("text"),
         MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
     )];
-    let mut fusion = FusionStream::new(streams, profile.clone())
-        .expect("the fixture contracts are admissible")
-        .with_plan_id(pinned);
+    let mut fusion = FusionStream::new(streams, profile.clone()).with_plan_id(pinned);
     while block_on(fusion.next()).expect("fusion succeeds").is_some() {}
     let trailer = block_on(fusion.trailer()).expect("trailer succeeds");
     assert_eq!(trailer.plan_id, Some(pinned));
@@ -1365,8 +1360,7 @@ fn a_candidate_contributed_to_more_times_than_there_are_strata_is_refused() {
             MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
         ),
     ];
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the fixture contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
     let result = block_on(async {
         loop {
             match fusion.next().await {
@@ -1546,8 +1540,7 @@ fn a_sum_landing_on_the_ceiling_is_refused_by_the_contribution_count() {
         "two rank-1, K=1 contributions at the max weight must sum to exactly the ceiling"
     );
 
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the fixture contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
     let result = block_on(async {
         loop {
             match fusion.next().await {
@@ -5524,8 +5517,7 @@ fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
         )
         .attesting(attests_short("g-7", "shard 1 offline")),
     )];
-    let mut fusion =
-        FusionStream::new(streams, profile).expect("the fixture contracts are admissible");
+    let mut fusion = FusionStream::new(streams, profile);
 
     block_on(fusion.next())
         .expect("the first row certifies")
@@ -7518,8 +7510,7 @@ fn a_top_k_that_stops_an_approximate_stream_still_reports_its_fidelity() {
             .declaring(lossy_contract()),
         )],
         profile,
-    )
-    .expect("the fixture contracts are admissible");
+    );
 
     // Pull one row and stop, leaving the stream open and unreceipted.
     let first = block_on(fusion.next()).expect("a row");
@@ -7551,8 +7542,7 @@ fn the_exactness_verdict_does_not_move_as_a_caller_reads_deeper() {
             .declaring(lossy_contract()),
         )],
         profile,
-    )
-    .expect("the fixture contracts are admissible");
+    );
 
     block_on(fusion.next()).expect("a row");
     let early = block_on(fusion.trailer()).expect("a trailer");
@@ -8595,8 +8585,7 @@ fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
             MockStream::new(Vec::new(), exhausted(0)).declaring(lossy_contract()),
         ));
     }
-    let mut fusion =
-        FusionStream::new(streams, whole_range).expect("the fixture contracts are admissible");
+    let mut fusion = FusionStream::new(streams, whole_range);
 
     let refused = block_on(fusion.next());
     assert!(
@@ -8621,8 +8610,7 @@ fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
             MockStream::new(Vec::new(), exhausted(0)).declaring(lossy_contract()),
         ));
     }
-    let mut fusion =
-        FusionStream::new(streams, narrow).expect("the fixture contracts are admissible");
+    let mut fusion = FusionStream::new(streams, narrow);
     let emitted = block_on(fusion.next())
         .expect("three rank-one charges at an eighth of the range still sum")
         .expect("the fusion certifies its one candidate");

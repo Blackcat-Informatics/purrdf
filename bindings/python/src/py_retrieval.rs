@@ -384,8 +384,8 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 
 use crate::attestation::Attestation;
 use crate::retrieval::{
-    AdmissionEnvironment, ClassWidth, CompiledRetrieval, CrossingRank, DecayRule, DepthCause,
-    Fixed, FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution,
+    AdmissionEnvironment, ClassWidth, CompiledRetrieval, CounterReading, CrossingRank, DecayRule,
+    DepthCause, Fixed, FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution,
     ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest,
     ScoreExactness, ScoreInterval, SearchResult, Statistics, Term, ToleratedDepth, TopK,
     UnservedReason,
@@ -2212,37 +2212,37 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         planned_resolution_dict(py, &result.planned_resolution)?,
     )?;
 
-    // `separates_to` is `None` when the profile's contributions never collide
-    // inside any expressible depth — a saturation, deliberately not a very large
-    // number a caller could mistake for a measurement.
+    // Every counter, named, from the trailer's one reading of its own fields
+    // (`StratumResolution::counters`) -- the reading the Rust text rendering is
+    // built from too, so a counter this dict carries is a counter every surface
+    // carries, and none can be added to one and missed by the other.
+    //
+    // They ride with no verbosity switch in front of them. `"ranks_pulled"` is
+    // what the fusion CONSUMED and it is the number a narrowing is judged by --
+    // which is exactly why it cannot be the only one here: a five-row answer
+    // whose producers were read four hundred rows deep reports a perfectly
+    // truthful `"exhausted"` status and an unremarkable rank count, and nothing
+    // else on this dict would say what it cost. `"exclusion_lookups"` is the
+    // point queries this fusion spent settling finality -- a different read of a
+    // different question, never added into the rank -- and `"rows_materialised"`
+    // is the rows the one read behind this stratum produced, taken when the
+    // fusion stops.
+    //
+    // A counter the trailer holds no number for is `None`, never a digit:
+    // `"separates_to"` when the profile's contributions never collide inside any
+    // expressible depth (a saturation, not a very large number), and
+    // `"rows_materialised"` for a stream with no materialised read behind it
+    // (no read to count, never "the read was free").
     let observed = PyDict::new(py);
     for (stratum, measured) in &result.trailer.resolution {
         let entry = PyDict::new(py);
-        entry.set_item("separates_to", measured.separation.rank())?;
-        entry.set_item("ranks_pulled", measured.ranks_pulled)?;
-        entry.set_item("collisions_observed", measured.collisions_observed)?;
-        // The two cost counters, carried with no verbosity switch in front of
-        // them. `"ranks_pulled"` is what the fusion CONSUMED and it is the
-        // number a narrowing is judged by -- which is exactly why it cannot be
-        // the only one here: a five-row answer whose producers were read four
-        // hundred rows deep reports a perfectly truthful `"exhausted"` status
-        // and an unremarkable rank count, and nothing else on this dict would
-        // say what it cost.
-        //
-        // `"exclusion_lookups"` is the point queries this fusion spent settling
-        // finality -- a different read of a different question, never added
-        // into the rank above -- and `"rows_materialised"` is the rows the one
-        // read behind this stratum produced. Each stratum is read on demand, one
-        // invocation read a row per pull, so it is the rows the fusion pulled
-        // plus the probe row where the fusion read past the planned depth, and
-        // it is taken when the fusion stops.
-        //
-        // `"rows_materialised"` is `None` only for a stream with no
-        // materialised read behind it, which no stream this surface builds is:
-        // an absence here is "there is no read to count" and never "the read was
-        // free".
-        entry.set_item("exclusion_lookups", measured.exclusion_lookups)?;
-        entry.set_item("rows_materialised", measured.rows_materialised)?;
+        for counter in measured.counters() {
+            let value = match counter.reading {
+                CounterReading::Number(value) => Some(value),
+                CounterReading::Absent { .. } => None,
+            };
+            entry.set_item(counter.name, value)?;
+        }
         observed.set_item(stratum.as_str(), entry)?;
     }
     out.set_item("observed_resolution", observed)?;

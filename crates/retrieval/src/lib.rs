@@ -442,8 +442,8 @@ pub use execute::{
 pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
 pub use fusion_stream::{
-    CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus, ScoreExactness,
-    ScoreInterval, StratumResolution,
+    CandidateId, CounterReading, FusedRow, FusionStream, FusionTrailer, OBSERVED_COUNTER_COUNT,
+    ObservedCounter, ProducerStatus, ScoreExactness, ScoreInterval, StratumResolution,
 };
 pub use id::{
     EVIDENCE_ID_BYTES, EVIDENCE_ID_DOMAIN, EVIDENCE_VERSION, EvidenceId, FUSION_PROFILE_ID_BYTES,

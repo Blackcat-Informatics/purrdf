@@ -3211,13 +3211,13 @@ fn membership_lookups_stop_the_drain_where_the_threshold_licenses() {
     );
 }
 
-/// The rank [`PlannedResolution::stopping_rank`] proves this file's two-stratum
+/// The rank [`planned_stopping_ranks`] proves this file's two-stratum
 /// configurations cannot pull past, where the two share whatever they admit and
 /// both answer lookups — computed by the library's own derivation, never
 /// restated.
 ///
 /// The value is pinned once, as a literal with its arithmetic, in
-/// [`the_lookups_answer_the_drained_configuration_in_one_read_at_the_proven_stopping_rank`];
+/// [`the_lookups_answer_the_drained_configuration_reading_only_the_ranks_the_fusion_pulls`];
 /// every other use reads it from here.
 fn stopping_read_depth() -> u64 {
     let k = u64::try_from(TOP_K.get()).expect("the fixture bound fits a u64");
@@ -3240,16 +3240,103 @@ fn compiled_for(config: Configuration) -> CompiledRetrieval {
     compile(&planned, &env).expect("a fresh plan is admitted")
 }
 
-/// The stopping rank the compiled plan itself surfaces for each of its units,
-/// which the two symmetric strata of this file must agree on — read off
-/// [`PlannedResolution::stopping_rank`] at the bundle's own bound, over the two
-/// streams every configuration here fuses.
+/// The stopping rank each unit of one configuration's compiled plan proves,
+/// which the two symmetric strata of this file must agree on.
+///
+/// Derived from what the plan itself surfaces — each stratum's
+/// `PlannedResolution::sharing_weights` — and the profile's weight for the
+/// stratum, through the library's own `crossing_rank_at`: `own` naming a
+/// candidate at rank `k` against one copy of `own` per stratum admitting its
+/// block. Over this file's two symmetric strata every block a stratum admits is
+/// admitted by exactly the strata in its sharing set, so the size of that set is
+/// the heaviest block the derivation below needs.
+///
+/// The result is the deepest rank a fusion bounded at `k` can pull a stratum's
+/// head to, when no block is admitted by more than `m` fused streams and every
+/// candidate the answer holds is final by the time its lower bound clears the
+/// threshold. The derivation below is why it is an upper bound on the ranks
+/// pulled rather than a guess at them — and, because a stratum is read on
+/// demand, on the rows its read produces short of its probe row.
+///
+/// # Derivation
+///
+/// Write `c(r)` for this stratum's contribution at rank `r`, `k` for the
+/// bound, and `m` for the heaviest block. Two premises. The first is a
+/// declaration: the stratum declared `DuplicatePolicy::Unique`. The second
+/// is what the declarations make *possible* and only the rows make true:
+/// every candidate a stream names becomes final as soon as the fusion asks
+/// about it — each other stream able to name it has named it already or
+/// holds it nowhere, so its lookup answers `Excluded`. The caller takes the
+/// derivation only where every stratum sharing a block with another answers
+/// lookups, which is the condition under which the second premise *can*
+/// hold; where the rows break it the fusion simply reads on, and the bound is
+/// not a bound for that run. A stratum holding fewer than `k` rows runs out
+/// before any depth this returns — the result is always past `k` — so it is
+/// assumed to hold at least `k`.
+///
+/// 1. **The `k`-th row is worth at least `c(k)`.** The stratum's first `k`
+///    rows name `k` distinct candidates, and each has collected at least its
+///    contribution from this stratum. So `k` candidates end at `c(k)` or
+///    more, and the `k`-th best final score `L_k` is at least `c(k)`.
+/// 2. **When this stratum is pulled from rank `r`, the threshold is at most
+///    `m · c(r)`.** The engine pulls the stream whose head contributes most,
+///    so every open head is then at most `c(r)`; its threshold is the
+///    largest, over blocks, of the heads admitting one block, which is at
+///    most `m` heads. The bound is summed in the same truncated terms
+///    `purrdf_retrieval::threshold_at` sums, so the tie the engine's
+///    strict comparison refuses is refused here too.
+/// 3. **A pull happens only while the threshold is at least `L_k`.** Were it
+///    below, every candidate worth `L_k` or more would already be named — a
+///    candidate no stream has named is worth at most the threshold — and
+///    each would clear it. Every named candidate whose ceiling still beats
+///    the threshold is asked about before the certification pass, so by the
+///    second premise each is final and none can block another on a ceiling
+///    it will never reach: the `k`-th row would have been certified instead
+///    of a row pulled.
+///
+/// Together: a pull from rank `r` needs `m · c(r) >= L_k >= c(k)`, so the
+/// head never passes the first rank at which `c(k) > m · c(r)` — the rank
+/// returned. The fusion never asks past it, so an on-demand read of this
+/// stratum produces no row past it either.
+///
+/// # Why the threshold is not `PlannedResolution::sharing_weights` here
+///
+/// [`crossing_rank_at`] models every sharer's head at one common rank,
+/// which is the right model for *where a given candidate crosses*, and not a
+/// bound on *how deep this stratum is read*. The engine equalises heads by
+/// contribution rather than by rank — a lighter sharer's head can sit at its
+/// first rank while this one is pulled deep — and its threshold is a maximum
+/// over **every** block, including blocks this stratum never admits. Either
+/// can hold the threshold above the common-rank sum, and a prediction taken
+/// from that sum could stop short of the read the engine takes.
+///
+/// # What `k` and the naming are, and why no row is needed
+///
+/// The crossing a candidate reaches depends on which strata named it and at
+/// what rank — facts about rows. Step 1 replaces both with the one bound the
+/// declarations do fix: whatever the rows are, this stratum alone supplies
+/// `k` candidates worth `c(k)`. The bound is attained, not merely safe: two
+/// strata of equal weight sharing a block, both naming the same `k - 1`
+/// candidates first and then one candidate each that the other does not
+/// hold, leave the `k`-th row single-named at rank `k`.
 fn planned_stopping_ranks(config: Configuration) -> u64 {
     let compiled = compiled_for(config);
+    let profile = fixture_profile();
+    let k = u64::try_from(TOP_K.get()).expect("the fixture bound fits a u64");
     let ranks: BTreeSet<u64> = compiled
         .resolution
-        .values()
-        .map(|resolution| crossed(resolution.stopping_rank(TOP_K, strata().len())))
+        .iter()
+        .map(|(stratum, resolution)| {
+            let own = profile
+                .weight(stratum)
+                .expect("the fixture profile weights every stratum");
+            crossing_rank_at(
+                decay(),
+                &[own],
+                k,
+                &vec![own; resolution.sharing_weights.len()],
+            )
+        })
         .collect();
     assert_eq!(
         ranks.len(),
@@ -3961,10 +4048,10 @@ fn the_exclusion_lookup_counter_moves_between_two_runs_that_both_ask() {
 
 /// **The prediction a host can read before it runs anything.**
 ///
-/// The threshold-crossing derivation is the library's, and the plan surfaces it:
-/// [`PlannedResolution::crossing_rank_at`] answers it from the decay law and the
-/// weights of the strata whose declared blocks meet this one's, which is
-/// everything the derivation needs that is not a fact about rows. Nothing here
+/// The threshold-crossing derivation is the library's, and the plan surfaces its
+/// input: `PlannedResolution::sharing_weights` is the weights of the strata whose
+/// declared blocks meet this one's, which with the decay law is everything the
+/// derivation needs that is not a fact about rows. Nothing here
 /// is hardcoded — each expected value is recomputed in this test, from the
 /// configuration's own two bits, through the same library function — and the
 /// three configurations must yield three *different* answers, so a constant or a
@@ -4012,7 +4099,7 @@ fn the_plan_surfaces_the_crossing_and_it_predicts_the_read_that_reaches_it() {
             // surfaces. Both are the library's; what is under test is that the
             // planner feeds it the right terms.
             let predicted = crossing_rank_at(decay(), &naming, deepest, &sharing);
-            let surfaced = crossed(planned.crossing_rank_at(&naming, deepest));
+            let surfaced = crossing_rank_at(decay(), &naming, deepest, &planned.sharing_weights);
             assert_eq!(
                 predicted,
                 surfaced,
@@ -4062,8 +4149,8 @@ fn the_plan_surfaces_the_crossing_and_it_predicts_the_read_that_reaches_it() {
 
 /// **The plan-time half, with nothing executed at all.**
 ///
-/// The point of putting the crossing on the compiled plan is that a host learns
-/// what its declarations have committed it to *before* it pays for a read. So
+/// The point of putting the crossing's input on the compiled plan is that a host
+/// learns what its declarations have committed it to *before* it pays for a read. So
 /// this test compiles and stops: no dataset is opened, no producer is called, no
 /// row exists. What it asks is the worst case — one namer, measured against every
 /// stratum that shares its blocks — and the two configurations answer with the
@@ -4093,7 +4180,11 @@ fn a_host_learns_the_crossing_its_declarations_condemn_it_to_without_reading_a_r
                 .resolution
                 .get(&stratum)
                 .expect("the fixture profile weights every planned stratum");
-            answers.push(crossed(resolution.crossing_rank(&[Fixed::ONE])));
+            answers.push(crossing_rank(
+                decay(),
+                &[Fixed::ONE],
+                &resolution.sharing_weights,
+            ));
         }
     }
 

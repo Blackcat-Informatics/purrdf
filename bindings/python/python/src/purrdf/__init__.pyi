@@ -2761,8 +2761,8 @@ class retrieval:
     # `"domains"` maps a stratum to the candidate-domain declaration its stream
     # fused under — `None` for the unrestricted promise, a list of tag IRIs for a
     # restriction — and `"exclusion_bases"` maps it to what that stream declared
-    # its exclusion answers would be a fact about: `"unavailable"`, `"membership"`
-    # or `"search"`. The two answer one question by two means: a declaration says
+    # its exclusion answers would be a fact about: `"unavailable"` or
+    # `"membership"`. The two answer one question by two means: a declaration says
     # a stream will never name a candidate, a lookup observes it. Read
     # `"exclusion_bases"` whenever `"exclusion_lookups"` is zero, because zero
     # means two different things — nothing COULD be asked, or nothing NEEDED

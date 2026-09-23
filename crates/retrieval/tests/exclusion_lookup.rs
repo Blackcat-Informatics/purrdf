@@ -259,42 +259,17 @@ fn lossy() -> Completeness {
     }
 }
 
-/// **`Search` is refused from a lossy producer, and admitted from an exhaustive
-/// one — and `Membership` is admitted from the lossy one.**
+/// **`Membership` is admitted from a lossy producer and from an exhaustive one
+/// alike.**
 ///
-/// Three registrations differing in one term each, all executed. The first is
-/// the refusal; the second shows the refusal is keyed on the completeness axis
-/// and not on the basis; the third is the case that matters most, because it is
-/// the one a completeness check applied to the wrong variant would wrongly
-/// refuse.
-///
-/// `Membership` is exact independently of completeness: a term the producer's
-/// universe does not contain is a term it names at no rank, whatever its search
-/// dropped. Refusing it would throw away the only evidence that can settle
-/// finality for a lossy producer, and the refusal would look like strictness.
+/// Both registrations are executed, and they differ in the completeness axis
+/// alone. A membership answer is exact independently of completeness: a term the
+/// producer's index holds no entry for is a term it names at no rank, whatever
+/// its search dropped. Refusing the lossy one would throw away the only evidence
+/// that can settle finality for a lossy producer, and the refusal would look like
+/// strictness.
 #[test]
-fn search_needs_a_complete_search_and_membership_does_not() {
-    let refused = refusal(ExclusionBasis::Search, lossy(), CandidateMode::PointLookup)
-        .expect("a lossy search cannot say a candidate is absent");
-    assert!(
-        refused.contains("exclusion basis of search")
-            && refused.contains("completeness lossy")
-            && refused.contains("ExclusionBasis::Membership"),
-        "the refusal names the basis, the axis it conflicts with, and the \
-         registration the host probably meant: {refused}"
-    );
-
-    assert_eq!(
-        refusal(
-            ExclusionBasis::Search,
-            Completeness::Complete,
-            CandidateMode::PointLookup,
-        ),
-        None,
-        "the same basis from a producer whose search is complete is exactly what \
-         the variant is for"
-    );
-
+fn membership_is_admitted_whatever_the_search_dropped() {
     assert_eq!(
         refusal(
             ExclusionBasis::Membership,
@@ -302,9 +277,18 @@ fn search_needs_a_complete_search_and_membership_does_not() {
             CandidateMode::PointLookup
         ),
         None,
-        "a membership answer is about the producer's term universe, which a \
-         lossy search does not make less exact; refusing this would be refusing \
-         a provably exact answer"
+        "a membership answer is about the producer's own index, which a lossy \
+         search does not make less exact; refusing this would be refusing a \
+         provably exact answer"
+    );
+    assert_eq!(
+        refusal(
+            ExclusionBasis::Membership,
+            Completeness::Complete,
+            CandidateMode::PointLookup,
+        ),
+        None,
+        "and the exhaustive neighbour is admitted on the same footing"
     );
 }
 
@@ -885,7 +869,7 @@ fn residual_streams(right: Right) -> Vec<(Iri, ScriptedStream)> {
 fn drive(
     streams: Vec<(Iri, ScriptedStream)>,
 ) -> Result<(Vec<FusedRow>, FusionTrailer), FusionError> {
-    let mut fusion = FusionStream::new(streams, weighted_profile())?;
+    let mut fusion = FusionStream::new(streams, weighted_profile());
     let mut rows = Vec::new();
     while rows.len() < 2 {
         let Some(row) = block_on(fusion.next())? else {
@@ -1063,84 +1047,5 @@ fn a_lossy_search_excluding_by_membership_discharges_the_residual() {
         asked > 0 && pulled < control_pulled,
         "the exclusion shortened the read: {pulled} ranks with {asked} lookups, \
          against {control_pulled} without"
-    );
-}
-
-/// **A hand-built stream pairing a search basis with a lossy search is refused
-/// when it is handed to fusion.**
-///
-/// The registry refuses this pairing at registration, but a stream a caller
-/// assembles itself never meets a registry — and the fusion is the party that
-/// would act on the answer. Honoured, this stream's `Excluded` for `i` and `b`
-/// would discharge the residual its own lossy search earns, exactly as the
-/// membership answer does above, from a search that may simply not have looked.
-/// So [`FusionStream::new`] refuses it by name before a row is pulled, and
-/// [`fuse`] surfaces the same refusal.
-///
-/// Two neighbours, each differing in one term and each executed through the
-/// same constructor, with an oracle that shows the answer was *used*: a search
-/// basis over an exhaustive search, and a membership basis over the lossy one.
-#[test]
-fn a_search_basis_over_a_lossy_search_is_refused_at_fusion() {
-    let expected = ProtocolError::SearchExclusionFromLossySearch {
-        stratum: ex("stratum/right"),
-        evidence: "approximate: beam search; recall unmeasured above 10^6".to_owned(),
-    };
-    let lossy_search = || {
-        residual_streams(Right {
-            fidelity: lossy_fidelity(),
-            short: false,
-            basis: ExclusionBasis::Search,
-        })
-    };
-    match drive(lossy_search()) {
-        Err(FusionError::Protocol(error)) => assert_eq!(*error, expected),
-        other => panic!("expected the pairing refused at construction, got {other:?}"),
-    }
-    match block_on(fuse::<ScriptedStream, Term>(
-        lossy_search(),
-        &weighted_profile(),
-        TopK::new(2),
-    )) {
-        Err(FusionError::Protocol(error)) => assert_eq!(*error, expected),
-        other => panic!("expected fuse to surface the same refusal, got {other:?}"),
-    }
-
-    // A search basis over an exhaustive search: admitted, asked, and used.
-    let (rows, trailer) = drive(residual_streams(Right {
-        fidelity: RankFidelity::EXACT,
-        short: false,
-        basis: ExclusionBasis::Search,
-    }))
-    .expect("a complete search's `not found` is `not present`");
-    let (_, control_trailer) = drive(residual_streams(Right {
-        fidelity: RankFidelity::EXACT,
-        short: false,
-        basis: ExclusionBasis::Unavailable,
-    }))
-    .expect("the control fuses");
-    let (pulled, asked) = right_read(&trailer);
-    let (control_pulled, _) = right_read(&control_trailer);
-    assert!(
-        asked > 0 && pulled < control_pulled,
-        "the exhaustive search's exclusions shortened the read: {pulled} ranks \
-         with {asked} lookups, against {control_pulled} without"
-    );
-    assert_eq!(entities(&rows), [term("i").as_str(), term("b").as_str()]);
-    assert_eq!(deficits(&rows), [Fixed::ZERO, Fixed::ZERO]);
-
-    // A membership basis over the lossy search: admitted, asked, and used.
-    let (rows, trailer) = drive(residual_streams(Right {
-        fidelity: lossy_fidelity(),
-        short: false,
-        basis: ExclusionBasis::Membership,
-    }))
-    .expect("membership is exact however lossy the search");
-    let (pulled, asked) = right_read(&trailer);
-    assert!(asked > 0 && pulled < control_pulled);
-    assert_eq!(
-        deficits(&rows),
-        [Fixed::ZERO, Fixed::ZERO],
-        "and its exclusions discharged the lossy residual they are exact about"
     );
 }
