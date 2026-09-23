@@ -442,7 +442,10 @@ row-for-row operators — projections, `OFFSET`-free `LIMIT`s and renaming
 `BIND`s — and a relation's `PfCursor` is already per-row at the seam. So the
 evaluator reads exactly that shape on demand, through the same admission,
 unification and containment the governed lane uses, and refuses every other
-shape by name rather than materializing it behind a cursor's back.
+shape by name rather than materializing it behind a cursor's back. A `FILTER`
+over the call is one more such operator: it drops rows and never reorders them,
+so the read evaluates it per pulled row with the engine's own expression
+evaluator, and never offers the relation a `LIMIT` that stands above it.
 
 **The rule now.** `execute` still materializes each stratum before its first
 row is readable; `execute_within` at `ReadSchedule::OnDemand` — the read

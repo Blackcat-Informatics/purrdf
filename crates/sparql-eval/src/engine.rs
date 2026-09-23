@@ -113,7 +113,9 @@ impl PreparedQuery {
     /// Whether this plan has the shape
     /// [`NativeSparqlEngine::open_call_cursor`] reads one row per pull: a `SELECT`
     /// over the default dataset whose pattern is one property-function call under
-    /// nothing but projections, `OFFSET`-free `LIMIT`s and variable-renaming `BIND`s.
+    /// nothing but projections, `OFFSET`-free `LIMIT`s, variable-renaming `BIND`s and
+    /// `FILTER`s it can evaluate row by row — see
+    /// [`CallReadShape::read_on_demand`](crate::CallReadShape::read_on_demand).
     ///
     /// A question about the algebra and nothing else. It resolves no relation and
     /// opens nothing, so `true` says the plan *can* be read on demand, not that the
@@ -124,27 +126,26 @@ impl PreparedQuery {
     ///
     /// Asked of the plan rather than of where its text came from, because the
     /// shape is what decides whether one invocation held open *is* the answer. A
-    /// caller's hand-written `SELECT ?c WHERE { (?c) <pf> ("q") }` is that shape
-    /// exactly as a rendered one is; a text with a join, a `FILTER` or an
+    /// caller's hand-written `SELECT ?c WHERE { (?c) <pf> ("q") FILTER(?c != <x>) }`
+    /// is that shape exactly as a rendered one is; a text with a join or an
     /// `ORDER BY` is not, whoever wrote it.
     #[must_use]
     pub fn is_call_read(&self) -> bool {
-        self.call_read_shape().is_ok()
+        self.call_read_shape()
+            .is_ok_and(|shape| shape.read_on_demand().is_ok())
     }
 
-    /// The call this plan consists of and which of its variables each projected
-    /// column reads, when the plan has the shape [`Self::is_call_read`] answers `true`
-    /// for — or the refusal naming the first thing in the way.
+    /// The calls this plan's answer is drawn from — which of them each projected
+    /// column's values come from, and whether the plan is one call read on demand.
     ///
-    /// The same check [`Self::is_call_read`] and
-    /// [`NativeSparqlEngine::open_call_cursor`] make, returned as a description rather
-    /// than a yes: a composition layer that asks the one call a second question reads
-    /// the call here, as this plan admitted it, rather than parsing the text again.
+    /// The one description [`Self::is_call_read`] and
+    /// [`NativeSparqlEngine::open_call_cursor`] read, handed out whole: a composition
+    /// layer that asks a column's call a second question reads the call here, as this
+    /// plan admitted it, rather than parsing the text again.
     ///
     /// # Errors
     ///
-    /// [`CallReadRefusal`](crate::CallReadRefusal) naming a form other than `SELECT`,
-    /// a dataset clause, or the first node that is not a row-for-row operator.
+    /// [`CallReadRefusal`](crate::CallReadRefusal) naming a form other than `SELECT`.
     pub fn call_read_shape(&self) -> Result<crate::CallReadShape<'_>, crate::CallReadRefusal> {
         crate::CallReadShape::of(&self.query)
     }
@@ -1110,7 +1111,8 @@ impl NativeSparqlEngine {
     }
 
     /// Open `prepared` — a `SELECT` that projects exactly one property-function call,
-    /// under an optional `LIMIT` — as a [`CallCursor`](crate::CallCursor): the call's
+    /// under optional `LIMIT`s and row-by-row `FILTER`s — as a
+    /// [`CallCursor`](crate::CallCursor): the call's
     /// solutions read one at a time as the caller asks, with the invocation held open
     /// between reads, instead of drained into an answer before the first is readable.
     ///
@@ -1131,8 +1133,8 @@ impl NativeSparqlEngine {
     /// # Errors
     ///
     /// A plan whose registry disagrees with `options`, a query that is not one
-    /// projected call (an `OFFSET`, a dataset clause, any operator between the call and
-    /// the root), and every failure the governed lane raises before the invocation's
+    /// projected call (an `OFFSET`, a dataset clause, a `FILTER` it cannot evaluate row
+    /// by row, any other operator between the call and the root), and every failure the governed lane raises before the invocation's
     /// first row: an unregistered relation, an arity or access mode it does not
     /// declare, a relation that refuses to open.
     pub fn open_call_cursor(
@@ -1146,17 +1148,31 @@ impl NativeSparqlEngine {
             &crate::DetHashSet::default(),
             ShaclPrebinding::None,
         )?;
-        let shape = prepared.call_read_shape().map_err(|refusal| {
+        let refused = |refusal: crate::CallReadRefusal| {
             RdfDiagnostic::error("native-sparql-query-eval", refusal.reason().to_owned())
-        })?;
-        crate::property_fn_eval::open_call_cursor(&shape, options.property_functions()).map_err(
-            |e| {
+        };
+        let shape = prepared.call_read_shape().map_err(refused)?;
+        shape.read_on_demand().map_err(refused)?;
+        // What a `FILTER` over the call is evaluated in: this engine's own context
+        // configuration (`Self::eval_ctx`), the query's base IRI, and `NOW()` read once,
+        // here — every value the materialised lane's single context would carry.
+        let filtering = crate::property_fn_eval::FilterContext {
+            options: self.eval_options,
+            standpoint_predicates: self.standpoint_predicates.clone(),
+            loss_vocabulary: self.loss_vocabulary.clone(),
+            base_iri: prepared
+                .query
+                .base_iri()
+                .map(|base| base.as_str().to_owned()),
+            now: purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
+        };
+        crate::property_fn_eval::open_call_cursor(&shape, options.property_functions(), filtering)
+            .map_err(|e| {
                 RdfDiagnostic::error(
                     eval_diagnostic_code(&e, "native-sparql-query-eval"),
                     e.to_string(),
                 )
-            },
-        )
+            })
     }
 
     /// The context every governed lane evaluates in: governors attached, a federated

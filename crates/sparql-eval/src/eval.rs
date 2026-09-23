@@ -844,9 +844,21 @@ impl<D: DatasetView + Sync> Drop for SubstitutedExistsGuard<'_, '_, D> {
 impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// A fresh context over `dataset`, scoped to the default graph.
     pub fn new(dataset: &'d D) -> Self {
-        let now_val = purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now());
-        let rng_seed: u64 = crate::clock::entropy_seed();
+        Self::at(
+            dataset,
+            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
+            crate::clock::entropy_seed(),
+        )
+    }
 
+    /// A fresh context over `dataset` whose `NOW()` is `now` and whose
+    /// `RAND()`/`UUID()` stream starts at `rng_seed`, for an evaluation that must
+    /// answer as one already under way answers: the per-row `FILTER` of an on-demand
+    /// call read ([`crate::CallCursor`]) evaluates in a context built per pull, and
+    /// every one of them reads the instant the read opened, as the single context of
+    /// the materialised lane does. [`Self::new`] is this with the wall clock and a
+    /// fresh seed.
+    pub(crate) fn at(dataset: &'d D, now_val: purrdf_xsd::XsdValue, rng_seed: u64) -> Self {
         // `static`, not a bare `&Registry::EMPTY` temporary: the returned `Self` must
         // outlive this function body, and a `HashMap`-backed registry's drop glue
         // blocks Rust's rvalue static promotion for a reference that has to live that

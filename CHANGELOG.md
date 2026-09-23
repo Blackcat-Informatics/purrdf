@@ -52,16 +52,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   prepares each stratum's lookup once, binds each candidate by the dataset id its read
   found it under, and hands the lookup back inside the stream; a stratum whose lookup
   will not prepare is that stratum's `ExecutionFailed` status. A unit built from a
-  caller-supplied query that is one property-function call under projections,
-  `OFFSET`-free `LIMIT`s and renaming `BIND`s — the shape
-  `PreparedQuery::call_read_shape` (new, beside `CallReadShape` and
-  `CallReadRefusal`) describes and `is_call_read` asks — gets the same lookup,
-  derived from the call it wrote: the position its `?candidate` column reads is the
-  parameter, a declared depth position is freed, and the registry must declare the
-  unit's basis for that call at that candidate position or the stratum fails by
-  name. A supplied query of any other shape cannot declare a basis
-  (`UnitError::ExclusionNotRenderable`, whose `reason` names what is in the way),
-  and registration refuses a declared basis on a relation with no candidate-bound
+  caller-supplied query gets the same lookup whenever every value its `?candidate`
+  column takes was emitted by one of its property-function calls: through
+  projections, `FILTER`s, `DISTINCT`, `ORDER BY`, `LIMIT`/`OFFSET`, renaming `BIND`s,
+  a join with any other pattern, the required side of an `OPTIONAL`, the left side of
+  a `MINUS`, a `GROUP BY` key or `GRAPH`. `PreparedQuery::call_read_shape` (new,
+  beside `CallReadShape` and `CallReadRefusal`) describes which calls those are
+  (`CallReadShape::sources_of`) and whether the query is one call read on demand
+  (`CallReadShape::read_on_demand`, which `is_call_read` asks). One lookup is
+  derived per call whose ranked declaration states the unit's basis at the position
+  the column is read from: that position is the parameter and a declared depth
+  position is freed. The stream answers `Excluded` at the first of them that
+  excludes the candidate and `Possible` only when none does, each held to the
+  attestation the stratum's read pinned. A stratum none of whose calls qualify fails
+  by name. A supplied query whose `?candidate` column can take a value no call
+  emitted — a `UNION`, an `OPTIONAL` whose required side can bind it, a call only
+  on the subtracted side of a `MINUS`, a computed `BIND`, an aggregate, a `GRAPH`
+  name, `VALUES` — cannot declare a basis (`UnitError::ExclusionNotRenderable`,
+  whose `reason` names what is in the way), and registration refuses a declared basis on a relation with no candidate-bound
   access mode whose row bound is one. `FusionTrailer::exclusion_bases` records each
   stream's basis, and `FusionTrailer::evidence_id` now also covers which strata
   answered lookups; an answer that asked none keeps its evidence id byte for byte.
@@ -74,10 +82,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `search` reads on demand, so every stratum is read exactly once, as far as its
   fusion pulls it — plus the probe row one past the planned depth where the read
   gets that far — and a consumer that stops at the sixth rank of a four-hundred-row
-  plan has caused six rows to be produced. A text of any other shape (a join, a
-  `FILTER`, an `ORDER BY`, a dataset clause) is materialised under either schedule,
-  and a caller's own single-call text that runs out ends `SuppliedQueryEnded` under
-  both. The receipt is taken when the fusion stops: `RankedStream::settle` returns a
+  plan has caused six rows to be produced. A caller's own text that is one call
+  under a `FILTER` is read on demand too: the `FILTER` is evaluated per pulled row
+  by the engine's own evaluator, a dropped row takes no rank, and a `LIMIT` above
+  the `FILTER` is never offered to the producer as its ceiling. A text of any other
+  shape (a join, an `ORDER BY`, a dataset clause, a `FILTER` embedding `EXISTS` or
+  calling a custom function or a builtin that draws per-query state) is
+  materialised under either schedule, and a caller's own single-call text that runs
+  out ends `SuppliedQueryEnded` under both. The receipt is taken when the fusion stops: `RankedStream::settle` returns a
   `ReadSettlement` (the attestation, rows materialised and rows emitted the read
   stands behind), and a read whose generation or service level moved between the
   open and the stop is refused as `ProtocolError::AttestationMoved`. A read that
@@ -104,10 +116,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 - **sparql-eval:** `NativeSparqlEngine::open_call_cursor` opens a prepared `SELECT`
   over the default dataset that is one property-function call under nothing but
-  projections, `OFFSET`-free `LIMIT`s and variable-renaming `BIND`s as a `CallCursor`
-  read one solution per `next_row`, with the same registry admission, arguments,
-  declared-mode check, row licence, width check and unification the governed lane
-  applies; `CallCursor::settle` returns the relation witness of the
+  projections, `OFFSET`-free `LIMIT`s, variable-renaming `BIND`s and `FILTER`s it can
+  evaluate row by row as a `CallCursor` read one solution per
+  `next_row(dataset)`, with the same registry admission, arguments, declared-mode
+  check, row licence, width check and unification the governed lane applies, and
+  each `FILTER` applied to the rows reaching it; `CallCursor::settle` returns the relation witness of the
   rows actually produced. `PreparedQuery::is_call_read` answers whether a plan has
   that shape without opening anything. `NativeSparqlEngine::execute_witnessed` runs a
   `PreparedExecution` and returns the run's `RelationWitness` beside the answer, so a

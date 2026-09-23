@@ -437,22 +437,50 @@ free variable in the lookup's text — and *only* in the lookup's text; the
 streaming unit still carries the depth the plan derived. A depth is an offer, and
 a lookup is not asking for an offer to be filled.
 
-**A caller's own one-call text is looked up the same way.** A unit built with
-`StratumUnit::new` over a hand-written query may declare your basis when that
-query is one call of your relation under nothing but projections, `OFFSET`-free
-`LIMIT`s and variable-renaming `BIND`s — the shape an on-demand read already
-recognises (`PreparedQuery::call_read_shape`), and the one shape check both
-paths share. The lookup is derived from the call the caller wrote, carried back
-through the renamings to the position its `?candidate` column reads: that
-position is the parameter, your depth position is freed whatever the caller
-wrote there, every other variable is a blank, and every other constant is the
-caller's own. It is held to the same terms as a rendered lookup: the call's IRI
-must be registered with a ranked declaration stating the basis the unit claims,
-and the candidate must be read from the position that basis was admitted at, or
-the stratum fails by name. A supplied text of any other shape — a join, a
-`FILTER`, an `ORDER BY`, a dataset clause — has no one call to ask and is
-refused at construction (`UnitError::ExclusionNotRenderable`, naming the node in
-the way); declare `ExclusionBasis::Unavailable` for such a text.
+**A caller's own text is looked up the same way, through each call its
+candidates come from.** A unit built with `StratumUnit::new` over a hand-written
+query may declare your basis when every value that query's `?candidate` column
+takes is a value one of its calls emitted. The shape description an on-demand read
+also reads (`PreparedQuery::call_read_shape`, `CallReadShape::sources_of`) names
+those calls. A call is one through projections, `FILTER`s, `DISTINCT`, `ORDER BY`,
+`LIMIT` and `OFFSET`, renaming `BIND`s, a join with any other pattern (another call,
+a triple pattern, `VALUES`), the required side of an `OPTIONAL`, the left side of a
+`MINUS`, a `GROUP BY` key and `GRAPH` (your relation is handed no graph, so its
+rows do not depend on the one in scope). Each of those only drops, merges,
+reorders or extends the solutions beneath it, so a candidate the call never emits
+is a candidate the text never names. For each such call of your relation the
+lookup is derived from the call the caller wrote, carried back through the
+renamings to the position the `?candidate` column reads: that position is the
+parameter, your depth position is freed whatever the caller wrote there, every
+other variable is a blank, and every other constant is the caller's own. Each is
+held to the same terms as a rendered lookup: it asks only a call whose IRI is
+registered with a ranked declaration stating the basis the unit claims and whose
+candidate position holds the variable the column comes from — at least one call
+must qualify, or the stratum fails naming what each lacks — and every lookup's
+attestation must equal the one the stratum's read pinned. The read's sole-witness
+rule makes that one attestation cover every call of the text, because every call
+of a conforming unit invokes your relation at one generation. The consumer asks
+the qualifying calls in order and answers `Excluded` at the first that finds no
+row; `Possible` needs every one of them to find the candidate. So a text joining
+two of your calls may invoke you twice per verdict.
+
+A text whose `?candidate` column can take a value no call emitted is refused at
+construction under any registry (`UnitError::ExclusionNotRenderable`, naming why):
+a `UNION` whose other branch binds the column, an `OPTIONAL` whose required side
+can bind it where the call on its optional side does not, a call only on the
+subtracted side of a `MINUS`, a computed `BIND` or an aggregate, a `GRAPH` name,
+`VALUES`. A column only a triple pattern binds is refused at execution, as that
+stratum's `ExecutionFailed`, because which predicates are calls is the registry's
+to say. Declare `ExclusionBasis::Unavailable` for such a text.
+
+A caller's text that is one call of your relation under projections,
+`OFFSET`-free `LIMIT`s, renaming `BIND`s and `FILTER`s is also *read* on demand,
+as a rendered unit is: the `FILTER` is applied to each row you emit as it is
+pulled, a row it drops takes no rank, and you are offered a `LIMIT` as your
+ceiling only when no `FILTER` stands between it and your call — a `FILTER` above
+the `LIMIT` would otherwise stop you short of the rows it was going to drop. A
+join of calls is not one ranked stream and is read materialised; its lookups are
+asked all the same.
 
 **The candidate is declared to the prepare, not merely substituted.** The
 consumer prepares the lookup through

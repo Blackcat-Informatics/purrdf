@@ -232,10 +232,11 @@ pub use property_fn_plan::content_fingerprint as property_function_content_finge
 // `NativeSparqlEngine::open_call_cursor`: a composition layer that stops reading a
 // ranked relation as soon as it has what it needs holds one of these.
 pub use property_fn_eval::CallCursor;
-// The one shape check behind every on-demand call read, as a description: the call a
-// plan consists of and which call variable each projected column reads. Returned by
+// The one shape description behind every question asked of a query's calls: which
+// of them each projected column's values come from, and whether the query is one call
+// read on demand. Returned by
 // `PreparedQuery::call_read_shape`, and asked of raw algebra by a layer that must tell
-// a caller's text is one call before any registry is in hand.
+// what a caller's text is drawn from before any registry is in hand.
 pub use property_fn_eval::{CallReadRefusal, CallReadShape};
 // The registry instance identity, re-exported alongside the registry that mints
 // it: a composition layer must be able to tell two independently built registries

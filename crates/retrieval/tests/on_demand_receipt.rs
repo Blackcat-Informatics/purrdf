@@ -816,7 +816,7 @@ fn one_call(predicate: &str) -> String {
 }
 
 /// The same call under a `FILTER` every one of its rows passes: the same rows in the
-/// same order, in a shape that is not one call under row-for-row operators.
+/// same order, with a predicate the on-demand read evaluates as each row is pulled.
 fn filtered_call(predicate: &str) -> String {
     format!(
         "SELECT ?candidate WHERE {{ ( ?candidate ) <{}> ( \"quick brown fox\"@en ) \
@@ -826,7 +826,7 @@ fn filtered_call(predicate: &str) -> String {
 }
 
 /// The same call joined with an empty-bindings `VALUES` row: again the same rows in
-/// the same order, and again not the shape the on-demand read admits.
+/// the same order, and not the shape the on-demand read admits.
 fn joined_call(predicate: &str) -> String {
     format!(
         "SELECT ?candidate WHERE {{ VALUES ?unused {{ UNDEF }} ( ?candidate ) <{}> \
@@ -921,72 +921,74 @@ fn supplied(text: fn(&str) -> String) -> Supplied {
     }
 }
 
-/// **A caller's own text that is one call is read on demand; one that is not is
-/// materialised; both answer what the rendered units answer.**
+/// **A caller's own text that is one call — bare or under a `FILTER` — is read on
+/// demand; a join is materialised; all answer what the rendered units answer.**
 ///
 /// Whether a stratum is read a row per pull is decided by its prepared text's shape.
 /// The single-call text is exactly the invocation a rendered unit makes, so the fusion
 /// stops it at the sixth rank having caused six rows to be minted — no probe row,
-/// because the fusion never read past the depth. The `FILTER` and join texts are
-/// executed too, not merely refused a cursor: each is read materialised, all four
-/// hundred rows of each producer before the first is fused, and each ends naming the
-/// caller's text as its stopper. All three give the rendered bundle's answer, row
-/// for row.
+/// because the fusion never read past the depth. The `FILTER` text is that call with
+/// a predicate applied to each row as it is pulled; this one keeps every row, so it
+/// mints the same six. The join text is executed too, not merely refused a cursor: it
+/// is read materialised, all four hundred rows of each producer before the first is
+/// fused, and it ends naming the caller's text as its stopper. All three give the
+/// rendered bundle's answer, row for row.
 #[test]
-fn a_callers_single_call_is_read_on_demand_and_a_callers_filter_or_join_is_materialised() {
+fn a_callers_single_call_or_filter_is_read_on_demand_and_a_callers_join_is_materialised() {
     let dataset = common::empty_dataset();
     let reference = materialised(Index::Stable, dataset);
 
-    let on_demand = supplied(one_call);
-    assert_eq!(
-        on_demand.rows, reference.rows,
-        "the caller's single call answers what the rendered unit answers"
-    );
-    assert_eq!(
-        on_demand.resolution,
-        vec![(6, Some(6)), (6, Some(6))],
-        "read on demand: each stream produced the ranks the fusion pulled, and no probe \
-         row because it never read past the depth"
-    );
-    assert_eq!(
-        on_demand.minted,
-        vec![6, 6],
-        "and the producers themselves minted exactly those rows"
-    );
-    assert_eq!(
-        on_demand.statuses,
-        vec![None, None],
-        "an on-demand stratum has no status until its stream is read"
-    );
-
     for (name, text) in [
-        ("FILTER", filtered_call as fn(&str) -> String),
-        ("join", joined_call),
+        ("single call", one_call as fn(&str) -> String),
+        ("FILTER", filtered_call),
     ] {
-        let read = supplied(text);
+        let on_demand = supplied(text);
         assert_eq!(
-            read.rows, reference.rows,
+            on_demand.rows, reference.rows,
             "the caller's {name} answers what the rendered unit answers"
         );
         assert_eq!(
-            read.minted,
-            vec![ROWS, ROWS],
-            "the {name} text is materialised: every row each producer holds was minted"
+            on_demand.resolution,
+            vec![(6, Some(6)), (6, Some(6))],
+            "read on demand: each stream produced the ranks the fusion pulled, and no probe \
+             row because it never read past the depth — {name}"
         );
         assert_eq!(
-            read.resolution,
-            vec![(6, Some(ROWS)), (6, Some(ROWS))],
-            "the fusion still pulls six ranks, out of a read of every row — {name}"
+            on_demand.minted,
+            vec![6, 6],
+            "and the producers themselves minted exactly those rows — {name}"
         );
         assert_eq!(
-            read.statuses,
-            vec![
-                Some(purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: ROWS }),
-                Some(purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: ROWS }),
-            ],
-            "and it has its status before a row is pulled, naming the caller's text — {name}"
+            on_demand.statuses,
+            vec![None, None],
+            "an on-demand stratum has no status until its stream is read — {name}"
         );
     }
+
+    let name = "join";
+    let read = supplied(joined_call);
+    assert_eq!(
+        read.rows, reference.rows,
+        "the caller's {name} answers what the rendered unit answers"
+    );
+    assert_eq!(
+        read.minted,
+        vec![ROWS, ROWS],
+        "the {name} text is materialised: every row each producer holds was minted"
+    );
+    assert_eq!(
+        read.resolution,
+        vec![(6, Some(ROWS)), (6, Some(ROWS))],
+        "the fusion still pulls six ranks, out of a read of every row — {name}"
+    );
+    assert_eq!(
+        read.statuses,
+        vec![
+            Some(purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: ROWS }),
+            Some(purrdf_retrieval::ProducerStatus::SuppliedQueryEnded { rank: ROWS }),
+        ],
+        "and it has its status before a row is pulled, naming the caller's text — {name}"
+    );
 }
 
 /// **A caller's single call that runs out is not certified exhausted.**

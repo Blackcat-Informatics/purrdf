@@ -41,9 +41,9 @@ purrdf-sparql-eval.workspace = true
 # text that is not a query (or not a `SELECT`) is refused at construction, the two
 # clauses the wrapping `SELECT` has no place for — the prologue and the dataset
 # clause — are found and moved onto the wrapper that bounds it, and a text declaring
-# an exclusion basis is checked for the one-call shape its lookup is derived from.
-# That lookup is written as algebra from the prepared call and serialised by this
-# crate's writer. Nothing else in this crate looks at SPARQL as anything but a string.
+# an exclusion basis is checked for a call its candidate column is drawn from. Each
+# lookup is written as algebra from a prepared call and serialised by this crate's
+# writer. Nothing else in this crate looks at SPARQL as anything but a string.
 purrdf-sparql-algebra.workspace = true
 # The exact base-10 fixed-point type (`Fixed`) stratum weights are expressed in,
 # so a plan never carries a float where exactness is the whole point.

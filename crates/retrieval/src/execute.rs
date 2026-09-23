@@ -227,7 +227,9 @@
 //! read described so far, and it is what [`execute`] runs. Under
 //! [`ReadSchedule::OnDemand`] — the schedule [`search`](crate::search) runs — every
 //! unit whose prepared text is one property-function call under row-for-row
-//! operators ([`PreparedQuery::is_call_read`](purrdf_sparql_eval::PreparedQuery::is_call_read)),
+//! operators — projections, `OFFSET`-free `LIMIT`s, renaming `BIND`s and `FILTER`s
+//! evaluated row by row
+//! ([`PreparedQuery::is_call_read`](purrdf_sparql_eval::PreparedQuery::is_call_read)),
 //! which is every unit this layer rendered, is opened as **one invocation held open**
 //! ([`NativeSparqlEngine::open_call_cursor`]): the same text, the same planned depth,
 //! the same bound one probe row past it, and the same arguments, admission, width
@@ -277,12 +279,17 @@
 //! past it would repeat that whole search for the second read — twice the work of
 //! the one invocation this layer takes — and would buy the first read nothing.
 //!
-//! A unit whose text is anything else — a caller's own join, `FILTER`, `ORDER BY` or
-//! dataset clause — is materialised under either schedule: it is not one invocation
-//! this layer can hold open. A caller's own text that *is* one call under row-for-row
+//! A unit whose text is anything else — a caller's own join, `ORDER BY` or dataset
+//! clause — is materialised under either schedule: it is not one invocation this
+//! layer can hold open. A caller's own text that *is* one call under row-for-row
 //! operators is read on demand exactly as a rendered one, and ends
 //! [`StreamEnding::SuppliedQueryEnded`] rather than `Exhausted` when it runs out,
-//! for the reason its materialised read does.
+//! for the reason its materialised read does. A `FILTER` it wrote over the call is
+//! applied as each row is pulled, by the engine's own evaluator: a row it drops is
+//! read and takes no rank, so the stream's ranks count only the rows it kept — as
+//! the materialised read of the same text numbers its answer — and no `LIMIT` above
+//! the `FILTER` is ever offered to the producer as a ceiling
+//! ([`CallCursor`](purrdf_sparql_eval::CallCursor)).
 //!
 //! A failure is isolated exactly as far as it still can be — one before the
 //! first row is that stratum's [`ProducerStatus::ExecutionFailed`], while one after
@@ -806,32 +813,45 @@ enum CandidateBinding<I> {
 /// the [`Term`] the fusion stage will ask about. Shared by that call's lookups.
 type CandidateIndex<I> = HashMap<Term, CandidateBinding<I>>;
 
-/// One stratum's prepared lookup, held until every ranking read of the call is
-/// open and it can be attached to its stream.
+/// One stratum's prepared lookups, held until every ranking read of the call is
+/// open and they can be attached to its stream.
 struct PendingLookup {
     /// The stream's position in the call's streams.
     position: usize,
-    /// The stratum the lookup answers for.
+    /// The stratum the lookups answer for.
     stratum: Iri,
-    /// The lookup, prepared once with the candidate as its one parameter.
-    execution: PreparedExecution,
-    /// The candidate parameter's slot in `execution`.
-    slot: usize,
+    /// The lookups, each prepared once with the candidate as its one parameter,
+    /// beside that parameter's slot — see [`DatasetExclusion::lookups`].
+    lookups: Vec<(PreparedExecution, usize)>,
     /// What the stratum's ranked read pinned, which every lookup is held to.
     pinned: PfAttestation,
 }
 
-/// The exclusion lookup [`execute`] compiles: one prepared execution, run against
-/// the caller's dataset once per candidate.
+/// The exclusion lookup [`execute`] compiles: one prepared execution per qualifying
+/// call of the stratum's text, run against the caller's dataset once per candidate.
 ///
 /// Prepared **once** per stratum and bound per candidate, which is the whole
 /// reason this is a value rather than a closure over a query string: a text
 /// re-parsed per candidate would pay a parse and a feasibility pass for a question
-/// whose answer is a row count. The candidate is bound into the handle's one
+/// whose answer is a row count. The candidate is bound into each handle's one
 /// declared parameter, by the dataset id the ranking read already resolved where
 /// there is one (see [`CandidateBinding`]), and the substitution pushes it into the
 /// producer's call, so the producer is invoked with the candidate position bound
 /// and answers the one question asked — a point read, not a scan of its index.
+///
+/// # Several calls, one verdict
+///
+/// A rendered unit has one call, and so one lookup. A caller's text may draw its
+/// `?candidate` column from several calls — a join of calls on it — and every one of
+/// them that the registry qualifies is a proof of absence on its own
+/// ([`StratumUnit::exclusion_sparql`](crate::StratumUnit)): the column holds only
+/// values each of them emitted. So the lookups are asked in order and the first that
+/// finds no row answers `Excluded`; `Possible` needs every one of them to find its
+/// candidate. Each is held, before its row count is read at all, to the one
+/// attestation the stratum's ranked read pinned — the sole-witness rule makes that one
+/// attestation cover every call the text made, since every call of a conforming unit
+/// invokes the one relation at one generation — so a verdict from any lookup answered
+/// by another index generation is refused, whichever lookup it was.
 struct DatasetExclusion<'d, D: DatasetView + Sync> {
     /// The stratum this lookup answers for, so its refusals name a producer
     /// rather than a query.
@@ -846,10 +866,11 @@ struct DatasetExclusion<'d, D: DatasetView + Sync> {
     /// and run under another is refused by the evaluator, so the same value must
     /// reach both calls — see [`execute_within`]'s own single-environment note.
     env: Arc<ExtensionEnv>,
-    /// The lookup itself, prepared once, with the candidate as its one parameter.
-    execution: PreparedExecution,
-    /// The candidate parameter's slot in [`Self::execution`], resolved once.
-    slot: usize,
+    /// The lookups themselves, one per qualifying call in the order
+    /// [`StratumUnit::exclusion_sparql`](crate::StratumUnit) derived them, each
+    /// prepared once with the candidate as its one parameter and beside that
+    /// parameter's slot, resolved once.
+    lookups: Vec<(PreparedExecution, usize)>,
     /// How each candidate this execution read is bound, shared by its lookups and
     /// written by the reads that name candidates — on demand, as each row is pulled.
     candidates: Rc<RefCell<CandidateIndex<D::Id>>>,
@@ -874,15 +895,35 @@ impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
 
 impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
     fn look_up(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        let binding = self.candidates.borrow().get(candidate).cloned();
+        for index in 0..self.lookups.len() {
+            if self.ask(index, candidate, binding.as_ref())? == ExclusionVerdict::Excluded {
+                return Ok(ExclusionVerdict::Excluded);
+            }
+        }
+        Ok(ExclusionVerdict::Possible)
+    }
+}
+
+impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
+    /// Ask the `index`-th lookup whether `candidate`, bound as `binding` says, is out
+    /// of its call's reach.
+    fn ask(
+        &mut self,
+        index: usize,
+        candidate: &Term,
+        binding: Option<&CandidateBinding<D::Id>>,
+    ) -> Result<ExclusionVerdict, ProtocolError> {
         let stratum = &self.stratum;
         let failed = |reason: String| ProtocolError::ExclusionLookupFailed {
             stratum: stratum.as_str().to_owned(),
             reason,
         };
-        let binding = self.candidates.borrow().get(candidate).cloned();
+        let (execution, slot) = &mut self.lookups[index];
+        let slot = *slot;
         let bound = match binding {
-            Some(CandidateBinding::Id(id)) => self.execution.bind_id(self.slot, self.dataset, id),
-            Some(CandidateBinding::Value(value)) => self.execution.bind(self.slot, value),
+            Some(CandidateBinding::Id(id)) => execution.bind_id(slot, self.dataset, *id),
+            Some(CandidateBinding::Value(value)) => execution.bind(slot, value.clone()),
             // A candidate no ranking read of this execution named: one from a
             // stream assembled elsewhere and fused beside these. Its canonical
             // lexical is the only form it arrives in, so it is read back through the
@@ -893,7 +934,7 @@ impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
                 let value = decode_term(candidate.as_str()).map_err(|reason| {
                     failed(format!("candidate {candidate} did not decode: {reason}"))
                 })?;
-                self.execution.bind(self.slot, value)
+                execution.bind(slot, value)
             }
         };
         bound.map_err(|diagnostic| failed(diagnostic.to_string()))?;
@@ -906,15 +947,13 @@ impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
         // its receipt. A lookup's receipt is two facts — its row count, which the
         // visitor reads here, and the witness of the index generation that
         // answered, which the witnessed door hands back beside it.
-        let (rows, witness) =
-            self.engine
-                .execute_witnessed(&mut self.execution, self.dataset, options, |outcome| {
-                    match outcome {
-                        InternedOutcome::Solutions(solutions) => Some(solutions.len()),
-                        InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => None,
-                    }
-                })
-                .map_err(|diagnostic| failed(diagnostic.to_string()))?;
+        let (rows, witness) = self
+            .engine
+            .execute_witnessed(execution, self.dataset, options, |outcome| match outcome {
+                InternedOutcome::Solutions(solutions) => Some(solutions.len()),
+                InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => None,
+            })
+            .map_err(|diagnostic| failed(diagnostic.to_string()))?;
         let rows =
             rows.ok_or_else(|| failed("the exclusion lookup did not return solutions".to_owned()))?;
         // Held to the read before its verdict is read at all. A verdict is only a
@@ -1402,7 +1441,8 @@ pub async fn execute<'d, D: DatasetView + Sync>(
 /// [`execute`] is this function at [`ReadSchedule::Materialised`]. Under
 /// [`ReadSchedule::OnDemand`] every unit whose prepared text is one property-function
 /// call under row-for-row operators — every unit this layer rendered, and a caller's
-/// own text of that shape — is opened at its planned depth as one invocation held
+/// own text of that shape, a row-by-row `FILTER` included — is opened at its planned
+/// depth as one invocation held
 /// open, and its stream produces a row each time it is pulled — see this module's
 /// header. The two schedules run the same text and read
 /// the same rows in the same order; what differs is how many of them a consumer that
@@ -1415,8 +1455,8 @@ pub async fn execute<'d, D: DatasetView + Sync>(
 ///   stream's receipt is its status, and a caller that wants the status of a stream
 ///   it will not fuse reads the stream to its end;
 /// * a unit whose text is not one call under row-for-row operators — a caller's own
-///   join, `FILTER`, `ORDER BY` or dataset clause — is materialised under this
-///   schedule too, and does get an entry.
+///   join, `ORDER BY`, dataset clause, or a `FILTER` the read cannot evaluate row by
+///   row — is materialised under this schedule too, and does get an entry.
 ///
 /// # Errors
 ///
@@ -1521,10 +1561,11 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
         };
         // Prepared before the ranking read runs, and once for the whole stratum —
         // but after the ranking text is prepared, because that prepared plan is what
-        // a caller's own one-call text has its lookup derived from (see
-        // `StratumUnit::exclusion_sparql`). It is a second query over the same
-        // producer — the same call with the candidate bound — and the fusion stage runs it once per candidate it
-        // needs a verdict for, so parsing and feasibility-ordering it here is
+        // a caller's own text has its lookups derived from (see
+        // `StratumUnit::exclusion_sparql`). Each is a second query over the same
+        // producer — one of the text's calls with the candidate bound — and the
+        // fusion stage runs it per candidate it needs a verdict for, so parsing and
+        // feasibility-ordering it here is
         // the difference between a prepared lookup and a re-parse per
         // candidate. A stratum whose lookup will not prepare is a stratum whose
         // declared basis cannot be honoured, and that is this stratum's own
@@ -1556,14 +1597,22 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                 );
                 continue;
             }
-            Some(Ok(text)) => {
-                match engine.prepare_execution(&text, None, &[CANDIDATE_NAME], options()) {
-                    Ok(execution) => {
-                        let slot = execution
-                            .slot(CANDIDATE_NAME)
-                            .expect("the one parameter this execution was prepared with");
-                        Some((execution, slot))
-                    }
+            Some(Ok(texts)) => {
+                let prepared_lookups: Result<Vec<(PreparedExecution, usize)>, _> = texts
+                    .iter()
+                    .map(|text| {
+                        engine
+                            .prepare_execution(text, None, &[CANDIDATE_NAME], options())
+                            .map(|execution| {
+                                let slot = execution
+                                    .slot(CANDIDATE_NAME)
+                                    .expect("the one parameter this execution was prepared with");
+                                (execution, slot)
+                            })
+                    })
+                    .collect();
+                match prepared_lookups {
+                    Ok(lookups) => Some(lookups),
                     Err(diagnostic) => {
                         statuses.insert(
                             unit.stratum.clone(),
@@ -1611,12 +1660,11 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                         candidates: index_candidates.then(|| Rc::clone(&candidates)),
                         dataset,
                     };
-                    if let Some((execution, slot)) = exclusion {
+                    if let Some(prepared_lookups) = exclusion {
                         lookups.push(PendingLookup {
                             position: streams.len(),
                             stratum: unit.stratum.clone(),
-                            execution,
-                            slot,
+                            lookups: prepared_lookups,
                             pinned: attestation.clone(),
                         });
                     }
@@ -1703,12 +1751,11 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                         let stream = RankedStreamImpl::new(ranked, ending)
                             .with_materialised_rows(materialised)
                             .with_attested(attestation.clone());
-                        if let Some((execution, slot)) = exclusion {
+                        if let Some(prepared_lookups) = exclusion {
                             lookups.push(PendingLookup {
                                 position: streams.len(),
                                 stratum: unit.stratum.clone(),
-                                execution,
-                                slot,
+                                lookups: prepared_lookups,
                                 pinned: attestation.clone(),
                             });
                         }
@@ -1776,8 +1823,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
     for PendingLookup {
         position,
         stratum,
-        execution,
-        slot,
+        lookups,
         pinned,
     } in lookups
     {
@@ -1787,8 +1833,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                 stratum,
                 engine: Rc::clone(&engine),
                 env: Arc::clone(&env),
-                execution,
-                slot,
+                lookups,
                 candidates: Rc::clone(&candidates),
                 dataset,
                 pinned,
@@ -2226,7 +2271,7 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
         };
         let Some(row) = self
             .cursor
-            .next_row()
+            .next_row(self.dataset)
             .map_err(|error| isolated(error.to_string()))?
         else {
             // Ran out. A caller's own text is the stopper nobody observed past, and
