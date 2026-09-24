@@ -462,6 +462,38 @@ jobs:
         # relaxed-simd anywhere.
         run: make simd-asm
 
+  # The third ISA the distance arithmetic's bit-identity claim is EXECUTED on. The
+  # exact law pins one summation order in source, so its results must be the same
+  # bits on x86_64, wasm32 and aarch64; the asm gate above can only show NEON code
+  # exists, and this job runs it. The pinned goldens these tests compare against are
+  # the ones x86_64 and wasm32 already hold, so a divergent aarch64 fold fails here.
+  # The reassociated arithmetic runs its NEON path too, against its error bound.
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      - name: Run the distance arithmetic's path and reference-model tests on NEON
+        run: cargo test --locked -p purrdf-core --lib distance
+
+      - name: Run the kNN kernels and their pinned cross-target answers on aarch64
+        run: |
+          cargo test --locked -p purrdf-sparql-eval --lib knn
+          cargo test --locked -p purrdf-sparql-eval --test knn_wasm_determinism
+          cargo test --locked -p purrdf-sparql-eval --test knn_wasm_reassociated
+
+      - name: Compare the HNSW canonical image digests with the pinned goldens on aarch64
+        run: cargo test --locked -p purrdf-hnsw --test determinism --test conformance
+
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
   # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module
   # with maturin and runs the pytest suite (compat parity + the rdflib/xfail-ledger
