@@ -283,7 +283,8 @@ with `HnswSpace<A>` and `HnswRelation<A>` over it. `HnswIndex::build` and
 `HnswIndex::decode` (and `hnsw::build`) are unchanged and exact.
 `HnswIndex::build_reassociated` (and `hnsw::build_reassociated`) builds the same
 algorithm under `purrdf_core::distance::Reassociated`, whose sums may be reassociated
-and contracted to fused multiply-add along the dispatch path this process resolves;
+and contracted to fused multiply-add along the dispatch path the build resolves, the
+widest this process runs;
 `HnswIndex::decode_reassociated`, `guard::load_reassociated` and
 `HnswSpace::from_artifact_reassociated` read it back. It is a second type, not a mode:
 neither index ever computes a distance under the other's law, and there is no runtime
@@ -326,11 +327,17 @@ identifier with the exact revision, and a reassociated revision naming another p
 than the payload records are each a `GuardProfile` failure.
 
 **Bound to its build and its path.** A reassociated image is reproducible only on the
-dispatch path that built it. `decode_reassociated`, `verify_rebuild` and every search
-re-resolve the path and, when it differs from the recorded one, refuse with
-`HnswError::ArithmeticPathUnavailable { recorded, available }` -- a named refusal,
-never an `Ok(false)` that would read as tampering, and never a search run with bits
-from another compilation. A header naming a code that is not one of the index type's
+dispatch path that built it, so `decode_reassociated`, `verify_rebuild` and every search
+resolve *the recorded path* through `Arithmetic::resolve_recorded`, not the widest one
+this process runs. A processor runs every compilation its binary holds whose features it
+reports: an image built on `x86_64`'s SSE2 or AVX2+FMA path is decoded, searched and
+rebuilt on that path by an AVX-512F processor, and the decoded index re-encodes its own
+code. Only a path this process cannot run -- its compilation belongs to another target,
+or the processor does not report a feature it needs -- is refused, with
+`HnswError::ArithmeticPathUnavailable { recorded, available }`, where `available` is the
+widest path this process runs (the one a new build here would record). The refusal is
+named, never an `Ok(false)` that would read as tampering, and never a search run with
+bits from another compilation. A header naming a code that is not one of the index type's
 own is `HnswError::ArithmeticMismatch`, in both directions.
 
 **Compiled in this crate.** The search traversal and the graph build are held by the

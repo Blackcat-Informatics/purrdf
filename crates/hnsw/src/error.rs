@@ -98,18 +98,22 @@ pub enum HnswError {
     },
 
     /// A payload's header records a dispatch path of its arithmetic that this process
-    /// does not run.
+    /// cannot run.
     ///
     /// A reassociated arithmetic's bits depend on the compilation that produced them, so
     /// an image records the path its distances came from, and only that path can decode
     /// it, verify its rebuild or search it: another path would recompute every distance
-    /// with different last bits. That is not tampering and not an honest "no", so it is
-    /// refused by name rather than answered `false`. An arithmetic whose bits are the
-    /// same on every path records one code and never raises this.
+    /// with different last bits. Any process that can run the recorded path does so,
+    /// even where a wider one is available; this is raised only when the recorded path's
+    /// compilation is not in this build (it belongs to another target) or the processor
+    /// does not report a feature it needs. That is not tampering and not an honest "no",
+    /// so it is refused by name rather than answered `false`. An arithmetic whose bits
+    /// are the same on every path records one code and never raises this.
     ArithmeticPathUnavailable {
         /// The image code the payload records.
         recorded: u32,
-        /// The image code of the dispatch path this process resolved.
+        /// The image code of the widest dispatch path this process runs: the one a new
+        /// build here would record.
         available: u32,
     },
 
@@ -225,9 +229,11 @@ impl fmt::Display for HnswError {
             } => write!(
                 f,
                 "the payload's distances were computed on the dispatch path recorded as \
-                 arithmetic code {recorded} ({}), and this process runs code {available} \
-                 ({}); an image whose arithmetic depends on its dispatch path is reproducible \
-                 only by a build running the path that built it",
+                 arithmetic code {recorded} ({}), which this process cannot run: its \
+                 compilation is not in this build, or the processor lacks a feature it needs \
+                 (the widest path this process runs is code {available}, {}); an image whose \
+                 arithmetic depends on its dispatch path is reproducible only on the path \
+                 that built it",
                 crate::profile::path_label(*recorded),
                 crate::profile::path_label(*available)
             ),

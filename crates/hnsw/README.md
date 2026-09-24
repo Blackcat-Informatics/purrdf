@@ -64,7 +64,8 @@ everything above describes the exact default. `HnswIndex::build_reassociated`
 (or `purrdf_hnsw::build_reassociated`) builds the same algorithm as a separate
 type, `HnswIndex<Reassociated>`, whose distances run through
 `purrdf_core::distance::Reassociated`: sums may be reassociated and contracted to
-fused multiply-add along the dispatch path this process resolves.
+fused multiply-add along the dispatch path the build resolves, the widest this
+process runs.
 
 * **One distance per pair.** Build, neighbour selection and search compute a
   pair through the same compiled kernel on one path, so the graph is still a
@@ -73,9 +74,12 @@ fused multiply-add along the dispatch path this process resolves.
   index's and between dispatch paths or builds, so near-tied candidates may link
   or rank differently. The image header records the path's code, the guard names
   the `hnsw-reassociated-v2` implementation with evidence that names the path,
-  and `decode_reassociated`, `verify_rebuild` and every search on a process that
-  runs another path are refused with `HnswError::ArithmeticPathUnavailable`
-  rather than answered with other bits.
+  and `decode_reassociated`, `verify_rebuild` and every search run the recorded
+  path, whichever path is widest here: an image built on `x86_64`'s SSE2 or
+  AVX2+FMA path runs on that path on an AVX-512F processor. Only a process that
+  cannot run the recorded path (another target's compilation, or a processor
+  without a feature it needs) is refused with
+  `HnswError::ArithmeticPathUnavailable` rather than answered with other bits.
 * **Graded against the exact oracle.** Its recall is measured against the exact
   scan exactly as the exact index's is, and meets the exact index's pinned recall
   on the conformance family.

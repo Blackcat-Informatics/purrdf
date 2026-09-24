@@ -17,7 +17,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   - the sealed `Arithmetic` trait. Its `ID` is the law's identifier. Its
     `IMAGE_CODES` and `image_code(path)` give the codes an index image records.
     Its `evidence(path)` gives the divergence text, and `resolve()` checks the
-    float environment and selects a dispatch path;
+    float environment and selects a dispatch path. `resolve_recorded(code)`
+    checks the environment and selects the path an image code names, whenever
+    the process can run it, rather than the widest. It refuses with a named
+    `RecordedPathError`: `FloatEnvironment`, `UnknownCode`, or `Unavailable`
+    carrying the `Path` and a `PathUnavailable` reason (`NotCompiled`, or
+    `MissingFeature` naming the first feature the processor does not report);
   - `Resolved<A>`, an arithmetic bound to its dispatch `Path` for one scan, with
     `distances`, `distances_indexed`, `distance` and `distance_bounded`;
   - `Exact` (`binary64-lane16-tree-v1`). It accumulates 16 f64 lanes over array
@@ -72,8 +77,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `HnswIndex::decode_reassociated`, `HnswSpace::from_artifact_reassociated`,
   `guard::load_reassociated` and the crate-level `build_reassociated` construct
   it. Each one refuses the other arithmetic's image codes. The image records the
-  dispatch path that built it. Rebuilding or searching on another path is refused
-  with `HnswError::ArithmeticPathUnavailable`, never a bare mismatch. Its profile
+  dispatch path that built it, and decode, rebuild verification and search run
+  that path, not the widest one: an image built on the sse2 or avx2+fma path runs
+  on that path on an avx512f processor. Only a path the process cannot run
+  (another target's compilation, or a missing processor feature) is refused, with
+  `HnswError::ArithmeticPathUnavailable`, never a bare mismatch. Its profile
   is `hnsw-reassociated-v2` (`IMPLEMENTATION_ID_REASSOCIATED`). The loss evidence
   adds the arithmetic's divergence text and says that the image is bound to its
   build's dispatch path. `profile_declaration` folds in the arithmetic id. The
@@ -1646,7 +1654,7 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   stops compiling:
   - `ArithmeticMismatch`, when a payload records another arithmetic's code;
   - `ArithmeticPathUnavailable`, when a payload records a dispatch path this
-    process does not run;
+    process cannot run. `available` is the widest path the process runs;
   - `FloatEnvironment(FloatEnvironmentError)`, raised by every build, rebuild
     and search entry point under a flush-to-zero or non-nearest environment.
 

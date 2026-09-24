@@ -632,18 +632,271 @@ fn reassociated_refuses_flush_to_zero() {
     let saved = env::mxcsr();
     set_mxcsr(saved | (1 << 15));
     let refused = Reassociated::resolve();
+    let refused_recorded = Reassociated::resolve_recorded(2);
     set_mxcsr(saved);
+    let flush = FloatEnvironmentError::FlushToZero {
+        evidence: FloatEnvironmentEvidence::Register {
+            name: "MXCSR",
+            bits: u64::from(saved | (1 << 15)),
+        },
+    };
+    assert_eq!(refused, Err(flush));
     assert_eq!(
-        refused,
-        Err(FloatEnvironmentError::FlushToZero {
-            evidence: FloatEnvironmentEvidence::Register {
-                name: "MXCSR",
-                bits: u64::from(saved | (1 << 15)),
-            },
-        })
+        refused_recorded,
+        Err(RecordedPathError::FloatEnvironment(flush)),
+        "a recorded path is resolved under the same environment check"
     );
     assert!(
         Reassociated::resolve().is_ok(),
         "the valid neighbour resolves"
+    );
+    assert!(
+        Reassociated::resolve_recorded(2).is_ok(),
+        "and so does its recorded path"
+    );
+}
+
+/// The path each reassociated image code names.
+fn path_named(code: u32) -> Path {
+    match code {
+        2 => Path::Sse2,
+        3 => Path::Avx2Fma,
+        4 => Path::Avx512f,
+        5 => Path::Neon,
+        6 => Path::WasmSimd128,
+        7 => Path::WasmScalar,
+        8 => Path::Portable,
+        other => panic!("{other} is not a reassociated image code"),
+    }
+}
+
+/// Every code resolves to the path it names exactly when this host can run that path --
+/// the set [`host_paths`] builds from the processor's own report -- and every other code
+/// is refused naming the path and why. The widest path is one of the accepted, never the
+/// only one where the processor runs several.
+#[test]
+fn a_recorded_path_resolves_whenever_the_host_runs_it() {
+    let runnable = host_paths();
+    let mut accepted = Vec::new();
+    for &code in Reassociated::IMAGE_CODES {
+        let path = path_named(code);
+        match Reassociated::resolve_recorded(code) {
+            Ok(resolved) => {
+                assert_eq!(resolved.path(), path, "code {code} resolves its own path");
+                assert_eq!(resolved.image_code(), code);
+                assert!(
+                    runnable.contains(&resolved),
+                    "{path} is not one the host runs"
+                );
+                accepted.push(resolved);
+            }
+            Err(RecordedPathError::Unavailable {
+                path: refused,
+                reason,
+            }) => {
+                assert_eq!(refused, path);
+                assert!(
+                    !runnable.iter().any(|handle| handle.path() == path),
+                    "{path} runs on this host, yet code {code} was refused: {reason}"
+                );
+                #[cfg(target_arch = "x86_64")]
+                if matches!(path, Path::Avx2Fma | Path::Avx512f) {
+                    assert!(
+                        matches!(reason, PathUnavailable::MissingFeature(_)),
+                        "{path} is compiled into every x86_64 build: {reason}"
+                    );
+                    continue;
+                }
+                assert_eq!(reason, PathUnavailable::NotCompiled, "{path}");
+            }
+            Err(other) => panic!("code {code}: {other}"),
+        }
+    }
+    assert_eq!(
+        accepted, runnable,
+        "the codes accepted are exactly the paths the host runs"
+    );
+    let widest = Reassociated::resolve().expect("the default environment is the IEEE one");
+    assert_eq!(accepted.last(), Some(&widest), "the widest is among them");
+    #[cfg(target_arch = "x86_64")]
+    {
+        let sse2 = Reassociated::resolve_recorded(2).expect("SSE2 is every x86_64's baseline");
+        assert_eq!(sse2.path(), Path::Sse2);
+        if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+            assert_ne!(
+                widest.path(),
+                Path::Sse2,
+                "an AVX2+FMA host resolves a wider path for new results"
+            );
+            assert_eq!(
+                Reassociated::resolve_recorded(3)
+                    .expect("an AVX2+FMA host runs the AVX2+FMA path")
+                    .path(),
+                Path::Avx2Fma
+            );
+        }
+        // The x86_64 build holds no NEON, wasm or portable compilation.
+        for code in [5, 6, 7, 8] {
+            assert_eq!(
+                Reassociated::resolve_recorded(code),
+                Err(RecordedPathError::Unavailable {
+                    path: path_named(code),
+                    reason: PathUnavailable::NotCompiled,
+                })
+            );
+        }
+    }
+    println!(
+        "a_recorded_path_resolves_whenever_the_host_runs_it accepted paths: {}",
+        names(&accepted)
+    );
+}
+
+/// A code of no arithmetic, or of the other one, is refused by name; each arithmetic
+/// accepts its own. The exact arithmetic has one code, which resolves to the path a new
+/// result would run on, since every exact path returns the same bits.
+#[test]
+fn a_recorded_code_of_another_arithmetic_is_unknown() {
+    for code in [0, 1, 9, u32::MAX] {
+        assert_eq!(
+            Reassociated::resolve_recorded(code),
+            Err(RecordedPathError::UnknownCode {
+                arithmetic: Reassociated::ID,
+                code,
+            })
+        );
+    }
+    for code in [0, 2, 3, 4, 8] {
+        assert_eq!(
+            Exact::resolve_recorded(code),
+            Err(RecordedPathError::UnknownCode {
+                arithmetic: Exact::ID,
+                code,
+            })
+        );
+    }
+    assert_eq!(
+        Exact::resolve_recorded(Exact::IMAGE_CODE),
+        Ok(Exact::resolve().expect("the default environment is the IEEE one"))
+    );
+    let refusal = Reassociated::resolve_recorded(1).expect_err("the exact code");
+    assert!(refusal.to_string().contains(Reassociated::ID), "{refusal}");
+}
+
+/// A handle on a narrower recorded path runs that path's compilation, not the widest's.
+///
+/// On an input where contraction moves the sum, a baseline compiled without FMA returns
+/// the unfused zero while an AVX2+FMA host's widest path does not, so the two are told
+/// apart by their bits. A build whose baseline itself enables FMA (a `target-cpu` that
+/// has it) contracts on both, so there the handle's path is what is observed.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn a_recorded_narrower_path_computes_its_own_bits() {
+    let factor = 1.0 + 2.0_f64.powi(-30);
+    let a: Vec<f64> = (0..64)
+        .map(|index| if index < 32 { factor } else { -factor })
+        .collect();
+    let b = vec![factor; 64];
+    let recorded = Reassociated::resolve_recorded(2).expect("SSE2 is every x86_64's baseline");
+    assert_eq!(recorded.path(), Path::Sse2);
+    let dot = |handle: Resolved<Reassociated>| {
+        -handle
+            .distance(Measure::NegativeDot, &a, 0.0, &b, 0.0)
+            .expect("finite")
+    };
+    let on_recorded = dot(recorded);
+    assert_eq!(
+        on_recorded.to_bits(),
+        dot(Resolved::on(Path::Sse2)).to_bits(),
+        "the recorded handle is the SSE2 compilation"
+    );
+    let widest = Reassociated::resolve().expect("the default environment is the IEEE one");
+    let exercised = if cfg!(target_feature = "fma") {
+        "baseline built with fma: path observed"
+    } else {
+        assert_eq!(
+            on_recorded, 0.0,
+            "an unfused baseline never contracts, so the products cancel"
+        );
+        if widest.path() == Path::Sse2 {
+            "sse2-only host"
+        } else {
+            assert_ne!(
+                dot(widest).to_bits(),
+                on_recorded.to_bits(),
+                "the widest path contracts on this input, so the two are told apart"
+            );
+            "recorded sse2 told apart from the wider path by its bits"
+        }
+    };
+    println!("a_recorded_narrower_path_computes_its_own_bits exercised: {exercised}");
+}
+
+/// A processor without AVX-512F cannot run an image recorded on it, and is refused
+/// naming the feature; its neighbour, the AVX2+FMA path, still resolves, and becomes
+/// the widest. Hiding FMA refuses both, naming FMA. Hiding only ever removes a feature,
+/// so each refusal is observed against the host's real report.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn a_recorded_path_whose_feature_is_hidden_is_refused_naming_it() {
+    use super::reassociated::{Feature, hidden};
+
+    let avx2_fma = std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma");
+    let avx512f = avx2_fma && std::is_x86_feature_detected!("avx512f");
+    {
+        let _hidden = hidden::hide(Feature::Avx512f);
+        assert_eq!(
+            Reassociated::resolve_recorded(4),
+            Err(RecordedPathError::Unavailable {
+                path: Path::Avx512f,
+                reason: PathUnavailable::MissingFeature("avx512f"),
+            })
+        );
+        let widest = Reassociated::resolve().expect("the default environment is the IEEE one");
+        if avx2_fma {
+            assert_eq!(
+                Reassociated::resolve_recorded(3).map(Resolved::path),
+                Ok(Path::Avx2Fma),
+                "the neighbour path still runs"
+            );
+            assert_eq!(widest.path(), Path::Avx2Fma);
+        } else {
+            assert_eq!(widest.path(), Path::Sse2);
+        }
+    }
+    {
+        let _hidden = hidden::hide(Feature::Fma);
+        let missing = if avx512f { "fma" } else { "avx512f" };
+        assert_eq!(
+            Reassociated::resolve_recorded(4),
+            Err(RecordedPathError::Unavailable {
+                path: Path::Avx512f,
+                reason: PathUnavailable::MissingFeature(missing),
+            })
+        );
+        let missing = if std::is_x86_feature_detected!("avx2") {
+            "fma"
+        } else {
+            "avx2"
+        };
+        assert_eq!(
+            Reassociated::resolve_recorded(3),
+            Err(RecordedPathError::Unavailable {
+                path: Path::Avx2Fma,
+                reason: PathUnavailable::MissingFeature(missing),
+            })
+        );
+        assert_eq!(
+            Reassociated::resolve_recorded(2).map(Resolved::path),
+            Ok(Path::Sse2),
+            "the baseline needs no feature"
+        );
+    }
+    // Unhidden, the host answers with its own report again.
+    assert_eq!(Reassociated::resolve_recorded(4).is_ok(), avx512f);
+    assert_eq!(Reassociated::resolve_recorded(3).is_ok(), avx2_fma);
+    println!(
+        "a_recorded_path_whose_feature_is_hidden_is_refused_naming_it host: avx2+fma {avx2_fma}, \
+         avx512f {avx512f}"
     );
 }

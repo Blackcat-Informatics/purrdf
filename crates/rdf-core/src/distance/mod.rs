@@ -82,6 +82,14 @@
 //! but not its code, and its image code (8) is its own. Relaxed wasm SIMD is never used:
 //! its results are left to the engine.
 //!
+//! A result recorded on one path is recomputed on that path, not on the widest:
+//! [`Arithmetic::resolve_recorded`] resolves the path an image code names whenever this
+//! process can run it -- its compilation is in this build and the processor reports every
+//! feature that compilation was built with -- so a reassociated image recorded on
+//! `x86_64`'s SSE2 or AVX2+FMA path runs on an AVX-512F processor, whose binary holds all
+//! three compilations. Only a path this process cannot run is refused, with a named
+//! [`RecordedPathError`].
+//!
 //! The batch kernels ([`Resolved::distances`], [`Resolved::distances_indexed`]) are the
 //! unit of dispatch. A per-pair call ([`Resolved::distance`]) runs the same body.
 //!
@@ -284,6 +292,85 @@ impl fmt::Display for Path {
     }
 }
 
+/// Why this process cannot run a dispatch path an image recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PathUnavailable {
+    /// This build holds no compilation of the path: it belongs to another target
+    /// architecture, or to a wasm build made with the other `simd128` setting.
+    NotCompiled,
+    /// The path's compilation is in this build, but the processor does not report a
+    /// feature it was built with; the value is the first such feature's name, as
+    /// `#[target_feature]` spells it.
+    MissingFeature(&'static str),
+}
+
+impl fmt::Display for PathUnavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotCompiled => f.write_str("this build holds no compilation of it"),
+            Self::MissingFeature(feature) => {
+                write!(f, "the processor does not report `{feature}`")
+            }
+        }
+    }
+}
+
+/// A refusal of [`Arithmetic::resolve_recorded`].
+///
+/// Exhaustive, so a caller mapping it into its own refusals names every case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordedPathError {
+    /// The calling thread's float environment is not the IEEE one; see
+    /// [`Arithmetic::resolve`].
+    FloatEnvironment(FloatEnvironmentError),
+    /// The code is not one of the arithmetic's [`Arithmetic::IMAGE_CODES`].
+    UnknownCode {
+        /// The identifier of the arithmetic asked to resolve it.
+        arithmetic: &'static str,
+        /// The code.
+        code: u32,
+    },
+    /// The code names a path of the arithmetic this process cannot run.
+    Unavailable {
+        /// The path the code names.
+        path: Path,
+        /// Why this process cannot run it.
+        reason: PathUnavailable,
+    },
+}
+
+impl fmt::Display for RecordedPathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FloatEnvironment(error) => error.fmt(f),
+            Self::UnknownCode { arithmetic, code } => write!(
+                f,
+                "{code} is not an image code of the {arithmetic} distance arithmetic"
+            ),
+            Self::Unavailable { path, reason } => write!(
+                f,
+                "the {path} dispatch path cannot run in this process: {reason}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RecordedPathError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::FloatEnvironment(error) => Some(error),
+            Self::UnknownCode { .. } | Self::Unavailable { .. } => None,
+        }
+    }
+}
+
+impl From<FloatEnvironmentError> for RecordedPathError {
+    fn from(error: FloatEnvironmentError) -> Self {
+        Self::FloatEnvironment(error)
+    }
+}
+
 /// A flat, row-major matrix of stored vectors, with the per-row norms a cosine kernel
 /// divides by.
 ///
@@ -380,8 +467,8 @@ mod sealed {
 /// held to it.
 ///
 /// The kernel functions take a [`Resolved`] handle rather than a bare [`Path`]: a path
-/// is a claim about the processor, and the only way to obtain one is
-/// [`Arithmetic::resolve`], which checked it. Callers normally use the methods on
+/// is a claim about the processor, and the only ways to obtain one are
+/// [`Arithmetic::resolve`] and [`Arithmetic::resolve_recorded`], which checked it. Callers normally use the methods on
 /// [`Resolved`].
 pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static {
     /// The stable identifier of this law. A plain identifier, not an IRI: PurRDF mints
@@ -417,6 +504,26 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
     /// control register where one is read, and by the behavioural probe on every target.
     /// Every arithmetic has a compilation for every target, so nothing else refuses.
     fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError>;
+
+    /// Check the float environment and select the dispatch path an image recorded as
+    /// `code`, when this process can run it.
+    ///
+    /// [`Arithmetic::resolve`] selects the path a *new* result is computed on, the widest
+    /// the processor reports. A result already recorded on a path must be recomputed on
+    /// that path, and a processor runs every compilation its binary holds whose features
+    /// it reports, not only the widest: so this resolves the recorded path itself, and
+    /// refuses only a path this process cannot run. An arithmetic whose bits are the same
+    /// on every path has one code and resolves it to the path [`Arithmetic::resolve`]
+    /// selects.
+    ///
+    /// # Errors
+    ///
+    /// [`RecordedPathError::FloatEnvironment`] as for [`Arithmetic::resolve`], checked
+    /// first; [`RecordedPathError::UnknownCode`] for a code that is not one of
+    /// [`Arithmetic::IMAGE_CODES`]; and [`RecordedPathError::Unavailable`] for a path
+    /// whose compilation is not in this build or whose features the processor does not
+    /// report.
+    fn resolve_recorded(code: u32) -> Result<Resolved<Self>, RecordedPathError>;
 
     /// Score every row of `rows` against `query` into `out`, in row order.
     ///
@@ -477,7 +584,7 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
 }
 
 /// An arithmetic whose float environment was checked and whose dispatch path was
-/// selected, by [`Arithmetic::resolve`].
+/// selected, by [`Arithmetic::resolve`] or [`Arithmetic::resolve_recorded`].
 ///
 /// `Copy` and cheap: it is the path and nothing else. It cannot be constructed any other
 /// way, so a path that names a processor feature is always one the processor reported.
@@ -659,6 +766,19 @@ impl Arithmetic for Exact {
         Ok(Resolved::on(dispatch::exact_path()))
     }
 
+    fn resolve_recorded(code: u32) -> Result<Resolved<Self>, RecordedPathError> {
+        env::check()?;
+        if code != Self::IMAGE_CODE {
+            return Err(RecordedPathError::UnknownCode {
+                arithmetic: Self::ID,
+                code,
+            });
+        }
+        // Every exact path computes the same bits, so the one code is honoured on
+        // whichever path this process selects.
+        Ok(Resolved::on(dispatch::exact_path()))
+    }
+
     fn distances<Q: Scalar, T: Scalar>(
         resolved: Resolved<Self>,
         measure: Measure,
@@ -742,6 +862,17 @@ impl Arithmetic for Reassociated {
     fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError> {
         env::check()?;
         Ok(Resolved::on(reassociated::path()))
+    }
+
+    fn resolve_recorded(code: u32) -> Result<Resolved<Self>, RecordedPathError> {
+        env::check()?;
+        let path = reassociated::path_of(code).ok_or(RecordedPathError::UnknownCode {
+            arithmetic: Self::ID,
+            code,
+        })?;
+        let path = reassociated::recorded(path)
+            .map_err(|reason| RecordedPathError::Unavailable { path, reason })?;
+        Ok(Resolved::on(path))
     }
 
     fn distances<Q: Scalar, T: Scalar>(

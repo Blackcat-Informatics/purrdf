@@ -28,20 +28,22 @@
 //! the routing is a constant.
 //!
 //! The paths: on `x86_64` the baseline (SSE2) compilation, one with AVX2 and FMA
-//! enabled, and one with AVX-512F enabled, chosen at run time in the order AVX-512F,
-//! AVX2+FMA, SSE2. On `aarch64` the baseline is NEON, and on wasm it is `simd128` or
-//! scalar as the build was made; both are fixed at compile time. On every other target
-//! the baseline is the portable path: the same body compiled once for whatever the
-//! target's baseline features are, fixed at compile time, so the arithmetic runs on
-//! every target a build can be made for. Relaxed wasm SIMD is never enabled: its
-//! results are left to the engine, which no contract here can name.
+//! enabled, and one with AVX-512F enabled. A new result is computed on the widest the
+//! processor reports, chosen at run time in the order AVX-512F, AVX2+FMA, SSE2; a result
+//! an image recorded on a narrower one is recomputed on that one, since the processor
+//! runs every compilation up to its widest. On `aarch64` the baseline is NEON, and on
+//! wasm it is `simd128` or scalar as the build was made; both are fixed at compile time.
+//! On every other target the baseline is the portable path: the same body compiled once
+//! for whatever the target's baseline features are, fixed at compile time, so the
+//! arithmetic runs on every target a build can be made for. Relaxed wasm SIMD is never
+//! enabled: its results are left to the engine, which no contract here can name.
 //!
 //! The `#[target_feature]` compilations are only ever *called*, from the ordinary
 //! wrapper impls below, never turned into function pointers.
 
 use super::exact::{cosine, finite};
 use super::sealed::{Stored, Width};
-use super::{Bound, Bounded, Measure, Path, RowsRef, Scalar};
+use super::{Bound, Bounded, Measure, Path, PathUnavailable, RowsRef, Scalar};
 
 /// The elements summed under one reassociation licence before the block's sum is added,
 /// in order, to the total; also the bounded fold's checkpoint interval.
@@ -103,23 +105,168 @@ const BASELINE: Path = Path::WasmScalar;
 )))]
 const BASELINE: Path = Path::Portable;
 
+/// A processor feature one of the `x86_64` compilations is built with.
+#[cfg(target_arch = "x86_64")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Feature {
+    /// AVX2.
+    Avx2,
+    /// Fused multiply-add.
+    Fma,
+    /// AVX-512 Foundation.
+    Avx512f,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl Feature {
+    /// The feature's name, as `is_x86_feature_detected!` and `#[target_feature]` spell it.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Avx2 => "avx2",
+            Self::Fma => "fma",
+            Self::Avx512f => "avx512f",
+        }
+    }
+
+    /// Whether the processor reports this feature.
+    ///
+    /// `is_x86_feature_detected!` caches its answer, so this is a load after the first
+    /// call. Under `cfg(test)` a unit test may hide a feature from the calling thread
+    /// (`hidden`), standing in for a processor that lacks it; a test can only ever take
+    /// a feature away, never report one the processor lacks, so every `true` here is the
+    /// processor's own answer.
+    fn detected(self) -> bool {
+        #[cfg(test)]
+        if hidden::hides(self) {
+            return false;
+        }
+        match self {
+            Self::Avx2 => std::is_x86_feature_detected!("avx2"),
+            Self::Fma => std::is_x86_feature_detected!("fma"),
+            Self::Avx512f => std::is_x86_feature_detected!("avx512f"),
+        }
+    }
+}
+
+/// The test hook that hides processor features from the calling thread.
+#[cfg(all(test, target_arch = "x86_64"))]
+pub(crate) mod hidden {
+    use std::cell::Cell;
+
+    use super::Feature;
+
+    thread_local! {
+        /// The features the calling thread treats as absent.
+        static HIDDEN: Cell<[bool; 3]> = const { Cell::new([false; 3]) };
+    }
+
+    const fn slot(feature: Feature) -> usize {
+        match feature {
+            Feature::Avx2 => 0,
+            Feature::Fma => 1,
+            Feature::Avx512f => 2,
+        }
+    }
+
+    /// While alive, the calling thread treats `feature` as one the processor lacks.
+    pub(crate) struct Hidden {
+        previous: [bool; 3],
+    }
+
+    impl Drop for Hidden {
+        fn drop(&mut self) {
+            HIDDEN.with(|hidden| hidden.set(self.previous));
+        }
+    }
+
+    /// Hide `feature` from this thread until the guard drops.
+    pub(crate) fn hide(feature: Feature) -> Hidden {
+        let previous = HIDDEN.with(Cell::get);
+        let mut now = previous;
+        now[slot(feature)] = true;
+        HIDDEN.with(|hidden| hidden.set(now));
+        Hidden { previous }
+    }
+
+    /// Whether a test hid `feature` on this thread.
+    pub(crate) fn hides(feature: Feature) -> bool {
+        HIDDEN.with(Cell::get)[slot(feature)]
+    }
+}
+
+/// The first feature among `features` the processor does not report.
+#[cfg(target_arch = "x86_64")]
+fn first_missing(features: &[Feature]) -> Option<Feature> {
+    features.iter().copied().find(|feature| !feature.detected())
+}
+
+/// The features [`Path::Avx2Fma`]'s compilation needs.
+#[cfg(target_arch = "x86_64")]
+const AVX2_FMA: [Feature; 2] = [Feature::Avx2, Feature::Fma];
+
+/// The features [`Path::Avx512f`]'s compilation needs, as [`path`] selects it.
+#[cfg(target_arch = "x86_64")]
+const AVX512F: [Feature; 3] = [Feature::Avx512f, Feature::Avx2, Feature::Fma];
+
 /// The path [`Reassociated`](super::Reassociated) runs on this process: the widest the
 /// processor reports, or the build's compile-time path. Every target has one.
 ///
-/// `is_x86_feature_detected!` caches its answer, so this is a load after the first call.
+/// This is the path a new result is computed on. A result recorded on another path this
+/// process can also run is resolved by [`recorded`] instead.
 pub(crate) fn path() -> Path {
     #[cfg(target_arch = "x86_64")]
     {
-        let avx2_fma =
-            std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma");
-        if avx2_fma && std::is_x86_feature_detected!("avx512f") {
+        if first_missing(&AVX512F).is_none() {
             return Path::Avx512f;
         }
-        if avx2_fma {
+        if first_missing(&AVX2_FMA).is_none() {
             return Path::Avx2Fma;
         }
     }
     BASELINE
+}
+
+/// The reassociated path an image records as `code`, or `None` for a code that is not
+/// one of the arithmetic's.
+pub(crate) const fn path_of(code: u32) -> Option<Path> {
+    match code {
+        2 => Some(Path::Sse2),
+        3 => Some(Path::Avx2Fma),
+        4 => Some(Path::Avx512f),
+        5 => Some(Path::Neon),
+        6 => Some(Path::WasmSimd128),
+        7 => Some(Path::WasmScalar),
+        8 => Some(Path::Portable),
+        _ => None,
+    }
+}
+
+/// `path`, when this process can run it: its compilation is in this build and the
+/// processor reports every feature that compilation was built with.
+///
+/// The second producer of a [`Path::Avx2Fma`] or [`Path::Avx512f`], beside [`path`]; it
+/// returns one only after detecting exactly the features [`path`] requires for it.
+///
+/// # Errors
+///
+/// [`PathUnavailable::NotCompiled`] for a path of another target (NEON or wasm on
+/// `x86_64`, the `x86_64` paths anywhere else, wasm `simd128` in a build without it) or a
+/// reassociated baseline other than this target's, and
+/// [`PathUnavailable::MissingFeature`] naming the first feature the processor does not
+/// report.
+pub(crate) fn recorded(path: Path) -> Result<Path, PathUnavailable> {
+    match path {
+        #[cfg(target_arch = "x86_64")]
+        Path::Avx2Fma => first_missing(&AVX2_FMA).map_or(Ok(path), |missing| {
+            Err(PathUnavailable::MissingFeature(missing.name()))
+        }),
+        #[cfg(target_arch = "x86_64")]
+        Path::Avx512f => first_missing(&AVX512F).map_or(Ok(path), |missing| {
+            Err(PathUnavailable::MissingFeature(missing.name()))
+        }),
+        path if path == BASELINE => Ok(path),
+        _ => Err(PathUnavailable::NotCompiled),
+    }
 }
 
 /// The one body every compilation inlines.
@@ -267,8 +414,8 @@ pub(crate) mod baseline {
 ///
 /// Safe functions carrying `#[target_feature]`: calling one is `unsafe` from any
 /// context that does not itself enable the features, and the only such call sites are
-/// the [`Avx2Fma`] impl below, reached only along a [`Path::Avx2Fma`] that only
-/// [`path`] produces.
+/// the [`Avx2Fma`] impl below, reached only along a [`Path::Avx2Fma`] that only [`path`]
+/// and [`recorded`] produce, each after detecting AVX2 and FMA.
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod avx2fma {
     compilation!(#[target_feature(enable = "avx2,fma")]);
@@ -276,7 +423,8 @@ pub(crate) mod avx2fma {
 
 /// The body compiled with AVX-512F enabled (which implies AVX2 and FMA).
 ///
-/// As [`avx2fma`], reached only along a [`Path::Avx512f`] that only [`path`] produces.
+/// As [`avx2fma`], reached only along a [`Path::Avx512f`] that only [`path`] and
+/// [`recorded`] produce, each after detecting AVX-512F, AVX2 and FMA.
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod avx512f {
     compilation!(#[target_feature(enable = "avx512f")]);
@@ -336,9 +484,10 @@ impl Compiled for Avx2Fma {
     #[inline]
     fn dot<Q: Scalar, T: Scalar>(a: &[Q], b: &[T]) -> f64 {
         // SAFETY: `Avx2Fma` is named only by `on_path!` for a `Path::Avx2Fma`, which
-        // reaches it only inside a `Resolved<Reassociated>`; that handle's sole producer
-        // for this path is `path`, which returns it only after `is_x86_feature_detected!`
-        // reported both AVX2 and FMA on this processor.
+        // reaches it only inside a `Resolved<Reassociated>`; that handle's only producers
+        // for this path are `path` (through `Reassociated::resolve`) and `recorded`
+        // (through `Reassociated::resolve_recorded`), each of which returns it only after
+        // `is_x86_feature_detected!` reported both AVX2 and FMA on this processor.
         unsafe { by_width!(avx2fma::dot(a, b)) }
     }
 
@@ -359,9 +508,10 @@ impl Compiled for Avx512f {
     #[inline]
     fn dot<Q: Scalar, T: Scalar>(a: &[Q], b: &[T]) -> f64 {
         // SAFETY: `Avx512f` is named only by `on_path!` for a `Path::Avx512f`, which
-        // reaches it only inside a `Resolved<Reassociated>`; that handle's sole producer
-        // for this path is `path`, which returns it only after `is_x86_feature_detected!`
-        // reported AVX-512F (with AVX2 and FMA) on this processor.
+        // reaches it only inside a `Resolved<Reassociated>`; that handle's only producers
+        // for this path are `path` (through `Reassociated::resolve`) and `recorded`
+        // (through `Reassociated::resolve_recorded`), each of which returns it only after
+        // `is_x86_feature_detected!` reported AVX-512F, AVX2 and FMA on this processor.
         unsafe { by_width!(avx512f::dot(a, b)) }
     }
 
@@ -373,10 +523,14 @@ impl Compiled for Avx512f {
 }
 
 /// Refuse a path that is not one of this build's reassociated paths, which no
-/// `Resolved<Reassociated>` carries: only [`path`] produces one.
+/// `Resolved<Reassociated>` carries: only [`path`] and [`recorded`] produce one, and
+/// neither returns a path this build has no compilation of.
 #[cold]
 fn not_reassociated(path: Path) -> ! {
-    unreachable!("{path} is not a reassociated path of this build; only `path` produces one")
+    unreachable!(
+        "{path} is not a reassociated path of this build; only `path` and `recorded` \
+         produce one"
+    )
 }
 
 /// Run `$call` with `$k` naming the compilation `$path` selects. Matched once per

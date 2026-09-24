@@ -542,7 +542,7 @@ pub fn load(guard: &IndexGuardView<'_>, matrix: VectorMatrix) -> Result<HnswInde
 /// As [`load`], with [`HnswError::GuardProfile`] for a guard naming the exact
 /// implementation or one whose revision names another dispatch path than the payload
 /// records, and [`HnswError::ArithmeticPathUnavailable`] for a payload recorded on a path
-/// this process does not run.
+/// this process cannot run.
 pub fn load_reassociated(
     guard: &IndexGuardView<'_>,
     matrix: VectorMatrix,
@@ -676,7 +676,7 @@ fn check_row_width(row: usize, decoded: usize, dimension: usize) -> Result<()> {
 /// another image version or arithmetic: a version-1 image is an index folded under a
 /// different law, not a tampered one, and answering `false` would say otherwise.
 /// [`HnswError::ArithmeticPathUnavailable`] for a reassociated payload recorded on a
-/// dispatch path this process does not run, for the same reason. Any other payload that
+/// dispatch path this process cannot run, for the same reason. Any other payload that
 /// cannot be read or decoded is `Ok(false)`, since it cannot be the rebuild either.
 ///
 /// The arithmetic the rebuild runs is the one the guard's implementation identifier names:

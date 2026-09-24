@@ -38,16 +38,19 @@
 //!
 //! [`HnswIndex::build_reassociated`] builds the same graph algorithm under
 //! [`purrdf_core::distance::Reassociated`], whose sums may be reassociated and contracted
-//! to fused multiply-add along the dispatch path this process resolves. It is a second
-//! type, `HnswIndex<Reassociated>`, not a mode of the first. Its image is still
-//! byte-identical across thread counts, because every call site on one path computes one
-//! pair's distance with the same compiled copy; but it is **bound to its build and its
-//! dispatch path**. The header records the path's image code, the implementation is
-//! [`IMPLEMENTATION_ID_REASSOCIATED`] and its evidence revision names the path
-//! ([`profile::loss_evidence_reassociated`]), and a decode, rebuild verification or search
-//! on a process that runs another path is refused with
-//! [`HnswError::ArithmeticPathUnavailable`] rather than answered with bits from a
-//! different compilation.
+//! to fused multiply-add along the dispatch path a build resolves, the widest this
+//! process runs. It is a second type, `HnswIndex<Reassociated>`, not a mode of the first.
+//! Its image is still byte-identical across thread counts, because every call site on one
+//! path computes one pair's distance with the same compiled copy; but it is **bound to its
+//! build and its dispatch path**. The header records the path's image code, the
+//! implementation is [`IMPLEMENTATION_ID_REASSOCIATED`] and its evidence revision names
+//! the path ([`profile::loss_evidence_reassociated`]). Every decode, rebuild verification
+//! and search runs the recorded path, whichever path is widest here: an image built on
+//! `x86_64`'s SSE2 or AVX2+FMA path runs on that path on an AVX-512F processor, whose
+//! binary holds every `x86_64` compilation. A process that cannot run the recorded path
+//! -- its compilation belongs to another target, or the processor lacks a feature it
+//! needs -- is refused with [`HnswError::ArithmeticPathUnavailable`] rather than answered
+//! with bits from a different compilation.
 //!
 //! # The approximation contract, stated honestly
 //!
@@ -102,7 +105,7 @@ pub use purrdf_sparql_eval::knn::{Kernel, Ranked};
 use std::sync::Mutex;
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{Arithmetic, Exact, Reassociated, Resolved};
+use purrdf_core::distance::{Arithmetic, Exact, Reassociated, RecordedPathError, Resolved};
 use rayon::prelude::*;
 
 use crate::graph::{Graph, decode_image};
@@ -128,80 +131,81 @@ pub const IMPLEMENTATION_ID: &str = "hnsw-v2";
 /// different evidence, and a guard naming one can never be read as the other.
 pub const IMPLEMENTATION_ID_REASSOCIATED: &str = "hnsw-reassociated-v2";
 
-/// Arithmetic `A`, resolved for the calling thread and required to run the dispatch path
-/// an image recorded as `recorded`.
+/// Arithmetic `A`, resolved for the calling thread on the dispatch path an image recorded
+/// as `recorded`.
+///
+/// The recorded path is resolved itself, not the widest this process runs: a processor
+/// runs every compilation its binary holds whose features it reports, so an image recorded
+/// on `x86_64`'s SSE2 or AVX2+FMA path is searched, verified and rebuilt on that path by an
+/// AVX-512F processor. Only a path this process cannot run is refused.
 ///
 /// # Errors
 ///
 /// [`HnswError::FloatEnvironment`] when the thread's float environment is not the IEEE
-/// one the arithmetic defines, and [`HnswError::ArithmeticPathUnavailable`] when the
-/// thread resolves a different path from the one recorded.
+/// one the arithmetic defines; [`HnswError::ArithmeticMismatch`] for a code that is not
+/// one of `A`'s; and [`HnswError::ArithmeticPathUnavailable`] when the recorded path's
+/// compilation is not in this build or the processor does not report a feature it needs.
 pub(crate) fn resolve_recorded<A: Arithmetic>(recorded: u32) -> Result<Resolved<A>> {
-    let here = A::resolve()?;
-    require_path(here, recorded)?;
-    Ok(here)
-}
-
-/// Refuse `here` unless it runs the dispatch path an image recorded as `recorded`.
-///
-/// An arithmetic whose bits are the same on every path has one code, which every path
-/// reports, so this can only refuse one whose bits depend on the path.
-fn require_path<A: Arithmetic>(here: Resolved<A>, recorded: u32) -> Result<()> {
-    let available = available_code(here);
-    if available == recorded {
-        Ok(())
-    } else {
-        Err(HnswError::ArithmeticPathUnavailable {
-            recorded,
-            available,
-        })
-    }
-}
-
-/// The image code of the dispatch path `here` runs.
-///
-/// Under `cfg(test)` a unit test may force the code the calling thread reports, through
-/// `path_hook`, to stand in for a process on another path: no test can make the
-/// processor it runs on report a different feature set.
-fn available_code<A: Arithmetic>(here: Resolved<A>) -> u32 {
     #[cfg(test)]
-    if let Some(code) = path_hook::forced() {
-        return code;
+    if let Some(widest) = path_hook::lacking(recorded) {
+        A::resolve()?;
+        return Err(HnswError::ArithmeticPathUnavailable {
+            recorded,
+            available: widest,
+        });
     }
-    here.image_code()
+    match A::resolve_recorded(recorded) {
+        Ok(resolved) => Ok(resolved),
+        Err(RecordedPathError::FloatEnvironment(error)) => Err(error.into()),
+        Err(RecordedPathError::Unavailable { .. }) => Err(HnswError::ArithmeticPathUnavailable {
+            recorded,
+            available: A::resolve()?.image_code(),
+        }),
+        Err(RecordedPathError::UnknownCode { .. }) => Err(HnswError::ArithmeticMismatch {
+            arithmetic: A::ID,
+            actual: recorded,
+        }),
+    }
 }
 
-/// The test hook that stands the calling thread on another dispatch path.
+/// The test hook that stands the calling thread on a processor that cannot run a path.
+///
+/// No test can make the processor it runs on stop reporting a feature, so a unit test
+/// that needs a refusal on a path this host really runs names it here.
 #[cfg(test)]
 pub(crate) mod path_hook {
     use std::cell::Cell;
 
     thread_local! {
-        /// The code the calling thread reports instead of its resolved path's.
-        static FORCED: Cell<Option<u32>> = const { Cell::new(None) };
+        /// The recorded code the calling thread cannot run, and the widest code it
+        /// reports instead.
+        static LACKING: Cell<Option<(u32, u32)>> = const { Cell::new(None) };
     }
 
-    /// While alive, the calling thread reports `code` as the path it runs.
-    pub(crate) struct Forced {
-        previous: Option<u32>,
+    /// While alive, the calling thread cannot run the path it was told it lacks.
+    pub(crate) struct Lacking {
+        previous: Option<(u32, u32)>,
     }
 
-    impl Drop for Forced {
+    impl Drop for Lacking {
         fn drop(&mut self) {
-            FORCED.with(|forced| forced.set(self.previous));
+            LACKING.with(|lacking| lacking.set(self.previous));
         }
     }
 
-    /// Report `code` as this thread's dispatch path until the guard drops.
-    pub(crate) fn force(code: u32) -> Forced {
-        Forced {
-            previous: FORCED.with(|forced| forced.replace(Some(code))),
+    /// Refuse `recorded` on this thread, reporting `widest` as the widest path it runs,
+    /// until the guard drops.
+    pub(crate) fn lack(recorded: u32, widest: u32) -> Lacking {
+        Lacking {
+            previous: LACKING.with(|lacking| lacking.replace(Some((recorded, widest)))),
         }
     }
 
-    /// The code a test forced on this thread, if any.
-    pub(crate) fn forced() -> Option<u32> {
-        FORCED.with(Cell::get)
+    /// The widest code to report when a test made `recorded` unrunnable on this thread.
+    pub(crate) fn lacking(recorded: u32) -> Option<u32> {
+        LACKING
+            .with(Cell::get)
+            .and_then(|(code, widest)| (code == recorded).then_some(widest))
     }
 }
 
@@ -288,7 +292,7 @@ pub fn build_reassociated(
 /// selection, in search and in rebuild verification -- runs under. [`HnswIndex::build`]
 /// builds the [`Exact`] index, whose canonical image is the same bytes on every target and
 /// dispatch path; [`HnswIndex::build_reassociated`] builds the [`Reassociated`] one, whose
-/// distances may be reassociated and contracted along the dispatch path this process
+/// distances may be reassociated and contracted along the dispatch path its build
 /// resolved, so its image is bound to that build and that path. They are two types, not
 /// one index with a mode, and neither ever computes a distance under the other's law.
 #[derive(Debug)]
@@ -386,12 +390,13 @@ impl HnswIndex<Reassociated> {
     /// in neighbour selection, in search and in rebuild verification -- under the
     /// [`Reassociated`] arithmetic.
     ///
-    /// The dispatch path is resolved here, and the image records it. Its distances may
-    /// differ in their last bits from [`HnswIndex::build`]'s, so the graph may differ too
-    /// wherever two candidates nearly tie; its recall is measured against the exact oracle
-    /// exactly as the exact index's is. Its canonical image is reproducible only by a build
-    /// running the same dispatch path, and every later decode, rebuild verification and
-    /// search refuses a process on another path with
+    /// The dispatch path is resolved here -- the widest this process runs -- and the
+    /// image records it. Its distances may differ in their last bits from
+    /// [`HnswIndex::build`]'s, so the graph may differ too wherever two candidates nearly
+    /// tie; its recall is measured against the exact oracle exactly as the exact index's
+    /// is. Its canonical image is reproducible only on the same dispatch path, so every
+    /// later decode, rebuild verification and search runs that path, on any process that
+    /// can run it, and refuses one that cannot with
     /// [`HnswError::ArithmeticPathUnavailable`].
     ///
     /// # Errors
@@ -414,7 +419,8 @@ impl HnswIndex<Reassociated> {
     /// As [`HnswIndex::decode`], with [`HnswError::ArithmeticMismatch`] for a header that
     /// records a code of another arithmetic (an exact image among them), and
     /// [`HnswError::ArithmeticPathUnavailable`] for one recorded on a dispatch path this
-    /// process does not run.
+    /// process cannot run. A path narrower than the widest this process runs is not
+    /// refused: the decoded index searches and verifies on the path it recorded.
     pub fn decode_reassociated(matrix: VectorMatrix, bytes: &[u8]) -> Result<Self> {
         Self::decode_with(matrix, bytes, Compiled::here())
     }
@@ -425,7 +431,7 @@ impl HnswIndex<Reassociated> {
     ///
     /// As [`HnswIndex::verify_bytes_against`], and
     /// [`HnswError::ArithmeticPathUnavailable`] for an image recorded on a dispatch path
-    /// this process does not run: rebuilding it here would recompute every distance with
+    /// this process cannot run: rebuilding it on another would recompute every distance with
     /// other last bits, so the answer would be a "no" that says nothing about the payload.
     pub(crate) fn verify_bytes_against_reassociated(
         matrix: &VectorMatrix,
@@ -514,9 +520,8 @@ impl<A: Arithmetic> HnswIndex<A> {
     /// [`HnswError::RowOutOfBounds`] if `query_row` is not a row of the matrix.
     /// [`HnswError::NonFiniteDistance`] if a kernel result leaves the finite range.
     /// [`HnswError::FloatEnvironment`] if the calling thread's float environment is not the
-    /// IEEE one. [`HnswError::ArithmeticPathUnavailable`] if the calling thread runs another
-    /// dispatch path than the one this index recorded, which only a reassociated index can
-    /// raise.
+    /// IEEE one. [`HnswError::ArithmeticPathUnavailable`] if the calling thread cannot run
+    /// the dispatch path this index recorded, which only a reassociated index can raise.
     pub fn search_rows(&self, query_row: usize, k: usize) -> Result<Vec<Ranked>> {
         let arithmetic = self.resolve_here()?;
         let cache = DistanceCache::new();
@@ -624,8 +629,8 @@ impl<A: Arithmetic> HnswIndex<A> {
     ///
     /// # Errors
     ///
-    /// As [`HnswIndex::search_rows`], for the first failing query. A calling thread on
-    /// another dispatch path than the one recorded is refused before any query runs.
+    /// As [`HnswIndex::search_rows`], for the first failing query. A calling thread that
+    /// cannot run the dispatch path recorded is refused before any query runs.
     pub fn search_batch(&self, query_rows: &[usize], k: usize) -> Result<Vec<Vec<Ranked>>> {
         self.resolve_here()?;
         let rows = self.matrix.rows();
@@ -711,10 +716,11 @@ impl<A: Arithmetic> HnswIndex<A> {
 
     /// Decode an index under `A` from its canonical image.
     fn decode_with(matrix: VectorMatrix, bytes: &[u8], compiled: Compiled<A>) -> Result<Self> {
-        // The norms computed below are arithmetic under the thread's environment.
-        let here = A::resolve()?;
         let image = decode_image::<A>(bytes)?;
-        require_path(here, image.arithmetic)?;
+        // The recorded path, which every later search and rebuild verification runs; the
+        // norms computed below are arithmetic under the thread's environment, which this
+        // checks too.
+        let here = resolve_recorded::<A>(image.arithmetic)?;
         if image.graph.node_count() != matrix.rows() {
             return Err(HnswError::InvalidPayload {
                 reason: format!(
@@ -745,7 +751,9 @@ impl<A: Arithmetic> HnswIndex<A> {
         bytes: &[u8],
         compiled: Compiled<A>,
     ) -> Result<Option<Params>> {
-        let here = A::resolve()?;
+        // The thread's environment is checked before the payload is read, so a refused
+        // environment is never reported as a payload that failed to decode.
+        A::resolve()?;
         let image = match decode_image::<A>(bytes) {
             Ok(image) => image,
             Err(
@@ -753,9 +761,10 @@ impl<A: Arithmetic> HnswIndex<A> {
             ) => return Err(error),
             Err(_) => return Ok(None),
         };
-        // A path this process does not run cannot rebuild the image, and saying `false`
-        // would report a real index as a tampered one.
-        require_path(here, image.arithmetic)?;
+        // The rebuild runs on the recorded path. A path this process cannot run cannot
+        // rebuild the image, and saying `false` would report a real index as a tampered
+        // one.
+        let here = resolve_recorded::<A>(image.arithmetic)?;
         if image.graph.node_count() != matrix.rows()
             || image
                 .params
@@ -788,7 +797,7 @@ impl<A: Arithmetic> HnswIndex<A> {
     /// # Errors
     ///
     /// As [`HnswIndex::build`], and [`HnswError::ArithmeticPathUnavailable`] if the calling
-    /// thread runs another dispatch path than the one this index recorded.
+    /// thread cannot run the dispatch path this index recorded.
     pub fn verify_rebuild(&self) -> Result<bool> {
         // Rebuilt from a borrow: the vectors are already here, and copying a
         // million-row matrix in order to compare against it is the largest avoidable
@@ -1093,12 +1102,13 @@ mod tests {
             Some(params())
         );
 
-        // The hook standing the thread on the path it already runs changes nothing, so
-        // the refusal `other_path_refused_named` observes is the path and not the hook.
-        let forced = path_hook::force(recorded);
+        // The hook refusing a path other than the recorded one changes nothing, so the
+        // refusal `other_path_refused_named` observes is the recorded path's and not the
+        // hook's.
+        let lacking = path_hook::lack(another_path(recorded), recorded);
         assert!(index.verify_rebuild().expect("the same path rebuilds"));
         assert!(HnswIndex::decode_reassociated(matrix, &image).is_ok());
-        drop(forced);
+        drop(lacking);
     }
 
     #[test]
@@ -1113,7 +1123,7 @@ mod tests {
             available,
         };
 
-        let forced = path_hook::force(available);
+        let lacking = path_hook::lack(recorded, available);
         assert_eq!(
             HnswIndex::decode_reassociated(matrix.clone(), &image).expect_err("refused"),
             refusal
@@ -1147,9 +1157,10 @@ mod tests {
                 && message.contains(&profile::path_label(available)),
             "the refusal names both paths: {message}"
         );
-        drop(forced);
+        drop(lacking);
 
-        // The neighbour: back on the path it recorded, every one of those calls answers.
+        // The neighbour: able to run the path it recorded, every one of those calls
+        // answers.
         assert!(index.verify_rebuild().expect("rebuilds"));
         assert!(HnswIndex::decode_reassociated(matrix.clone(), &image).is_ok());
         assert_eq!(
@@ -1157,6 +1168,219 @@ mod tests {
             Some(params())
         );
         assert_eq!(index.search_rows(0, 3).expect("searches").len(), 3);
+    }
+
+    /// A reassociated index built on the path `code` names, which this host runs.
+    fn reassociated_on(matrix: VectorMatrix, code: u32) -> HnswIndex<Reassociated> {
+        let arithmetic =
+            Reassociated::resolve_recorded(code).expect("the host runs the recorded path");
+        let kernel = Kernel::SquaredEuclidean;
+        let compiled = Compiled::here();
+        let (graph, norms) =
+            (compiled.build_graph)(&matrix, arithmetic, kernel, params(), None).expect("builds");
+        HnswIndex::new(matrix, kernel, params(), graph, norms, arithmetic, compiled)
+    }
+
+    /// Every reassociated code this host runs, narrowest first, as the processor reports.
+    fn host_codes() -> Vec<u32> {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut codes = vec![2];
+            if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+                codes.push(3);
+                if std::is_x86_feature_detected!("avx512f") {
+                    codes.push(4);
+                }
+            }
+            codes
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            vec![
+                Reassociated::resolve()
+                    .expect("the test thread runs the default float environment")
+                    .image_code(),
+            ]
+        }
+    }
+
+    /// An image recorded on a narrower path than the widest this host runs is decoded,
+    /// searched and verified on that path, never refused and never recomputed on the
+    /// widest. The oracle is the recorded path's own kernel: every offered distance equals
+    /// it bit for bit, and where the widest path's bits differ on the fixture, the widest
+    /// is shown to disagree -- so a run on the widest path could not pass. Where the two
+    /// compilations agree on every pair, the resolved handle's path is what is observed.
+    #[test]
+    fn a_narrower_recorded_path_is_run_not_refused() {
+        let codes = host_codes();
+        let widest = Reassociated::resolve()
+            .expect("the test thread runs the default float environment")
+            .image_code();
+        assert_eq!(
+            codes.last(),
+            Some(&widest),
+            "the widest is the host's last path"
+        );
+        let mut exercised = Vec::new();
+        for &code in &codes[..codes.len() - 1] {
+            let matrix = fixture(48, 150);
+            let built = reassociated_on(matrix.clone(), code);
+            let recorded = built.arithmetic();
+            assert_eq!(recorded.image_code(), code);
+            let image = built.canonical_image();
+            assert_eq!(
+                header_code(&image),
+                code,
+                "the image records the narrower path"
+            );
+
+            let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image)
+                .expect("a host that runs the recorded path decodes it");
+            assert_eq!(
+                decoded.arithmetic(),
+                recorded,
+                "decoded onto the recorded path"
+            );
+            assert_eq!(
+                decoded.canonical_image(),
+                image,
+                "re-encoded with its own code"
+            );
+            assert!(
+                decoded
+                    .verify_rebuild()
+                    .expect("rebuilds on the recorded path")
+            );
+            assert!(
+                built
+                    .verify_rebuild()
+                    .expect("rebuilds on the recorded path")
+            );
+            assert_eq!(
+                HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
+                    .expect("verifies on the recorded path"),
+                Some(params())
+            );
+
+            let wide = Reassociated::resolve_recorded(widest).expect("the widest path");
+            let pair = |handle: Resolved<Reassociated>, a: usize, b: usize| {
+                matrix
+                    .distance_with(handle, decoded.kernel(), a, 0.0, b, 0.0)
+                    .expect("finite")
+            };
+            let mut told_apart = 0_usize;
+            for row in 0..matrix.rows() {
+                let offered = decoded.search_rows(row, 8).expect("searches");
+                assert_eq!(
+                    decoded.search_batch(&[row], 8).expect("searches"),
+                    vec![offered.clone()]
+                );
+                for candidate in &offered {
+                    let on_recorded = pair(recorded, row, candidate.row);
+                    assert_eq!(
+                        candidate.distance.to_bits(),
+                        on_recorded.to_bits(),
+                        "code {code}: search ran another path for ({row}, {})",
+                        candidate.row
+                    );
+                    if pair(wide, row, candidate.row).to_bits() != on_recorded.to_bits() {
+                        told_apart += 1;
+                    }
+                }
+            }
+            let query = matrix.row_to_vec(0);
+            for candidate in decoded.search_vector(&query, 8).expect("searches") {
+                assert_eq!(
+                    candidate.distance.to_bits(),
+                    pair(recorded, 0, candidate.row).to_bits()
+                );
+            }
+            let how = if told_apart > 0 {
+                "told apart from the widest by its bits"
+            } else {
+                "agrees with the widest bitwise; path observed"
+            };
+            exercised.push(format!("{} ({how})", profile::path_label(code)));
+        }
+        // The cases this host could exercise, from its own report.
+        #[cfg(target_arch = "x86_64")]
+        if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+            assert!(
+                exercised.iter().any(|case| case.contains("along sse2")),
+                "an AVX2+FMA host runs an SSE2 image: {exercised:?}"
+            );
+            if std::is_x86_feature_detected!("avx512f") {
+                assert!(
+                    exercised.iter().any(|case| case.contains("along avx2+fma")),
+                    "an AVX-512F host runs an AVX2+FMA image: {exercised:?}"
+                );
+            }
+        }
+        if codes.len() == 1 {
+            assert_eq!(
+                exercised,
+                Vec::<String>::new(),
+                "no narrower path to exercise"
+            );
+            exercised.push(format!(
+                "none: this host runs only {}",
+                profile::path_label(widest)
+            ));
+        }
+        println!("a_narrower_recorded_path_is_run_not_refused exercised: {exercised:?}");
+    }
+
+    /// An image recorded on a path this build holds no compilation of is refused by its
+    /// real resolution, naming the widest path this process runs; the neighbour, the same
+    /// image with the code this host built it under, decodes.
+    #[test]
+    fn a_path_this_build_cannot_run_is_refused() {
+        let matrix = fixture(48, 70);
+        let index = reassociated(matrix.clone());
+        let widest = index.arithmetic().image_code();
+        let codes = host_codes();
+        let foreign = *Reassociated::IMAGE_CODES
+            .iter()
+            .find(|code| !codes.contains(code))
+            .expect("every build lacks some target's compilation");
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(
+            foreign, 5,
+            "NEON is the first code an x86_64 build cannot run"
+        );
+        assert!(matches!(
+            Reassociated::resolve_recorded(foreign),
+            Err(RecordedPathError::Unavailable { .. })
+        ));
+        let mut image = index.canonical_image();
+        image[60..64].copy_from_slice(&foreign.to_le_bytes());
+        let refusal = HnswError::ArithmeticPathUnavailable {
+            recorded: foreign,
+            available: widest,
+        };
+        assert_eq!(
+            HnswIndex::decode_reassociated(matrix.clone(), &image).expect_err("refused"),
+            refusal
+        );
+        assert_eq!(
+            HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
+                .expect_err("refused by name, never `Ok(None)`"),
+            refusal
+        );
+        let message = refusal.to_string();
+        assert!(
+            message.contains(&profile::path_label(foreign))
+                && message.contains(&profile::path_label(widest)),
+            "the refusal names both paths: {message}"
+        );
+
+        // The neighbour: the bytes as built decode and verify.
+        let built = index.canonical_image();
+        assert!(HnswIndex::decode_reassociated(matrix.clone(), &built).is_ok());
+        assert_eq!(
+            HnswIndex::verify_bytes_against_reassociated(&matrix, &built).expect("verifies"),
+            Some(params())
+        );
     }
 
     #[test]
@@ -1167,63 +1391,40 @@ mod tests {
         let matrix = fixture(48, 70);
         let index = reassociated(matrix.clone());
         let here = index.arithmetic().image_code();
-        // A target with no named reassociated path records the portable code itself.
-        #[cfg(not(any(
+        let portable_target = cfg!(not(any(
             target_arch = "x86_64",
             target_arch = "aarch64",
             target_arch = "wasm32",
             target_arch = "wasm64"
-        )))]
-        assert_eq!(here, portable, "this target runs the portable path");
+        )));
+        // A target with no named reassociated path records the portable code itself.
+        assert_eq!(here == portable, portable_target);
         let mut image = index.canonical_image();
         image[60..64].copy_from_slice(&portable.to_le_bytes());
         assert_eq!(header_code(&image), portable);
 
-        // The thread stood on the portable path decodes the image, the whole payload
-        // intact.
-        let forced = path_hook::force(portable);
-        let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image)
-            .expect("a portable-path host decodes a portable-path image");
-        let reencoded = decoded.canonical_image();
-        assert_eq!(reencoded[..60], image[..60]);
-        assert_eq!(reencoded[64..], image[64..]);
-        drop(forced);
-
-        // A thread on any other path refuses it by name, naming both paths.
-        let other = another_path(portable);
-        let refusal = HnswError::ArithmeticPathUnavailable {
-            recorded: portable,
-            available: other,
-        };
-        let forced = path_hook::force(other);
-        assert_eq!(
-            HnswIndex::decode_reassociated(matrix.clone(), &image).expect_err("refused"),
-            refusal
-        );
-        assert_eq!(
-            HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
-                .expect_err("refused by name, never `Ok(None)`"),
-            refusal
-        );
-        drop(forced);
-        let message = refusal.to_string();
-        assert!(
-            message.contains("along portable") && message.contains(&profile::path_label(other)),
-            "the refusal names both paths: {message}"
-        );
-
-        // Unforced, this host answers as the path it really runs: it decodes the image
-        // exactly when that path is the portable one.
-        let unforced = HnswIndex::decode_reassociated(matrix.clone(), &image);
-        if here == portable {
-            assert!(unforced.is_ok(), "{unforced:?}");
+        // This host answers as the paths it really runs: it decodes the image exactly
+        // when its build holds the portable compilation, and otherwise refuses it naming
+        // both paths.
+        let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image);
+        if portable_target {
+            let decoded = decoded.expect("a portable-path host decodes a portable-path image");
+            assert_eq!(decoded.canonical_image(), image);
         } else {
+            let refusal = HnswError::ArithmeticPathUnavailable {
+                recorded: portable,
+                available: here,
+            };
+            assert_eq!(decoded.expect_err("another target refuses"), refusal);
             assert_eq!(
-                unforced.expect_err("another path refuses"),
-                HnswError::ArithmeticPathUnavailable {
-                    recorded: portable,
-                    available: here,
-                }
+                HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
+                    .expect_err("refused by name, never `Ok(None)`"),
+                refusal
+            );
+            let message = refusal.to_string();
+            assert!(
+                message.contains("along portable") && message.contains(&profile::path_label(here)),
+                "the refusal names both paths: {message}"
             );
         }
 
@@ -1232,6 +1433,24 @@ mod tests {
             HnswIndex::decode(matrix, &image),
             Err(HnswError::ArithmeticMismatch { actual: 8, .. })
         ));
+    }
+
+    /// The exact arithmetic records one code, and every host runs it on the path a new
+    /// exact result runs on.
+    #[test]
+    fn an_exact_image_resolves_its_one_code() {
+        let matrix = fixture(40, 20);
+        let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
+            .expect("builds");
+        let image = exact.canonical_image();
+        assert_eq!(header_code(&image), Exact::IMAGE_CODE);
+        let decoded = HnswIndex::decode(matrix, &image).expect("decodes");
+        assert_eq!(
+            decoded.arithmetic(),
+            Exact::resolve().expect("the test thread runs the default float environment")
+        );
+        assert!(decoded.verify_rebuild().expect("rebuilds"));
+        assert_eq!(decoded.canonical_image(), image);
     }
 
     #[test]
