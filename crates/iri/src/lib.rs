@@ -144,6 +144,8 @@ pub mod pos;
 mod resolve;
 mod scan;
 pub mod terminals;
+#[cfg(test)]
+mod test_rng;
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};

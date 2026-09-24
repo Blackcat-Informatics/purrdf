@@ -3857,13 +3857,7 @@ mod tests {
     #[test]
     fn chunked_scan_filter_matches_per_row_filter() {
         let mut state = 0x0DA7_A5E7_u64;
-        let mut next = move |bound: u64| {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            (z ^ (z >> 31)) % bound
-        };
+        let mut next = move |bound: u64| crate::test_rng::splitmix64_next(&mut state) % bound;
         let mut sequential = 0_usize;
         let mut permuted = 0_usize;
         for rows in (0..=40).chain([63, 64, 65, 127, 200]) {

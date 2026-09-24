@@ -14,6 +14,9 @@
 
 use std::sync::Arc;
 
+#[path = "support/corpus.rs"]
+mod corpus;
+
 use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_core::{DistanceMetric, IndexLossContract, TermValue};
 use purrdf_hnsw::relation::{
@@ -38,17 +41,7 @@ fn params() -> Params {
 /// `(-1, 1)`; nothing here reads a clock or an RNG.
 fn space_over(rows: usize, terms: Vec<TermValue>, params: Params) -> Arc<HnswSpace> {
     let dims = 4;
-    let mut state = 0x51DE_0000_1234_ABCD_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        let value = ((z >> 11) as f64 / (1u64 << 53) as f64).mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.125 } else { value });
-    }
+    let data = corpus::linear_unit_values(0x51DE_0000_1234_ABCD_u64, rows * dims);
     let matrix = VectorMatrix::new(rows, dims, data).expect("a valid matrix");
     let index =
         HnswIndex::build(matrix, &DistanceMetric::SquaredEuclidean, params).expect("it builds");

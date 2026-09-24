@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_columnar::plain_bench::PlainInt64;
+use purrdf_columnar::test_rng::mix;
 use purrdf_columnar::{Compression, read, write};
 use purrdf_core::{BlankScope, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral};
 
@@ -70,15 +71,6 @@ fn bench_codec(c: &mut Criterion) {
 /// Rows per PLAIN `INT64` column: many chunk multiples, and past any small-size
 /// special case.
 const PLAIN_ROWS: usize = 65_536;
-
-/// A deterministic SplitMix64 step: the column's only source of variety.
-fn mix(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
 
 /// A column with `nulls_per_ten` rows in ten null, at seeded positions.
 fn plain_column(nulls_per_ten: u64) -> PlainInt64 {

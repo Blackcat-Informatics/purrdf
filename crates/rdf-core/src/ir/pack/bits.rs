@@ -1614,11 +1614,7 @@ mod tests {
         // well represented, not only popcounts near 32.
         let mut state = 0x5E1E_C7ED_u64;
         for _ in 0..4096 {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            let word = z ^ (z >> 31);
+            let word = crate::test_rng::splitmix64_next(&mut state);
             assert_select_agrees(word);
             assert_select_agrees(word & word.rotate_left(17) & word.rotate_left(41));
             assert_select_agrees(word | word.rotate_left(17) | word.rotate_left(41));

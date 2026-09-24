@@ -9,20 +9,12 @@
 //! them changes the written bytes, which the byte-determinism contract
 //! forbids without a golden update and its reason.
 
+use purrdf_columnar::test_rng::mix;
 use purrdf_columnar::{Compression, Table, read, write};
 use purrdf_core::{
     BlankScope, ContentDigest, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfTextDirection,
 };
-
-/// A deterministic SplitMix64 step: the fixture's only source of variety.
-fn mix(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
 
 /// Every term kind in a seeded mix, so each nullable `INT64` column of the
 /// terms table (datatype, direction, scope, the triple components) holds runs

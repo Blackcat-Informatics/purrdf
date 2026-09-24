@@ -44,21 +44,9 @@ use purrdf_sparql_eval::{
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test;
 
-/// A seeded splitmix64 stream of values in `[-1, 1)`, none of them exactly
-/// representable as short decimals, so every product and partial sum rounds.
-fn stream(len: usize, seed: u64) -> Vec<f64> {
-    let mut state = seed;
-    (0..len)
-        .map(|_| {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^= z >> 31;
-            ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
-        })
-        .collect()
-}
+// A seeded splitmix64 stream of values in `[-1, 1)`, none of them exactly
+// representable as short decimals, so every product and partial sum rounds.
+use purrdf_sparql_eval::test_rng::stream;
 
 /// The reassociated arithmetic on this target.
 fn resolved() -> Resolved<Reassociated> {

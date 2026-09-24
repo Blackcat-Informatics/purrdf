@@ -67,6 +67,8 @@ mod json;
 mod json_read;
 mod model;
 mod term;
+#[cfg(test)]
+mod test_rng;
 mod tsv;
 mod xml;
 mod xml_read;

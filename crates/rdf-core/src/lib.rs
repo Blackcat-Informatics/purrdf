@@ -129,6 +129,8 @@ pub mod small;
 pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;
+#[doc(hidden)]
+pub mod test_rng;
 pub mod turtle;
 // The canonical, review-friendly Turtle RENDERER over the IR — the oxigraph-free half
 // of the on-disk normalizer (the oxigraph-coupled text parser stays in `purrdf`).

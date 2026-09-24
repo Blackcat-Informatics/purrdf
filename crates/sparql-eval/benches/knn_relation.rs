@@ -36,6 +36,7 @@ use purrdf_core::{
     EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
     RdfDatasetBuilder, RdfTermTarget, StageImplementation, TargetSet, TermValue, VectorDtype,
 };
+use purrdf_sparql_eval::test_rng::splitmix64_step;
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PfArgs, PropertyFunction,
 };
@@ -55,20 +56,12 @@ const SEED: u64 = 0x4b4e_4e5f_5245_4c4e;
 /// The fixture's data namespace.
 const EX: &str = "https://example.org/d/";
 
-/// One step of splitmix64.
-const fn splitmix64(state: u64) -> u64 {
-    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
 /// `len` values in `[-1, 1)` from the fixed stream at `seed`, none exactly zero.
 fn stream(len: usize, seed: u64) -> Vec<f64> {
     let mut state = seed;
     (0..len)
         .map(|_| {
-            state = splitmix64(state);
+            state = splitmix64_step(state);
             let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
             let value = unit.mul_add(2.0, -1.0);
             if value == 0.0 { 0.25 } else { value }

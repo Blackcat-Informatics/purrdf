@@ -706,17 +706,7 @@ mod tests {
 
     /// A deterministic stream of values in `[-1, 1)`, for the differential tests below.
     fn stream(len: usize, seed: u64) -> Vec<f64> {
-        let mut state = seed;
-        (0..len)
-            .map(|_| {
-                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-                let mut z = state;
-                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-                z ^= z >> 31;
-                ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
-            })
-            .collect()
+        crate::test_rng::stream(len, seed)
     }
 
     #[test]
@@ -922,14 +912,7 @@ mod tests {
         // matrix widened in advance -- otherwise halving the resident size would quietly be
         // a different index. Asserted on bits, not on an epsilon.
         let mut state = 0xF32_0000_1234_ABCD_u64;
-        let mut next = || {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^= z >> 31;
-            ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0) as f32
-        };
+        let mut next = || crate::test_rng::unit_f64_next(&mut state) as f32;
         for len in [1_usize, 63, 64, 65, 200, 4_096] {
             let a32: Vec<f32> = (0..len).map(|_| next()).collect();
             let b32: Vec<f32> = (0..len).map(|_| next()).collect();

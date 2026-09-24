@@ -43,6 +43,7 @@ use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterio
 use purrdf_core::distance::{
     Arithmetic, Bound, Exact, Measure, Reassociated, Resolved, RowsRef, Scalar,
 };
+use purrdf_core::test_rng::splitmix64_step;
 
 /// The rows in every matrix.
 const ROWS: usize = 4_096;
@@ -56,21 +57,13 @@ const DIMS: [usize; 3] = [384, 768, 1_536];
 /// The seed of the fixture stream.
 const SEED: u64 = 0x4449_5354_414e_4345;
 
-/// One step of splitmix64.
-const fn splitmix64(state: u64) -> u64 {
-    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
 /// `len` values in `[-1, 1)` from the fixed stream at `seed`, none exactly zero, each
 /// exactly representable in binary32 so the `f32` copy holds the same values.
 fn stream(len: usize, seed: u64) -> Vec<f64> {
     let mut state = seed;
     (0..len)
         .map(|_| {
-            state = splitmix64(state);
+            state = splitmix64_step(state);
             let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
             let value = f64::from(unit.mul_add(2.0, -1.0) as f32);
             if value == 0.0 { 0.25 } else { value }

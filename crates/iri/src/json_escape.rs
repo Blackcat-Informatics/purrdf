@@ -308,13 +308,7 @@ mod tests {
             .chars()
             .collect();
         let mut state: u64 = 0x5EED_1234_ABCD_0042;
-        let mut next = || {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
-        };
+        let mut next = || crate::test_rng::splitmix64_next(&mut state);
         for _ in 0..2_000 {
             let len = usize::try_from(next() % 70).expect("below 70");
             let value: String = (0..len)

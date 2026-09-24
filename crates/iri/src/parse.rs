@@ -1001,11 +1001,8 @@ mod tests {
         ];
         let mut state = 0x01B1_C0DE_5EED_u64;
         let mut next = move || {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            usize::try_from((z ^ (z >> 31)) % 1_000_003).expect("small")
+            usize::try_from(crate::test_rng::splitmix64_next(&mut state) % 1_000_003)
+                .expect("small")
         };
         let mut verdicts = [0_usize; 3];
         for len in (0..=70).chain([128, 400]) {
