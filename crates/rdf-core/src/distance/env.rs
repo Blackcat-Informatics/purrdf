@@ -230,7 +230,7 @@ const TWO_POW_MINUS_51: u64 = 0x3cc0_0000_0000_0000;
 const _: () = {
     assert!(f64::from_bits(ONE) == 1.0);
     assert!(f64::from_bits(ONE_PLUS_ULP) == 1.0 + f64::EPSILON);
-    assert!(f64::from_bits(ONE_PLUS_TWO_ULP) == 1.0 + 2.0 * f64::EPSILON);
+    assert!(f64::from_bits(ONE_PLUS_TWO_ULP) == 1.0 + f64::EPSILON + f64::EPSILON);
     assert!(f64::from_bits(QUARTER_ULP) == f64::EPSILON / 4.0);
     assert!(f64::from_bits(HALF_ULP) == f64::EPSILON / 2.0);
     assert!(f64::from_bits(THREE_QUARTER_ULP) == 3.0 * f64::EPSILON / 4.0);

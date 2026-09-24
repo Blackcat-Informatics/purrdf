@@ -518,12 +518,8 @@ jobs:
   # that decode and refuse an image recorded on that path.
   cross-arch:
     runs-on: ubuntu-latest
-    # Six cold check graphs, two test builds, and the HNSW worker-count digest under
-    # emulation, which is the long pole.
+    # Six cold check graphs and the i686 test build.
     timeout-minutes: 90
-    env:
-      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
-      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64 -L /usr/riscv64-linux-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -536,11 +532,10 @@ jobs:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
           targets: i686-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu
 
-      - name: Install the i686 C library, the riscv64 cross linker and user-mode emulation
+      - name: Install the i686 C library
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-multilib gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+          sudo apt-get install -y --no-install-recommends gcc-multilib
 
       - name: Type-check the distance kernels and their consumers on six architectures
         run: |
@@ -566,6 +561,33 @@ jobs:
             --test knn_wasm_determinism --test knn_wasm_reassociated
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hnsw \
             --lib --test determinism --test conformance --test float_environment
+
+  # riscv64 runs apart from i686 because the distribution's multilib and riscv64
+  # cross compilers cannot be installed together. Its HNSW worker-count digest under
+  # emulation is the long pole.
+  cross-arch-riscv64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64 -L /usr/riscv64-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: riscv64gc-unknown-linux-gnu
+
+      - name: Install the riscv64 cross linker and user-mode emulation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
 
       - name: Run the distance, kNN and HNSW suites on riscv64 under emulation
         env:
