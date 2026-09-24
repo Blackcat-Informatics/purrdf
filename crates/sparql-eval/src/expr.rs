@@ -524,6 +524,19 @@ fn ebv_of<D: DatasetView + Sync>(
     }
 }
 
+/// The effective boolean value a constant `literal` evaluates to (`None` = type error)
+/// — [`ebv_term`]'s answer for it, reached without a dataset, for the prepare-time
+/// planner (`crate::property_fn_plan`'s `truth_requires`). A language-tagged string has
+/// none; every other literal has its XSD value's.
+pub(crate) fn constant_ebv(literal: &purrdf_sparql_algebra::Literal) -> Option<bool> {
+    if literal.language().is_some() {
+        return None;
+    }
+    xsd_of(&crate::convert::literal_to_value(literal))
+        .as_ref()
+        .and_then(effective_boolean_value)
+}
+
 /// The effective boolean value of a concrete term (`None` = type error).
 fn ebv_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
@@ -9228,5 +9241,385 @@ mod tests {
         // so a nine-character PRIVATE subtag must still be accepted. This is the
         // over-refusal half of the same bound.
         assert!(well_formed_langtag("en-x-cantbethislong"));
+    }
+
+    // ── strictness: the planner's classification, held to the evaluator ──────────
+
+    /// The data the strictness samples read: the one-member `rdf:List` headed by
+    /// `<https://example.org/list>`, holding `"a"`.
+    fn list_ds() -> Arc<RdfDataset> {
+        const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+        let mut builder = RdfDatasetBuilder::new();
+        let head = builder.intern_iri("https://example.org/list");
+        let first = builder.intern_iri(&format!("{RDF}first"));
+        let rest = builder.intern_iri(&format!("{RDF}rest"));
+        let nil = builder.intern_iri(&format!("{RDF}nil"));
+        let member = builder.intern_literal(RdfLiteral::simple("a"));
+        builder.push_quad(head, first, member, None);
+        builder.push_quad(head, rest, nil, None);
+        builder.freeze().expect("freeze")
+    }
+
+    /// Whether `expr` evaluates to a value — `false` for no value and for a hard error
+    /// alike, since neither is true under a `FILTER`.
+    fn has_value(ds: &RdfDataset, expr: &Expression) -> bool {
+        let mut ctx =
+            EvalCtx::new(ds).with_standpoint_predicates(crate::eval::StandpointPredicates::new(
+                "https://example.org/accordingTo",
+                "https://example.org/sharpens",
+            ));
+        let schema = VarSchema::new();
+        matches!(eval_expr(expr, &[], &schema, &mut ctx), Ok(Some(_)))
+    }
+
+    /// Argument lists on which each built-in has a value, several where the answer for
+    /// an unbound argument could depend on the others (an optional argument present or
+    /// absent, a variadic function at two lengths).
+    #[allow(clippy::too_many_lines)] // one table row per built-in, kept together
+    fn strictness_samples(function: &Function) -> Vec<Vec<Expression>> {
+        use purrdf_cdt::CdtFn;
+        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        let int = |n: &str| typed_lit(n, &format!("{XSD}integer"));
+        let date_time = || typed_lit("2020-01-02T03:04:05Z", &format!("{XSD}dateTime"));
+        let cdt = |kind: CdtFn, args: Vec<Expression>| {
+            Expression::FunctionCall(
+                Function::Cdt(purrdf_sparql_algebra::CdtCall {
+                    fn_kind: kind,
+                    iri: kind.iri().to_owned(),
+                }),
+                args,
+            )
+        };
+        let list = || cdt(CdtFn::ListConstructor, vec![int("1"), int("2")]);
+        let map = || cdt(CdtFn::MapConstructor, vec![int("1"), lit("one")]);
+        let triple = || {
+            Expression::FunctionCall(
+                Function::Triple,
+                vec![
+                    iri("https://example.org/s"),
+                    iri("https://example.org/p"),
+                    iri("https://example.org/o"),
+                ],
+            )
+        };
+        let rdf_list = || iri("https://example.org/list");
+        match function {
+            Function::Str
+            | Function::Datatype
+            | Function::StrLen
+            | Function::UCase
+            | Function::LCase
+            | Function::EncodeForUri
+            | Function::Md5
+            | Function::Sha1
+            | Function::Sha256
+            | Function::Sha384
+            | Function::Sha512
+            | Function::Sha3_224
+            | Function::Sha3_256
+            | Function::Sha3_384
+            | Function::Sha3_512
+            | Function::IsIri
+            | Function::IsUri
+            | Function::IsBlank
+            | Function::IsLiteral
+            | Function::IsNumeric
+            | Function::IsTriple
+            | Function::LangDir
+            | Function::HasLang
+            | Function::HasLangDir
+            | Function::BNode => vec![vec![lit("abc")]],
+            Function::Lang => vec![vec![Expression::Literal(Literal::new_lang(
+                "abc", "en", None,
+            ))]],
+            Function::Iri | Function::Uri => vec![vec![lit("https://example.org/x")]],
+            Function::LangMatches => vec![vec![lit("en"), lit("*")]],
+            Function::Rand | Function::Now | Function::Uuid | Function::StrUuid => {
+                vec![Vec::new()]
+            }
+            Function::Abs | Function::Ceil | Function::Floor | Function::Round => {
+                vec![vec![int("1")]]
+            }
+            Function::Concat => vec![vec![lit("a"), lit("b")], vec![lit("a"), lit("b"), lit("c")]],
+            Function::SubStr => vec![
+                vec![lit("abc"), int("2")],
+                vec![lit("abc"), int("1"), int("2")],
+            ],
+            Function::Replace => vec![
+                vec![lit("abc"), lit("b"), lit("x")],
+                vec![lit("abc"), lit("b"), lit("x"), lit("i")],
+            ],
+            Function::Regex => vec![
+                vec![lit("abc"), lit("b")],
+                vec![lit("abc"), lit("b"), lit("i")],
+            ],
+            Function::Contains
+            | Function::StrStarts
+            | Function::StrEnds
+            | Function::StrBefore
+            | Function::StrAfter => vec![vec![lit("abc"), lit("b")]],
+            Function::Year
+            | Function::Month
+            | Function::Day
+            | Function::Hours
+            | Function::Minutes
+            | Function::Seconds
+            | Function::Timezone
+            | Function::Tz => vec![vec![date_time()]],
+            Function::Adjust => vec![vec![
+                date_time(),
+                typed_lit("PT1H", &format!("{XSD}dayTimeDuration")),
+            ]],
+            Function::StrLang => vec![vec![lit("abc"), lit("en")]],
+            Function::StrDt => vec![vec![lit("1"), iri(&format!("{XSD}integer"))]],
+            Function::StrLangDir => vec![vec![lit("abc"), lit("en"), lit("ltr")]],
+            Function::Triple => vec![vec![
+                iri("https://example.org/s"),
+                iri("https://example.org/p"),
+                iri("https://example.org/o"),
+            ]],
+            Function::Subject | Function::Predicate | Function::Object => vec![vec![triple()]],
+            Function::Purrdf(call) => match call.fn_kind {
+                PurrdfFn::HeldIn => vec![vec![
+                    iri("https://example.org/reifier"),
+                    iri("https://example.org/standpoint"),
+                ]],
+                PurrdfFn::ListLength => vec![vec![rdf_list()]],
+                PurrdfFn::ListGet => vec![vec![rdf_list(), int("0")]],
+                PurrdfFn::ListIndexOf | PurrdfFn::ListContains => {
+                    vec![vec![rdf_list(), lit("a")]]
+                }
+                PurrdfFn::ListSlice => vec![vec![rdf_list(), int("0"), int("1")]],
+                PurrdfFn::ListConcat => vec![vec![rdf_list(), rdf_list()]],
+            },
+            Function::Cdt(call) => match call.fn_kind {
+                CdtFn::ListConstructor => vec![vec![int("1")], vec![int("1"), int("2")]],
+                CdtFn::MapConstructor => vec![vec![int("1"), lit("one")]],
+                CdtFn::Concat => vec![vec![list(), list()]],
+                CdtFn::Contains => vec![vec![list(), int("1")]],
+                CdtFn::Get => vec![vec![list(), int("1")]],
+                CdtFn::Head | CdtFn::Tail | CdtFn::Reverse | CdtFn::Size => vec![vec![list()]],
+                CdtFn::Subseq => vec![vec![list(), int("1")], vec![list(), int("1"), int("1")]],
+                CdtFn::ContainsKey | CdtFn::Remove => vec![vec![map(), int("1")]],
+                CdtFn::Keys => vec![vec![map()]],
+                CdtFn::Merge => vec![vec![map(), map()]],
+                CdtFn::Put => vec![vec![map(), int("2")], vec![map(), int("2"), lit("two")]],
+            },
+            Function::Custom(_) => Vec::new(),
+        }
+    }
+
+    /// Every function the evaluator dispatches.
+    fn every_function() -> Vec<Function> {
+        let purrdf = |kind: PurrdfFn| {
+            Function::Purrdf(purrdf_sparql_algebra::PurrdfCall {
+                fn_kind: kind,
+                iri: format!("https://example.org/fn/{}", kind.local_name()),
+            })
+        };
+        let mut every = vec![
+            Function::Str,
+            Function::Lang,
+            Function::LangMatches,
+            Function::Datatype,
+            Function::Iri,
+            Function::Uri,
+            Function::BNode,
+            Function::Rand,
+            Function::Abs,
+            Function::Ceil,
+            Function::Floor,
+            Function::Round,
+            Function::Concat,
+            Function::SubStr,
+            Function::StrLen,
+            Function::Replace,
+            Function::UCase,
+            Function::LCase,
+            Function::EncodeForUri,
+            Function::Contains,
+            Function::StrStarts,
+            Function::StrEnds,
+            Function::StrBefore,
+            Function::StrAfter,
+            Function::Year,
+            Function::Month,
+            Function::Day,
+            Function::Hours,
+            Function::Minutes,
+            Function::Seconds,
+            Function::Timezone,
+            Function::Tz,
+            Function::Adjust,
+            Function::Now,
+            Function::Uuid,
+            Function::StrUuid,
+            Function::Md5,
+            Function::Sha1,
+            Function::Sha256,
+            Function::Sha384,
+            Function::Sha512,
+            Function::Sha3_224,
+            Function::Sha3_256,
+            Function::Sha3_384,
+            Function::Sha3_512,
+            Function::StrLang,
+            Function::StrDt,
+            Function::IsIri,
+            Function::IsUri,
+            Function::IsBlank,
+            Function::IsLiteral,
+            Function::IsNumeric,
+            Function::Regex,
+            Function::Triple,
+            Function::Subject,
+            Function::Predicate,
+            Function::Object,
+            Function::IsTriple,
+            Function::LangDir,
+            Function::StrLangDir,
+            Function::HasLang,
+            Function::HasLangDir,
+        ];
+        every.extend(
+            [
+                PurrdfFn::HeldIn,
+                PurrdfFn::ListLength,
+                PurrdfFn::ListGet,
+                PurrdfFn::ListIndexOf,
+                PurrdfFn::ListContains,
+                PurrdfFn::ListSlice,
+                PurrdfFn::ListConcat,
+            ]
+            .map(purrdf),
+        );
+        every.extend(purrdf_cdt::CDT_FUNCTIONS.map(|kind| {
+            Function::Cdt(purrdf_sparql_algebra::CdtCall {
+                fn_kind: kind,
+                iri: kind.iri().to_owned(),
+            })
+        }));
+        every
+    }
+
+    /// **The planner's strictness classification is the evaluator's.** For every
+    /// built-in the evaluator dispatches and every argument position of every sample,
+    /// the call is evaluated with that argument unbound (a variable no row binds): a
+    /// position the planner (`crate::property_fn_plan::strict_in_argument`) calls
+    /// strict must leave the call without a value on EVERY sample — else a `FILTER`
+    /// over it would be taken to bind a variable it passes unbound — and one it calls
+    /// otherwise must give the call a value on at least one — else a `FILTER` the
+    /// evaluator only ever passes with the variable bound is refused. Each sample is
+    /// first checked to have a value with every argument bound, so "no value when
+    /// unbound" is the argument's doing.
+    ///
+    /// A custom function is the one exception, and is asserted as such: it is resolved
+    /// at run time against the host's registrations, so it is classified as needing
+    /// nothing, whatever the evaluator does without a registration.
+    #[test]
+    fn every_built_in_is_strict_exactly_where_the_planner_says() {
+        let ds = list_ds();
+        let unbound = || Expression::Variable(Variable::new("unbound"));
+        let mut mismatches = Vec::new();
+        for function in every_function() {
+            let samples = strictness_samples(&function);
+            assert!(!samples.is_empty(), "{function:?} has a sample");
+            let arity = samples.iter().map(Vec::len).max().unwrap_or(0);
+            for sample in &samples {
+                assert!(
+                    has_value(
+                        &ds,
+                        &Expression::FunctionCall(function.clone(), sample.clone())
+                    ),
+                    "{function:?}{sample:?} has a value with every argument bound"
+                );
+            }
+            for position in 0..arity {
+                let answers: Vec<bool> = samples
+                    .iter()
+                    .filter(|sample| position < sample.len())
+                    .map(|sample| {
+                        let mut args = sample.clone();
+                        args[position] = unbound();
+                        has_value(&ds, &Expression::FunctionCall(function.clone(), args))
+                    })
+                    .collect();
+                let evaluator_strict = answers.iter().all(|answer| !answer);
+                let planner_strict =
+                    crate::property_fn_plan::strict_in_argument(&function, position);
+                if evaluator_strict != planner_strict {
+                    mismatches.push(format!(
+                        "{function:?} at {position}: evaluator strict = {evaluator_strict}, \
+                         planner strict = {planner_strict}"
+                    ));
+                }
+            }
+        }
+        assert_eq!(mismatches, Vec::<String>::new());
+
+        // A custom function: what the host registers decides, and a registration can
+        // answer for an unbound argument — here a SPARQL-bodied function whose one
+        // parameter is optional — so the planner may not call any position strict.
+        const HOST_FN: &str = "https://example.org/fn/host";
+        let custom = Function::Custom(NamedNode::new_unchecked(HOST_FN));
+        let mut registry = crate::user_fn::UserFunctionRegistry::new();
+        registry.insert(
+            HOST_FN,
+            crate::user_fn::UserFunction {
+                params: vec![crate::user_fn::UserFnParam {
+                    var: "value".to_owned(),
+                    constraint: crate::user_fn::TypeConstraint::default(),
+                }],
+                required: 0,
+                body: Arc::from("ASK {}"),
+                kind: crate::user_fn::UserFnBody::Ask,
+                return_constraint: crate::user_fn::TypeConstraint::default(),
+            },
+        );
+        let bound = crate::user_fn::BoundFunctionRegistry::bound_for_test(registry);
+        let mut ctx = EvalCtx::new(&*ds).with_user_functions(&bound);
+        let answer = eval_expr(
+            &Expression::FunctionCall(custom.clone(), vec![unbound()]),
+            &[],
+            &VarSchema::new(),
+            &mut ctx,
+        );
+        assert!(
+            matches!(answer, Ok(Some(_))),
+            "a registered custom function can answer for an unbound argument: {answer:?}"
+        );
+        assert!(
+            !crate::property_fn_plan::strict_in_argument(&custom, 0),
+            "so the planner takes a custom function to need nothing of its arguments"
+        );
+    }
+
+    /// **A constant's truth, as the planner reads it, is the evaluator's.**
+    /// `crate::property_fn_plan`'s `truth_requires` calls a constant never true unless
+    /// [`constant_ebv`] answers `true`; each literal here is evaluated for its
+    /// effective boolean value and compared.
+    #[test]
+    fn a_constant_s_effective_boolean_value_is_the_evaluator_s() {
+        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        let ds = empty_ds();
+        let literals = [
+            Literal::new_simple(""),
+            Literal::new_simple("x"),
+            Literal::new_typed("true", NamedNode::new_unchecked(format!("{XSD}boolean"))),
+            Literal::new_typed("false", NamedNode::new_unchecked(format!("{XSD}boolean"))),
+            Literal::new_typed("0", NamedNode::new_unchecked(format!("{XSD}integer"))),
+            Literal::new_typed("2", NamedNode::new_unchecked(format!("{XSD}integer"))),
+            Literal::new_typed("NaN", NamedNode::new_unchecked(format!("{XSD}double"))),
+            Literal::new_typed("zz", NamedNode::new_unchecked(format!("{XSD}integer"))),
+            Literal::new_typed("2020-01-02", NamedNode::new_unchecked(format!("{XSD}date"))),
+            Literal::new_lang("x", "en", None),
+        ];
+        for literal in literals {
+            assert_eq!(
+                constant_ebv(&literal),
+                ebv(&ds, &Expression::Literal(literal.clone())),
+                "{literal:?}"
+            );
+        }
     }
 }

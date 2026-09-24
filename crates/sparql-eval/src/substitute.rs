@@ -448,6 +448,10 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 /// * a sub-`SELECT`, for the variables its projection carries — each is the same
 ///   variable inside, and its rows' bindings of it pass out unchanged — and `DISTINCT`,
 ///   `REDUCED` and `ORDER BY`, which keep, drop or reorder whole rows;
+/// * a `GROUP BY`, for the variables that are its keys: the rows the restriction
+///   removes are exactly the rows of the groups keyed by some other term, whole, and
+///   those groups' output rows are the ones the seed join drops — see
+///   [`group_key_carries`];
 /// * `LeftJoin`, `Minus` — the LEFT operand only. Restricting the right
 ///   arm of an `OPTIONAL` is NOT the same rewrite: a left row whose only match
 ///   binds `var` to some other `d` is a MATCH before the rewrite (and its `var = d`
@@ -459,8 +463,9 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 /// sub-`SELECT` whose projection does not carry it is a DIFFERENT variable that the seed
 /// join cannot correlate with; a slice keeps rows by their position, so which rows
 /// `LIMIT` keeps beneath a restriction is not which it keeps above one; and a
-/// `GROUP BY` folds its rows into groups whose values the removed rows would have
-/// changed.
+/// `GROUP BY` for a `var` that is not one of its keys — read only by an aggregate, or
+/// only by an expression key such as `(STR(?q) AS ?k)` — folds rows into groups whose
+/// values the removed rows would have changed.
 ///
 /// `Extend` binds `var` itself when `var` is its target, so that variable is dropped
 /// from the candidate set for its operand rather than pushed into a subtree where it
@@ -619,8 +624,8 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
         // way; a variable it does NOT project is a different variable inside it, and is
         // not pushed. `DISTINCT`, `REDUCED` and `ORDER BY` keep, drop or reorder whole
         // rows, so a row they would have passed with the variable bound to another term
-        // is simply absent. A slice and a `GROUP BY` are not entered — see
-        // [`push_probe_constants`].
+        // is simply absent. A slice is not entered, and a `GROUP BY` only for its keys —
+        // see [`push_probe_constants`].
         GraphPattern::Project { inner, variables } => {
             if probes.iter().all(|(var, _)| variables.contains(var)) {
                 push_probes(inner, probes, false);
@@ -638,8 +643,59 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
         GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::OrderBy { inner, .. } => push_probes(inner, probes, false),
+        // A `GROUP BY` is entered for the pre-bound variables that are its keys, and
+        // for no other — see [`group_key_carries`] and [`push_probe_constants`].
+        GraphPattern::Group {
+            inner, variables, ..
+        } => {
+            if probes
+                .iter()
+                .all(|(var, _)| group_key_carries(variables, var))
+            {
+                push_probes(inner, probes, false);
+            } else {
+                let keyed: Vec<(Variable, GroundTerm)> = probes
+                    .iter()
+                    .filter(|(var, _)| group_key_carries(variables, var))
+                    .cloned()
+                    .collect();
+                if !keyed.is_empty() {
+                    push_probes(inner, &keyed, false);
+                }
+            }
+        }
         _ => {}
     }
+}
+
+/// Whether the pushdown enters a `GROUP BY` whose keys are `keys` for the pre-bound
+/// `variable` — which it does exactly when `variable` IS one of the keys.
+///
+/// This is the single definition of that reach: [`push_probes`] writes through a
+/// `GROUP BY` by it, and the prepare-time planner (`crate::property_fn_plan`'s
+/// `map_children`) promises a pre-bound parameter bound beneath one by it too.
+///
+/// # Why a key, and only a key
+///
+/// A key's value in a group's row IS the variable's value in every row of the group,
+/// so a group's key column partitions the grouped rows by that value. Restricting the
+/// grouped rows to those binding `variable = c` or leaving it unbound — what the
+/// pushdown does to any operand it enters — removes exactly the groups keyed by some
+/// other `d`, whole, and leaves every other group's rows untouched: a group keyed `c`
+/// loses none of its rows, and a group whose key is unbound loses none either, since
+/// each of its rows leaves `variable` unbound. The removed groups' output rows carry
+/// `variable = d`, which the seed join drops anyway, and every aggregate over a kept
+/// group sees the same rows it saw before. A `GROUP BY` with keys never forms a group
+/// over no rows, so removing every row of the input cannot conjure one either.
+///
+/// Anything else is not a key and is not entered. A pre-bound variable read only by
+/// an aggregate — `COUNT(?q)` grouped by `?o` — is folded into groups the removed rows
+/// would have changed: the seed cannot correlate with it, because the group's row
+/// does not carry it. An expression key `(STR(?q) AS ?k)` is the key `?k`, not `?q`:
+/// two different `?q` values can land in one group, so removing the rows of one
+/// changes that group's aggregates.
+pub(crate) fn group_key_carries(keys: &[Variable], variable: &Variable) -> bool {
+    keys.contains(variable)
 }
 
 /// The property-function call a `Lateral`'s right operand IS, when it is one — the

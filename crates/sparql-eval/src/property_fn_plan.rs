@@ -34,11 +34,13 @@
 //! of its budget on a query that could never have run. A caller's ceiling is for the
 //! work its query does, not for discovering that the query is misconfigured.
 
+use purrdf_cdt::CdtFn;
 use purrdf_core::ContentDigest;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_sparql_algebra::{
-    AggregateExpression, AggregateFunction, Expression, GraphPattern, Literal, NamedNodePattern,
-    OrderExpression, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, Literal,
+    NamedNodePattern, OrderExpression, PropertyFunctionCall, PurrdfFn, Query, TermPattern,
+    TriplePattern, Variable,
 };
 
 use crate::DetHashSet;
@@ -258,11 +260,13 @@ pub(crate) fn plan_where_pattern(
 ///   That is [`Self::Pushed`], and it follows the pushdown's own reach exactly: into
 ///   both operands of a `Join`, a `UNION` and a `LATERAL`, the inner of a `GRAPH`,
 ///   `FILTER`, `BIND`, `DISTINCT`, `REDUCED` and `ORDER BY`, the left operand of an
-///   `OPTIONAL` and a `MINUS`, and a sub-`SELECT` for the parameters it projects.
-///   Everywhere else — an `OPTIONAL`'s or a `MINUS`'s right arm, the body of an
-///   `EXISTS` beneath the core, a sub-`SELECT` that does not project the parameter,
-///   the inner of a slice or a `GROUP BY` — the pushdown does not write, and a call
-///   there is invoked with the parameter free.
+///   `OPTIONAL` and a `MINUS`, a sub-`SELECT` for the parameters it projects, and a
+///   `GROUP BY` for the parameters that are its keys
+///   (`crate::substitute::group_key_carries`). Everywhere else — an `OPTIONAL`'s or a
+///   `MINUS`'s right arm, the body of an `EXISTS` beneath the core, a sub-`SELECT` that
+///   does not project the parameter, the inner of a slice, a `GROUP BY` the parameter
+///   is not a key of — the pushdown does not write, and a call there is invoked with
+///   the parameter free.
 ///   Admitting it as though it were bound would exchange a refusal at prepare for a
 ///   refusal on every run.
 ///
@@ -1076,8 +1080,31 @@ fn map_children(
         } => {
             let mut scope = outer.clone();
             collect_bound(inner, outer, promise.written(), &mut scope);
+            // Beneath the core the pushdown enters a `GROUP BY` for exactly the
+            // parameters that are its keys (`crate::substitute::group_key_carries`, the
+            // one definition both sides read): the rows it removes are whole groups
+            // keyed by some other term, whose output rows the seed join drops anyway. A
+            // parameter only an aggregate or an expression key reads is not promised.
+            let keyed: DetHashSet<Variable>;
+            let into = match promise {
+                Promise::Pushed(parameters) => {
+                    keyed = parameters
+                        .iter()
+                        .filter(|parameter| {
+                            crate::substitute::group_key_carries(variables, parameter)
+                        })
+                        .cloned()
+                        .collect();
+                    if keyed.is_empty() {
+                        Promise::None
+                    } else {
+                        Promise::Pushed(&keyed)
+                    }
+                }
+                other => other,
+            };
             GraphPattern::Group {
-                inner: recurse(inner, outer, wrapped)?,
+                inner: recurse(inner, outer, into)?,
                 variables: variables.clone(),
                 aggregates: aggregates
                     .iter()
@@ -1392,8 +1419,9 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 ///   and [`collect_certainly_bound_in`]);
 /// * a variable a `FILTER`'s condition requires bound for it to be true
 ///   ([`truth_requires`]): `FILTER(BOUND(?v))`, `FILTER(sameTerm(?v, ?o))`,
-///   `FILTER(isIRI(?v))` and their conjunctions bind `?v`; a disjunction binds only
-///   what both of its sides do, and `FILTER(!BOUND(?v))` binds nothing;
+///   `FILTER(isIRI(?v))`, a built-in strict in `?v` such as
+///   `FILTER(REGEX(STR(?v), "x"))`, and their conjunctions bind `?v`; a disjunction
+///   binds only what both of its sides do, and `FILTER(!BOUND(?v))` binds nothing;
 /// * the variable naming a `GRAPH`;
 /// * a grouping key every row of the grouped pattern binds;
 /// * an aggregate's output when [`aggregate_certainly_binds`] says every group row
@@ -1574,8 +1602,11 @@ fn collect_bound(
         // it.
         GraphPattern::Filter { expr, inner } => {
             collect_bound(inner, context, written, out);
+            // A condition that is never true passes no row; it is taken to bind nothing,
+            // the narrow answer.
             out.extend(
                 truth_requires(expr)
+                    .unwrap_or_default()
                     .into_iter()
                     .filter(|variable| !written.writes(variable)),
             );
@@ -1830,8 +1861,7 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
 }
 
 /// Whether `function` is a type test: total over terms, answering a boolean.
-const fn is_type_test(function: &purrdf_sparql_algebra::Function) -> bool {
-    use purrdf_sparql_algebra::Function;
+const fn is_type_test(function: &Function) -> bool {
     matches!(
         function,
         Function::IsIri
@@ -1843,16 +1873,176 @@ const fn is_type_test(function: &purrdf_sparql_algebra::Function) -> bool {
     )
 }
 
+/// Whether a call of `function` has no value when its argument at `position` is
+/// unbound, whatever its other arguments hold — the argument positions the function is
+/// STRICT in.
+///
+/// Read off the evaluator (`crate::expr`'s `eval_function` and the dispatch tables it
+/// hands on to), and held to it by a drift test there that evaluates every built-in
+/// with each argument unbound in turn: a position classified strict must yield no value
+/// on every sample, and one classified otherwise must yield a value on at least one —
+/// so the classification is neither wider nor narrower than the evaluator.
+///
+/// What is NOT strict, and why:
+///
+/// * a type test (`isIRI` and its kin) answers `false` for an unbound argument;
+/// * `REGEX`'s and `REPLACE`'s flags and `SUBSTR`'s length are optional, and an unbound
+///   one is read as absent;
+/// * `cdt:List` and `cdt:Map` keep an unbound argument as a `null` element, and
+///   `cdt:put` an unbound value as a `null` entry;
+/// * a custom function is resolved at run time against what the host registered — a
+///   SPARQL-bodied function may accept an unbound argument, and a registration may
+///   even shadow an XSD cast's IRI — so nothing is known about it here, and it is taken
+///   to need nothing.
+///
+/// A function taking no arguments (`RAND`, `NOW`, `UUID`, `STRUUID`, `BNODE()`) has no
+/// position to be strict in; it is listed with the strict ones only because the answer
+/// for a position it does not have is never asked.
+pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> bool {
+    match function {
+        Function::IsIri
+        | Function::IsUri
+        | Function::IsBlank
+        | Function::IsLiteral
+        | Function::IsNumeric
+        | Function::IsTriple
+        | Function::Custom(_) => false,
+        Function::Regex => position < 2,
+        Function::Replace => position < 3,
+        Function::SubStr => position < 2,
+        Function::Cdt(call) => match call.fn_kind {
+            CdtFn::ListConstructor | CdtFn::MapConstructor => false,
+            CdtFn::Put => position < 2,
+            CdtFn::Concat
+            | CdtFn::Contains
+            | CdtFn::Get
+            | CdtFn::Head
+            | CdtFn::Tail
+            | CdtFn::Reverse
+            | CdtFn::Size
+            | CdtFn::Subseq
+            | CdtFn::ContainsKey
+            | CdtFn::Keys
+            | CdtFn::Merge
+            | CdtFn::Remove => true,
+        },
+        Function::Purrdf(call) => match call.fn_kind {
+            PurrdfFn::HeldIn
+            | PurrdfFn::ListLength
+            | PurrdfFn::ListGet
+            | PurrdfFn::ListIndexOf
+            | PurrdfFn::ListContains
+            | PurrdfFn::ListSlice
+            | PurrdfFn::ListConcat => true,
+        },
+        Function::Str
+        | Function::Lang
+        | Function::LangMatches
+        | Function::Datatype
+        | Function::Iri
+        | Function::Uri
+        | Function::BNode
+        | Function::Rand
+        | Function::Abs
+        | Function::Ceil
+        | Function::Floor
+        | Function::Round
+        | Function::Concat
+        | Function::StrLen
+        | Function::UCase
+        | Function::LCase
+        | Function::EncodeForUri
+        | Function::Contains
+        | Function::StrStarts
+        | Function::StrEnds
+        | Function::StrBefore
+        | Function::StrAfter
+        | Function::Year
+        | Function::Month
+        | Function::Day
+        | Function::Hours
+        | Function::Minutes
+        | Function::Seconds
+        | Function::Timezone
+        | Function::Tz
+        | Function::Adjust
+        | Function::Now
+        | Function::Uuid
+        | Function::StrUuid
+        | Function::Md5
+        | Function::Sha1
+        | Function::Sha256
+        | Function::Sha384
+        | Function::Sha512
+        | Function::Sha3_224
+        | Function::Sha3_256
+        | Function::Sha3_384
+        | Function::Sha3_512
+        | Function::StrLang
+        | Function::StrDt
+        | Function::Triple
+        | Function::Subject
+        | Function::Predicate
+        | Function::Object
+        | Function::LangDir
+        | Function::StrLangDir
+        | Function::HasLang
+        | Function::HasLangDir => true,
+    }
+}
+
+/// What an expression needs bound to reach an outcome — to be true, to be false, or to
+/// have a value — or `None` when it can never reach it.
+///
+/// `None` is what a constant that is never true (`false`, `0`, an IRI, which has no
+/// effective boolean value) answers for truth, and anything that reaches the outcome
+/// only through it inherits it: it absorbs a conjunction of requirements
+/// ([`all_of`]) and is the identity of an alternative between them ([`one_of`]). So
+/// `IF(BOUND(?v), ?v = ?v, false)` is true only through its first branch, and needs
+/// `?v`.
+type Requires = Option<DetHashSet<Variable>>;
+
+/// Needs nothing.
+fn needs_nothing() -> Requires {
+    Some(DetHashSet::default())
+}
+
+/// Needs `variable`.
+fn needs(variable: &Variable) -> Requires {
+    Some(std::iter::once(variable.clone()).collect())
+}
+
+/// Both requirements hold: the union, and never if either is never.
+fn all_of(left: Requires, right: Requires) -> Requires {
+    let (mut left, right) = (left?, right?);
+    left.extend(right);
+    Some(left)
+}
+
+/// One of the requirements holds, and which is not known: the intersection, over the
+/// ones that can hold at all.
+fn one_of(left: Requires, right: Requires) -> Requires {
+    match (left, right) {
+        (None, other) | (other, None) => other,
+        (Some(mut left), Some(right)) => {
+            left.retain(|variable| right.contains(variable));
+            Some(left)
+        }
+    }
+}
+
 /// The variables `expr` must have bound for it to be TRUE — which a `FILTER` over `expr`
-/// therefore binds in every row it passes.
+/// therefore binds in every row it passes — or `None` when it is never true.
 ///
 /// # The rule, and why each case is sound
 ///
 /// A variable read where the expression has no value unless it is bound — an operand of
-/// `=`, `sameTerm`, a comparison or arithmetic, or the expression itself — errors when
-/// unbound, and an error is not true. So:
+/// `=`, `sameTerm`, a comparison or arithmetic, an argument a built-in function is
+/// strict in ([`strict_in_argument`]), or the expression itself — errors when unbound,
+/// and an error is not true. So:
 ///
 /// * `?v` alone, `BOUND(?v)`: `?v`;
+/// * a constant: nothing if its effective boolean value is true, never otherwise;
 /// * `a && b`: both are true, so the union of what each requires;
 /// * `a || b`: at least one is true, and which is not known, so the INTERSECTION of
 ///   what each requires — `BOUND(?a) || BOUND(?b)` binds neither;
@@ -1860,107 +2050,109 @@ const fn is_type_test(function: &purrdf_sparql_algebra::Function) -> bool {
 ///   `!BOUND(?v)` binds nothing and `!!BOUND(?v)` binds `?v`;
 /// * a type test `isIRI(a)` and its kin: `a` has a value of that type, so what `a`
 ///   needs for a value;
-/// * `IF(c, t, e)`: `c` has a value, and one of the branches is true;
+/// * `IF(c, t, e)`: `c` has a value, and either `c` is true and `t` is, or `c` is false
+///   and `e` is — so `IF(BOUND(?v), true, true)` binds nothing, and
+///   `IF(BOUND(?v), ?v = ?v, false)` binds `?v`;
 /// * `COALESCE(…)`: the first argument with a value is true, so the intersection over
 ///   the arguments;
 /// * `a IN (…)`: `a` has a value;
-/// * every other operator and comparison: its value needs its operands' values, so
-///   what the whole expression needs for a value.
+/// * every other operator, comparison and function call: its value needs its operands'
+///   values, so what the whole expression needs for a value ([`value_requires`]) —
+///   `REGEX(STR(?v), "x")` and `STRLEN(STR(?v)) > 0` bind `?v`.
 ///
-/// `EXISTS` requires nothing, and a function this crate does not classify is taken to
-/// require nothing — narrow, never wrong.
-fn truth_requires(expr: &Expression) -> DetHashSet<Variable> {
+/// `EXISTS` requires nothing. Every case needs a value somewhere, so no answer is wider
+/// than the evaluator's; a custom function, whose strictness the host decides, is taken
+/// to need nothing of its arguments.
+fn truth_requires(expr: &Expression) -> Requires {
     match expr {
-        Expression::Variable(variable) | Expression::Bound(variable) => {
-            std::iter::once(variable.clone()).collect()
+        Expression::Variable(variable) | Expression::Bound(variable) => needs(variable),
+        Expression::Exists(_) => needs_nothing(),
+        Expression::NamedNode(_) => None,
+        Expression::Literal(literal) => {
+            (crate::expr::constant_ebv(literal) == Some(true)).then(DetHashSet::default)
         }
-        Expression::And(a, b) => {
-            let mut both = truth_requires(a);
-            both.extend(truth_requires(b));
-            both
-        }
-        Expression::Or(a, b) => intersection(truth_requires(a), &truth_requires(b)),
+        Expression::And(a, b) => all_of(truth_requires(a), truth_requires(b)),
+        Expression::Or(a, b) => one_of(truth_requires(a), truth_requires(b)),
         Expression::Not(a) => falsity_requires(a),
-        Expression::FunctionCall(function, args) if is_type_test(function) => {
-            args.iter().flat_map(value_requires).collect()
-        }
-        Expression::If(condition, then, otherwise) => {
-            let mut required = value_requires(condition);
-            required.extend(intersection(
-                truth_requires(then),
-                &truth_requires(otherwise),
-            ));
-            required
-        }
-        Expression::Coalesce(items) => items
+        Expression::FunctionCall(function, args) if is_type_test(function) => args
             .iter()
-            .map(truth_requires)
-            .reduce(|left, right| intersection(left, &right))
-            .unwrap_or_default(),
+            .map(value_requires)
+            .fold(needs_nothing(), all_of),
+        Expression::If(condition, then, otherwise) => all_of(
+            value_requires(condition),
+            one_of(
+                all_of(truth_requires(condition), truth_requires(then)),
+                all_of(falsity_requires(condition), truth_requires(otherwise)),
+            ),
+        ),
+        Expression::Coalesce(items) => items.iter().map(truth_requires).fold(None, one_of),
         Expression::In(needle, _) => value_requires(needle),
         _ => value_requires(expr),
     }
 }
 
 /// The variables `expr` must have bound for it to be FALSE — the dual of
-/// [`truth_requires`], which reads it through `!`.
+/// [`truth_requires`], which reads it through `!` — or `None` when it is never false.
 ///
 /// `BOUND(?v)` is false exactly when `?v` is unbound, and a type test is false on an
-/// unbound argument too, so neither requires anything; `EXISTS` requires nothing. `!a`
-/// is false when `a` is true ([`truth_requires`]); `a && b` when at least one is
-/// false, so what both require; `a || b` when both are, so what either requires.
-/// `IF`, `COALESCE` and `IN` follow [`truth_requires`]'s reasoning, and every other
-/// expression needs what it needs for any value ([`value_requires`]).
-fn falsity_requires(expr: &Expression) -> DetHashSet<Variable> {
+/// unbound argument too, so neither requires anything; `EXISTS` requires nothing. A
+/// constant requires nothing if its effective boolean value is false, and is never
+/// false otherwise. `!a` is false when `a` is true ([`truth_requires`]); `a && b` when
+/// at least one is false, so what both require; `a || b` when both are, so what either
+/// requires. `IF`, `COALESCE` and `IN` follow [`truth_requires`]'s reasoning, and every
+/// other expression needs what it needs for any value ([`value_requires`]).
+fn falsity_requires(expr: &Expression) -> Requires {
     match expr {
-        Expression::Variable(variable) => std::iter::once(variable.clone()).collect(),
-        Expression::Bound(_) | Expression::Exists(_) => DetHashSet::default(),
-        Expression::FunctionCall(function, _) if is_type_test(function) => DetHashSet::default(),
+        Expression::Variable(variable) => needs(variable),
+        Expression::Bound(_) | Expression::Exists(_) => needs_nothing(),
+        Expression::NamedNode(_) => None,
+        Expression::Literal(literal) => {
+            (crate::expr::constant_ebv(literal) == Some(false)).then(DetHashSet::default)
+        }
+        Expression::FunctionCall(function, _) if is_type_test(function) => needs_nothing(),
         Expression::Not(a) => truth_requires(a),
-        Expression::And(a, b) => intersection(falsity_requires(a), &falsity_requires(b)),
-        Expression::Or(a, b) => {
-            let mut both = falsity_requires(a);
-            both.extend(falsity_requires(b));
-            both
-        }
-        Expression::If(condition, then, otherwise) => {
-            let mut required = value_requires(condition);
-            required.extend(intersection(
-                falsity_requires(then),
-                &falsity_requires(otherwise),
-            ));
-            required
-        }
-        Expression::Coalesce(items) => items
-            .iter()
-            .map(falsity_requires)
-            .reduce(|left, right| intersection(left, &right))
-            .unwrap_or_default(),
+        Expression::And(a, b) => one_of(falsity_requires(a), falsity_requires(b)),
+        Expression::Or(a, b) => all_of(falsity_requires(a), falsity_requires(b)),
+        Expression::If(condition, then, otherwise) => all_of(
+            value_requires(condition),
+            one_of(
+                all_of(truth_requires(condition), falsity_requires(then)),
+                all_of(falsity_requires(condition), falsity_requires(otherwise)),
+            ),
+        ),
+        Expression::Coalesce(items) => items.iter().map(falsity_requires).fold(None, one_of),
         Expression::In(needle, _) => value_requires(needle),
         _ => value_requires(expr),
     }
 }
 
-/// The variables `expr` must have bound for it to have any value at all — see
-/// [`truth_requires`].
+/// The variables `expr` must have bound for it to have any value at all, or `None`
+/// when it never has one — see [`truth_requires`].
 ///
-/// `BOUND`, `EXISTS` and a type test answer for any row. `&&` and `||` can answer
-/// with one operand in error (`false && error` is false, `true || error` is true), so
-/// they need only what BOTH operands need; `IF` needs its condition and what both
-/// branches need; `COALESCE` what every argument needs; `IN` its needle. Every other
-/// operator — a comparison, `sameTerm`, arithmetic — needs every operand. A function
-/// call other than a type test needs nothing here: this crate does not classify how
-/// each treats an unbound argument, and requiring nothing is the narrow answer.
-fn value_requires(expr: &Expression) -> DetHashSet<Variable> {
+/// `BOUND`, `EXISTS`, a constant and a type test answer for any row. `&&` and `||` can
+/// answer with one operand in error (`false && error` is false, `true || error` is
+/// true), so they need only what BOTH operands need; `IF` needs its condition and what
+/// the branch it takes needs; `COALESCE` what all its arguments need in common; `IN` its
+/// needle. A
+/// built-in function call needs what its arguments in the positions it is strict in
+/// need ([`strict_in_argument`]), so `STRLEN(STR(?v))` needs `?v`. Every other
+/// operator — a comparison, `sameTerm`, arithmetic, a unary sign — needs every
+/// operand.
+fn value_requires(expr: &Expression) -> Requires {
     match expr {
-        Expression::Variable(variable) => std::iter::once(variable.clone()).collect(),
+        Expression::Variable(variable) => needs(variable),
         Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Bound(_)
-        | Expression::Exists(_)
-        | Expression::FunctionCall(..) => DetHashSet::default(),
+        | Expression::Exists(_) => needs_nothing(),
+        Expression::FunctionCall(function, args) => args
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| strict_in_argument(function, *position))
+            .map(|(_, arg)| value_requires(arg))
+            .fold(needs_nothing(), all_of),
         Expression::And(a, b) | Expression::Or(a, b) => {
-            intersection(value_requires(a), &value_requires(b))
+            one_of(value_requires(a), value_requires(b))
         }
         Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
@@ -1971,38 +2163,20 @@ fn value_requires(expr: &Expression) -> DetHashSet<Variable> {
         | Expression::Add(a, b)
         | Expression::Subtract(a, b)
         | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
-            let mut both = value_requires(a);
-            both.extend(value_requires(b));
-            both
-        }
+        | Expression::Divide(a, b) => all_of(value_requires(a), value_requires(b)),
         Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
             value_requires(a)
         }
-        Expression::If(condition, then, otherwise) => {
-            let mut required = value_requires(condition);
-            required.extend(intersection(
-                value_requires(then),
-                &value_requires(otherwise),
-            ));
-            required
-        }
-        Expression::Coalesce(items) => items
-            .iter()
-            .map(value_requires)
-            .reduce(|left, right| intersection(left, &right))
-            .unwrap_or_default(),
+        Expression::If(condition, then, otherwise) => all_of(
+            value_requires(condition),
+            one_of(
+                all_of(truth_requires(condition), value_requires(then)),
+                all_of(falsity_requires(condition), value_requires(otherwise)),
+            ),
+        ),
+        Expression::Coalesce(items) => items.iter().map(value_requires).fold(None, one_of),
         Expression::In(needle, _) => value_requires(needle),
     }
-}
-
-/// `left ∩ right`, reusing `left`.
-fn intersection(
-    mut left: DetHashSet<Variable>,
-    right: &DetHashSet<Variable>,
-) -> DetHashSet<Variable> {
-    left.retain(|variable| right.contains(variable));
-    left
 }
 
 /// Add a triple pattern's variables (recursing through quoted triples).
@@ -2856,10 +3030,74 @@ mod pushdown_reach_tests {
         }
     }
 
+    /// `query` with every sub-`SELECT` projection over a `GROUP BY` removed, so the
+    /// `GROUP BY` itself is what the rewrite and the promise meet — a shape the parser
+    /// never produces from text, where the projection alone would already stop a
+    /// variable that is not a key.
+    ///
+    /// Also answers how many projections it removed.
+    fn without_group_projections(query: Query) -> (Query, usize) {
+        fn over_group(pattern: &GraphPattern) -> bool {
+            match pattern {
+                GraphPattern::Group { .. } => true,
+                GraphPattern::Extend { inner, .. } | GraphPattern::Filter { inner, .. } => {
+                    over_group(inner)
+                }
+                _ => false,
+            }
+        }
+        fn strip(pattern: &mut GraphPattern) -> usize {
+            if let GraphPattern::Project { inner, .. } = pattern
+                && over_group(inner)
+            {
+                let inner = std::mem::replace(
+                    inner.as_mut(),
+                    GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    },
+                );
+                *pattern = inner;
+                return 1 + strip(pattern);
+            }
+            match pattern {
+                GraphPattern::Join { left, right }
+                | GraphPattern::Union { left, right }
+                | GraphPattern::Lateral { left, right }
+                | GraphPattern::LeftJoin { left, right, .. }
+                | GraphPattern::Minus { left, right } => strip(left) + strip(right),
+                GraphPattern::Filter { inner, .. }
+                | GraphPattern::Graph { inner, .. }
+                | GraphPattern::Extend { inner, .. }
+                | GraphPattern::Unfold { inner, .. }
+                | GraphPattern::OrderBy { inner, .. }
+                | GraphPattern::Project { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::Slice { inner, .. }
+                | GraphPattern::Group { inner, .. }
+                | GraphPattern::Service { inner, .. } => strip(inner),
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Values { .. }
+                | GraphPattern::PropertyFunction(_) => 0,
+            }
+        }
+        let mut query = query;
+        let Query::Select { pattern, .. } = &mut query else {
+            panic!("a SELECT stays one");
+        };
+        let removed = strip(pattern);
+        (query, removed)
+    }
+
     /// Whether the ordinary rewrite of `body`'s plan writes `?q` into every call.
     fn rewrite_writes(body: &str) -> bool {
+        rewrite_writes_in(parse(body), body)
+    }
+
+    /// [`rewrite_writes`], over an already-built `query`.
+    fn rewrite_writes_in(query: Query, body: &str) -> bool {
         let parameters = parameter_set(&["q"]);
-        let query = parse(body);
         let planned = plan_query(
             &query,
             &registry(&["bf", "ff"]),
@@ -2897,8 +3135,13 @@ mod pushdown_reach_tests {
 
     /// Whether a bound-only relation is admitted in `body` with `?q` declared.
     fn admitted(body: &str) -> bool {
+        admitted_in(&parse(body))
+    }
+
+    /// [`admitted`], over an already-built `query`.
+    fn admitted_in(query: &Query) -> bool {
         plan_query(
-            &parse(body),
+            query,
             &registry(&["bf"]),
             &AggregateRegistry::EMPTY,
             &parameter_set(&["q"]),
@@ -2953,21 +3196,22 @@ mod pushdown_reach_tests {
                 true,
             ),
             (format!("{atom} LATERAL {{ GRAPH ?g {{ {call} }} }}"), true),
+            // A `GROUP BY` the variable is a key of.
+            (
+                format!(
+                    "{atom} LATERAL {{ SELECT ?q (COUNT(?out) AS ?n) WHERE {{ {call} }} GROUP BY ?q }}"
+                ),
+                true,
+            ),
             // ... and where it is not: a sub-`SELECT` that does not project the
-            // variable, a slice or a `GROUP BY` beneath the projection, an `OPTIONAL` or
-            // a `MINUS` right arm inside the right side.
+            // variable, a slice beneath the projection, an `OPTIONAL` or a `MINUS` right
+            // arm inside the right side.
             (
                 format!("{atom} LATERAL {{ SELECT ?out WHERE {{ {call} }} }}"),
                 false,
             ),
             (
                 format!("{atom} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} LIMIT 1 }}"),
-                false,
-            ),
-            (
-                format!(
-                    "{atom} LATERAL {{ SELECT ?q (COUNT(?out) AS ?n) WHERE {{ {call} }} GROUP BY ?q }}"
-                ),
                 false,
             ),
             (format!("{atom} LATERAL {{ OPTIONAL {{ {call} }} }}"), false),
@@ -3003,6 +3247,54 @@ mod pushdown_reach_tests {
             ),
             (format!("VALUES ?w {{ 1 2 }} {call}"), true),
             (format!("{{ {call} }} LATERAL {{ BIND(1 AS ?one) }}"), true),
+            // A `GROUP BY` beneath the core: entered for a key, whether the groups are
+            // joined, reached through a `LATERAL`, filtered by a `HAVING`, or fed by a
+            // `UNION` arm that leaves the key unbound ...
+            (
+                format!(
+                    "{atom} {{ SELECT ?q (COUNT(?out) AS ?n) WHERE {{ {call} }} GROUP BY ?q }}"
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "{atom} {{ SELECT ?q (COUNT(*) AS ?n) WHERE {{ {{ {call} }} UNION {{ {other} }} }} \
+                     GROUP BY ?q }}"
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "{atom} {{ SELECT ?q ?out WHERE {{ {call} }} GROUP BY ?q ?out \
+                     HAVING(COUNT(*) > 0) }}"
+                ),
+                true,
+            ),
+            // ... and not for a variable only an expression key or an aggregate reads,
+            // or that no key names.
+            (
+                format!(
+                    "{atom} {{ SELECT ?k (COUNT(?out) AS ?n) WHERE {{ {call} }} \
+                     GROUP BY (STR(?q) AS ?k) }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "{atom} {{ SELECT ?out (COUNT(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
+                ),
+                false,
+            ),
+            (
+                format!("{atom} {{ SELECT (COUNT(?q) AS ?n) WHERE {{ {call} }} }}"),
+                false,
+            ),
+            (
+                format!(
+                    "{atom} {{ SELECT ?out (SAMPLE(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
+                ),
+                false,
+            ),
         ];
         for (body, reaches) in &corpus {
             assert_eq!(
@@ -3015,6 +3307,74 @@ mod pushdown_reach_tests {
                 *reaches,
                 "{body}: a bound-only relation is admitted exactly where the rewrite writes \
                  the parameter into its call"
+            );
+        }
+    }
+
+    /// The `GROUP BY` rule on its own, without the projection a sub-`SELECT` puts over
+    /// it — which from text already stops every variable that is not a key, so the
+    /// corpus above alone could not tell "a key" from "any variable". Each shape's
+    /// projection is removed, leaving the `GROUP BY` the first node between the core
+    /// and the call that can stop the rewrite; the rewrite and the promise must still
+    /// agree, and must still enter for a key and only for one.
+    #[test]
+    fn the_group_by_rule_holds_without_a_projection_over_it() {
+        let call = format!("?q <{REL}> ?out");
+        let atom = "?s <http://example.org/p> ?o";
+        let other = "?s2 <http://example.org/p> ?o2";
+        let corpus: Vec<(String, bool)> = vec![
+            (
+                format!(
+                    "{atom} {{ SELECT ?q (COUNT(?out) AS ?n) WHERE {{ {call} }} GROUP BY ?q }}"
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "{atom} LATERAL {{ SELECT ?q (COUNT(*) AS ?n) WHERE {{ {{ {call} }} UNION \
+                     {{ {other} }} }} GROUP BY ?q }}"
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "{atom} {{ SELECT ?out (COUNT(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "{atom} {{ SELECT ?out (SAMPLE(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
+                ),
+                false,
+            ),
+            (
+                format!("{atom} {{ SELECT (COUNT(?q) AS ?n) WHERE {{ {call} }} }}"),
+                false,
+            ),
+            (
+                format!(
+                    "{atom} {{ SELECT ?k (COUNT(?out) AS ?n) WHERE {{ {call} }} \
+                     GROUP BY (STR(?q) AS ?k) }}"
+                ),
+                false,
+            ),
+        ];
+        for (body, reaches) in &corpus {
+            let (query, removed) = without_group_projections(parse(body));
+            assert_eq!(
+                removed, 1,
+                "{body}: the one projection over the GROUP BY is gone"
+            );
+            assert_eq!(
+                rewrite_writes_in(query.clone(), body),
+                *reaches,
+                "{body}: the rewrite enters a GROUP BY for a key and only for one"
+            );
+            assert_eq!(
+                admitted_in(&query),
+                *reaches,
+                "{body}: the promise follows the rewrite through a GROUP BY"
             );
         }
     }

@@ -37,7 +37,8 @@ use purrdf_core::{
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
     CustomAggregate, EvalError, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, TypeConstraint,
+    UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
 };
 
 /// The relation IRI every query calls — host configuration, never minted
@@ -1359,12 +1360,19 @@ fn a_filter_binds_what_its_condition_requires() {
         "BOUND(?q) && ?o != \"zzz\"",
         "!(!BOUND(?q))",
         "BOUND(?q) || sameTerm(?q, ?o)",
+        // A built-in strict in the argument reading `?q` has no value without it.
+        "REGEX(STR(?q), \".\")",
+        "STRLEN(STR(?q)) > 0",
+        "STRLEN(CONCAT(STR(?q))) >= 0",
+        "-(STRLEN(STR(?q))) <= 0",
+        "IF(BOUND(?q), ?q = ?q, false)",
     ] {
         for body in [
             format!(
                 "{{ SELECT ?q WHERE {{ {optional} FILTER({condition}) }} GROUP BY ?q }} {call}"
             ),
             format!("{{ SELECT ?q WHERE {{ {optional} FILTER({condition}) }} }} {call}"),
+            format!("{{ {optional} FILTER({condition}) }} {call}"),
         ] {
             assert_eq!(run(Variant::BoundOnly, &body), expected, "{body}");
             assert_eq!(run(Variant::FreeCapable, &body), expected, "{body}");
@@ -1374,8 +1382,12 @@ fn a_filter_binds_what_its_condition_requires() {
 
 /// **A `FILTER` binds nothing its condition can be true without.** `!BOUND(?q)` is true
 /// exactly when `?q` is unbound; `BOUND(?q) || BOUND(?w)` is true on a row binding only
-/// `?w`. Each is refused for the bound-only relation, and the free-capable one is
-/// observed invoked free on the row the condition let through.
+/// `?w`; `COALESCE(STR(?q), "x") != ""` falls back to `"x"` without `?q`; and
+/// `IF(BOUND(?q), true, true)` is true whichever way its condition goes. A custom
+/// function over `?q` is one the host decides — the one registered here has an
+/// optional parameter and answers `true` without it — so it binds nothing either. Each
+/// is refused for the bound-only relation, and the free-capable one is observed invoked
+/// free on the row the condition let through.
 #[test]
 fn a_filter_binds_nothing_its_condition_can_be_true_without() {
     let call = format!("?q <{EXPAND}> ?out");
@@ -1383,19 +1395,164 @@ fn a_filter_binds_nothing_its_condition_can_be_true_without() {
         answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
         invocations: calls(&["ff:-"]),
     };
-    for body in [
-        format!(
-            "{{ SELECT ?q WHERE {{ ?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}nothing> ?q }} \
-             FILTER(!BOUND(?q)) }} }} {call}"
-        ),
-        format!(
-            "{{ SELECT ?q WHERE {{ ?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}nothing> ?q }} \
-             OPTIONAL {{ ?s <{EX}p> ?w }} FILTER(BOUND(?q) || BOUND(?w)) }} }} {call}"
-        ),
+    let unbound = format!("?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}nothing> ?q }}");
+    let mut bodies = vec![format!(
+        "{{ SELECT ?q WHERE {{ {unbound} OPTIONAL {{ ?s <{EX}p> ?w }} \
+         FILTER(BOUND(?q) || BOUND(?w)) }} }} {call}"
+    )];
+    for condition in [
+        "!BOUND(?q)",
+        "COALESCE(STR(?q), \"x\") != \"\"",
+        "IF(BOUND(?q), true, true)",
     ] {
-        assert_refused_at_prepare(&run(Variant::BoundOnly, &body));
-        assert_eq!(run(Variant::FreeCapable, &body), free, "{body}");
+        bodies.push(format!(
+            "{{ SELECT ?q WHERE {{ {unbound} FILTER({condition}) }} }} {call}"
+        ));
+        bodies.push(format!(
+            "{{ SELECT ?q WHERE {{ {unbound} FILTER({condition}) }} GROUP BY ?q }} {call}"
+        ));
+        bodies.push(format!("{{ {unbound} FILTER({condition}) }} {call}"));
     }
+    for body in &bodies {
+        assert_refused_at_prepare(&run(Variant::BoundOnly, body));
+        assert_eq!(run(Variant::FreeCapable, body), free, "{body}");
+    }
+
+    let custom = format!("{{ SELECT ?q WHERE {{ {unbound} FILTER(<{HOST_FN}>(?q)) }} }} {call}");
+    assert_refused_at_prepare(&run_with_host_function(Variant::BoundOnly, &custom));
+    assert_eq!(
+        run_with_host_function(Variant::FreeCapable, &custom),
+        free,
+        "{custom}"
+    );
+}
+
+/// A host function IRI — configuration, never minted vocabulary.
+const HOST_FN: &str = "https://example.org/fn/host";
+
+/// [`run`], with [`HOST_FN`] registered as a SPARQL-bodied function whose one parameter
+/// is optional and whose body is `ASK {}`: `true`, whether or not its argument is bound.
+fn run_with_host_function(variant: Variant, body: &str) -> Outcome {
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let relation: Arc<dyn PropertyFunction> = match variant {
+        Variant::BoundOnly => Arc::new(Expand::bound_only(Arc::clone(&invocations))),
+        Variant::FreeCapable => Arc::new(Expand::free_capable(Arc::clone(&invocations))),
+    };
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(EXPAND.to_owned(), relation);
+    let env = ExtensionEnv::over_relations(registry).expect("the fixture declarations read");
+    let mut functions = UserFunctionRegistry::new();
+    functions.insert(
+        HOST_FN,
+        UserFunction {
+            params: vec![UserFnParam {
+                var: "value".to_owned(),
+                constraint: TypeConstraint::default(),
+            }],
+            required: 0,
+            body: Arc::from("ASK {}"),
+            kind: UserFnBody::Ask,
+            return_constraint: TypeConstraint::default(),
+        },
+    );
+    let engine = NativeSparqlEngine::new();
+    let bound = engine
+        .bind_functions(functions, &env)
+        .expect("the fixture body parses");
+    let query = format!("SELECT ?q ?out WHERE {{ {body} }}");
+    let answer = engine
+        .query_with_options_view(
+            &*dataset(),
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                env: &env,
+                functions: &bound,
+                ..QueryOptions::EMPTY
+            },
+        )
+        .map(|result| {
+            let SparqlResult::Solutions { rows, .. } = result else {
+                panic!("a SELECT answers with solutions");
+            };
+            let mut rendered: Vec<(String, String)> = rows
+                .iter()
+                .map(|row| (render(row[0].as_ref()), render(row[1].as_ref())))
+                .collect();
+            rendered.sort();
+            rendered
+        })
+        .map_err(|diagnostic| diagnostic.message);
+    let mut invocations = invocations
+        .lock()
+        .expect("the fixture recorder is never poisoned")
+        .clone();
+    invocations.sort();
+    Outcome {
+        answer,
+        invocations,
+    }
+}
+
+/// **A `FILTER` over a built-in strict in `?q` drops the row that leaves `?q` unbound,
+/// and so binds `?q` in every row it passes.** Over `<a> "alpha"`, `<b> "beta"` and
+/// `<c> "epsilon"`, the `OPTIONAL` binds `?q` on `<a>`'s and `<c>`'s rows and leaves it
+/// unbound on `<b>`'s. Each condition below has no value on `<b>`'s row — `STR` of an
+/// unbound argument has none, nor has anything strict over it — so the call sees
+/// `"alpha"` and `"epsilon"` only: the bound-only relation is admitted and invoked
+/// bound with exactly those, and the free-capable one answers the same and is never
+/// invoked free. `!BOUND(?q)`, the neighbour that passes exactly `<b>`'s row, is
+/// refused for the bound-only relation and invokes the free-capable one free.
+#[test]
+fn a_filter_over_a_strict_built_in_drops_the_unbound_row() {
+    let call = format!("?q <{EXPAND}> ?out");
+    let some = format!("?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}p> ?q FILTER(?q != \"beta\") }}");
+    let expected = Outcome {
+        answer: Ok(rows(&[
+            ("alpha", "alpha/1"),
+            ("alpha", "alpha/2"),
+            ("epsilon", "epsilon/1"),
+        ])),
+        invocations: calls(&["bf:alpha", "bf:epsilon"]),
+    };
+    for condition in [
+        "REGEX(STR(?q), \".\")",
+        "STRLEN(STR(?q)) > 0",
+        "IF(BOUND(?q), ?q = ?q, false)",
+        "-(STRLEN(STR(?q))) <= 0",
+        "STRLEN(CONCAT(STR(?q))) >= 0",
+    ] {
+        for body in [
+            format!("{{ SELECT ?q WHERE {{ {some} FILTER({condition}) }} GROUP BY ?q }} {call}"),
+            format!("{{ SELECT ?q WHERE {{ {some} FILTER({condition}) }} }} {call}"),
+            format!("{{ {some} FILTER({condition}) }} {call}"),
+        ] {
+            for variant in [Variant::BoundOnly, Variant::FreeCapable] {
+                assert_eq!(
+                    run_over(&lateral_dataset(), variant, &body),
+                    expected,
+                    "{body}"
+                );
+            }
+        }
+    }
+    let neighbour = format!("{{ {some} FILTER(!BOUND(?q)) }} {call}");
+    assert_refused_at_prepare(&run_over(
+        &lateral_dataset(),
+        Variant::BoundOnly,
+        &neighbour,
+    ));
+    assert_eq!(
+        run_over(&lateral_dataset(), Variant::FreeCapable, &neighbour),
+        Outcome {
+            answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
+            invocations: calls(&["ff:-"]),
+        },
+        "{neighbour}"
+    );
 }
 
 /// Assert `outcome` is the evaluator's per-row refusal of `iri`, a relation serving
@@ -1935,6 +2092,31 @@ fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
             every_value(),
         ));
     }
+    // A `GROUP BY` the substituted variable is a key of, which the rewrite enters.
+    for (body, expected) in group_key_shapes() {
+        shapes.push((body, alpha(), ShaclPrebinding::None, expected));
+    }
+    // A `FILTER` over a built-in strict in the variable it reads, which drops `<b>`'s
+    // row, where the `OPTIONAL` leaves `?q` unbound.
+    let some = format!("?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}p> ?q FILTER(?q != \"beta\") }}");
+    for condition in [
+        "REGEX(STR(?q), \".\")",
+        "STRLEN(STR(?q)) > 0",
+        "IF(BOUND(?q), ?q = ?q, false)",
+        "-(STRLEN(STR(?q))) <= 0",
+    ] {
+        for body in [
+            format!("{{ SELECT ?q WHERE {{ {some} FILTER({condition}) }} GROUP BY ?q }} {call}"),
+            format!("{{ {some} FILTER({condition}) }} {call}"),
+        ] {
+            shapes.push((
+                body,
+                none(),
+                ShaclPrebinding::None,
+                rows(&[("alpha", "alpha/1"), ("alpha", "alpha/2")]),
+            ));
+        }
+    }
     for (body, substitutions, lane, expected) in &shapes {
         let reference = run_pairs_with(&["ff"], true, body, substitutions, *lane);
         assert_eq!(
@@ -1959,5 +2141,176 @@ fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
                 outcome.invocations
             );
         }
+    }
+}
+
+// ── a GROUP BY the pushdown enters ──────────────────────────────────────────
+
+/// The three shapes whose `GROUP BY` the substituted `?q` is a key of — a grouped
+/// sub-`SELECT` joined, the same reached through a `LATERAL`, and one grouping a `UNION`
+/// whose second arm leaves `?q` unbound — with their exact answers for `?q = "alpha"`
+/// over [`lateral_dataset`]'s three left rows. `"alpha"` has two table rows, so its
+/// group counts `2`; the unbound arm's group counts the three `<p>` triples, and keeps
+/// its row, which the seed then binds to `"alpha"`.
+fn group_key_shapes() -> Vec<(String, Vec<(String, String)>)> {
+    let call = format!("?q <{PAIRS}> ?x");
+    let left = format!("?s <{EX}p> ?v");
+    let times = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        let mut expected: Vec<(String, String)> = (0..3).flat_map(|_| rows(pairs)).collect();
+        expected.sort();
+        expected
+    };
+    vec![
+        (
+            format!("{left} {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}"),
+            times(&[("alpha", "2")]),
+        ),
+        (
+            format!(
+                "{left} LATERAL {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}"
+            ),
+            times(&[("alpha", "2")]),
+        ),
+        (
+            format!(
+                "{left} {{ SELECT ?q (COUNT(*) AS ?out) WHERE {{ {{ {call} }} UNION \
+                 {{ ?z <{EX}p> ?w }} }} GROUP BY ?q }}"
+            ),
+            times(&[("alpha", "2"), ("alpha", "3")]),
+        ),
+    ]
+}
+
+/// `?q = "alpha"`, the substitution the `GROUP BY` shapes run under.
+fn alpha_substitution() -> Vec<(String, TermValue)> {
+    vec![("q".to_owned(), simple_literal("alpha"))]
+}
+
+/// **A `GROUP BY` whose key is the substituted variable is entered by the rewrite.**
+/// Restricting the grouped rows to those binding `?q = "alpha"` or leaving it unbound
+/// removes whole groups keyed by some other value — exactly the groups whose rows the
+/// substitution's seed drops — so the rewrite writes `"alpha"` into the call inside.
+/// Each shape is admitted for the relation serving only `bf`, which is invoked with
+/// `"alpha"` and nothing else, and answers exactly what the query with the value
+/// written in by hand as `VALUES` answers — the documented meaning of a substitution —
+/// evaluated bottom-up by a relation that ignores its input.
+#[test]
+fn a_group_by_keyed_by_the_substituted_variable_is_entered() {
+    for (body, expected) in group_key_shapes() {
+        let by_hand = format!("{body} VALUES ?q {{ \"alpha\" }}");
+        let oracle = run_pairs_with(&["ff"], true, &by_hand, &[], ShaclPrebinding::None);
+        assert_eq!(
+            oracle.answer.as_ref(),
+            Ok(&expected),
+            "{by_hand}: the oracle"
+        );
+        for modes in [&["bf"][..], &["bf", "ff"][..]] {
+            let outcome = run_pairs_with(
+                modes,
+                false,
+                &body,
+                &alpha_substitution(),
+                ShaclPrebinding::None,
+            );
+            assert_eq!(
+                outcome.answer.as_ref(),
+                Ok(&expected),
+                "{body} declaring {modes:?} answers the hand-written VALUES"
+            );
+            let mut invoked = outcome.invocations;
+            invoked.dedup();
+            assert_eq!(
+                invoked,
+                calls(&["bf:alpha"]),
+                "{body} declaring {modes:?} invokes the relation with \"alpha\" only"
+            );
+        }
+    }
+}
+
+/// **A `GROUP BY` the substituted variable is not a key of is not entered.** An
+/// expression key `(STR(?q) AS ?k)` groups by `?k`, and two values of `?q` can share
+/// one; an aggregate `COUNT(?q)` folds every value into one row that does not carry
+/// `?q`; a key `?x` other than `?q` partitions by something else. In each the
+/// substitution cannot reach the call, so the relation serving only `bf` is refused at
+/// prepare and never invoked, and the free-capable one is invoked free and answers
+/// exactly the bottom-up reference — every group, joined with the seed afterwards.
+#[test]
+fn a_group_by_not_keyed_by_the_substituted_variable_is_not_entered() {
+    let call = format!("?q <{PAIRS}> ?x");
+    let left = format!("?s <{EX}p> ?v");
+    let times = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        let mut expected: Vec<(String, String)> = (0..3).flat_map(|_| rows(pairs)).collect();
+        expected.sort();
+        expected
+    };
+    for (body, expected) in [
+        (
+            format!(
+                "{left} {{ SELECT ?k (COUNT(?x) AS ?out) WHERE {{ {call} }} \
+                 GROUP BY (STR(?q) AS ?k) }}"
+            ),
+            times(&[("alpha", "2"), ("alpha", "1"), ("alpha", "1")]),
+        ),
+        (
+            format!("{left} {{ SELECT (COUNT(?q) AS ?out) WHERE {{ {call} }} }}"),
+            times(&[("alpha", "4")]),
+        ),
+        (
+            format!("{left} {{ SELECT ?x (COUNT(*) AS ?out) WHERE {{ {call} }} GROUP BY ?x }}"),
+            times(&[
+                ("alpha", "1"),
+                ("alpha", "1"),
+                ("alpha", "1"),
+                ("alpha", "1"),
+            ]),
+        ),
+    ] {
+        let refused = run_pairs_with(
+            &["bf"],
+            false,
+            &body,
+            &alpha_substitution(),
+            ShaclPrebinding::None,
+        );
+        let Err(message) = &refused.answer else {
+            panic!("{body}: the bound-only relation is refused, got {refused:?}");
+        };
+        assert!(
+            message.contains("no feasible evaluation order")
+                && message.contains(&format!("<{PAIRS}> reachable only as `ff`")),
+            "{body}: the refusal names the call and its free input: {message}"
+        );
+        assert_eq!(refused.invocations, Vec::<String>::new(), "{body}");
+
+        let reference = run_pairs_with(
+            &["ff"],
+            true,
+            &body,
+            &alpha_substitution(),
+            ShaclPrebinding::None,
+        );
+        assert_eq!(
+            reference.answer.as_ref(),
+            Ok(&expected),
+            "{body}: the reference"
+        );
+        let free = run_pairs_with(
+            &["bf", "ff"],
+            false,
+            &body,
+            &alpha_substitution(),
+            ShaclPrebinding::None,
+        );
+        assert_eq!(
+            free.answer.as_ref(),
+            Ok(&expected),
+            "{body}: the free-capable answer"
+        );
+        assert_eq!(
+            free.invocations,
+            calls(&["ff:-"]),
+            "{body}: the free-capable relation is invoked free"
+        );
     }
 }
