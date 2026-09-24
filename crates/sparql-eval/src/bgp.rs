@@ -56,7 +56,12 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// The `NUL`-prefixed marker that distinguishes a synthetic blank-node slot
 /// variable from a real, projectable SPARQL variable.
-const BLANK_VAR_PREFIX: char = '\u{0}';
+///
+/// Spelled out in full rather than as the bare `NUL`: a blank label SHARED between
+/// the pieces of one basic graph pattern is renamed to a different `NUL`-prefixed
+/// variable (see `crate::blank_scope`), and that one must keep its column here so
+/// the pieces can join on it.
+const BLANK_VAR_PREFIX: &str = "\u{0}bnode:";
 
 /// A compiled triple-pattern position.
 enum Pos<I: ViewTermId = TermId> {
@@ -958,7 +963,7 @@ fn collect_term_slot_keys(term: &TermPattern, keys: &mut Vec<Variable>) {
 /// One spelling of the synthetic name, so the two cannot disagree about what a blank
 /// slot is called.
 pub(crate) fn blank_var(label: &str) -> Variable {
-    Variable::new(format!("{BLANK_VAR_PREFIX}bnode:{label}"))
+    Variable::new(format!("{BLANK_VAR_PREFIX}{label}"))
 }
 
 /// Whether a schema variable is a synthetic blank-node slot (vs. a real variable).

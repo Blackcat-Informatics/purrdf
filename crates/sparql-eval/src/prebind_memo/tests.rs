@@ -39,7 +39,8 @@
 //! shape nobody wrote a case for here still cannot install a memo that disagrees.
 
 use purrdf_sparql_algebra::{
-    BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, SparqlParser,
+    BlankNode, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, ParserOptions, Query,
+    SparqlParser, TermPattern,
 };
 
 use super::{PrebindMemo, ValueShape, rewrite};
@@ -51,7 +52,7 @@ use crate::engine::ShaclPrebinding;
 const LANES: [ShaclPrebinding; 2] = [ShaclPrebinding::Applied, ShaclPrebinding::None];
 
 /// Parse `text` as a query, or fail the test naming it.
-fn parse(text: &str) -> purrdf_sparql_algebra::Query {
+fn parse(text: &str) -> Query {
     SparqlParser::new()
         .parse_query(text)
         .unwrap_or_else(|e| panic!("the fixture query does not parse: {e}\n{text}"))
@@ -165,31 +166,148 @@ fn bindings() -> Vec<Vec<(&'static str, GroundTerm)>> {
 #[test]
 fn a_memo_holds_what_the_rewrite_builds() {
     for text in QUERIES {
-        let parsed = parse(text);
-        for lane in LANES {
-            for built_from in bindings() {
-                let build_probes = probes(&built_from);
-                let Some(mut memo) = PrebindMemo::build(&parsed, lane, &build_probes) else {
-                    // A declined memo is a performance decision, never an answer:
-                    // the run takes the ordinary rewrite. The only shape declined
-                    // here is a quoted-triple value, and the case below pins that.
+        memo_agrees_with_rewrite(&parse(text), text);
+    }
+}
+
+/// The oracle's body for one parsed query: every lane, every binding set it builds
+/// from, every binding set of matching shape it is then bound to.
+fn memo_agrees_with_rewrite(parsed: &Query, text: &str) {
+    for lane in LANES {
+        for built_from in bindings() {
+            let build_probes = probes(&built_from);
+            let Some(mut memo) = PrebindMemo::build(parsed, lane, &build_probes) else {
+                // A declined memo is a performance decision, never an answer: the run
+                // takes the ordinary rewrite. The only shape declined here is a
+                // quoted-triple value, and the case below pins that.
+                continue;
+            };
+            for bound_to in bindings() {
+                let run_probes = probes(&bound_to);
+                if !memo.matches(lane, &run_probes) {
                     continue;
-                };
-                for bound_to in bindings() {
-                    let run_probes = probes(&bound_to);
-                    if !memo.matches(lane, &run_probes) {
-                        continue;
-                    }
-                    let expected = rewrite(parsed.clone(), lane, run_probes.clone());
-                    assert_eq!(
-                        memo.bind(&run_probes),
-                        &expected,
-                        "memo built from {built_from:?} and bound to {bound_to:?} disagrees \
-                         with the rewrite\n  lane: {lane:?}\n  query: {text}"
-                    );
                 }
+                let expected = rewrite(parsed.clone(), lane, run_probes.clone());
+                assert_eq!(
+                    memo.bind(&run_probes),
+                    &expected,
+                    "memo built from {built_from:?} and bound to {bound_to:?} disagrees with \
+                     the rewrite\n  lane: {lane:?}\n  query: {text}"
+                );
             }
         }
+    }
+}
+
+/// The predicate the property-function fixtures below are parsed as a call to.
+const RELATION: &str = "http://example.org/purrdf/prebind#relation";
+
+/// Property-function call shapes, parsed with [`RELATION`] declared as a call.
+///
+/// A call is a leaf the plain lane's pushdown WRITES into — the pre-bound constant
+/// replaces the argument, so the relation is invoked with that position bound — and
+/// the memo's cells for it must be the call's argument positions. Three placements:
+/// at the core, where the seed alone re-binds the column; beside a pattern, where a
+/// restoring `VALUES` does; and in an `OPTIONAL`'s right arm, which the pushdown must
+/// not enter.
+const CALL_QUERIES: &[&str] = &[
+    "SELECT ?o WHERE { ( $this ) <http://example.org/purrdf/prebind#relation> ( ?o ) }",
+    "SELECT ?o WHERE { ?s <http://example.org/purrdf/prebind#p> ?o . \
+     ( $this ?s ) <http://example.org/purrdf/prebind#relation> ( ?x ) }",
+    "SELECT ?o WHERE { ?s <http://example.org/purrdf/prebind#p> ?o \
+     OPTIONAL { ( $this ) <http://example.org/purrdf/prebind#relation> ( ?o ) } }",
+];
+
+/// Whether any property-function call in `pattern` carries `constant` as an argument.
+fn call_carries(pattern: &GraphPattern, constant: &TermPattern) -> bool {
+    let mut found = false;
+    let mut stack = vec![pattern];
+    while let Some(node) = stack.pop() {
+        match node {
+            GraphPattern::PropertyFunction(call) => {
+                found |= call
+                    .subject_args
+                    .iter()
+                    .chain(&call.object_args)
+                    .any(|argument| argument == constant);
+            }
+            GraphPattern::Join { left, right }
+            | GraphPattern::LeftJoin { left, right, .. }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Union { left, right }
+            | GraphPattern::Minus { left, right } => {
+                stack.push(left);
+                stack.push(right);
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. } => stack.push(inner),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// **The oracle, over property-function calls — and the pushdown it memoizes is
+/// really there.**
+///
+/// The memo must agree with the rewrite for every call placement, which is the
+/// oracle above over [`CALL_QUERIES`]. That alone would also pass if the rewrite
+/// left every call alone, so the rewrite's own tree is checked too: at the core and
+/// beside a pattern the call carries the pre-bound constant, and in an `OPTIONAL`'s
+/// right arm it does not. And the memo for the IRI-shaped binding set is asserted to
+/// BUILD, so the agreement is between a retained tree and the rewrite rather than
+/// between the rewrite and itself.
+#[test]
+fn a_memo_holds_what_the_rewrite_builds_through_a_property_function_call() {
+    let options = ParserOptions {
+        property_fn_iris: vec![RELATION.to_owned()],
+        ..ParserOptions::default()
+    };
+    let parse_calls = |text: &str| {
+        SparqlParser::new()
+            .parse_query_with(text, &options)
+            .unwrap_or_else(|e| panic!("the fixture query does not parse: {e}\n{text}"))
+    };
+    let this = iri("a");
+    let pushed =
+        crate::substitute::term_pattern_from_ground(&this).expect("an IRI has a pattern form");
+    let pattern_of = |query: &Query| match query {
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. } => pattern.clone(),
+    };
+    for (at, text) in CALL_QUERIES.iter().enumerate() {
+        let parsed = parse_calls(text);
+        assert!(
+            call_carries(
+                &pattern_of(&parsed),
+                &TermPattern::Variable(crate::substitute::interned_variable("this"))
+            ),
+            "the fixture parses to a call on `$this`: {text}"
+        );
+        memo_agrees_with_rewrite(&parsed, text);
+
+        let run = probes(&[("this", this.clone()), ("other", iri("b"))]);
+        let rewritten = rewrite(parsed.clone(), ShaclPrebinding::None, run.clone());
+        let in_optional = at == 2;
+        assert_eq!(
+            call_carries(&pattern_of(&rewritten), &pushed),
+            !in_optional,
+            "the pushdown writes the constant into a call it reaches, and into no call in an \
+             `OPTIONAL`'s right arm: {text}"
+        );
+        assert!(
+            PrebindMemo::build(&parsed, ShaclPrebinding::None, &run).is_some(),
+            "an IRI-shaped binding list over a call is memoizable: {text}"
+        );
     }
 }
 

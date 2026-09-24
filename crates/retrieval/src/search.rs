@@ -37,8 +37,9 @@
 //!
 //! # A failed stratum is named in the answer, not left behind at `execute`
 //!
-//! [`execute`] reports a stratum that failed as a status rather than a stream,
-//! and fusion consumes streams, so a failed stratum contributes no rows and no
+//! [`execute`](crate::execute) reports a stratum that failed as a status rather
+//! than a stream, and fusion consumes streams, so a failed stratum contributes
+//! no rows and no
 //! fusion trailer entry of its own. That is where the status could die, and §6
 //! of the design record says it may not: a fused answer carries the status of
 //! every producer that contributed **and of every applicable producer that could
@@ -61,8 +62,9 @@
 //! do so. One is to ask the plan at the end, which always succeeds and proves
 //! nothing: the name would be right even if the rows had come from somewhere
 //! else entirely. The other is to carry the identity along with the rows and
-//! read it back off the answer, which is what happens here — [`execute`] tags
-//! each stream with the plan its unit was compiled from, the bridge below keeps
+//! read it back off the answer, which is what happens here —
+//! [`execute`](crate::execute) tags each stream with the plan its unit was
+//! compiled from, the bridge below keeps
 //! the tag, and [`fuse`] names it in the trailer only when every stream still
 //! agrees on it.
 //!
@@ -76,8 +78,9 @@
 //!
 //! The third thing that can only be known where the rows are is what the index
 //! behind them attested: which generation answered, and whether it admitted to
-//! being short. [`execute`] reads it off the governed receipt of the very run
-//! that produced the rows and tags the stream with it; the bridge below carries
+//! being short. [`execute`](crate::execute) reads it off the governed receipt of
+//! the very run that produced the rows and tags the stream with it; the bridge
+//! below carries
 //! it into [`RankedStream::attestation`]; and
 //! [`FusionStream`](crate::FusionStream) reads it **before pulling a row** and
 //! derives the trailer's [`FusionTrailer::attestations`],
@@ -100,8 +103,9 @@
 //! The same route carries a second thing the fusion stage is the consumer of:
 //! the duplicate handling and the candidate domains each producer declared
 //! where it was registered. [`compile`] reads them off the registry it admits
-//! against, [`execute`] tags every stream with them, the bridge below reports
-//! them, and [`FusionStream`](crate::FusionStream) reads them before it pulls a
+//! against, [`execute`](crate::execute) tags every stream with them, the bridge
+//! below reports them, and [`FusionStream`](crate::FusionStream) reads them
+//! before it pulls a
 //! row — so a producer that declared its repeats are the consumer's to remove
 //! is de-duplicated, one that promised there are none is believed and charged
 //! nothing for the promise, and one that named the blocks of the candidate
@@ -180,6 +184,57 @@
 //! and thereby asserts that each one belongs in this fusion. `search` makes no
 //! such assertion on the caller's behalf — it decides which streams to hand over
 //! and reports what it left out.
+//!
+//! # Each stratum is read as far as the fusion asks, once
+//!
+//! A stratum whose depth the planner could not narrow is planned at its
+//! producer's whole declared length. Two strata sharing one block are that shape,
+//! and the fusion routinely certifies such a run inside the first handful of
+//! ranks: the plan admitted hundreds of rows, the answer needs six of them.
+//!
+//! The planner cannot fix that, because the depth is a *sound* bound — the
+//! narrowing argument really does fail there — and no depth chosen before the
+//! first row is read can, because the rank the fusion stops at is not knowable
+//! until it has stopped. So the bound travels the other way: `search` executes
+//! under [`ReadSchedule::OnDemand`], which opens every stratum this layer rendered
+//! as **one invocation at its planned depth, held open**, and produces a row each
+//! time the fusion pulls one. A fusion that certifies at its sixth rank has caused
+//! six rows to be produced; one that needs the four hundredth goes on reading the
+//! same invocation to it. Nothing is ever read twice and nothing is ever
+//! re-opened, so there is no misprediction to recover from: the read is exactly as
+//! deep as the fusion's own stop, plus the probe row past the planned depth when
+//! the fusion reads that far.
+//!
+//! What makes that servable is the receipt. Each stream announces, before its
+//! first row, what its invocation attested the instant it opened — the generation
+//! it pinned, the service level it reported — and the fusion certifies every row
+//! under that announcement exactly as it does for a read that finished first. When
+//! the fusion stops, every stream settles
+//! ([`RankedStream::settle`](crate::RankedStream::settle)): the invocation's
+//! witness is read as it stands then, under the sole-witness rule a finished run is
+//! read under, and held to the announcement. An index that moved under the read,
+//! or a service level that changed between the open and the stop, is refused
+//! ([`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved)),
+//! never relabelled; and the rows the stream says it handed out are held to the
+//! rows the fusion pulled. So the evidence on the answer describes exactly the
+//! read that produced it, and the answer, its order and its evidence are the ones
+//! the same invocation read to its planned depth would have given.
+//!
+//! The cost is reported, not inferred: every stratum's
+//! [`StratumResolution::rows_materialised`](crate::StratumResolution::rows_materialised)
+//! is taken at that settlement, beside the ranks the fusion pulled.
+//!
+//! A producer that takes its depth as an argument is opened at the planned depth
+//! too, and that costs its search nothing: both nearest-neighbour producers in this
+//! workspace do the same search at any `k` — a full scan, or a beam of the index's
+//! declared width — and a smaller `k` only keeps a prefix of the same ranking. See
+//! [`execute_within`](crate::execute_within)'s module header.
+//!
+//! A stratum the profile does not weight is still read to its end, because its
+//! status is how it ended and nothing but reading it can say that. It then settles
+//! exactly as a fused stream does, and a witness that moved under it is refused with
+//! the same [`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved)
+//! rather than reported as the stratum's ending.
 
 use std::collections::BTreeMap;
 
@@ -188,18 +243,19 @@ use purrdf_sparql_eval::{PfAttestation, PropertyFunctionRegistry};
 use purrdf_text::Fixed;
 
 use crate::admission::{AdmissionEnvironment, AdmissionError};
-use crate::compile::{PlannedResolution, compile};
+use crate::compile::{CompiledRetrieval, PlannedResolution, ReadSchedule, compile};
 use crate::error::{FusionError, PlanError};
-use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute};
+use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute_within};
 use crate::fuse::{TopK, fuse};
 use crate::fusion_profile::{DecayRule, FusionProfile};
-use crate::fusion_stream::{FusedRow, FusionTrailer};
+use crate::fusion_stream::{FusedRow, FusionTrailer, ProducerStatus};
 use crate::id::{EvidenceId, FusionProfileId, PlanId};
 use crate::iri::{Iri, Term};
 use crate::plan::UnservedTerm;
 use crate::planner::plan;
 use crate::ranked_stream::{
-    ProducerReceipt, ProtocolError, RankedRow, RankedStream, StreamContract,
+    ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, ReadSettlement,
+    StreamContract,
 };
 use crate::reciprocal_rank::contribution_under;
 use crate::request::RetrievalRequest;
@@ -393,6 +449,11 @@ pub enum SearchError {
 /// not have to run a search at all — [`compile`](crate::compile) against an
 /// environment naming `profile` answers it without executing anything.
 ///
+/// Stage three runs under [`ReadSchedule::OnDemand`]: each stratum is one
+/// invocation held open and read as far as the fusion pulls it, never re-read,
+/// and every stream's receipt is taken when the fusion stops. It changes no
+/// answer: see this module's header.
+///
 /// # Errors
 ///
 /// The corresponding [`SearchError`] variant of whichever stage refuses:
@@ -402,7 +463,13 @@ pub enum SearchError {
 ///
 /// [`FusionError::UnknownStratum`] additionally names `search`'s one refusal of
 /// its own: `profile` weights none of the strata that ran, so no row it produced
-/// could contribute to the answer.
+/// could contribute to the answer. And a stratum the profile does not weight, read
+/// to its end, whose witness moved under the read is refused as
+/// [`FusionError::Protocol`] carrying
+/// [`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved) —
+/// the error the same fact is refused with on a weighted stratum — and one whose
+/// producer beat its declared row bound, as [`FusionError::Protocol`] carrying
+/// [`ProtocolError::ReadFailed`](crate::ProtocolError::ReadFailed).
 // The composition is awaited in one task and never crosses a thread boundary, so
 // the `Send` bound this lint wants to express would buy nothing and would force a
 // `Sync` statistics provider and environment into every caller. The
@@ -436,9 +503,46 @@ where
     };
     let compiled = compile(&plan, &env).map_err(SearchError::AdmissionError)?;
 
+    // 3. Read and fuse. Each stratum is read on demand, so the read goes exactly
+    //    as deep as the fusion's own stop; see this module's header.
+    let answer = read_and_fuse(&compiled, registry, dataset, profile).await?;
+
+    Ok(SearchResult {
+        rows: answer.rows,
+        trailer: answer.trailer,
+        unserved_terms: plan.unserved_evidence(),
+        plan_id: answer.plan_id,
+        evidence_id: answer.evidence_id,
+        // 7. Carry the waist's own resolution evidence onto the answer. It is
+        //    moved, not recomputed: recomputing it here from the profile and
+        //    the plan would be a second derivation of what the admission waist
+        //    already decided, and the value of the evidence is that it is the
+        //    one the compiled bundle actually holds.
+        planned_resolution: compiled.resolution,
+        profile_id: profile.id(),
+        unweighted_strata: answer.unweighted_strata,
+    })
+}
+
+/// One read of `compiled`, on demand, fused under `profile`.
+///
+/// Stages three to six of the composition, as one value: the answer the read
+/// produced, with the identities read back off it.
+// The composition is awaited in one task and never crosses a thread boundary; see
+// the same allowance on `search`.
+#[allow(clippy::future_not_send)]
+async fn read_and_fuse<D>(
+    compiled: &CompiledRetrieval,
+    registry: &PropertyFunctionRegistry,
+    dataset: &D,
+    profile: &FusionProfile,
+) -> Result<Attempt, SearchError>
+where
+    D: DatasetView + Sync,
+{
     // 3. Execute. Each stratum runs independently against the caller's dataset; a
     //    failed stratum is a status, not a stream.
-    let execution = execute(&compiled, registry, dataset)
+    let execution = execute_within(compiled, registry, dataset, ReadSchedule::OnDemand)
         .await
         .map_err(SearchError::ExecutionError)?;
 
@@ -449,9 +553,9 @@ where
     //    whole request down with it. See this module's header.
     let ExecutionResult {
         streams: executed,
-        statuses,
+        mut statuses,
     } = execution;
-    let mut streams: Vec<(Iri, RankedStreamAdapter)> = Vec::with_capacity(executed.len());
+    let mut streams: Vec<(Iri, RankedStreamAdapter<'_>)> = Vec::with_capacity(executed.len());
     let mut unweighted_strata: Vec<Iri> = Vec::new();
     for stratum_stream in executed {
         let stratum = stratum_stream.stratum.clone();
@@ -462,6 +566,20 @@ where
         // does: it is the producer's own declaration, read at the admission
         // waist and carried, so the promise fusion holds this stream to is the
         // one its producer made and not one re-read off a registry afterwards.
+        if profile.weight(&stratum).is_none() {
+            // Not fused, and still an applicable producer that ran: its status is
+            // how its read ended, and a stream read on demand has not ended until
+            // it is read. So it is read to its end here — the read it would have
+            // been given materialised — and its own receipt is its status.
+            if !statuses.contains_key(&stratum) {
+                let status = read_to_its_end(stratum_stream.stream, &stratum, &attestation)
+                    .await
+                    .map_err(|error| SearchError::FusionError(error.into()))?;
+                statuses.insert(stratum.clone(), status);
+            }
+            unweighted_strata.push(stratum);
+            continue;
+        }
         let Some(adapter) = RankedStreamAdapter::new(
             stratum_stream.stream,
             stratum_stream.contract,
@@ -508,7 +626,7 @@ where
     //    bundle's bound, so `fuse` re-checks this call against it rather than
     //    taking it on trust.
     let fused_strata = streams.len();
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
+    let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
         .await
         .map_err(SearchError::FusionError)?;
 
@@ -546,29 +664,122 @@ where
     //     attestation to digest and gets no entry.
     let evidence_id = trailer.evidence_id;
 
-    Ok(SearchResult {
+    Ok(Attempt {
         rows: fused.rows,
         trailer,
-        unserved_terms: plan.unserved_evidence(),
         plan_id,
         evidence_id,
-        // 7. Carry the waist's own resolution evidence onto the answer. It is
-        //    moved, not recomputed: recomputing it here from the profile and
-        //    the plan would be a second derivation of what the admission waist
-        //    already decided, and the value of the evidence is that it is the
-        //    one the compiled bundle actually holds.
-        planned_resolution: compiled.resolution,
-        profile_id: profile.id(),
         unweighted_strata,
     })
 }
 
-/// The bridge from [`execute`]'s `(rank, candidate, block)` stream to the ranked fusion
-/// protocol: the one piece a caller resuming at `execute` would otherwise have
+/// Read a stream nothing will fuse to its end, settle it, and report how it ended.
+///
+/// A failure of the read is that stratum's status rather than the request's:
+/// nothing was merged out of this stream, so there is no answer for its failure to
+/// be part of. The one failure that is not is a producer returning more rows than
+/// its registry declared it could, which invalidates the run whichever stratum
+/// exposes it.
+///
+/// A settlement that refuses is not a status. A read that ended is settled exactly
+/// as a fused stream is when the fusion stops — its invocation's witness read under
+/// the sole-witness rule, and held to the attestation `announced` before its first
+/// row — because an ending is a claim about the read its witness stands behind. An
+/// index that moved under the read, or a service level that changed between the
+/// open and the end, is the snapshot moving under the query, and that invalidates
+/// the run rather than one stratum of it: the materialised schedule refuses the same
+/// witness for every stratum, weighted or not, and a weighted stratum read on demand
+/// is refused with [`ProtocolError::AttestationMoved`]. This one is refused with that
+/// same error, so one fact reaches a caller as one error whether or not the profile
+/// happens to weight the stratum that exposed it. Reported as the stratum's
+/// `Exhausted` or `DepthReached` instead, it would certify a read that no one index
+/// generation answered.
+///
+/// # Errors
+///
+/// [`ProtocolError::AttestationMoved`] when the witness is not one attestation, or is
+/// not the one `announced`; [`ProtocolError::ReadFailed`] when the producer beat its
+/// declared row bound.
+// Awaited in the one task `search` runs in; see the same allowance there.
+#[allow(clippy::future_not_send)]
+async fn read_to_its_end(
+    mut stream: RankedStreamImpl<'_>,
+    stratum: &Iri,
+    announced: &PfAttestation,
+) -> Result<ProducerStatus, ProtocolError> {
+    loop {
+        match stream.next().await {
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            // A producer that beat its declared row bound broke a number that is
+            // not confined to this stratum, so its read is refused for every
+            // stratum alike — the materialised schedule refuses the same read as
+            // `ExecutionError::RowBoundBreached`, whether or not the profile weights
+            // it.
+            Err(error) if stream.run_invalidated() => return Err(error),
+            Err(error) => {
+                return Ok(ProducerStatus::ExecutionFailed {
+                    reason: error.to_string(),
+                });
+            }
+        }
+    }
+    let receipt = match stream.receipt().await {
+        // A read that failed before its first row ended in no ranking at all, so
+        // there is no ending for a witness to stand behind; the failure is the status.
+        Ok(receipt @ ProducerReceipt::ExecutionFailed { .. }) => receipt,
+        Ok(receipt) => {
+            // `None` is a stream no read of this crate's produced, which has no
+            // witness to settle; every stream `execute_within` hands back has one.
+            if let Some(settled) = stream.settle().await?
+                && settled != *announced
+            {
+                return Err(ProtocolError::AttestationMoved {
+                    stratum: stratum.as_str().to_owned(),
+                    reason: format!(
+                        "announced {announced:?} before the first row, settled {settled:?} \
+                         when the read ended"
+                    ),
+                });
+            }
+            receipt
+        }
+        Err(error) => {
+            return Ok(ProducerStatus::ExecutionFailed {
+                reason: error.to_string(),
+            });
+        }
+    };
+    Ok(ProducerStatus::from(receipt))
+}
+
+/// What one read of a bundle, fused, came to.
+///
+/// Everything in a [`SearchResult`] that is a fact about the *read* rather than
+/// about the plan behind it. The fields the plan and the waist supply —
+/// the unserved terms, the planned resolution, the profile identity — are not
+/// here, because they are the compiled plan's and the waist's rather than the read's.
+struct Attempt {
+    /// The fused rows, in the profile's declared final order.
+    rows: Vec<FusedRow>,
+    /// The terminal report, already completed with the executor's statuses.
+    trailer: FusionTrailer,
+    /// The plan identity that travelled with these rows.
+    plan_id: PlanId,
+    /// The digest of exactly the attestations in [`Self::trailer`].
+    evidence_id: EvidenceId,
+    /// The strata that ran but that the profile declares no weight for.
+    unweighted_strata: Vec<Iri>,
+}
+
+/// The bridge from [`execute`](crate::execute)'s `(rank, candidate, block)`
+/// stream to the ranked fusion protocol: the one piece a caller resuming at
+/// `execute` would otherwise have
 /// to write itself.
 ///
-/// [`execute`] deliberately carries no contribution. A contribution depends on
-/// the fusion profile's weights and smoothing constant, the profile is
+/// [`execute`](crate::execute) deliberately carries no contribution. A
+/// contribution depends on the fusion profile's weights and smoothing constant,
+/// the profile is
 /// deliberately not a planning input, and keeping the executor profile-free is
 /// what lets the unfused rung be consumed with no fusion law in the path.
 /// [`fuse`] nonetheless
@@ -594,9 +805,9 @@ where
 /// [`ProtocolError::ContributionMismatch`]. Its terminal receipt is the
 /// executor's own, passed through unchanged.
 #[derive(Debug)]
-pub struct RankedStreamAdapter {
+pub struct RankedStreamAdapter<'d> {
     /// The executor's rows, in rank order.
-    inner: RankedStreamImpl,
+    inner: RankedStreamImpl<'d>,
     /// The contract the stratum's producer declared these rows under.
     contract: StreamContract,
     /// The profile's weight for this stream's stratum.
@@ -612,7 +823,7 @@ pub struct RankedStreamAdapter {
     attestation: PfAttestation,
 }
 
-impl RankedStreamAdapter {
+impl<'d> RankedStreamAdapter<'d> {
     /// Bridge `stream` for `stratum` under `profile`, reporting `contract`, or
     /// `None` when `profile` declares no weight for that stratum.
     ///
@@ -623,7 +834,8 @@ impl RankedStreamAdapter {
     ///
     /// The contract goes the other way: it is taken as an argument, because it
     /// is the *producer's* declaration and no profile knows it. A caller
-    /// resuming at [`execute`] holds it beside the stream it is bridging
+    /// resuming at [`execute`](crate::execute) holds it beside the stream it is
+    /// bridging
     /// ([`StratumStream::contract`](crate::StratumStream)) and passes it
     /// through; a caller whose stream came from somewhere else states its own,
     /// with [`StreamContract::new`]. It is a parameter rather than a builder
@@ -637,7 +849,7 @@ impl RankedStreamAdapter {
     /// names it in [`SearchResult::unweighted_strata`] and fuses the rest.
     #[must_use]
     pub fn new(
-        stream: RankedStreamImpl,
+        stream: RankedStreamImpl<'d>,
         contract: StreamContract,
         profile: &FusionProfile,
         stratum: &Iri,
@@ -655,8 +867,9 @@ impl RankedStreamAdapter {
 
     /// Name the row bound these rows' depth was derived for.
     ///
-    /// [`execute`] tags every stream it returns with the bound the bundle was
-    /// compiled for ([`StratumStream::fused_bound`](crate::StratumStream)), and
+    /// [`execute`](crate::execute) tags every stream it returns with the bound
+    /// the bundle was compiled for
+    /// ([`StratumStream::fused_bound`](crate::StratumStream)), and
     /// this is how that tag continues into the fusion: [`fuse`] reads it back
     /// through [`RankedStream::fused_bound`] and refuses a `top_k` that disagrees
     /// with it, so a read taken for one bound is never served as an answer to
@@ -675,8 +888,9 @@ impl RankedStreamAdapter {
 
     /// Name the pinned plan these rows descend from.
     ///
-    /// [`execute`] tags every stream it returns with the plan its unit was
-    /// compiled from ([`StratumStream::plan_id`](crate::StratumStream)), and
+    /// [`execute`](crate::execute) tags every stream it returns with the plan its
+    /// unit was compiled from
+    /// ([`StratumStream::plan_id`](crate::StratumStream)), and
     /// this is how that tag continues into the fusion: [`fuse`] reads it back
     /// through [`RankedStream::plan_id`] and names it in the trailer, so the
     /// identity in a fused answer is the one that travelled with the rows.
@@ -694,8 +908,8 @@ impl RankedStreamAdapter {
 
     /// Name what the index behind these rows attested.
     ///
-    /// [`execute`] reads this off the governed receipt of the run that produced
-    /// the rows and tags the stream with it
+    /// [`execute`](crate::execute) reads this off the governed receipt of the run
+    /// that produced the rows and tags the stream with it
     /// ([`StratumStream::attestation`](crate::StratumStream)); this is how that
     /// tag continues into the fusion, which reads it through
     /// [`RankedStream::attestation`] before pulling a row and derives the
@@ -717,9 +931,15 @@ impl RankedStreamAdapter {
     }
 }
 
-impl RankedStream for RankedStreamAdapter {
+impl RankedStream for RankedStreamAdapter<'_> {
     type Item = Term;
 
+    #[expect(
+        clippy::future_not_send,
+        reason = "the adapted stream may hold an on-demand read, which shares its \
+                  candidate index through `Rc<RefCell<_>>`; the fusion awaits it in one \
+                  task, so the future is not `Send` by construction"
+    )]
     async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         let Some((rank, item, block)) = self.inner.next().await? else {
             return Ok(None);
@@ -758,12 +978,36 @@ impl RankedStream for RankedStreamAdapter {
         Ok(Some(RankedRow::new(rank, value, item, block)))
     }
 
+    #[expect(
+        clippy::future_not_send,
+        reason = "the adapted stream may hold an on-demand read, which shares its \
+                  candidate index through `Rc<RefCell<_>>`; the fusion awaits it in one \
+                  task, so the future is not `Send` by construction"
+    )]
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         self.inner.receipt().await
     }
 
     fn contract(&self) -> StreamContract {
         self.contract.clone()
+    }
+
+    /// Passed through untouched, exactly as the receipt is.
+    ///
+    /// This bridge adds the contribution and nothing else. A verdict is a
+    /// measurement the executor's prepared lookup takes against the caller's
+    /// dataset, and a bridge that answered one — by defaulting, by caching, by
+    /// deriving one from the rows it has already seen — would be answering a
+    /// question about a host's corpus out of a rank it was handed. The same rule
+    /// that keeps it from inventing a contract keeps it from inventing this.
+    #[expect(
+        clippy::future_not_send,
+        reason = "the adapted stream may hold an on-demand read, which shares its \
+                  candidate index through `Rc<RefCell<_>>`; the fusion awaits it in one \
+                  task, so the future is not `Send` by construction"
+    )]
+    async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        self.inner.exclusion(candidate).await
     }
 
     fn plan_id(&self) -> Option<PlanId> {
@@ -776,5 +1020,38 @@ impl RankedStream for RankedStreamAdapter {
 
     fn attestation(&self) -> PfAttestation {
         self.attestation.clone()
+    }
+
+    /// Passed through from the executor's stream, which is the only party that
+    /// knows it: this bridge is handed rows, not a read.
+    fn rows_materialised(&self) -> Option<u64> {
+        Some(self.inner.rows_materialised())
+    }
+
+    /// The executor's stream settles its own read; this bridge adds nothing to it.
+    ///
+    /// A read produced on demand settles to the attestation its invocation's
+    /// witness now stands behind, which the fusion holds to the one this adapter
+    /// announced ([`Self::with_attestation`]). A read the executor materialised
+    /// has nothing left to learn and settles to what its witness attested when it
+    /// finished, which the fusion holds to the announcement the same way; rows a
+    /// caller handed the executor's stream type directly came from no read, and
+    /// settle to the announcement itself.
+    #[expect(
+        clippy::future_not_send,
+        reason = "the adapted stream may hold an on-demand read, which shares its \
+                  candidate index through `Rc<RefCell<_>>`; the fusion awaits it in one \
+                  task, so the future is not `Send` by construction"
+    )]
+    async fn settle(&mut self) -> Result<ReadSettlement, ProtocolError> {
+        let attestation = match self.inner.settle().await? {
+            Some(settled) => settled,
+            None => self.attestation.clone(),
+        };
+        Ok(ReadSettlement {
+            attestation,
+            rows_materialised: Some(self.inner.rows_materialised()),
+            rows_emitted: Some(self.inner.rows_emitted()),
+        })
     }
 }

@@ -3,7 +3,12 @@
 
 //! The executor: each admitted unit runs independently through the evaluator.
 //!
-//! [`execute`] is the only stage that runs a query. It runs one unit per stratum
+//! [`execute`] is the only stage that runs a **ranked read**, and the only stage
+//! that compiles a query at all — including the one query it does not itself run,
+//! the per-candidate exclusion lookup it prepares and hands back inside the
+//! stream, which executes when the fusion stage asks (see
+//! [`RankedStream::exclusion`](crate::RankedStream::exclusion) and the borrow
+//! note on [`RankedStreamImpl`]). It runs one unit per stratum
 //! through `purrdf-sparql-eval` against **the caller's dataset**, with the
 //! caller's registry injected, and the query text is exactly the admitted
 //! emission. A unit that fails to parse or evaluate becomes that stratum's
@@ -45,9 +50,10 @@
 //! depends on the fusion profile's weights and smoothing constant, which are
 //! deliberately not a plan input, so the contribution is attached at `fuse` time.
 //! Keeping the executor profile-free is what lets the unfused rung be consumed
-//! with no fusion law in the path at all. It is not what makes it cheap: a
-//! stratum's rows are materialized by the evaluator before the first one is
-//! read, so that rung costs what the stratum's own result costs.
+//! with no fusion law in the path at all. It is not what makes it cheap: under
+//! [`execute`] a stratum's rows are materialized by the evaluator before the first
+//! one is read, so that rung costs what the stratum's own result costs. What makes
+//! a read cheap is reading it on demand — see the last section of this header.
 //!
 //! Attaching it is not left to the caller to re-derive: a stream here is carried
 //! into the fusion protocol by
@@ -135,7 +141,10 @@
 //! [`compile`](crate::compile) emits `LIMIT depth + 1`, so a unit whose producer
 //! still had rows past the planned depth hands back one more row than the
 //! stratum may contribute. That row is a **probe**: it is never emitted onto the
-//! stream, never ranked, and never counted anywhere. All it does is decide the
+//! stream, never ranked, and counted in exactly one place —
+//! [`RankedStreamImpl::rows_materialised`], which answers what the read cost
+//! rather than what the answer is made of, and which would understate the read by
+//! exactly this row if it left it out. What it decides is the
 //! stream's ending — [`StreamEnding::DepthReached`] when it arrived,
 //! [`StreamEnding::Exhausted`] when it did not. Without it an executor could
 //! only ever say `Exhausted`, which is the one ending that names no
@@ -211,29 +220,113 @@
 //! over-refusal — the seam exists so that a host can drive this executor over a query
 //! of its own, and most such queries are perfectly good; what cannot be done honestly
 //! is certify a completeness claim from one.
+//!
+//! # A stratum may be read on demand, and its receipt is taken when the reading stops
+//!
+//! [`execute_within`] takes a [`ReadSchedule`]. [`ReadSchedule::Materialised`] is the
+//! read described so far, and it is what [`execute`] runs. Under
+//! [`ReadSchedule::OnDemand`] — the schedule [`search`](crate::search) runs — every
+//! unit whose prepared text is one property-function call under row-for-row
+//! operators — projections, `OFFSET`-free `LIMIT`s, renaming `BIND`s and `FILTER`s
+//! evaluated row by row
+//! ([`PreparedQuery::is_call_read`](purrdf_sparql_eval::PreparedQuery::is_call_read)),
+//! which is every unit this layer rendered, is opened as **one invocation held open**
+//! ([`NativeSparqlEngine::open_call_cursor`]): the same text, the same planned depth,
+//! the same bound one probe row past it, and the same arguments, admission, width
+//! check and unification the governed lane gives it. Its stream then produces a row
+//! each time it is pulled and none before. A fusion that certifies at its sixth rank
+//! has produced six rows of a four-hundred-row plan; one that needs the four
+//! hundredth goes on reading the invocation it opened — never a second invocation,
+//! never a row twice — and reaches the probe row only if it asks for it. The ending
+//! is decided by exactly the observations [`bound_to_depth`] makes, one row at a
+//! time: the probe row's arrival, the producer running out, the producer's own
+//! declared bound.
+//!
+//! The receipt is where a materialised read and an on-demand one differ, and it is
+//! the reason the difference is sound. A materialised read's witness describes a run
+//! that finished before its first row was readable. An on-demand read's invocation
+//! finishes when its consumer stops, so its evidence is taken then: the stream
+//! announces what the invocation attested **the instant it opened** — the generation
+//! it pinned and the service level it reported — before its first row, exactly where
+//! a materialised stream announces its own; and when the consumer stops, the stream
+//! settles ([`RankedStream::settle`](crate::RankedStream::settle)), reading the
+//! invocation's witness as it stands then under the same sole-witness rule a
+//! materialised run is read under. An index that moved under the read shows as the
+//! two generations it is and is refused; a service level that changed between the
+//! announcement and the stop is refused too
+//! ([`ProtocolError::AttestationMoved`](crate::ProtocolError::AttestationMoved)),
+//! because every row was certified under the announcement. The receipt covers
+//! exactly the rows the stream handed out, and the consumer checks that count
+//! against the rows it pulled.
+//!
+//! # A producer that takes its depth is opened at the planned depth, and pays nothing for it
+//!
+//! A rendered unit hands a self-bounding producer — a nearest-neighbour search — the
+//! planned depth (one probe row past it, within its declaration) as its `k`, and the
+//! on-demand read opens it there even where the fusion will provably stop far
+//! shallower. That is not a missed saving, because neither nearest-neighbour producer
+//! in this workspace does work that depends on `k`. The exact scan computes one
+//! distance per row of its space for any `k` of at least one — the nearest row is
+//! not known until every row has been measured — and `k` only sizes the selection
+//! it keeps. The graph search walks a beam of the artifact's declared `ef_search`,
+//! which is part of the index identity and is never narrowed or widened to fit a
+//! request, and `k` only truncates the beam's sorted result. So the search an
+//! invocation performs is the same search at `k = 6` as at `k = 401`, both producers'
+//! results at a smaller `k` are exactly the prefix of their results at a larger one
+//! (the order is total: distance, then row), and the rows past the fusion's stop are
+//! never produced because the cursor builds a row only when it is pulled. Opening at
+//! a shallower `k` and continuing with a second invocation where the fusion read
+//! past it would repeat that whole search for the second read — twice the work of
+//! the one invocation this layer takes — and would buy the first read nothing.
+//!
+//! A unit whose text is anything else — a caller's own join, `ORDER BY` or dataset
+//! clause — is materialised under either schedule: it is not one invocation this
+//! layer can hold open. A caller's own text that *is* one call under row-for-row
+//! operators is read on demand exactly as a rendered one, and ends
+//! [`StreamEnding::SuppliedQueryEnded`] rather than `Exhausted` when it runs out,
+//! for the reason its materialised read does. A `FILTER` it wrote over the call is
+//! applied as each row is pulled, by the engine's own evaluator: a row it drops is
+//! read and takes no rank, so the stream's ranks count only the rows it kept — as
+//! the materialised read of the same text numbers its answer — and no `LIMIT` above
+//! the `FILTER` is ever offered to the producer as a ceiling
+//! ([`CallCursor`](purrdf_sparql_eval::CallCursor)).
+//!
+//! A failure is isolated exactly as far as it still can be — one before the
+//! first row is that stratum's [`ProducerStatus::ExecutionFailed`], while one after
+//! rows were merged fails the request by name, because those rows are already in the
+//! answer.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use purrdf_core::{DatasetView, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, ExtensionEnv, GovernedOutcome, NativeSparqlEngine, PfAttestation,
-    PropertyFunctionRegistry, QueryGovernors, QueryOptions, RegistryId, RelationWitness,
-    ServiceLevel,
+    CallCursor, CandidateDomains, DomainTag, ExtensionEnv, GovernedOutcome, InternedOutcome,
+    NativeSparqlEngine, PfAttestation, PreparedExecution, PropertyFunctionRegistry, QueryGovernors,
+    QueryOptions, RegistryId, RelationWitness, ServiceLevel,
 };
 
 use crate::admission::BoundMode;
-use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval, ReadReach};
+use crate::compile::{
+    BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval, EXCLUSION_LIMIT, ReadReach, ReadSchedule,
+    StratumUnit,
+};
 use crate::fuse::TopK;
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RowBlock, StreamContract};
-use crate::render::candidate_lexical;
+use crate::ranked_stream::{
+    ExclusionVerdict, ProducerReceipt, ProtocolError, RowBlock, StreamContract,
+};
+use crate::render::{RenderError, candidate_lexical, decode_term};
 
 /// One stratum's ranked rows, tagged with the pinned plan they descend from and
 /// the contract its producer declared them under.
 #[derive(Debug)]
-pub struct StratumStream {
+pub struct StratumStream<'d> {
     /// The stratum the stream's ranks are within.
     pub stratum: Iri,
     /// The admitted plan the stream was compiled from.
@@ -274,12 +367,18 @@ pub struct StratumStream {
     /// served rank one is the version that served the last rank — which is only
     /// a useful fact if it travels with the rows it is true of.
     ///
+    /// For a stratum read on demand it is what the invocation attested the
+    /// instant it opened, before any row existed — the announcement the stream is
+    /// held to when it settles ([`RankedStream::settle`](crate::RankedStream::settle)),
+    /// so a read that ends under a different attestation is refused rather than
+    /// reported under this one.
+    ///
     /// [`PfAttestation::UNDECLARED`] is the honest answer for a unit whose
     /// relation declared neither fact, and it stays an absence all the way out:
     /// silence is never a certificate that the index was current or whole.
     pub attestation: PfAttestation,
     /// The evaluator's rows, in rank order.
-    pub stream: RankedStreamImpl,
+    pub stream: RankedStreamImpl<'d>,
 }
 
 /// The result of running every compiled unit: the surviving streams and every
@@ -287,11 +386,14 @@ pub struct StratumStream {
 ///
 /// A failed stratum appears in `statuses` as
 /// [`ProducerStatus::ExecutionFailed`] and has no entry in `streams`; a surviving
-/// stratum appears in both. Nothing reduces the statuses to one flag.
+/// stratum read materialised appears in both. A stratum read on demand
+/// ([`ReadSchedule::OnDemand`]) appears in `streams` only, because how its read
+/// ends is decided by how far it is read, and its stream's receipt is its status.
+/// Nothing reduces the statuses to one flag.
 #[derive(Debug)]
-pub struct ExecutionResult {
+pub struct ExecutionResult<'d> {
     /// One stream per stratum that ran, ordered as compiled.
-    pub streams: Vec<StratumStream>,
+    pub streams: Vec<StratumStream<'d>>,
     /// Every stratum's own terminal status.
     pub statuses: HashMap<Iri, ProducerStatus>,
 }
@@ -501,7 +603,9 @@ pub enum ExecutionError {
 
 /// A concrete ranked stream of `(rank, candidate, block)` rows.
 ///
-/// The rows are materialized by the evaluator and drained in order; `next` never
+/// The rows are either materialized by the evaluator before the stream exists and
+/// drained in order, or — under [`ReadSchedule::OnDemand`] — produced one per
+/// [`next`](Self::next) from an invocation held open. Either way `next` never
 /// pends, so the stream is usable under any executor. A caller that wants to fuse
 /// the rows wraps them with the fusion profile at `fuse` time.
 ///
@@ -520,14 +624,454 @@ pub enum ExecutionError {
 /// protocol — one with no receipt at the end of it, and so no way for a caller
 /// to tell a stratum that ended from a stratum it stopped reading.
 #[derive(Debug)]
-pub struct RankedStreamImpl {
-    rows: VecDeque<(u64, Term, RowBlock)>,
+pub struct RankedStreamImpl<'d> {
+    /// Where the rows come from: a read already materialised, or one produced as
+    /// this stream is pulled.
+    source: RowSource<'d>,
     pulled: u64,
     exhausted: bool,
-    ending: StreamEnding,
+    /// The prepared exclusion lookup for this stratum, where its producer
+    /// declared a basis for one.
+    ///
+    /// `None` is the whole of "this stratum answers no exclusion lookup", and it
+    /// is what every stream of every producer that declared
+    /// [`ExclusionBasis::Unavailable`](purrdf_sparql_eval::ExclusionBasis)
+    /// carries.
+    ///
+    /// # Why the stream borrows the dataset, and why that is the honest shape
+    ///
+    /// The rows may be materialized before this type exists; an exclusion
+    /// verdict is not, and cannot be. Which candidates a fusion needs verdicts for is
+    /// decided by the fusion, from a frontier that does not exist until the rows
+    /// are being merged — so the alternative to holding the dataset is
+    /// pre-computing verdicts for candidates nobody will ask about, which is the
+    /// drain this whole mechanism removes. The borrow is what makes the lifetime
+    /// parameter on this type unavoidable, and it is stated rather than worked
+    /// around because a lookup that could not reach the dataset would have to
+    /// answer from something else.
+    exclusion: Option<Box<dyn ExclusionLookup + 'd>>,
+    /// How many rows the read that produced this stream really returned.
+    ///
+    /// Not `rows.len()` in general, and that is the point. The rows this stream
+    /// holds are what survived [`bound_to_depth`] — the depth's worth, with the
+    /// probe row taken off — while this counts what the evaluator handed back,
+    /// which is what the read actually cost. The two differ by the probe row on
+    /// every unit that got one, and by a great deal more on a unit whose
+    /// producer beat its depth.
+    ///
+    /// Set by [`Self::new`] to the rows it was handed, which is the honest
+    /// answer for a caller-assembled stream: those rows are the whole of the
+    /// read behind it. [`execute`] overrides it through
+    /// [`Self::with_materialised_rows`] with the number only it can know. A read
+    /// produced on demand counts its own, as it goes, and this field is not read
+    /// for it.
+    materialised: u64,
+    /// Whether the fault [`Self::next`] last refused with invalidates the whole run —
+    /// the producer beating its declared row bound — rather than only this stratum.
+    ///
+    /// Both reach a consumer as [`ProtocolError::ReadFailed`], because a fused stream
+    /// fails the request either way. A stream nothing fuses is the one consumer that
+    /// tells them apart: an isolated fault is that stratum's status, exactly as it is
+    /// for a materialised read, while a breach is refused for every stratum, weighted
+    /// or not, exactly as [`ExecutionError::RowBoundBreached`] is.
+    run_invalidated: bool,
 }
 
-/// How a materialized stream ends, decided before the first row is pulled.
+/// Where a [`RankedStreamImpl`]'s rows come from.
+enum RowSource<'d> {
+    /// A read that finished before this stream existed: its rows, already cut to the
+    /// depth, and the ending it had.
+    Materialised {
+        rows: VecDeque<(u64, Term, RowBlock)>,
+        ending: StreamEnding,
+        /// What the read's witness attested when it finished, for a read this
+        /// executor took; `None` for rows a caller handed [`RankedStreamImpl::new`],
+        /// which came from no read this crate observed.
+        attested: Option<PfAttestation>,
+    },
+    /// One invocation held open and read a row per pull, and — once it has ended —
+    /// how it ended.
+    OnDemand {
+        read: Box<dyn OnDemandRead + 'd>,
+        ended: Option<OnDemandEnd>,
+    },
+}
+
+impl fmt::Debug for RowSource<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Materialised {
+                rows,
+                ending,
+                attested,
+            } => f
+                .debug_struct("Materialised")
+                .field("rows_left", &rows.len())
+                .field("ending", ending)
+                .field("attested", attested)
+                .finish(),
+            Self::OnDemand { read, ended } => f
+                .debug_struct("OnDemand")
+                .field("read", read)
+                .field("ended", ended)
+                .finish(),
+        }
+    }
+}
+
+/// How an on-demand read ended: an ending [`bound_to_depth`] would have reported for
+/// the same rows, or a failure before its first row, which is that stratum's status
+/// exactly as a materialised read's failure is.
+#[derive(Clone, Debug)]
+enum OnDemandEnd {
+    Ended(StreamEnding),
+    Failed(String),
+}
+
+/// One stratum's invocation, held open and read as its stream is pulled.
+///
+/// Object-safe for the reason [`ExclusionLookup`] is: the dataset's type stays out
+/// of the stream's.
+trait OnDemandRead: fmt::Debug {
+    /// The stratum this read is for, naming its refusals.
+    fn stratum(&self) -> &str;
+    /// The next ranked row, or how the read ended.
+    fn pull(&mut self) -> Result<ReadStep, ReadFault>;
+    /// The rows the invocation has returned so far, the probe row included once it
+    /// has been read.
+    fn materialised(&self) -> u64;
+    /// The attestation the invocation stands behind now, read off its witness under
+    /// the sole-witness rule, or the rule it broke.
+    fn settle(&self) -> Result<PfAttestation, String>;
+}
+
+/// One step of an on-demand read.
+enum ReadStep {
+    /// The next row, ranked.
+    Row((u64, Term, RowBlock)),
+    /// The read has ended, this way.
+    Ended(StreamEnding),
+}
+
+/// Why an on-demand read could not go on.
+struct ReadFault {
+    /// The refusal, rendered as a materialised read would render it.
+    reason: String,
+    /// Whether the failure invalidates the whole run whenever it is observed — the
+    /// producer beating its declared row bound — rather than only this stratum.
+    whole_run: bool,
+}
+
+/// One stratum's prepared *do you hold this one* question, asked per candidate.
+///
+/// Object-safe and synchronous: the evaluator this crate reads through is
+/// synchronous, and the `async` shape of
+/// [`RankedStream::exclusion`](crate::RankedStream::exclusion) is the fusion
+/// stage's protocol rather than a pending future. Boxed behind this trait rather
+/// than named concretely so the dataset's own type stays out of every type
+/// between here and the fusion engine — a fusion is over strata, and which
+/// concrete store answered is not a fact its type should carry.
+pub(crate) trait ExclusionLookup: fmt::Debug {
+    /// Ask this stratum's producer whether `candidate` is out of its reach.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::ExclusionLookupFailed`] for every way the lookup can
+    /// fail — the term did not decode, the dataset read was refused, the
+    /// producer answered with more rows than its declared bound admits — and
+    /// [`ProtocolError::ExclusionAttestationMoved`] when the index generation that
+    /// answered is not the one the stratum's ranked read pinned. None of them
+    /// degrades to a verdict.
+    ///
+    /// `&mut self` because a lookup is a prepared execution that is bound and run
+    /// once per candidate, and a prepared execution is bound and run through a
+    /// unique borrow — see [`PreparedExecution`].
+    fn look_up(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError>;
+}
+
+/// How a candidate this execution read is bound into an exclusion lookup, decided
+/// once at the ranking read that named it rather than once per lookup.
+///
+/// The fusion stage asks for verdicts by [`Term`], the canonical lexical the
+/// frontier keys candidates by. Turning that text back into a term on every lookup
+/// would re-parse, per candidate, a term the ranking read already held as a value;
+/// and binding it by value would then re-ground it. The ranking read is where the
+/// term is in hand, so that is where this is decided: the dataset's own id for it
+/// where the dataset holds the term — bound through
+/// [`PreparedExecution::bind_id`], which resolves it against the same view the
+/// lookup runs over — and the value itself where the dataset does not, which is the
+/// honest case for a producer whose index names terms the graph never mentions.
+#[derive(Clone, Debug)]
+enum CandidateBinding<I> {
+    /// The dataset holds the term, at this id.
+    Id(I),
+    /// The dataset does not hold the term; it is bound by value.
+    Value(TermValue),
+}
+
+/// Every candidate the ranking reads of one [`execute_within`] call named, keyed by
+/// the [`Term`] the fusion stage will ask about. Shared by that call's lookups.
+type CandidateIndex<I> = HashMap<Term, CandidateBinding<I>>;
+
+/// One stratum's prepared lookups, held until every ranking read of the call is
+/// open and they can be attached to its stream.
+struct PendingLookup {
+    /// The stream's position in the call's streams.
+    position: usize,
+    /// The stratum the lookups answer for.
+    stratum: Iri,
+    /// The lookups, one list per alternative — see [`DatasetExclusion::lookups`].
+    lookups: Vec<Vec<PreparedLookup>>,
+    /// What the stratum's ranked read pinned, which every lookup is held to.
+    pinned: PfAttestation,
+}
+
+/// One exclusion lookup, prepared once with the candidate as its one parameter.
+struct PreparedLookup {
+    /// The prepared execution.
+    execution: PreparedExecution,
+    /// The candidate parameter's slot, resolved once.
+    slot: usize,
+    /// Whether its call is driven by patterns of the caller's text, and so invoked
+    /// once per distinct binding of its inputs rather than once — see
+    /// [`LookupText::driven`](crate::compile::LookupText).
+    driven: bool,
+}
+
+/// The exclusion lookup [`execute`] compiles: one prepared execution per qualifying
+/// call of the stratum's text, run against the caller's dataset once per candidate.
+///
+/// Prepared **once** per stratum and bound per candidate, which is the whole
+/// reason this is a value rather than a closure over a query string: a text
+/// re-parsed per candidate would pay a parse and a feasibility pass for a question
+/// whose answer is a row count. The candidate is bound into each handle's one
+/// declared parameter, by the dataset id the ranking read already resolved where
+/// there is one (see [`CandidateBinding`]), and the substitution pushes it into the
+/// producer's call, so the producer is invoked with the candidate position bound
+/// and answers the one question asked — a point read, not a scan of its index.
+///
+/// # Several calls, one verdict
+///
+/// A rendered unit has one call, and so one lookup. A caller's text may draw its
+/// `?candidate` column from several calls, grouped into **alternatives**
+/// ([`StratumUnit::exclusion_sparql`](crate::StratumUnit)): every solution naming a
+/// candidate is one in which every call of some alternative emitted it. Within an
+/// alternative — a join of calls on the column — any one call finding no row proves
+/// the alternative never names the candidate; across alternatives — the branches of
+/// a `UNION` — the candidate is out of the text's reach only when every alternative
+/// is. So the verdict is `Excluded` exactly when each alternative, asked in order,
+/// has a lookup that finds no row, its lookups asked in order and the first such
+/// ending that alternative; the first alternative all of whose lookups find the
+/// candidate answers `Possible`. Each lookup is held, before its rows are read at all,
+/// to the one attestation the stratum's ranked read pinned — the sole-witness rule
+/// makes that one attestation cover every call the text made, in every branch, since
+/// every call of a conforming unit invokes the one relation at one generation — so a
+/// verdict from any lookup answered by another index generation is refused, whichever
+/// alternative and lookup it was.
+struct DatasetExclusion<'d, D: DatasetView + Sync> {
+    /// The stratum this lookup answers for, so its refusals name a producer
+    /// rather than a query.
+    stratum: Iri,
+    /// The engine the execution was prepared on, shared by every lookup the same
+    /// [`execute_within`] call compiled. Shared rather than owned per stratum
+    /// because the stream outlives that call, and an engine is not a fact about
+    /// any one stratum.
+    engine: Rc<NativeSparqlEngine>,
+    /// The extension environment the execution was prepared against, shared with
+    /// the run that produced the rows. An execution prepared against one registry
+    /// and run under another is refused by the evaluator, so the same value must
+    /// reach both calls — see [`execute_within`]'s own single-environment note.
+    env: Arc<ExtensionEnv>,
+    /// The lookups themselves, one list per alternative and one lookup per
+    /// qualifying call of it, in the order
+    /// [`StratumUnit::exclusion_sparql`](crate::StratumUnit) derived them, each
+    /// prepared once with the candidate as its one parameter.
+    lookups: Vec<Vec<PreparedLookup>>,
+    /// How each candidate this execution read is bound, shared by its lookups and
+    /// written by the reads that name candidates — on demand, as each row is pulled.
+    candidates: Rc<RefCell<CandidateIndex<D::Id>>>,
+    /// The caller's dataset, read exactly as the ranking read it.
+    dataset: &'d D,
+    /// What the ranked read of this stratum pinned: the attestation its stream
+    /// announced before its first row. Every lookup is held to it — see
+    /// [`ProtocolError::ExclusionAttestationMoved`].
+    pinned: PfAttestation,
+}
+
+impl<D: DatasetView + Sync> fmt::Debug for DatasetExclusion<'_, D> {
+    /// Names the stratum and nothing else. A prepared execution has no `Debug` a
+    /// reader could act on, and a dataset's is unbounded — printing either would
+    /// make a stream's `{:?}` a dump of the store it was read from.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DatasetExclusion")
+            .field("stratum", &self.stratum.as_str())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<D: DatasetView + Sync> ExclusionLookup for DatasetExclusion<'_, D> {
+    fn look_up(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        let binding = self.candidates.borrow().get(candidate).cloned();
+        for alternative in 0..self.lookups.len() {
+            let mut excluded = false;
+            for index in 0..self.lookups[alternative].len() {
+                if self.ask(alternative, index, candidate, binding.as_ref())?
+                    == ExclusionVerdict::Excluded
+                {
+                    excluded = true;
+                    break;
+                }
+            }
+            if !excluded {
+                return Ok(ExclusionVerdict::Possible);
+            }
+        }
+        Ok(ExclusionVerdict::Excluded)
+    }
+}
+
+impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
+    /// Ask the `index`-th lookup of the `alternative`-th alternative whether
+    /// `candidate`, bound as `binding` says, is out of its call's reach.
+    fn ask(
+        &mut self,
+        alternative: usize,
+        index: usize,
+        candidate: &Term,
+        binding: Option<&CandidateBinding<D::Id>>,
+    ) -> Result<ExclusionVerdict, ProtocolError> {
+        let stratum = &self.stratum;
+        let failed = |reason: String| ProtocolError::ExclusionLookupFailed {
+            stratum: stratum.as_str().to_owned(),
+            reason,
+        };
+        let PreparedLookup {
+            execution,
+            slot,
+            driven,
+        } = &mut self.lookups[alternative][index];
+        let (slot, driven) = (*slot, *driven);
+        let bound = match binding {
+            Some(CandidateBinding::Id(id)) => execution.bind_id(slot, self.dataset, *id),
+            Some(CandidateBinding::Value(value)) => execution.bind(slot, value.clone()),
+            // A candidate no ranking read of this execution named: one from a
+            // stream assembled elsewhere and fused beside these. Its canonical
+            // lexical is the only form it arrives in, so it is read back through the
+            // crate's own decoder. A term this layer wrote and cannot read back is a
+            // defect in one of the two halves, and it is reported as the failed
+            // lookup it is rather than answered as `Possible`.
+            None => {
+                let value = decode_term(candidate.as_str()).map_err(|reason| {
+                    failed(format!("candidate {candidate} did not decode: {reason}"))
+                })?;
+                execution.bind(slot, value)
+            }
+        };
+        bound.map_err(|diagnostic| failed(diagnostic.to_string()))?;
+        let options = QueryOptions {
+            env: &self.env,
+            ..QueryOptions::EMPTY
+        };
+        // Ungoverned, and the governed ranking read's reasoning is why that is no
+        // loss: that lane declines every caller-settable ceiling and is taken for
+        // its receipt. A lookup's receipt is two facts — its row count, which the
+        // visitor reads here, and the witness of the index generation that
+        // answered, which the witnessed door hands back beside it.
+        //
+        // A driven lookup projects the candidate and the inputs it was invoked with,
+        // one invocation per distinct binding of them, so the most rows any one
+        // invocation answered is the most times one row repeats.
+        let (rows, witness) = self
+            .engine
+            .execute_witnessed(execution, self.dataset, options, |outcome| match outcome {
+                InternedOutcome::Solutions(solutions) => Some(if driven {
+                    let mut answered: HashMap<&[_], u64> = HashMap::new();
+                    for row in solutions.rows() {
+                        *answered.entry(row.as_slice()).or_default() += 1;
+                    }
+                    (
+                        solutions.len(),
+                        answered.values().copied().max().unwrap_or(0),
+                    )
+                } else {
+                    let rows = solutions.len();
+                    (rows, u64::try_from(rows).unwrap_or(u64::MAX))
+                }),
+                InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => None,
+            })
+            .map_err(|diagnostic| failed(diagnostic.to_string()))?;
+        let (rows, pulled) =
+            rows.ok_or_else(|| failed("the exclusion lookup did not return solutions".to_owned()))?;
+        // Held to the read before its verdict is read at all. A verdict is only a
+        // statement about the rows the ranked read would have gone on to name if it
+        // came from the index generation that read pinned; one from anywhere else
+        // is refused whatever it says, because a verdict that happens to agree has
+        // still certified rows on the word of an index the answer's evidence does
+        // not name. The lookup is one call with constant arguments, so its witness
+        // is read under the rule a compiled unit's is — one relation, one
+        // generation — and a witness that breaks it is the same refusal.
+        // A driven lookup whose driving pattern binds no input at all invoked its call
+        // not once, so nothing attested — and nothing needed to. The driving pattern
+        // is implied by the text, so the text binds no input either and never
+        // invokes the call: no candidate is one it names. That is a verdict about
+        // the dataset the ranking read, which this lookup read too, and about no
+        // index generation. An undriven lookup always invokes its call, so an empty
+        // witness there stays the refusal below; so does an empty witness beside a
+        // row, which no invocation produced.
+        if driven && rows == 0 && witness.is_empty() {
+            return Ok(ExclusionVerdict::Excluded);
+        }
+        let moved = |reason: String| ProtocolError::ExclusionAttestationMoved {
+            stratum: stratum.as_str().to_owned(),
+            reason,
+        };
+        let answered = sole_attestation(&witness).map_err(moved)?;
+        if answered != self.pinned {
+            return Err(moved(format!(
+                "the read pinned {:?}, the lookup of {candidate} was answered under {:?}",
+                self.pinned, answered
+            )));
+        }
+        // The point bound a declared exclusion basis rests on, derived from the
+        // ceiling the lookup is read under rather than written twice: the text
+        // asks for one row past the bound precisely so a producer that beats it
+        // is observed instead of truncated into looking conforming. A driven
+        // lookup is read whole instead, and `pulled` is then the most rows any one
+        // of its invocations answered — each distinct binding of its inputs is one
+        // invocation, so a row repeated is an invocation answering twice.
+        const POINT_BOUND: u64 = EXCLUSION_LIMIT - 1;
+        if pulled > POINT_BOUND {
+            // A producer that declared an exclusion basis declared, through the
+            // registry, a candidate-bound mode whose row bound is a point bound.
+            // More than one row back is that declaration broken, and it is
+            // reported through the refusal that already exists for exactly that
+            // — named here rather than given a family of its own, because a
+            // producer that beats its own row bound is one fault however the
+            // call that caught it was shaped.
+            let breach = ExecutionError::RowBoundBreached {
+                stratum: Box::new(self.stratum.clone()),
+                declared: POINT_BOUND,
+                pulled,
+                // No declared mode stands behind this number *here*. The point
+                // bound is the condition the registry admitted the basis under,
+                // read at registration over the relation's own modes; this stage
+                // holds the bound and not the mode it was read at, and naming
+                // one would attribute the figure to a declaration this stage
+                // never looked at — the same reason a caller-assembled unit
+                // records `Undeclared`.
+                mode: BoundMode::Undeclared,
+            };
+            return Err(failed(breach.to_string()));
+        }
+        Ok(if rows == 0 {
+            ExclusionVerdict::Excluded
+        } else {
+            ExclusionVerdict::Possible
+        })
+    }
+}
+
+/// How a stream's read ended.
 ///
 /// The endings answer "what stopped this read", and only the producer's own
 /// side of the seam can tell them apart: an empty cursor looks identical whether
@@ -536,12 +1080,15 @@ pub struct RankedStreamImpl {
 /// reads, so the arrival of that extra row *is* the distinction — see this
 /// module's header.
 ///
-/// It is fixed at construction rather than computed in
-/// [`RankedStreamImpl::receipt`] because the fact is about the evaluator's
-/// answer, not about how much of the stream a consumer chose to pull: a stream
-/// whose ending were derived at the end would say something different to a
-/// caller that stopped early, which is precisely the falsifiable status the
-/// ranked-stream protocol forbids.
+/// A materialised read's ending is known before its first row is pulled, and is
+/// fixed when its stream is built. A read produced on demand learns its ending
+/// only when it gets there — the probe row, or the producer running out — so its
+/// ending is decided at that pull. That is not a status that can say something
+/// different to a caller that stopped early, because it says nothing to such a
+/// caller at all: [`RankedStreamImpl::receipt`] refuses to answer before the
+/// stream has returned its last row ([`ProtocolError::NeverEndingSource`]), so an
+/// ending is only ever observed about a read that reached it, and the same rows
+/// reach the same ending under either schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamEnding {
     /// Every row the unit could yield is on the stream.
@@ -589,7 +1136,7 @@ pub enum StreamEnding {
     },
 }
 
-impl RankedStreamImpl {
+impl<'d> RankedStreamImpl<'d> {
     /// Build a stream over pre-ranked `(rank, candidate, block)` rows that ends the way
     /// `ending` says.
     ///
@@ -597,13 +1144,189 @@ impl RankedStreamImpl {
     /// because it cannot be inferred from `rows`: the row count is the same
     /// either way, and the whole point of the distinction is that only the
     /// reader of the underlying answer knows which one happened.
+    ///
+    /// The stream answers no exclusion lookup. That is the honest state for a
+    /// caller-built stream: an exclusion verdict is a measurement against a
+    /// dataset, and this constructor is handed rows rather than a dataset to
+    /// take one from. `attach_exclusion` is where
+    /// [`execute`] attaches the prepared lookup it compiled.
     #[must_use]
     pub fn new(rows: Vec<(u64, Term, RowBlock)>, ending: StreamEnding) -> Self {
+        // The rows in hand are the whole of the read behind a caller-assembled
+        // stream, so they are the honest read-work figure for one. A `usize`
+        // that does not fit a `u64` is a row count no machine produced; it is
+        // saturated rather than truncated, because a wrapped count would report
+        // an enormous read as a tiny one.
+        let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
         Self {
-            rows: rows.into(),
+            source: RowSource::Materialised {
+                rows: rows.into(),
+                ending,
+                attested: None,
+            },
             pulled: 0,
             exhausted: false,
-            ending,
+            exclusion: None,
+            materialised,
+            run_invalidated: false,
+        }
+    }
+
+    /// A stream over one invocation held open, producing a row per pull.
+    ///
+    /// Not public: an on-demand read is one this executor opened, against a dataset
+    /// and a registry it was handed, and its ending is decided by observations only
+    /// the executor's read makes.
+    const fn on_demand(read: Box<dyn OnDemandRead + 'd>) -> Self {
+        Self {
+            source: RowSource::OnDemand { read, ended: None },
+            pulled: 0,
+            exhausted: false,
+            exclusion: None,
+            materialised: 0,
+            run_invalidated: false,
+        }
+    }
+
+    /// Record how many rows the read that produced these rows really returned.
+    ///
+    /// A builder step rather than a parameter of [`new`](Self::new) for the
+    /// reason [`attach_exclusion`](Self::attach_exclusion) is: only the party that
+    /// ran the read knows the number, and the rows reach this type after the
+    /// depth has already been applied to them. A caller-assembled stream
+    /// attaches nothing and reports the rows it was handed.
+    #[must_use]
+    pub(crate) const fn with_materialised_rows(mut self, rows: u64) -> Self {
+        self.materialised = rows;
+        self
+    }
+
+    /// Record what the witness of the read that produced these rows attested.
+    ///
+    /// A builder step for the reason [`with_materialised_rows`](Self::with_materialised_rows)
+    /// is: only the party that ran the read holds its witness. A caller-assembled
+    /// stream records nothing, and settles to nothing.
+    #[must_use]
+    pub(crate) fn with_attested(mut self, attestation: PfAttestation) -> Self {
+        if let RowSource::Materialised { attested, .. } = &mut self.source {
+            *attested = Some(attestation);
+        }
+        self
+    }
+
+    /// How many rows the read behind this stream returned.
+    ///
+    /// The number [`RankedStream::rows_materialised`](crate::RankedStream::rows_materialised)
+    /// carries into the fused trailer; see there for what it is for and why it
+    /// is not the ranks a fusion pulled.
+    ///
+    /// For a stream read on demand, the rows its invocation has returned **so far**:
+    /// the rows pulled, and the probe row once a pull past the planned depth has read
+    /// it. It grows exactly as far as the stream's consumer reads and no further.
+    #[must_use]
+    pub fn rows_materialised(&self) -> u64 {
+        match &self.source {
+            RowSource::Materialised { .. } => self.materialised,
+            RowSource::OnDemand { read, .. } => read.materialised(),
+        }
+    }
+
+    /// How many rows this stream has handed out through [`Self::next`].
+    #[must_use]
+    pub const fn rows_emitted(&self) -> u64 {
+        self.pulled
+    }
+
+    /// What the read behind this stream stands behind now, if this crate observed
+    /// the read.
+    ///
+    /// For a read this executor materialised, the attestation its witness held,
+    /// read under the sole-witness rule when its run finished and before its first
+    /// row was readable — the one [`StratumStream::attestation`] carries. It has
+    /// nothing left to learn, and it is still handed back rather than withheld: a
+    /// consumer holds whatever a caller announced for the stream to this, exactly
+    /// as it holds an on-demand read's announcement to its settled witness, so the
+    /// two schedules refuse a mis-announced attestation alike and the evidence an
+    /// answer names is the evidence its read and its exclusion lookups stood
+    /// behind. For a read produced on demand, the invocation's witness as it stands
+    /// at this instant, read under the same rule. `None` for rows a caller handed
+    /// [`Self::new`]: no read of this crate's stands behind them.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::AttestationMoved`] when that witness cannot be one
+    /// attestation — the index the read served from moved under it — naming the
+    /// count the rule refused.
+    // Synchronous for the reason `next` is.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::future_not_send,
+        reason = "an on-demand read shares its candidate index with the stratum's \
+                  exclusion lookups through `Rc<RefCell<_>>` and is awaited in the one \
+                  task that fuses it, so the future is not `Send` by construction"
+    )]
+    pub async fn settle(&mut self) -> Result<Option<PfAttestation>, ProtocolError> {
+        match &self.source {
+            RowSource::Materialised { attested, .. } => Ok(attested.clone()),
+            RowSource::OnDemand { read, .. } => {
+                read.settle()
+                    .map(Some)
+                    .map_err(|reason| ProtocolError::AttestationMoved {
+                        stratum: read.stratum().to_owned(),
+                        reason,
+                    })
+            }
+        }
+    }
+
+    /// Whether the fault [`Self::next`] refused with invalidates the whole run
+    /// rather than only this stratum: the producer returned more rows than its
+    /// registry declared it could.
+    pub(crate) const fn run_invalidated(&self) -> bool {
+        self.run_invalidated
+    }
+
+    /// Attach the prepared exclusion lookup this stratum answers through.
+    ///
+    /// A builder step rather than a parameter of [`new`](Self::new), for the
+    /// reason the plan identity is one on the adapter above: a lookup exists
+    /// only where the producer declared a basis and only where this layer
+    /// rendered the query, and a stream without one is not a stream missing
+    /// anything.
+    ///
+    /// On a stream already in place rather than as a consuming builder step:
+    /// [`execute_within`] attaches its lookups after every stratum has been read,
+    /// because a lookup binds candidates any stratum of the call may have named,
+    /// and those are only all known once the last ranking read is in.
+    pub(crate) fn attach_exclusion(&mut self, lookup: Box<dyn ExclusionLookup + 'd>) {
+        self.exclusion = Some(lookup);
+    }
+
+    /// Ask this stratum's producer whether `candidate` is out of its reach.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::ExclusionUnavailable`] when no lookup was compiled for
+    /// this stratum, and whatever the lookup itself refuses with — its failure
+    /// ([`ProtocolError::ExclusionLookupFailed`]), or an answer given under an
+    /// attestation other than the one this stream's read pinned
+    /// ([`ProtocolError::ExclusionAttestationMoved`]). None is
+    /// answered as [`ExclusionVerdict::Possible`]: see
+    /// [`RankedStream::exclusion`](crate::RankedStream::exclusion) for why a
+    /// failed measurement must not wear that costume.
+    // Synchronous for the reason `next` is: the evaluator behind it is
+    // synchronous, and the `async` shape is the fusion stage's protocol.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::future_not_send,
+        reason = "an on-demand read shares its candidate index with the stratum's \
+                  exclusion lookups through `Rc<RefCell<_>>` and is awaited in the one \
+                  task that fuses it, so the future is not `Send` by construction"
+    )]
+    pub async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        match self.exclusion.as_mut() {
+            Some(lookup) => lookup.look_up(candidate),
+            None => Err(ProtocolError::ExclusionUnavailable),
         }
     }
 
@@ -617,8 +1340,52 @@ impl RankedStreamImpl {
     // returning; the `async` shape is the ranked-stream contract the fusion stage
     // consumes, and a caller may compose it with genuinely asynchronous streams.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::future_not_send,
+        reason = "an on-demand read shares its candidate index with the stratum's \
+                  exclusion lookups through `Rc<RefCell<_>>` and is awaited in the one \
+                  task that fuses it, so the future is not `Send` by construction"
+    )]
     pub async fn next(&mut self) -> Result<Option<(u64, Term, RowBlock)>, ProtocolError> {
-        match self.rows.pop_front() {
+        let row = match &mut self.source {
+            RowSource::Materialised { rows, .. } => rows.pop_front(),
+            RowSource::OnDemand { read, ended } => {
+                if ended.is_some() {
+                    None
+                } else {
+                    match read.pull() {
+                        Ok(ReadStep::Row(row)) => Some(row),
+                        Ok(ReadStep::Ended(ending)) => {
+                            *ended = Some(OnDemandEnd::Ended(ending));
+                            None
+                        }
+                        // Before the first row, a failure is this stratum's alone,
+                        // reported exactly as a materialised read's is: through the
+                        // receipt, as `ExecutionFailed`, with every other stratum
+                        // still answering.
+                        Err(ReadFault {
+                            reason,
+                            whole_run: false,
+                        }) if self.pulled == 0 => {
+                            *ended = Some(OnDemandEnd::Failed(reason));
+                            None
+                        }
+                        // After rows were handed out — or at any point, for a
+                        // breach of the declared row bound — it fails the request by
+                        // name, because those rows may already be in the answer.
+                        Err(ReadFault { reason, whole_run }) => {
+                            self.run_invalidated = whole_run;
+                            return Err(ProtocolError::ReadFailed {
+                                stratum: read.stratum().to_owned(),
+                                rows_before: self.pulled,
+                                reason,
+                            });
+                        }
+                    }
+                }
+            }
+        };
+        match row {
             Some(row) => {
                 self.pulled += 1;
                 Ok(Some(row))
@@ -646,11 +1413,38 @@ impl RankedStreamImpl {
     /// drained, because a completeness claim from a partially read stream is
     /// exactly the falsifiable status the protocol forbids.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::future_not_send,
+        reason = "an on-demand read shares its candidate index with the stratum's \
+                  exclusion lookups through `Rc<RefCell<_>>` and is awaited in the one \
+                  task that fuses it, so the future is not `Send` by construction"
+    )]
     pub async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         if !self.exhausted {
             return Err(ProtocolError::NeverEndingSource);
         }
-        Ok(match self.ending {
+        let ending = match &self.source {
+            RowSource::Materialised { ending, .. } => *ending,
+            RowSource::OnDemand {
+                ended: Some(OnDemandEnd::Ended(ending)),
+                ..
+            } => *ending,
+            RowSource::OnDemand {
+                ended: Some(OnDemandEnd::Failed(reason)),
+                ..
+            } => {
+                return Ok(ProducerReceipt::ExecutionFailed {
+                    reason: reason.clone(),
+                });
+            }
+            // `exhausted` is set only on the pull that recorded an end, so an
+            // exhausted on-demand stream always has one; reporting this rather than
+            // inventing an ending keeps the impossibility a refusal.
+            RowSource::OnDemand { ended: None, .. } => {
+                return Err(ProtocolError::NeverEndingSource);
+            }
+        };
+        Ok(match ending {
             StreamEnding::Exhausted => ProducerReceipt::Exhausted {
                 rows_emitted: self.pulled,
             },
@@ -692,11 +1486,59 @@ impl RankedStreamImpl {
     clippy::unused_async_trait_impl,
     clippy::future_not_send
 )]
-pub async fn execute<D: DatasetView + Sync>(
+pub async fn execute<'d, D: DatasetView + Sync>(
     compiled: &CompiledRetrieval,
     registry: &PropertyFunctionRegistry,
-    dataset: &D,
-) -> Result<ExecutionResult, ExecutionError> {
+    dataset: &'d D,
+) -> Result<ExecutionResult<'d>, ExecutionError> {
+    execute_within(compiled, registry, dataset, ReadSchedule::Materialised).await
+}
+
+/// Run every compiled unit as [`execute`] does, producing each stratum's rows on
+/// the `schedule` given.
+///
+/// [`execute`] is this function at [`ReadSchedule::Materialised`]. Under
+/// [`ReadSchedule::OnDemand`] every unit whose prepared text is one property-function
+/// call under row-for-row operators — every unit this layer rendered, and a caller's
+/// own text of that shape, a row-by-row `FILTER` included — is opened at its planned
+/// depth as one invocation held
+/// open, and its stream produces a row each time it is pulled — see this module's
+/// header. The two schedules run the same text and read
+/// the same rows in the same order; what differs is how many of them a consumer that
+/// stops early ever causes to be produced.
+///
+/// Two consequences a caller of the on-demand schedule should know:
+///
+/// * an on-demand stratum has **no entry in [`ExecutionResult::statuses`]** until its
+///   stream is read, because how it ends is decided by how far it is read. Its
+///   stream's receipt is its status, and a caller that wants the status of a stream
+///   it will not fuse reads the stream to its end;
+/// * a unit whose text is not one call under row-for-row operators — a caller's own
+///   join, `ORDER BY`, dataset clause, or a `FILTER` the read cannot evaluate row by
+///   row — is materialised under this schedule too, and does get an entry.
+///
+/// # Errors
+///
+/// Exactly [`execute`]'s: [`ExecutionError::RegistryMismatch`],
+/// [`ExecutionError::UnitsNotAsAssembled`],
+/// [`ExecutionError::EnvironmentNotDerivable`],
+/// [`ExecutionError::InconsistentWitness`] and
+/// [`ExecutionError::RowBoundBreached`] — the last two only for a materialised read;
+/// an on-demand read reports the same two facts when it reaches them, through its
+/// stream ([`ProtocolError::AttestationMoved`], [`ProtocolError::ReadFailed`]).
+// The same three allowances [`execute`] carries, for the same reasons; this is
+// the body that function delegates to.
+#[allow(
+    clippy::unused_async,
+    clippy::unused_async_trait_impl,
+    clippy::future_not_send
+)]
+pub async fn execute_within<'d, D: DatasetView + Sync>(
+    compiled: &CompiledRetrieval,
+    registry: &PropertyFunctionRegistry,
+    dataset: &'d D,
+    schedule: ReadSchedule,
+) -> Result<ExecutionResult<'d>, ExecutionError> {
     if compiled.registry_id != registry.instance_id() {
         return Err(ExecutionError::RegistryMismatch {
             expected: compiled.registry_id,
@@ -710,8 +1552,19 @@ pub async fn execute<D: DatasetView + Sync>(
     // identity before the check could be reached.
     compiled.tagged_as_assembled()?;
 
-    let engine = NativeSparqlEngine::new();
+    // One engine for the whole call, shared with the exclusion lookups it
+    // compiles: they run after this call returns, on executions prepared here.
+    let engine = Rc::new(NativeSparqlEngine::new());
     let mut streams = Vec::with_capacity(compiled.units.len());
+    // The lookups this call compiled, attached once every ranking read is open —
+    // see `CandidateIndex` — beside the index of each candidate those reads named.
+    // The index is filled only when some stratum compiled a lookup, because it is
+    // read by lookups and by nothing else; a read produced on demand fills it as
+    // each row is pulled, which is before any lookup can ask about that row's
+    // candidate, because the fusion asks only about candidates it has pulled.
+    let mut lookups: Vec<PendingLookup> = Vec::new();
+    let candidates: Rc<RefCell<CandidateIndex<D::Id>>> = Rc::new(RefCell::new(HashMap::new()));
+    let index_candidates = compiled.units.iter().any(StratumUnit::declares_exclusion);
     let mut statuses = HashMap::with_capacity(compiled.units.len());
     // The registry is named identically at prepare and at evaluation: the
     // evaluator refuses a plan prepared against a different registry than the
@@ -722,13 +1575,20 @@ pub async fn execute<D: DatasetView + Sync>(
     // borrow it: an environment derives the parse configuration and the registry
     // fingerprints the plan cache keys on, and rebuilding it per unit would pay that
     // derivation once per unit for a value that cannot change inside one execution.
-    let env = ExtensionEnv::over_relations(registry.clone()).map_err(|e| {
+    //
+    // Shared rather than owned outright because a capable stratum's exclusion
+    // lookup outlives this call: the lookup runs per candidate while the fusion
+    // is merging, against a plan prepared here, and the evaluator refuses a plan
+    // run under a different registry than it was prepared against. One value,
+    // one refcount per capable stratum, and no way for the two calls to name
+    // different registries.
+    let env = Arc::new(ExtensionEnv::over_relations(registry.clone()).map_err(|e| {
         ExecutionError::EnvironmentNotDerivable {
             reason: e.to_string(),
         }
-    })?;
+    })?);
     let options = || QueryOptions {
-        env: &env,
+        env: env.as_ref(),
         ..QueryOptions::EMPTY
     };
 
@@ -740,8 +1600,11 @@ pub async fn execute<D: DatasetView + Sync>(
         // can be told about and never observe, which is why this arm was deleted rather
         // than kept as a guard: the condition it guarded cannot reach a bundle.
         //
-        // Rendered once and run once: the depth this loop reads the ending against
-        // is the depth that wrote the bound in this text.
+        // Rendered once and run once, under either schedule: the depth this loop
+        // reads the ending against is the depth that wrote the bound in this text,
+        // taken from the unit once, here, so the text, the reach and the rank the
+        // ending reports cannot be three readings of two different numbers.
+        let depth = unit.probed_depth();
         let sparql = unit.sparql();
         let prepared = match engine.prepare_query_with_options(&sparql, None, options()) {
             Ok(prepared) => prepared,
@@ -755,6 +1618,147 @@ pub async fn execute<D: DatasetView + Sync>(
                 continue;
             }
         };
+        // Prepared before the ranking read runs, and once for the whole stratum —
+        // but after the ranking text is prepared, because that prepared plan is what
+        // a caller's own text has its lookups derived from (see
+        // `StratumUnit::exclusion_sparql`). Each is a second query over the same
+        // producer — one of the text's calls with the candidate bound — and the
+        // fusion stage runs it per candidate it needs a verdict for, so parsing and
+        // feasibility-ordering it here is
+        // the difference between a prepared lookup and a re-parse per
+        // candidate. A stratum whose lookup will not prepare is a stratum whose
+        // declared basis cannot be honoured, and that is this stratum's own
+        // failure exactly as a ranking text that will not prepare is: reported
+        // here and contributing no stream, rather than carried to a lookup that
+        // fails once per candidate at read time.
+        //
+        // The candidate is DECLARED to the prepare as the execution's parameter, not
+        // merely substituted at run time. A lookup is one prepared execution run
+        // once per candidate, so the admission pass sees `?candidate` as a free
+        // variable unless it is told otherwise — and for a producer that takes a
+        // depth, a free candidate beside a free depth is a call no mode serves at
+        // all, while a free candidate beside a BOUND depth is the ranked question
+        // whose absences are not exclusions. Declaring it is what puts the call in
+        // the candidate-bound mode a membership basis is admitted against, and the
+        // execution refuses to run with it unbound, so it cannot be run free.
+        let exclusion = match unit.exclusion_sparql(&prepared, registry) {
+            None => None,
+            Some(Err(reason)) => {
+                statuses.insert(
+                    unit.stratum.clone(),
+                    ProducerStatus::ExecutionFailed {
+                        reason: format!(
+                            "stratum {}: the exclusion lookup its contract declared could not be \
+                             derived from its query: {reason}",
+                            unit.stratum
+                        ),
+                    },
+                );
+                continue;
+            }
+            Some(Ok(alternatives)) => {
+                let prepared_lookups: Result<Vec<Vec<PreparedLookup>>, _> = alternatives
+                    .iter()
+                    .map(|alternative| {
+                        alternative
+                            .iter()
+                            .map(|lookup| {
+                                engine
+                                    .prepare_execution(
+                                        &lookup.text,
+                                        None,
+                                        &[lookup.parameter.as_str()],
+                                        options(),
+                                    )
+                                    .map(|execution| {
+                                        let slot = execution.slot(&lookup.parameter).expect(
+                                            "the one parameter this execution was prepared with",
+                                        );
+                                        PreparedLookup {
+                                            execution,
+                                            slot,
+                                            driven: lookup.driven,
+                                        }
+                                    })
+                            })
+                            .collect()
+                    })
+                    .collect();
+                match prepared_lookups {
+                    Ok(lookups) => Some(lookups),
+                    Err(diagnostic) => {
+                        statuses.insert(
+                            unit.stratum.clone(),
+                            ProducerStatus::ExecutionFailed {
+                                reason: format!(
+                                    "stratum {}: the exclusion lookup its producer declared \
+                                     could not be prepared: {diagnostic}",
+                                    unit.stratum
+                                ),
+                            },
+                        );
+                        continue;
+                    }
+                }
+            }
+        };
+        // On demand: the same prepared text, opened as one invocation held open, and
+        // read as its stream is pulled. No status is recorded, because how this read
+        // ends is decided by how far its consumer reads it; see `execute_within`.
+        //
+        // Decided by the prepared plan's shape, never by who wrote the text: a
+        // caller's own text that is one call under row-for-row operators is exactly
+        // one invocation, and one that is anything else is read materialised below.
+        if schedule == ReadSchedule::OnDemand && prepared.is_call_read() {
+            let opened = engine
+                .open_call_cursor(&prepared, options())
+                .map_err(|diagnostic| diagnostic.to_string())
+                .and_then(|cursor| {
+                    CandidateColumns::locate(cursor.variables(), &unit.contract.domains)
+                        .map(|columns| (cursor, columns))
+                        .map_err(|reason| format!("stratum {}: {reason}", unit.stratum))
+                });
+            match opened {
+                Ok((cursor, columns)) => {
+                    let attestation = cursor.opened().clone();
+                    let read = CallRead {
+                        stratum: unit.stratum.clone(),
+                        cursor,
+                        columns,
+                        depth: depth.get(),
+                        declared_rows: unit.declared_rows(),
+                        declared_mode: unit.declared_mode(),
+                        reach: unit.reach(),
+                        materialised: 0,
+                        candidates: index_candidates.then(|| Rc::clone(&candidates)),
+                        dataset,
+                    };
+                    if let Some(prepared_lookups) = exclusion {
+                        lookups.push(PendingLookup {
+                            position: streams.len(),
+                            stratum: unit.stratum.clone(),
+                            lookups: prepared_lookups,
+                            pinned: attestation.clone(),
+                        });
+                    }
+                    streams.push(StratumStream {
+                        stratum: unit.stratum.clone(),
+                        plan_id: compiled.plan_id,
+                        fused_bound: compiled.fused_bound,
+                        contract: unit.contract.clone(),
+                        attestation,
+                        stream: RankedStreamImpl::on_demand(Box::new(read)),
+                    });
+                }
+                Err(reason) => {
+                    statuses.insert(
+                        unit.stratum.clone(),
+                        ProducerStatus::ExecutionFailed { reason },
+                    );
+                }
+            }
+            continue;
+        }
         // Governors are per call, never per engine: the value is built here,
         // used once, and dropped with the call. `UNBOUNDED` declines every
         // caller-settable ceiling, so this is the governed lane for its receipt
@@ -789,6 +1793,15 @@ pub async fn execute<D: DatasetView + Sync>(
                     })?;
                 match rank_candidates(&variables, &rows, &unit.contract.domains) {
                     Ok(ranked) => {
+                        if index_candidates {
+                            index_candidates_into(
+                                &mut candidates.borrow_mut(),
+                                &variables,
+                                &rows,
+                                &ranked,
+                                dataset,
+                            );
+                        }
                         // `?`, not a per-stratum status: a producer that beat
                         // its own declaration broke the number every other
                         // stratum's admission and ordering rested on, and the
@@ -796,19 +1809,36 @@ pub async fn execute<D: DatasetView + Sync>(
                         // the extra row has already falsified.
                         let (ranked, ending, status) = bound_to_depth(
                             ranked,
-                            unit.depth(),
+                            depth.get(),
                             unit.declared_rows(),
                             unit.declared_mode(),
                             unit.reach(),
                             &unit.stratum,
                         )?;
+                        // The read's own cost, taken from the evaluator's
+                        // answer rather than from the rows that survived the
+                        // depth: `bound_to_depth` has just taken the probe row
+                        // off, and a figure read after it would report every
+                        // bounded read as one row cheaper than it was.
+                        let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
+                        let stream = RankedStreamImpl::new(ranked, ending)
+                            .with_materialised_rows(materialised)
+                            .with_attested(attestation.clone());
+                        if let Some(prepared_lookups) = exclusion {
+                            lookups.push(PendingLookup {
+                                position: streams.len(),
+                                stratum: unit.stratum.clone(),
+                                lookups: prepared_lookups,
+                                pinned: attestation.clone(),
+                            });
+                        }
                         streams.push(StratumStream {
                             stratum: unit.stratum.clone(),
                             plan_id: compiled.plan_id,
                             fused_bound: compiled.fused_bound,
                             contract: unit.contract.clone(),
                             attestation,
-                            stream: RankedStreamImpl::new(ranked, ending),
+                            stream,
                         });
                         statuses.insert(unit.stratum.clone(), status);
                     }
@@ -863,7 +1893,71 @@ pub async fn execute<D: DatasetView + Sync>(
         }
     }
 
+    for PendingLookup {
+        position,
+        stratum,
+        lookups,
+        pinned,
+    } in lookups
+    {
+        streams[position]
+            .stream
+            .attach_exclusion(Box::new(DatasetExclusion {
+                stratum,
+                engine: Rc::clone(&engine),
+                env: Arc::clone(&env),
+                lookups,
+                candidates: Rc::clone(&candidates),
+                dataset,
+                pinned,
+            }));
+    }
+
     Ok(ExecutionResult { streams, statuses })
+}
+
+/// Record how each of `ranked`'s candidates is bound into an exclusion lookup —
+/// see [`CandidateBinding`].
+///
+/// `ranked` is [`rank_candidates`]' answer over `rows`, one entry per row in row
+/// order, so the two are zipped rather than the lexical being rendered a second
+/// time. A candidate several strata named is recorded once: the dataset's id for a
+/// term does not depend on which read found it.
+fn index_candidates_into<D: DatasetView>(
+    index: &mut CandidateIndex<D::Id>,
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+    ranked: &[(u64, Term, RowBlock)],
+    dataset: &D,
+) {
+    let Some(column) = variables.iter().position(|name| name == CANDIDATE_NAME) else {
+        return;
+    };
+    for ((_, term, _), row) in ranked.iter().zip(rows) {
+        if let Some(value) = row.get(column).and_then(Option::as_ref) {
+            index_candidate(index, term, value, dataset);
+        }
+    }
+}
+
+/// Record how one candidate, named `term` and read as `value`, is bound into an
+/// exclusion lookup — the dataset's own id where the dataset holds it, the value
+/// where it does not. A candidate already recorded is left as it is: the dataset's
+/// id for a term does not depend on which read found it.
+fn index_candidate<D: DatasetView>(
+    index: &mut CandidateIndex<D::Id>,
+    term: &Term,
+    value: &TermValue,
+    dataset: &D,
+) {
+    if index.contains_key(term) {
+        return;
+    }
+    let binding = dataset.term_id_by_value(value).map_or_else(
+        || CandidateBinding::Value(value.clone()),
+        CandidateBinding::Id,
+    );
+    index.insert(term.clone(), binding);
 }
 
 /// What one stratum's read came to: the rows that reach the stream, how the read
@@ -879,9 +1973,12 @@ type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
 ///
 /// The unit was emitted one row deeper than `depth`, so a `depth + 1`-th row
 /// here means the read still had a row when the bound ran out. That row is
-/// dropped — it is a probe and never a value — and its only effect is the
-/// ending. Every other row keeps the rank [`rank_candidates`] gave it, so
-/// nothing is renumbered.
+/// dropped — it is a probe and never a value — and its only effect on the
+/// *answer* is the ending. It is still a row the read paid for, so it survives
+/// in [`RankedStreamImpl::rows_materialised`], which this function's caller sets
+/// from the rows the evaluator returned rather than from the rows it kept. Every
+/// other row keeps the rank [`rank_candidates`] gave it, so nothing is
+/// renumbered.
 ///
 /// The status returned is the mirror of the ending, so the terminal report and
 /// the stream's own receipt cannot say different things about the same read.
@@ -1123,33 +2220,193 @@ fn rank_candidates(
     rows: &[Vec<Option<TermValue>>],
     domains: &CandidateDomains,
 ) -> Result<Vec<(u64, Term, RowBlock)>, String> {
-    let column = variables
-        .iter()
-        .position(|name| name == CANDIDATE_NAME)
-        .ok_or_else(|| {
-            format!("the unit's solutions project no ?{CANDIDATE_NAME} column: {variables:?}")
-        })?;
-    // Present exactly when the producer declared a position to read a block out
-    // of, because that is the only case `compile` projects the column. Found by
-    // name for the reason the candidate is: reading a position instead would make
-    // the block depend on projection order.
-    let block_column = variables.iter().position(|name| name == BLOCK_NAME);
-    // The fallback for a unit with no block column, and it is a derivation rather
-    // than a default: see [`entailed_block`].
-    let entailed = entailed_block(domains);
+    let columns = CandidateColumns::locate(variables, domains)?;
     let mut ranked = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let rank = u64::try_from(index + 1).unwrap_or(u64::MAX);
-        let value = row.get(column).and_then(Option::as_ref).ok_or_else(|| {
-            format!("the projected ?{CANDIDATE_NAME} column is unbound in row {rank}")
-        })?;
-        let block = match block_column {
-            None => entailed.clone(),
-            Some(column) => row_block(row.get(column).and_then(Option::as_ref), rank)?,
-        };
-        ranked.push((rank, term_candidate(value), block));
+        ranked.push(columns.rank(row, rank)?);
     }
     Ok(ranked)
+}
+
+/// Where a unit's solutions carry the candidate and the block, found once per read
+/// and applied to every row of it — materialised or produced on demand alike, so the
+/// two schedules rank a row by one reading of it.
+#[derive(Debug)]
+struct CandidateColumns {
+    /// The `?candidate` column.
+    candidate: usize,
+    /// The `?block` column, present exactly when the producer declared a position to
+    /// read a block out of, because that is the only case `compile` projects it.
+    block: Option<usize>,
+    /// The block every row carries when the unit projects no block column: a
+    /// derivation rather than a default, see [`entailed_block`].
+    entailed: RowBlock,
+}
+
+impl CandidateColumns {
+    /// Find the columns by name among `variables`, for a producer that declared
+    /// `domains`.
+    ///
+    /// Found by name rather than by position, because reading a position would make
+    /// the candidate and the block depend on projection order.
+    fn locate(variables: &[String], domains: &CandidateDomains) -> Result<Self, String> {
+        let candidate = variables
+            .iter()
+            .position(|name| name == CANDIDATE_NAME)
+            .ok_or_else(|| {
+                format!("the unit's solutions project no ?{CANDIDATE_NAME} column: {variables:?}")
+            })?;
+        Ok(Self {
+            candidate,
+            block: variables.iter().position(|name| name == BLOCK_NAME),
+            entailed: entailed_block(domains),
+        })
+    }
+
+    /// The ranked `(rank, candidate, block)` reading of one solution row at `rank`.
+    fn rank(&self, row: &[Option<TermValue>], rank: u64) -> Result<(u64, Term, RowBlock), String> {
+        let value = row
+            .get(self.candidate)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| {
+                format!("the projected ?{CANDIDATE_NAME} column is unbound in row {rank}")
+            })?;
+        let block = match self.block {
+            None => self.entailed.clone(),
+            Some(column) => row_block(row.get(column).and_then(Option::as_ref), rank)?,
+        };
+        let candidate = term_candidate(value).map_err(|error| {
+            format!("the projected ?{CANDIDATE_NAME} column in row {rank} names no term: {error}")
+        })?;
+        Ok((rank, candidate, block))
+    }
+
+    /// The candidate cell of `row`, when it is bound.
+    fn candidate_of<'r>(&self, row: &'r [Option<TermValue>]) -> Option<&'r TermValue> {
+        row.get(self.candidate).and_then(Option::as_ref)
+    }
+}
+
+/// One stratum's invocation held open by [`execute_within`] under
+/// [`ReadSchedule::OnDemand`], read a row per pull.
+///
+/// Every observation [`bound_to_depth`] makes over a materialised read is made here,
+/// in the same order, one row at a time: the declared row bound is checked against
+/// every row the invocation returns before anything else is decided about it; a row
+/// past the planned depth is the probe, never emitted, and ends the read
+/// `DepthReached`; a producer that runs out ends it `Exhausted`, or
+/// `RowBoundReached` where it filled a depth it could not be asked past.
+struct CallRead<'d, D: DatasetView + Sync> {
+    /// The stratum this read is for.
+    stratum: Iri,
+    /// The open invocation.
+    cursor: CallCursor,
+    /// Where the invocation's solutions carry the candidate and the block.
+    columns: CandidateColumns,
+    /// The planned depth: the most rows this stratum may contribute.
+    depth: u32,
+    /// The registry's declared row bound for the producer, held against every row.
+    declared_rows: Option<u64>,
+    /// Which declared mode `declared_rows` was read at, for the refusal naming it.
+    declared_mode: BoundMode,
+    /// How far past `depth` this read can reach.
+    reach: ReadReach,
+    /// The rows the invocation has returned, the probe row included once read.
+    materialised: u64,
+    /// The index an exclusion lookup binds candidates through, when any stratum of
+    /// this execution compiled one.
+    candidates: Option<Rc<RefCell<CandidateIndex<D::Id>>>>,
+    /// The caller's dataset, which a candidate is resolved against for that index.
+    dataset: &'d D,
+}
+
+impl<D: DatasetView + Sync> fmt::Debug for CallRead<'_, D> {
+    /// Names the stratum and the read's position; a dataset's `Debug` is unbounded.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CallRead")
+            .field("stratum", &self.stratum.as_str())
+            .field("depth", &self.depth)
+            .field("materialised", &self.materialised)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
+    fn stratum(&self) -> &str {
+        self.stratum.as_str()
+    }
+
+    fn pull(&mut self) -> Result<ReadStep, ReadFault> {
+        let isolated = |reason: String| ReadFault {
+            reason,
+            whole_run: false,
+        };
+        let Some(row) = self
+            .cursor
+            .next_row(self.dataset)
+            .map_err(|error| isolated(error.to_string()))?
+        else {
+            // Ran out. A caller's own text is the stopper nobody observed past, and
+            // the ending names it, exactly as `bound_to_depth` does: a `LIMIT` inside
+            // that text may have cut the read before this layer's bound was reached.
+            // Filling a depth the read could not be taken past is the producer's own
+            // bound stopping it, which nobody could observe past either; anything
+            // else is a verified exhaustion.
+            let ending = match self.reach {
+                ReadReach::Unknown => StreamEnding::SuppliedQueryEnded {
+                    rank: self.materialised,
+                },
+                ReadReach::AtDepth if self.materialised == u64::from(self.depth) => {
+                    StreamEnding::RowBoundReached {
+                        rank: u64::from(self.depth),
+                    }
+                }
+                ReadReach::AtDepth | ReadReach::PastDepth => StreamEnding::Exhausted,
+            };
+            return Ok(ReadStep::Ended(ending));
+        };
+        self.materialised += 1;
+        if let Some(declared) = self.declared_rows
+            && self.materialised > declared
+        {
+            return Err(ReadFault {
+                reason: ExecutionError::RowBoundBreached {
+                    stratum: Box::new(self.stratum.clone()),
+                    declared,
+                    pulled: self.materialised,
+                    mode: self.declared_mode,
+                }
+                .to_string(),
+                whole_run: true,
+            });
+        }
+        if self.materialised > u64::from(self.depth) {
+            // The probe row: never emitted, and its arrival is the ending.
+            return Ok(ReadStep::Ended(StreamEnding::DepthReached {
+                rank: u64::from(self.depth),
+            }));
+        }
+        let ranked = self
+            .columns
+            .rank(&row, self.materialised)
+            .map_err(|reason| isolated(format!("stratum {}: {reason}", self.stratum)))?;
+        if let Some(index) = &self.candidates
+            && let Some(value) = self.columns.candidate_of(&row)
+        {
+            index_candidate(&mut index.borrow_mut(), &ranked.1, value, self.dataset);
+        }
+        Ok(ReadStep::Row(ranked))
+    }
+
+    fn materialised(&self) -> u64 {
+        self.materialised
+    }
+
+    fn settle(&self) -> Result<PfAttestation, String> {
+        let witness = self.cursor.settle().map_err(|error| error.to_string())?;
+        sole_attestation(&witness)
+    }
 }
 
 /// The block every row of a producer that names none itself lies in, read off the
@@ -1238,15 +2495,20 @@ fn row_block(value: Option<&TermValue>, rank: u64) -> Result<RowBlock, String> {
 /// placement, where a caller actually tries it, and the decoder reads `_:label`
 /// back either way. Refusing here would discard every other row in the stratum
 /// over one answer the layer merely declined to write down.
-fn term_candidate(value: &TermValue) -> Term {
-    Term::new(candidate_lexical(value))
+///
+/// A literal no concrete syntax can spell — a base direction with no language tag,
+/// or a tag that is not a `LANGTAG` — is refused: it is not well-formed RDF, and
+/// dropping the tag or direction to write it would name the plain literal of the
+/// same lexical form instead, a different term.
+fn term_candidate(value: &TermValue) -> Result<Term, RenderError> {
+    candidate_lexical(value).map(Term::new)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use purrdf_core::TermValue;
+    use purrdf_core::{RdfTextDirection, TermValue};
     use purrdf_sparql_eval::{
         BindingPattern, CandidateDomains, DomainTag, IndexGeneration, PfAttestation,
         RelationWitness, ServiceLevel,
@@ -1276,7 +2538,7 @@ mod tests {
                 o: Box::new(TermValue::simple_literal("o")),
             },
         ] {
-            let candidate = term_candidate(&value);
+            let candidate = term_candidate(&value).expect("the fixture value is well-formed");
             assert_eq!(
                 decode_term(candidate.as_str()),
                 Ok(value),
@@ -1285,7 +2547,9 @@ mod tests {
             );
         }
         assert_eq!(
-            term_candidate(&TermValue::iri("http://example.org/doc")).as_str(),
+            term_candidate(&TermValue::iri("http://example.org/doc"))
+                .expect("an IRI is well-formed")
+                .as_str(),
             "<http://example.org/doc>",
             "an IRI candidate is legible, not an encoding of one"
         );
@@ -1331,6 +2595,92 @@ mod tests {
             Ok(TermValue::blank("b0")),
             "and the decoder reads the label back, so nothing is lost"
         );
+    }
+
+    /// A literal no concrete syntax can spell is refused rather than written without
+    /// its tag, which would name the plain literal of the same lexical form — a
+    /// different term. Its well-formed neighbours, a tagged and a directional
+    /// literal, and a blank node nested in a triple term, are all named and read
+    /// back to the value they came from.
+    #[test]
+    fn an_unspellable_literal_is_refused_and_its_well_formed_neighbours_are_named() {
+        let malformed_tag = TermValue::Literal {
+            lexical_form: "chat".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            language: Some("en_us".to_owned()),
+            direction: None,
+        };
+        let untagged_direction = TermValue::Literal {
+            lexical_form: "chat".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: None,
+            direction: Some(RdfTextDirection::Rtl),
+        };
+        for (value, nested) in [
+            (&malformed_tag, false),
+            (&untagged_direction, false),
+            (&malformed_tag, true),
+        ] {
+            let value = if nested {
+                TermValue::Triple {
+                    s: Box::new(TermValue::blank("b0")),
+                    p: Box::new(TermValue::iri("http://example.org/p")),
+                    o: Box::new(value.clone()),
+                }
+            } else {
+                value.clone()
+            };
+            let refused = rank_candidates(
+                &variables(),
+                &[vec![Some(value)]],
+                &CandidateDomains::Unrestricted,
+            )
+            .expect_err("an unspellable literal is refused, not misnamed");
+            assert!(
+                refused.contains("row 1 names no term"),
+                "the refusal names the row: {refused}"
+            );
+        }
+
+        let tagged = TermValue::lang_literal("chat", "en-us");
+        let directional = TermValue::Literal {
+            lexical_form: "chat".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        };
+        let nested_blank = TermValue::Triple {
+            s: Box::new(TermValue::blank("b0")),
+            p: Box::new(TermValue::iri("http://example.org/p")),
+            o: Box::new(tagged.clone()),
+        };
+        let ranked = rank_candidates(
+            &variables(),
+            &[
+                vec![Some(tagged.clone())],
+                vec![Some(directional.clone())],
+                vec![Some(nested_blank.clone())],
+            ],
+            &CandidateDomains::Unrestricted,
+        )
+        .expect("well-formed literals and a nested blank node are named");
+        let named: Vec<&str> = ranked.iter().map(|(_, term, _)| term.as_str()).collect();
+        assert_eq!(
+            named,
+            vec![
+                "\"chat\"@en-us",
+                "\"chat\"@ar--rtl",
+                "<<( _:b0 <http://example.org/p> \"chat\"@en-us )>>",
+            ],
+            "each well-formed value keeps its tag, its direction and its nested blank"
+        );
+        for (text, value) in named.iter().zip([tagged, directional, nested_blank]) {
+            assert_eq!(
+                decode_term(text),
+                Ok(value),
+                "{text} reads back to its value"
+            );
+        }
     }
 
     #[test]
@@ -1600,10 +2950,10 @@ mod tests {
             }
             let attestation = sole_attestation(&witness).expect("the conforming shape");
             let stratum = Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
-            crate::fusion_stream::evidence_canonical_bytes(&BTreeMap::from([(
-                stratum,
-                attestation,
-            )]))
+            crate::fusion_stream::evidence_canonical_bytes(
+                &BTreeMap::from([(stratum, attestation)]),
+                &BTreeMap::new(),
+            )
         };
         assert_eq!(
             bytes_after(1),
@@ -1617,10 +2967,10 @@ mod tests {
             witness.record(ONE_RELATION, declared("gen-8"), ServiceLevel::Undeclared);
             let attestation = sole_attestation(&witness).expect("the conforming shape");
             let stratum = Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
-            crate::fusion_stream::evidence_canonical_bytes(&BTreeMap::from([(
-                stratum,
-                attestation,
-            )]))
+            crate::fusion_stream::evidence_canonical_bytes(
+                &BTreeMap::from([(stratum, attestation)]),
+                &BTreeMap::new(),
+            )
         };
         assert_ne!(
             bytes_after(1),

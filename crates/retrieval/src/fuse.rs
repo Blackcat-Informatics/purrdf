@@ -53,18 +53,21 @@
 //! rather than promised away.
 //!
 //! A fused score is exact only once every stream that could still name a
-//! candidate has named it, and this engine has no random access: a
-//! [`RankedStream`] offers `next` and `receipt`, so the only way to learn that
-//! a stream will not name `x` is to read that stream until it does or until it
-//! ends. Where the strata overlap — the case a fused answer is usually wanted
-//! for — the confirmations arrive early and `k` rows cost a few rows per
-//! stratum. Where they do not overlap, and nothing has been declared, they
-//! never arrive: every candidate waits on a stratum that was never going to
-//! mention it, and the reading runs to the end of the streams even though the
-//! *rows* are still bounded by `k`. That is not a defect of the bound, it is
-//! the price of an exact score over a protocol with no random access.
+//! candidate has named it, and a stream that has told the consumer nothing and
+//! answers nothing offers no random access: [`RankedStream`]'s `next` and
+//! `receipt` are then the whole of it, so the only way to learn that such a
+//! stream will not name `x` is to read it until it does or until it ends. Where
+//! the strata overlap — the case a fused answer is usually wanted for — the
+//! confirmations arrive early and `k` rows cost a few rows per stratum. Where
+//! they do not overlap, and the producers have neither declared nor answered,
+//! they never arrive: every candidate waits on a stratum that was never going
+//! to mention it, and the reading runs to the end of the streams even though
+//! the *rows* are still bounded by `k`. That is not a defect of the bound, it
+//! is the price of an exact score over a stream that will say nothing about its
+//! own candidates.
 //!
-//! The way out is the producers' own declaration.
+//! There are two ways out and a producer may sell either.
+//!
 //! [`StreamContract::domains`](crate::StreamContract::domains) — supplied by
 //! the host at registration, carried with the stream — says which blocks of the
 //! candidate universe a producer may name, and fusion skips exactly the streams
@@ -73,10 +76,22 @@
 //! rows plus the lookahead the threshold needs, per stratum, however long the
 //! streams are. Under [`CandidateDomains`](crate::CandidateDomains)'s
 //! `Unrestricted` — the honest default-shaped value, and the widest promise —
-//! nothing is skipped and the reading is whatever the confirmations cost.
+//! nothing is skipped on this account.
 //!
-//! The scores are identical either way. A declaration changes how much is read,
-//! never what is returned.
+//! [`StreamContract::exclusion`](crate::StreamContract::exclusion) is the
+//! other, and it is the one that reaches the case a declaration cannot: two
+//! producers over one block, both declaring the truth, whose results never
+//! overlap. A producer that declared a basis can be **asked** whether it holds
+//! one named candidate, and an `Excluded` answer retires that stream's claim on
+//! that candidate exactly as a declaration would have. The reading then stops
+//! where the fused threshold licenses it to — a property of the decay law and
+//! the weights, flat in the streams' length — rather than at the end of the
+//! streams. The asking is itself bounded: only a candidate that is blocked and
+//! could still win is looked up, and one `(candidate, stream)` pair costs at
+//! most one lookup for the whole read.
+//!
+//! The scores are identical under all of it. What a producer declares or
+//! answers changes how much is read, never what is returned.
 //!
 //! # The bound that reaches here has already been spent
 //!

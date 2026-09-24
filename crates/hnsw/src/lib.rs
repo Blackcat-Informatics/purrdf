@@ -894,6 +894,50 @@ impl<A: Arithmetic> HnswIndex<A> {
         &self.matrix
     }
 
+    /// The exact distance between two stored rows, computed **without touching the
+    /// graph**.
+    ///
+    /// The one arithmetic path: the same [`Kernel`], the same stored components and the
+    /// same precomputed norms a traversal binds its query with, so the value is
+    /// bit-identical to the one the beam would have produced for this pair had it
+    /// visited it. There is no second distance formula in this crate and this does not
+    /// add one.
+    ///
+    /// What it is *not* is a search. It visits no node, consults no layer and claims no
+    /// rank: a rank is one plus the number of rows nearer the query, which is a fact
+    /// about every other row. A caller that needs a rank searches; a caller that has
+    /// already named both rows and needs only the number between them asks here.
+    ///
+    /// # Errors
+    ///
+    /// [`HnswError::RowOutOfBounds`] if either row is not a row of the matrix,
+    /// [`HnswError::NonFiniteDistance`] if the kernel result leaves the finite range,
+    /// [`HnswError::FloatEnvironment`] if the calling thread's float environment is not the
+    /// IEEE one, and [`HnswError::ArithmeticPathUnavailable`] if the calling thread cannot
+    /// run the dispatch path this index recorded, which only a reassociated index can raise.
+    pub fn row_distance(&self, a: usize, b: usize) -> Result<f64> {
+        let rows = self.matrix.rows();
+        for index in [a, b] {
+            if index >= rows {
+                return Err(HnswError::RowOutOfBounds {
+                    index,
+                    max: rows.saturating_sub(1),
+                });
+            }
+        }
+        let arithmetic = self.resolve_here()?;
+        self.matrix
+            .distance(
+                arithmetic,
+                self.kernel,
+                a,
+                search::norm_of(&self.norms, a),
+                b,
+                search::norm_of(&self.norms, b),
+            )
+            .ok_or(HnswError::NonFiniteDistance { row: b })
+    }
+
     /// The number of indexed rows.
     #[must_use]
     pub fn rows(&self) -> usize {

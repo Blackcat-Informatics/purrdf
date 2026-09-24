@@ -213,11 +213,13 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     }
     // A property-function call is driven PER LEFT ROW with the row in hand, rather than
     // substituted into and re-evaluated like an ordinary right operand. The generic path
-    // below would work — the lateral join's compatibility test reconciles everything the
-    // IRI-only substitution could not carry — but it would hand the relation the wrong
-    // access pattern: a literal, blank-node or quoted-triple binding would arrive as a
-    // FREE position, so a relation that can only be invoked with that position bound
-    // would be refused an invocation the engine can make. See `crate::property_fn_eval`.
+    // below would also invoke the relation with every binding bound — correlated
+    // substitution writes an IRI or a literal into the call's arguments, and drives a
+    // blank node or a quoted triple into it through a one-row `VALUES` that lands the
+    // call right back in THIS position (`crate::substitute::bind_call_arguments`) — but
+    // it would build and evaluate a substituted copy of the call per left row to do so.
+    // Reading each left row directly is the one route, and the one every bound argument
+    // is delivered through in the end. See `crate::property_fn_eval`.
     if let GraphPattern::PropertyFunction(call) = right {
         // The answer-cap / `LIMIT` ceiling the plan licensed for THIS node, read while
         // the cursor is still on it. The interception FUSES `Lateral(left, call)` into

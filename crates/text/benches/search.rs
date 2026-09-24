@@ -24,9 +24,10 @@
 //!   through a binary heap bounded at the ceiling instead of sorting the tail;
 //! * a term-occurrence lookup, which is a dictionary binary search plus a
 //!   partition-span slice and touches no arithmetic at all;
-//! * and the two halves of the **bound-document** path over a multi-partition
-//!   corpus — one ranking every partition and one ranking only the partitions
-//!   the bound subject appears in.
+//! * and the three shapes of the **bound-document** path over a multi-partition
+//!   corpus — one ranking every partition, one ranking only the partitions the
+//!   bound subject appears in, and one that ranks nothing at all because the
+//!   membership lookup already answered.
 //!
 //! # Why the last pair exists
 //!
@@ -40,10 +41,23 @@
 //! `search_bound_doc_every_partition` is that shape and
 //! `search_bound_doc_pushed_down` is the shape after
 //! `TextIndex::partitions_holding_subject` narrows the filter to the partitions
-//! the subject actually occupies. Both are measured here rather than argued
-//! about, and neither asserts a number: the reduction is a complexity claim —
-//! `O(all partitions)` becomes `O(that subject's partitions)` — and it is the
-//! test suite, not this file, that proves the two produce the same rows.
+//! the subject actually occupies — which is what `TermOccurrenceRelation` still
+//! does.
+//!
+//! `search_bound_doc_membership` is the third shape, and it is what
+//! `TextSearchRelation` does now: before anything is ranked, one binary search
+//! per needle term over the term dictionary and that document's partition span
+//! decides whether the document holds any needle term at all. Where it holds
+//! none — which is every candidate an exclusion lookup excludes — there is
+//! nothing to rank and the relation answers out of those searches alone. Where
+//! it holds one, the partitions it is held in are ranked exactly as the second
+//! shape ranks them, because the row still carries a per-partition rank and a
+//! rank is a fact about every other candidate of that partition.
+//!
+//! All three are measured here rather than argued about, and none asserts a
+//! number: the reductions are complexity claims — `O(all partitions)` becomes
+//! `O(that subject's partitions)` becomes `O(needle terms · log n)` — and it is
+//! the test suite, not this file, that proves they produce the same rows.
 //!
 //! # The corpus is generated, not sampled
 //!
@@ -307,10 +321,10 @@ fn benchmark(criterion: &mut Criterion) {
         });
     });
 
-    // ── the bound-document pair ─────────────────────────────────────────────
+    // ── the bound-document shapes ───────────────────────────────────────────
     //
-    // One index, one needle, one bound subject; the only difference is whether
-    // the filter names the partitions that subject occupies.
+    // One index, one needle, one bound subject; the difference is how much of
+    // the index each shape has to touch before it can answer.
     let spread = partitioned_corpus();
     let spread_index =
         TextIndex::from_dataset(&*spread, &config).expect("the partitioned corpus must build");
@@ -347,6 +361,25 @@ fn benchmark(criterion: &mut Criterion) {
                 None,
             )
             .expect("a well-formed needle ranks")
+        });
+    });
+
+    // The membership lookup itself: the documents the subject occupies, and one
+    // binary search per needle term against each of them. Its cost does not
+    // depend on the answer — every term is searched for either way — so this is
+    // what a candidate-bound invocation costs *before* anything is ranked, and
+    // it is the whole of what one costs when the document holds no needle term,
+    // which is the case an exclusion lookup excludes.
+    group.bench_function("search_bound_doc_membership", |bencher| {
+        bencher.iter(|| {
+            let index = black_box(&spread_index);
+            let mut held = false;
+            for &document in index.documents_with_subject(black_box(&subject)) {
+                for term in black_box(&query) {
+                    held |= index.term_frequency(document, term) > 0;
+                }
+            }
+            held
         });
     });
 

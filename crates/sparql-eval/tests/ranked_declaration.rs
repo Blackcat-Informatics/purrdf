@@ -15,9 +15,9 @@ use std::sync::Arc;
 use purrdf_core::Iri;
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, Completeness, DeclaredArithmetic, DepthPlacement, DomainTag,
-    DuplicatePolicy, MemoryRelation, OrderFidelity, PropertyFunction, PropertyFunctionRegistry,
-    RankArithmetic, RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement,
+    DuplicatePolicy, ExclusionBasis, MemoryRelation, OrderFidelity, PropertyFunction,
+    PropertyFunctionRegistry, RankArithmetic, RankFidelity, RankedDeclaration, RequestFacet,
+    TermKind, TermPattern, TermPlacement,
 };
 
 const EX_REL: &str = "http://example.org/ns#search";
@@ -104,6 +104,7 @@ fn declaration() -> RankedDeclaration {
         // producer that restricts nothing: there is no promise for a row to
         // back. The tests that are ABOUT the block column state their own.
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory: true,
     }
 }
@@ -749,6 +750,7 @@ fn a_declaration_whose_positions_are_all_in_range_and_distinct_registers() {
             }],
             depth_placement: None,
             candidate_position: 0,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
             ..declaration()
         },
@@ -814,6 +816,7 @@ fn canonical_description_is_injective_over_every_field() {
         (
             "mandatory",
             RankedDeclaration {
+                exclusion: ExclusionBasis::Unavailable,
                 mandatory: false,
                 ..base.clone()
             },

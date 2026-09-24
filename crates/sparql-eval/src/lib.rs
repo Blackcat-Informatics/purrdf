@@ -81,6 +81,7 @@ pub mod agg_fn;
 mod basic_profile;
 mod bgp;
 mod binop;
+mod blank_scope;
 mod cdt_agg;
 mod cdt_fn;
 mod cdt_unfold;
@@ -212,11 +213,11 @@ pub use purrdf_sparql_algebra::ParserOptions;
 // row / arity types its calls speak in, the registry evaluation resolves a predicate
 // IRI against, and the in-memory reference relation. Re-exported so a host wires a
 // relation into the engine without naming the module path.
-pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
+pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, KnnObservations, Ranked};
 pub use property_fn::{
     AcceptedTerm, CandidateDomains, Completeness, DeclaredArithmetic, DepthPlacement, DomainTag,
-    DuplicatePolicy, IndexGeneration, MemoryRelation, OrderFidelity, PfArgs, PfArity,
-    PfAttestation, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
+    DuplicatePolicy, ExclusionBasis, IndexGeneration, MemoryRelation, OrderFidelity, PfArgs,
+    PfArity, PfAttestation, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
     PropertyFunctionRegistry, RankArithmetic, RankFidelity, RankedDeclaration, RequestFacet,
     ServiceLevel, TermKind, TermPattern, TermPlacement, composed_order_fidelity,
     generation_contained, service_level_contained,
@@ -230,6 +231,16 @@ pub use property_fn::{
 // kind it covers. Its two siblings need no re-export: `agg_fn` and `user_fn` are
 // already public modules.
 pub use property_fn_plan::content_fingerprint as property_function_content_fingerprint;
+// The on-demand read of one property-function call, returned by
+// `NativeSparqlEngine::open_call_cursor`: a composition layer that stops reading a
+// ranked relation as soon as it has what it needs holds one of these.
+pub use property_fn_eval::CallCursor;
+// The one shape description behind every question asked of a query's calls: which
+// of them each projected column's values come from, and whether the query is one call
+// read on demand. Returned by
+// `PreparedQuery::call_read_shape`, and asked of raw algebra by a layer that must tell
+// what a caller's text is drawn from before any registry is in hand.
+pub use property_fn_eval::{CallReadRefusal, CallReadShape, ColumnSource};
 // The registry instance identity, re-exported alongside the registry that mints
 // it: a composition layer must be able to tell two independently built registries
 // apart even when they declare identically (`PropertyFunctionRegistry::instance_id`),

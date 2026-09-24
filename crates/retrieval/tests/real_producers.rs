@@ -46,9 +46,9 @@ use purrdf_core::{
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionError, FusionProfile, Iri,
-    OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter, RequestTerm, RetrievalRequest,
-    ScoreExactness, SearchError, SearchResult, Statistics, Term, TopK, compile, contribution,
-    execute, fuse, plan, search,
+    OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter, ReadSchedule, RequestTerm,
+    RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics, Term, TopK, compile,
+    contribution, execute, execute_within, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     BindingPattern, CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace,
@@ -781,13 +781,51 @@ async fn manual_composition(
         fusion_profile: Some(profile),
     };
     let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
-    let execution = execute(&compiled, registry, data)
+    // The schedule `search` reads under, which a caller composing by hand names
+    // as well: each stratum is one invocation held open and read as far as the
+    // fusion pulls it.
+    let execution = execute_within(&compiled, registry, data, ReadSchedule::OnDemand)
         .await
         .expect("both real relations run");
+    let mut statuses = execution.statuses;
 
     let mut streams = Vec::new();
     let mut unweighted_strata = Vec::new();
-    for stream in execution.streams {
+    for mut stream in execution.streams {
+        if profile.weight(&stream.stratum).is_none() {
+            // Not fused: its status is how its read ended, and a read produced on
+            // demand has ended only once it is read, so it is read to its end.
+            while stream
+                .stream
+                .next()
+                .await
+                .expect("an unweighted stratum reads cleanly")
+                .is_some()
+            {}
+            let receipt = stream
+                .stream
+                .receipt()
+                .await
+                .expect("a stream read to its end has a receipt");
+            // Its ending is a claim about the read its witness stands behind, so it
+            // settles exactly as a fused stream does, and is held to what it
+            // announced before its first row.
+            let settled = stream
+                .stream
+                .settle()
+                .await
+                .expect("an unweighted stratum's witness is one attestation");
+            assert_eq!(
+                settled.as_ref(),
+                Some(&stream.attestation),
+                "an unweighted stratum settles to what it announced"
+            );
+            statuses
+                .entry(stream.stratum.clone())
+                .or_insert_with(|| purrdf_retrieval::ProducerStatus::from(receipt));
+            unweighted_strata.push(stream.stratum);
+            continue;
+        }
         let plan_id = stream.plan_id;
         let fused_bound = stream.fused_bound;
         let attestation = stream.attestation.clone();
@@ -811,10 +849,10 @@ async fn manual_composition(
     }
     unweighted_strata.sort();
 
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
+    let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
         .await
         .expect("the surviving streams fuse");
-    let trailer = fused.trailer.completed_with(execution.statuses);
+    let trailer = fused.trailer.completed_with(statuses);
     let evidence_id = trailer.evidence_id;
     SearchResult {
         rows: fused.rows,

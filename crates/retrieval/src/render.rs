@@ -36,8 +36,24 @@
 //! emitting one would silently unbind a position that
 //! [`place`](crate::matching::place) just proved bound, and the invocation would
 //! be admitted against a mode it does not actually have.
+//!
+//! # The second thing this module writes
+//!
+//! [`observed_resolution`] renders a fused answer's per-stratum cost counters as
+//! text. It shares nothing with the codec above but the discipline: the output is
+//! a pure function of its input, in a fixed order, with no locale and no float
+//! formatting, so two renderings of one trailer are byte-identical. It lives here
+//! because this is where this crate writes text a caller reads, and a second
+//! module for one function would only make it easier to forget the rendering
+//! exists.
+
+use core::fmt::Write as _;
+use std::collections::BTreeMap;
 
 use purrdf_core::{RdfTextDirection, TermValue};
+
+use crate::fusion_stream::{CounterReading, StratumResolution};
+use crate::iri::Iri;
 
 /// `xsd:string`, the datatype a plain literal carries in the kernel's term
 /// model. Spelled here because the kernel's own constant is crate-private; it is
@@ -124,9 +140,10 @@ pub(crate) fn sparql_term(value: &TermValue) -> Result<String, RenderError> {
 /// it is rendered every time the unit's text is asked for.
 pub(crate) fn typed_literal(lexical_form: &str, datatype: &str) -> String {
     let mut out = String::with_capacity(lexical_form.len() + datatype.len() + 6);
-    // Infallible for this shape: `write_literal` refuses only a direction without a
-    // tag and a malformed tag, and neither is supplied.
-    let _ = write_literal(lexical_form, datatype, None, None, &mut out);
+    // `write_literal` refuses only a direction without a tag and a malformed tag,
+    // and neither is supplied, so an error here is a broken invariant, not a value.
+    write_literal(lexical_form, datatype, None, None, &mut out)
+        .expect("a literal with no tag and no direction always renders");
     out
 }
 
@@ -187,43 +204,49 @@ fn lexical_size_hint(value: &TermValue) -> usize {
 /// genuinely cannot do is seed a *later* request, since its label is
 /// dataset-local; that is refused where it happens, at placement, rather than
 /// pre-emptively here.
-pub(crate) fn candidate_lexical(value: &TermValue) -> String {
+///
+/// # Errors
+///
+/// A literal with a base direction and no language tag, or with a tag that is not
+/// a `LANGTAG`: see [`write_candidate`].
+pub(crate) fn candidate_lexical(value: &TermValue) -> Result<String, RenderError> {
     // Sized up front: this runs once per row every stratum emits.
     let mut out = String::with_capacity(lexical_size_hint(value));
-    if let TermValue::Blank { label, .. } = value {
-        out.push_str("_:");
-        out.push_str(label);
-        return out;
-    }
-    // Every non-blank arm is infallible, and a blank nested inside a triple term
-    // is written by the same rule rather than refused.
-    if write_term(value, &mut out).is_err() {
-        out.clear();
-        write_candidate(value, &mut out);
-    }
-    out
+    write_candidate(value, &mut out)?;
+    Ok(out)
 }
 
-/// Append `value`'s result-naming form to `out`, spelling blank nodes.
-fn write_candidate(value: &TermValue, out: &mut String) {
+/// Append `value`'s result-naming form to `out`, spelling blank nodes at every
+/// depth, a blank nested inside a triple term included.
+///
+/// Every other term is written by [`write_term`], the writer [`sparql_term`] uses,
+/// so a blank-free value names the same bytes on both paths.
+///
+/// # Errors
+///
+/// [`RenderError::DirectionWithoutLanguage`] and
+/// [`RenderError::MalformedLanguageTag`] for a literal no concrete syntax can
+/// spell. Such a literal is not well-formed RDF; writing it without its tag or
+/// direction would name a *different* term — one that collides with the plain
+/// literal of the same lexical form — so it is refused rather than misnamed.
+fn write_candidate(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
     match value {
         TermValue::Blank { label, .. } => {
             out.push_str("_:");
             out.push_str(label);
+            Ok(())
         }
         TermValue::Triple { s, p, o } => {
             out.push_str("<<( ");
-            write_candidate(s, out);
+            write_candidate(s, out)?;
             out.push(' ');
-            write_candidate(p, out);
+            write_candidate(p, out)?;
             out.push(' ');
-            write_candidate(o, out);
+            write_candidate(o, out)?;
             out.push_str(" )>>");
+            Ok(())
         }
-        other => {
-            // Infallible for IRIs and literals: `write_term` only refuses blanks.
-            let _ = write_term(other, out);
-        }
+        other => write_term(other, out),
     }
 }
 
@@ -618,6 +641,58 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// Render a fused answer's **observed resolution** as text, one line per
+/// stratum.
+///
+/// # Why this exists at all, and why it is not behind a diagnostics gate
+///
+/// The observed resolution is the only place the price of an answer is written
+/// down. A five-row answer over a configuration whose declarations condemn it to
+/// a full drain reports a perfectly truthful
+/// [`ProducerStatus::Exhausted`](crate::ProducerStatus) — both streams really did
+/// run out — and from the status alone it is indistinguishable from a cheap
+/// answer over a small corpus. The counters are what tell those two apart:
+/// [`StratumResolution::ranks_pulled`] says the answer cost four hundred ranks
+/// per stratum, and [`StratumResolution::rows_materialised`] says what the reads
+/// behind them came to.
+///
+/// So every counter is rendered, every time, with no verbosity switch and no
+/// debug build to turn on. A cost a caller has to opt into seeing is a cost that
+/// goes unseen, and the failure this rendering exists to prevent is precisely
+/// the one where nothing looks wrong.
+///
+/// # The shape
+///
+/// One line per stratum, in ascending stratum order — the order the engine's own
+/// map carries, so the text is a pure function of the trailer. Each line is the
+/// stratum IRI followed by `name=value` for every counter
+/// [`StratumResolution::counters`] returns, in the order it returns them — the
+/// same names and the same order every language binding reports. A
+/// value a trailer does not carry is written as a word rather than as a number:
+/// `separates_to=beyond-any-plan` for a law that never stops separating inside
+/// an expressible depth, and `rows_materialised=unreported` for a stream with no
+/// materialised read behind it. Neither is spelled as a digit, because a
+/// saturation and an absence are not measurements and a caller that parsed them
+/// as one would be reading a number nobody took.
+pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> String {
+    let mut out = String::new();
+    for (stratum, measured) in resolution {
+        write!(out, "{stratum}").expect("writing to a String cannot fail");
+        // The counters, and their names, come from the trailer's one reading of
+        // its own fields — the same one every binding renders — so this text
+        // cannot carry a different set of counters from any other surface.
+        for counter in measured.counters() {
+            match counter.reading {
+                CounterReading::Number(value) => write!(out, " {}={value}", counter.name),
+                CounterReading::Absent { word } => write!(out, " {}={word}", counter.name),
+            }
+            .expect("writing to a String cannot fail");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RenderError, decode_term, sparql_term};
@@ -810,5 +885,69 @@ mod tests {
         for text in ["<http://example.org/s>", "_:b0", "\"x\"@en", "\"x\""] {
             assert!(decode_term(text).is_ok(), "{text:?} is one canonical term");
         }
+    }
+
+    /// The counter names every surface reports, written out as the whole set.
+    ///
+    /// The Python binding's cost-counter test holds its dict keys to this same
+    /// list, so a counter added to [`StratumResolution::counters`] fails both
+    /// tests until both documented sets name it — and, because the text below
+    /// and the binding's dict are both rendered from that one method, neither
+    /// surface can carry it without the other.
+    const DOCUMENTED_COUNTERS: [&str; crate::OBSERVED_COUNTER_COUNT] = [
+        "separates_to",
+        "ranks_pulled",
+        "collisions_observed",
+        "exclusion_lookups",
+        "rows_materialised",
+    ];
+
+    fn resolution(
+        separation: crate::MonotoneDepth,
+        rows_materialised: Option<u64>,
+    ) -> crate::StratumResolution {
+        crate::StratumResolution {
+            separation,
+            ranks_pulled: 66,
+            collisions_observed: 2,
+            exclusion_lookups: 65,
+            rows_materialised,
+        }
+    }
+
+    #[test]
+    fn the_counters_are_the_documented_set_in_the_documented_order() {
+        let measured = resolution(crate::MonotoneDepth::SeparatesTo(400), Some(67));
+        let names: Vec<&str> = measured.counters().iter().map(|c| c.name).collect();
+        assert_eq!(names, DOCUMENTED_COUNTERS);
+        let readings: Vec<crate::CounterReading> =
+            measured.counters().iter().map(|c| c.reading).collect();
+        assert_eq!(
+            readings,
+            [400, 66, 2, 65, 67].map(crate::CounterReading::Number),
+            "every field reaches its own counter, none swapped for a neighbour's"
+        );
+    }
+
+    #[test]
+    fn the_rendering_is_the_counters_and_nothing_else() {
+        let stratum = crate::Iri::parse("http://example.org/stratum/text").expect("valid");
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            stratum,
+            resolution(crate::MonotoneDepth::SeparatesBeyondAnyPlan, None),
+        );
+        let text = super::observed_resolution(&map);
+        assert_eq!(
+            text,
+            "http://example.org/stratum/text separates_to=beyond-any-plan ranks_pulled=66 \
+             collisions_observed=2 exclusion_lookups=65 rows_materialised=unreported\n"
+        );
+        let rendered_names: Vec<&str> = text
+            .split_whitespace()
+            .skip(1)
+            .map(|pair| pair.split_once('=').expect("name=value").0)
+            .collect();
+        assert_eq!(rendered_names, DOCUMENTED_COUNTERS);
     }
 }

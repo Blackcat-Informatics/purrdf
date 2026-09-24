@@ -221,7 +221,7 @@ pub(crate) const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 /// those is bytes no reader takes back. `Iri` and `Blank` carry no tag at all, so
 /// they are a discriminant test; a literal with no tag is one more branch. The
 /// walk is strictly cheaper than the [`hash_value`] the intern path already pays.
-fn language_tags_well_formed(value: &TermValue) -> bool {
+pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
     match value {
         TermValue::Iri(_) | TermValue::Blank { .. } => true,
         TermValue::Literal { language, .. } => language

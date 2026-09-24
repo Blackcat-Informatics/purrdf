@@ -524,6 +524,19 @@ fn ebv_of<D: DatasetView + Sync>(
     }
 }
 
+/// The effective boolean value a constant `literal` evaluates to (`None` = type error)
+/// — [`ebv_term`]'s answer for it, reached without a dataset, for the prepare-time
+/// planner (`crate::property_fn_plan`'s `truth_requires`). A language-tagged string has
+/// none; every other literal has its XSD value's.
+pub(crate) fn constant_ebv(literal: &purrdf_sparql_algebra::Literal) -> Option<bool> {
+    if literal.language().is_some() {
+        return None;
+    }
+    xsd_of(&crate::convert::literal_to_value(literal))
+        .as_ref()
+        .and_then(effective_boolean_value)
+}
+
 /// The effective boolean value of a concrete term (`None` = type error).
 fn ebv_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
@@ -1060,7 +1073,7 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// Collect EVERY variable `pattern` mentions anywhere — triple/path terms,
 /// `VALUES` columns, `GRAPH`/`SERVICE` names, property-function arguments, every
 /// expression position, and every variable a construct itself INTRODUCES
-/// (`BIND`/`GROUP BY`/a projection list). Used ONLY by [`expr_vars`]'s widened
+/// (`BIND`/`GROUP BY`/a projection list). Used by [`expr_vars`]'s widened
 /// `Expression::Exists` arm (a nested `EXISTS`'s Values-Insertion substitution
 /// reaches its inner's LEAF positions too, not just its own expression
 /// positions — see that arm's doc and [`expr_vars`]'s own "Relationship to
@@ -1068,6 +1081,11 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// the SEPARATE, independent walk [`crate::governor::soundness::analyze_pattern`]
 /// runs — via [`crate::eval::PreparedExists::build`] — for the [`exists`] decision
 /// site's own correlation test; this function's output never feeds that decision).
+///
+/// Also read by the call-read shape (`crate::property_fn_eval`), which needs
+/// every variable a `LATERAL` injection could reach in a pattern: a superset is
+/// what that reader's soundness rests on, so the widening below is exactly right
+/// there too.
 ///
 /// # Diverges from `analyze_pattern`'s `free_vars` at exactly one point
 ///
@@ -1080,7 +1098,7 @@ fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHas
 /// `pattern_all_vars(P)` is always a SUPERSET of (or equal to)
 /// `analyze_pattern(P).free_vars` for the same `P` — see [`expr_vars`]'s doc for
 /// why that one-directional divergence is safe for this walk's actual consumer.
-fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     use purrdf_sparql_algebra::NamedNodePattern;
 
     match pattern {
@@ -1895,9 +1913,10 @@ impl SubstitutionRow {
 ///
 /// # Property-function arguments
 ///
-/// Unchanged: still IRI-only value substitution via `substitute_term_pattern`
-/// — the fusion contract a joined `VALUES` row cannot satisfy (see that
-/// function's doc).
+/// Written INTO the call rather than joined beside it — the fusion contract a
+/// joined `VALUES` row cannot satisfy: an IRI or a literal as the constant it is,
+/// a blank node or a quoted triple through a one-row `VALUES` driving the call
+/// (see [`bind_row_into_call`]), so every term kind reaches the relation bound.
 #[allow(
     clippy::unnecessary_box_returns,
     reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
@@ -2116,28 +2135,14 @@ fn substitute_pattern_impl(
             );
             join_leaf_with_values(leaf, &vars, &row.term, pattern, map)
         }
-        // A property function's argument vectors are term positions, but — unlike a
-        // `Bgp`/`Path` leaf, which now receives its row via a joined `VALUES` above —
-        // the relation's invocation contract needs the argument itself constant, not
-        // merely join-compatible with one (`substitute_term_pattern`'s fusion-contract
-        // doc). This is that helper's one remaining client.
-        GraphPattern::PropertyFunction(call) => boxed_and_mapped(
-            GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
-                iri: call.iri.clone(),
-                subject_args: call
-                    .subject_args
-                    .iter()
-                    .map(|term| substitute_term_pattern(term, &row.expr))
-                    .collect(),
-                object_args: call
-                    .object_args
-                    .iter()
-                    .map(|term| substitute_term_pattern(term, &row.expr))
-                    .collect(),
-            }),
-            pattern,
-            map,
-        ),
+        // A property function's arguments are invocation INPUTS, not join keys: a
+        // `VALUES` row joined beside the call (a `Bgp`/`Path` leaf's Values Insertion)
+        // would leave the relation invoked with the position free. The row's value
+        // has to be IN the call — written as a constant where it has one, driven by a
+        // one-row `VALUES` on the call's left where it has not — which is
+        // `crate::substitute::bind_call_arguments`'s decision; see
+        // [`bind_row_into_call`].
+        GraphPattern::PropertyFunction(call) => bind_row_into_call(call, row, pattern, map),
         // `wrap_with_expr_term_only_values` closes the gap `substitute_expr` alone
         // leaves open: a blank-node/quoted-triple outer binding referenced ONLY by
         // `expr` (no leaf occurrence elsewhere in `inner`) has no `Expression`
@@ -2269,9 +2274,32 @@ fn substitute_pattern_impl(
                 map,
             )
         }
+        // A call that is the `Lateral`'s DIRECT right operand keeps that position: it
+        // is the one the evaluator drives per left row, handing it each left row's
+        // bindings as bound arguments, and wrapping the call would demote it to the
+        // generic correlated path. So the row's writable values are written into the
+        // call in place, and the driver of the rest is joined onto the LEFT operand —
+        // the same placement `crate::substitute`'s whole-query rewrites use.
         GraphPattern::Lateral { left, right } => {
             let left_sub = substitute_pattern_impl(left, row, map);
-            let right_sub = substitute_pattern_impl(right, row, map);
+            let (left_sub, right_sub) = if let GraphPattern::PropertyFunction(call) = &**right {
+                let mut bound = call.clone();
+                let seed =
+                    crate::substitute::bind_call_arguments(&mut bound, &row.term, Some(&left_sub));
+                let right_sub = boxed_and_mapped(GraphPattern::PropertyFunction(bound), right, map);
+                let left_sub = match seed {
+                    Some(seed) => plant_mapped_driver(left_sub, seed, left, map, |seed, left| {
+                        GraphPattern::Join {
+                            left: seed,
+                            right: left,
+                        }
+                    }),
+                    None => left_sub,
+                };
+                (left_sub, right_sub)
+            } else {
+                (left_sub, substitute_pattern_impl(right, row, map))
+            };
             boxed_and_mapped(
                 GraphPattern::Lateral {
                     left: left_sub,
@@ -2771,37 +2799,59 @@ fn wrap_with_expr_term_only_values(
     )
 }
 
-/// Substitute outer-bound variables into a property-function argument term —
-/// the ONLY remaining client of this substitution style, since Values
-/// Insertion (`substitute_pattern`'s `Bgp`/`Path` arms) took over triple-pattern
-/// positions.
+/// Substitute μ into a property-function call: every value an argument names is
+/// written into the call as a constant (an IRI, a literal) or DRIVEN into it by a
+/// one-row `VALUES` on its left (a blank node, a quoted triple), so the relation is
+/// invoked with that argument BOUND to exactly μ's term.
 ///
-/// IRI-valued bindings only, by the fusion contract: a property-function
-/// argument is an INVOCATION INPUT the relation reads directly from the row
-/// (`crate::property_fn_eval`), not a join key a `VALUES` row could supply —
-/// joining a literal/blank-node/quoted-triple binding in would hand the
-/// relation a FREE argument position it may refuse to be invoked with, where a
-/// rewritten IRI constant is a position the relation can read exactly as if
-/// the caller had written it literally. A literal, blank-node, or quoted-triple
-/// binding therefore leaves the argument as the original variable, and the
-/// per-row argument read supplies the value instead — see
-/// `property_function_arg_with_a_literal_binding_behaves_unchanged`.
-fn substitute_term_pattern(
-    term: &purrdf_sparql_algebra::TermPattern,
-    bindings: &[(Variable, Expression)],
-) -> purrdf_sparql_algebra::TermPattern {
-    use purrdf_sparql_algebra::TermPattern;
-
-    if let TermPattern::Variable(v) = term {
-        for (bv, expr) in bindings {
-            if bv == v
-                && let Expression::NamedNode(n) = expr
-            {
-                return TermPattern::NamedNode(n.clone());
+/// A call's argument is an invocation input the relation reads from the row it is
+/// driven with (`crate::property_fn_eval`), not a join key: a `VALUES` row joined
+/// BESIDE the call, as Values Insertion does for a `Bgp`/`Path` leaf, would leave the
+/// relation invoked with the position free — refused by a relation serving only the
+/// bound mode, and answered from the relation's whole extent by one serving both.
+/// Which values are written and which are driven, and the driving row itself, are
+/// `crate::substitute::bind_call_arguments`'s decision — the one the SHACL
+/// pre-binding walk makes too — so the two walks cannot diverge on it.
+///
+/// A stand-alone call that needs a driver becomes `Lateral(VALUES, call)`: the call
+/// is then a `Lateral`'s direct right operand, the position the evaluator drives per
+/// left row with that row's terms in hand. The call keeps its variable, so its column
+/// survives beside the driven value.
+fn bind_row_into_call(
+    call: &purrdf_sparql_algebra::PropertyFunctionCall,
+    row: &SubstitutionRow,
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+) -> Box<GraphPattern> {
+    let mut bound = call.clone();
+    let seed = crate::substitute::bind_call_arguments(&mut bound, &row.term, None);
+    let node = boxed_and_mapped(GraphPattern::PropertyFunction(bound), source, map);
+    match seed {
+        Some(seed) => plant_mapped_driver(node, seed, source, map, |seed, call| {
+            GraphPattern::Lateral {
+                left: seed,
+                right: call,
             }
-        }
+        }),
+        None => node,
     }
-    term.clone()
+}
+
+/// Plant a call's one-row driver `seed` beside `node` — `assemble(seed, node)` builds
+/// the node that joins them — mapping every node it adds to `source` exactly as
+/// [`join_leaf_with_values`] maps its wrapper: `seed` is scaffolding, and the new
+/// node, not `node`, becomes `source`'s row-counting entry, because its output (not
+/// `node`'s, which lacks the driven column) is `source`'s true output for this row.
+fn plant_mapped_driver(
+    node: Box<GraphPattern>,
+    seed: GraphPattern,
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+    assemble: impl FnOnce(Box<GraphPattern>, Box<GraphPattern>) -> GraphPattern,
+) -> Box<GraphPattern> {
+    demote_to_scaffolding(map, std::ptr::from_ref(node.as_ref()) as usize);
+    let seed = boxed_and_mapped_scaffolding(seed, source, map);
+    boxed_and_mapped(assemble(seed, node), source, map)
 }
 
 /// Substitute outer-bound variables in expression positions by replacing
@@ -8478,13 +8528,11 @@ mod tests {
     }
 
     #[test]
-    fn property_function_arg_with_a_literal_binding_behaves_unchanged() {
-        // The fusion contract: a property-function argument's
-        // substitution stays IRI-only. A literal-valued row binding must leave
-        // the argument as the bare variable — UNCHANGED from before Values
-        // Insertion — so the relation still reads the value from the per-row
-        // argument dispatch, never from a rewritten constant a joined `VALUES`
-        // could not have supplied either.
+    fn property_function_arg_with_a_literal_binding_is_written_into_the_call() {
+        // A property-function argument is an invocation input: nothing but the call
+        // itself can carry the row's value to the relation. A literal is written
+        // into the argument as the constant it is — exactly as an IRI is — so the
+        // relation is invoked with the position bound.
         use purrdf_sparql_algebra::PropertyFunctionCall;
 
         let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
@@ -8497,18 +8545,58 @@ mod tests {
             expr: vec![(Variable::new("w"), Expression::Literal(literal.clone()))],
             term: vec![(
                 Variable::new("w"),
-                purrdf_sparql_algebra::GroundTerm::Literal(literal),
+                purrdf_sparql_algebra::GroundTerm::Literal(literal.clone()),
             )],
         };
 
         let substituted = *substitute_pattern(&call, &row);
         let GraphPattern::PropertyFunction(c) = substituted else {
-            panic!("PropertyFunction node preserved");
+            panic!("a written value needs no driver, so the call stays a bare call");
         };
         assert_eq!(
             c.subject_args[0],
-            ex_vp("w"),
-            "a literal binding must not rewrite the argument"
+            purrdf_sparql_algebra::TermPattern::Literal(literal),
+            "a literal binding is written into the argument"
+        );
+        assert_eq!(
+            c.object_args[0],
+            ex_vp("parts"),
+            "an unbound argument is untouched"
+        );
+    }
+
+    #[test]
+    fn property_function_arg_with_a_blank_binding_is_driven_into_the_call() {
+        // A blank node has no spelling in a pattern — one written there is an
+        // anonymous variable — so it is DRIVEN: the call becomes the direct right
+        // operand of a `Lateral` over a one-row `VALUES` binding it, which is the
+        // position the evaluator hands a row's terms to the relation as bound
+        // arguments. The argument keeps its variable.
+        use purrdf_sparql_algebra::PropertyFunctionCall;
+
+        let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
+            iri: ex_iri("split").as_str().to_owned(),
+            subject_args: vec![ex_vp("w")],
+            object_args: vec![ex_vp("parts")],
+        });
+        let blank = purrdf_sparql_algebra::GroundTerm::BlankNode(
+            purrdf_sparql_algebra::BlankNode::new("b0"),
+        );
+        let row = SubstitutionRow {
+            expr: Vec::new(),
+            term: vec![(Variable::new("w"), blank.clone())],
+        };
+
+        let substituted = *substitute_pattern(&call, &row);
+        assert_eq!(
+            substituted,
+            GraphPattern::Lateral {
+                left: Box::new(GraphPattern::Values {
+                    variables: vec![Variable::new("w")],
+                    bindings: vec![vec![Some(blank)]],
+                }),
+                right: Box::new(call),
+            }
         );
     }
 
@@ -9183,5 +9271,385 @@ mod tests {
         // so a nine-character PRIVATE subtag must still be accepted. This is the
         // over-refusal half of the same bound.
         assert!(well_formed_langtag("en-x-cantbethislong"));
+    }
+
+    // ── strictness: the planner's classification, held to the evaluator ──────────
+
+    /// The data the strictness samples read: the one-member `rdf:List` headed by
+    /// `<https://example.org/list>`, holding `"a"`.
+    fn list_ds() -> Arc<RdfDataset> {
+        const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+        let mut builder = RdfDatasetBuilder::new();
+        let head = builder.intern_iri("https://example.org/list");
+        let first = builder.intern_iri(&format!("{RDF}first"));
+        let rest = builder.intern_iri(&format!("{RDF}rest"));
+        let nil = builder.intern_iri(&format!("{RDF}nil"));
+        let member = builder.intern_literal(RdfLiteral::simple("a"));
+        builder.push_quad(head, first, member, None);
+        builder.push_quad(head, rest, nil, None);
+        builder.freeze().expect("freeze")
+    }
+
+    /// Whether `expr` evaluates to a value — `false` for no value and for a hard error
+    /// alike, since neither is true under a `FILTER`.
+    fn has_value(ds: &RdfDataset, expr: &Expression) -> bool {
+        let mut ctx =
+            EvalCtx::new(ds).with_standpoint_predicates(crate::eval::StandpointPredicates::new(
+                "https://example.org/accordingTo",
+                "https://example.org/sharpens",
+            ));
+        let schema = VarSchema::new();
+        matches!(eval_expr(expr, &[], &schema, &mut ctx), Ok(Some(_)))
+    }
+
+    /// Argument lists on which each built-in has a value, several where the answer for
+    /// an unbound argument could depend on the others (an optional argument present or
+    /// absent, a variadic function at two lengths).
+    #[allow(clippy::too_many_lines)] // one table row per built-in, kept together
+    fn strictness_samples(function: &Function) -> Vec<Vec<Expression>> {
+        use purrdf_cdt::CdtFn;
+        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        let int = |n: &str| typed_lit(n, &format!("{XSD}integer"));
+        let date_time = || typed_lit("2020-01-02T03:04:05Z", &format!("{XSD}dateTime"));
+        let cdt = |kind: CdtFn, args: Vec<Expression>| {
+            Expression::FunctionCall(
+                Function::Cdt(purrdf_sparql_algebra::CdtCall {
+                    fn_kind: kind,
+                    iri: kind.iri().to_owned(),
+                }),
+                args,
+            )
+        };
+        let list = || cdt(CdtFn::ListConstructor, vec![int("1"), int("2")]);
+        let map = || cdt(CdtFn::MapConstructor, vec![int("1"), lit("one")]);
+        let triple = || {
+            Expression::FunctionCall(
+                Function::Triple,
+                vec![
+                    iri("https://example.org/s"),
+                    iri("https://example.org/p"),
+                    iri("https://example.org/o"),
+                ],
+            )
+        };
+        let rdf_list = || iri("https://example.org/list");
+        match function {
+            Function::Str
+            | Function::Datatype
+            | Function::StrLen
+            | Function::UCase
+            | Function::LCase
+            | Function::EncodeForUri
+            | Function::Md5
+            | Function::Sha1
+            | Function::Sha256
+            | Function::Sha384
+            | Function::Sha512
+            | Function::Sha3_224
+            | Function::Sha3_256
+            | Function::Sha3_384
+            | Function::Sha3_512
+            | Function::IsIri
+            | Function::IsUri
+            | Function::IsBlank
+            | Function::IsLiteral
+            | Function::IsNumeric
+            | Function::IsTriple
+            | Function::LangDir
+            | Function::HasLang
+            | Function::HasLangDir
+            | Function::BNode => vec![vec![lit("abc")]],
+            Function::Lang => vec![vec![Expression::Literal(Literal::new_lang(
+                "abc", "en", None,
+            ))]],
+            Function::Iri | Function::Uri => vec![vec![lit("https://example.org/x")]],
+            Function::LangMatches => vec![vec![lit("en"), lit("*")]],
+            Function::Rand | Function::Now | Function::Uuid | Function::StrUuid => {
+                vec![Vec::new()]
+            }
+            Function::Abs | Function::Ceil | Function::Floor | Function::Round => {
+                vec![vec![int("1")]]
+            }
+            Function::Concat => vec![vec![lit("a"), lit("b")], vec![lit("a"), lit("b"), lit("c")]],
+            Function::SubStr => vec![
+                vec![lit("abc"), int("2")],
+                vec![lit("abc"), int("1"), int("2")],
+            ],
+            Function::Replace => vec![
+                vec![lit("abc"), lit("b"), lit("x")],
+                vec![lit("abc"), lit("b"), lit("x"), lit("i")],
+            ],
+            Function::Regex => vec![
+                vec![lit("abc"), lit("b")],
+                vec![lit("abc"), lit("b"), lit("i")],
+            ],
+            Function::Contains
+            | Function::StrStarts
+            | Function::StrEnds
+            | Function::StrBefore
+            | Function::StrAfter => vec![vec![lit("abc"), lit("b")]],
+            Function::Year
+            | Function::Month
+            | Function::Day
+            | Function::Hours
+            | Function::Minutes
+            | Function::Seconds
+            | Function::Timezone
+            | Function::Tz => vec![vec![date_time()]],
+            Function::Adjust => vec![vec![
+                date_time(),
+                typed_lit("PT1H", &format!("{XSD}dayTimeDuration")),
+            ]],
+            Function::StrLang => vec![vec![lit("abc"), lit("en")]],
+            Function::StrDt => vec![vec![lit("1"), iri(&format!("{XSD}integer"))]],
+            Function::StrLangDir => vec![vec![lit("abc"), lit("en"), lit("ltr")]],
+            Function::Triple => vec![vec![
+                iri("https://example.org/s"),
+                iri("https://example.org/p"),
+                iri("https://example.org/o"),
+            ]],
+            Function::Subject | Function::Predicate | Function::Object => vec![vec![triple()]],
+            Function::Purrdf(call) => match call.fn_kind {
+                PurrdfFn::HeldIn => vec![vec![
+                    iri("https://example.org/reifier"),
+                    iri("https://example.org/standpoint"),
+                ]],
+                PurrdfFn::ListLength => vec![vec![rdf_list()]],
+                PurrdfFn::ListGet => vec![vec![rdf_list(), int("0")]],
+                PurrdfFn::ListIndexOf | PurrdfFn::ListContains => {
+                    vec![vec![rdf_list(), lit("a")]]
+                }
+                PurrdfFn::ListSlice => vec![vec![rdf_list(), int("0"), int("1")]],
+                PurrdfFn::ListConcat => vec![vec![rdf_list(), rdf_list()]],
+            },
+            Function::Cdt(call) => match call.fn_kind {
+                CdtFn::ListConstructor => vec![vec![int("1")], vec![int("1"), int("2")]],
+                CdtFn::MapConstructor => vec![vec![int("1"), lit("one")]],
+                CdtFn::Concat => vec![vec![list(), list()]],
+                CdtFn::Contains => vec![vec![list(), int("1")]],
+                CdtFn::Get => vec![vec![list(), int("1")]],
+                CdtFn::Head | CdtFn::Tail | CdtFn::Reverse | CdtFn::Size => vec![vec![list()]],
+                CdtFn::Subseq => vec![vec![list(), int("1")], vec![list(), int("1"), int("1")]],
+                CdtFn::ContainsKey | CdtFn::Remove => vec![vec![map(), int("1")]],
+                CdtFn::Keys => vec![vec![map()]],
+                CdtFn::Merge => vec![vec![map(), map()]],
+                CdtFn::Put => vec![vec![map(), int("2")], vec![map(), int("2"), lit("two")]],
+            },
+            Function::Custom(_) => Vec::new(),
+        }
+    }
+
+    /// Every function the evaluator dispatches.
+    fn every_function() -> Vec<Function> {
+        let purrdf = |kind: PurrdfFn| {
+            Function::Purrdf(purrdf_sparql_algebra::PurrdfCall {
+                fn_kind: kind,
+                iri: format!("https://example.org/fn/{}", kind.local_name()),
+            })
+        };
+        let mut every = vec![
+            Function::Str,
+            Function::Lang,
+            Function::LangMatches,
+            Function::Datatype,
+            Function::Iri,
+            Function::Uri,
+            Function::BNode,
+            Function::Rand,
+            Function::Abs,
+            Function::Ceil,
+            Function::Floor,
+            Function::Round,
+            Function::Concat,
+            Function::SubStr,
+            Function::StrLen,
+            Function::Replace,
+            Function::UCase,
+            Function::LCase,
+            Function::EncodeForUri,
+            Function::Contains,
+            Function::StrStarts,
+            Function::StrEnds,
+            Function::StrBefore,
+            Function::StrAfter,
+            Function::Year,
+            Function::Month,
+            Function::Day,
+            Function::Hours,
+            Function::Minutes,
+            Function::Seconds,
+            Function::Timezone,
+            Function::Tz,
+            Function::Adjust,
+            Function::Now,
+            Function::Uuid,
+            Function::StrUuid,
+            Function::Md5,
+            Function::Sha1,
+            Function::Sha256,
+            Function::Sha384,
+            Function::Sha512,
+            Function::Sha3_224,
+            Function::Sha3_256,
+            Function::Sha3_384,
+            Function::Sha3_512,
+            Function::StrLang,
+            Function::StrDt,
+            Function::IsIri,
+            Function::IsUri,
+            Function::IsBlank,
+            Function::IsLiteral,
+            Function::IsNumeric,
+            Function::Regex,
+            Function::Triple,
+            Function::Subject,
+            Function::Predicate,
+            Function::Object,
+            Function::IsTriple,
+            Function::LangDir,
+            Function::StrLangDir,
+            Function::HasLang,
+            Function::HasLangDir,
+        ];
+        every.extend(
+            [
+                PurrdfFn::HeldIn,
+                PurrdfFn::ListLength,
+                PurrdfFn::ListGet,
+                PurrdfFn::ListIndexOf,
+                PurrdfFn::ListContains,
+                PurrdfFn::ListSlice,
+                PurrdfFn::ListConcat,
+            ]
+            .map(purrdf),
+        );
+        every.extend(purrdf_cdt::CDT_FUNCTIONS.map(|kind| {
+            Function::Cdt(purrdf_sparql_algebra::CdtCall {
+                fn_kind: kind,
+                iri: kind.iri().to_owned(),
+            })
+        }));
+        every
+    }
+
+    /// **The planner's strictness classification is the evaluator's.** For every
+    /// built-in the evaluator dispatches and every argument position of every sample,
+    /// the call is evaluated with that argument unbound (a variable no row binds): a
+    /// position the planner (`crate::property_fn_plan::strict_in_argument`) calls
+    /// strict must leave the call without a value on EVERY sample — else a `FILTER`
+    /// over it would be taken to bind a variable it passes unbound — and one it calls
+    /// otherwise must give the call a value on at least one — else a `FILTER` the
+    /// evaluator only ever passes with the variable bound is refused. Each sample is
+    /// first checked to have a value with every argument bound, so "no value when
+    /// unbound" is the argument's doing.
+    ///
+    /// A custom function is the one exception, and is asserted as such: it is resolved
+    /// at run time against the host's registrations, so it is classified as needing
+    /// nothing, whatever the evaluator does without a registration.
+    #[test]
+    fn every_built_in_is_strict_exactly_where_the_planner_says() {
+        let ds = list_ds();
+        let unbound = || Expression::Variable(Variable::new("unbound"));
+        let mut mismatches = Vec::new();
+        for function in every_function() {
+            let samples = strictness_samples(&function);
+            assert!(!samples.is_empty(), "{function:?} has a sample");
+            let arity = samples.iter().map(Vec::len).max().unwrap_or(0);
+            for sample in &samples {
+                assert!(
+                    has_value(
+                        &ds,
+                        &Expression::FunctionCall(function.clone(), sample.clone())
+                    ),
+                    "{function:?}{sample:?} has a value with every argument bound"
+                );
+            }
+            for position in 0..arity {
+                let answers: Vec<bool> = samples
+                    .iter()
+                    .filter(|sample| position < sample.len())
+                    .map(|sample| {
+                        let mut args = sample.clone();
+                        args[position] = unbound();
+                        has_value(&ds, &Expression::FunctionCall(function.clone(), args))
+                    })
+                    .collect();
+                let evaluator_strict = answers.iter().all(|answer| !answer);
+                let planner_strict =
+                    crate::property_fn_plan::strict_in_argument(&function, position);
+                if evaluator_strict != planner_strict {
+                    mismatches.push(format!(
+                        "{function:?} at {position}: evaluator strict = {evaluator_strict}, \
+                         planner strict = {planner_strict}"
+                    ));
+                }
+            }
+        }
+        assert_eq!(mismatches, Vec::<String>::new());
+
+        // A custom function: what the host registers decides, and a registration can
+        // answer for an unbound argument — here a SPARQL-bodied function whose one
+        // parameter is optional — so the planner may not call any position strict.
+        const HOST_FN: &str = "https://example.org/fn/host";
+        let custom = Function::Custom(NamedNode::new_unchecked(HOST_FN));
+        let mut registry = crate::user_fn::UserFunctionRegistry::new();
+        registry.insert(
+            HOST_FN,
+            crate::user_fn::UserFunction {
+                params: vec![crate::user_fn::UserFnParam {
+                    var: "value".to_owned(),
+                    constraint: crate::user_fn::TypeConstraint::default(),
+                }],
+                required: 0,
+                body: Arc::from("ASK {}"),
+                kind: crate::user_fn::UserFnBody::Ask,
+                return_constraint: crate::user_fn::TypeConstraint::default(),
+            },
+        );
+        let bound = crate::user_fn::BoundFunctionRegistry::bound_for_test(registry);
+        let mut ctx = EvalCtx::new(&*ds).with_user_functions(&bound);
+        let answer = eval_expr(
+            &Expression::FunctionCall(custom.clone(), vec![unbound()]),
+            &[],
+            &VarSchema::new(),
+            &mut ctx,
+        );
+        assert!(
+            matches!(answer, Ok(Some(_))),
+            "a registered custom function can answer for an unbound argument: {answer:?}"
+        );
+        assert!(
+            !crate::property_fn_plan::strict_in_argument(&custom, 0),
+            "so the planner takes a custom function to need nothing of its arguments"
+        );
+    }
+
+    /// **A constant's truth, as the planner reads it, is the evaluator's.**
+    /// `crate::property_fn_plan`'s `truth_requires` calls a constant never true unless
+    /// [`constant_ebv`] answers `true`; each literal here is evaluated for its
+    /// effective boolean value and compared.
+    #[test]
+    fn a_constant_s_effective_boolean_value_is_the_evaluator_s() {
+        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        let ds = empty_ds();
+        let literals = [
+            Literal::new_simple(""),
+            Literal::new_simple("x"),
+            Literal::new_typed("true", NamedNode::new_unchecked(format!("{XSD}boolean"))),
+            Literal::new_typed("false", NamedNode::new_unchecked(format!("{XSD}boolean"))),
+            Literal::new_typed("0", NamedNode::new_unchecked(format!("{XSD}integer"))),
+            Literal::new_typed("2", NamedNode::new_unchecked(format!("{XSD}integer"))),
+            Literal::new_typed("NaN", NamedNode::new_unchecked(format!("{XSD}double"))),
+            Literal::new_typed("zz", NamedNode::new_unchecked(format!("{XSD}integer"))),
+            Literal::new_typed("2020-01-02", NamedNode::new_unchecked(format!("{XSD}date"))),
+            Literal::new_lang("x", "en", None),
+        ];
+        for literal in literals {
+            assert_eq!(
+                constant_ebv(&literal),
+                ebv(&ds, &Expression::Literal(literal.clone())),
+                "{literal:?}"
+            );
+        }
     }
 }

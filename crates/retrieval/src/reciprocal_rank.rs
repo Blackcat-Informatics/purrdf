@@ -416,6 +416,161 @@ impl ClassWidth {
     }
 }
 
+/// Where a candidate's collected lower bound overtakes the fusion threshold.
+///
+/// [`MonotoneDepth`]'s sibling in shape, and a saturating quantity for the same
+/// reason: a plan records a per-stratum depth as a `u32`, so a head rank past
+/// `MAX_DEPTH` is not a rank any read could reach, and handing back
+/// `u32::MAX` as though it were a measured crossing invites a caller to log it,
+/// plot it, or budget for it. A crossing no expressible rank delivers is not an
+/// enormous crossing; it is the absence of one.
+///
+/// It says nothing at all about *finality*, which is the other gate a fused row
+/// passes. A candidate whose lower bound clears the threshold is still withheld
+/// while some stream that could name it is open, so this is a **lower bound on
+/// the read**, never a promise that the read stops there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrossingRank {
+    /// Once every open head sits at this 1-based rank the threshold is
+    /// strictly below the candidate's lower bound, and one rank shallower it is
+    /// not. Exact, not a conservative estimate.
+    CrossesAt(u64),
+    /// No rank a plan is able to express brings the threshold below the
+    /// candidate's lower bound. There is no crossing to report, not a very deep
+    /// one.
+    NeverInsideAnyPlan,
+}
+
+impl CrossingRank {
+    /// Read a found crossing as the saturating quantity it is.
+    #[must_use]
+    const fn from_rank(rank: u64) -> Self {
+        if rank >= MAX_DEPTH {
+            Self::NeverInsideAnyPlan
+        } else {
+            Self::CrossesAt(rank)
+        }
+    }
+
+    /// The crossing as a number, when there is one to report.
+    #[must_use]
+    pub const fn rank(self) -> Option<u64> {
+        match self {
+            Self::NeverInsideAnyPlan => None,
+            Self::CrossesAt(rank) => Some(rank),
+        }
+    }
+}
+
+/// The sum of `weights`' contributions at one 1-based `rank`, under `decay`.
+///
+/// This is the quantity the fusion engine's own threshold is a maximum of: once
+/// every open head that admits a candidate's block sits at `rank`, the most any
+/// unseen candidate in that block can still be worth is exactly this sum over
+/// those heads' weights.
+///
+/// **One arithmetic path.** Every term comes out of [`contribution_under`], and
+/// the terms are summed at the declared scale rather than recomputed from a
+/// wider one. The engine's contributions are truncated fixed point, so
+/// `Σ w / (k + r)` recomputed in floating point disagrees with it at exactly the
+/// boundary that decides a crossing — the rank where a doubled threshold *ties*
+/// a single lower bound instead of falling below it, and a strict comparison
+/// does not pass a tie.
+///
+/// # Errors
+///
+/// [`FusionError::NonPositiveCrossingWeight`] for a weight that is not strictly
+/// positive, [`FusionError::Overflow`] if the sum leaves the fixed-point range,
+/// and whatever [`contribution_under`] refuses for the rank.
+pub fn threshold_at(decay: DecayRule, weights: &[Fixed], rank: u64) -> Result<Fixed, FusionError> {
+    weights.iter().try_fold(Fixed::ZERO, |total, weight| {
+        if *weight <= Fixed::ZERO {
+            return Err(FusionError::NonPositiveCrossingWeight { weight: *weight });
+        }
+        let term = contribution_under(decay, *weight, rank)?;
+        total.checked_add(term).map_err(|_| FusionError::Overflow)
+    })
+}
+
+/// The head rank at which a candidate sitting at `at_rank` in each of the
+/// `naming` strata first beats the threshold the `sharing` strata impose.
+///
+/// The fused emission gate has two halves and this is the second of them. A
+/// candidate is emittable while some head is still live only when its lower
+/// bound is **strictly** above the threshold, and:
+///
+/// * `naming` are the weights of the strata that named the candidate, so
+///   `L = Σ contribution(w, at_rank)` is what it has already collected;
+/// * `sharing` are the weights of the strata whose declarations admit the
+///   candidate's block, so `T(r) = Σ contribution(w, r)` is what the threshold
+///   rises to for that block once every one of those heads sits at rank `r`.
+///
+/// A stratum that names the candidate also admits its block, so `naming` is a
+/// sub-multiset of `sharing` for every honest call; the two are separate
+/// arguments because the gap between them is the whole phenomenon. A candidate
+/// every sharing stratum named is bounded by exactly the streams it already
+/// read and crosses immediately; a candidate one of two equal sharers named is
+/// measured against twice its own weight, so the threshold has to fall to half
+/// the lower bound, which under reciprocal rank means outlasting the smoothing
+/// constant.
+///
+/// The first half of the gate — *finality*, whether a stream that could still
+/// name this candidate is open — is no part of this. A configuration whose
+/// candidates never become final never reaches this gate at all, and the number
+/// here is then the read it *would* have been licensed to stop at rather than
+/// the read it took.
+///
+/// # Why the search is a bisection and why that is exact
+///
+/// `T` is non-increasing in `r`: every term is a truncated quotient whose
+/// denominator grows with the rank, under both decay rules, so a sum of terms
+/// at strictly positive weights cannot rise as the rank deepens. The predicate
+/// `L > T(r)` is therefore false up to the crossing and true from it on, which
+/// is what makes a bisection over the expressible range find the same rank a
+/// scan from one would, in thirty-two probes rather than four billion. The
+/// strictly-positive premise is not assumed: a weight that breaks it is refused
+/// rather than searched over, because the answer a bisection returns under a
+/// non-monotone predicate is arbitrary rather than wrong-by-a-little.
+///
+/// # Errors
+///
+/// Whatever [`threshold_at`] refuses — a non-positive weight in either list, a
+/// rank the rule cannot evaluate, or an out-of-range sum.
+pub fn crossing_rank_at(
+    decay: DecayRule,
+    naming: &[Fixed],
+    at_rank: u64,
+    sharing: &[Fixed],
+) -> Result<CrossingRank, FusionError> {
+    let lower = threshold_at(decay, naming, at_rank)?;
+    // The shallow end first, so a candidate every sharer named — the ordinary
+    // case — is answered by two evaluations and no search at all.
+    if lower > threshold_at(decay, sharing, 1)? {
+        return Ok(CrossingRank::from_rank(1));
+    }
+    // And the deep end, which decides between "crosses somewhere inside the
+    // range" and "never does". Under the truncated rules a deep enough
+    // contribution reaches zero, so a positive lower bound crosses eventually;
+    // an empty `naming` list collects nothing and never crosses, and that is
+    // reported as the absence it is rather than as an enormous rank.
+    if lower <= threshold_at(decay, sharing, MAX_DEPTH)? {
+        return Ok(CrossingRank::NeverInsideAnyPlan);
+    }
+    // Invariant: `low` is known not to cross and `high` is known to cross, so
+    // the crossing is `high` once they are adjacent.
+    let mut low = 1_u64;
+    let mut high = MAX_DEPTH;
+    while high - low > 1 {
+        let mid = low + (high - low) / 2;
+        if lower > threshold_at(decay, sharing, mid)? {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    Ok(CrossingRank::from_rank(high))
+}
+
 /// The largest 1-based depth at which `weight`'s contributions are still
 /// **strictly** decreasing with rank under `decay`.
 ///

@@ -200,6 +200,143 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   copies it whole, instead of testing byte by byte; the expanded IRIs are
   identical.
 
+- **retrieval:** exclusion lookups. A producer's `RankedDeclaration` and a stream's
+  `StreamContract` carry an `ExclusionBasis` — `Unavailable`, or `Membership`: an
+  exclusion is a fact about the producer's own index, which holds no entry through
+  which the request could reach the candidate — and fusion may ask a stream whose
+  contract declares a basis about one candidate through `RankedStream::exclusion`.
+  `ExclusionVerdict::Excluded` makes the candidate final at once, so two strata that
+  share a block but never name the same candidate stop at the threshold crossing
+  instead of draining; `Possible` claims nothing. A lookup that fails is
+  `ProtocolError::ExclusionLookupFailed` and fails the request rather than reading as
+  `Possible`; a stream that names a candidate it excluded is
+  `ProtocolError::ExclusionContradicted`; a stream asked while declaring no basis
+  answers `ProtocolError::ExclusionUnavailable`. Each lookup is answered through the
+  witnessed prepared lane and must stand behind exactly the attestation — generation
+  and service level — the stratum's read pinned, or the request fails with
+  `ProtocolError::ExclusionAttestationMoved` naming both sides. An exclusion from an
+  index that attested itself incomplete settles only what the stream will name: the
+  residual the missing documents owe the candidate's score is still charged. `execute`
+  prepares each stratum's lookup once, binds each candidate by the dataset id its read
+  found it under, and hands the lookup back inside the stream; a stratum whose lookup
+  will not prepare is that stratum's `ExecutionFailed` status. A unit built from a
+  caller-supplied query gets the same lookup whenever every value its `?candidate`
+  column takes was emitted by one of its property-function calls: through
+  projections, `FILTER`s, `DISTINCT`, `ORDER BY`, `LIMIT`/`OFFSET`, renaming `BIND`s
+  and `GROUP BY` conditions, a join with any other pattern, the required side of an
+  `OPTIONAL`, the left side of a `MINUS`, a `GROUP BY` key, `GRAPH`, or a `UNION`
+  each of whose branches binds it from a call. `PreparedQuery::call_read_shape` (new,
+  beside `CallReadShape`, `CallReadRefusal` and `ColumnSource`) describes which calls
+  those are (`CallReadShape::sources_of`: alternatives, one per `UNION` branch, each a
+  set of calls with the pattern that drives each) and whether the query is one call
+  read on demand (`CallReadShape::read_on_demand`, which `is_call_read` asks). A node
+  rebinding a variable its operand bound replaces that column's sources rather than
+  adding a second column beside them. One lookup is derived per call whose ranked
+  declaration states the unit's basis at the position the column is read from: that
+  position is the parameter and a declared depth position is freed; where patterns
+  before the call bind its inputs — a needle read out of the data — the lookup keeps
+  them, as a `DISTINCT` sub-select, and invokes the call once per binding of them.
+  They are kept as the text evaluates them (`ColumnSource::driving_pattern`), so the
+  bindings are never fewer than the text's: a `LATERAL` whose right operand is not a
+  call stays one pattern with its left, a `LATERAL` inside another's right operand is
+  re-attached through a `LATERAL` of it, a pattern in a `GRAPH` is read in it, the
+  lookup carries the text's dataset clause, and a pattern reading a variable a
+  sub-select has injected from outside it is left out. A sub-select binding no input
+  at all answers `Excluded` for every candidate without invoking the call.
+  The stream answers `Excluded` only when every alternative excludes the candidate —
+  an alternative excluding it when any of its lookups finds no row — each lookup held
+  to the attestation the stratum's read pinned. A stratum with an alternative none of
+  whose calls qualify fails by name. A supplied query whose `?candidate` column can
+  take a value no call emitted — a `UNION` branch binding it from something that is
+  not a call, an `OPTIONAL` whose required side can bind it, a call only on the
+  subtracted side of a `MINUS`, a computed `BIND`, `SELECT` expression or `GROUP BY`
+  condition, an aggregate, a `GRAPH` name, `VALUES` — cannot declare a basis
+  (`UnitError::ExclusionNotRenderable`, whose `reason` names what is in the way), and
+  registration refuses a declared basis on a relation with no candidate-bound access
+  mode whose row bound is one and which leaves any declared depth position free (see
+  the `register_ranked` entry below). `FusionTrailer::exclusion_bases` records each
+  stream's basis, and `FusionTrailer::evidence_id` now also covers which strata
+  answered lookups; an answer that asked none keeps its evidence id byte for byte.
+
+- **retrieval:** an on-demand read schedule. `execute_within(compiled, registry,
+  dataset, ReadSchedule)` runs a bundle as `execute` does under
+  `ReadSchedule::Materialised`, or under `ReadSchedule::OnDemand` holds each unit
+  whose prepared text is one property-function call under row-for-row operators
+  open as a single invocation and produces a row each time its stream is pulled.
+  `search` reads on demand, so every stratum is read exactly once, as far as its
+  fusion pulls it — plus the probe row one past the planned depth where the read
+  gets that far — and a consumer that stops at the sixth rank of a four-hundred-row
+  plan has caused six rows to be produced. A caller's own text that is one call
+  under a `FILTER` is read on demand too: the `FILTER` is evaluated per pulled row
+  by the engine's own evaluator, a dropped row takes no rank, and a `LIMIT` above
+  the `FILTER` is never offered to the producer as its ceiling. A text of any other
+  shape (a join, an `ORDER BY`, a dataset clause, a `FILTER` embedding `EXISTS` or
+  calling a custom function or a builtin that draws per-query state) is
+  materialised under either schedule, and a caller's own single-call text that runs
+  out ends `SuppliedQueryEnded` under both. The receipt is taken when the fusion stops: `RankedStream::settle` returns a
+  `ReadSettlement` (the attestation, rows materialised and rows emitted the read
+  stands behind), and a read whose generation or service level moved between the
+  open and the stop is refused as `ProtocolError::AttestationMoved`. A read that
+  fails after its first row has been merged fails the request as
+  `ProtocolError::ReadFailed`, naming the stratum, the rows already handed out and
+  the producer's reason; a failure before the first row stays that stratum's
+  `ExecutionFailed` status.
+  `RankedStreamImpl` gains `exclusion`, `settle`, `rows_materialised` and
+  `rows_emitted`.
+
+- **retrieval:** what a read cost, on the answer. `StratumResolution` gains
+  `exclusion_lookups` and `rows_materialised` (the rows the stratum's read produced,
+  probe row included; `None` only for a stream with no read behind it), and
+  `StratumResolution::counters` names every counter once, in a fixed order, as
+  `ObservedCounter`s whose `CounterReading` is a number or a word for an absent value.
+  `observed_resolution` renders a trailer's resolution map from those counters, one
+  line per stratum. `PlannedResolution::sharing_weights` lists the weights of every
+  stratum whose declared blocks meet a stratum's own, and `crossing_rank_at` and
+  `threshold_at` answer, from the plan alone, the head rank at which a candidate
+  first beats the threshold those sharers impose (`CrossingRank`), through the same
+  arithmetic fusion uses. A weight at or below zero is refused as
+  `FusionError::NonPositiveCrossingWeight`. `ExclusionBasis` is re-exported from
+  `purrdf-retrieval`.
+
+- **sparql-eval:** `NativeSparqlEngine::open_call_cursor` opens a prepared `SELECT`
+  over the default dataset that is one property-function call under nothing but
+  projections, `OFFSET`-free `LIMIT`s, variable-renaming `BIND`s and `FILTER`s it can
+  evaluate row by row as a `CallCursor` read one solution per
+  `next_row(dataset)`, with the same registry admission, arguments, declared-mode
+  check, row licence, width check and unification the governed lane applies, and
+  each `FILTER` applied to the rows reaching it; `CallCursor::settle` returns the relation witness of the
+  rows actually produced. `PreparedQuery::is_call_read` answers whether a plan has
+  that shape without opening anything. `NativeSparqlEngine::execute_witnessed` runs a
+  `PreparedExecution` and returns the run's `RelationWitness` beside the answer, so a
+  relation's declared shortfall is reported rather than refused.
+
+- **sparql-eval, text, hnsw:** membership answers. `TextSearchRelation`,
+  `EmbeddingKnnRelation` and `HnswRelation` declare `ExclusionBasis::Membership`
+  and a candidate-bound access mode with a row bound of one, answered by a binary
+  search over the index's own terms: a document with no posting under any needle
+  term, or a term with no vector row, is excluded without ranking, computing a
+  distance or visiting a graph node. A held candidate still ranks through the one
+  scoring path, and the vector relations' emitted distance is bit-identical to the
+  one a scan or beam would give. `SearchObservations`, `KnnObservations` and
+  `HnswObservations` (each relation's `observations()`) count lookups, rankings,
+  scans, distances and graph candidates. `EmbeddingSpace::from_vectors` builds an
+  exact kNN space from a host's `(term, vector)` rows with every check
+  `from_artifact` makes and a content-addressed generation of its own, and
+  `HnswIndex::row_distance` gives one pairwise distance.
+
+- **python:** `retrieval.plan`, `compile` and `search` accept `hnsw_producers=` and
+  `knn_producers=` beside `text_producers`: an approximate or an exact
+  nearest-neighbour producer over the host's own `(iri, vector)` rows, with a
+  metric, a guard, domains and an attestation, seeded by an `("entity", "<iri>")`
+  request term. The three maps form one registry; a stratum or producer IRI claimed
+  twice across them raises `ValueError` naming both. Every producer registers with
+  the exclusion basis its relation declares, and there is no position to assert or
+  withdraw one. The answer's `"observed_resolution"` entries carry
+  `"exclusion_lookups"` and `"rows_materialised"`, its `"exclusion_bases"` maps each
+  stratum to `"unavailable"` or `"membership"`, a compiled answer's planned
+  resolution carries `"sharing_weights"`, and `retrieval.crossing_rank_at` computes
+  a crossing rank from raw weights.
+
 ### Measured
 
 Peak allocator bytes, from the deterministic counting allocator rather than timings.
@@ -253,6 +390,102 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   escaping to `iri_escape`. The native serializer's literal law, which also
   escapes C1, and the Turtle literal law remain separate laws. Every writer's
   bytes are unchanged.
+
+- **sparql-algebra:** a `GROUP BY (expr AS ?v)` condition whose `?v` is already in
+  scope — bound in the `WHERE` clause, or by an earlier condition — is refused as a
+  syntax error, as the same rebinding by `BIND` or a `SELECT` expression already was.
+  It was parsed and lowered to an `Extend` over a variable its operand bound, which
+  the algebra leaves undefined and which the evaluator answered by overwriting the
+  column. A fresh target, a plain key over the variable, and a target a sub-select
+  hides still parse.
+
+- **sparql-eval:** a property-function call inside an `OPTIONAL`'s right arm was
+  admitted at prepare as though the variables bound to its left were bound for it,
+  but that arm is evaluated on its own and matched afterwards, so the relation was
+  invoked with those positions free and refused on every run. It is now refused
+  once, at prepare. A call written into the group itself is still driven by the
+  rows before it.
+
+- **sparql-eval:** a literal, blank-node or quoted-triple value reaching a
+  property-function call through correlated substitution — an `EXISTS` or
+  `NOT EXISTS` body, a `LATERAL`'s right side below other operators, an `OPTIONAL`
+  inside a `LATERAL`, a sub-`SELECT` receiving a projected variable — was never
+  written into the call's arguments, so the relation was invoked with that
+  position free and a relation serving only the bound mode refused the call on
+  every row, though the plan admitted it; one serving both answered from its whole
+  extent. It now arrives as the term it is: an IRI or a literal written into the
+  argument, a blank node or a quoted triple driven into the call by a one-row
+  `VALUES`, including a variable nested inside a quoted-triple argument.
+
+- **sparql-eval:** a property function fed from a `LATERAL`'s right side is now
+  admitted when its input is certainly bound there: a `BIND`, `VALUES`, triple or
+  `FILTER` inside `LATERAL { … }` is judged with the left side's bindings in hand,
+  so `?s ?p ?v LATERAL { BIND(?v AS ?q) } ?q <rel> ?out` invokes a bound-only
+  relation with each `?v` instead of being refused at prepare; a sub-`SELECT` sees
+  the enclosing bindings it projects.
+
+- **sparql-eval:** a property function's input could be fed only by a triple pattern. A
+  `VALUES` table or a `BIND` written in the same group — `{ VALUES ?q { "alpha beta" } ?doc
+  ex:search (?q …) }`, `{ BIND("alpha beta" AS ?q) ?doc ex:search (?q …) }` — and a nested
+  group, a sub-`SELECT` projecting the variable, or a `UNION` binding it in both branches
+  were all refused at prepare with "no feasible evaluation order", so a relation serving
+  only a bound input could not take a computed or tabled needle. A group's joined operands
+  are now planned as one chain, and a `VALUES` column with no `UNDEF` and a `BIND` whose
+  expression reads only bound variables count as binding their variable; a row whose
+  `BIND` expression errors is refused by the evaluator's per-row access-pattern check
+  rather than invoked free, and an `UNDEF` cell, an `OPTIONAL` arm or a `BIND` over one
+  still does not count. A `LATERAL` written after a call is also no longer re-planned as
+  an independent join, which had evaluated its right side without the call's rows.
+
+- **sparql-eval:** a prepared execution's parameters now count as bound when its
+  property-function calls are admitted, wherever a run's rewrite really binds them,
+  and a run writes each parameter's value into the calls it reaches — including a
+  call written after another atom — so a relation is invoked in the bound mode it
+  declared for that argument rather than scanned and filtered by a join.
+
+- **sparql-eval:** a prepared-execution parameter bound to a blank node — through
+  `bind_id` or by value — never reached a property-function call's arguments, so a
+  relation serving only the bound mode refused the run, and a fused retrieval whose
+  exclusion lookup was asked about a blank-node candidate failed the whole request. A
+  blank node is still never written into a pattern, where it would be an anonymous
+  variable; the call is instead driven by a one-row `VALUES` carrying the bound blank
+  node as the term it is, so the relation is invoked with that argument bound.
+
+- **sparql-eval, shapes:** a SHACL constraint body could not call a relation that
+  serves only a bound `$this` from an `OPTIONAL` arm, a sub-`SELECT` beside another
+  atom, or an `EXISTS` below the top of its pattern. The SHACL pre-binding rewrite
+  binds `$this` in every call, but the execution was admitted as though it bound
+  `$this` only where the ordinary rewrite does, so the constraint was refused before
+  it ran, whatever kind of term the focus node was. A blank-node focus node also never
+  reached those calls at run time. A prepared execution is now admitted under the
+  rewrite its runs apply (`QueryOptions::prebinding` at prepare), and SHACL prepares
+  its handles that way. A handle admitted for the SHACL rewrite refuses to run under
+  the ordinary one. The SHACL rewrite now passes a blank-node or quoted-triple value
+  to every call through a one-row `VALUES`, so the relation receives it bound.
+
+- **retrieval:** a fused top-`k` narrowed its read depth for a whole request or not
+  at all, so one stratum declaring allowed duplicates, or one intersecting pair
+  anywhere in the request, made every stratum read at the maximum depth — including
+  a stratum whose declared blocks met no other's. The depth is now licensed per
+  stratum: a unique stratum whose blocks meet no other surviving stratum's keeps its
+  prefix of `k`, whatever the others declare.
+
+- **retrieval:** a candidate literal carrying a language tag that is not a
+  `LANGTAG`, or a base direction with no tag, was named without its tag or
+  direction — the spelling of a different term, the plain literal of the same
+  lexical form. Such a literal is not well-formed RDF; it is now refused, naming the
+  row, as a failure of the stratum read that produced it. Tagged, directional and
+  nested-blank-node candidates are named and read back as before.
+
+- **text:** a search invocation with its document bound declared a row bound of one
+  and then ranked every partition that document appears in. It now answers whether
+  the document holds a posting under any needle term by binary searches over the
+  term dictionary and that term's postings, and ranks only a document that does.
+
+- **hnsw:** `HnswSpace::from_index` ignored its guard's candidate bound, which it is
+  documented to refuse at construction. A space with more rows than
+  `max_candidates` is now refused with `EvalError::Config`; a bound equal to the row
+  count is still admitted.
 
 - **cli:** a failed write could unlink a symlinked output path, destroying the link
   and leaving the half-written bytes in its target — the exact loss the guard's own
@@ -835,6 +1068,10 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `Store`, a `MutableDataset`, or `validate_nt` for text a caller holds), rather
   than escaping as an `AttributeError` about a private attribute the caller never
   wrote.
+
+- **sparql-eval, retrieval:** a needle-driven exclusion lookup now drives a call inside a sub-`SELECT` that a `LATERAL` injects into: the driving pattern carries in the enclosing frames for exactly the variables the sub-`SELECT` projects, rebuilt as `{ SELECT carried… } LATERAL { … }`, and a `GRAPH` variable the sub-`SELECT` does not project is read under a fresh name in every named graph. Before, a piece reading an injected variable was dropped even when it was the only binder of the call's input, and the lookup asked the relation in a mode it never declared. A lookup is now derived only where the relation declares a mode serving the access pattern it asks in; a call whose input the text does not drive no longer qualifies, and the refusal names the call, the mode and the undriven position.
+- **shapes, sparql-eval:** a `sh:sparql` constraint whose `FILTER EXISTS` or `FILTER NOT EXISTS` body calls a registered relation failed validation outright for every blank-node or quoted-triple focus node while it validated an IRI one: the value was driven into the call by a one-row `VALUES` that bound `$this` again on a row that already had it, which the evaluator refuses as a rebinding. Inside an `EXISTS` body the call is now driven in a scope of its own: it is invoked bound to the focus node exactly as before and its output does not carry `$this`, which is also what an IRI focus node gets.
+- **sparql-eval:** a query request's substitutions are now admitted as bound, the same way a prepared execution's declared parameters are. `SELECT ?q ?out WHERE { ?q <rel> ?out }` with `?q` substituted was refused against a relation serving only the bound mode ("reachable only as `ff`") for every term kind, an IRI included, on every request entry point — ungoverned, interned, governed, operation-scoped and fallible. The rewrite lane is part of the admission, so a substitution the ordinary rewrite does not carry to the call, such as one inside an `OPTIONAL` arm, is still refused, while the SHACL pre-binding rewrite, which does reach that arm, admits it.
 
 ### Fixed
 
@@ -1547,6 +1784,22 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `GROUP BY`, `HAVING`, `ORDER BY` or `VALUES` was already refused, and that is
   now pinned alongside.
 
+- **sparql-eval:** a property-function call that is the whole right-hand side of a `LATERAL` (`?s ?p ?o LATERAL { ?q <rel> ?out }`) is admitted with a request substitution or prepared-execution parameter bound, as the rewrite invokes it, where it was refused as "reachable only as `ff`" against a relation serving only the bound mode; admission and the rewrite share one definition of that position.
+
+- **sparql-eval:** a `BIND` reading a promised parameter makes its target a source for a following call — everywhere under the SHACL pre-binding rewrite, above the core pattern under the ordinary one — so `BIND($this AS ?x) ?x <rel> ?why` is no longer refused.
+
+- **sparql-eval, shapes:** under SHACL pre-binding, a `BIND`, `FILTER`, `HAVING`, `ORDER BY` key, `SELECT` expression, `UNFOLD`, `OPTIONAL` condition or aggregate argument reading a blank-node or quoted-triple focus node sees that node wherever it sits: beneath the core pattern, above a `GROUP BY`, and above a sub-`SELECT` whose projection drops `$this`. Beneath the core it saw an unbound variable, so a relation could be invoked with its input free and every node it approved was reported; above a `GROUP BY` or such a sub-`SELECT` the column holding the focus node was hidden, so `SELECT ?v WHERE { ?x ex:tag ?v } GROUP BY ?v HAVING(SAMPLE(?x) = $this)` reported a violation for an IRI focus node and conformed for a blank one with the same data, through `sh:sparql` and `sh:SPARQLSelectValidator` alike. The expression now reads the focus node through a variable of its own that no query can name, bound by a one-row `VALUES` beside the node and projected away above it, so it reads exactly the term an IRI or a literal focus node is written in as. An `EXISTS` in such an expression whose body names `$this` — `HAVING EXISTS { ?r ex:about $this }` — is now matched against rows carrying the focus node for every kind of focus node, an IRI included; it had matched a free `$this`, so every group passed.
+
+- **sparql-eval:** an aggregate's output can feed a relation serving only the bound mode. `COUNT`, `SUM`, `AVG`, `GROUP_CONCAT` and `FOLD` answer a value over no values (`0`, `0`, `0`, `""`, the empty list), so they count with or without `GROUP BY`; `SAMPLE`, `MIN`, `MAX` and a custom aggregate count under `GROUP BY` over arguments reading only certainly-bound variables, and not without it, since the one implicit group over an empty input hands them no value. A grouping key is a source only where every grouped row binds it.
+
+- **sparql-eval:** a `FILTER` makes certain every variable its condition requires bound to be true, so `GROUP BY ?q` or a sub-`SELECT` of `?q` after `OPTIONAL { … ?q }` feeds a relation serving only the bound mode when a `FILTER(BOUND(?q))`, `FILTER(sameTerm(?q, ?o))`, `FILTER(isLiteral(?q))` or a conjunction holding one of them passes only rows binding `?q`; such a key had been refused since the grouping-key rule above. A disjunction makes certain only what both of its sides do, and `FILTER(!BOUND(?q))` nothing. A built-in function has no value when an argument it is strict in is unbound, so `FILTER(REGEX(STR(?q), "."))`, `FILTER(STRLEN(STR(?q)) > 0)` and `FILTER(-(STRLEN(STR(?q))) <= 0)` make `?q` certain too, where they had been refused as though a function call could be true without its arguments; which argument positions each built-in is strict in is read off the evaluator and held to it by a test that evaluates every built-in with each argument unbound — `REGEX`'s and `REPLACE`'s flags, `SUBSTR`'s length, the type tests, `cdt:List`, `cdt:Map` and `cdt:put`'s value are not strict, and a custom function, which the host registers, is taken to require nothing. `IF(c, t, e)` requires what its condition needs for a value and what either the condition's truth and `t`'s, or its falsity and `e`'s, require, and a constant that is never true drops its branch, so `FILTER(IF(BOUND(?q), ?q = ?q, false))` makes `?q` certain while `FILTER(IF(BOUND(?q), true, true))` and `FILTER(COALESCE(STR(?q), "x") != "")` make nothing certain. An aggregate follows the rule a `BIND` does: it counts even where its argument or its fold can fail on the data — `MAX(STR(?q))` and `SAMPLE(IRI(STR(?q)))` exactly as `BIND(IRI(STR(?q)) AS ?y)` followed by `SAMPLE(?y)`, `SUM` over a string, `GROUP_CONCAT` over a blank node — and a group whose aggregate failed reaches the call with its input unbound, where the evaluator refuses that row with a typed access-pattern error for a relation serving only the bound mode and invokes one that also serves the free mode free, as it does for a row whose `BIND` erred. A relation is never invoked free unless it declares the free mode.
+
+- **sparql-eval:** a request substitution or prepared-execution parameter now reaches a property-function call anywhere in a `LATERAL`'s right side where writing it there is the same as joining it on above — beside a `BIND`, a `VALUES`, a triple or a `FILTER`, in a nested `LATERAL`, a `UNION`, a `GRAPH`, or a sub-`SELECT` that projects it (`SELECT *`, `DISTINCT` and `ORDER BY` included), and in such a sub-`SELECT` joined anywhere else — so a relation serving only the bound mode is admitted there and invoked with the value, where it was refused as "reachable only as `ff`" although the same text with the value written into a `VALUES` block was admitted with the same rows. It reaches too beneath a `GROUP BY` the variable is a key of — `{ SELECT ?q (COUNT(?out) AS ?n) WHERE { ?q <rel> ?out } GROUP BY ?q }`, joined, in a `LATERAL`'s right side, or grouping a `UNION` whose other arm leaves `?q` unbound — since the rows that writing it there removes are whole groups keyed by other values, whose rows the substitution's seed drops anyway; those shapes had been refused while the same text with the value written into a `VALUES` block was admitted with the same rows. A call in an `OPTIONAL` or `MINUS` arm inside that right side, in a sub-`SELECT` that does not project the variable, beneath a `LIMIT`, or beneath a `GROUP BY` whose keys do not include the variable — one only an aggregate or an expression key such as `(STR(?q) AS ?k)` reads — is still refused, and a relation serving both modes is invoked free there. Admission and the rewrite still share one definition of where the value is written, held shape by shape against each other.
+
+- **sparql-eval, retrieval:** `register_ranked` admits a declared `ExclusionBasis::Membership` only against a point mode an exclusion lookup can be invoked in — binding the candidate, leaving any `DepthPlacement` position free, with a row bound of one — because every lookup frees the depth: asked with a depth the producer answers "is this candidate among your best n", and absence from that is not an exclusion. A producer declaring `[fbb, bbb]` with its depth at position 2 was admitted and then failed every stratum's lookup at prepare; it is refused at registration, naming the relation, its modes and why. The lookup's shape is derived once, `RankedDeclaration::exclusion_lookup_mode`, which registration and the retrieval compiler both ask.
+
+- **retrieval:** a stratum this layer renders no longer fails at search when its producer's only candidate-bound point mode binds an argument no request facet fills: `compile` checks the rendered lookup's mode and compiles such a unit declaring `ExclusionBasis::Unavailable`, so the stratum still ranks and its contract and the fused trailer's `exclusion_bases` say no lookup was available.
+
 ### Removed
 
 - **retrieval:** `PlanError::StatisticsUnavailable`. It was the refusal of an unbounded
@@ -1807,6 +2060,26 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `gen_streamable_vectors` are renamed `capture-sparql-goldens`,
   `gen-dict-vectors` and `gen-streamable-vectors`. Their source paths are
   unchanged.
+
+- **BREAKING** **retrieval, sparql-eval:** `RankedStream` gains a required
+  `exclusion(&mut self, candidate: &Term)` method, and defaulted `rows_materialised`
+  and `settle` methods; a hand-written stream that declares no basis answers
+  `exclusion` with `ProtocolError::ExclusionUnavailable`. `StreamContract::new` takes
+  the stream's `ExclusionBasis` as a fourth argument and `StreamContract` carries it
+  as `exclusion`, and `RankedDeclaration` gains the required field `exclusion`: there
+  is no default, because `Unavailable` would discard a capability a producer has and
+  `Membership` would claim one it may not. The basis joins the ranked declaration's
+  canonical description, so the registry content fingerprint moves and a plan pinned
+  against a registry built before this change must be re-planned.
+
+- **BREAKING** **retrieval:** a stream now carries its prepared exclusion lookup and a
+  borrow of the dataset, so `RankedStreamImpl`, `StratumStream`, `ExecutionResult`
+  and `RankedStreamAdapter` gain a lifetime parameter and `execute` returns an
+  `ExecutionResult<'d>` borrowing its dataset. `StratumResolution` gains the public
+  fields `exclusion_lookups` and `rows_materialised`, `FusionTrailer` gains
+  `exclusion_bases`, and `PlannedResolution` gains `sharing_weights`, so none of
+  them can be built by struct literal from an older field list; `PlannedResolution`
+  is no longer `Copy`, and `PlannedResolution::fully_separated` takes `&self`.
 
 - **BREAKING** **retrieval:** The read bound moved into `RetrievalRequest`, so a
   bounded answer costs a bounded *read*. `RetrievalRequest` gains a `bound` field
@@ -2399,6 +2672,13 @@ which is kept as a test oracle, and no emitted byte changes.
     `vpunpckhqdq` on x86-64-v3, `vpermt2q` on x86-64-v4, SVE `st2d`).
   - On SSE2, NEON and wasm simd128, both copies stay scalar, and the only vector
     op is the presence count (`i32x4.add` on simd128).
+
+- **retrieval:** fused selection reads one key per signature group instead of
+  walking the whole frontier on every pass, so a read through a plateau of equal
+  contributions costs work linear in the rows pulled rather than quadratic (a
+  collided-weight drain of 8,000 candidates read 150,985,757 frontier states and
+  now reads 61,910 index entries); every emitted row, its order, its score interval
+  and the trailer are unchanged.
 
 - **sparql-eval/text:** Attesting an index generation is a refcount bump instead of
   a string copy, and an entry point that cannot carry the answer no longer asks the

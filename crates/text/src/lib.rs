@@ -82,7 +82,9 @@ pub use index::{
     Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,
     TextIndexConfig,
 };
-pub use relation::{TermOccurrenceRelation, TextSearchRelation, verify_binding};
+pub use relation::{
+    SearchObservations, TermOccurrenceRelation, TextSearchRelation, verify_binding,
+};
 pub use score::{
     B, Constraint, K1, PartitionFilter, Scored, TermContribution, explain, rank_partition, select,
 };

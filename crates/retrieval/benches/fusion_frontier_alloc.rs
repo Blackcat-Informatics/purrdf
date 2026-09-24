@@ -36,8 +36,27 @@
 //! single-stratum fusion has no frontier to measure — nothing is ever held
 //! awaiting confirmation — so it would report the same bytes whether the
 //! frontier were bounded or not.
+//!
+//! # The counters the later phases add, and why they are still report-only
+//!
+//! The shared-block phases report two more numbers beside the bytes:
+//! `lookups`, the point queries a fusion spent to settle finality, and `work`,
+//! the rows the reads behind its streams returned. They are here because a
+//! narrowing judged on `pulled` alone is judged on the counter it was built to
+//! lower — the rows a read materialised are the price, and a read that halved
+//! the ranks while doubling the rows would look like a win in every other
+//! number this file prints.
+//!
+//! **No phase here asserts anything, and none of them takes a clock reading.**
+//! That is unchanged by the additions: this machine is not quiet, a timing
+//! threshold would be a flaky gate, and a speedup claimed from a number
+//! measured here would be a claim about the load on the box. The
+//! non-regression claims live on the deterministic counters, in
+//! `tests/multimodal_read_bound.rs` and `tests/exclusion_lookup.rs`, which
+//! compare two runs against each other.
 
 use std::collections::BTreeMap;
+use std::env;
 use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -46,9 +65,10 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_retrieval::{
-    CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile,
-    FusionStream, Iri, OrderFidelity, ProducerReceipt, ProtocolError, RankFidelity, RankedRow,
-    RankedStream, RowBlock, ScoreInterval, StreamContract, Term, contribution,
+    CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, ExclusionBasis,
+    ExclusionVerdict, Fixed, FusionProfile, FusionStream, Iri, OrderFidelity, ProducerReceipt,
+    ProtocolError, RankFidelity, RankedRow, RankedStream, RowBlock, ScoreInterval, StreamContract,
+    Term, contribution,
 };
 
 // ---------------------------------------------------------------------------
@@ -139,6 +159,39 @@ const STRATA: [&str; 3] = ["nra/a", "nra/b", "nra/c"];
 /// exhausted.
 const PULL_BUDGET: usize = 1 << 16;
 
+/// The stream length and row count `--test` mode runs every case shape at.
+///
+/// This file has no `criterion` harness, so nothing in it already knows how to
+/// answer cargo's `--test` the way the crate's criterion-driven benches do
+/// (`benches/on_demand_read.rs` gets that for free from
+/// `Criterion::default().configure_from_args()`, which is what makes `--test`
+/// run one fast pass there). A smoke run has to shrink the *inputs*, not skip
+/// the measurement, and it has to shrink them past every phase's worst case,
+/// not just its typical one: [`shared_block_phase`] under
+/// [`ExclusionBasis::Unavailable`], and the collided-regime call in [`main`],
+/// can each only certify a row once every stream is fully exhausted (see their
+/// doc comments), so the true per-phase cost at `total` rows is `3 * total`
+/// pulls, not the handful the bounded cases need. At `SMOKE_TOTAL` that worst
+/// case is a few hundred pulls; at the full grid's largest `total` it is
+/// millions.
+const SMOKE_TOTAL: u64 = 64;
+
+/// The rows fused per case in `--test` mode, well under [`SMOKE_TOTAL`] so
+/// every case shape — bounded or full-drain — has rows left to hand back.
+const SMOKE_ROWS: usize = 8;
+
+/// Whether this run is cargo's `--test` smoke pass.
+///
+/// `cargo bench -- --test` appends `--test` to the harness binary's own argv;
+/// a `harness = false` binary that never reads its argv — this file, before
+/// this function existed — runs its full `main` regardless, which is exactly
+/// what made a "smoke" invocation of this bench cost the same as the full
+/// report. Checked by literal argument match rather than a flag-parsing crate,
+/// because the one flag this file honours is the one cargo itself defines.
+fn smoke_requested() -> bool {
+    env::args().any(|arg| arg == "--test")
+}
+
 fn stratum(suffix: &str) -> Iri {
     Iri::parse(&format!("http://example.org/stratum/{suffix}")).expect("fixture IRIs are valid")
 }
@@ -187,6 +240,24 @@ struct LazyStream {
     /// did — which is otherwise never measured here, because nothing in an
     /// undegraded fusion reaches it.
     fidelity: RankFidelity,
+    /// Whether every stream of this fixture declares ONE block while minting
+    /// candidates nobody else can name.
+    ///
+    /// The shape finality forbids stopping early in, and therefore the shape an
+    /// exclusion lookup exists for: the declarations are all true, and the fact
+    /// that is false — that no other stream will ever name this candidate — is
+    /// one no promise about blocks can express. `block` stays `None` here
+    /// because the declaration is not per stream, and the item prefix is the
+    /// stream's own so the universes really are disjoint.
+    shared_block: bool,
+    /// What this producer declares its exclusion answers are a fact about.
+    ///
+    /// [`ExclusionBasis::Unavailable`] for every phase that predates the
+    /// mechanism, which is every phase but the shared-block pair.
+    exclusion: ExclusionBasis,
+    /// How many candidate lookups this producer was asked, shared with the
+    /// phase that reports it.
+    lookups: Arc<AtomicUsize>,
 }
 
 // The trait's methods are `async`; this fixture's body is synchronous because it
@@ -203,23 +274,36 @@ impl RankedStream for LazyStream {
         self.pulls.fetch_add(1, Ordering::Relaxed);
         let rank = self.emitted;
         let value = contribution(self.weight, rank, K).expect("the contribution fits");
-        let item = match self.block {
-            None => {
-                let index = permuted_index(self.stream_index, rank);
-                format!("candidate-{index:08}")
+        let item = if self.shared_block {
+            // One declared block, one universe per stream: exactly the
+            // configuration whose candidates never become final on a
+            // declaration alone.
+            format!("shared/stream-{}/candidate-{rank:08}", self.stream_index)
+        } else {
+            match self.block {
+                None => {
+                    let index = permuted_index(self.stream_index, rank);
+                    format!("candidate-{index:08}")
+                }
+                Some(block) => format!("block-{block}/candidate-{rank:08}"),
             }
-            Some(block) => format!("block-{block}/candidate-{rank:08}"),
         };
         // The block this row was drawn from, which a restricted stream owes on
         // every row. It is the same block the contract declares — the disjoint
         // fixture's streams each draw from exactly one, so that block IS where
         // every one of their rows comes from — and the overlapping fixture
         // declares nothing and so names nothing.
-        let drawn_from = match self.block {
-            None => RowBlock::Undeclared,
-            Some(block) => RowBlock::Declared(
-                DomainTag::parse(BLOCKS[block]).expect("the fixture block tags are valid IRIs"),
-            ),
+        let drawn_from = if self.shared_block {
+            RowBlock::Declared(
+                DomainTag::parse(BLOCKS[0]).expect("the fixture block tags are valid IRIs"),
+            )
+        } else {
+            match self.block {
+                None => RowBlock::Undeclared,
+                Some(block) => RowBlock::Declared(
+                    DomainTag::parse(BLOCKS[block]).expect("the fixture block tags are valid IRIs"),
+                ),
+            }
         };
         Ok(Some(RankedRow::new(
             rank,
@@ -244,11 +328,22 @@ impl RankedStream for LazyStream {
     /// streams each mint their items under their own prefix, so each really
     /// does draw from one block, and says so.
     fn contract(&self) -> StreamContract {
+        if self.shared_block {
+            return StreamContract::new(
+                DuplicatePolicy::Unique,
+                self.fidelity.clone(),
+                CandidateDomains::within([
+                    DomainTag::parse(BLOCKS[0]).expect("the fixture block tags are valid IRIs")
+                ]),
+                self.exclusion,
+            );
+        }
         match self.block {
             None => StreamContract::new(
                 DuplicatePolicy::Unique,
                 self.fidelity.clone(),
                 CandidateDomains::Unrestricted,
+                self.exclusion,
             ),
             Some(block) => StreamContract::new(
                 DuplicatePolicy::Unique,
@@ -256,8 +351,42 @@ impl RankedStream for LazyStream {
                 CandidateDomains::within([
                     DomainTag::parse(BLOCKS[block]).expect("the fixture block tags are valid IRIs")
                 ]),
+                self.exclusion,
             ),
         }
+    }
+
+    /// Answer whether `candidate` is one this stream's universe holds, where
+    /// this fixture declares a basis for the question.
+    ///
+    /// Read off the candidate's own prefix rather than by scanning, which is
+    /// what makes it a point lookup: this stream mints
+    /// `shared/stream-{i}/candidate-{rank}` and nothing else, so a term of any
+    /// other shape is one it will never name. A stream that declared no basis
+    /// answers the disagreement [`ProtocolError::ExclusionUnavailable`] names
+    /// rather than a verdict it did not measure; fusion never asks it.
+    async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        if !self.exclusion.is_declared() {
+            return Err(ProtocolError::ExclusionUnavailable);
+        }
+        self.lookups.fetch_add(1, Ordering::Relaxed);
+        let mine = format!("shared/stream-{}/candidate-", self.stream_index);
+        Ok(if candidate.as_str().starts_with(&mine) {
+            ExclusionVerdict::Possible
+        } else {
+            ExclusionVerdict::Excluded
+        })
+    }
+
+    /// The rows the read behind this stream returns, which for a fixture that
+    /// mints arithmetically is the whole of the stream it was built for.
+    ///
+    /// Reported rather than declined because the phases below are about exactly
+    /// this: a read taken at the fused frontier and a read taken at the planned
+    /// depth cost different numbers of rows, and the fusion that consumes them
+    /// pulls the same ranks either way.
+    fn rows_materialised(&self) -> Option<u64> {
+        Some(self.total)
     }
 }
 
@@ -304,6 +433,9 @@ fn fixture_declaring(
                     weight,
                     block: None,
                     fidelity: fidelities[stream_index].clone(),
+                    shared_block: false,
+                    exclusion: ExclusionBasis::Unavailable,
+                    lookups: Arc::new(AtomicUsize::new(0)),
                 },
             )
         })
@@ -313,8 +445,8 @@ fn fixture_declaring(
 
 /// Certify `rows` rows from three streams of `total` rows each, reporting the
 /// peak heap and the resident-set delta across the certifying window.
-fn phase(label: &str, total: u64, rows: usize) {
-    phase_at_weight(label, total, rows, Fixed::ONE);
+fn phase(label: &str, total: u64, rows: usize) -> usize {
+    phase_at_weight(label, total, rows, Fixed::ONE)
 }
 
 /// The same phase at a stratum weight whose adjacent ranks collide, so the
@@ -325,7 +457,7 @@ fn phase(label: &str, total: u64, rows: usize) {
 /// certifies until the plateau ends. At a unit weight that regime begins past a
 /// million ranks — beyond `PULL_BUDGET`, so every phase above stops short of it
 /// and this bench has never once reported on it.
-fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
+fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) -> usize {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, &pulls, weight);
     let mut fusion = FusionStream::new(streams, profile);
@@ -353,6 +485,7 @@ fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
         rss_before,
         rss_after,
     );
+    fused
 }
 
 /// A lossy but order-faithful declaration: what an HNSW graph is, and the only
@@ -404,7 +537,7 @@ fn perturbed() -> RankFidelity {
 /// Report-only, like every phase above. Nothing here asserts a time, a ratio or
 /// a bound: this machine is not quiet, and a threshold would be noise wearing a
 /// gate's clothes.
-fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity) {
+fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity) -> usize {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture_declaring(
         total,
@@ -450,6 +583,7 @@ fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity)
         rss_before,
         rss_after,
     );
+    fused
 }
 
 /// The caller-named block each stratum of the disjoint fixture draws from, in
@@ -486,6 +620,9 @@ fn disjoint_fixture(
                     weight: Fixed::ONE,
                     block: Some(stream_index),
                     fidelity: RankFidelity::EXACT,
+                    shared_block: false,
+                    exclusion: ExclusionBasis::Unavailable,
+                    lookups: Arc::new(AtomicUsize::new(0)),
                 },
             )
         })
@@ -502,7 +639,7 @@ fn disjoint_fixture(
 /// watch. `pulled` is the quantity of interest: over disjoint strata it is
 /// `rows` plus a head per stream when the producers declare their blocks, and
 /// the whole of every stream when they do not.
-fn disjoint_phase(label: &str, total: u64, rows: usize) {
+fn disjoint_phase(label: &str, total: u64, rows: usize) -> usize {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = disjoint_fixture(total, &pulls);
     let mut fusion = FusionStream::new(streams, profile);
@@ -530,9 +667,190 @@ fn disjoint_phase(label: &str, total: u64, rows: usize) {
         rss_before,
         rss_after,
     );
+    fused
+}
+
+/// The profile and three streams that all declare ONE block while minting
+/// candidates nobody else can name, each answering lookups on `basis`.
+fn shared_block_fixture(
+    total: u64,
+    pulls: &Arc<AtomicUsize>,
+    lookups: &Arc<AtomicUsize>,
+    basis: ExclusionBasis,
+) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
+    let weights: BTreeMap<Iri, Fixed> = STRATA
+        .iter()
+        .map(|name| (stratum(name), Fixed::ONE))
+        .collect();
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid");
+    let streams = STRATA
+        .iter()
+        .enumerate()
+        .map(|(stream_index, name)| {
+            (
+                stratum(name),
+                LazyStream {
+                    stream_index,
+                    emitted: 0,
+                    total,
+                    pulls: Arc::clone(pulls),
+                    weight: Fixed::ONE,
+                    block: None,
+                    fidelity: RankFidelity::EXACT,
+                    shared_block: true,
+                    exclusion: basis,
+                    lookups: Arc::clone(lookups),
+                },
+            )
+        })
+        .collect();
+    (profile, streams)
+}
+
+/// The shared-block phase: the configuration a declaration cannot narrow, with
+/// and without the lookups that can.
+///
+/// **Report-only, and it asserts nothing about time.** No phase in this file
+/// takes a clock reading and this one does not either; the machine is not quiet
+/// and a timing threshold here would be a flaky gate rather than a measurement.
+/// What it reports is the pair of quantities the mechanism is judged on, and
+/// both are deterministic: `pulled`, the ranks the fusion consumed, and
+/// `lookups`, the point queries it spent to get there. The claims that those
+/// numbers are the right ones are made — and enforced — by
+/// `tests/multimodal_read_bound.rs` and `tests/exclusion_lookup.rs`, which
+/// compare two runs against each other rather than against a number.
+///
+/// `work` is the third number, and it is here because it is the one a headline
+/// about materialised rows is a headline about: the rows the reads behind these
+/// streams returned, summed over the strata, straight off the trailer.
+fn shared_block_phase(label: &str, total: u64, rows: usize, basis: ExclusionBasis) -> usize {
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let (profile, streams) = shared_block_fixture(total, &pulls, &lookups, basis);
+    let mut fusion = FusionStream::new(streams, profile);
+
+    let rss_before = rss_kb();
+    let window = WholeProcessWindow::open();
+    let mut fused = 0usize;
+    let mut contributions = 0usize;
+    while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
+        let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") else {
+            break;
+        };
+        contributions += row.contributions.len();
+        fused += 1;
+    }
+    let peak = window.close().peak_working_bytes;
+    let rss_after = rss_kb();
+    let pulled = pulls.load(Ordering::Relaxed);
+
+    // Read after the window closes: the trailer allocates a map per stratum and
+    // that is reporting rather than fusing.
+    let trailer = block_on(fusion.trailer()).expect("the fixture obeys the protocol");
+    let counted: u64 = trailer
+        .resolution
+        .values()
+        .map(|measured| measured.exclusion_lookups)
+        .sum();
+    let work: u64 = trailer
+        .resolution
+        .values()
+        .filter_map(|measured| measured.rows_materialised)
+        .sum();
+    drop(fusion);
+
+    black_box(contributions);
+    report(
+        &format!(
+            "{label} fused={fused}/{rows} pulled={pulled} lookups={counted}/{served} work={work}",
+            served = lookups.load(Ordering::Relaxed),
+        ),
+        peak,
+        rss_before,
+        rss_after,
+    );
+    fused
+}
+
+/// The `--test` path: every case shape this file has, run exactly once at
+/// [`SMOKE_TOTAL`]/[`SMOKE_ROWS`], each asserted to have certified every row
+/// it was asked for.
+///
+/// This is deliberately not "print without asserting", which is what every
+/// phase above does for the full report: a smoke run exists to prove the
+/// protocol still holds, and a phase that silently fused zero rows because a
+/// fixture stopped converging would be a smoke run that passed while proving
+/// nothing. Asserting `fused == SMOKE_ROWS` catches exactly that, on every
+/// fixture shape in this file: the overlapping fixture, the collided-weight
+/// regime, the disjoint fixture, both shared-block bases, and both degraded
+/// fidelities.
+fn run_smoke() {
+    assert_eq!(
+        phase("smoke: overlapping", SMOKE_TOTAL, SMOKE_ROWS),
+        SMOKE_ROWS,
+        "the overlapping fixture must fuse every requested row"
+    );
+
+    let colliding = Fixed::from_raw(1_000);
+    assert_eq!(
+        phase_at_weight("smoke: collided", SMOKE_TOTAL, SMOKE_ROWS, colliding),
+        SMOKE_ROWS,
+        "the collided-weight regime must still fuse every requested row"
+    );
+
+    assert_eq!(
+        disjoint_phase("smoke: disjoint", SMOKE_TOTAL, SMOKE_ROWS),
+        SMOKE_ROWS,
+        "the disjoint fixture must fuse every requested row"
+    );
+
+    assert_eq!(
+        shared_block_phase(
+            "smoke: shared silent",
+            SMOKE_TOTAL,
+            SMOKE_ROWS,
+            ExclusionBasis::Unavailable,
+        ),
+        SMOKE_ROWS,
+        "the shared-block fixture must fuse every requested row once its \
+         streams are exhausted"
+    );
+    assert_eq!(
+        shared_block_phase(
+            "smoke: shared asking",
+            SMOKE_TOTAL,
+            SMOKE_ROWS,
+            ExclusionBasis::Membership,
+        ),
+        SMOKE_ROWS,
+        "an exclusion-answering shared-block fixture must fuse every requested row"
+    );
+
+    let lossy = lossy();
+    assert_eq!(
+        degraded_phase("smoke: lossy", SMOKE_TOTAL, SMOKE_ROWS, &lossy),
+        SMOKE_ROWS,
+        "a lossy stratum must not block certification"
+    );
+    let perturbed = perturbed();
+    assert_eq!(
+        degraded_phase("smoke: perturbed", SMOKE_TOTAL, SMOKE_ROWS, &perturbed),
+        SMOKE_ROWS,
+        "a perturbed stratum must not block certification"
+    );
+
+    println!(
+        "[fusion_frontier_alloc] --test: every case shape fused {SMOKE_ROWS} rows at \
+         total={SMOKE_TOTAL}"
+    );
 }
 
 fn main() {
+    if smoke_requested() {
+        run_smoke();
+        return;
+    }
     // Warm every lazy one-time allocation outside the reported phases.
     phase("warmup", 1_000, 32);
     println!("[fusion_frontier_alloc] --- stream length varies, rows fused fixed at 32 ---");
@@ -564,6 +882,23 @@ fn main() {
             colliding,
         );
     }
+    // The same weight, drained. Thirty-two rows certify inside the early, short
+    // plateaus; past rank 940 every contribution is zero, so a drain holds the
+    // whole remaining universe in the frontier until every stream is exhausted
+    // and then emits it row by row. That is the one place in this grid where the
+    // frontier is as wide as the streams, and the peak here is expected to follow
+    // the stream length. Every total stays under `PULL_BUDGET` at three pulls per
+    // candidate, so each row reports a complete drain.
+    println!("[fusion_frontier_alloc] --- collided regime (weight 1e-9), drained ---");
+    for total in [1_000_u64, 4_000, 16_000] {
+        let rows = usize::try_from(total).expect("the grid's totals fit a usize");
+        phase_at_weight(
+            &format!("strata=3 rows={total} stream={total} collided drained"),
+            total,
+            rows,
+            colliding,
+        );
+    }
     // Disjoint strata, each producer declaring the block it draws from. This is
     // the configuration the reading bound is about: `pulled` should stay flat
     // as the streams grow by three orders of magnitude, where without a
@@ -576,6 +911,44 @@ fn main() {
             &format!("strata=3 rows=32 stream={total} disjoint"),
             total,
             32,
+        );
+    }
+    // One declared block and three disjoint universes: the shape no declaration
+    // can narrow, because both halves of every declaration are true and the
+    // fact that is false is a fact about the corpus. Reported in pairs — the
+    // same fixture with the lookup declared and withheld — because the only
+    // reading of either number that means anything is the comparison.
+    println!(
+        "[fusion_frontier_alloc] --- one shared block, disjoint universes, rows fused fixed at 32 ---"
+    );
+    for total in [1_000_u64, 10_000, 100_000] {
+        shared_block_phase(
+            &format!("strata=3 rows=32 stream={total} shared silent"),
+            total,
+            32,
+            ExclusionBasis::Unavailable,
+        );
+        shared_block_phase(
+            &format!("strata=3 rows=32 stream={total} shared asking"),
+            total,
+            32,
+            ExclusionBasis::Membership,
+        );
+    }
+    // The length of the read behind a stream, against the rows the fusion
+    // takes from it. The fusion consumes the same ranks whatever the stream
+    // holds past them — that is the soundness claim — and `work` is what each
+    // stream's read reports it cost, which is the number `pulled` alone cannot
+    // show.
+    println!(
+        "[fusion_frontier_alloc] --- read length against rows fused, rows fused fixed at 32 ---"
+    );
+    for total in [35_u64, 1_000, 100_000] {
+        shared_block_phase(
+            &format!("strata=3 rows=32 read={total} read-length"),
+            total,
+            32,
+            ExclusionBasis::Membership,
         );
     }
     // The score-interval path, which every phase above leaves unmeasured: one

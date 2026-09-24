@@ -691,20 +691,28 @@ impl TextIndex {
         document: u32,
         term: &str,
     ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
-        let doc = self
-            .document(document)
-            .ok_or_else(|| TextError::data("field input names an absent document"))?;
-        let frequencies = self
-            .term_entry(term)
-            .and_then(|entry| {
-                let postings = span_slice(entry, doc.partition);
-                postings
-                    .binary_search_by_key(&document, |posting| posting.document)
-                    .ok()
-                    .map(|at| postings[at].predicate_frequencies.as_slice())
-            })
-            .unwrap_or(&[]);
+        if self.document(document).is_none() {
+            return Err(TextError::data("field input names an absent document"));
+        }
+        let frequencies = self.posted_frequencies(document, term).unwrap_or(&[]);
         self.field_inputs_from_counts(document, frequencies)
+    }
+
+    /// The predicate frequencies of `term`'s posting for `document`, or `None`
+    /// when the document holds no posting for it — including a term the
+    /// dictionary does not hold and an id naming no document.
+    ///
+    /// One binary search over the dictionary and one over the term's postings
+    /// within the document's own partition span: the point lookup that decides
+    /// membership, returning the very facts the scorer reads, so a caller that
+    /// both decides and scores searches once rather than twice.
+    pub(crate) fn posted_frequencies(&self, document: u32, term: &str) -> Option<&[(u32, u64)]> {
+        let partition = self.documents.get(document as usize)?.partition;
+        let postings = span_slice(self.term_entry(term)?, partition);
+        postings
+            .binary_search_by_key(&document, |posting| posting.document)
+            .ok()
+            .map(|at| postings[at].predicate_frequencies.as_slice())
     }
 
     /// Assemble field inputs from a posting already located by the query walk.
@@ -866,10 +874,17 @@ impl TextIndex {
     ///
     /// This is what makes a bound document position a **partition** restriction
     /// rather than a per-row filter. A query that names a document is answered
-    /// by ranking the one, two or three partitions that subject actually appears
-    /// in instead of every partition the index holds — and because ranks are
-    /// per-partition, dropping the rest cannot change the rank of any row that
-    /// survives.
+    /// over the partitions that subject actually appears in instead of every
+    /// partition the index holds — and because ranks are per-partition,
+    /// dropping the rest cannot change the rank of any row that survives.
+    ///
+    /// It is the whole of the narrowing for a relation whose rows are the
+    /// postings themselves. A relation whose rows are *ranked documents* narrows
+    /// further, because for it a partition is worth ranking only where the
+    /// subject's document in it holds a needle term at all: see
+    /// [`Self::term_frequency`], which decides that in one binary search per
+    /// term, and `TextSearchRelation::open`, which answers without ranking
+    /// anything where the answer is none.
     ///
     /// Empty for a subject the index holds no text for, which admits no
     /// partition and so retrieves nothing — the same answer a per-row filter

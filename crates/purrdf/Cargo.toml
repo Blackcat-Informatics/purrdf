@@ -78,3 +78,20 @@ purrdf-markdown = { workspace = true }
 
 # Ordered JSON is an always-available data carrier over the shared IR.
 purrdf-json.workspace = true
+
+[dev-dependencies]
+# The timed bench (`benches/multimodal_on_demand_read.rs`). Report-only: it
+# compares the on-demand read against the materialised one over real text and
+# HNSW producers, which only the umbrella can wire together in one fixture
+# because `purrdf-retrieval` does not depend on `purrdf-hnsw`.
+criterion = { workspace = true }
+
+# The fused read taken on demand against the same read materialised, over real
+# text and HNSW producers rather than the mock ones `purrdf-retrieval`'s own
+# `on_demand_read` bench uses — plus one governed per-candidate exclusion
+# lookup, timed in isolation. Report-only: the deterministic counterparts are
+# asserted in `tests/multimodal_exclusion_lookup.rs` and in
+# `purrdf-retrieval`'s `tests/text_exclusion_lookup.rs`.
+[[bench]]
+name = "multimodal_on_demand_read"
+harness = false

@@ -16,8 +16,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
@@ -32,10 +32,10 @@ use purrdf_retrieval::{
     plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, ExtensionEnv, NativeSparqlEngine,
-    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, RankArithmetic, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, ExclusionBasis, ExtensionEnv,
+    NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+    PropertyFunctionRegistry, QueryGovernors, QueryOptions, RankArithmetic, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const K: u32 = 60;
@@ -79,6 +79,20 @@ fn dataset_of(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
     builder
         .freeze()
         .expect("the fixture dataset is structurally valid")
+}
+
+/// The empty fixture dataset, shared for the whole binary and handed out by
+/// reference.
+///
+/// [`dataset_of`] builds a fresh dataset per call, which a test that only needs
+/// somewhere for the relations to be read against cannot keep alive: an
+/// execution's streams borrow the dataset they were read from, because an
+/// exclusion lookup is a question asked of that dataset while the fusion is
+/// merging. One frozen empty dataset is the same value in every such case — it
+/// holds no quads, so no test can observe which one it got.
+fn empty_dataset() -> &'static RdfDataset {
+    static EMPTY: OnceLock<Arc<RdfDataset>> = OnceLock::new();
+    EMPTY.get_or_init(|| dataset_of(&[]))
 }
 
 /// What a fixture producer's cursor attests about the index behind it.
@@ -317,6 +331,7 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
         arithmetic: RankArithmetic::FloatFree,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory: true,
     }
 }
@@ -431,7 +446,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 /// Every candidate the named stratum streamed, in rank order.
-fn candidates(execution: &mut purrdf_retrieval::ExecutionResult, stratum: &Iri) -> Vec<String> {
+fn candidates(execution: &mut purrdf_retrieval::ExecutionResult<'_>, stratum: &Iri) -> Vec<String> {
     let stream = execution
         .streams
         .iter_mut()
@@ -571,7 +586,7 @@ fn candidates_are_the_canonical_lexical_and_not_an_opaque_blob() {
     let stats = statistics();
     let bundle = compiled(&registry, &stats);
     let mut execution =
-        block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("the units run");
+        block_on(execute(&bundle, &registry, empty_dataset())).expect("the units run");
 
     let alpha = candidates(&mut execution, &iri(&ex(STRATA[0])));
     assert_eq!(
@@ -776,7 +791,7 @@ fn a_forced_failure_isolates_to_its_stratum() {
     );
 
     let mut execution =
-        block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("execution starts");
+        block_on(execute(&bundle, &registry, empty_dataset())).expect("execution starts");
 
     match &execution.statuses[&iri(&ex(STRATA[0]))] {
         ProducerStatus::ExecutionFailed { reason } => assert!(
@@ -827,11 +842,13 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
             duplicates,
             RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
+            ExclusionBasis::Unavailable,
         );
         let beta = StreamContract::new(
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
+            ExclusionBasis::Unavailable,
         );
 
         let unit = bundle
@@ -844,7 +861,7 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
             "the compiled unit carries the declaration the registry it was admitted against made"
         );
 
-        let execution = block_on(execute(&bundle, &registry, &*dataset_of(&[])))
+        let execution = block_on(execute(&bundle, &registry, empty_dataset()))
             .expect("the fixture registry executes");
         let profile = fixture_profile();
         for stream in execution.streams {
@@ -877,7 +894,10 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
 fn run(
     registry: &PropertyFunctionRegistry,
     stats: &MockStatistics,
-) -> purrdf_retrieval::ExecutionResult {
+    // `'static` because the execution borrows the shared empty fixture dataset, which
+    // outlives every caller; an elided lifetime would have to pick one of the two
+    // input references and would be describing the wrong thing.
+) -> purrdf_retrieval::ExecutionResult<'static> {
     let planned = plan(&seed_request(), registry, stats).expect("the fixture request plans");
     let env = AdmissionEnvironment {
         registry,
@@ -885,7 +905,7 @@ fn run(
         fusion_profile: None,
     };
     let bundle = compile(&planned, &env).expect("the fresh plan is admitted");
-    block_on(execute(&bundle, registry, &*dataset_of(&[]))).expect("the units run")
+    block_on(execute(&bundle, registry, empty_dataset())).expect("the units run")
 }
 
 /// The one-call path over `registry` and `stats`, under the fixture profile.
@@ -899,7 +919,7 @@ fn searched(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> Sear
         &seed_request(),
         registry,
         stats,
-        &*dataset_of(&[]),
+        empty_dataset(),
         &env,
         &fixture_profile(),
     ))
@@ -908,7 +928,7 @@ fn searched(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> Sear
 
 /// What one stratum's executed stream attested.
 fn attested(
-    execution: &purrdf_retrieval::ExecutionResult,
+    execution: &purrdf_retrieval::ExecutionResult<'_>,
     stratum: &Iri,
 ) -> purrdf_retrieval::PfAttestation {
     execution
@@ -1141,7 +1161,7 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
         "and the unit records the depth, not the bound it was emitted under"
     );
     let mut execution =
-        block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("the unit runs");
+        block_on(execute(&bundle, &registry, empty_dataset())).expect("the unit runs");
     assert_eq!(
         candidates(&mut execution, &alpha).len(),
         3,
@@ -1174,8 +1194,7 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
         fusion_profile: None,
     };
     let bundle = compile(&planned, &env).expect("admits");
-    let execution =
-        block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("the unit runs");
+    let execution = block_on(execute(&bundle, &registry, empty_dataset())).expect("the unit runs");
     assert_eq!(
         execution.statuses[&alpha],
         ProducerStatus::Exhausted { rows_emitted: 2 },
@@ -1221,8 +1240,7 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
         Some(3),
         "the unit carries the declaration the probe row will be read against"
     );
-    let execution =
-        block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("the unit runs");
+    let execution = block_on(execute(&bundle, &registry, empty_dataset())).expect("the unit runs");
     assert_eq!(
         execution.statuses[&alpha],
         ProducerStatus::Exhausted { rows_emitted: 3 },
@@ -1280,7 +1298,7 @@ fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
         3,
         "the recorded depth did not move with the emitted bound"
     );
-    let error = block_on(execute(&bundle, &registry, &*dataset_of(&[])))
+    let error = block_on(execute(&bundle, &registry, empty_dataset()))
         .expect_err("a fourth row from a producer that declared three is refused");
     match &error {
         ExecutionError::RowBoundBreached {
@@ -1332,7 +1350,7 @@ fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
     };
     let bundle = compile(&planned, &env).expect("admits");
     let execution =
-        block_on(execute(&bundle, &honest, &*dataset_of(&[]))).expect("an honest producer runs");
+        block_on(execute(&bundle, &honest, empty_dataset())).expect("an honest producer runs");
     assert_eq!(
         execution.statuses[&alpha],
         ProducerStatus::Exhausted { rows_emitted: 3 },
@@ -1530,7 +1548,7 @@ fn the_unbounded_lane_keeps_one_ceiling_and_a_unit_cannot_charge_it() {
             ex("fn/deepen")
         ),
     );
-    let mut execution = block_on(execute(&bundle, &registry, &*dataset_of(&[])))
+    let mut execution = block_on(execute(&bundle, &registry, empty_dataset()))
         .expect("an unreachable function is a stratum's failure, never a budget trip");
     match &execution.statuses[&iri(&ex(STRATA[0]))] {
         ProducerStatus::ExecutionFailed { reason } => assert!(
@@ -1598,7 +1616,7 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
         source.fused_bound,
         source.resolution,
     );
-    let execution = block_on(execute(&by_hand, &registry, &*dataset_of(&[])))
+    let execution = block_on(execute(&by_hand, &registry, empty_dataset()))
         .expect("a bundle a caller assembled runs");
     assert_eq!(
         execution.statuses.len(),
@@ -1610,7 +1628,7 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
     //     the check they wrote one status between them.
     let mut renamed = compiled(&registry, &stats);
     renamed.units[1].stratum = alpha.clone();
-    let error = block_on(execute(&renamed, &registry, &*dataset_of(&[])))
+    let error = block_on(execute(&renamed, &registry, empty_dataset()))
         .expect_err("a unit reporting under another producer's stratum");
     match error {
         ExecutionError::UnitsNotAsAssembled { plan, reason } => {
@@ -1631,7 +1649,7 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
     swapped.units[1].stratum = alpha;
     assert!(
         matches!(
-            block_on(execute(&swapped, &registry, &*dataset_of(&[]))),
+            block_on(execute(&swapped, &registry, empty_dataset())),
             Err(ExecutionError::UnitsNotAsAssembled { .. })
         ),
         "a swap crosses two producers' evidence and is refused"
@@ -1640,7 +1658,7 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
     // (3) A unit removed. The narrowing the waist exists to prevent, one stage later.
     let mut dropped = compiled(&registry, &stats);
     dropped.units.remove(1);
-    match block_on(execute(&dropped, &registry, &*dataset_of(&[]))) {
+    match block_on(execute(&dropped, &registry, empty_dataset())) {
         Err(ExecutionError::UnitsNotAsAssembled { reason, .. }) => assert!(
             reason.contains("assembled with 2 unit(s) and holds 1"),
             "the count is reported before any position, because a removal shifts every \
@@ -1660,10 +1678,12 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
         // edit the assertion below could not tell apart from the first.
         fidelity: relaxed.units[0].contract.fidelity.clone(),
         domains: relaxed.units[0].contract.domains.clone(),
+        // Carried over for the identical reason.
+        exclusion: relaxed.units[0].contract.exclusion,
     };
     assert!(
         matches!(
-            block_on(execute(&relaxed, &registry, &*dataset_of(&[]))),
+            block_on(execute(&relaxed, &registry, empty_dataset())),
             Err(ExecutionError::UnitsNotAsAssembled { .. })
         ),
         "a rewritten declaration is not the declaration the producer made"
@@ -1675,7 +1695,7 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
     // one thing that was wrong.
     let mut supplied = compiled(&registry, &stats);
     running(&mut supplied, 0, mentions_fox());
-    block_on(execute(&supplied, &registry, &*dataset_of(&[])))
+    block_on(execute(&supplied, &registry, empty_dataset()))
         .expect("a caller's own text in a compiled unit still runs");
 }
 

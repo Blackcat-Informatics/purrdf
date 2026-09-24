@@ -40,19 +40,22 @@
 //! than a misspelling of it — see [`verify_binding`].
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
-    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, IndexGeneration, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, RankArithmetic, RankFidelity, RankedDeclaration,
-    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis, IndexGeneration,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankArithmetic, RankFidelity,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 use crate::analysis::Analyzer;
 use crate::error::TextError;
 use crate::index::{PartitionKey, TextIndex, TextIndexConfig, source_digest};
-use crate::score::{Constraint, PartitionFilter, Scored, select};
+use crate::score::{
+    Constraint, PartitionFilter, Scored, ScoringWork, distinct_terms, score_located, select_counted,
+};
 
 /// The datatype of a plain string literal.
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -77,8 +80,22 @@ const SEARCH_RANK: usize = 3;
 const SEARCH_LANG: usize = 4;
 /// [`TextSearchRelation`]'s `?matched` position.
 const SEARCH_MATCHED: usize = 5;
-/// The one access pattern [`TextSearchRelation`] declares.
+/// The general access pattern [`TextSearchRelation`] declares: the needle is the
+/// one position it cannot enumerate, and every other position is free.
 const SEARCH_MODE: &str = "fbffff";
+/// The **candidate-bound** access pattern [`TextSearchRelation`] declares beside
+/// [`SEARCH_MODE`]: the needle and the document, both bound.
+///
+/// It is not a wider capability — [`SEARCH_MODE`] already subsumes it, so nothing
+/// becomes feasible by its being declared — and it is not a second spelling of the
+/// same promise either. What it states is a *different* promise about the same
+/// call: that this relation answers `do you hold this document for this needle`
+/// as a point lookup, with a row bound of one over the single-partition index its
+/// ranked declaration requires anyway. That is the declaration
+/// `PropertyFunctionRegistry::register_ranked` reads before it admits
+/// [`ExclusionBasis::Membership`], and without it a declared basis would promise
+/// a lookup that becomes a ranking.
+const SEARCH_CANDIDATE_MODE: &str = "bbffff";
 
 /// [`TermOccurrenceRelation`]'s `?doc` position.
 const OCCURRENCE_DOC: usize = 0;
@@ -560,13 +577,168 @@ impl SearchBounds {
 pub struct TextSearchRelation {
     /// The index every invocation is answered from.
     index: Arc<TextIndex>,
-    /// The single declared mode, materialized once so [`PropertyFunction::modes`]
+    /// The declared modes, materialized once so [`PropertyFunction::modes`]
     /// can hand out a slice.
-    modes: [BindingPattern; 1],
+    modes: [BindingPattern; 2],
     /// The row maxima, measured once at construction.
     bounds: SearchBounds,
     /// The generation every cursor attests, rendered once at construction.
     generation: Arc<str>,
+    /// What this relation's invocations actually did, counted rather than
+    /// inferred. Shared with every clone, so a host that cloned the relation into
+    /// a registry still reads the counts of the invocations that registry served.
+    observations: Arc<SearchObservations>,
+}
+
+/// What [`TextSearchRelation`]'s invocations actually did, counted at the two
+/// places the difference between a point lookup and a ranking is decided.
+///
+/// This exists because "the candidate-bound call does not rank anything" is a
+/// claim about *work*, and the only honest evidence for a claim about work is a
+/// count of the work. Timing is not evidence: a fixture small enough to run in a
+/// test is small enough that ranking it and not ranking it take the same
+/// measurable time, so a timing assertion would pass over an implementation that
+/// ranks the whole index and one that does not.
+///
+/// Both counters are monotone for the life of the relation and are never reset
+/// here. A caller that wants a delta reads the value before and after, which is
+/// the reading that composes: a reset would race with any other invocation of a
+/// relation the registry may run across workers.
+///
+/// # Not part of any identity
+///
+/// Nothing here reaches a row, a score, an ordering or a fingerprint. Two
+/// relations over the same index answer identically whatever these say, so the
+/// counts are an observation about one process's execution rather than a fact
+/// about the index — which is why they live on the relation and not on
+/// [`TextIndex`], whose every field is part of what it attests.
+#[derive(Debug, Default)]
+pub struct SearchObservations {
+    /// How many membership lookups the relation has performed.
+    membership_lookups: AtomicU64,
+    /// How many invocations have entered the partition ranker.
+    rankings: AtomicU64,
+    /// How many posting lists the ranker has walked end to end.
+    posting_lists_walked: AtomicU64,
+    /// How many postings those walks have read.
+    postings_walked: AtomicU64,
+    /// How many documents a score has been computed for, by either scorer.
+    documents_scored: AtomicU64,
+    /// How many invocations were answered by the point scorer.
+    point_scorings: AtomicU64,
+}
+
+impl SearchObservations {
+    /// How many **membership lookups** the relation has performed.
+    ///
+    /// One lookup is one `(document, needle term)` pair asked of the index: a
+    /// binary search over the term dictionary followed by a binary search over
+    /// that term's postings within the document's own partition. A
+    /// candidate-bound invocation performs exactly one per pair of (a document
+    /// the bound subject occupies and the partition filter admits) and (a
+    /// distinct analyzed needle term), and nothing else performs any.
+    #[must_use]
+    pub fn membership_lookups(&self) -> u64 {
+        self.membership_lookups.load(Ordering::Relaxed)
+    }
+
+    /// How many invocations have **entered the partition ranker** — that is, have
+    /// handed a needle to [`crate::select`] at all.
+    ///
+    /// Zero is the load-bearing value: an invocation that never entered the
+    /// ranker never walked a posting list, never built a candidate set and never
+    /// computed a corpus statistic, whatever the index holds. The relation has
+    /// exactly one call site into the ranker and it increments this counter, so
+    /// a zero here is not an inference about how much ranking happened; it is the
+    /// statement that none did.
+    #[must_use]
+    pub fn rankings(&self) -> u64 {
+        self.rankings.load(Ordering::Relaxed)
+    }
+
+    /// How many **posting lists** the ranker has walked from end to end: one per
+    /// `(partition ranked, distinct needle term)`.
+    ///
+    /// Only the ranker walks a posting list. A membership lookup binary-searches
+    /// one and the point scorer reads the posting that search found, so an
+    /// invocation answered without ranking adds nothing here.
+    #[must_use]
+    pub fn posting_lists_walked(&self) -> u64 {
+        self.posting_lists_walked.load(Ordering::Relaxed)
+    }
+
+    /// How many individual **postings** the ranker's walks have read — the sum,
+    /// over every list [`Self::posting_lists_walked`] counts, of that list's
+    /// length in the partition ranked. This is the number that grows with the
+    /// corpus, which is why it is counted rather than inferred.
+    #[must_use]
+    pub fn postings_walked(&self) -> u64 {
+        self.postings_walked.load(Ordering::Relaxed)
+    }
+
+    /// How many documents a **score** has been computed for, by the ranker (every
+    /// candidate of every partition it ranked) and by the point scorer (each
+    /// document of the bound subject holding a needle term) alike.
+    #[must_use]
+    pub fn documents_scored(&self) -> u64 {
+        self.documents_scored.load(Ordering::Relaxed)
+    }
+
+    /// How many invocations were answered by the **point scorer**: a bound `?doc`
+    /// whose document holds a needle term, with `?rank` unobserved, so the rows
+    /// were scored in place and nothing was ranked. See
+    /// [`PropertyFunction::open`] on [`TextSearchRelation`].
+    #[must_use]
+    pub fn point_scorings(&self) -> u64 {
+        self.point_scorings.load(Ordering::Relaxed)
+    }
+
+    /// Add one scoring call's counted work.
+    fn record(&self, work: ScoringWork) {
+        self.posting_lists_walked
+            .fetch_add(work.posting_lists, Ordering::Relaxed);
+        self.postings_walked
+            .fetch_add(work.postings, Ordering::Relaxed);
+        self.documents_scored
+            .fetch_add(work.documents_scored, Ordering::Relaxed);
+    }
+}
+
+/// One document of a bound subject that holds at least one needle term, with the
+/// postings the membership lookups located for it.
+struct Holding<'i> {
+    /// The document id.
+    document: u32,
+    /// Its partition.
+    key: PartitionKey,
+    /// `(term ordinal, predicate frequencies)` for each distinct needle term the
+    /// document holds, in ascending ordinal order — what the point scorer reads.
+    located: Vec<(usize, &'i [(u32, u64)])>,
+}
+
+/// One row a [`SearchCursor`] will emit, before it is rendered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Hit {
+    /// The index document id.
+    document: u32,
+    /// The exact score.
+    score: crate::fixed::Fixed,
+    /// The per-partition rank, or `None` where `?rank` is unobserved and so was
+    /// never computed.
+    rank: Option<u32>,
+    /// How many distinct needle terms the document holds.
+    matched: u32,
+}
+
+impl From<Scored> for Hit {
+    fn from(scored: Scored) -> Self {
+        Self {
+            document: scored.document,
+            score: scored.score,
+            rank: Some(scored.partition_rank),
+            matched: scored.matched,
+        }
+    }
 }
 
 impl TextSearchRelation {
@@ -584,9 +756,13 @@ impl TextSearchRelation {
         let generation = index_generation(&index);
         Self {
             index,
-            modes: [BindingPattern::from_code(SEARCH_MODE)],
+            modes: [
+                BindingPattern::from_code(SEARCH_MODE),
+                BindingPattern::from_code(SEARCH_CANDIDATE_MODE),
+            ],
             bounds,
             generation,
+            observations: Arc::new(SearchObservations::default()),
         }
     }
 
@@ -594,6 +770,18 @@ impl TextSearchRelation {
     #[must_use]
     pub fn index(&self) -> &TextIndex {
         &self.index
+    }
+
+    /// What this relation's invocations have actually done.
+    ///
+    /// Handed back as a shared handle rather than a snapshot so a host can keep
+    /// reading after the relation itself has been moved into a registry, which
+    /// is the only arrangement in which the interesting question — did the
+    /// exclusion lookups this producer served rank anything — can be asked at
+    /// all. See [`SearchObservations`].
+    #[must_use]
+    pub fn observations(&self) -> Arc<SearchObservations> {
+        Arc::clone(&self.observations)
     }
 
     /// The flattened argument position of `?doc`, the document's subject.
@@ -658,6 +846,15 @@ impl TextSearchRelation {
     /// * **No depth placement.** This relation takes no `k` argument; a consumer
     ///   bounds it with `LIMIT`, which is what "bounded by the consumer's row
     ///   ceiling" means in [`RankedDeclaration::depth_placement`].
+    /// * **[`ExclusionBasis::Membership`]** — this producer answers *do you hold
+    ///   this document for this needle*, and an `Excluded` from it means the
+    ///   document holds a posting for no needle term — including a document the
+    ///   index holds under other terms only. That is a fact about the index's
+    ///   own postings rather than about what a search found, so it is exact whatever
+    ///   `fidelity` the host declares: a document that is in no posting list of
+    ///   any needle term is in no candidate set, so it is named at no rank, so
+    ///   its contribution to a fused score is exactly zero. The lookup is a
+    ///   binary search per needle term; see [`PropertyFunction::open`].
     /// * **[`DuplicatePolicy::Unique`]** — true within one partition, where a
     ///   subject occurs at most once. The rank law every ranked producer owes
     ///   its consumer holds there too: rows leave in descending score order
@@ -793,8 +990,183 @@ impl TextSearchRelation {
             // declares `CandidateDomains::Unrestricted`. See
             // `RankedDeclaration::block_position`.
             block_position: None,
+
+            // An exclusion from this producer is a fact about its own index: the
+            // document holds no posting under any needle term. That is what
+            // `Membership` means for an index keyed by the request, and it is
+            // already the sharpest answer a lookup here could give — a document
+            // held under other terms only is excluded by it, exactly as a
+            // complete ranking would leave it unnamed.
+            //
+            // A document that holds no posting for any needle term is not a
+            // candidate: `score::select` builds its candidate set out of the
+            // needle's posting lists, so such a document is never scored, never
+            // ranked and therefore named at no rank — whatever the ceiling, the
+            // bound rank or the language filter does to the rows that ARE named.
+            // That is a property of the dictionary and the postings, not of the
+            // search, so the answer is exact independently of the `fidelity` the
+            // host declares: a host that indexed a sample of its corpus has a
+            // genuinely lossy producer whose membership answers are still exactly
+            // right about the sample it holds.
+            //
+            // The lookup is cheap for the same reason it is exact. Membership is
+            // one binary search per needle term over the dictionary and the
+            // document's own partition span, so `open` answers a candidate-bound
+            // call without entering the ranker at all where the document holds
+            // none of the terms — and `SEARCH_CANDIDATE_MODE` is the declaration
+            // the registry reads that capability off.
+            exclusion: ExclusionBasis::Membership,
             mandatory: false,
         })
+    }
+
+    /// The documents of the subject a bound `?doc` names that really hold at
+    /// least one of `needle`'s analyzed terms, among those `filter` admits — each
+    /// with the postings that decided it.
+    ///
+    /// This is the point lookup, and it is the whole of what
+    /// [`ExclusionBasis::Membership`] promises. An **empty** result is the
+    /// exclusion: no document of this subject holds any needle term, so no
+    /// document of this subject is a candidate, so this needle names it at no
+    /// rank — and the caller above returns the empty answer without entering the
+    /// ranker.
+    ///
+    /// # Why this replaces ranking the subject's partitions
+    ///
+    /// The engine drives a property function once per left row, so a pattern
+    /// like `?doc ex:label ?l . ?doc <ex:search> ( "cat" … )` — and every
+    /// exclusion lookup a fused read performs — opens this relation once per
+    /// candidate document. `?doc` is filtered *after* ranking, so the ceiling is
+    /// withheld from the ranker (see [`PropertyFunction::open`]) and nothing else
+    /// narrows the work: without this, each of those invocations walked every
+    /// posting list of every partition the subject appears in, built that
+    /// partition's whole candidate set, and then let the cursor discard all but
+    /// the one row whose subject matches. The discarded fraction grows with the
+    /// corpus.
+    ///
+    /// Membership does not. A document is a candidate exactly when it holds a
+    /// posting for some needle term ([`crate::select`] builds its candidate set
+    /// out of the needle's posting lists), and that is `O(terms · log n)` to
+    /// decide: [`TextIndex::documents_with_subject`] binary-searches the subject
+    /// side index, and each `(document, term)` pair is one binary search over the
+    /// term dictionary and then that term's postings within the document's own
+    /// partition span. Nothing here scores, sorts or counts a corpus.
+    ///
+    /// The search returns the posting it found rather than a yes or no, so a
+    /// caller that goes on to score the document reads the same facts the lookup
+    /// already located instead of searching for them again.
+    ///
+    /// `terms` is the needle's [`distinct_terms`], which the caller computes and
+    /// which is where a needle wider than the ranking profile admits is refused —
+    /// the ranker's own check, called rather than restated, so a needle too wide
+    /// to rank is too wide to look up rather than quietly answering empty.
+    fn holdings(
+        &self,
+        subject: &TermValue,
+        terms: &[&str],
+        filter: &PartitionFilter,
+    ) -> Vec<Holding<'_>> {
+        let mut held: Vec<Holding<'_>> = Vec::new();
+        for &document in self.index.documents_with_subject(subject) {
+            let Some(key) = self.index.partition_key_of(document) else {
+                continue;
+            };
+            if !filter.matches(key) {
+                continue;
+            }
+            // Every term is asked, rather than stopping at the first hit, so the
+            // cost of a lookup is a function of the request and not of which
+            // term happened to match first — one lookup per `(document, term)`
+            // pair, always, which is the number `SearchObservations` reports and
+            // a test can assert as a literal.
+            let mut located = Vec::new();
+            for (ordinal, term) in terms.iter().enumerate() {
+                self.observations
+                    .membership_lookups
+                    .fetch_add(1, Ordering::Relaxed);
+                if let Some(counts) = self.index.posted_frequencies(document, term) {
+                    located.push((ordinal, counts));
+                }
+            }
+            if !located.is_empty() {
+                held.push(Holding {
+                    document,
+                    key: key.clone(),
+                    located,
+                });
+            }
+        }
+        // Already in emission order, `(partition key ASC, rank ASC)`, with nothing
+        // to sort: a subject holds at most one document per partition, the ids
+        // come back ascending, and the index assigns ids in `(graph, subject,
+        // language)` order — so among one subject's documents ascending id is
+        // ascending `(graph, language)`, which is exactly `PartitionKey`'s order.
+        held
+    }
+
+    /// Score each holding document in place, without ranking anything.
+    ///
+    /// The path a bound `?doc` takes when `?rank` is **unobserved** — see
+    /// [`PropertyFunction::open`]. Each document's score is the one the ranker
+    /// would give it, exactly: [`score_located`] sums through the one summation
+    /// the ranker uses, over the same stored corpus statistics. What is not
+    /// computed is the rank, because nothing will read it.
+    fn scored_in_place(
+        &self,
+        terms: &[&str],
+        holdings: &[Holding<'_>],
+    ) -> Result<Vec<Hit>, TextError> {
+        self.observations
+            .point_scorings
+            .fetch_add(1, Ordering::Relaxed);
+        let mut work = ScoringWork::default();
+        let hits = holdings
+            .iter()
+            .map(|holding| {
+                score_located(
+                    &self.index,
+                    holding.document,
+                    terms,
+                    &holding.located,
+                    &mut work,
+                )
+                .map(|(score, matched)| Hit {
+                    document: holding.document,
+                    score,
+                    rank: None,
+                    matched,
+                })
+            })
+            .collect::<Result<Vec<Hit>, TextError>>();
+        self.observations.record(work);
+        hits
+    }
+
+    /// Enter the partition ranker, counting the entry and the work it did.
+    ///
+    /// The **only** call site of [`crate::select`] in this relation, which is
+    /// what makes [`SearchObservations::rankings`] a measurement rather than an
+    /// estimate: an invocation that did not come through here did not rank
+    /// anything, because there is no other way for it to have done so.
+    fn ranked(
+        &self,
+        needle: &[String],
+        filter: &PartitionFilter,
+        ceiling: Option<u64>,
+        partition_rank: Option<u32>,
+    ) -> Result<Vec<Scored>, TextError> {
+        self.observations.rankings.fetch_add(1, Ordering::Relaxed);
+        let mut work = ScoringWork::default();
+        let rows = select_counted(
+            &self.index,
+            needle,
+            filter,
+            ceiling,
+            partition_rank,
+            &mut work,
+        );
+        self.observations.record(work);
+        rows
     }
 }
 
@@ -809,6 +1181,23 @@ impl PropertyFunction for TextSearchRelation {
         PfArity::new(1, 5)
     }
 
+    /// Two modes, and the second one widens nothing.
+    ///
+    /// `SEARCH_MODE` (`fbffff`) is the capability: the needle is the one
+    /// position this relation cannot enumerate, and everything else is free. It
+    /// subsumes every access pattern of this arity that binds the needle, so it
+    /// alone decides what is feasible.
+    ///
+    /// `SEARCH_CANDIDATE_MODE` (`bbffff`) is declared beside it because a
+    /// declaration is read for more than feasibility. It states that binding the
+    /// document is a **point lookup** — see [`Self::open`] — with the row bound
+    /// [`Self::rows_per_invocation`] reports for it, and that pairing is what
+    /// [`register_ranked`] reads before it admits the
+    /// [`ExclusionBasis::Membership`] this relation's ranked declaration makes. A
+    /// basis declared without it would promise a lookup that becomes a ranking,
+    /// once per frontier candidate per stratum.
+    ///
+    /// [`register_ranked`]: purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked
     fn modes(&self) -> &[BindingPattern] {
         &self.modes
     }
@@ -850,6 +1239,41 @@ impl PropertyFunction for TextSearchRelation {
 
     /// Begin one ranked-retrieval invocation.
     ///
+    /// # A bound `?doc` is answered membership-first
+    ///
+    /// The candidate-bound call is the shape an exclusion lookup arrives in, and
+    /// it is served without ranking anything wherever the answer is going to be
+    /// empty. One binary search per `(document the bound subject occupies,
+    /// distinct needle term)` pair decides which partitions hold a document of
+    /// that subject carrying at least one needle term, and only those are
+    /// ranked. A document carrying none is in no candidate set, so it is
+    /// named at no rank, so the invocation's answer is empty — and it is reached
+    /// without walking a posting list, building a candidate set or computing a
+    /// corpus statistic. [`SearchObservations`] counts both halves, so that claim
+    /// is measured rather than argued.
+    ///
+    /// Where the document IS carried, what happens next depends on whether
+    /// anything will read `?rank`.
+    ///
+    /// * **`?rank` observed** — a variable, or a constant to match. A rank is a
+    ///   fact about every other candidate of the partition — one plus the number
+    ///   of them that outscore this document — so no point lookup can produce it
+    ///   and a cheaper wrong one would be worse than the work it saved. The
+    ///   partitions the document is carried in are ranked by the one ranker this
+    ///   crate has, and only the subject's own rows reach the cursor.
+    /// * **`?rank` unobserved** — the call site wrote a blank node there that
+    ///   occurs nowhere else, which is how an exclusion lookup is rendered
+    ///   ([`PfArgs::is_unobserved`]). Nothing will read the rank, so none is
+    ///   computed: each holding document is scored **in place**, from the
+    ///   postings its membership lookups already located, through the one
+    ///   summation the ranker uses over the same stored corpus statistics. The
+    ///   score is the ranked reading's score for that document bit for bit; the
+    ///   work is one field-input assembly per held term and one document-frequency
+    ///   search per needle term, whatever the corpus holds. The rank position
+    ///   carries `0`, outside the 1-based rank domain, and the engine discards it
+    ///   unread. [`SearchObservations::point_scorings`] counts this path, and its
+    ///   [`SearchObservations::postings_walked`] contribution is zero.
+    ///
     /// # Refusals
     ///
     /// Each of these aborts the query rather than contributing zero rows, which
@@ -889,8 +1313,8 @@ impl PropertyFunction for TextSearchRelation {
         let Some(needle) = args.get(SEARCH_NEEDLE) else {
             return Err(EvalError::function(format!(
                 "the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
-                 for a needle and cannot enumerate needles for a document, which is why its only \
-                 declared mode is `{SEARCH_MODE}`"
+                 for a needle and cannot enumerate needles for a document, which is why both of \
+                 its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"
             )));
         };
         let text = needle_text(needle, SEARCH_NEEDLE)?;
@@ -903,36 +1327,7 @@ impl PropertyFunction for TextSearchRelation {
             Some(value) => language_constraint(value, SEARCH_LANG)?,
             None => Constraint::Any,
         };
-        let mut filter = PartitionFilter::unconstrained().with_language(language);
-
-        // A bound `?doc` is pushed down to the partitions that subject actually
-        // appears in, which is what keeps a bound-document call from being a
-        // whole-index ranking.
-        //
-        // The engine drives a property function once per left row, so a pattern
-        // like `?doc ex:label ?l . ?doc <ex:search> ( "cat" … )` opens this
-        // relation once for every candidate document. Without the pushdown each
-        // of those invocations ranks EVERY partition in full — `?doc` is a
-        // post-rank position, so the ceiling is withheld (see below) and nothing
-        // else narrows the work — and then the cursor discards all but the one
-        // row whose subject matches. That is `O(left rows × whole index)`, and
-        // the discarded fraction grows with the corpus.
-        //
-        // A subject is one of `(graph, subject, language)`, so it occupies at
-        // most one document per partition and usually appears in one or two
-        // partitions out of however many the index holds. Restricting to exactly
-        // those turns the per-invocation cost into `O(that subject's partitions)`
-        // and removes the whole-index term from the product.
-        //
-        // It is sound for the same reason the language pushdown is: ranks are
-        // per-partition, so dropping whole partitions cannot change the rank of
-        // any row that survives, and every row dropped here is one the cursor's
-        // equality filter on position 0 would have dropped anyway. A subject the
-        // index holds no text for admits no partition at all, which is the
-        // correct empty answer reached without ranking anything.
-        if let Some(subject) = args.get(SEARCH_DOC) {
-            filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
-        }
+        let filter = PartitionFilter::unconstrained().with_language(language);
 
         // The ceiling handling, and why it is not simply passed through.
         //
@@ -958,10 +1353,46 @@ impl PropertyFunction for TextSearchRelation {
         let select_ceiling = if post_rank_filtered { None } else { ceiling };
 
         let analyzed = analyze(text);
-        let rows = match rank {
-            RankBound::BeyondTheIndex => Vec::new(),
-            RankBound::Unbound => select(&self.index, &analyzed, &filter, select_ceiling, None)?,
-            RankBound::At(at) => select(&self.index, &analyzed, &filter, select_ceiling, Some(at))?,
+        let at = match rank {
+            RankBound::At(at) => Some(at),
+            // `BeyondTheIndex` is answered empty below; `Unbound` bounds nothing.
+            RankBound::Unbound | RankBound::BeyondTheIndex => None,
+        };
+
+        let rows: Vec<Hit> = match args.get(SEARCH_DOC) {
+            // A `?rank` past the end of every partition names no row, whatever
+            // else is bound, and is answered without entering the ranker.
+            _ if rank == RankBound::BeyondTheIndex => Vec::new(),
+            None => self
+                .ranked(&analyzed, &filter, select_ceiling, at)?
+                .into_iter()
+                .map(Hit::from)
+                .collect(),
+            // A bound `?doc` is answered membership-first: see `holdings` for why
+            // that is the whole of the exclusion lookup this relation declares a
+            // basis for, and `open`'s documentation for the two ways a present
+            // document is then answered.
+            Some(subject) => {
+                let terms = distinct_terms(&analyzed)?;
+                let holdings = self.holdings(subject, &terms, &filter);
+                if holdings.is_empty() {
+                    Vec::new()
+                } else if args.is_unobserved(SEARCH_RANK) {
+                    self.scored_in_place(&terms, &holdings)?
+                } else {
+                    let documents: Vec<u32> =
+                        holdings.iter().map(|holding| holding.document).collect();
+                    let keys = holdings.into_iter().map(|holding| holding.key).collect();
+                    // The subject's own rows and nothing else reach the cursor:
+                    // every other candidate was needed to rank these, and is not
+                    // a row this invocation can emit.
+                    self.ranked(&analyzed, &filter.restricted_to(keys), select_ceiling, at)?
+                        .into_iter()
+                        .filter(|row| documents.contains(&row.document))
+                        .map(Hit::from)
+                        .collect()
+                }
+            }
         };
 
         Ok(Box::new(SearchCursor {
@@ -1005,8 +1436,8 @@ struct SearchCursor {
     generation: Arc<str>,
     /// The needle, echoed verbatim into position 1 of every row.
     needle: TermValue,
-    /// The ranked rows, in `(partition ASC, rank ASC)` order.
-    rows: Vec<Scored>,
+    /// The rows to emit, in `(partition ASC, rank ASC)` order.
+    rows: Vec<Hit>,
     /// How far into `rows` the cursor has read.
     at: usize,
     /// The invocation's bound values by flattened position (`None` = free).
@@ -1017,20 +1448,24 @@ struct SearchCursor {
 
 impl SearchCursor {
     /// The full row for one ranked document.
-    fn build(&self, scored: &Scored) -> Result<PfRow, EvalError> {
-        let document = self.index.document(scored.document).ok_or_else(|| {
+    fn build(&self, hit: &Hit) -> Result<PfRow, EvalError> {
+        let document = self.index.document(hit.document).ok_or_else(|| {
             EvalError::data(format!(
                 "the ranker named document {}, which the index does not hold",
-                scored.document
+                hit.document
             ))
         })?;
         Ok(vec![
             document.subject().clone(),
             self.needle.clone(),
-            TermValue::typed_literal(scored.score.to_decimal_lexical(), XSD_DECIMAL),
-            integer_term(scored.partition_rank),
+            TermValue::typed_literal(hit.score.to_decimal_lexical(), XSD_DECIMAL),
+            // An uncomputed rank sits only at an unobserved position, whose value
+            // the engine discards unread. Zero is outside the 1-based rank domain,
+            // so it could never be mistaken for a rank even by a reader that
+            // ignored that contract.
+            integer_term(hit.rank.unwrap_or(0)),
             language_term(document.language()),
-            integer_term(scored.matched),
+            integer_term(hit.matched),
         ])
     }
 }
@@ -1348,12 +1783,17 @@ impl PropertyFunction for TermOccurrenceRelation {
         };
         let mut filter = PartitionFilter::unconstrained().with_language(language);
 
-        // The same document pushdown the search relation does, for the same
-        // reason and with a smaller saving: this cursor is already lazy per
-        // partition, so a bound `?doc` without it walks each partition's posting
-        // list for the term and discards every row but that subject's. Naming
-        // the subject's own partitions skips those lists rather than reading
-        // them.
+        // A bound `?doc` is narrowed to the partitions that subject occupies.
+        // This cursor is already lazy per partition, so without it a bound
+        // `?doc` walks each partition's posting list for the term and discards
+        // every row but that subject's. Naming the subject's own partitions
+        // skips those lists rather than reading them.
+        //
+        // The search relation beside it goes one step further and decides
+        // membership per document before ranking anything, which this relation
+        // cannot: a membership answer says whether the term occurs, and this
+        // relation's rows are the occurrences themselves, so there is nothing it
+        // could answer without reading the posting it would have emitted.
         if let Some(subject) = args.get(OCCURRENCE_DOC) {
             filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
         }
@@ -1617,9 +2057,9 @@ mod tests {
     use purrdf_sparql_eval::RankFidelity;
 
     use super::{
-        OCCURRENCE_MODE, RDF_DIR_LANG_STRING, SEARCH_DOC, SEARCH_LANG, SEARCH_MATCHED, SEARCH_MODE,
-        SEARCH_NEEDLE, SEARCH_RANK, SEARCH_SCORE, TermOccurrenceRelation, TextSearchRelation,
-        XSD_DECIMAL, XSD_INTEGER, verify_binding,
+        OCCURRENCE_MODE, RDF_DIR_LANG_STRING, SEARCH_CANDIDATE_MODE, SEARCH_DOC, SEARCH_LANG,
+        SEARCH_MATCHED, SEARCH_MODE, SEARCH_NEEDLE, SEARCH_RANK, SEARCH_SCORE,
+        TermOccurrenceRelation, TextSearchRelation, XSD_DECIMAL, XSD_INTEGER, verify_binding,
     };
     use crate::error::TextError;
     use crate::index::{GraphSelector, TextIndex, TextIndexConfig};
@@ -1952,8 +2392,23 @@ mod tests {
                 .iter()
                 .map(|mode| mode.code())
                 .collect::<Vec<_>>(),
-            vec![SEARCH_MODE.to_owned()],
-            "the needle is the only input, so there is exactly one mode"
+            vec![SEARCH_MODE.to_owned(), SEARCH_CANDIDATE_MODE.to_owned()],
+            "the needle is the only position that must be bound, so the general mode is the one \
+             that leaves everything else free; the candidate-bound mode beside it adds no \
+             feasibility — the general one already subsumes it — and declares the point lookup \
+             an exclusion basis is admitted against"
+        );
+        assert!(
+            BindingPattern::from_code(SEARCH_MODE)
+                .subsumes(BindingPattern::from_code(SEARCH_CANDIDATE_MODE)),
+            "the candidate-bound mode must widen nothing: every invocation it serves was already \
+             served, so declaring it cannot make an infeasible call feasible"
+        );
+        assert!(
+            search.rows_per_invocation(BindingPattern::from_code(SEARCH_CANDIDATE_MODE)) <= 1,
+            "and it must be a point bound over the single-partition index a ranked declaration \
+             requires, because that is the condition the registry admits a declared exclusion \
+             basis under"
         );
 
         let occurrence = TermOccurrenceRelation::new(occurrences());

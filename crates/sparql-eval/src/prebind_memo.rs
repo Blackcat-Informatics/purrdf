@@ -26,10 +26,11 @@
 //! which cells exist, and the difference is already live in the crate:
 //! `term_pattern_from_ground` refuses a [`GroundTerm::BlankNode`], because a blank in
 //! a pattern is an anonymous variable rather than a request to match that blank. So a
-//! blank-node focus node is bound by the seed alone while an IRI one is ALSO pushed
-//! into the leaves. The pushed set and the seed set are different sets, and which
-//! positions exist depends on which of a small, closed set of *shapes* each value
-//! has.
+//! blank-node focus node is bound through `VALUES` rows alone — the seed, and the
+//! one-row driver a property-function call naming it is given — while an IRI one is
+//! written into the leaves themselves. The pushed set and the seed set are different
+//! sets, and which positions exist depends on which of a small, closed set of
+//! *shapes* each value has.
 //!
 //! [`ValueShape`] is that closed set, and it is the memo's key alongside the lane.
 //! A run whose values have the memo's shapes writes into the retained tree; a run
@@ -75,7 +76,8 @@ type Probes = [(Variable, GroundTerm)];
 /// * `expression_from_ground` — has the constant an expression form? Only an IRI or a
 ///   literal has one; a blank node and a quoted triple ride the `VALUES` seed.
 /// * `substitute_in_term_pattern` — a property function's argument takes an IRI or a
-///   literal and nothing else.
+///   literal as a written constant; a blank node there is bound by the one-row
+///   `VALUES` that drives the call instead, which is a `VALUES` cell like the seed's.
 /// * `substitute_in_named_node_pattern` — a `GRAPH`/`SERVICE` name takes an IRI and
 ///   nothing else.
 ///
@@ -89,8 +91,9 @@ pub(crate) enum ValueShape {
     /// A literal: pushed into patterns and substituted in expressions, but never a
     /// graph name.
     Literal,
-    /// Bound by the `VALUES` seed and nowhere else — a blank node, or a quoted triple
-    /// with a blank node somewhere inside it.
+    /// Bound through `VALUES` rows and written into no pattern — a blank node, or a
+    /// quoted triple with a blank node somewhere inside it. The seed carries it, and so
+    /// does the one-row driver of any property-function call that names it.
     SeedOnly,
     /// A quoted triple every position of which is writable into a pattern.
     ///

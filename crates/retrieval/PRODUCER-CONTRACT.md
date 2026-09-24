@@ -34,8 +34,12 @@ A third property cuts across both and is stated once here rather than sixteen
 times. **A promise about rows nobody has pulled is verified exactly as far as the
 rows actually pulled reach, and no further.** A false declaration that no pulled
 row contradicts produces a wrong answer, and this layer does not dress that up as
-a proof. Reading a stream to its end is the only alternative, and it is the
-precise cost several of these declarations exist to avoid.
+a proof. The alternatives are reading a stream to its end, or *asking* it about
+one candidate where its registration licensed the question
+([A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them));
+the first is the precise cost several of these declarations exist to avoid, and
+the second is an observation, verified exactly as far as the rows that later
+contradict it.
 
 ## The obligations
 
@@ -56,6 +60,7 @@ precise cost several of these declarations exist to avoid.
 | [A13](#a13--attest-the-generation-of-the-snapshot-that-answered) | Attest the generation of the snapshot that answered | producer declares, layer carries |
 | [A14](#a14--declare-incompleteness-rather-than-refusing-or-faking-exhaustion) | Declare incompleteness rather than refusing or faking exhaustion | producer declares, layer refuses an unrecordable one |
 | [A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them) | Declare candidate domains, name each row's block, and never name a candidate outside them | both, per row |
+| [A16](#a16--declare-the-fidelity-of-the-rows-you-can-name) | Declare the fidelity of the rows you can name, on both axes, with evidence for any loss | producer declares, registration refuses an empty disclosure |
 
 [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound),
 [A10](#a10--the-engine-pushed-ceiling-is-honoured-for-efficiency-only) and
@@ -383,12 +388,147 @@ An index-informed producer can therefore declare many modes precisely because it
 indices serve binding directions a scan cannot, and a relation that can serve
 everything declares exactly one all-free mode that subsumes every pattern of its
 arity. Neither shipped producer takes that latitude, and both are right not to:
-the lexical search relation declares exactly one mode (`fbffff`) and the
-nearest-neighbour relation exactly one (`fbbf`), because each has an input
-position it genuinely cannot enumerate — it retrieves documents for a needle and
-cannot enumerate needles for a document. Declaring narrowly is the honest move
-when the index really is directional. Declaring broadly is the honest move when it
-is not. Neither is a default.
+the lexical search relation's general mode is `fbffff` and both nearest-neighbour
+relations' is `fbbf`, because each has an input position it genuinely cannot
+enumerate — it retrieves documents for a needle and cannot enumerate needles for
+a document, and it retrieves neighbours for a seed and cannot enumerate seeds.
+Declaring narrowly is the honest move when the index really is directional.
+Declaring broadly is the honest move when it is not. Neither is a default.
+
+The lexical search relation declares a *second* mode, `bbffff`, and it is worth
+reading for what it is not. It widens nothing — `fbffff` already subsumes it, so
+no call becomes feasible by its being there — and it is not a second spelling of
+the same promise. It states a different fact about the same call: that binding
+the document is a **point lookup**, with the row bound declared for it, which is
+the pair `register_ranked` reads before it admits an exclusion basis — the
+declared answer to *do you hold this candidate*, which fusion asks once per
+frontier candidate and must therefore never turn into a scan. Declare such a
+mode when the candidate-bound call really is a
+lookup, and do not declare one when it is a scan the engine's equality filter
+happens to narrow — see
+[A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound) for why
+the bound beside it is the one you will be held to.
+
+There is a second condition, and it is the one that decides whether a basis is
+declarable at all: **the lookup must arrive in the mode that answers it.** An
+exclusion lookup is your own call with the candidate bound as the parameter of a
+prepared execution, and that execution is prepared once per stratum. The
+candidate is therefore a *variable* in the text at the moment the call is
+admitted, and whatever mode that admission selects is the mode your relation is
+invoked in.
+
+For the lexical relation this is settled by its general mode alone: `fbffff`
+leaves every position but the needle free, so a candidate-bound call has one
+meaning and `bbffff` is what it arrives in. For a producer that declares a
+`DepthPlacement` it is not, and the difference is decisive. If the lookup were
+rendered the way the ranked read is, the depth would be bound, and the pattern
+reaching the relation would be exactly the pattern an ordinary ranked call
+arrives in — with no signal by which to tell the two apart. The answer would then
+be the answer to *is this candidate among your best n*, whose absences are **not**
+exclusions: a candidate outside the best n is one the producer may still name at
+rank n, and a consumer that read that absence as an exclusion would refuse the
+fused read as `ExclusionContradicted` the first time one arrived.
+
+Three things together keep that from happening, and a producer with a depth
+placement should know all three, because its basis rests on them.
+
+**The exclusion unit renders no depth.** [`compile`] leaves the depth position a
+free variable in the lookup's text — and *only* in the lookup's text; the
+streaming unit still carries the depth the plan derived. A depth is an offer, and
+a lookup is not asking for an offer to be filled.
+
+**`register_ranked` admits the basis only against a mode that frees the
+depth.** Every lookup — rendered or derived from a caller's text — is invoked
+in the shape `RankedDeclaration::exclusion_lookup_mode` derives: the candidate
+bound, the depth free, and every other position bound only where the text
+supplies it (a constant, or a variable a pattern it evaluates first binds). The
+widest such shape binds everything but the depth, so the point mode a basis
+rests on must bind the candidate, leave the depth position free, and declare a
+row bound of one; the needle and any other input may be bound in it. A
+producer with its depth at position 2 that declares `[fbb, bbb]` is therefore
+refused at registration, naming the relation, its declared modes and the freed
+depth — `bbb` is cheap, but no lookup is ever invoked in it, so a basis admitted
+on its strength would fail every stratum's lookup at the first search. `[fbb,
+bbf]` is admitted, and `bbf` is the mode its lookups arrive in. A producer
+declaring no depth placement frees nothing, and needs only the candidate-bound
+point mode.
+
+**A caller's own text is looked up the same way, through each call its
+candidates come from.** A unit built with `StratumUnit::new` over a hand-written
+query may declare your basis when every value that query's `?candidate` column
+takes is a value one of its calls emitted. The shape description an on-demand read
+also reads (`PreparedQuery::call_read_shape`, `CallReadShape::sources_of`) names
+those calls. A call is one through projections, `FILTER`s, `DISTINCT`, `ORDER BY`,
+`LIMIT` and `OFFSET`, renaming `BIND`s, a join with any other pattern (another call,
+a triple pattern, `VALUES`), the required side of an `OPTIONAL`, the left side of a
+`MINUS`, a `GROUP BY` key and `GRAPH` (your relation is handed no graph, so its
+rows do not depend on the one in scope). Each of those only drops, merges,
+reorders or extends the solutions beneath it, so a candidate the call never emits
+is a candidate the text never names. For each such call of your relation the
+lookup is derived from the call the caller wrote, carried back through the
+renamings to the position the `?candidate` column reads: that position is the
+parameter, your depth position is freed whatever the caller wrote there, every
+other variable is a blank, and every other constant is the caller's own. Each is
+held to the same terms as a rendered lookup: it asks only a call whose IRI is
+registered with a ranked declaration stating the basis the unit claims and whose
+candidate position holds the variable the column comes from — at least one call
+must qualify, or the stratum fails naming what each lacks — and every lookup's
+attestation must equal the one the stratum's read pinned. The read's sole-witness
+rule makes that one attestation cover every call of the text, because every call
+of a conforming unit invokes your relation at one generation. The consumer asks
+the qualifying calls in order and answers `Excluded` at the first that finds no
+row; `Possible` needs every one of them to find the candidate. So a text joining
+two of your calls may invoke you twice per verdict.
+
+A text whose `?candidate` column can take a value no call emitted is refused at
+construction under any registry (`UnitError::ExclusionNotRenderable`, naming why):
+a `UNION` whose other branch binds the column, an `OPTIONAL` whose required side
+can bind it where the call on its optional side does not, a call only on the
+subtracted side of a `MINUS`, a computed `BIND` or an aggregate, a `GRAPH` name,
+`VALUES`. A column only a triple pattern binds is refused at execution, as that
+stratum's `ExecutionFailed`, because which predicates are calls is the registry's
+to say. Declare `ExclusionBasis::Unavailable` for such a text.
+
+A caller's text that is one call of your relation under projections,
+`OFFSET`-free `LIMIT`s, renaming `BIND`s and `FILTER`s is also *read* on demand,
+as a rendered unit is: the `FILTER` is applied to each row you emit as it is
+pulled, a row it drops takes no rank, and you are offered a `LIMIT` as your
+ceiling only when no `FILTER` stands between it and your call — a `FILTER` above
+the `LIMIT` would otherwise stop you short of the rows it was going to drop. A
+join of calls is not one ranked stream and is read materialised; its lookups are
+asked all the same.
+
+**The candidate is declared to the prepare, not merely substituted.** The
+consumer prepares the lookup through
+[`prepare_execution`](purrdf_sparql_eval::NativeSparqlEngine::prepare_execution),
+naming the candidate variable as the execution's parameter, and the feasibility
+pass treats it as bound at the point the binding really lands. So the admission
+pass sees the candidate-bound, depth-free pattern, and that is the mode your
+relation receives: the bound candidate is written into your call's candidate
+position, so each lookup is one point read rather than a scan a join narrows.
+The declaration is **enforced**: an execution refuses to run, by name, while
+its parameter is unbound — because running it with the position free would
+invoke a relation in a mode nobody declared, which is the whole thing the
+promise was traded for.
+
+Both shipped vector relations sit on exactly that footing. Each declares the
+count-free membership mode `bbff` beside its general `fbbf`, each answers it by a
+binary search over its own term universe with no ranking, no vector read and no
+graph traversal, and each declares `ExclusionBasis::Membership`. For the
+approximate one that basis is admitted *despite* an unconditionally
+`Completeness::Lossy` declaration, and deliberately so: a term the matrix holds
+no row for is a term no beam reaches at any `ef`, so the verdict is a fact about
+the matrix rather than about what the search found.
+
+`Membership` is the only basis there is, and it is not the weaker of two. The
+verdict is whatever your candidate-bound call answers, so what an exclusion can
+rule out is decided by what your index is keyed on. The lexical relation's
+index is keyed by the needle: its lookup excludes every document with no
+posting under a needle term, including documents it holds under other terms
+only — which is every document its complete ranking would leave unnamed. A
+basis meaning *my search did not find it* would change no verdict such a
+relation gives, and would be sound only where the search is complete, so none
+is offered.
 
 Declaring several modes also decides which row bound your read is held to, because that
 bound is a function of the mode — see
@@ -419,8 +559,10 @@ The layer's own purchase — the middle one — is the depth probe.
 [`compile`] emits `LIMIT depth + 1`, so a
 unit whose producer still had rows past the planned depth hands back one more row
 than its stratum may contribute. That row is a **probe**: never emitted onto the
-stream, never ranked, never counted, present in no plan field, no identity and no
-resolution number. All it decides is
+stream, never ranked, present in no plan field and no identity, and counted in
+exactly one number — the rows a read materialized, which asks what the read cost
+rather than what the answer is made of, and which would understate the read by
+exactly this row if it left it out. All the probe *decides* is
 [`ProducerStatus::DepthReached`] versus
 [`ProducerStatus::Exhausted`]. Without it an
 executor could only ever say `Exhausted` — the one ending that names no
@@ -841,6 +983,43 @@ the value is tagged onto the stream, read by
 [`FusionTrailer::attestations`] and digested
 into [`EvidenceId`].
 
+[`search`] reads each stratum **on demand** — one invocation held open and read a
+row per pull — so the stream it announces is what the invocation attested *the
+instant it opened*: the generation, and the service level asked at that instant
+too. When the fusion stops, the stream settles to the witness the invocation
+stands behind then, under the same rule, and is held to the announcement. A
+relation whose cursor reports a different generation at the stop than at the
+open, or a different service level, has its answer refused
+([`ProtocolError::AttestationMoved`]) — every row was certified under the
+announcement, so relabelling the trailer would keep rows ordered under a claim
+the read did not end with. A relation over a snapshot pinned at `open`, which
+answers both questions the same way at both instants, never meets this.
+
+An exclusion lookup is held to the same announcement. Each lookup is its own
+invocation, and its cursor is asked both questions exactly as a ranked read's is;
+the attestation it gives must be the one the stratum's ranked read pinned —
+generation and service level alike — or the request is refused
+([`ProtocolError::ExclusionAttestationMoved`]) before the verdict is read. A
+verdict is a statement about rows the ranked read would have gone on to name,
+which is only true of the index that read was served from; an index rebuilt
+between the two can exclude a candidate the pinned one holds. Which strata's
+lookups an answer was certified on is digested into [`EvidenceId`] beside the
+attestations, so an answer that leaned on lookups is not the evidence of one that
+read instead. A relation that answers lookups from the snapshot its ranked read
+pinned never meets this; one that re-resolves "the current index" per invocation
+must attest each invocation's generation honestly, and a rebuild mid-request is
+then a refused request rather than a silently different answer.
+
+A producer that takes its depth as an argument is opened **once, at the planned
+depth** (one probe row past it, within its declaration), however early the
+fusion then stops pulling: there is one invocation per stratum and never a
+second. The rows past the stop are never produced, but whatever the search does
+before its first row is sized by that `k`. Both shipped nearest-neighbour
+producers do the same search at every `k` — the exact scan measures every row of
+its space, the graph search walks a beam of its index's declared `ef_search` — so
+for them the planned depth costs nothing a smaller one would save. A host
+producer whose search grows with `k` pays for the planned depth.
+
 **Both shipped producers attest a content-derived generation**, and each value is
 pinned against its own source rather than merely asserted non-empty.
 
@@ -945,6 +1124,16 @@ or [`ScoreExactness::Estimated`] naming the responsible strata on each side.
 `FusedRow::interval` carries the size of each for one row. The rows are returned
 either way, because a short index still produced real rows in a real order.
 
+**An exclusion does not retire that charge.** A short index that answers an
+exclusion lookup `Excluded` is telling the truth about what it holds, and fusion
+believes it for what it establishes: the stream will not name the candidate, so
+the read need not wait for it. It is not believed about the missing shard, because
+"I hold no entry for it" is exactly what every document in that shard would say.
+The candidate's interval keeps the short stratum's rank-one contribution whatever
+basis the answer was given under. An index that is whole behind a lossy *search*
+is the opposite case: a membership answer covers every row that search could have
+missed, so there it discharges the charge.
+
 ## A15 — Declare candidate domains, and never name a candidate outside them
 
 **The obligation.**
@@ -1001,15 +1190,21 @@ a vector index with neighbours, and neither holds any notion of a host's
 partition, so both leave the position unset and take their domains from the host
 unchanged.
 
-**The failure it prevents.** Without a declaration, "could this stream still name
-the candidate" is true of every open stream, so strata whose candidate sets do not
-overlap are read to their ends however small the caller's top-k — a top-ten over
-two million-row strata reads two million rows and grows a frontier to match.
-Weakening the finality test was not available: the engine has no random access, so
-the only way to learn that a stream does *not* name a candidate is to read it to
-its end, and certifying sooner without a declaration would emit a score missing a
-contribution and call it exact. Exact scores and a bounded read are jointly
-reachable only if fusion is told which candidates a stream can name.
+**The failure it prevents.** With nothing declared and nothing askable, "could
+this stream still name the candidate" is true of every open stream, so strata
+whose candidate sets do not overlap are read to their ends however small the
+caller's top-k — a top-ten over two million-row strata reads two million rows and
+grows a frontier to match. Weakening the finality test was not available: against
+a producer that will say nothing about its own candidates there is no random
+access, so the only way to learn that a stream does *not* name a candidate is to
+read it to its end, and certifying sooner while knowing nothing would emit a
+score missing a contribution and call it exact. Exact scores and a bounded read
+are jointly reachable only if fusion is told, or can ask, which candidates a
+stream can name. This obligation is the telling; the exclusion basis in
+[A8](#a8--capability-declarations-are-contracts-cardinality-declarations-are-estimates)
+is the asking, and it reaches the configuration this one cannot — two producers
+over one block whose results never overlap, where both declarations are true and
+neither settles a thing.
 
 **What it licenses, precisely.**
 The finality test inside [`FusionStream`] stays a **membership** question — a
@@ -1024,18 +1219,27 @@ stream declares `Unrestricted` therefore computes precisely what it computed bef
 the term existed — the same rows, the same scores, the same provenance, the same
 reading cost.
 
-**And it licenses a narrower depth, conditioned on `Unique`.** The declaration buys
-a second thing, one stage earlier and larger than the quantifier: where a request
-states a bound of `k`, every surviving stratum declares a block set, no two of those
-sets meet, **and every one of those strata declared
-[`DuplicatePolicy::Unique`]**, the planner records a per-stratum depth of `k` and
-the compiled unit is emitted at that `LIMIT`. The read itself is bounded, not merely
-the walk over a stream that was materialized in full. The `Unique` condition is not
-decoration: the merge argument counts ranks and reads the count as a count of
+**And it licenses a narrower depth, conditioned on `Unique`, and it is decided per
+stratum.** The declaration buys a second thing, one stage earlier and larger than
+the quantifier: where a request states a bound of `k`, a surviving stratum `s`
+declares a block set that meets no other surviving stratum's, **and `s` itself
+declared [`DuplicatePolicy::Unique`]**, the planner records a depth of `k` for `s`
+and the compiled unit is emitted at that `LIMIT`. The read itself is bounded, not
+merely the walk over a stream that was materialized in full. The `Unique` condition
+is not decoration: the merge argument counts ranks and reads the count as a count of
 candidates, which is true only of a stream that names an item once — see
-[A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer). Drop `Unique` and the
-depth is the declared-or-measured bound it always was; no request is refused and no
-answer moves either way.
+[A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer).
+
+Read the conditions as being about `s`, because they are. A stratum that fails them
+takes no other stratum's narrowing with it: two strata sharing a block cost each
+other their prefixes and cost a third, disjoint stratum nothing, and a neighbour
+declaring `Allowed` cannot repeat a candidate it is not allowed to name, so how
+often it repeats its own is not a fact about `s`. The one declaration that still
+costs *everyone* a prefix is `Unrestricted` among two or more strata, and that is
+request-wide because the declaration is: "may name anything" is a statement about
+every stratum's candidates. Wherever a condition fails, that stratum's depth is the
+declared-or-measured bound it always was; no request is refused and no answer moves
+either way.
 
 **A single surviving stratum needs no domain declaration for that depth**, and the
 reason is what disjointness is a statement about: pairs. With one stratum there is no

@@ -128,7 +128,7 @@ impl PlanId {
         let mut out = String::with_capacity(PLAN_ID_BYTES * 2);
         for byte in &self.0 {
             use fmt::Write as _;
-            let _ = write!(out, "{byte:02x}");
+            write!(out, "{byte:02x}").expect("writing to a String cannot fail");
         }
         out
     }
@@ -195,7 +195,7 @@ impl FusionProfileId {
         let mut out = String::with_capacity(FUSION_PROFILE_ID_BYTES * 2);
         for byte in &self.0 {
             use fmt::Write as _;
-            let _ = write!(out, "{byte:02x}");
+            write!(out, "{byte:02x}").expect("writing to a String cannot fail");
         }
         out
     }
@@ -311,7 +311,7 @@ impl EvidenceId {
         let mut out = String::with_capacity(EVIDENCE_ID_BYTES * 2);
         for byte in &self.0 {
             use fmt::Write as _;
-            let _ = write!(out, "{byte:02x}");
+            write!(out, "{byte:02x}").expect("writing to a String cannot fail");
         }
         out
     }

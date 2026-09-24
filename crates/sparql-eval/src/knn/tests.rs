@@ -966,20 +966,53 @@ fn the_declared_shape_is_the_documented_one() {
             .iter()
             .map(|mode| mode.code())
             .collect::<Vec<_>>(),
-        vec![KNN_MODE.to_owned()]
+        vec![KNN_MODE.to_owned(), KNN_MEMBERSHIP_MODE.to_owned()]
+    );
+    // The membership mode is a NEW point of the lattice, not a re-reading of the one
+    // beside it. Subsumption is `bound(declared) ⊆ bound(invocation)`, and the general
+    // mode binds the count the membership mode leaves free, so it does not subsume it —
+    // which is exactly what makes the two different questions rather than two meanings
+    // of one call. Asserted rather than argued, because the failure it guards against is
+    // a silent change to the rows an unedited query returns.
+    assert!(
+        !BindingPattern::from_code(KNN_MODE)
+            .subsumes(BindingPattern::from_code(KNN_MEMBERSHIP_MODE)),
+        "`{KNN_MODE}` binds the count `{KNN_MEMBERSHIP_MODE}` leaves free, so it cannot \
+         subsume it"
+    );
+    // And the ranked question's own call — a bound candidate beside a bound count — is
+    // still subsumed by the general mode, so it is served exactly as it always was.
+    assert!(
+        BindingPattern::from_code(KNN_MODE).subsumes(BindingPattern::from_code("bbbf")),
+        "a bound candidate beside a bound count is the ranked question and always was"
     );
 
-    // Feasibility: everything binding the seed and the count is admitted, nothing else.
+    // Feasibility, half one: everything binding BOTH inputs is admitted, and is the
+    // ranked question.
     for admitted in ["fbbf", "bbbf", "fbbb", "bbbb"] {
         assert!(
             relation.admits(BindingPattern::from_code(admitted)),
             "{admitted} binds both inputs and must be admitted"
         );
     }
-    for refused in ["ffff", "bfbf", "fbff", "bbff", "ffbf", "fbfb"] {
+    // Feasibility, half two: the count may be left free — and only — when the neighbour
+    // is bound, because that is the membership question and it is about the one term it
+    // names. These two became feasible when `KNN_MEMBERSHIP_MODE` was declared, and
+    // nothing above changed meaning when they did.
+    for admitted in [KNN_MEMBERSHIP_MODE, "bbfb"] {
+        assert!(
+            relation.admits(BindingPattern::from_code(admitted)),
+            "{admitted} names its own candidate, which is the one call this relation \
+             serves without a count"
+        );
+    }
+    // A free count with a free neighbour is still no question: there is neither a
+    // request to honour nor a term to answer about.
+    for refused in ["ffff", "bfbf", "fbff", "ffbf", "fbfb", "ffbb"] {
         assert!(
             !relation.admits(BindingPattern::from_code(refused)),
-            "{refused} leaves an input free and cannot be served"
+            "{refused} leaves an input free with no candidate to answer about and cannot \
+             be served"
         );
     }
 }
@@ -2336,4 +2369,622 @@ fn assert_required_paths_ran(ran: purrdf_core::distance::Path) {
             refusal.map_or_else(String::new, |refusal| format!(": {refusal}"))
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The exclusion lookup
+// ---------------------------------------------------------------------------
+
+/// A space over four points, plus the terms it deliberately does NOT hold.
+///
+/// The universe is wider than the space so the walk below has a genuinely non-empty
+/// answer in both directions and neither half of the agreement is vacuous.
+fn membership_space() -> EmbeddingSpace {
+    space(
+        &DistanceMetric::SquaredEuclidean,
+        &[
+            ("a", vec![0.0, 0.0]),
+            ("b", vec![3.0, 4.0]),
+            ("c", vec![30.0, 40.0]),
+            ("d", vec![-7.0, 1.0]),
+        ],
+    )
+}
+
+/// Every term the walk asks about: the four the space holds, then three strangers.
+fn membership_universe() -> Vec<TermValue> {
+    ["a", "b", "c", "d", "x", "y", "z"]
+        .into_iter()
+        .map(iri)
+        .collect()
+}
+
+/// **A membership basis is what this producer declares, and the registry admits it
+/// whatever the host's fidelity says.**
+///
+/// Two facts, asserted together because each without the other leaves the interesting
+/// one unstated. The relation's own declaration is [`ExclusionBasis::Membership`], and
+/// it does not move with the fidelity the host passes in, because an exclusion here is a
+/// fact about the space's term universe rather than about how much of the corpus that
+/// space covers. And the registry's half of the rule is that such a basis is admitted
+/// from a producer declared lossy as readily as from an exact one — keying that
+/// admission on completeness would reject a provably exact answer. Both fidelities are
+/// registered for real.
+#[test]
+fn a_membership_basis_is_declared_and_admitted_from_either_fidelity() {
+    let relation = EmbeddingKnnRelation::new(Arc::new(membership_space()));
+    let declare = |fidelity: RankFidelity| {
+        relation.ranked_declaration(
+            purrdf_core::parse_iri("https://example.org/stratum/knn").expect("fixture stratum"),
+            TermKind::Iri,
+            "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+            fidelity,
+            CandidateDomains::Unrestricted,
+        )
+    };
+    let sampled = RankFidelity {
+        completeness: Completeness::Lossy {
+            evidence: Arc::from("this space holds a sample of the corpus"),
+        },
+        order: OrderFidelity::Faithful,
+    };
+
+    // What the relation declares, and it does not move with the host's fidelity.
+    for fidelity in [RankFidelity::EXACT, sampled.clone()] {
+        assert_eq!(declare(fidelity).exclusion, ExclusionBasis::Membership);
+    }
+
+    // And what the registry admits, from BOTH — which is the refusal that must not
+    // exist. The declaration is the relation's own, not a field the test set.
+    for fidelity in [RankFidelity::EXACT, sampled] {
+        let declaration = declare(fidelity);
+        assert_eq!(declaration.exclusion, ExclusionBasis::Membership);
+        let mut registry = crate::PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            "https://example.org/pf/nearest",
+            Arc::new(EmbeddingKnnRelation::new(Arc::new(membership_space()))),
+            declaration,
+        );
+        assert_eq!(
+            registry
+                .ranked_declaration("https://example.org/pf/nearest")
+                .expect("the producer registered")
+                .exclusion,
+            ExclusionBasis::Membership
+        );
+    }
+}
+
+/// **The ranked question still cuts at `k`, and the membership question is a different
+/// mode rather than a different reading of the same one.**
+///
+/// The control the whole exclusion change is measured against. A term the space holds
+/// but the offer of `k` leaves out must still be an empty answer under a bound count, or
+/// a query nobody edited started returning different rows.
+#[test]
+fn a_bound_count_keeps_its_cut_and_a_free_one_asks_the_other_question() {
+    let relation = EmbeddingKnnRelation::new(Arc::new(membership_space()));
+    let general = BindingPattern::from_code(KNN_MODE);
+    let membership = BindingPattern::from_code(KNN_MEMBERSHIP_MODE);
+
+    // Two points of the lattice, not one: the general mode binds the count the
+    // membership mode leaves free, so it cannot subsume it.
+    assert!(!general.subsumes(membership));
+    assert!(general.subsumes(BindingPattern::from_code("bbbf")));
+    // And the bound the registry reads beside the membership mode is the point bound it
+    // really is.
+    assert_eq!(relation.rows_per_invocation(membership), 1);
+    assert!(
+        relation.rows_per_invocation(general) > 1,
+        "over this fixture"
+    );
+
+    // `d` is the farthest of the four points from `a`, so an offer of two leaves it out.
+    let offer = invoke(
+        &relation,
+        &[None, Some(iri("a")), Some(count(2)), None],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(offer.len(), 2);
+    let outside = iri("c");
+    assert!(
+        !offer
+            .iter()
+            .any(|row| row[KNN_NEIGHBOUR] == outside.clone()),
+        "the fixture's chosen term must be one the offer of two leaves out: {:?}",
+        order(&offer)
+    );
+
+    // Bound count: the cut applies, and the held-but-unoffered term is an empty answer.
+    let cut = invoke(
+        &relation,
+        &[Some(outside.clone()), Some(iri("a")), Some(count(2)), None],
+        None,
+    )
+    .expect("answered");
+    assert!(
+        cut.is_empty(),
+        "a bound count asks `is this term among the k nearest`, and this term is not"
+    );
+    // The neighbouring case that must still succeed: a term the offer DID name.
+    let kept = invoke(
+        &relation,
+        &[
+            Some(offer[1][KNN_NEIGHBOUR].clone()),
+            Some(iri("a")),
+            Some(count(2)),
+            None,
+        ],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(kept.len(), 1, "and the term it did offer is still named");
+
+    // Free count: the membership question, and the same held-but-unoffered term is now
+    // named — because a different question was asked, through a different mode.
+    let held = invoke(
+        &relation,
+        &[Some(outside.clone()), Some(iri("a")), None, None],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0][KNN_NEIGHBOUR], outside);
+
+    // A free count with no candidate either is no question at all, and is refused rather
+    // than answered with some invented depth.
+    assert!(
+        invoke(&relation, &[None, Some(iri("a")), None, None], None).is_err(),
+        "how many neighbours to retrieve is a question this relation is asked, not one \
+         it answers"
+    );
+}
+
+/// **A membership answer fills the count position with a fact about the producer, not a
+/// request the caller never made.**
+///
+/// The position is an input under [`KNN_MODE`] and an output under
+/// [`KNN_MEMBERSHIP_MODE`], and what it outputs is the size of the term universe the
+/// lookup just searched. Asserted because the alternative — inventing a `k` — would put
+/// a claim about rank into a row that ranked nothing.
+#[test]
+fn the_count_position_of_a_membership_answer_is_the_universe_size() {
+    let space = Arc::new(membership_space());
+    let relation = EmbeddingKnnRelation::new(Arc::clone(&space));
+    let held = invoke(
+        &relation,
+        &[Some(iri("c")), Some(iri("a")), None, None],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(held.len(), 1);
+    assert_eq!(
+        held[0][KNN_COUNT],
+        TermValue::typed_literal(
+            space.row_count().to_string(),
+            "http://www.w3.org/2001/XMLSchema#integer"
+        )
+    );
+
+    // And the ranked path still echoes the caller's own term there, datatype and all,
+    // rather than minting one.
+    let ranked = invoke(
+        &relation,
+        &[None, Some(iri("a")), Some(count(2)), None],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(ranked[0][KNN_COUNT], count(2));
+}
+
+#[test]
+fn every_term_of_the_universe_agrees_with_its_row() {
+    let space = Arc::new(membership_space());
+    let relation = EmbeddingKnnRelation::new(Arc::clone(&space));
+    let seed = iri("a");
+
+    let (mut present, mut absent) = (0_u64, 0_u64);
+    for term in membership_universe() {
+        let rows = invoke(
+            &relation,
+            &[Some(term.clone()), Some(seed.clone()), None, None],
+            None,
+        )
+        .expect("the candidate-bound invocation is answered");
+        match space.row_of(&term) {
+            Some(_) => {
+                present += 1;
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "{term:?} has a row, so the producer may still name it and the lookup \
+                     must say so — whatever k the call carried"
+                );
+                assert_eq!(rows[0][KNN_NEIGHBOUR], term);
+            }
+            None => {
+                absent += 1;
+                assert!(
+                    rows.is_empty(),
+                    "{term:?} has no row, so this producer names it at no rank"
+                );
+            }
+        }
+    }
+    assert_eq!(present, 4, "the space's own terms");
+    assert_eq!(absent, 3, "and the strangers beside them");
+}
+
+#[test]
+fn a_membership_lookup_scans_nothing_and_a_ranked_read_does() {
+    let space = Arc::new(membership_space());
+    let relation = EmbeddingKnnRelation::new(Arc::clone(&space));
+    let observed = relation.observations();
+    let report = || {
+        format!(
+            "lookups={} lookup_distances={} scans={} scanned={}",
+            observed.membership_lookups(),
+            observed.membership_distances(),
+            observed.scans(),
+            observed.scanned_candidates(),
+        )
+    };
+
+    // 1. The excluded candidate: one lookup, and NOTHING else. Not a distance, not a
+    //    scanned row. A zero read off a counter rather than inferred from a timing,
+    //    which a fixture this small could never distinguish.
+    let rows = invoke(
+        &relation,
+        &[Some(iri("x")), Some(iri("a")), None, None],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(rows, Vec::<PfRow>::new());
+    assert_eq!(observed.membership_lookups(), 1, "{}", report());
+    assert_eq!(observed.membership_distances(), 0, "{}", report());
+    assert_eq!(observed.scans(), 0, "{}", report());
+    assert_eq!(observed.scanned_candidates(), 0, "{}", report());
+
+    // 2. The held candidate: one more lookup, one pairwise distance for the `?distance`
+    //    the emitted row carries, and still no scan. `k` was four and the space was
+    //    never walked, which is the whole claim.
+    let rows = invoke(
+        &relation,
+        &[Some(iri("c")), Some(iri("a")), None, None],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(observed.membership_lookups(), 2, "{}", report());
+    assert_eq!(observed.membership_distances(), 1, "{}", report());
+    assert_eq!(observed.scans(), 0, "{}", report());
+    assert_eq!(observed.scanned_candidates(), 0, "{}", report());
+
+    // 3. The control, so the zeroes above are not the zeroes of a relation that never
+    //    scans anything. The same relation, the same seed, the candidate left free.
+    let rows = invoke(
+        &relation,
+        &[None, Some(iri("a")), Some(count(4)), None],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(rows.len(), 4);
+    assert_eq!(observed.scans(), 1, "{}", report());
+    assert_eq!(
+        observed.scanned_candidates(),
+        4,
+        "the ranked read examined every row, so `scanned zero` above is a measurement — {}",
+        report()
+    );
+    assert_eq!(observed.membership_lookups(), 2, "{}", report());
+}
+
+#[test]
+fn the_distance_a_lookup_reports_is_the_one_the_scan_would_have() {
+    // The lookup fills `?distance` from one pairwise evaluation rather than from a scan.
+    // That value must be the scan's value, bit for bit, or two readings of the same pair
+    // would disagree depending on which question was asked.
+    let relation = EmbeddingKnnRelation::new(Arc::new(membership_space()));
+    let ranked = invoke(
+        &relation,
+        &[None, Some(iri("a")), Some(count(4)), None],
+        None,
+    )
+    .expect("answered");
+    assert_eq!(ranked.len(), 4);
+    for row in &ranked {
+        let neighbour = row[KNN_NEIGHBOUR].clone();
+        let looked_up = invoke(
+            &relation,
+            &[Some(neighbour.clone()), Some(iri("a")), None, None],
+            None,
+        )
+        .expect("answered");
+        assert_eq!(looked_up.len(), 1);
+        assert_eq!(
+            looked_up[0][KNN_DISTANCE], row[KNN_DISTANCE],
+            "the lookup's distance for {neighbour:?} must be the scan's own"
+        );
+    }
+}
+
+/// **A smaller `k` is the prefix of a larger one, and costs the same scan.**
+///
+/// The fact a consumer that hands this relation a depth relies on when it opens it
+/// once at the planned depth and reads only as far as it needs: the scan measures
+/// every row of the space whatever `k` is — the nearest row is not known until every
+/// row has been measured — and `k` only sizes the selection kept. So the rows at
+/// every `k` are exactly the first `k` rows of the largest read, distance for
+/// distance, and every read, at every `k`, examined the whole space.
+///
+/// The fixture carries **ties**: four pairs of rows at one distance from the seed.
+/// Without them the prefix property would hold for any selection at all; with them it
+/// holds only because the order is total — distance, then row — so a selection that
+/// kept an arbitrary member of a tied pair would fail here at the `k` that splits it.
+#[test]
+fn a_smaller_k_is_a_prefix_of_a_larger_one_and_scans_the_same_rows() {
+    const NAMES: [&str; 10] = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"];
+    // Distances from `r0` under squared Euclidean: 0, then 1 twice, 4 twice, 9 twice,
+    // 16 twice, and 25.
+    let coordinates = [
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (0.0, 1.0),
+        (2.0, 0.0),
+        (0.0, 2.0),
+        (3.0, 0.0),
+        (0.0, 3.0),
+        (4.0, 0.0),
+        (0.0, 4.0),
+        (5.0, 0.0),
+    ];
+    let rows: Vec<(&str, Vec<f64>)> = NAMES
+        .iter()
+        .zip(coordinates)
+        .map(|(name, (x, y))| (*name, vec![x, y]))
+        .collect();
+    let space = fixture(&DistanceMetric::SquaredEuclidean, &rows)
+        .open(KnnGuard::new(100, 10).expect("positive bounds"))
+        .expect("space opens");
+    let relation = EmbeddingKnnRelation::new(Arc::new(space));
+    let observed = relation.observations();
+
+    let full = named(
+        &invoke(
+            &relation,
+            &[None, Some(iri("r0")), Some(count(10)), None],
+            None,
+        )
+        .expect("search"),
+    );
+    assert_eq!(full.len(), 10);
+    let distances: Vec<&str> = full.iter().map(|(_, distance)| distance.as_str()).collect();
+    assert!(
+        distances.windows(2).any(|pair| pair[0] == pair[1]),
+        "the fixture must carry tied distances, or the prefix property is not tested at \
+         a tie: {full:?}"
+    );
+    assert_eq!((observed.scans(), observed.scanned_candidates()), (1, 10));
+
+    for k in 1..=10_i64 {
+        let before = observed.scanned_candidates();
+        let read = named(
+            &invoke(
+                &relation,
+                &[None, Some(iri("r0")), Some(count(k)), None],
+                None,
+            )
+            .expect("search"),
+        );
+        let k = usize::try_from(k).expect("small");
+        assert_eq!(read, full[..k], "k = {k} is the first {k} rows of k = 10");
+        assert_eq!(
+            observed.scanned_candidates() - before,
+            10,
+            "k = {k} measured every row of the space, as k = 10 did"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Construction from a host's own vectors
+// ---------------------------------------------------------------------------
+
+/// `points()` as the `(term, vector)` rows [`EmbeddingSpace::from_vectors`] takes.
+fn vector_rows(rows: &[(&str, Vec<f64>)]) -> Vec<(TermValue, Vec<f64>)> {
+    rows.iter()
+        .map(|(name, vector)| (iri(name), vector.clone()))
+        .collect()
+}
+
+#[test]
+fn a_space_from_vectors_ranks_exactly_as_the_artifact_space_over_the_same_rows() {
+    let from_vectors = EmbeddingSpace::from_vectors(
+        &DistanceMetric::SquaredEuclidean,
+        2,
+        vector_rows(&points()),
+        roomy(),
+    )
+    .expect("the plain rows open");
+    let from_artifact = space(&DistanceMetric::SquaredEuclidean, &points());
+    assert_eq!(from_vectors.metric(), &DistanceMetric::SquaredEuclidean);
+    assert_eq!(from_vectors.dimension(), 2);
+    assert_eq!(from_vectors.row_count(), 3);
+    assert_eq!(from_vectors.row_of(&iri("b")), Some(1));
+
+    let ask = |space: EmbeddingSpace| {
+        let relation = EmbeddingKnnRelation::new(Arc::new(space));
+        named(
+            &invoke(
+                &relation,
+                &[None, Some(iri("a")), Some(count(3)), None],
+                None,
+            )
+            .expect("search"),
+        )
+    };
+    let artifact_generation = from_artifact.generation().to_owned();
+    let vectors_generation = from_vectors.generation().to_owned();
+    assert_eq!(
+        ask(from_vectors),
+        ask(from_artifact),
+        "one arithmetic path: the same rows rank to the same neighbours at the same \
+         distances whichever constructor built the space"
+    );
+    assert_ne!(
+        vectors_generation, artifact_generation,
+        "the two constructions fold different facts under different domains"
+    );
+}
+
+#[test]
+fn a_space_from_vectors_attests_a_generation_that_moves_with_its_rows_only() {
+    let open = |rows: Vec<(TermValue, Vec<f64>)>, guard: KnnGuard| {
+        EmbeddingSpace::from_vectors(&DistanceMetric::SquaredEuclidean, 2, rows, guard)
+            .expect("the plain rows open")
+            .generation()
+            .to_owned()
+    };
+    let baseline = open(vector_rows(&points()), roomy());
+    assert_eq!(baseline.len(), 64, "a hex BLAKE3 digest");
+    assert_eq!(
+        open(vector_rows(&points()), roomy()),
+        baseline,
+        "the same rows attest the same generation"
+    );
+    assert_eq!(
+        open(
+            vector_rows(&points()),
+            KnnGuard::new(3, 1).expect("positive")
+        ),
+        baseline,
+        "the guard decides how hard a search tries, never which rows exist"
+    );
+
+    let mut moved = vector_rows(&points());
+    moved[2].1[1] = f64::from_bits(40.0_f64.to_bits() + 1);
+    assert_ne!(open(moved, roomy()), baseline, "one bit of one component");
+
+    let mut renamed = vector_rows(&points());
+    renamed[2].0 = iri("d");
+    assert_ne!(open(renamed, roomy()), baseline, "one row's term");
+
+    let under_dot = EmbeddingSpace::from_vectors(
+        &DistanceMetric::NegativeDot,
+        2,
+        vector_rows(&points()),
+        roomy(),
+    )
+    .expect("the plain rows open");
+    assert_ne!(under_dot.generation(), baseline, "the metric");
+}
+
+#[test]
+fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbours() {
+    let refuse = |metric: &DistanceMetric,
+                  dimension: usize,
+                  rows: Vec<(TermValue, Vec<f64>)>,
+                  guard: KnnGuard,
+                  needle: &str| {
+        let error = EmbeddingSpace::from_vectors(metric, dimension, rows, guard)
+            .expect_err("the construction is refused");
+        assert!(
+            error.to_string().contains(needle),
+            "expected {needle:?} in {error}"
+        );
+        error
+    };
+    let euclid = DistanceMetric::SquaredEuclidean;
+
+    // A row whose width is not the dimension, and the valid neighbour at that width.
+    let mut short = vector_rows(&points());
+    short[1].1.pop();
+    let error = refuse(&euclid, 2, short, roomy(), "carries 1 component(s)");
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+
+    // A non-finite component, and the finite neighbour.
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut rows = vector_rows(&points());
+        rows[2].1[0] = bad;
+        let error = refuse(&euclid, 2, rows, roomy(), "non-finite component");
+        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    }
+    let mut finite = vector_rows(&points());
+    finite[2].1[0] = f64::MAX / 4.0;
+    assert!(EmbeddingSpace::from_vectors(&euclid, 2, finite, roomy()).is_ok());
+
+    // One term on two rows, and two distinct terms at the same vector.
+    let mut twice = vector_rows(&points());
+    twice[2].0 = iri("a");
+    let error = refuse(&euclid, 2, twice, roomy(), "bound to two different rows");
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    let mut same_vector = vector_rows(&points());
+    same_vector[2].1 = same_vector[1].1.clone();
+    assert!(EmbeddingSpace::from_vectors(&euclid, 2, same_vector, roomy()).is_ok());
+
+    // Dimension zero, and dimension one.
+    let error = refuse(
+        &euclid,
+        0,
+        vec![(iri("a"), Vec::new())],
+        roomy(),
+        "dimension zero",
+    );
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(EmbeddingSpace::from_vectors(&euclid, 1, vec![(iri("a"), vec![1.0])], roomy()).is_ok());
+
+    // One row past the guard, and exactly at it.
+    let error = refuse(
+        &euclid,
+        2,
+        vector_rows(&points()),
+        KnnGuard::new(2, 10).expect("positive"),
+        "3 row(s)",
+    );
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+    assert!(
+        EmbeddingSpace::from_vectors(
+            &euclid,
+            2,
+            vector_rows(&points()),
+            KnnGuard::new(3, 10).expect("positive")
+        )
+        .is_ok()
+    );
+
+    // A zero-norm vector under cosine (the origin is `points()`'s first row), and the
+    // same rows under a metric that divides by nothing.
+    let error = refuse(
+        &DistanceMetric::Cosine,
+        2,
+        vector_rows(&points()),
+        roomy(),
+        "zero L2 norm",
+    );
+    assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+    assert!(
+        EmbeddingSpace::from_vectors(
+            &DistanceMetric::NegativeDot,
+            2,
+            vector_rows(&points()),
+            roomy()
+        )
+        .is_ok()
+    );
+
+    // An extension metric, whose rule this engine cannot evaluate.
+    let extension = DistanceMetric::Extension {
+        identifier: "https://example.org/my-metric".to_owned(),
+        parameter_encoding: "application/cbor".to_owned(),
+        parameters: vec![7],
+    };
+    let error = refuse(
+        &extension,
+        2,
+        vector_rows(&points()),
+        roomy(),
+        "caller-defined distance metric",
+    );
+    assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
 }

@@ -2382,6 +2382,77 @@ _TextProducerSpec: TypeAlias = (
     | tuple[str, str, str, list[str] | None, _Attestation]
     | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity]
 )
+# One vector space, as the rows a vector producer ranks: `(iri, vector)` pairs
+# in the host's own row order, which is kept because it is what ranks two
+# neighbours at exactly equal distance. The IRI is the entity the row stands for
+# — the spelling a fused row's `"entity"` names, without the angle brackets — and
+# every vector carries the same number of finite components. A seed is an
+# `("entity", "<iri>")` request term naming a row the space holds: a vector
+# producer searches FROM a term it already has a vector for.
+#
+# An empty row list, a row whose width differs from the first row's, a row IRI
+# the IRI parser refuses, a non-finite component, one IRI on two rows, and more
+# rows than the guard's `max_candidates` each raise `ValueError` naming the
+# producer, before any row is read. Under `"cosine"` a zero vector is refused
+# too: it has no direction, so its distance to anything is undefined.
+_VectorRows: TypeAlias = list[tuple[str, list[float]]]
+# The distance a space ranks by: "cosine", "negative_dot" or
+# "squared_euclidean". Any other spelling raises `ValueError` naming the three.
+_VectorMetric: TypeAlias = str
+# `(max_candidates, max_neighbours)`: the largest space the producer admits, and
+# the largest neighbour count one invocation may ask for. Both are the host's
+# statement of what it will spend and neither has a default; a zero in either
+# admits nothing and raises `ValueError`.
+_VectorGuard: TypeAlias = tuple[int, int]
+# One HNSW producer: `(stratum, rows, metric, guard, (m, m0, ef_construction,
+# ef_search), domains, attestation, order)`. Every position is written — `None`,
+# `(None, None)` and `None` where the host states nothing — so a value is never
+# read by guessing which optional position its tail meant.
+#
+# The graph is built in the call, deterministically, from the rows and the four
+# parameters; an invalid parameter set (`m < 2`, `m0 < m`, `ef_construction <
+# m0`, `ef_search < 1`) raises `ValueError`. `domains` and the attestation read
+# exactly as `_TextProducerSpec`'s do: a silent attestation axis delegates to the
+# relation's own, which attests the content digest of the graph and its terms.
+#
+# `order` is `None` — the vectors are the values the host meant — or the host's
+# own words for how they were approximated before they arrived (a non-empty
+# `str`, carried verbatim into `"fidelities"`). There is no completeness
+# position: a beam search offers the candidates it reached and never certifies
+# that nothing else matched, so this producer's stratum is always reported
+# `"lossy"`, with the relation's own evidence, and the answer's `"exactness"`
+# names it.
+_HnswProducerSpec: TypeAlias = tuple[
+    str,
+    _VectorRows,
+    _VectorMetric,
+    _VectorGuard,
+    tuple[int, int, int, int],
+    list[str] | None,
+    _Attestation,
+    str | None,
+]
+# One exact nearest-neighbour producer: `(stratum, rows, metric, guard, domains,
+# attestation, fidelity)`, every position written. The scan compares every row's
+# exact distance, so over the vectors it holds it names every neighbour that was
+# due and orders them truly; whether those vectors are the whole of the host's
+# corpus is the host's to say, on the same `(completeness, order)` fidelity a
+# text producer carries. `(None, None)` states nothing on either axis.
+_KnnProducerSpec: TypeAlias = tuple[
+    str,
+    _VectorRows,
+    _VectorMetric,
+    _VectorGuard,
+    list[str] | None,
+    _Attestation,
+    _Fidelity,
+]
+# Every relation the three producer maps build declares its own exclusion basis,
+# `"membership"`: asked whether it will ever name a candidate, it answers out of
+# its own index — a posting for the needle, or a row for the term. There is no
+# position that asserts or withdraws a basis, because what an exclusion answer
+# is a fact about is a property of the index rather than something a host can say
+# on the producer's behalf.
 
 class _PlanDocumentError(ValueError):
     """A refusal from the plan-document boundary: `certify_plan`, `explain_depth`.
@@ -2437,13 +2508,22 @@ class retrieval:
     #
     # `text_producers` maps a producer IRI to (stratum, predicate, graph), to
     # (stratum, predicate, graph, domains), or to those four followed by one
-    # (generation, incompleteness) attestation, where `graph` is "any", "default",
+    # (generation, incompleteness) attestation and then one (completeness, order)
+    # fidelity, where `graph` is "any", "default",
     # or a named-graph IRI and `domains` is the producer's candidate-domain
     # declaration (see `_TextProducerSpec`: `None` or an omitted fourth element
     # promises nothing and restricts nothing, a list of tag IRIs restricts the
     # producer to those blocks, and an empty list is refused by name; the fifth
     # position is what the host attests about the index behind the producer, and
     # declaring nothing there is silence rather than a claim the index was whole).
+    #
+    # `hnsw_producers` and `knn_producers` map a producer IRI to a
+    # `_HnswProducerSpec` or a `_KnnProducerSpec`: an approximate or an exact
+    # nearest-neighbour search over the host's own vectors, seeded by an
+    # ("entity", "<iri>") request term. Omitting either map registers no producer
+    # of that kind. All three maps are one registry: two producers of any kinds
+    # that claim one stratum, or one producer IRI written into two maps, raise
+    # `ValueError` naming both.
     # `statistics` must name
     # its "source" and "revision", and may carry "cardinality" (stratum IRI to
     # row count) and "selectivity" ((stratum IRI, request-term index) to an
@@ -2502,6 +2582,8 @@ class retrieval:
         text_producers: dict[str, _TextProducerSpec],
         statistics: dict[str, builtins.object],
         top_k: int,
+        hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
+        knn_producers: dict[str, _KnnProducerSpec] | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -2648,6 +2730,8 @@ class retrieval:
         text_producers: dict[str, _TextProducerSpec],
         statistics: dict[str, builtins.object],
         top_k: int,
+        hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
+        knn_producers: dict[str, _KnnProducerSpec] | None = None,
         weights: dict[str, int] | None = None,
         k: int | None = None,
         decay: str | None = None,
@@ -2684,10 +2768,26 @@ class retrieval:
     # `"observed_resolution"` is what the rows this run actually pulled did cost,
     # with an entry per weighted stratum a stream was fused for — including one
     # that yielded no rows, whose `"ranks_pulled"` is zero rather than absent:
-    # `"separates_to"`, the `"ranks_pulled"` reached, and the
-    # `"collisions_observed"`. The two legitimately disagree — a top-k that
-    # certified early never reaches its planned depth — and neither is a
-    # correction of the other.
+    # `"separates_to"`, the `"ranks_pulled"` reached, the
+    # `"collisions_observed"`, the `"exclusion_lookups"` spent and the
+    # `"rows_materialised"` the reads behind that stratum returned. The two
+    # resolutions legitimately disagree — a top-k that certified early never
+    # reaches its planned depth — and neither is a correction of the other.
+    #
+    # The last two are COST, and they are on the answer rather than behind a
+    # diagnostics switch. `"ranks_pulled"` is what the fusion consumed, and on
+    # its own it cannot tell an expensive answer from a cheap one: a five-row
+    # answer whose producers were drained four hundred rows deep reports a
+    # perfectly truthful `"exhausted"` status and nothing else here would say
+    # what it cost. `"exclusion_lookups"` counts the point queries the fusion
+    # spent settling finality — a different read of a different question, never
+    # added into the rank — and `"rows_materialised"` counts the rows the
+    # stratum's one read produced. Every stratum is read on demand, one
+    # invocation read a row per pull, so this is the ranks the fusion pulled plus
+    # the probe row where it read past the planned depth — never a row read
+    # twice. It is `None` only for a stream with no read behind it, which is
+    # never one this module builds; the absence means "there is no read to
+    # count", never "the read was free".
     #
     # `"statuses"` maps a stratum to its producer's own terminal status, and the
     # `"status"` string has exactly seven spellings. `"exhausted"` (with
@@ -2717,17 +2817,30 @@ class retrieval:
     # request terms it was handed. "Answered with nothing" and "could not answer"
     # stay distinguishable, because none of the seven is reduced to a flag.
     #
-    # Three of the seven can come out of THIS surface: `"exhausted"`,
-    # `"depth_reached"` and `"ceiling_reached"`. The other four belong to
-    # producers or bundles this module does not build — `"row_bound_reached"` needs
-    # a producer that takes its depth as an argument, `"supplied_query_ended"`
-    # needs a unit carrying a query text a caller wrote and this surface compiles
-    # every unit it runs, `"terms_rejected"` is a receipt a producer writes for
-    # itself, and `"execution_failed"` needs a unit whose text
-    # could not be prepared or run — so they are reachable for a host driving the
-    # Rust surface with a bundle of its own. They are spelled and mapped here
+    # Four of the seven can come out of THIS surface: `"exhausted"`,
+    # `"depth_reached"`, `"ceiling_reached"` and `"row_bound_reached"` — the last
+    # from a vector producer, which takes its depth as its own neighbour count, so
+    # a read whose depth sits on the count it declared ends there unobserved. The
+    # other three belong to bundles or producers this module does not build —
+    # `"supplied_query_ended"` needs a unit carrying a query text a caller wrote
+    # and this surface compiles every unit it runs, `"terms_rejected"` is a
+    # receipt a producer writes for itself, and `"execution_failed"` needs a unit
+    # whose text could not be prepared or run — so they are reachable for a host
+    # driving the Rust surface with a bundle of its own. They are spelled and mapped here
     # regardless: the mapping is what makes a status a host DOES receive readable,
     # and the seven-way vocabulary is the engine's, not this binding's.
+    #
+    # `"domains"` maps a stratum to the candidate-domain declaration its stream
+    # fused under — `None` for the unrestricted promise, a list of tag IRIs for a
+    # restriction — and `"exclusion_bases"` maps it to what that stream declared
+    # its exclusion answers would be a fact about: `"unavailable"` or
+    # `"membership"`. The two answer one question by two means: a declaration says
+    # a stream will never name a candidate, a lookup observes it. Zero
+    # `"exclusion_lookups"` means two different things in general — nothing COULD
+    # be asked, or nothing NEEDED asking, since the frontier asks only about
+    # candidates a verdict could change the fate of — and `"exclusion_bases"` is
+    # what tells them apart. Every relation this surface builds declares
+    # `"membership"`, so on an answer from here a zero is always the second.
     #
     # `"attestations"` maps a stratum to what the index behind its stream
     # attested, as `{"generation": str | None, "incomplete": str | None}`, read
@@ -2747,11 +2860,12 @@ class retrieval:
     # absent rather than reported as having declined to answer.
     #
     # Either axis may be the HOST's word rather than the relation's, through the
-    # fifth position of that producer's `_TextProducerSpec`. That is the only way
-    # an incompleteness reaches this map at all: the shipped text relation indexes
-    # the document it was handed and has no way to know what was missing from it,
-    # so a host whose corpus was assembled from a partial index is the only party
-    # who can say so. A declared generation replaces the content digest the
+    # fifth position of that producer's `_TextProducerSpec` or the attestation
+    # position of a `_HnswProducerSpec` / `_KnnProducerSpec`. That is the only way
+    # an incompleteness reaches this map at all: every shipped relation indexes
+    # what it was handed in this call and has no way to know what was missing from
+    # it, so a host whose corpus was assembled from a partial index is the only
+    # party who can say so. A declared generation replaces the content digest the
     # relation would otherwise attest; a declared incompleteness is added beside it
     # and leaves it alone.
     #
@@ -2819,7 +2933,8 @@ class retrieval:
     # instead of being read to its end is asking about this map. An answer whose
     # every entry is `None` was certified with no licence to skip anything.
     #
-    # `"evidence_id"` is the content identity of `"attestations"`, rendered
+    # `"evidence_id"` is the content identity of `"attestations"` and of which
+    # strata answered the exclusion lookups the rows were certified on, rendered
     # exactly like `"plan_id"` and `"profile_id"`: 64 lowercase hex characters. It
     # is the third of the three identities an answer carries — the plan pins the
     # question, the profile pins the law, and this pins the index generations that
@@ -2838,6 +2953,8 @@ class retrieval:
         k: int,
         decay: str,
         top_k: int,
+        hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
+        knn_producers: dict[str, _KnnProducerSpec] | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -2950,4 +3067,37 @@ class retrieval:
     @staticmethod
     def deepest_rank_within_width(
         weight_raw: int, k: int, max_width: int, *, decay: str
+    ) -> int | None: ...
+    # The head rank at which a candidate that has collected `naming_raw`'s
+    # contributions, at rank `at_rank` in each of them, first beats the threshold
+    # `sharing_raw`'s strata impose, under the rule `decay` names.
+    #
+    # The second half of the fused emission gate: while any stream is open a
+    # candidate is emittable only when its lower bound is STRICTLY above the
+    # threshold. `naming_raw` are the weights of the strata that named it;
+    # `sharing_raw` are the weights of the strata whose declarations admit its
+    # block, which is exactly what `"sharing_weights"` on a `compile` answer
+    # reports per stratum. A candidate every sharer named crosses at rank one; a
+    # candidate one of two equal sharers named is measured against twice its own
+    # weight, so under "reciprocal_rank" the head must outlast the smoothing
+    # constant.
+    #
+    # This is the plan-time question: it opens no store and reads no row, so a
+    # host learns what depth its OWN declarations have committed it to before it
+    # pays for anything. It bounds the threshold gate only — a candidate is also
+    # withheld while a stream that could still name it is open, and a
+    # configuration where that never resolves reads past this rank regardless.
+    #
+    # `None` when no rank a plan can express brings the threshold below the
+    # bound, rendered as a wall and never as an enormous rank. Weights are raw
+    # fixed-point units (`SCALE` is one whole unit); a non-positive weight, a `k`
+    # of zero, a rank of zero or an unknown `decay` raise `ValueError`.
+    @staticmethod
+    def crossing_rank_at(
+        naming_raw: list[int],
+        at_rank: int,
+        sharing_raw: list[int],
+        k: int,
+        *,
+        decay: str,
     ) -> int | None: ...

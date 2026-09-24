@@ -367,7 +367,8 @@ impl SparqlParser {
         options: &'o ParserOptions,
     ) -> Result<Parser<'a, 'o>> {
         let base = self.base.clone()?;
-        let tokens = tokenize(text)?.into_iter().map(Some).collect();
+        let tokens: Vec<Option<Spanned<'a>>> = tokenize(text)?.into_iter().map(Some).collect();
+        let anon_prefix = anon_label_prefix(&tokens);
         Ok(Parser {
             tokens,
             pos: 0,
@@ -378,6 +379,7 @@ impl SparqlParser {
             version: None,
             agg_counter: 0,
             anon_counter: 0,
+            anon_prefix,
             group_counter: 0,
             group_pattern_depth: 0,
             pattern_node_budget: 0,
@@ -389,9 +391,29 @@ impl SparqlParser {
             pending_exists_scope_checks: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: 0,
+            blank_label_bgps: HashMap::new(),
+            bgp_counter: 0,
+            bgp_scope: None,
             options,
         })
     }
+}
+
+/// The prefix an anonymous blank node's minted label starts with: `__purrdf_anon_`,
+/// lengthened one leading underscore at a time until no blank node label the request
+/// text writes starts with it.
+///
+/// A minted label must never equal one the author wrote, or `[]` and `_:label` would
+/// be read as one node. Any label is a legal `BLANK_NODE_LABEL`, so no fixed prefix
+/// is out of an author's reach; one chosen against the text in hand is.
+fn anon_label_prefix(tokens: &[Option<Spanned<'_>>]) -> String {
+    let mut prefix = String::from("__purrdf_anon_");
+    while tokens.iter().flatten().any(|spanned| {
+        matches!(spanned.token, Token::BlankNodeLabel(label) if label.starts_with(prefix.as_str()))
+    }) {
+        prefix.insert(0, '_');
+    }
+    prefix
 }
 
 /// Which grammar production a `SELECT` is being read under.
@@ -430,6 +452,8 @@ struct Parser<'a, 'o> {
     version: Option<SparqlVersion>,
     agg_counter: usize,
     anon_counter: usize,
+    /// The label prefix [`Parser::fresh_anon`] mints under — see [`anon_label_prefix`].
+    anon_prefix: String,
     group_counter: usize,
     group_pattern_depth: usize,
     /// Running count of graph-pattern combinator nodes charged so far against
@@ -510,6 +534,21 @@ struct Parser<'a, 'o> {
     /// may have been recorded a moment earlier, and is never observed: the error
     /// propagates to the public entry point and this `Parser` is not consulted again.
     dataset_at: Option<Range<usize>>,
+    /// The basic graph pattern each author-written blank node label was first
+    /// seen in, keyed by label — the state behind the rule that a label is
+    /// scoped to ONE basic graph pattern (see [`Parser::scoped_blank_label`]).
+    ///
+    /// One map per query, so a label reused in a sub-`SELECT` or an `EXISTS`
+    /// body is caught too; one map per UPDATE operation, whose `WHERE` clauses
+    /// are separate patterns ([`Parser::parse_update`] clears it between them).
+    blank_label_bgps: HashMap<String, usize>,
+    /// The next basic-graph-pattern ordinal [`Parser::parse_group_graph_pattern_inner`]
+    /// hands out.
+    bgp_counter: usize,
+    /// The basic graph pattern the triples block being parsed belongs to, or
+    /// `None` outside a group's triples block — a template, a `VALUES` block or
+    /// an expression, none of which is a basic graph pattern of the query.
+    bgp_scope: Option<usize>,
     options: &'o ParserOptions,
 }
 
@@ -585,6 +624,7 @@ impl<'a> Parser<'a, '_> {
             version: self.version.clone(),
             agg_counter: self.agg_counter,
             anon_counter: self.anon_counter,
+            anon_prefix: self.anon_prefix.clone(),
             group_counter: self.group_counter,
             group_pattern_depth: self.group_pattern_depth,
             pattern_node_budget: self.pattern_node_budget,
@@ -610,6 +650,12 @@ impl<'a> Parser<'a, '_> {
             // contain a dataset clause: the fork records none, and the position the
             // outer parse recorded stays the outer parse's, on the outer parser.
             dataset_at: None,
+            // A fork reads a template or quad-pattern block, which is not a basic
+            // graph pattern of the query: nothing it reads is scoped to one, so it
+            // starts with no scope and records nothing.
+            blank_label_bgps: HashMap::new(),
+            bgp_counter: 0,
+            bgp_scope: None,
             options: self.options,
         }
     }
@@ -1243,6 +1289,35 @@ impl<'a> Parser<'a, '_> {
         self.note_exists_scope(&where_pat);
 
         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
+
+        // A `GROUP BY (expr AS ?v)` target must be fresh too — not in scope in the
+        // `WHERE` clause, and not an earlier condition's target. §18.2.1 makes `?v`
+        // in scope by that very form and requires it not to be in scope already at
+        // the point of an `(expr AS ?v)`, and the condition lowers to an `Extend`
+        // (§18.2.4.1), which §18.5 leaves undefined for a variable the solution
+        // already binds: `BIND`'s and the `SELECT` list's rule, on the third place
+        // the grammar writes the form. A synthetic target (`GROUP BY (expr)`) is
+        // minted outside every name a query can write and never collides.
+        if !modifiers.group_extends.is_empty() {
+            // A PRODUCTION consultation of the whole WHERE pattern's scope — once
+            // per SELECT with expression-valued GROUP BY conditions (see
+            // `Parser::scope_consultations`'s doc).
+            self.note_scope_consultation();
+            let mut in_scope: std::collections::HashSet<Variable> =
+                visible_variables(&where_pat).into_iter().collect();
+            for (variable, _) in &modifiers.group_extends {
+                if !in_scope.insert(variable.clone()) {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "GROUP BY target ?{} is already in scope in the WHERE clause or \
+                             an earlier GROUP BY condition",
+                            variable.as_str()
+                        ),
+                        self.span(),
+                    ));
+                }
+            }
+        }
 
         // §19.8: each SELECT `(expr AS ?v)` target must be fresh — not already in
         // scope. When the query aggregates (an explicit `GROUP BY` or any
@@ -1884,6 +1959,9 @@ impl<'a> Parser<'a, '_> {
             if self.pos >= self.tokens.len() {
                 break;
             }
+            // Each operation's `WHERE` is a pattern of its own, so the labels its
+            // basic graph patterns claim are its own too.
+            self.blank_label_bgps.clear();
             let op = self.parse_update_operation()?;
             this_op_labels.clear();
             if let GraphUpdateOperation::InsertData { data } = &op {
@@ -2428,10 +2506,17 @@ impl<'a> Parser<'a, '_> {
         // `BIND`/`LATERAL`, so the Nth element paid for re-walking the N-1
         // before it.
         let mut scope = VarScope::new();
+        // The basic graph pattern the next triples block extends, while one is
+        // open: a `FILTER` or a `.` leaves it open, every other element closes it
+        // (see [`Self::scoped_blank_label`]).
+        let mut open_bgp: Option<usize> = None;
 
         loop {
             if self.at(&Token::RBrace) {
                 break;
+            }
+            if self.block_boundary() && !self.peek_kw("FILTER") {
+                open_bgp = None;
             }
             // A structural charge against `MAX_GRAPH_PATTERN_NODES`, once per
             // group ELEMENT — the choke point that closes the sibling-spine
@@ -2670,7 +2755,14 @@ impl<'a> Parser<'a, '_> {
                 // statement separator between blocks
             } else {
                 // A triples block (BGP / path patterns).
-                let block = self.parse_triples_block()?;
+                let bgp = *open_bgp.get_or_insert_with(|| {
+                    self.bgp_counter += 1;
+                    self.bgp_counter
+                });
+                let enclosing = self.bgp_scope.replace(bgp);
+                let block = self.parse_triples_block();
+                self.bgp_scope = enclosing;
+                let block = block?;
                 collect_vars(&block, &mut scope);
                 self.note_exists_scope(&block);
                 g = join(g, block);
@@ -3126,10 +3218,11 @@ impl<'a> Parser<'a, '_> {
                 Ok(TermPattern::NamedNode(self.expect_iri_node()?))
             }
             Some(Token::BlankNodeLabel(_)) => {
+                let at = self.span();
                 let Some(Token::BlankNodeLabel(l)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(TermPattern::BlankNode(BlankNode::new(l)))
+                Ok(TermPattern::BlankNode(self.scoped_blank_label(l, at)?))
             }
             Some(Token::Anon) => {
                 self.pos += 1;
@@ -3497,10 +3590,11 @@ impl<'a> Parser<'a, '_> {
                 Ok(TermPattern::NamedNode(self.expect_iri_node()?))
             }
             Some(Token::BlankNodeLabel(_)) => {
+                let at = self.span();
                 let Some(Token::BlankNodeLabel(l)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(TermPattern::BlankNode(BlankNode::new(l)))
+                Ok(TermPattern::BlankNode(self.scoped_blank_label(l, at)?))
             }
             Some(Token::Anon) => {
                 self.pos += 1;
@@ -4640,11 +4734,44 @@ impl<'a> Parser<'a, '_> {
         v
     }
 
+    /// A blank node the query author labelled `_:label`, recorded against the
+    /// basic graph pattern it is written in.
+    ///
+    /// SPARQL scopes a blank node label to the basic graph pattern it appears
+    /// in, and forbids one label in two different basic graph patterns of the
+    /// same query: within one it is a single non-distinguished variable, so
+    /// two patterns sharing it would have to be one existential and two at once.
+    /// A basic graph pattern is a run of triples blocks, optionally with
+    /// `FILTER`s among them; any other element of the group ends it (the W3C
+    /// syntax tests `syn-bad-34`…`38` and `syn-bad-{OPT,UNION,GRAPH}-breaks-BGP`
+    /// state the rule). A property-function call or a property path written in
+    /// the block is part of that basic graph pattern like any triple.
+    ///
+    /// Outside a group's triples block — a `CONSTRUCT` or UPDATE template —
+    /// nothing is recorded: a template's labels mint fresh nodes per solution
+    /// and are not the pattern's.
+    fn scoped_blank_label(&mut self, label: &str, at: usize) -> Result<BlankNode> {
+        if let Some(bgp) = self.bgp_scope {
+            let first = *self.blank_label_bgps.entry(label.to_owned()).or_insert(bgp);
+            if first != bgp {
+                return Err(ParseError::syntax(
+                    format!(
+                        "blank node label _:{label} is used in two different basic graph \
+                         patterns; a blank node label is scoped to the one basic graph \
+                         pattern it appears in"
+                    ),
+                    at,
+                ));
+            }
+        }
+        Ok(BlankNode::new(label))
+    }
+
     /// Mint a fresh, unique label for an anonymous blank node (`[]`). Each
     /// occurrence is a distinct existential; reusing one label (e.g. `""`) would
     /// wrongly fuse separate blank nodes into a single AST node.
     fn fresh_anon(&mut self) -> BlankNode {
-        let b = BlankNode::new(format!("__purrdf_anon_{}", self.anon_counter));
+        let b = BlankNode::new(format!("{}{}", self.anon_prefix, self.anon_counter));
         self.anon_counter += 1;
         b
     }
@@ -8026,6 +8153,125 @@ mod tests {
         assert!(matches!(data[0].triple.subject, TermPattern::BlankNode(_)));
     }
 
+    // ── a blank node label belongs to one basic graph pattern ────────────────
+    //
+    // Every refusal below is paired with the neighbouring query that must still
+    // parse: the same label kept inside ONE basic graph pattern.
+
+    /// The syntax error a query reusing `_:a` across basic graph patterns gets.
+    fn blank_scope_err(q: &str) -> ParseError {
+        let err = try_parse(q).expect_err("a label shared by two basic graph patterns");
+        assert!(
+            matches!(&err, ParseError::Syntax { reason, .. }
+                if reason.contains("_:a") && reason.contains("two different basic graph patterns")),
+            "expected the blank-label scope error for {q:?}, got {err:?}"
+        );
+        err
+    }
+
+    #[test]
+    fn a_blank_label_reused_across_basic_graph_patterns_is_a_syntax_error() {
+        // The W3C `syntax-sparql4` cases, verbatim in shape.
+        for q in [
+            // syn-bad-34: into a nested group.
+            "SELECT * WHERE { _:a ?p ?v . { _:a ?q 1 } }",
+            // syn-bad-35 / -37: out of a nested group.
+            "SELECT * WHERE { { _:a ?p ?v . } _:a ?q 1 }",
+            // syn-bad-36: across UNION arms.
+            "SELECT * WHERE { { _:a ?p ?v . } UNION { _:a ?q 1 } }",
+            // syn-bad-38: into an OPTIONAL.
+            "SELECT * WHERE { _:a ?p ?v . OPTIONAL { _:a ?q 1 } }",
+            // syn-bad-OPT-breaks-BGP / -UNION- / -GRAPH-: the element between
+            // two triples blocks of ONE group ends the first basic graph pattern.
+            "SELECT * WHERE { _:a ?p ?v . OPTIONAL { ?s ?p ?v } _:a ?q 1 }",
+            "SELECT * WHERE { _:a ?p ?v1 { ?s <http://example.org/p1> ?o } UNION { ?s <http://example.org/p2> ?o } _:a ?p ?v2 }",
+            "SELECT * WHERE { _:a ?p ?v . GRAPH ?g { ?s ?p ?v } _:a ?q 1 }",
+            // The other elements that end one, by the same rule.
+            "SELECT * WHERE { _:a ?p ?v . BIND(1 AS ?x) _:a ?q ?y }",
+            "SELECT * WHERE { _:a ?p ?v . VALUES ?x { 1 } _:a ?q ?y }",
+            "SELECT * WHERE { _:a ?p ?v . MINUS { ?s ?p ?v } _:a ?q ?y }",
+            "SELECT * WHERE { _:a ?p ?v . MINUS { _:a ?q ?y } }",
+            "SELECT * WHERE { _:a ?p ?v . FILTER EXISTS { _:a ?q ?y } }",
+            "SELECT * WHERE { _:a ?p ?v . { SELECT ?y WHERE { _:a ?q ?y } } }",
+            // A reifier id is a label like any other.
+            "SELECT * WHERE { ?s ?p ?o ~ _:a . OPTIONAL { _:a ?q ?y } }",
+        ] {
+            blank_scope_err(q);
+        }
+    }
+
+    #[test]
+    fn a_blank_label_kept_inside_one_basic_graph_pattern_still_parses() {
+        for q in [
+            "SELECT * WHERE { _:a ?p ?v . _:a ?q 1 }",
+            "SELECT * WHERE { _:a ?p ?v ; ?q _:a }",
+            // A FILTER does not end a basic graph pattern.
+            "SELECT * WHERE { _:a ?p ?v . FILTER(true) _:a ?q 1 }",
+            "SELECT * WHERE { _:a ?p ?v FILTER(true) . FILTER(false) _:a ?q 1 }",
+            // A property path is part of the block it is written in.
+            "SELECT * WHERE { ?s ?p _:a . _:a <http://example.org/q>+ ?o }",
+            // Inside a quoted triple and a blank-node property list.
+            "SELECT * WHERE { _:a ?p <<( _:a ?q ?o )>> . [ ?r _:a ] }",
+            // One nested group reusing ITS OWN label, and a sibling with another.
+            "SELECT * WHERE { { _:a ?p ?v . _:a ?q 1 } OPTIONAL { _:b ?p ?v . _:b ?q 1 } }",
+            // A CONSTRUCT template is not a basic graph pattern of the query.
+            "CONSTRUCT { _:a <http://example.org/p> ?v } WHERE { _:a ?p ?v . _:a ?q 1 }",
+        ] {
+            try_parse(q).unwrap_or_else(|e| panic!("{q:?} is one basic graph pattern: {e:?}"));
+        }
+        // A property-function call is part of its block's basic graph pattern.
+        try_parse_with_prop_fn(
+            "SELECT * WHERE { ?s <http://example.org/p> _:a . ( ?s ) <https://example.org/pf/solve> ( \"x\" _:a ) }",
+        )
+        .expect("a label shared by a call and a triple of one block");
+        let err = try_parse_with_prop_fn(
+            "SELECT * WHERE { ?s <http://example.org/p> _:a . OPTIONAL { ( ?s ) <https://example.org/pf/solve> ( _:a ) } }",
+        )
+        .expect_err("a call in an OPTIONAL is another basic graph pattern");
+        assert!(matches!(err, ParseError::Syntax { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn an_anonymous_blank_never_takes_a_label_the_author_wrote() {
+        // `[]` mints a label; the author may write any label at all, including the
+        // one the parser would otherwise mint first. The two must stay two nodes.
+        let q = try_parse(
+            "SELECT * WHERE { [] <http://example.org/p> ?o . \
+             _:__purrdf_anon_0 <http://example.org/q> ?x }",
+        )
+        .expect("both are legal blank nodes");
+        let Query::Select { pattern, .. } = q else {
+            panic!("a SELECT");
+        };
+        let GraphPattern::Project { inner, .. } = pattern else {
+            panic!("a projection");
+        };
+        let GraphPattern::Bgp { patterns } = *inner else {
+            panic!("one basic graph pattern, got {inner:?}");
+        };
+        let (TermPattern::BlankNode(anon), TermPattern::BlankNode(written)) =
+            (&patterns[0].subject, &patterns[1].subject)
+        else {
+            panic!("two blank subjects, got {patterns:?}");
+        };
+        assert_eq!(written.as_str(), "__purrdf_anon_0");
+        assert_ne!(anon, written, "the minted label avoided the written one");
+    }
+
+    #[test]
+    fn each_update_operation_scopes_its_own_where_labels() {
+        // Two operations' WHERE clauses are separate patterns.
+        parse_update(
+            "DELETE { ?s purrdf:p ?o } WHERE { ?s purrdf:p ?o . _:a purrdf:q ?s } ; \
+             DELETE { ?s purrdf:p ?o } WHERE { ?s purrdf:p ?o . _:a purrdf:q ?s }",
+        );
+        // Within one operation the query rule holds.
+        let err = update_err(
+            "DELETE { ?s purrdf:p ?o } WHERE { ?s purrdf:p _:a . OPTIONAL { _:a purrdf:q ?o } }",
+        );
+        assert!(matches!(err, ParseError::Syntax { .. }), "{err:?}");
+    }
+
     #[test]
     fn update_reused_blank_label_across_operations_is_rejected() {
         // §19.6: a blank node label is scoped to one operation — sharing `_:b1`
@@ -8685,6 +8931,55 @@ mod tests {
         SparqlParser::new()
             .parse_query(&ok)
             .expect("fresh BIND target parses");
+    }
+
+    /// A `GROUP BY (expr AS ?v)` target already in scope is refused exactly as a
+    /// `BIND` or `SELECT`-list target is: in the `WHERE` clause, behind a nested
+    /// group, in a sub-`SELECT`'s own `WHERE`, and as an earlier condition's target.
+    /// The neighbours — the same conditions over a fresh target, the W3C
+    /// `grouping/group04` and `aggregates/agg-group-builtin` shapes, a plain key over
+    /// the in-scope variable, and a target that a sub-`SELECT` below hides — parse,
+    /// and lower to the `Extend` beneath the `Group`.
+    #[test]
+    fn group_by_target_already_in_scope_is_rejected() {
+        for query in [
+            "SELECT ?c WHERE { ?c purrdf:p ?o } GROUP BY (purrdf:x AS ?c)",
+            "SELECT ?c WHERE { ?c purrdf:p ?o } GROUP BY (?o AS ?c)",
+            "SELECT ?c WHERE { { ?c purrdf:p ?o } } GROUP BY (COALESCE(?nope, 1) AS ?c)",
+            "SELECT ?k WHERE { ?c purrdf:p ?o } GROUP BY (?o AS ?k) (?c AS ?k)",
+            "SELECT ?c WHERE { { SELECT ?c WHERE { ?c purrdf:p ?o } GROUP BY (purrdf:x AS ?c) } }",
+        ] {
+            let q = format!("{GM}{query}");
+            let err = SparqlParser::new()
+                .parse_query(&q)
+                .expect_err("a GROUP BY target over an in-scope variable must fail");
+            assert!(
+                matches!(&err, ParseError::Syntax { reason, .. }
+                    if reason.contains("GROUP BY target ?") && reason.contains("already in scope")),
+                "expected the GROUP BY scope refusal for {query:?}, got {err:?}"
+            );
+        }
+        for query in [
+            "SELECT ?k WHERE { ?c purrdf:p ?o } GROUP BY (purrdf:x AS ?k)",
+            "SELECT ?X (SAMPLE(?v) AS ?S) { ?s purrdf:p ?v OPTIONAL { ?s purrdf:q ?w } } \
+             GROUP BY (COALESCE(?w, 1) AS ?X)",
+            "SELECT ?d (COUNT(*) AS ?n) WHERE { ?s ?p ?o } GROUP BY (DATATYPE(?o) AS ?d)",
+            "SELECT ?c WHERE { ?c purrdf:p ?o } GROUP BY ?c",
+            "SELECT ?k ?j WHERE { ?c purrdf:p ?o } GROUP BY (?o AS ?k) (?c AS ?j)",
+            "SELECT ?h WHERE { { SELECT ?o WHERE { ?h purrdf:p ?o } } } GROUP BY (?o AS ?h)",
+        ] {
+            let q = format!("{GM}{query}");
+            let parsed = SparqlParser::new()
+                .parse_query(&q)
+                .unwrap_or_else(|err| panic!("a fresh GROUP BY target parses: {query:?}: {err}"));
+            let Query::Select { pattern, .. } = parsed else {
+                panic!("a SELECT: {query:?}");
+            };
+            assert!(
+                format!("{pattern:?}").contains("Group {"),
+                "the condition lowers beneath a Group: {query:?}"
+            );
+        }
     }
 
     /// The group-parsing loop's scope set is a genuinely incremental structure,

@@ -445,6 +445,59 @@ fn an_ungoverned_entry_still_answers_a_relation_that_declares_nothing_short() {
     assert_eq!(row_count(&result), 1);
 }
 
+/// The witnessed prepared door hands back the run's witness beside the answer, and —
+/// having somewhere to put it — reports a relation's declared shortfall instead of
+/// refusing the run. Its unwitnessed twin, [`NativeSparqlEngine::execute`], over the
+/// same prepared execution and the same relation, refuses it: the neighbour that
+/// shows the report is a property of the return type, not a relaxation.
+#[test]
+fn the_witnessed_prepared_door_reports_what_the_unwitnessed_one_must_refuse() {
+    let engine = NativeSparqlEngine::new();
+    let dataset = dataset();
+    let count = |outcome: InternedOutcome<'_, '_, RdfDataset>| match outcome {
+        InternedOutcome::Solutions(solutions) => solutions.len(),
+        InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => {
+            panic!("a SELECT returns solutions")
+        }
+    };
+
+    for (declares, short) in [
+        (Declares::Generation("gen-7"), false),
+        (
+            Declares::GenerationThenIncomplete("gen-7", SHARD_REASON),
+            true,
+        ),
+    ] {
+        let relations = registry("ff", declares);
+        let mut execution = engine
+            .prepare_execution(ONE_CALL, None, &[], with_relations(&relations))
+            .expect("the query prepares against the registry");
+
+        let (rows, witness) = engine
+            .execute_witnessed(&mut execution, &*dataset, with_relations(&relations), count)
+            .expect("the witnessed door answers, whole or short");
+        assert_eq!(rows, 1, "the rows the relation served cross");
+        let attested = witness.get(REL_IRI).expect("the relation attested");
+        assert_eq!(attested.generations, declared("gen-7"));
+        assert_eq!(attested.invocations, 1);
+        let expected: BTreeSet<String> = if short {
+            BTreeSet::from([SHARD_REASON.to_owned()])
+        } else {
+            BTreeSet::new()
+        };
+        assert_eq!(attested.incompleteness, expected);
+
+        let unwitnessed =
+            engine.execute(&mut execution, &*dataset, with_relations(&relations), count);
+        if short {
+            let diagnostic = unwitnessed.expect_err("the unwitnessed door cannot label it");
+            assert_eq!(diagnostic.code, EvalError::RELATION_INCOMPLETE_CODE);
+        } else {
+            assert_eq!(unwitnessed.expect("a whole relation is answered"), 1);
+        }
+    }
+}
+
 /// The shard-found-missing-late case: nothing at open, an incompleteness at close. The
 /// declaration is read when the invocation ENDS, so it is recorded — a reading taken only
 /// at open would have lost it silently.
