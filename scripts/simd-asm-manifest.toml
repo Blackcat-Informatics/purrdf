@@ -22,13 +22,11 @@
 #
 # Every function row of the audit document has an entry here, whatever its verdict. A
 # `leave` entry sets `min_vector_ops = 0` and requires no mnemonic: it records what the
-# site compiles to today (the document's generated cells), and still fails when the
-# symbol it names disappears. A `rewrite` entry does the same until its reformulation
-# lands, and from then on carries the floors and proof mnemonics of the new shape; a
-# rewritten site with nothing vector-shaped in it (a cursor, a table load) keeps 0 and
-# says why. A `covered` entry carries the floors and
-# the proof mnemonics that hold on each configuration. The site ids are the document's
-# row ids.
+# site compiles to (the document's generated cells), and still fails when the symbol it
+# names disappears. A `rewrite` entry carries the floors and proof mnemonics of its
+# reformulated shape; a rewritten site with nothing vector-shaped in it (a cursor, a
+# table load) keeps 0 and says why. A `covered` entry carries the floors and the proof
+# mnemonics that hold on each configuration. The site ids are the document's row ids.
 
 [build]
 packages = [
@@ -958,6 +956,146 @@ summary = "`terminals::find_first_json_string_special`, the chunked scan for the
   max_fma = 0
   forbid_relaxed = true
 
+
+[[site]]
+id = "iri.json-escape-controls"
+summary = "`json_escape::find_first_json_controls_stop`, the clean-run scan of the JSON escape law's `Controls` spelling (the JSON string class plus DEL and `0xC2`)"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 6
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v11.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v5.
+  [[site.measure]]
+  label = "avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 2
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v10 (aarch64), v10 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 5
+  require_mnemonics = ["cmeq .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+
+[[site]]
+id = "iri.json-escape-ascii"
+summary = "`json_escape::find_first_json_ascii_stop`, the clean-run scan of the JSON escape law's `Ascii` spelling (the JSON string class plus DEL and every non-ASCII byte)"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 6
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v24.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 12
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
+  [[site.measure]]
+  label = "avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 9
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v8 (aarch64), v8 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 4
+  require_mnemonics = ["cmeq .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq"]
+  max_fma = 0
+  forbid_relaxed = true
+
 [[site]]
 id = "iri.scan-xml"
 summary = "`terminals::find_first_xml_special`, the chunked scan for the first byte XML 1.0 egress must replace or check"
@@ -1880,7 +2018,7 @@ summary = "the residual `(s, p, o, g)` filter of `RdfDataset::quads_for_pattern_
 
 [[site]]
 id = "core.pack-triples-intersect"
-summary = "the pack triples sorted-list intersect (`partition_rows`) and the delta-varint decode (`DeltaListRef::next`)"
+summary = "the pack triples `(?,p,o)` access path (`partition_rows`: the shorter FoQ list decoded and each entry tested in place) and the delta-varint decode (`DeltaListRef::next`)"
 
   [[site.measure]]
   label = "intersect"
@@ -2233,6 +2371,86 @@ summary = "the compiled XSD regex's literal prefilter (`regex_automata` `Memchr:
   configs = ["wasm32"]
   crate = "regex_automata"
   symbol = "<regex_automata::util::prefilter::memchr::Memchr as regex_automata::util::prefilter::PrefilterI>::find"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+
+[[site]]
+id = "core.loss-json-escape"
+summary = "`loss::escape_json_into`, the loss ledger's JSON string body: the escape law in its `ShortForms` spelling, inlined into `loss::push_field`"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
+  [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 4
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v21.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 10
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v17.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v6 (aarch64), v6 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v7.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The writer: one `push_body` call, inlined into `push_field`, whose count is the call site's; scalar by nature.
+  [[site.measure]]
+  label = "call site"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::loss::push_field"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2681,7 +2899,7 @@ summary = "`FrontierDedup::insert`, the small-frontier dedup: the linear stage (
 
 [[site]]
 id = "shapes.path-eval"
-summary = "`path::eval_planned_ids_from_id`, the planned SHACL path walk"
+summary = "`path::eval_planned_ids_from_id`, the planned SHACL path walk; its frontier probe is `shapes.frontier-dedup`, out of line"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -2940,7 +3158,7 @@ summary = "`csv::push_field`, the CSV field quoting: one chunked scan for `\"`, 
 
 [[site]]
 id = "results.json-escape"
-summary = "`json::json_escape_body`, the JSON results string escape over `terminals::find_first_json_string_special`"
+summary = "`json::json_escape_body`, the JSON results string escape: the escape law `purrdf_iri::json_escape` in its `Minimal` spelling, over `terminals::find_first_json_string_special`"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
   [[site.measure]]
@@ -3007,12 +3225,15 @@ summary = "`json::json_escape_body`, the JSON results string escape over `termin
   max_fma = 0
   forbid_relaxed = true
 
-  # The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
+  # The escape driver: `json_escape_body` is one call to the law's `escape_body` and
+  # inlines into its callers, so the driver is `escape_body` instantiated for this
+  # writer's `TextSink` closure. Scalar by nature (a scan call, a `char` decode and a
+  # push per stop); the entry records its counts.
   [[site.measure]]
   label = "call site"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_sparql_results"
-  symbol = "purrdf_sparql_results::json::json_escape_body::<purrdf_core::sink::TextSink>"
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::escape_body::<purrdf_sparql_results::json::json_escape_body<purrdf_core::sink::TextSink>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -3318,7 +3539,7 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
 
 [[site]]
 id = "distance.exact.sqeuclid"
-summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Euclidean fold with its 64-element checkpoint, in the pair kernels HNSW's selection and repair call"
+summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Euclidean fold with its 64-element checkpoint, in the bounded pair kernels HNSW's selection and repair call and the resolved-handle pair kernels `HnswIndex::row_distance` and a row-seeded search call"
 
   # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs.
   # Measured v169.
@@ -3464,60 +3685,147 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
+  # The resolved-handle pair path: `Resolved::<Exact>::distance` -> `Exact::distance_on` ->
+  # `dispatch::distance`, which `HnswIndex::row_distance` and a row-seeded search reach
+  # through `VectorMatrix::distance`. The handle-free `Exact::distance` is gone and every
+  # public pair entry is generic, so the audited graph instantiates the pair only at the
+  # stored widths the HNSW crate calls it with; no f64×f32 pair is compiled here, and the
+  # mixed-width fold is measured where the library compiles it, the beam's
+  # `distances_indexed::<f64, f32>` under `distance.exact.dot`. `subpd` is the
+  # squared-Euclidean difference, which the dot fold does not have.
   # Baseline SSE2: the portable compilation packs the sixteen lanes into xmm pairs.
-  # Measured v235.
+  # Measured v169.
   [[site.measure]]
-  label = "pair f64×f32"
+  label = "pair f64×f64"
   configs = ["x86_64"]
   crate = "purrdf_core"
-  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
-  min_vector_ops = 117
-  require_mnemonics = ["addpd", "mulpd"]
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f64>"
+  min_vector_ops = 84
+  require_mnemonics = ["addpd", "mulpd", "subpd"]
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v197
-  # (x86_64-v3), v161 (x86_64-v4).
+  # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
+  # run time. Measured v157.
   [[site.measure]]
-  label = "pair f64×f32"
+  label = "pair f64×f64 avx2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx2::distance::<f64, f64>"
+  min_vector_ops = 78
+  require_mnemonics = ["vaddpd", "vmulpd", "vsubpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157
+  # (x86_64-v3), v133 (x86_64-v4).
+  [[site.measure]]
+  label = "pair f64×f64"
   configs = ["x86_64-v3", "x86_64-v4"]
   crate = "purrdf_core"
-  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
-  min_vector_ops = 80
-  require_mnemonics = ["vaddpd", "vmulpd"]
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f64>"
+  min_vector_ops = 66
+  require_mnemonics = ["vaddpd", "vmulpd", "vsubpd"]
   max_fma = 0
   forbid_relaxed = true
 
   # NEON `v.2d` lanes; neoverse-v1 adds only strictly ordered SVE `fadda` reductions.
-  # Measured v208 (aarch64), v215 (neoverse-v1).
+  # Measured v160 (aarch64), v167 (neoverse-v1).
   [[site.measure]]
-  label = "pair f64×f32"
+  label = "pair f64×f64"
   configs = ["aarch64", "aarch64-neoverse-v1"]
   crate = "purrdf_core"
-  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
-  min_vector_ops = 104
-  require_mnemonics = ["fadd .2d", "fmul .2d"]
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f64>"
+  min_vector_ops = 80
+  require_mnemonics = ["fadd .2d", "fmul .2d", "fsub .2d"]
   max_fma = 0
   forbid_relaxed = true
 
-  # `f64x2` lanes and no `relaxed_` op. Measured v183.
+  # `f64x2` lanes and no `relaxed_` op. Measured v149.
   [[site.measure]]
-  label = "pair f64×f32"
+  label = "pair f64×f64"
   configs = ["wasm32-simd128"]
   crate = "purrdf_core"
-  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
-  min_vector_ops = 91
-  require_mnemonics = ["f64x2.add", "f64x2.mul"]
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f64>"
+  min_vector_ops = 74
+  require_mnemonics = ["f64x2.add", "f64x2.mul", "f64x2.sub"]
   max_fma = 0
   forbid_relaxed = true
 
   # wasm32 without a SIMD proposal: scalar `f64.add` / `f64.mul` in the same order.
   # Measured v0.
   [[site.measure]]
-  label = "pair f64×f32"
+  label = "pair f64×f64"
   configs = ["wasm32"]
   crate = "purrdf_core"
-  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f32>"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f64>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same pair path over f32 rows, each component widened exactly inside the fold.
+  # Baseline SSE2. Measured v201.
+  [[site.measure]]
+  label = "pair f32×f32"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f32, f32>"
+  min_vector_ops = 100
+  require_mnemonics = ["addpd", "mulpd", "subpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The `#[target_feature(enable = "avx2")]` compilation, selected at run time. Measured
+  # v125.
+  [[site.measure]]
+  label = "pair f32×f32 avx2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx2::distance::<f32, f32>"
+  min_vector_ops = 62
+  require_mnemonics = ["vaddpd", "vmulpd", "vsubpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2. Measured v125 (x86_64-v3), v89 (x86_64-v4).
+  [[site.measure]]
+  label = "pair f32×f32"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f32, f32>"
+  min_vector_ops = 44
+  require_mnemonics = ["vaddpd", "vmulpd", "vsubpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON `v.2d` lanes. Measured v192 (aarch64), v206 (neoverse-v1).
+  [[site.measure]]
+  label = "pair f32×f32"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f32, f32>"
+  min_vector_ops = 96
+  require_mnemonics = ["fadd .2d", "fmul .2d", "fsub .2d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # `f64x2` lanes and no `relaxed_` op. Measured v181.
+  [[site.measure]]
+  label = "pair f32×f32"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f32, f32>"
+  min_vector_ops = 90
+  require_mnemonics = ["f64x2.add", "f64x2.mul", "f64x2.sub"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # wasm32 without a SIMD proposal: scalar, the same order. Measured v0.
+  [[site.measure]]
+  label = "pair f32×f32"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f32, f32>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -4556,6 +4864,50 @@ summary = "`reciprocal_rank::contribution`, reciprocal-rank fusion on fixed poin
   forbid_relaxed = true
 
 [[site]]
+id = "retrieval.fusion-frontier"
+summary = "`FusionStream::next`'s frontier, filed by signature in `SelectionIndex` (`insert`, `take`), re-filed on every pull, exclusion answer and emission"
+
+  # `FusionStream<S>` and the on-demand read under it are generic over the stream and the
+  # dataset, so they are compiled only in a crate that names those types and none of the
+  # audited graph does; the frontier's own methods are non-generic and out of line, and
+  # every instantiation calls them. Ordered-map work: measured v0 on every configuration.
+  [[site.measure]]
+  label = "take"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_retrieval"
+  symbol = "purrdf_retrieval::fusion_stream::SelectionIndex>::take"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "insert"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_retrieval"
+  symbol = "purrdf_retrieval::fusion_stream::SelectionIndex>::insert"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "facade.multimodal-read"
+summary = "the umbrella's multimodal on-demand read: `retrieval::search` over the real text and HNSW producers, and the text side of the per-candidate exclusion lookup, `TextSearchRelation::holdings`"
+
+  # The umbrella compiles none of this path (the bench reaches it through re-exports); the
+  # lookup it times on the text side is out of line in `purrdf_text`. Binary searches of the
+  # subject side index, the term dictionary and a document's postings: measured v0 on every
+  # configuration. The HNSW side (`HnswSpace::row_of`) is generic over the arithmetic and
+  # has no copy in the audited graph.
+  [[site.measure]]
+  label = "text lookup"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_text"
+  symbol = "purrdf_text::relation::TextSearchRelation>::holdings"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
 id = "columnar.plain-codec"
 summary = "PLAIN `INT64`: `encode_int64_plain` (from `ColumnValues::encode_plain`) and `decode_int64_plain` (from `decode_plain`), each out of line over the split column layout (a presence bitmap beside a dense `Vec<i64>` of the present values): the body is the value vector in little-endian bytes, so each direction is one contiguous copy"
 
@@ -4689,6 +5041,86 @@ summary = "`topology::relate::relate` and its pairwise `segment::intersect`"
   max_fma = 0
   forbid_relaxed = true
 
+
+[[site]]
+id = "geo.json-write-string"
+summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in its `ShortForms` spelling"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
+  [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 4
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v21.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 10
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v17.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v6 (aarch64), v6 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v7.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The writer: one `push_string` call; scalar by nature (a scan call and a push per run).
+  [[site.measure]]
+  label = "call site"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_geo"
+  symbol = "purrdf_geo::json::write_string"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
 [[site]]
 id = "gts.cbor-writer"
 summary = "the GTS canonical CBOR writer (`wire::Canonical` serialization)"
@@ -4697,6 +5129,166 @@ summary = "the GTS canonical CBOR writer (`wire::Canonical` serialization)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_gts"
   symbol = "<purrdf_gts::wire::Canonical as serde_core::ser::Serialize>::serialize"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+
+[[site]]
+id = "gts.mmr-json-escape"
+summary = "`mmr::json_escape`, the proof report's JSON string body: the escape law in its `Controls` spelling, inlined into `Proof::to_json`"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
+  [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 6
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v11.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v5.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 2
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v10 (aarch64), v10 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 5
+  require_mnemonics = ["cmeq .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The writer: one `push_body` call, inlined into `Proof::to_json`, whose count is the call site's; scalar by nature (a scan call and a push per run).
+  [[site.measure]]
+  label = "call site"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_gts"
+  symbol = "<purrdf_gts::mmr::Proof>::to_json"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+
+[[site]]
+id = "gts.replication-json-string"
+summary = "`replication::json_string`, the replication report's JSON strings: the escape law in its `Controls` spelling"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
+  [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 6
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v11.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v5.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 2
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v10 (aarch64), v10 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 5
+  require_mnemonics = ["cmeq .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The writer: one `push_string` call; scalar by nature (a scan call and a push per run).
+  [[site.measure]]
+  label = "call site"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_gts"
+  symbol = "purrdf_gts::replication::json_string"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -4735,6 +5327,166 @@ summary = "`OwnershipAnalyzer::analyze` and `collect_term_iri_refs` (inlined int
   max_fma = 0
   forbid_relaxed = true
 
+
+[[site]]
+id = "slice.prefix-json-string"
+summary = "`prefix_emit::json_string`, the JSON-LD context emitter's strings: the escape law in its `Minimal` spelling"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
+  [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 4
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v21.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 10
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v17.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 8
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v6 (aarch64), v6 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["cmeq .16b", "cmhi .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v7.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  min_vector_ops = 3
+  require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The writer: one `push_string` call; scalar by nature (a scan call and a push per run).
+  [[site.measure]]
+  label = "call site"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_slice"
+  symbol = "purrdf_slice::prefix_emit::json_string"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+
+[[site]]
+id = "slice.dsl-stats-json-string"
+summary = "`dsl_stats_emit::json_string`, the DSL stats emitter's file names: the escape law in its `Ascii` spelling, inlined into `render_stats`"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
+  [[site.measure]]
+  label = "scan sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 6
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v24.
+  [[site.measure]]
+  label = "scan avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 12
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
+  [[site.measure]]
+  label = "scan avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 9
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v8 (aarch64), v8 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "scan neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 4
+  require_mnemonics = ["cmeq .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "scan scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v9.
+  [[site.measure]]
+  label = "scan simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_iri"
+  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  min_vector_ops = 4
+  require_mnemonics = ["i8x16.eq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The writer: one `push_string` call, inlined into `render_stats`, whose count is the call site's; scalar by nature.
+  [[site.measure]]
+  label = "call site"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_slice"
+  symbol = "purrdf_slice::dsl_stats_emit::render_stats"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
 [[site]]
 id = "cli.pack-input"
 summary = "the CLI pack-input path: `ImmutableInput` acquisition, then `verify_pack` (measured in purrdf-core)"
@@ -4767,6 +5519,173 @@ summary = "`projections::carrier::project_archive`, the carrier projections (CSV
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_rdf"
   symbol = "purrdf_rdf::projections::carrier::project_archive::<purrdf_core::ir::dataset::RdfDataset>"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+
+[[site]]
+id = "rdf.csvw-percent-encode"
+summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW URI-template expansions: each plain run found by a `ByteClass` scan of the bytes the expansion encodes (`find_first_reserved_escape`, `find_first_unreserved_escape`), both inlined into `expand_url`"
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v22.
+  [[site.measure]]
+  label = "reserved sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  min_vector_ops = 11
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v21.
+  [[site.measure]]
+  label = "reserved avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  min_vector_ops = 10
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v9.
+  [[site.measure]]
+  label = "reserved avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  min_vector_ops = 4
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v18.
+  [[site.measure]]
+  label = "reserved neon"
+  configs = ["aarch64"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  min_vector_ops = 9
+  require_mnemonics = ["cmeq .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # SVE predicate compares (`cmpeq`, `cmphi`, `cmplo`). Measured v12.
+  [[site.measure]]
+  label = "reserved sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  min_vector_ops = 6
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "reserved scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v17.
+  [[site.measure]]
+  label = "reserved simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  min_vector_ops = 8
+  require_mnemonics = ["i8x16.eq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v25.
+  [[site.measure]]
+  label = "simple sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  min_vector_ops = 12
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v24.
+  [[site.measure]]
+  label = "simple avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  min_vector_ops = 12
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v10.
+  [[site.measure]]
+  label = "simple avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqb %k"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares; `addp` folds the lanes. Measured v19.
+  [[site.measure]]
+  label = "simple neon"
+  configs = ["aarch64"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  min_vector_ops = 9
+  require_mnemonics = ["cmeq .16b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # SVE predicate compares (`cmpeq`, `cmphi`, `cmplo`). Measured v15.
+  [[site.measure]]
+  label = "simple sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  min_vector_ops = 7
+  require_mnemonics = ["cmpeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "simple scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed byte compares. Measured v18.
+  [[site.measure]]
+  label = "simple simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  min_vector_ops = 9
+  require_mnemonics = ["i8x16.eq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The template driver: both expansions and `push_percent_encoded` inline into it; a scan call, a run copy and a `%XX` push per stop, scalar by nature.
+  [[site.measure]]
+  label = "call site"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_rdf"
+  symbol = "purrdf_rdf::projections::csvw::rdf::expand_url"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
