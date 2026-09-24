@@ -27,11 +27,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     inside each 64-element block and combines the block sums in ascending order,
     so every bounded checkpoint is a true prefix. On x86_64 it dispatches at run
     time to avx512f, then avx2+fma, then sse2. NEON, wasm simd128 and wasm scalar
-    are chosen at compile time. Each path has exactly one out-of-line copy, so
-    every call site on a path gets the same bits;
+    are chosen at compile time. Every other target runs its portable compilation,
+    also fixed at compile time, so it resolves on every target. Each path has
+    exactly one out-of-line copy, so every call site on a path gets the same bits.
+    Its image codes are 2 (sse2), 3 (avx2+fma), 4 (avx512f), 5 (neon),
+    6 (wasm-simd128), 7 (wasm-scalar) and 8 (portable); `Exact`'s is 1;
   - `Path` (`#[non_exhaustive]`), with one variant per dispatch path: `Portable`
-    and `Avx2` for `Exact`; `Sse2`, `Avx2Fma`, `Avx512f`, `Neon`, `WasmSimd128`
-    and `WasmScalar` for `Reassociated`;
+    and `Avx2` for `Exact`; `Portable`, `Sse2`, `Avx2Fma`, `Avx512f`, `Neon`,
+    `WasmSimd128` and `WasmScalar` for `Reassociated`. `Portable` names each
+    arithmetic's own body compiled for the target's baseline features;
   - the batch kernels, which are the unit of dispatch. `Exact` has a
     bit-identical AVX2 path chosen once per scan. They come with `RowsRef`,
     `Measure`, `EXACT_LANES` and a `norm` that delegates to the one normative
@@ -46,9 +50,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     probe on every target: eight operations through `core::hint::black_box`,
     covering flushed results, flushed operands, all three directed roundings and
     ties-to-even. So i686, armv7, riscv64, powerpc64le, s390x, loongarch64 and
-    any other target run the exact arithmetic, and are refused only when a
-    departure is observed. `Uninspectable` is produced by no environment check.
-    It remains only for an arithmetic with no compilation for the target.
+    any other target run both arithmetics, and are refused only when a departure
+    is observed.
 
 - **sparql-eval:** `Kernel::distance_reassociated` and
   `Kernel::distance_bounded_reassociated` are named entry points for the
@@ -1626,8 +1629,7 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `bits`. A pattern that named `register: "MXCSR"` now names
   `evidence: FloatEnvironmentEvidence::Register { name: "MXCSR", .. }`. A
   refusal on a target whose register is not read carries
-  `FloatEnvironmentEvidence::Probe`. `Uninspectable` no longer describes an
-  unreadable environment and no environment check returns it.
+  `FloatEnvironmentEvidence::Probe`.
 
 - **BREAKING** **hnsw:** the image and index version is now 2 (`INDEX_VERSION`,
   `profile::PAYLOAD_VERSION`). The header's reserved word becomes the arithmetic

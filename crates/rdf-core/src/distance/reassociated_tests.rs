@@ -519,10 +519,11 @@ fn evidence_text_pinned() {
 fn the_reassociated_identity_is_pinned() {
     assert_eq!(Reassociated::ID, "binary64-reassociated-v1");
     assert_ne!(Reassociated::ID, Exact::ID);
-    assert_eq!(Reassociated::IMAGE_CODES, [2, 3, 4, 5, 6, 7]);
+    assert_eq!(Reassociated::IMAGE_CODES, [2, 3, 4, 5, 6, 7, 8]);
     assert_eq!(Exact::IMAGE_CODES, [1]);
+    // `Portable` is a path of both arithmetics, and each records it under its own code.
     let table = [
-        (Path::Portable, Some(1), None),
+        (Path::Portable, Some(1), Some(8)),
         (Path::Avx2, Some(1), None),
         (Path::Sse2, None, Some(2)),
         (Path::Avx2Fma, None, Some(3)),
@@ -561,10 +562,54 @@ fn reassociated_resolves_the_path_the_processor_predicts() {
     }
     #[cfg(target_arch = "aarch64")]
     assert_eq!(resolved.path(), Path::Neon);
+    #[cfg(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_feature = "simd128"
+    ))]
+    assert_eq!(resolved.path(), Path::WasmSimd128);
+    #[cfg(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        not(target_feature = "simd128")
+    ))]
+    assert_eq!(resolved.path(), Path::WasmScalar);
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "wasm64"
+    )))]
+    {
+        assert_eq!(resolved.path(), Path::Portable);
+        assert_eq!(resolved.image_code(), 8);
+    }
     assert!(host_paths().contains(&resolved));
     println!(
         "reassociated_resolves_the_path_the_processor_predicts resolved path: {}",
         resolved.path()
+    );
+}
+
+/// On a target with named reassociated paths the portable one is not among them: a
+/// handle on it reaches no compilation, so it can never stand in for the path the
+/// processor runs. The valid neighbour, a handle on the resolved path, computes.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[test]
+#[should_panic(expected = "portable is not a reassociated path of this build")]
+fn the_portable_path_is_not_dispatched_where_a_named_path_exists() {
+    let a = [1.0_f64, 2.0, 3.0];
+    let resolved = Reassociated::resolve().expect("the default environment is the IEEE one");
+    assert_ne!(resolved.path(), Path::Portable);
+    assert_eq!(
+        resolved.distance(Measure::NegativeDot, &a, 0.0, &a, 0.0),
+        Some(-14.0),
+        "the resolved path computes"
+    );
+    let _ = Resolved::<Reassociated>::on(Path::Portable).distance(
+        Measure::NegativeDot,
+        &a,
+        0.0,
+        &a,
+        0.0,
     );
 }
 

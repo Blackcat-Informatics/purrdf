@@ -84,7 +84,7 @@
 //!   node_count u64
 //!   max_level  u32
 //!   arithmetic u32       the distance arithmetic's image code: 1 = Exact
-//!                        (binary64-lane16-tree-v1); 2..=7 = Reassociated
+//!                        (binary64-lane16-tree-v1); 2..=8 = Reassociated
 //!                        (binary64-reassociated-v1) on the dispatch path the
 //!                        build ran; 0 is refused
 //!   entry      u64       row, or u64::MAX for an empty graph
@@ -131,7 +131,7 @@
 //! | arithmetic | identifier | evidence revision | image codes |
 //! |---|---|---|---|
 //! | [`Exact`] | [`IMPLEMENTATION_ID`] | [`LOSS_EVIDENCE`] | `Exact::IMAGE_CODES` (`1`) |
-//! | [`Reassociated`] | [`IMPLEMENTATION_ID_REASSOCIATED`] | [`loss_evidence_reassociated`] of the path | that path's one code (`2`..=`7`) |
+//! | [`Reassociated`] | [`IMPLEMENTATION_ID_REASSOCIATED`] | [`loss_evidence_reassociated`] of the path | that path's one code (`2`..=`8`) |
 //!
 //! The exact arithmetic returns the same bits on every path, so it has one revision and
 //! one code. The reassociated arithmetic's bits depend on the dispatch path, so its

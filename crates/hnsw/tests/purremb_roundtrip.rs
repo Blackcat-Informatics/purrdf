@@ -454,6 +454,7 @@ fn guard_refuses_cross_paired_profile() {
     // guard alone is a published row, so it validates; the pairing of that row with the
     // payload's recorded code is what the load refuses.
     let other = [
+        Path::Portable,
         Path::Sse2,
         Path::Avx2Fma,
         Path::Avx512f,

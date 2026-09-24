@@ -1117,9 +1117,6 @@ fn every_refusal_renders_a_distinct_sentence() {
         FloatEnvironmentError::RoundingMode { evidence: register },
         probe_refusal(0, 0.0),
         probe_refusal(2, 1.0),
-        FloatEnvironmentError::Uninspectable {
-            target_arch: "example",
-        },
     ];
     let messages: Vec<String> = cases.iter().map(ToString::to_string).collect();
     for (index, message) in messages.iter().enumerate() {

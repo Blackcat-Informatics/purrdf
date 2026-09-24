@@ -17,7 +17,8 @@
 //!
 //! `make wasm-test` runs it twice on wasm32: on the baseline build, whose path is
 //! `wasm-scalar`, and on a `+simd128` build, whose path is `wasm-simd128`. Natively it
-//! is an ordinary `#[test]`.
+//! is an ordinary `#[test]`, on `x86_64` and `aarch64` along their named paths and on
+//! every other target along the portable one.
 //!
 //! ```text
 //! cargo test -p purrdf-sparql-eval --target wasm32-unknown-unknown --test knn_wasm_reassociated
@@ -79,6 +80,20 @@ fn the_reassociated_path_is_the_one_this_build_was_made_for() {
         fast.path(),
         Path::Sse2 | Path::Avx2Fma | Path::Avx512f
     ));
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "wasm64"
+    )))]
+    {
+        assert_eq!(fast.path(), Path::Portable);
+        assert_eq!(
+            fast.image_code(),
+            8,
+            "the portable path records its own code"
+        );
+    }
     assert!(
         fast.evidence()
             .is_some_and(|text| text.contains(fast.path().name())),

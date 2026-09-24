@@ -72,11 +72,15 @@
 //! features of the one portable path. There is no exact AVX-512 path: at sixteen
 //! binary64 lanes AVX2 already holds the fold in four registers.
 //!
-//! `Reassociated` has its own paths and never shares one with `Exact`: on `x86_64` an
-//! AVX-512F, an AVX2+FMA and a baseline SSE2 compilation, chosen in that order by what
-//! the processor reports; on `aarch64` NEON, and on wasm the `simd128` or scalar
-//! compilation the build was made with, both fixed at compile time. Relaxed wasm SIMD
-//! is never used: its results are left to the engine.
+//! `Reassociated` compiles its own body and never runs a compilation of `Exact`'s: on
+//! `x86_64` an AVX-512F, an AVX2+FMA and a baseline SSE2 compilation, chosen in that
+//! order by what the processor reports; on `aarch64` NEON, and on wasm the `simd128` or
+//! scalar compilation the build was made with, both fixed at compile time; and on every
+//! other target its portable compilation, the body built once for the target's baseline
+//! features. So it runs on every target, as `Exact` does. Its portable path shares the
+//! name [`Path::Portable`] with `Exact`'s, because it is the same kind of compilation,
+//! but not its code, and its image code (8) is its own. Relaxed wasm SIMD is never used:
+//! its results are left to the engine.
 //!
 //! The batch kernels ([`Resolved::distances`], [`Resolved::distances_indexed`]) are the
 //! unit of dispatch. A per-pair call ([`Resolved::distance`]) runs the same body.
@@ -221,14 +225,21 @@ pub enum Measure {
 ///
 /// A path is a compilation of an arithmetic's body, never a different arithmetic: every
 /// path of one arithmetic honours that arithmetic's whole contract. For [`Exact`] every
-/// path returns the same bits. Each path belongs to exactly one arithmetic: [`Exact`]
-/// runs `Portable` and `Avx2`, and [`Reassociated`] runs the other six.
+/// path returns the same bits. [`Exact`] runs `Portable` and `Avx2`, and
+/// [`Reassociated`] runs `Portable` and the other six. `Portable` names the same kind of
+/// compilation for both, each arithmetic's own body compiled for the target's baseline
+/// features, and an image code is always read against its arithmetic, so the shared
+/// name never makes one arithmetic's results read as the other's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Path {
-    /// [`Exact`]: the generic body compiled for the target's baseline features. On
-    /// `aarch64` that is NEON, and on a `wasm32` build with `+simd128` it is wasm SIMD;
-    /// both are compile-time features, so this is the only path those targets have.
+    /// An arithmetic's body compiled for the target's baseline features.
+    ///
+    /// For [`Exact`] this is the path on every target without AVX2: on `aarch64` that is
+    /// NEON, and on a `wasm32` build with `+simd128` it is wasm SIMD; both are
+    /// compile-time features, so this is the only exact path those targets have. For
+    /// [`Reassociated`] it is the path of every target other than `x86_64`, `aarch64` and
+    /// wasm, which have no named reassociated path, fixed at compile time.
     Portable,
     /// [`Exact`]: the same generic body compiled with
     /// `#[target_feature(enable = "avx2")]`, selected on `x86_64` when the processor
@@ -403,9 +414,8 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
     ///
     /// [`FloatEnvironmentError`] when the current thread's floating-point environment
     /// flushes subnormals or rounds other than to nearest, ties to even — shown by its
-    /// control register where one is read, and by the behavioural probe on every target —
-    /// or, as [`FloatEnvironmentError::Uninspectable`], when the arithmetic has no
-    /// compilation for this target.
+    /// control register where one is read, and by the behavioural probe on every target.
+    /// Every arithmetic has a compilation for every target, so nothing else refuses.
     fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError>;
 
     /// Score every row of `rows` against `query` into `out`, in row order.
@@ -710,7 +720,7 @@ impl sealed::Sealed for Reassociated {}
 
 impl Arithmetic for Reassociated {
     const ID: &'static str = "binary64-reassociated-v1";
-    const IMAGE_CODES: &'static [u32] = &[2, 3, 4, 5, 6, 7];
+    const IMAGE_CODES: &'static [u32] = &[2, 3, 4, 5, 6, 7, 8];
 
     fn image_code(path: Path) -> Option<u32> {
         match path {
@@ -720,7 +730,8 @@ impl Arithmetic for Reassociated {
             Path::Neon => Some(5),
             Path::WasmSimd128 => Some(6),
             Path::WasmScalar => Some(7),
-            Path::Portable | Path::Avx2 => None,
+            Path::Portable => Some(8),
+            Path::Avx2 => None,
         }
     }
 
@@ -730,10 +741,7 @@ impl Arithmetic for Reassociated {
 
     fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError> {
         env::check()?;
-        let path = reassociated::path().ok_or(FloatEnvironmentError::Uninspectable {
-            target_arch: std::env::consts::ARCH,
-        })?;
-        Ok(Resolved::on(path))
+        Ok(Resolved::on(reassociated::path()))
     }
 
     fn distances<Q: Scalar, T: Scalar>(

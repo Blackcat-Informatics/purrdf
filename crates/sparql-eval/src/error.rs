@@ -279,8 +279,7 @@ pub enum EvalError {
     /// distance arithmetic defines its results under: it flushes subnormals to zero or
     /// rounds other than to nearest, ties to even. The refusal carries what showed it —
     /// the control register where one is read, or the binary64 probe operation whose
-    /// bits differed. It also carries, for the reassociated arithmetic, a target that
-    /// arithmetic has no compilation for.
+    /// bits differed.
     ///
     /// Its own variant rather than [`Self::Data`], because nothing about the data is
     /// wrong: the same artifact ranks correctly on a thread with the default

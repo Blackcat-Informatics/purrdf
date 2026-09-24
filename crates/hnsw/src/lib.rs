@@ -396,8 +396,9 @@ impl HnswIndex<Reassociated> {
     ///
     /// # Errors
     ///
-    /// As [`HnswIndex::build`], with [`HnswError::FloatEnvironment`] also raised on a target
-    /// the reassociated arithmetic has no compilation for.
+    /// As [`HnswIndex::build`], whose [`HnswError::FloatEnvironment`] refusal is the
+    /// reassociated arithmetic's here: it has a compilation for every target, so the
+    /// thread's float environment is the only thing that refuses it.
     pub fn build_reassociated(
         matrix: VectorMatrix,
         metric: &DistanceMetric,
@@ -1156,6 +1157,81 @@ mod tests {
             Some(params())
         );
         assert_eq!(index.search_rows(0, 3).expect("searches").len(), 3);
+    }
+
+    #[test]
+    fn a_portable_path_image_decodes_only_on_a_portable_path_host() {
+        let portable = Reassociated::image_code(purrdf_core::distance::Path::Portable)
+            .expect("the portable path is one of the reassociated arithmetic's");
+        assert_eq!(portable, 8);
+        let matrix = fixture(48, 70);
+        let index = reassociated(matrix.clone());
+        let here = index.arithmetic().image_code();
+        // A target with no named reassociated path records the portable code itself.
+        #[cfg(not(any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "wasm32",
+            target_arch = "wasm64"
+        )))]
+        assert_eq!(here, portable, "this target runs the portable path");
+        let mut image = index.canonical_image();
+        image[60..64].copy_from_slice(&portable.to_le_bytes());
+        assert_eq!(header_code(&image), portable);
+
+        // The thread stood on the portable path decodes the image, the whole payload
+        // intact.
+        let forced = path_hook::force(portable);
+        let decoded = HnswIndex::decode_reassociated(matrix.clone(), &image)
+            .expect("a portable-path host decodes a portable-path image");
+        let reencoded = decoded.canonical_image();
+        assert_eq!(reencoded[..60], image[..60]);
+        assert_eq!(reencoded[64..], image[64..]);
+        drop(forced);
+
+        // A thread on any other path refuses it by name, naming both paths.
+        let other = another_path(portable);
+        let refusal = HnswError::ArithmeticPathUnavailable {
+            recorded: portable,
+            available: other,
+        };
+        let forced = path_hook::force(other);
+        assert_eq!(
+            HnswIndex::decode_reassociated(matrix.clone(), &image).expect_err("refused"),
+            refusal
+        );
+        assert_eq!(
+            HnswIndex::verify_bytes_against_reassociated(&matrix, &image)
+                .expect_err("refused by name, never `Ok(None)`"),
+            refusal
+        );
+        drop(forced);
+        let message = refusal.to_string();
+        assert!(
+            message.contains("along portable") && message.contains(&profile::path_label(other)),
+            "the refusal names both paths: {message}"
+        );
+
+        // Unforced, this host answers as the path it really runs: it decodes the image
+        // exactly when that path is the portable one.
+        let unforced = HnswIndex::decode_reassociated(matrix.clone(), &image);
+        if here == portable {
+            assert!(unforced.is_ok(), "{unforced:?}");
+        } else {
+            assert_eq!(
+                unforced.expect_err("another path refuses"),
+                HnswError::ArithmeticPathUnavailable {
+                    recorded: portable,
+                    available: here,
+                }
+            );
+        }
+
+        // The exact decoder never reads the portable reassociated code as its own.
+        assert!(matches!(
+            HnswIndex::decode(matrix, &image),
+            Err(HnswError::ArithmeticMismatch { actual: 8, .. })
+        ));
     }
 
     #[test]

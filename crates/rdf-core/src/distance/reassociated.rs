@@ -30,8 +30,11 @@
 //! The paths: on `x86_64` the baseline (SSE2) compilation, one with AVX2 and FMA
 //! enabled, and one with AVX-512F enabled, chosen at run time in the order AVX-512F,
 //! AVX2+FMA, SSE2. On `aarch64` the baseline is NEON, and on wasm it is `simd128` or
-//! scalar as the build was made; both are fixed at compile time. Relaxed wasm SIMD is
-//! never enabled: its results are left to the engine, which no contract here can name.
+//! scalar as the build was made; both are fixed at compile time. On every other target
+//! the baseline is the portable path: the same body compiled once for whatever the
+//! target's baseline features are, fixed at compile time, so the arithmetic runs on
+//! every target a build can be made for. Relaxed wasm SIMD is never enabled: its
+//! results are left to the engine, which no contract here can name.
 //!
 //! The `#[target_feature]` compilations are only ever *called*, from the ordinary
 //! wrapper impls below, never turned into function pointers.
@@ -72,48 +75,48 @@ pub(crate) const fn evidence(path: Path) -> &'static str {
     }
 }
 
-/// The path the baseline compilation is, on this target; `None` on a target with no
-/// reassociated compilation.
+/// The path the baseline compilation is, on this target.
 #[cfg(target_arch = "x86_64")]
-const BASELINE: Option<Path> = Some(Path::Sse2);
+const BASELINE: Path = Path::Sse2;
 /// The path the baseline compilation is, on this target.
 #[cfg(target_arch = "aarch64")]
-const BASELINE: Option<Path> = Some(Path::Neon);
+const BASELINE: Path = Path::Neon;
 /// The path the baseline compilation is, on this target.
 #[cfg(all(
     any(target_arch = "wasm32", target_arch = "wasm64"),
     target_feature = "simd128"
 ))]
-const BASELINE: Option<Path> = Some(Path::WasmSimd128);
+const BASELINE: Path = Path::WasmSimd128;
 /// The path the baseline compilation is, on this target.
 #[cfg(all(
     any(target_arch = "wasm32", target_arch = "wasm64"),
     not(target_feature = "simd128")
 ))]
-const BASELINE: Option<Path> = Some(Path::WasmScalar);
-/// A target with no reassociated compilation.
+const BASELINE: Path = Path::WasmScalar;
+/// The path the baseline compilation is on a target with no named reassociated path:
+/// the portable one, the body compiled for the target's baseline features.
 #[cfg(not(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
     target_arch = "wasm32",
     target_arch = "wasm64"
 )))]
-const BASELINE: Option<Path> = None;
+const BASELINE: Path = Path::Portable;
 
 /// The path [`Reassociated`](super::Reassociated) runs on this process: the widest the
-/// processor reports, or the build's compile-time path.
+/// processor reports, or the build's compile-time path. Every target has one.
 ///
 /// `is_x86_feature_detected!` caches its answer, so this is a load after the first call.
-pub(crate) fn path() -> Option<Path> {
+pub(crate) fn path() -> Path {
     #[cfg(target_arch = "x86_64")]
     {
         let avx2_fma =
             std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma");
         if avx2_fma && std::is_x86_feature_detected!("avx512f") {
-            return Some(Path::Avx512f);
+            return Path::Avx512f;
         }
         if avx2_fma {
-            return Some(Path::Avx2Fma);
+            return Path::Avx2Fma;
         }
     }
     BASELINE
@@ -254,7 +257,8 @@ macro_rules! compilation {
 }
 
 /// The body compiled for the target's baseline features: SSE2 on `x86_64`, NEON on
-/// `aarch64`, and on wasm `simd128` or scalar as the build was made.
+/// `aarch64`, on wasm `simd128` or scalar as the build was made, and on every other
+/// target the portable path.
 pub(crate) mod baseline {
     compilation!();
 }
@@ -390,7 +394,7 @@ macro_rules! on_path {
                 type $k = Avx2Fma;
                 $call
             }
-            path if Some(path) == BASELINE => {
+            path if path == BASELINE => {
                 type $k = Baseline;
                 $call
             }

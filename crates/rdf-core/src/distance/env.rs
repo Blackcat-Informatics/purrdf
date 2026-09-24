@@ -109,15 +109,6 @@ pub enum FloatEnvironmentError {
         /// What showed it.
         evidence: FloatEnvironmentEvidence,
     },
-    /// The arithmetic has no compilation for this target, so it cannot run here at all.
-    ///
-    /// This is not a statement about the float environment, which is proven by behaviour
-    /// on every target: no environment check produces it. Only an arithmetic whose
-    /// dispatch table has no path for the target does.
-    Uninspectable {
-        /// The target architecture, as `std::env::consts::ARCH` names it.
-        target_arch: &'static str,
-    },
 }
 
 impl fmt::Display for FloatEnvironmentError {
@@ -134,11 +125,6 @@ impl fmt::Display for FloatEnvironmentError {
                 "the thread rounds other than to nearest, ties to even ({evidence}); binary64 \
                  distances computed under it differ from the IEEE-754 results the arithmetic \
                  defines, so they are refused rather than ranked"
-            ),
-            Self::Uninspectable { target_arch } => write!(
-                f,
-                "this arithmetic has no compilation for {target_arch}, so it cannot run on \
-                 this target"
             ),
         }
     }

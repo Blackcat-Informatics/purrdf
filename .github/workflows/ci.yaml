@@ -501,6 +501,9 @@ jobs:
   # the distance, kNN and HNSW suites: i686 natively through the multilib C library, and
   # riscv64 under user-mode emulation, which also sets the RISC-V rounding field and
   # proves the probe refuses every non-default mode on a target with no register reader.
+  # Neither has a named reassociated path, so both execute the reassociated arithmetic
+  # along its portable one, against its error bound, and i686 runs the HNSW unit tests
+  # that decode and refuse an image recorded on that path.
   cross-arch:
     runs-on: ubuntu-latest
     # Six cold check graphs, two test builds, and the HNSW worker-count digest under
@@ -548,7 +551,7 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
             --test knn_wasm_determinism --test knn_wasm_reassociated
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hnsw \
-            --test determinism --test conformance --test float_environment
+            --lib --test determinism --test conformance --test float_environment
 
       - name: Run the distance, kNN and HNSW suites on riscv64 under emulation
         run: |
