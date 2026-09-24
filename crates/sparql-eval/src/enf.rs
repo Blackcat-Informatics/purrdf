@@ -75,28 +75,36 @@
 //!      sub-`SELECT` — the shapes language's focus-node binding is not subject to
 //!      SPARQL's own scope rule the way an `EXISTS` correlation is, so
 //!      `apply_shacl_prebinding` rewrites `Expression::Variable`/`Expression::Bound`
-//!      unconditionally through every nested pattern, `Project` included.
+//!      unconditionally through every nested pattern, `Project` included. A value
+//!      with no expression form — a blank node, a quoted triple — is read through a
+//!      stand-in variable a one-row `VALUES` binds beside the expression's node,
+//!      which is what lets it reach an expression above a `GROUP BY` or a
+//!      sub-`SELECT` that hides the seed's column too.
 //!   2. **Single query-level injection, not per-row.** A pre-binding substitutes
 //!      ONE caller-supplied value into the whole query ONCE, before any row is
 //!      evaluated — there is no "current row" to restrict against, unlike
 //!      `Replace`, which runs once per outer row inside a live evaluation.
-//!   3. **Literal property-function-argument substitution.** SHACL pre-binding
-//!      rewrites a `PropertyFunction` argument's `TermPattern` directly (an
-//!      IRI/literal constant swap), where `Replace`'s Values-Insertion walk never
-//!      touches `PropertyFunction` argument vectors at all — a relation's argument
-//!      is an invocation input the evaluator reads from the row, not a join key a
-//!      `VALUES` table can supply (see `crate::expr::substitute_term_pattern`'s
-//!      doc).
+//!   3. **Scope, not rule, at a property-function call.** Both walks put a value
+//!      into a call's arguments by the SAME decision,
+//!      `crate::substitute::bind_call_arguments`: an IRI or a literal is written in
+//!      as a constant, and a blank node or a quoted triple is driven in by a
+//!      one-row `VALUES` on the call's left — a relation's argument is an
+//!      invocation input, not a join key a `VALUES` table joined beside the call
+//!      could supply. Inside an `EXISTS` body the driver additionally sits under a
+//!      projection of the call's undriven variables, so the call's output does not
+//!      rebind a variable the filtered row already carries. What differs is only
+//!      which calls each walk reaches, per divergences 1 and 2.
 //!
-//!   Where the two walks do AGREE is at a `Bgp`/`Path` leaf. `apply_substitutions`
+//!   Where the two walks also AGREE is at a `Bgp`/`Path` leaf. `apply_substitutions`
 //!   pushes a pre-bound constant into the leaf's term positions so the bound
 //!   position is an index probe rather than a scan the seed join filters afterwards,
 //!   and it restores the column the rewrite consumed with exactly this module's
 //!   Values-Insertion device — a single-row `VALUES` joined onto the rewritten leaf.
 //!   That pushdown descends only the operators for which restricting an operand
-//!   restricts the node's output the same way, which is why it stops at an
-//!   `OPTIONAL`'s or a `MINUS`'s right arm; `crate::substitute::push_probe_constants`
-//!   states the argument and `engine`'s `prebinding_is_not_pushed_into_*` tests pin
+//!   restricts the node's output the same way, which is why it enters a `LATERAL`'s
+//!   right side and stops at an `OPTIONAL`'s or a `MINUS`'s right arm;
+//!   `crate::substitute::push_probe_constants` states the argument, and `engine`'s
+//!   `prebinding_is_not_pushed_into_*` and `prebinding_is_pushed_into_*` tests pin
 //!   it.
 //!
 //! # Existential Normal Form itself (Part A)

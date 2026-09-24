@@ -4,9 +4,9 @@
 //! Prepared execution composing caller governors and fallible view checkpoints.
 
 use super::{
-    Arc, FallibleDatasetView, FallibleSparqlError, FallibleSparqlResult, GovernedEvidence,
-    GovernorState, NativeSparqlEngine, PreparedQuery, QueryOptions, TermValue, ViewOperationStatus,
-    finish_governed_fallible_query,
+    AdmittedSubstitutions, Arc, FallibleDatasetView, FallibleSparqlError, FallibleSparqlResult,
+    GovernedEvidence, GovernorState, NativeSparqlEngine, PreparedQuery, QueryOptions, TermValue,
+    ViewOperationStatus, finish_governed_fallible_query,
 };
 use crate::remote::ServiceResolver;
 
@@ -94,7 +94,7 @@ impl NativeSparqlEngine {
             self.query_governed_prepared_in_state(
                 dataset,
                 prepared,
-                substitutions,
+                &AdmittedSubstitutions::prepared(substitutions),
                 options,
                 source,
                 state,

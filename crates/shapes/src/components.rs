@@ -379,27 +379,38 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     // per-value-node cost the hoisted `subs` list was introduced to remove, and which
     // a bind-per-run door would have reintroduced.
     if prepared {
-        crate::sparql::with_cached_execution(ask, &names, |execution| {
-            // Every slot but `$value`, once. `with_cached_execution` cleared them all
-            // at checkout, so any slot this forgets is `None` and the engine refuses
-            // the run rather than answering with whatever a previous focus node left
-            // there.
-            crate::sparql::bind_focus(execution, 0, dataset, focus, focus_id)?;
-            let mut slot = VALUE_SLOT + 1;
-            for (_, value) in bindings {
-                execution.bind(slot, value.to_term_value())?;
-                slot += 1;
-            }
-            crate::sparql::bind_shape_context(execution, slot, shapes_graph_iri, current_shape)?;
-            for v in value_nodes {
-                // The one varying slot, written on every pass.
-                execution.bind(VALUE_SLOT, v.to_term_value())?;
-                if !crate::sparql::run_bound_ask_with_shacl_prebinding_view(dataset, execution)? {
-                    report(v, &mut results);
+        crate::sparql::with_cached_execution(
+            ask,
+            &names,
+            purrdf_sparql_eval::ShaclPrebinding::Applied,
+            |execution| {
+                // Every slot but `$value`, once. `with_cached_execution` cleared them all
+                // at checkout, so any slot this forgets is `None` and the engine refuses
+                // the run rather than answering with whatever a previous focus node left
+                // there.
+                crate::sparql::bind_focus(execution, 0, dataset, focus, focus_id)?;
+                let mut slot = VALUE_SLOT + 1;
+                for (_, value) in bindings {
+                    execution.bind(slot, value.to_term_value())?;
+                    slot += 1;
                 }
-            }
-            Ok(())
-        })?;
+                crate::sparql::bind_shape_context(
+                    execution,
+                    slot,
+                    shapes_graph_iri,
+                    current_shape,
+                )?;
+                for v in value_nodes {
+                    // The one varying slot, written on every pass.
+                    execution.bind(VALUE_SLOT, v.to_term_value())?;
+                    if !crate::sparql::run_bound_ask_with_shacl_prebinding_view(dataset, execution)?
+                    {
+                        report(v, &mut results);
+                    }
+                }
+                Ok(())
+            },
+        )?;
     } else {
         for v in value_nodes {
             subs[VALUE_SLOT].value = v.to_term_value();

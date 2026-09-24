@@ -697,6 +697,27 @@ pub enum FusionError {
         weight: purrdf_text::Fixed,
     },
 
+    /// A weight handed to the threshold-crossing derivation was not strictly
+    /// positive.
+    ///
+    /// Separate from [`Self::NonPositiveWeight`], which names the stratum whose
+    /// declaration was rejected while a profile was being built. This one is
+    /// raised by
+    /// [`crossing_rank_at`](crate::crossing_rank_at) over a bare list of
+    /// weights, where there is no stratum to name and inventing one would
+    /// attribute the refusal to a declaration nobody made. The premise it
+    /// defends is the derivation's own: the threshold is non-increasing in the
+    /// rank only while every weight is positive, and a bisection over a
+    /// non-monotone predicate returns an arbitrary rank rather than a slightly
+    /// wrong one.
+    #[error(
+        "the threshold-crossing derivation was handed the non-positive weight {weight:?}; its search rests on a non-increasing threshold, which a non-positive weight does not give"
+    )]
+    NonPositiveCrossingWeight {
+        /// The rejected weight.
+        weight: purrdf_text::Fixed,
+    },
+
     /// A stream emitted under a stratum the profile declares no weight for.
     #[error("fusion profile declares no weight for stratum {stratum}")]
     UnknownStratum {

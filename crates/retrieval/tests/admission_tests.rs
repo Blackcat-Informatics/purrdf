@@ -24,9 +24,9 @@ use purrdf_retrieval::{
     execute,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -89,6 +89,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory,
     }
 }
@@ -773,7 +774,7 @@ fn a_depth_beyond_the_profiles_monotone_range_is_admitted_and_records_its_resolu
     let recorded = compiled
         .resolution
         .get(&stratum)
-        .copied()
+        .cloned()
         .expect("a weighted stratum's resolution is recorded");
     assert_eq!(
         recorded.separation,
@@ -1000,7 +1001,7 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     let recorded = coarse
         .resolution
         .get(&stratum)
-        .copied()
+        .cloned()
         .expect("a weighted stratum's resolution is recorded");
     assert!(
         !recorded.fully_separated(),
@@ -1051,7 +1052,7 @@ fn a_depth_past_the_weighted_profiles_own_range_reports_a_coarser_resolution() {
     let recorded = compiled
         .resolution
         .get(&stratum)
-        .copied()
+        .cloned()
         .expect("a weighted stratum's resolution is recorded");
     assert_eq!(recorded.separation, MonotoneDepth::SeparatesTo(monotone));
     assert_eq!(recorded.requested_depth, requested);
@@ -2195,7 +2196,7 @@ fn a_stratum_no_surviving_producer_ranks_under_records_no_depth_at_all() {
 
 /// Read an executed stream the way a caller that stopped at `execute` reads it:
 /// one row at a time through the ranked-stream protocol, to exhaustion.
-fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
+fn drain(mut stream: RankedStreamImpl<'_>) -> Vec<(u64, Term)> {
     let mut rows = Vec::new();
     // The block each row names is not what these assertions are about — every
     // producer here declares `Unrestricted` and so names none — so it is dropped
@@ -2208,7 +2209,9 @@ fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
     rows
 }
 
-fn rows_by_stratum(result: purrdf_retrieval::ExecutionResult) -> BTreeMap<Iri, Vec<(u64, Term)>> {
+fn rows_by_stratum(
+    result: purrdf_retrieval::ExecutionResult<'_>,
+) -> BTreeMap<Iri, Vec<(u64, Term)>> {
     result
         .streams
         .into_iter()
@@ -2266,8 +2269,8 @@ fn one_stratum_failure_others_continue() {
     .expect("a well-formed query over an unresolvable function is still a unit");
     compiled.units[1] = broken;
 
-    let result = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
-        .expect("execution starts");
+    let result =
+        block_on(execute(&compiled, &registry, common::empty_dataset())).expect("execution starts");
     match result.statuses.get(&failing) {
         Some(ProducerStatus::ExecutionFailed { reason }) => assert!(
             reason.contains(&ex("fn/absent")),
@@ -2308,7 +2311,7 @@ fn pinned_plan_replay_reproduces_candidate_set_and_ranks() {
         block_on(execute(
             &compile(&plan, &env).expect("admits"),
             &registry,
-            &*common::empty_dataset(),
+            common::empty_dataset(),
         ))
         .expect("runs"),
     );
@@ -2316,7 +2319,7 @@ fn pinned_plan_replay_reproduces_candidate_set_and_ranks() {
         block_on(execute(
             &compile(&plan, &env).expect("admits"),
             &registry,
-            &*common::empty_dataset(),
+            common::empty_dataset(),
         ))
         .expect("runs"),
     );
@@ -2352,7 +2355,7 @@ fn execute_refuses_a_different_registry_instance() {
     };
     let compiled = compile(&plan, &env).expect("admits");
     let other = fixture_registry();
-    let error = block_on(execute(&compiled, &other, &*common::empty_dataset()))
+    let error = block_on(execute(&compiled, &other, common::empty_dataset()))
         .expect_err("a foreign registry is refused");
     assert!(matches!(
         error,
@@ -2402,6 +2405,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory,
     }
 }

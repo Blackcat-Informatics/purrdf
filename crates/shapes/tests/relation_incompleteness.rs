@@ -96,9 +96,8 @@ fn registry(incomplete: Option<&'static str>) -> Arc<PropertyFunctionRegistry> {
     registry.register(
         REL_IRI.to_owned(),
         Arc::new(AttestingRelation {
-            // Both positions free: `$this` is pre-bound by substitution, which the
-            // evaluation-order analysis does not see as a binding, so a relation that
-            // demanded a bound subject would be unreachable from a constraint body.
+            // Both positions free: this file is about the shortfall a cursor declares,
+            // not about access modes, so the relation serves any invocation.
             modes: [BindingPattern::from_code("ff")],
             incomplete,
         }),

@@ -15,8 +15,8 @@ use purrdf_retrieval::{
     TopK, UnservedReason, UnservedTerm,
 };
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
-    RankedDeclaration,
+    CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, MemoryRelation,
+    PropertyFunctionRegistry, RankedDeclaration,
 };
 
 fn iri(text: &str) -> Iri {
@@ -947,6 +947,7 @@ fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry {
             fidelity: RankFidelity::EXACT,
             domains,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );

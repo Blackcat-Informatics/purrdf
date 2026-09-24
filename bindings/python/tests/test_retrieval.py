@@ -12,7 +12,9 @@ host that writes Python:
 * **Producers are DATA, not callables.** ``text_producers`` maps a producer IRI
   to ``(stratum, predicate, graph)``, or to ``(stratum, predicate, graph,
   domains)`` where the producer can say which blocks of the candidate universe
-  it draws from; the engine builds the index and registers the relation itself.
+  it draws from, and ``hnsw_producers`` / ``knn_producers`` map one to the rows
+  of a vector space; the engine builds the index and registers the relation
+  itself.
   Nothing it invokes can re-enter the interpreter, which is why the whole ladder
   still runs with the GIL released.
 * **Nothing is defaulted.** There is no default producer, stratum, weight,
@@ -278,6 +280,111 @@ BOTH = _producers(
     (NOTE_PRODUCER, NOTE_STRATUM, NOTE),
     (TITLE_PRODUCER, TITLE_STRATUM, TITLE),
 )
+
+# The axis the disjoint-corpus oracles vary, and nothing else: what the two
+# producers DECLARE about where their candidates lie.
+#
+# It decides which of two instruments settles finality. A domain declaration is
+# how fusion is TOLD that a stream will never name a candidate; an exclusion
+# lookup is how it OBSERVES the same fact, by asking that producer and being
+# answered out of its own index. Every relation this surface builds declares the
+# membership basis, so an undeclared run always has the second instrument to fall
+# back on — and the declaration is what decides whether it has to.
+DOMAINS_UNDECLARED = None
+DOMAINS_DISJOINT = "disjoint"
+
+
+def _two_producers(domains: str | None) -> dict[str, tuple[Any, ...]]:
+    """Both producers over the disjoint corpus, under one domain declaration.
+
+    Every other position is written identically, so a number that moves between
+    two runs moved because of the declaration.
+    """
+    declared = {
+        NOTE_PRODUCER: [NOTE_DOMAIN],
+        TITLE_PRODUCER: [TITLE_DOMAIN],
+    }
+    return {
+        producer: (
+            stratum,
+            predicate,
+            "any",
+            declared[producer] if domains == DOMAINS_DISJOINT else None,
+            (None, None),
+            (None, None),
+        )
+        for producer, stratum, predicate in (
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE),
+        )
+    }
+
+
+def _undeclared_crossing(corpus: str, request: list[Any], top_k: int) -> int:
+    """Where the fused threshold licenses an UNDECLARED read to stop.
+
+    Computed, never written down. The sharing set — the weights of the strata
+    whose declared blocks meet each other's — is read off the compiled plan's
+    own ``"sharing_weights"``, which the admission waist derived from exactly the
+    declarations the fusion will read; the crossing itself comes out of
+    ``retrieval.crossing_rank_at``, which is the engine's own derivation. A
+    literal here would go on passing if the decay law, the smoothing constant or
+    the declarations moved under it, which is the whole failure this indirection
+    avoids.
+
+    The candidate is measured at the deepest rank the answer actually reaches.
+    With nothing declared every stratum shares every block, so each candidate is
+    named by ONE stratum and measured against both — the expensive crossing, and
+    the reason an undeclared read is still far longer than a declared one.
+    """
+    compiled = retrieval.compile(
+        corpus,
+        request,
+        text_producers=_two_producers(DOMAINS_UNDECLARED),
+        statistics=STATISTICS,
+        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        k=60,
+        decay=TRUNCATED,
+        top_k=top_k,
+    )
+    sharing = compiled["planned_resolution"][NOTE_STRATUM]["sharing_weights"]
+    assert sharing == [retrieval.SCALE, retrieval.SCALE], (
+        "an unrestricted declaration admits every block, so both strata share "
+        f"this one's and the waist must say so: {sharing}"
+    )
+    # The deepest rank any emitted row carries, read off the answer rather than
+    # assumed: it is the last row that has to certify, and the rank the
+    # threshold has to fall below for it to do so.
+    answer = retrieval.search(
+        corpus,
+        request,
+        text_producers=_two_producers(DOMAINS_UNDECLARED),
+        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=top_k,
+    )
+    deepest = max(
+        contribution["rank"]
+        for row in answer["rows"]
+        for contribution in row["contributions"]
+    )
+    # The strata that named THAT row, not the widest row in the answer: the
+    # crossing is about the candidate the threshold has to clear, and a
+    # different row's namer count would be a different candidate's arithmetic.
+    namers = next(
+        len(row["contributions"])
+        for row in answer["rows"]
+        if any(c["rank"] == deepest for c in row["contributions"])
+    )
+    naming = [retrieval.SCALE] * namers
+    crossing = retrieval.crossing_rank_at(naming, deepest, sharing, 60, decay=TRUNCATED)
+    assert crossing is not None, (
+        "this law reaches zero, so a positive lower bound always crosses inside "
+        "the expressible range"
+    )
+    return crossing
 
 
 def test_one_request_fuses_two_producers_into_one_ranking() -> None:
@@ -757,8 +864,8 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
     assert _ranking(_search(well_formed)) == _ranking(accepted)
 
 
-def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -> None:
-    """Three of the seven endings, executed — and the suite says which three those are.
+def test_a_terminal_status_carries_one_of_the_four_spellings_reachable_here() -> None:
+    """Four of the seven endings, executed — and the suite says which four those are.
 
     ``"exhausted"`` says the producer emitted every row its SEARCH produced --
     not that everything matching was returned, which is what the stratum's
@@ -777,21 +884,21 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
     of the other six as "that was all of it" is the mistake the seven spellings
     exist to prevent.
 
-    What this test executes is ``"exhausted"``, ``"depth_reached"`` and
-    ``"ceiling_reached"``, and it claims nothing about the other four: they are
-    unreachable through this binding, not untested by oversight, and
-    ``py_retrieval.rs``'s header records why beside the refusals in the same
-    position. ``"row_bound_reached"`` needs a self-bounding producer — one whose
-    declaration places the depth as an argument the producer reads — and the one
-    relation this surface registers places none, so every stratum a Python host
-    can configure is bounded by the unit's own emitted ``LIMIT``.
+    What this test executes is ``"exhausted"``, ``"depth_reached"``,
+    ``"ceiling_reached"`` and ``"row_bound_reached"``, and it claims nothing about
+    the other three: they are unreachable through this binding, not untested by
+    oversight, and ``py_retrieval.rs``'s header records why beside the refusals in
+    the same position. ``"row_bound_reached"`` needs a self-bounding producer —
+    one whose declaration places the depth as an argument the producer reads —
+    and both vector producers are: their neighbour count IS the planned depth, so
+    a read whose depth sits on the declared count ends there unobserved.
     ``"supplied_query_ended"`` needs a unit carrying a query text a caller wrote,
     and this surface compiles every unit it runs and accepts no bundle from a
     caller. ``"terms_rejected"`` is a receipt a producer writes for itself, and
     ``"execution_failed"`` needs a unit whose text could not be prepared or run;
     both belong to a host driving the Rust surface with a bundle of its own, and
-    none of the four can come out of a call that compiles its own units from a
-    text index.
+    none of the three can come out of a call that compiles its own units from
+    the relations this surface builds.
 
     The spellings are not asserted against the call's documentation. A docstring
     that contains the word proves nothing about which string the mapping emits,
@@ -848,9 +955,41 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
 
         assert Decimal(entry["bound"]) > 0, stratum
 
+    # ``"row_bound_reached"``: an exact nearest-neighbour producer over four
+    # rows, whose guard admits four neighbours. Its declared row count is four,
+    # the plan's depth sits on it, and the producer is handed that depth as its
+    # own count — so its read ends at rank four and the row past it could not be
+    # asked for. That is not ``"exhausted"``, though the space does hold exactly
+    # four rows: whether a fifth existed was not observable to the reader.
+    space = [
+        (f"{EX}v{i}", [float(i + 1), float(2 * i + 1)]) for i in range(4)
+    ]
+    self_bounded = retrieval.search(
+        DATA,
+        [("entity", f"<{EX}v0>")],
+        text_producers={},
+        knn_producers={
+            f"{EX}pf/nearest": (
+                f"{EX}stratum/vector",
+                space,
+                "squared_euclidean",
+                (4, 4),
+                None,
+                (None, None),
+                (None, None),
+            )
+        },
+        weights={f"{EX}stratum/vector": retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )["statuses"][f"{EX}stratum/vector"]
+    assert self_bounded == {"status": "row_bound_reached", "rank": 4}, self_bounded
+
     # Whatever a status says, it says it with one of the seven spellings and with
     # the payload that spelling owes — no aggregate flag, and no eighth word.
-    for entry in (exhausted, bounded, *stopped.values()):
+    for entry in (exhausted, bounded, self_bounded, *stopped.values()):
         assert entry["status"] in STATUS_SPELLINGS, entry
         assert ("rows_emitted" in entry) == (entry["status"] == "exhausted"), (
             "only the ending that names no stopper carries a row count; every "
@@ -858,15 +997,54 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
         )
 
     # And the coverage this test does and does not have, stated rather than
-    # implied: exactly three endings came out of the three calls above. A fourth
+    # implied: exactly four endings came out of the four calls above. A fifth
     # appearing is news — some registration this surface offers now reaches an
-    # ending the module header says it cannot — and a third going missing is a
+    # ending the module header says it cannot — and a fourth going missing is a
     # fixture that stopped exercising what it was written for.
-    reached = {entry["status"] for entry in (exhausted, bounded, *stopped.values())}
-    assert reached == {"exhausted", "depth_reached", "ceiling_reached"}, reached
+    reached = {
+        entry["status"] for entry in (exhausted, bounded, self_bounded, *stopped.values())
+    }
+    assert reached == {
+        "exhausted",
+        "depth_reached",
+        "ceiling_reached",
+        "row_bound_reached",
+    }, reached
     assert reached < STATUS_SPELLINGS, (
         "the seven spellings are the whole vocabulary, and this surface reaches "
         "strictly fewer than all of them"
+    )
+
+
+def _full_read(
+    corpus: str, request: list[Any], rows: int, law: dict[str, Any]
+) -> dict[str, Any]:
+    """The oracle every bounded answer below is held to: a run that reads EVERY
+    row of both streams and asks nothing.
+
+    Both halves come from what the producers and the request declare, never from
+    a switch that withholds a capability. The disjoint declaration is TRUE of
+    this corpus, so fusion is told where every candidate lies and has no lookup
+    to make; a ``top_k`` of every candidate the corpus holds means no row is
+    certified before both streams have run out. Its leading rows are therefore a
+    ranking computed from every contribution there is, and a bounded answer must
+    be exactly that prefix.
+    """
+    return retrieval.search(
+        corpus,
+        request,
+        text_producers=_two_producers(DOMAINS_DISJOINT),
+        **{**law, "top_k": 2 * rows},
+    )
+
+
+def _drained(answer: dict[str, Any], rows: int) -> bool:
+    """Whether a run read every row of both streams and asked nothing."""
+    return all(
+        entry["status"] == "exhausted" for entry in answer["statuses"].values()
+    ) and all(
+        (observed["ranks_pulled"], observed["exclusion_lookups"]) == (rows, 0)
+        for observed in answer["observed_resolution"].values()
     )
 
 
@@ -874,76 +1052,174 @@ def test_a_declared_domain_changes_the_reading_and_not_the_answer() -> None:
     """The Python-visible proof that a declaration buys a read, not an answer.
 
     Fusion certifies a candidate only when every stream that COULD still name it
-    has. With nothing declared, that is every open stream — so over two strata
-    whose candidate sets do not overlap, a top-three drains both, because the
-    confirmation it waits for is never coming. Telling fusion which blocks each
-    producer draws from lets it skip the streams that provably cannot name a
-    candidate, and only those: the finality test does not get weaker, its
-    quantifier gets smaller.
+    has. A domain declaration is how fusion is TOLD that a stream never will, so
+    it can skip exactly the streams that provably cannot name a candidate: the
+    finality test does not get weaker, its quantifier gets smaller.
 
-    So the two runs below must agree on every row, every score and every
+    So the runs below must agree on every row, every score and every
     contribution, and disagree only on how far they read to get there. The
     declaration is reported back on the answer, because it is an input the
     answer cannot otherwise be audited against: it decides which streams fusion
     was allowed to skip when it certified a row.
+
+    # Two instruments, and the declaration decides which one is used
+
+    A declaration is not the only way the same question gets settled. An
+    exclusion lookup settles it by OBSERVATION — asking a producer about one
+    candidate and being answered out of that producer's own index — and every
+    relation this surface builds answers one. So the two configurations below
+    differ in which instrument finality is settled by:
+
+    * with nothing declared, fusion ASKS, and it stops where the fused threshold
+      falls below the leading candidates' bounds — a property of the fusion law,
+      computed here through the engine's own derivation and never written down;
+    * with the disjoint blocks declared, fusion asks nothing and reads a prefix
+      of each stream no longer than the answer needs.
+
+    Both are held to the full read — every row of both streams, nothing asked —
+    and both return exactly its leading rows.
     """
-    corpus = _disjoint_corpus()
+    # Longer than the threshold crossing on purpose, and asserted to be below.
+    # Under this law a candidate one of two equal sharers named has to outlast
+    # the smoothing constant before the threshold falls below its bound, so over
+    # a forty-row corpus every stream runs out first and the observed stop and
+    # the full read are the same number — which would leave the asking run
+    # indistinguishable from the oracle it is compared against.
+    rows = 200
+    top_k = 3
+    corpus = _disjoint_corpus(rows)
     request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
-    common: dict[str, Any] = {
+    law: dict[str, Any] = {
         "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
         "statistics": STATISTICS,
         "k": 60,
         "decay": TRUNCATED,
-        "top_k": 3,
+        "top_k": top_k,
     }
-    undeclared = retrieval.search(corpus, request, text_producers=BOTH, **common)
+    asking = retrieval.search(
+        corpus, request, text_producers=_two_producers(DOMAINS_UNDECLARED), **law
+    )
     declared = retrieval.search(
-        corpus,
-        request,
-        text_producers=_declared(
-            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
-            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [TITLE_DOMAIN]),
-        ),
-        **common,
+        corpus, request, text_producers=_two_producers(DOMAINS_DISJOINT), **law
     )
+    full = _full_read(corpus, request, rows, law)
 
-    assert _ranking(declared) == _ranking(undeclared), (
-        "a declaration licenses a shorter read, and never a different answer"
-    )
-    assert len(declared["rows"]) == 3
+    # (0) The oracle really is one: every row of both streams, nothing asked.
+    assert _drained(full, rows), full["observed_resolution"]
+    assert len(full["rows"]) == 2 * rows
 
-    # The reading is where they differ, and it differs in the direction the
-    # declaration promised.
-    assert any(
-        entry["status"] == "ceiling_reached" for entry in declared["statuses"].values()
-    ), "the declared run stopped at a bound instead of draining its streams"
+    # (1) One answer, and it is the full read's prefix. Whatever a declaration or
+    #     a lookup buys, it is never a row, a score or a contribution.
+    reference = _ranking(full)[:top_k]
+    for name, answer in (("asking", asking), ("declared", declared)):
+        assert _ranking(answer) == reference, (
+            f"the {name} run returned a different answer; a declaration and a "
+            "lookup license a shorter read, and neither may license a different "
+            "answer"
+        )
+    assert len(reference) == top_k
+
+    # (2) The basis each stream fused under is on the answer, and it is the
+    #     relations' own: nothing on either spec could have changed it.
+    for answer in (asking, declared):
+        assert answer["exclusion_bases"] == {
+            NOTE_STRATUM: "membership",
+            TITLE_STRATUM: "membership",
+        }, answer["exclusion_bases"]
+
+    # (3) The two configurations, by their exact counters. The declared run
+    #     reads the three-row prefix of each stream and asks nothing: the
+    #     declaration settled every verdict a lookup would have. The undeclared
+    #     run asks — sixty-three and sixty-four point queries — and reads to the
+    #     threshold crossing. Neither number is a constant of the surface: the
+    #     full read above pulled two hundred ranks per stream and asked nothing.
+    def counters(answer: dict[str, Any]) -> dict[str, tuple[int, int, int]]:
+        return {
+            stratum: (
+                observed["ranks_pulled"],
+                observed["exclusion_lookups"],
+                observed["rows_materialised"],
+            )
+            for stratum, observed in answer["observed_resolution"].items()
+        }
+
+    assert counters(declared) == {
+        NOTE_STRATUM: (3, 0, 3),
+        TITLE_STRATUM: (3, 0, 3),
+    }, counters(declared)
+    assert counters(asking) == {
+        NOTE_STRATUM: (65, 63, 65),
+        TITLE_STRATUM: (64, 64, 64),
+    }, counters(asking)
     assert all(
-        entry["status"] == "exhausted" for entry in undeclared["statuses"].values()
-    ), "with nothing declared there is no stream fusion may skip, so both drain"
-    for stratum in (NOTE_STRATUM, TITLE_STRATUM):
-        assert (
-            declared["observed_resolution"][stratum]["ranks_pulled"]
-            < undeclared["observed_resolution"][stratum]["ranks_pulled"]
-        ), stratum
+        entry["status"] == "ceiling_reached"
+        for answer in (asking, declared)
+        for entry in answer["statuses"].values()
+    ), "both bounded runs stopped at a contribution bound rather than draining"
 
-    # And the answer says whose word it was certified on.
+    # (4) Where the asking run stopped is the law's, not the fixture's. The rank
+    #     is computed from the profile through the engine's own derivation, fed
+    #     the sharing set the WAIST derived from the same declarations — never
+    #     written here as a literal, which would go on passing if the law moved
+    #     under it.
+    crossing = _undeclared_crossing(corpus, request, top_k=top_k)
+    assert crossing < rows, (
+        f"the threshold licenses a stop at {crossing} and each stream holds "
+        f"{rows} rows; a corpus shorter than the crossing would exhaust first "
+        "and the asking run would be a full read wearing a threshold stop's name"
+    )
+    #
+    #     The derivation asks where the threshold falls with EVERY head at one
+    #     rank, and the engine pulls one stream at a time — so at the moment the
+    #     threshold falls, one head is necessarily a pull behind the other. The
+    #     deepest read is therefore the crossing exactly, and the shallower one
+    #     is within a single rank of it.
+    for stratum in (NOTE_STRATUM, TITLE_STRATUM):
+        pulled = asking["observed_resolution"][stratum]["ranks_pulled"]
+        assert crossing - 1 <= pulled <= crossing, (
+            f"{stratum}: an undeclared read stops where the threshold licenses "
+            f"({crossing}, give or take the one pull that separates two heads), "
+            f"and this one read {pulled}"
+        )
+    assert (
+        max(
+            asking["observed_resolution"][stratum]["ranks_pulled"]
+            for stratum in (NOTE_STRATUM, TITLE_STRATUM)
+        )
+        == crossing
+    ), "the head that made the threshold fall sits exactly on the crossing"
+
+    # And the three readings really are three: the full read, the observed stop
+    # and the declaration-bounded prefix, in that order and all distinct.
+    for stratum in (NOTE_STRATUM, TITLE_STRATUM):
+        reads = [
+            answer["observed_resolution"][stratum]["ranks_pulled"]
+            for answer in (full, asking, declared)
+        ]
+        assert reads[0] > reads[1] > reads[2], (
+            f"{stratum}: the full read, the observed stop and the declared prefix "
+            f"must be three distinct readings, and they are {reads}"
+        )
+
+    # (5) And the answer says whose word it was certified on.
     assert declared["domains"] == {
         NOTE_STRATUM: [NOTE_DOMAIN],
         TITLE_STRATUM: [TITLE_DOMAIN],
     }
-    assert undeclared["domains"] == {NOTE_STRATUM: None, TITLE_STRATUM: None}, (
+    assert asking["domains"] == {NOTE_STRATUM: None, TITLE_STRATUM: None}, (
         "None is the widest promise — this producer may name anything — and it "
         "is what every answer this engine produced before domains carried"
     )
 
-    # The shorter read is still an exact one: nothing here attested a short
+    # The shorter reads are still exact ones: nothing here attested a short
     # index, so the scores are sums of every contribution that was due.
-    assert declared["exactness"] == {
-        "exact": True,
-        "deficit": [],
-        "inflation": [],
-        "unbounded": [],
-    }
+    for answer in (asking, declared, full):
+        assert answer["exactness"] == {
+            "exact": True,
+            "deficit": [],
+            "inflation": [],
+            "unbounded": [],
+        }
 
 
 def test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum() -> None:
@@ -964,16 +1240,25 @@ def test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum() -> Non
     narrowed depth is the corpus still being materialized.
 
     And the answer does not move. At both sizes the bounded run's rows, scores and
-    provenance are identical to the draining run's — the run that reads every row
-    of every stream because nothing was declared. That is the soundness gate: a
-    depth rule that fired too eagerly would show up here as a truncated ranked
-    list, which is the mirror of the defect above and worse than it.
+    provenance are the leading rows of the full read — the run that reads every
+    row of every stream and asks nothing. That is the soundness gate: a depth rule
+    that fired too eagerly would show up here as a truncated ranked list, which is
+    the mirror of the defect above and worse than it.
+
+    # What a read that declares nothing costs instead
+
+    "Declared nothing" does not produce a full read: every relation this surface
+    builds answers an exclusion lookup, so an undeclared read OBSERVES what a
+    declaration would have told it, and stops where the fused threshold falls.
+    That reading is measured beside the other two rather than dropped — it reads
+    to the threshold crossing, computed from the law through the engine's own
+    derivation and never written here as a number, and it pays for the stop in
+    point queries. Three readings, one answer, and the flat prefix is the
+    shallowest of the three, and the only one that asks nothing, at both corpus
+    sizes.
     """
     top_k = 5
-    disjoint = _declared(
-        (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
-        (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [TITLE_DOMAIN]),
-    )
+    disjoint = _two_producers(DOMAINS_DISJOINT)
     request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
     law: dict[str, Any] = {
         "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
@@ -1010,27 +1295,62 @@ def test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum() -> Non
         f"past it exactly as at any other depth: {small}"
     )
 
-    # The answer is the same answer, at both sizes, as the run that drains
-    # everything. Nothing declared means no stream fusion may skip, so the
-    # undeclared run is the oracle here rather than a second engine.
+    # The answer is the same answer, at both sizes, as the full read's leading
+    # rows. Every row of both streams read and nothing asked means nothing was
+    # certified early, so that run is the oracle here rather than a second
+    # engine.
     for rows in (400, 1600):
         corpus = _disjoint_corpus(rows)
         bounded = retrieval.search(corpus, request, text_producers=disjoint, **law)
-        draining = retrieval.search(corpus, request, text_producers=BOTH, **law)
-        assert _ranking(bounded) == _ranking(draining), (
-            f"over {rows} rows per predicate a declaration licensed a shorter "
-            "read, and it must never license a different answer"
+        full = _full_read(corpus, request, rows, law)
+        asking = retrieval.search(
+            corpus,
+            request,
+            text_producers=_two_producers(DOMAINS_UNDECLARED),
+            **law,
         )
+        assert _drained(full, rows), full["observed_resolution"]
+        for name, answer in (("bounded", bounded), ("asking", asking)):
+            assert _ranking(answer) == _ranking(full)[:top_k], (
+                f"over {rows} rows per predicate the {name} run read less than the "
+                "full read, and it must never answer differently"
+            )
         assert len(bounded["rows"]) == top_k
 
-        # And the reading really was flat, measured on the rows themselves: the
-        # draining run pulled its whole corpus per stratum, the bounded one pulled
-        # at most what its depth allowed.
+        # And the reading really was flat, measured on the counters themselves,
+        # exactly: the bounded run pulls the same four ranks per stratum at both
+        # sizes and asks nothing, while the full read pulled its whole corpus.
+        #
+        # The asking reading is bounded by the LAW rather than by either, which
+        # is why the same sixty-six ranks and sixty-five lookups per stratum
+        # appear at both corpus sizes while the full read quadruples.
         for stratum in (NOTE_STRATUM, TITLE_STRATUM):
-            assert draining["observed_resolution"][stratum]["ranks_pulled"] == rows, (
-                "the undeclared run has no stream it may skip, so it reads to the "
-                "end of both"
-            )
+            assert (
+                bounded["observed_resolution"][stratum]["ranks_pulled"],
+                bounded["observed_resolution"][stratum]["exclusion_lookups"],
+                bounded["observed_resolution"][stratum]["rows_materialised"],
+            ) == (4, 0, 4), (rows, stratum, bounded["observed_resolution"])
+            assert (
+                asking["observed_resolution"][stratum]["ranks_pulled"],
+                asking["observed_resolution"][stratum]["exclusion_lookups"],
+                asking["observed_resolution"][stratum]["rows_materialised"],
+            ) == (66, 65, 66), (rows, stratum, asking["observed_resolution"])
+        #
+        # The crossing those sixty-six sit on, derived rather than trusted. The derivation asks where the threshold falls with every
+        # head at one rank and the engine pulls one stream at a time, so one head
+        # is a pull behind at the moment it falls.
+        crossing = _undeclared_crossing(corpus, request, top_k=top_k)
+        assert crossing < rows, (
+            f"the threshold licenses a stop at {crossing} over {rows} rows; a "
+            "corpus shorter than the crossing would exhaust first and the asking "
+            "run would be a drain wearing a threshold stop's name"
+        )
+        for stratum in (NOTE_STRATUM, TITLE_STRATUM):
+            assert (
+                crossing - 1
+                <= asking["observed_resolution"][stratum]["ranks_pulled"]
+                <= crossing
+            ), stratum
             assert bounded["observed_resolution"][stratum]["ranks_pulled"] <= top_k, (
                 stratum
             )
@@ -3109,6 +3429,36 @@ def test_a_non_positive_weight_is_refused_naming_the_stratum() -> None:
     for accepted in (1, retrieval.SCALE // 2, retrieval.SCALE, 1000 * retrieval.SCALE):
         answer = retrieval.search(DATA, request, weights={NOTE_STRATUM: accepted}, **common)
         assert answer["rows"], f"a raw weight of {accepted} is a weight and answers"
+
+
+def test_crossing_rank_at_refuses_a_non_positive_weight_and_answers_its_neighbour() -> None:
+    """The crossing derivation refuses a weight its search cannot rest on.
+
+    ``retrieval.crossing_rank_at`` bisects over the head rank, which is exact only
+    while the threshold does not rise with the rank — true only while every weight
+    in it is positive. A zero or negative weight, whether on the stratum that
+    named the candidate or on one that merely shares its block, raises
+    ``ValueError`` naming the weight it was handed.
+
+    The neighbour is executed and pinned: one stratum named the candidate at rank
+    five, two equal strata share its block, so under a smoothing constant of 60
+    the threshold has to fall to half the candidate's bound, which it first does
+    at head rank 71. A one-unit sharer is a weight too and is searched, crossing
+    where a lone sharer does, at rank six.
+    """
+    scale = retrieval.SCALE
+    for decay in (TRUNCATED, "weighted_reciprocal_rank"):
+        for refused in (0, -1):
+            for naming, sharing in (([refused], [scale, scale]), ([scale], [scale, refused])):
+                with pytest.raises(ValueError, match="non-positive weight") as raised:
+                    retrieval.crossing_rank_at(naming, 5, sharing, 60, decay=decay)
+                assert f"Fixed({refused})" in str(raised.value), (
+                    f"the refusal names the weight it was handed: {raised.value}"
+                )
+
+        assert retrieval.crossing_rank_at([scale], 5, [scale, scale], 60, decay=decay) == 71
+        assert retrieval.crossing_rank_at([scale], 5, [scale, 1], 60, decay=decay) == 6
+        assert retrieval.crossing_rank_at([scale], 5, [scale], 60, decay=decay) == 6
 
 
 def test_every_graph_selector_spelling_selects_a_different_reading() -> None:

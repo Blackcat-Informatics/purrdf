@@ -476,7 +476,7 @@ fn resolve_end<D: DatasetView + Sync>(
         // so two distinct blank labels are distinct vars and a repeated label
         // co-refers, exactly as in a BGP.
         TermPattern::BlankNode(b) => Ok(Endpoint::Free {
-            var: Variable::new(format!("\u{0}bnode:{}", b.as_str())),
+            var: crate::bgp::blank_var(b.as_str()),
         }),
         // `crate::bgp` supports a variable *inside* a quoted-triple-term BGP
         // position (`Pos::Triple`'s structural match), so a reader could expect

@@ -749,9 +749,14 @@ fn renderable(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UnitArgument {
     /// A position rendered once, at emission: a constant [`place`] put a request facet
-    /// into, or the free `?cN` variable of a position nothing was placed into. Neither
-    /// depends on the depth.
+    /// into. It does not depend on the depth.
     Placed(String),
+    /// A position nothing was placed into. Each text renders it for the question it
+    /// asks: the streaming read as the variable `?c{position}`, because it projects
+    /// the candidate and the block out of such positions, and the exclusion lookup as
+    /// a blank node, because it reads nothing out of them but the candidate — see
+    /// `RenderedQuery::exclusion_text`.
+    Free,
     /// The depth argument of a producer that declared a
     /// [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement), held as the datatype
     /// that producer declared for it and rendered from the unit's own depth every
@@ -773,7 +778,7 @@ impl UnitArgument {
     }
 }
 
-/// Render every occupied slot, leaving a free position as `?c{position}` and the
+/// Render every occupied slot, leaving a free position [`UnitArgument::Free`] and the
 /// depth's own position as the number's placeholder.
 ///
 /// Shared so the branch text is written in exactly one place. The depth position is
@@ -792,9 +797,8 @@ pub(crate) fn render_slots(
     invocation
         .slots
         .iter()
-        .enumerate()
-        .map(|(position, slot)| match slot {
-            Slot::Free => Ok(UnitArgument::Placed(format!("?c{position}"))),
+        .map(|slot| match slot {
+            Slot::Free => Ok(UnitArgument::Free),
             Slot::Placed(value) => render::sparql_term(value).map(UnitArgument::Placed),
             Slot::Depth { datatype } => Ok(UnitArgument::Depth {
                 datatype: datatype.clone(),
@@ -810,9 +814,9 @@ mod tests {
     use crate::request::{Metric, RequestTerm};
     use purrdf_core::binding_pattern::BindingPattern;
     use purrdf_sparql_eval::{
-        AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode,
-        RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
-        Volatility,
+        AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, ExclusionBasis,
+        PfDescriptor, PfMode, RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern,
+        TermPlacement, Volatility,
     };
 
     fn ex(suffix: &str) -> String {
@@ -851,6 +855,7 @@ mod tests {
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         }
     }
@@ -885,8 +890,10 @@ mod tests {
         render_slots(invocation)
             .expect("every placed slot renders")
             .into_iter()
-            .map(|argument| match argument {
+            .enumerate()
+            .map(|(position, argument)| match argument {
                 UnitArgument::Placed(text) => text,
+                UnitArgument::Free => format!("?c{position}"),
                 UnitArgument::Depth { datatype } => format!("<the unit's depth>^^<{datatype}>"),
             })
             .collect()

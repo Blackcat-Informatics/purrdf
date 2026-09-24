@@ -44,10 +44,18 @@
 //! | 2 | `k` | **in**: how many neighbours to retrieve |
 //! | 3 | `?distance` | **out**: the distance, as `xsd:double` |
 //!
-//! The one declared mode is therefore `fbbf`: positions 1 and 2 are inputs this relation
-//! cannot enumerate. By the seam's subsumption rule that admits every invocation binding
-//! at least those two, so `?neighbour` and `?distance` may each be bound or free and the
-//! engine's equality filter (which this relation's cursor mirrors) resolves them.
+//! The general declared mode is therefore `fbbf`: positions 1 and 2 are inputs this
+//! relation cannot enumerate. By the seam's subsumption rule that admits every invocation
+//! binding at least those two, so `?neighbour` and `?distance` may each be bound or free
+//! and the engine's equality filter (which this relation's cursor mirrors) resolves them.
+//!
+//! A second mode, `bbff`, is declared beside it: the neighbour and the seed bound, the
+//! count **free**. It is a genuinely new capability rather than a narrowing — `fbbf` binds
+//! the count it leaves free, so `fbbf` does not subsume it — and it asks a different
+//! question: *do you hold this term at all*, answered by [`EmbeddingSpace::row_of`]
+//! without entering the scan. A count-BOUND call keeps its `k` cut exactly as before: the
+//! two are two points of the lattice, and the invocation's own pattern decides which was
+//! asked. See [`PropertyFunction::open`].
 //!
 //! # Ordering, and the exactness of it
 //!
@@ -98,6 +106,7 @@
 mod metric;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{
@@ -114,6 +123,7 @@ use crate::property_fn::{
 };
 use crate::user_fn::Volatility;
 
+use crate::property_fn::ExclusionBasis;
 pub use metric::{Bound, Bounded, Kernel, Ranked, Scalar, best, norm};
 
 /// The `?neighbour` position: the retrieved term.
@@ -124,11 +134,44 @@ const KNN_QUERY: usize = 1;
 const KNN_COUNT: usize = 2;
 /// The `?distance` position: the retrieved term's distance from the query.
 const KNN_DISTANCE: usize = 3;
-/// The one access pattern [`EmbeddingKnnRelation`] declares.
+/// The general access pattern [`EmbeddingKnnRelation`] declares: the seed and the
+/// neighbour count are the two positions it cannot enumerate, and the two it
+/// projects are free.
 const KNN_MODE: &str = "fbbf";
+/// The **membership** access pattern [`EmbeddingKnnRelation`] declares beside
+/// [`KNN_MODE`]: the neighbour and the seed bound, and the neighbour count **free**.
+///
+/// The free count is the whole of what distinguishes the two questions, and it is
+/// deliberately a *different mode* rather than a second reading of [`KNN_MODE`]:
+///
+/// * with the count **bound**, `?neighbour ex:knn (?query k ?distance)` asks *is
+///   this term among the `k` nearest*. That invocation is subsumed by [`KNN_MODE`]
+///   and always was, and it means exactly what it has always meant.
+/// * with the count **free** it asks *do you hold this term at all* — a question
+///   `k` is no part of, answered by [`EmbeddingSpace::row_of`] alone.
+///
+/// One binding pattern cannot mean both without silently changing the answer to
+/// somebody's query, so the lattice separates them. [`KNN_MODE`] does **not**
+/// subsume this pattern — subsumption is `bound(declared) ⊆ bound(invocation)`, and
+/// [`KNN_MODE`] binds the count while this leaves it free — so this is a genuinely
+/// new declared capability, with its own point
+/// [`PropertyFunction::rows_per_invocation`]. It is the question an
+/// [`ExclusionBasis::Membership`] lookup asks, this relation answers it, and a lookup
+/// really does arrive in it: the consumer renders the exclusion call with the count free
+/// and declares the candidate to the prepare, so the admission pass matches THIS pattern
+/// rather than [`KNN_MODE`]. See [`PropertyFunction::open`] and the `exclusion` field of
+/// the ranked declaration.
+///
+/// [`PropertyFunctionRegistry::register_ranked`]: crate::PropertyFunctionRegistry::register_ranked
+const KNN_MEMBERSHIP_MODE: &str = "bbff";
 
 /// `xsd:double`, the datatype every emitted distance carries.
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+
+/// `xsd:integer`, the datatype the count position carries in a membership answer. The
+/// ranked path never mints one: it echoes the caller's own count term verbatim, datatype
+/// and all. See [`universe_size`].
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
 /// The domain separator every [`EmbeddingSpace`] generation opens with, so this
 /// digest can never equal a digest of another kind that happens to fold a
@@ -384,12 +427,127 @@ impl EmbeddingSpace {
         })
     }
 
+    /// Build a queryable space directly from a host's own vectors, each already
+    /// named by the RDF term it stands for.
+    ///
+    /// The sibling of [`Self::from_artifact`] for a host that holds vectors rather than
+    /// a sealed PURREMB artifact — the same shape as `purrdf_hnsw::HnswSpace::from_index`
+    /// on the approximate side, which takes a matrix built from plain rows. Row `r` of the
+    /// space is `rows[r]`, in the host's own order: that order is what ranks two
+    /// neighbours at exactly equal distance, so it is the host's to state and is never
+    /// re-sorted here.
+    ///
+    /// Everything [`Self::from_artifact`] proves at construction is proved here too, so
+    /// an invocation's only remaining failure modes are about the invocation: the metric
+    /// is one this engine can evaluate, every row carries exactly `dimension` finite
+    /// components, no term is claimed by two rows, the space fits the guard's candidate
+    /// bound, and under a norm-dividing metric no vector has a zero norm. A non-finite
+    /// component is refused here rather than at the first query that reaches it, which
+    /// is where it would otherwise surface as a distance that left the finite range.
+    ///
+    /// # Generation
+    ///
+    /// A content identity over exactly what decides this space's answers — the metric,
+    /// the dimension, every component in row order and every term in row order — under
+    /// a domain separator of its own, so a space built this way can never attest the
+    /// generation of an artifact-built one. The guard is excluded for the reason
+    /// [`Self::generation`] gives.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Config`] for every refusal above: a zero `dimension`, a row whose
+    /// component count is not `dimension`, a non-finite component, a duplicate term, a
+    /// space larger than the guard admits, or an extension metric.
+    ///
+    /// [`EvalError::Data`] for a zero-norm vector under a norm-dividing metric, the
+    /// classification [`Self::from_artifact`] gives the same defect.
+    pub fn from_vectors(
+        metric: &DistanceMetric,
+        dimension: usize,
+        rows: Vec<(TermValue, Vec<f64>)>,
+        guard: KnnGuard,
+    ) -> Result<Self, EvalError> {
+        let kernel = Kernel::of(metric).ok_or_else(|| {
+            EvalError::config(format!(
+                "the caller-defined distance metric {metric:?} carries parameters as opaque \
+                 bytes this engine cannot evaluate; only the three built-in PURREMB metrics \
+                 can be ranked here"
+            ))
+        })?;
+        if dimension == 0 {
+            return Err(EvalError::config(
+                "a space of dimension zero holds vectors with no components, so no distance \
+                 between two of them separates anything"
+                    .to_owned(),
+            ));
+        }
+        let row_count = rows.len();
+        if row_count as u64 > guard.max_candidates() {
+            return Err(EvalError::config(format!(
+                "this space holds {row_count} row(s), which is more than the {} candidate(s) \
+                 the configured guard admits; a search here would either exceed the work the \
+                 host licensed or rank a prefix of the space and report it as the whole",
+                guard.max_candidates()
+            )));
+        }
+
+        let mut terms: Vec<TermValue> = Vec::with_capacity(row_count);
+        let mut vectors: Vec<f64> = Vec::with_capacity(row_count.saturating_mul(dimension));
+        for (row, (term, values)) in rows.into_iter().enumerate() {
+            if values.len() != dimension {
+                return Err(EvalError::config(format!(
+                    "row {row} ({term:?}) carries {} component(s); the space's dimension is \
+                     {dimension}",
+                    values.len()
+                )));
+            }
+            if let Some(at) = values.iter().position(|value| !value.is_finite()) {
+                return Err(EvalError::config(format!(
+                    "row {row} ({term:?}) carries the non-finite component {} at position \
+                     {at}; a distance computed from it could not be ranked",
+                    values[at]
+                )));
+            }
+            vectors.extend_from_slice(&values);
+            terms.push(term);
+        }
+
+        let mut rows_by_term: Vec<usize> = (0..row_count).collect();
+        rows_by_term.sort_unstable_by(|&left, &right| terms[left].cmp(&terms[right]));
+        if let Some(pair) = rows_by_term
+            .windows(2)
+            .find(|pair| terms[pair[0]] == terms[pair[1]])
+        {
+            return Err(EvalError::config(format!(
+                "the term {:?} is bound to two different rows; a query seed names a term, so \
+                 a term claimed by two rows makes the seed ambiguous",
+                terms[pair[0]]
+            )));
+        }
+
+        let norms = read_norms(kernel, &vectors, dimension, row_count)?;
+        let generation = vectors_generation(metric, dimension, &vectors, &terms);
+        Ok(Self {
+            kernel,
+            metric: metric.clone(),
+            dimension,
+            vectors,
+            norms,
+            terms,
+            rows_by_term,
+            guard,
+            generation,
+        })
+    }
+
     /// The generation this space attests for every row it returns.
     ///
     /// A content identity, comparable across processes and machines. It folds the
     /// projection digest, the family contract that names the metric, and every
     /// bound term in row order — and it moves exactly when the rows this space can
-    /// return move, which is what makes it worth comparing.
+    /// return move, which is what makes it worth comparing. A space built by
+    /// [`Self::from_vectors`] folds its metric, dimension and components in their
+    /// place, because it has no artifact to take a digest of.
     ///
     /// The projection digest rather than the matrix digest, because a prefix policy
     /// lets two spaces share one stored matrix and differ in the prefix taken. The
@@ -453,6 +611,36 @@ impl EmbeddingSpace {
     /// Row `row`'s L2 norm, or `0.0` for a kernel that does not divide by one.
     fn norm_of(&self, row: usize) -> f64 {
         self.norms.get(row).copied().unwrap_or(0.0)
+    }
+
+    /// The exact distance between two rows of this space, computed without ranking
+    /// anything.
+    ///
+    /// The one arithmetic path: the same [`Kernel`], over the same stored components
+    /// and the same precomputed norms [`Self::search`] uses, so the value is
+    /// bit-identical to the one a scan would have produced for this pair. There is
+    /// no second distance formula in this crate and this does not add one.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Data`], as [`Self::search`] raises it, when the distance leaves
+    /// the finite binary64 range. Reporting an infinity as a distance would put a
+    /// number that overflowed into an answer.
+    fn row_distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError> {
+        self.kernel
+            .distance(
+                self.vector(query_row),
+                self.norm_of(query_row),
+                self.vector(row),
+                self.norm_of(row),
+            )
+            .ok_or_else(|| {
+                EvalError::data(format!(
+                    "the distance from row {query_row} to row {row} left the finite range \
+                     under {:?}; the artifact's magnitudes cannot be ranked under this metric",
+                    self.metric
+                ))
+            })
     }
 
     /// The `k` rows nearest `query_row`, in rank order.
@@ -621,6 +809,58 @@ fn space_generation(
     Arc::from(ContentDigest::of(&bytes).to_hex())
 }
 
+/// The domain separator a [`EmbeddingSpace::from_vectors`] generation opens with. It
+/// differs from [`SPACE_GENERATION_DOMAIN`] so the two constructions can never attest
+/// one generation, however their folded fields happen to line up.
+const VECTORS_GENERATION_DOMAIN: &str = "purrdf-sparql-eval/embedding-space-vectors-generation/v1";
+
+/// The generation one [`EmbeddingSpace::from_vectors`] space attests.
+///
+/// The same discipline as [`space_generation`], over the facts this construction
+/// actually has: the metric's stable code (the law the vectors are compared under),
+/// the dimension, every component's exact binary64 bit pattern in row order, and every
+/// term in row order through the injective `TermValue::canonical_bytes`. Bit patterns
+/// rather than a decimal rendering, so two vectors that differ in their last bit are
+/// two generations. No clock, no counter, no RNG: two processes handed the same rows
+/// attest the same generation.
+fn vectors_generation(
+    metric: &DistanceMetric,
+    dimension: usize,
+    vectors: &[f64],
+    terms: &[TermValue],
+) -> Arc<str> {
+    let mut bytes = Vec::new();
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "domain",
+        VECTORS_GENERATION_DOMAIN.as_bytes(),
+    );
+    crate::registry_id::append_framed_part(&mut bytes, "metric", &metric.code().to_be_bytes());
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "dimension",
+        &(dimension as u64).to_be_bytes(),
+    );
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "row-count",
+        &(terms.len() as u64).to_be_bytes(),
+    );
+    let mut component_bytes = Vec::with_capacity(dimension * 8);
+    let mut term_bytes = Vec::new();
+    for (row, term) in terms.iter().enumerate() {
+        component_bytes.clear();
+        for value in &vectors[row * dimension..(row + 1) * dimension] {
+            component_bytes.extend_from_slice(&value.to_bits().to_be_bytes());
+        }
+        crate::registry_id::append_framed_part(&mut bytes, "vector", &component_bytes);
+        term_bytes.clear();
+        term.canonical_bytes(&mut term_bytes);
+        crate::registry_id::append_framed_part(&mut bytes, "term", &term_bytes);
+    }
+    Arc::from(ContentDigest::of(&bytes).to_hex())
+}
+
 /// Read every row of `effective` into one row-major `f64` buffer.
 fn read_vectors(
     effective: &purrdf_core::EffectiveMatrixView<'_>,
@@ -766,9 +1006,91 @@ fn check_index_guards(
 pub struct EmbeddingKnnRelation {
     /// The space every invocation searches.
     space: Arc<EmbeddingSpace>,
-    /// The single declared mode, materialized once so [`PropertyFunction::modes`] can
+    /// The declared modes, materialized once so [`PropertyFunction::modes`] can
     /// hand out a slice.
-    modes: [BindingPattern; 1],
+    modes: [BindingPattern; 2],
+    /// What this relation's invocations actually did, counted rather than inferred.
+    /// Shared with every clone, so a host that cloned the relation into a registry
+    /// still reads the counts of the invocations that registry served.
+    observations: Arc<KnnObservations>,
+}
+
+/// What [`EmbeddingKnnRelation`]'s invocations actually did, counted at the two
+/// places the difference between a point lookup and a scan is decided.
+///
+/// This exists because "a candidate-bound call does not scan the space" is a claim
+/// about *work*, and the only honest evidence for a claim about work is a count of
+/// the work. Timing is not evidence: a fixture small enough to run in a test is
+/// small enough that scanning it and not scanning it take the same measurable time,
+/// so a timing assertion would pass over an implementation that scans every row and
+/// one that does not.
+///
+/// Every counter is monotone for the life of the relation and is never reset here.
+/// A caller that wants a delta reads the value before and after, which is the
+/// reading that composes: a reset would race with any other invocation of a relation
+/// the registry may run across workers.
+///
+/// # Not part of any identity
+///
+/// Nothing here reaches a row, a distance, an ordering or a fingerprint. Two
+/// relations over the same space answer identically whatever these say, so the
+/// counts are an observation about one process's execution rather than a fact about
+/// the space — which is why they live on the relation and not on [`EmbeddingSpace`],
+/// whose every field is part of what it attests.
+#[derive(Debug, Default)]
+pub struct KnnObservations {
+    /// Candidate-bound invocations answered by a row lookup.
+    membership_lookups: AtomicU64,
+    /// Invocations that entered the exhaustive scan.
+    scans: AtomicU64,
+    /// Rows the scans examined — one distance evaluation each.
+    scanned_candidates: AtomicU64,
+    /// Distance evaluations the membership path performed.
+    membership_distances: AtomicU64,
+}
+
+impl KnnObservations {
+    /// How many **membership lookups** this relation has performed.
+    ///
+    /// One lookup is one candidate-bound invocation, answered by
+    /// [`EmbeddingSpace::row_of`] — a binary search over the space's canonical term
+    /// order, with no float in it anywhere. Exactly one is performed per
+    /// candidate-bound invocation, and nothing else performs any.
+    #[must_use]
+    pub fn membership_lookups(&self) -> u64 {
+        self.membership_lookups.load(Ordering::Relaxed)
+    }
+
+    /// How many invocations have **entered the exhaustive scan** — that is, have
+    /// asked `EmbeddingSpace::search` for a ranking at all.
+    ///
+    /// Zero is the load-bearing value: an invocation that never entered the scan
+    /// never compared a distance against another row and never claimed a rank,
+    /// whatever the space holds. This relation has exactly one call site into the
+    /// scan and it increments this counter, so a zero here is not an inference about
+    /// how much scanning happened; it is the statement that none did.
+    #[must_use]
+    pub fn scans(&self) -> u64 {
+        self.scans.load(Ordering::Relaxed)
+    }
+
+    /// How many rows the scans examined, which is how many distances they computed.
+    #[must_use]
+    pub fn scanned_candidates(&self) -> u64 {
+        self.scanned_candidates.load(Ordering::Relaxed)
+    }
+
+    /// How many distances the **membership path** computed.
+    ///
+    /// Zero for a candidate the space does not hold — that answer is settled by the
+    /// term order alone and no vector is ever read — and one for a candidate it
+    /// does, which is the single pairwise evaluation the emitted row's `?distance`
+    /// position needs. Never more, whatever `k` the call carried, because a call
+    /// that names its own candidate ranks nothing.
+    #[must_use]
+    pub fn membership_distances(&self) -> u64 {
+        self.membership_distances.load(Ordering::Relaxed)
+    }
 }
 
 impl EmbeddingKnnRelation {
@@ -777,7 +1099,11 @@ impl EmbeddingKnnRelation {
     pub fn new(space: Arc<EmbeddingSpace>) -> Self {
         Self {
             space,
-            modes: [BindingPattern::from_code(KNN_MODE)],
+            modes: [
+                BindingPattern::from_code(KNN_MODE),
+                BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
+            ],
+            observations: Arc::new(KnnObservations::default()),
         }
     }
 
@@ -785,6 +1111,18 @@ impl EmbeddingKnnRelation {
     #[must_use]
     pub fn space(&self) -> &EmbeddingSpace {
         &self.space
+    }
+
+    /// What this relation's invocations have actually done.
+    ///
+    /// Handed back as a shared handle rather than a snapshot so a host can keep
+    /// reading after the relation itself has been moved into a registry, which is
+    /// the only arrangement in which the interesting question — did the exclusion
+    /// lookups this producer served scan anything — can be asked at all. See
+    /// [`KnnObservations`].
+    #[must_use]
+    pub fn observations(&self) -> Arc<KnnObservations> {
+        Arc::clone(&self.observations)
     }
 
     /// The flattened argument position of `?neighbour`, the retrieved term.
@@ -940,6 +1278,36 @@ impl EmbeddingKnnRelation {
             // `CandidateDomains::Unrestricted`; see
             // `RankedDeclaration::block_position`.
             block_position: None,
+            // An exclusion from this producer is a fact about its own TERM
+            // UNIVERSE — the space holds a row for this term, or it holds none —
+            // which is what `Membership` means and the only thing a point lookup
+            // can honestly say.
+            //
+            // It is emphatically not the ranked question. `is this candidate among
+            // your best n` has absences that are not exclusions: a candidate
+            // outside the best n is one this producer may still name at rank n,
+            // and a consumer that read that absence as an exclusion would refuse
+            // the fused read as a contradiction the first time the stream named
+            // it. Those two questions are two points of this relation's mode
+            // lattice, and which one an invocation asks is decided by the count —
+            // see `KNN_MEMBERSHIP_MODE` and [`Self::open`].
+            //
+            // What makes the basis deliverable is that a lookup arrives in the
+            // membership mode. The consumer renders the lookup with the count left
+            // FREE and declares the candidate a prepare parameter, so the
+            // admission pass sees `KNN_MEMBERSHIP_MODE` rather than the general
+            // one, and the invocation reaches this relation as the point lookup it
+            // was admitted as. The promise that the candidate really will be
+            // supplied is enforced where the execution begins; a plan that
+            // declared it and did not supply it is refused rather than run with
+            // the position free.
+            //
+            // The lookup is exact however the search behaves — a term the space
+            // holds no row for is a term no ranking can name — and it costs one
+            // binary search over canonical term order, with no vector read and no
+            // distance compared against any other row. `KnnObservations` counts
+            // both halves, so that is measured rather than argued.
+            exclusion: ExclusionBasis::Membership,
             mandatory: false,
         }
     }
@@ -954,6 +1322,29 @@ impl PropertyFunction for EmbeddingKnnRelation {
         PfArity::new(1, 3)
     }
 
+    /// Two modes, answering two different questions.
+    ///
+    /// `fbbf` is the ranked capability: the seed and the count are the two positions
+    /// this relation cannot enumerate, and it projects the other two. It subsumes
+    /// every access pattern of this arity that binds both inputs, so a bound
+    /// `?neighbour` beside a bound count — *is this term among the `k` nearest* — is
+    /// feasible under it and means what it has always meant.
+    ///
+    /// `bbff` is the **membership** capability, and it is a genuinely new one rather
+    /// than a narrowing: subsumption is `bound(declared) ⊆ bound(invocation)`, and
+    /// `fbbf` binds the count that this pattern leaves free, so `fbbf` does not
+    /// subsume it and an invocation of this shape was infeasible before it was
+    /// declared. What it adds is the point lookup [`Self::open`] documents — *do you
+    /// hold this term at all* — with the row bound [`Self::rows_per_invocation`]
+    /// reports for it. That is the question an
+    /// [`ExclusionBasis::Membership`] lookup asks, this relation answers it, and the
+    /// ranked declaration offers the basis on that footing: a lookup is rendered with
+    /// the count free and the candidate declared to the prepare, so it is admitted
+    /// against THIS pattern rather than against the one beside it.
+    ///
+    /// Adding it takes nothing away from the pattern beside it. A count-bound call
+    /// keeps its `k` cut, because the two shapes are two points of the lattice and
+    /// the invocation's own pattern decides which question was asked.
     fn modes(&self) -> &[BindingPattern] {
         &self.modes
     }
@@ -964,7 +1355,7 @@ impl PropertyFunction for EmbeddingKnnRelation {
     ///
     /// | bound positions | declared bound | why |
     /// |---|---|---|
-    /// | `?neighbour` (0) | `min(1, rows)` | terms are distinct within a space, so at most one row carries the bound term — and it is emitted only if it is among the `k` nearest |
+    /// | `?neighbour` (0) | `min(1, rows)` | terms are distinct within a space, so at most one row carries the bound term — emitted if it is among the `k` nearest where `k` was given, and if the space holds it at all where `k` was not |
     /// | otherwise | `min(max_neighbours, rows)` | an invocation emits at most `k` rows, `k` is capped by the guard, and a space cannot yield more rows than it holds |
     ///
     /// `?query` (1) and `k` (2) are bound in every admitted invocation, so neither
@@ -985,6 +1376,46 @@ impl PropertyFunction for EmbeddingKnnRelation {
 
     /// Begin one nearest-neighbour invocation.
     ///
+    /// # A free `k` asks a different question, and is answered by membership
+    ///
+    /// The **count** decides which of two questions an invocation is, and nothing else
+    /// does.
+    ///
+    /// With `k` **bound** — every invocation `KNN_MODE` subsumes, which is every
+    /// invocation that was feasible before `KNN_MEMBERSHIP_MODE` existed — the call
+    /// means what it has always meant: rank the seed's neighbourhood and emit the `k`
+    /// nearest, filtering `?neighbour` and `?distance` afterwards. A bound
+    /// `?neighbour` is therefore still *is this term among the `k` nearest*, and a
+    /// term the offer of `k` leaves out is still an empty answer. Nothing on this
+    /// path changed when the membership mode was declared, and nothing may: it is a
+    /// public query surface, and a producer that quietly answered a wider question
+    /// here would change the rows of a query nobody edited.
+    ///
+    /// With `k` **free** and `?neighbour` bound — `KNN_MEMBERSHIP_MODE`, a pattern
+    /// `KNN_MODE` does not subsume and which was infeasible until it was declared —
+    /// the call asks *do you hold this term at all*. That is the question
+    /// [`ExclusionBasis::Membership`] declares, and `k` is no part of it: there is one
+    /// candidate and no offer to size. It is answered by [`EmbeddingSpace::row_of`] —
+    /// a binary search over canonical term order, with no vector read, no distance
+    /// compared against any other row and no rank claimed — and the answer is one row
+    /// where the space holds the term and none where it does not.
+    /// [`KnnObservations`] counts both halves, so "nothing was scanned" is an
+    /// observation a test reads rather than an inference from a timing.
+    ///
+    /// Splitting them is what makes the exclusion lookup sound. A lookup is rendered
+    /// as this call with the candidate bound, so a producer that answered it by
+    /// ranking would report an absence for a term it is about to name at rank five,
+    /// and a consumer that believed it would refuse the fused read as a
+    /// contradiction. A membership answer cannot contradict a row, because every row a
+    /// search can name is a row this lookup finds.
+    ///
+    /// The emitted `?distance` is the true one: a single pairwise evaluation through
+    /// `EmbeddingSpace::row_distance`, which is the same [`Kernel`] over the same
+    /// components and norms the scan uses, so it is bit-identical to the value a scan
+    /// would have produced for that pair. What a point lookup cannot produce is a
+    /// *rank* — one plus the number of rows nearer the seed is a fact about every other
+    /// row, so no lookup can know it — and this relation does not claim one.
+    ///
     /// # Refusals
     ///
     /// Each aborts the query rather than contributing zero rows, which would be
@@ -1002,18 +1433,21 @@ impl PropertyFunction for EmbeddingKnnRelation {
     /// Refusing it would abort any query that ranged a seed over terms only some of which
     /// are embedded — which is the ordinary way this relation is used.
     ///
-    /// `k = 0` is likewise a request for zero neighbours, honoured with zero rows and zero
-    /// work. It is a boundary a clamp-or-refuse rule gets wrong in both directions.
+    /// `k = 0` is likewise a request for zero neighbours of a *free* `?neighbour`,
+    /// honoured with zero rows and zero work. It is a boundary a clamp-or-refuse rule
+    /// gets wrong in both directions. On the candidate-bound call it bounds nothing, as
+    /// above.
     ///
     /// # The ceiling
     ///
     /// The engine offers a row ceiling whenever the call is admission-transparent, which
-    /// includes calls that bind `?neighbour` or `?distance` to a constant. Those two
-    /// positions are filtered *after* the ranking, so shrinking the ranking to the ceiling
-    /// would let the cursor filter a prefix and then report exhaustion with fewer rows
-    /// than the engine asked for — a short bag read as a complete one. So the ceiling is
-    /// pushed into the selection only when neither is bound; otherwise the full `k` are
-    /// ranked and the cursor does the cutting, spending the licence only on rows it emits.
+    /// includes calls that bind `?distance` to a constant. That position is filtered
+    /// *after* the ranking, so shrinking the ranking to the ceiling would let the cursor
+    /// filter a prefix and then report exhaustion with fewer rows than the engine asked
+    /// for — a short bag read as a complete one. So the ceiling is pushed into the
+    /// selection only when it is free; otherwise the full `k` are ranked and the cursor
+    /// does the cutting, spending the licence only on rows it emits. The membership
+    /// answer is at most one row and needs no such care.
     fn open(
         &self,
         args: &PfArgs<'_>,
@@ -1030,36 +1464,68 @@ impl PropertyFunction for EmbeddingKnnRelation {
         let Some(query) = args.get(KNN_QUERY) else {
             return Err(EvalError::function(format!(
                 "the query term at position {KNN_QUERY} is free; this relation retrieves the \
-                 neighbours of a seed and cannot enumerate seeds, which is why its only \
-                 declared mode is `{KNN_MODE}`"
+                 neighbours of a seed and cannot enumerate seeds, which is why both of its \
+                 declared modes — `{KNN_MODE}` and `{KNN_MEMBERSHIP_MODE}` — demand it"
             )));
         };
-        let Some(count) = args.get(KNN_COUNT) else {
-            return Err(EvalError::function(format!(
-                "the neighbour count at position {KNN_COUNT} is free; how many neighbours to \
-                 retrieve is a question this relation is asked, not one it answers"
-            )));
-        };
-        let k = neighbour_count(count, self.space.guard())?;
 
         // A seed the space does not hold: an honest empty result, not a refusal. See the
         // method docs.
         let query_row = self.space.row_of(query);
 
-        let post_selection_filtered =
-            args.get(KNN_NEIGHBOUR).is_some() || args.get(KNN_DISTANCE).is_some();
-        let select_k = if post_selection_filtered {
-            k
-        } else {
-            ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
+        // THE COUNT DECIDES WHICH QUESTION THIS IS, and nothing else does. A bound count
+        // is the ranked read this relation has always performed, down to the `k` cut on a
+        // bound `?neighbour`; a free count is the membership lookup. Branching on the
+        // candidate instead would make one binding pattern mean two questions and would
+        // silently widen the answer to `?n ex:knn (?q k ?d)` — a query nobody edited.
+        let (answer, count_term) = match args.get(KNN_COUNT) {
+            Some(count) => {
+                let k = neighbour_count(count, self.space.guard())?;
+                // `?neighbour` and `?distance` are both filtered AFTER the ranking, so the
+                // ceiling is withheld from the selection when either is bound: pushing it
+                // down would rank a prefix, let the cursor filter it, and report fewer
+                // rows than the engine asked for as an exhausted answer.
+                let post_selection_filtered =
+                    args.get(KNN_NEIGHBOUR).is_some() || args.get(KNN_DISTANCE).is_some();
+                let select_k = if post_selection_filtered {
+                    k
+                } else {
+                    ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
+                };
+                (
+                    Answer::Search {
+                        query_row,
+                        select_k,
+                    },
+                    count.clone(),
+                )
+            }
+            None => {
+                let Some(candidate) = args.get(KNN_NEIGHBOUR) else {
+                    return Err(EvalError::function(format!(
+                        "the neighbour count at position {KNN_COUNT} is free and so is the \
+                         neighbour at position {KNN_NEIGHBOUR}; how many neighbours to \
+                         retrieve is a question this relation is asked, not one it answers, so \
+                         the only call it serves without a count is the membership lookup \
+                         `{KNN_MEMBERSHIP_MODE}`, which names the one term it is about"
+                    )));
+                };
+                self.observations
+                    .membership_lookups
+                    .fetch_add(1, Ordering::Relaxed);
+                (
+                    Answer::Membership(query_row.zip(self.space.row_of(candidate))),
+                    universe_size(self.space.row_count()),
+                )
+            }
         };
 
         Ok(Box::new(KnnCursor {
             space: Arc::clone(&self.space),
-            query_row,
-            select_k,
+            observations: Arc::clone(&self.observations),
+            answer,
             query_term: query.clone(),
-            count_term: count.clone(),
+            count_term,
             bound: args.flattened().map(<Option<&TermValue>>::cloned).collect(),
             ranked: None,
             at: 0,
@@ -1067,6 +1533,29 @@ impl PropertyFunction for EmbeddingKnnRelation {
             unreported_work: 0,
         }))
     }
+}
+
+/// The value the count position carries in a **membership** answer: the number of rows
+/// the space holds, as an `xsd:integer`.
+///
+/// # Why the position needs a value at all, and why this is the one
+///
+/// A [`PfRow`] carries a value for every flattened position, so a mode that leaves the
+/// count free must still fill it. In [`KNN_MODE`] that position is an *input* — the
+/// request — and is echoed back verbatim. In [`KNN_MEMBERSHIP_MODE`] there is no request
+/// to echo: the caller asked *do you hold this term*, a question no `k` is part of.
+///
+/// So under that mode the position is an **output**, and what it outputs is a fact about
+/// the producer rather than a request it was never given: the size of its term universe.
+/// That is exactly the quantity a membership answer is about — the lookup says *this term
+/// is one of my rows*, and this says *how many rows there are* — it is single-valued, so
+/// the mode's declared row bound of one is exact, and it costs a length read.
+///
+/// It is emphatically **not** a fabricated `k`. Inventing a request the caller did not
+/// make would put a claim about rank into a row that ranked nothing, which is the one
+/// thing a point lookup must never do.
+fn universe_size(rows: usize) -> TermValue {
+    TermValue::typed_literal(rows.to_string(), XSD_INTEGER)
 }
 
 /// Read `k` off the invocation's neighbour-count argument.
@@ -1099,6 +1588,29 @@ fn neighbour_count(value: &TermValue, guard: KnnGuard) -> Result<usize, EvalErro
     })
 }
 
+/// What one invocation is going to do, decided in [`EmbeddingKnnRelation::open`] from
+/// the access pattern it arrived in.
+///
+/// Two shapes rather than one with an optional field, because they are two different
+/// questions: one ranks a neighbourhood and the other asks whether a named term has a
+/// row at all. Naming them apart is what makes "the scan was not entered" a branch a
+/// reader can see rather than a condition buried in a selection size.
+#[derive(Debug)]
+enum Answer {
+    /// Rank the seed's neighbourhood: the offer of candidates.
+    Search {
+        /// The seed's row, or `None` when the space does not hold the seed term.
+        query_row: Option<usize>,
+        /// How many neighbours the ranking retains — `k`, or the engine's ceiling
+        /// when it was safe to push it down.
+        select_k: usize,
+    },
+    /// Answer *do you hold this candidate*: the seed's row and the candidate's row,
+    /// or `None` when the space holds no row for one of them — which is equally an
+    /// exclusion, because a search from a seed with no row names nothing at all.
+    Membership(Option<(usize, usize)>),
+}
+
 /// The cursor [`EmbeddingKnnRelation::open`] returns: the ranked neighbours, filtered on
 /// every bound position and cut at the engine's licence.
 ///
@@ -1122,11 +1634,11 @@ fn neighbour_count(value: &TermValue, guard: KnnGuard) -> Result<usize, EvalErro
 struct KnnCursor {
     /// The space being searched.
     space: Arc<EmbeddingSpace>,
-    /// The seed's row, or `None` when the space does not hold the seed term.
-    query_row: Option<usize>,
-    /// How many neighbours the ranking retains — `k`, or the engine's ceiling when it was
-    /// safe to push it down.
-    select_k: usize,
+    /// The relation's counters, so the work this cursor does is observable from the
+    /// relation a host still holds after moving it into a registry.
+    observations: Arc<KnnObservations>,
+    /// What this invocation is going to do.
+    answer: Answer,
     /// The seed term, echoed verbatim into position 1 of every row.
     query_term: TermValue,
     /// The neighbour count, echoed verbatim into position 2 of every row.
@@ -1144,14 +1656,42 @@ struct KnnCursor {
 }
 
 impl KnnCursor {
-    /// Run the search if it has not run yet, recording the candidates it examined.
+    /// Produce this invocation's rows if they have not been produced yet, recording the
+    /// candidates examined.
+    ///
+    /// The **only** call site of [`EmbeddingSpace::search`] in this relation, which is
+    /// what makes [`KnnObservations::scans`] a measurement rather than an estimate: an
+    /// invocation that did not call `ensure_ranked` did not scan anything, because
+    /// there is no other way for it to have done so.
     fn ensure_ranked(&mut self) -> Result<(), EvalError> {
         if self.ranked.is_some() {
             return Ok(());
         }
-        let (ranked, examined) = match self.query_row {
-            Some(row) => self.space.search(row, self.select_k)?,
-            None => (Vec::new(), 0),
+        let (ranked, examined) = match self.answer {
+            Answer::Search {
+                query_row: Some(row),
+                select_k,
+            } => {
+                self.observations.scans.fetch_add(1, Ordering::Relaxed);
+                let (ranked, examined) = self.space.search(row, select_k)?;
+                self.observations
+                    .scanned_candidates
+                    .fetch_add(examined, Ordering::Relaxed);
+                (ranked, examined)
+            }
+            Answer::Search {
+                query_row: None, ..
+            }
+            | Answer::Membership(None) => (Vec::new(), 0),
+            // One pairwise evaluation, charged as the one candidate it examined. No
+            // other row of the space is read and the graph of ranks is never built.
+            Answer::Membership(Some((query_row, row))) => {
+                self.observations
+                    .membership_distances
+                    .fetch_add(1, Ordering::Relaxed);
+                let distance = self.space.row_distance(query_row, row)?;
+                (vec![Ranked { distance, row }], 1)
+            }
         };
         self.unreported_work = self.unreported_work.saturating_add(examined);
         self.ranked = Some(ranked);

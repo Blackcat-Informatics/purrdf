@@ -3,7 +3,7 @@
 
 //! Fixtures shared by the integration tests.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 
@@ -15,8 +15,18 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 /// predicate position, which read no stored data, so an empty graph is the
 /// honest input rather than a stand-in for one. A test that is about the data
 /// builds its own dataset.
-pub(crate) fn empty_dataset() -> Arc<RdfDataset> {
-    RdfDatasetBuilder::new()
-        .freeze()
-        .expect("an empty default graph is structurally valid")
+/// Shared rather than built per call, and handed out by reference: a stream an
+/// execution returns borrows the dataset it was read from, because an exclusion
+/// lookup is a question asked of that dataset while the fusion is merging. A
+/// fixture that built a fresh dataset per call would therefore hand every test a
+/// stream borrowing a temporary. One frozen, empty dataset for the whole binary
+/// is the same value in every case — it holds no quads, so no test can observe
+/// which one it got.
+pub(crate) fn empty_dataset() -> &'static RdfDataset {
+    static EMPTY: OnceLock<Arc<RdfDataset>> = OnceLock::new();
+    EMPTY.get_or_init(|| {
+        RdfDatasetBuilder::new()
+            .freeze()
+            .expect("an empty default graph is structurally valid")
+    })
 }

@@ -249,7 +249,12 @@ impl NativeSparqlEngine {
         options: QueryOptions<'_>,
         state: Option<&Arc<GovernorState>>,
     ) -> Result<(), GraphBuildError> {
-        check_plan_matches_relations(prepared, options)?;
+        check_plan_matches_relations(
+            prepared,
+            options,
+            &crate::DetHashSet::default(),
+            ShaclPrebinding::None,
+        )?;
         if !matches!(prepared.query, Query::Construct { .. }) {
             return Err(RdfDiagnostic::error(
                 "native-sparql-construct",

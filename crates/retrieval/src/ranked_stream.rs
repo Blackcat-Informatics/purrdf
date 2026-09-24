@@ -80,7 +80,8 @@
 //! claim otherwise.
 
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, DuplicatePolicy, PfAttestation, RankFidelity, RankedDeclaration,
+    CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, PfAttestation, RankFidelity,
+    RankedDeclaration,
 };
 use purrdf_text::Fixed;
 
@@ -182,21 +183,29 @@ pub struct StreamContract {
     /// [`CandidateDomains::Unrestricted`] says "anything", which is the wider
     /// promise and the one every stream made before this term existed:
     /// [`FusionStream`](crate::FusionStream) then behaves exactly as it always
-    /// did. A [`CandidateDomains::Within`] declaration is what lets fusion
-    /// certify a candidate without first reading a stream that was never going
-    /// to name it — the drain that makes a top-ten answer over two disjoint
-    /// million-row strata read two million rows.
+    /// did on this term's account. A [`CandidateDomains::Within`] declaration is
+    /// one of the two ways fusion can certify a candidate without first reading
+    /// a stream that was never going to name it — the drain that makes a top-ten
+    /// answer over two disjoint million-row strata read two million rows. The
+    /// other is [`Self::exclusion`], so `Unrestricted` here does not on its own
+    /// mean the read drains: a producer that answers a lookup bounds it by
+    /// observation instead.
     ///
     /// # Why the consumer cannot derive this for itself
     ///
-    /// Because the input protocol has no random access. A
-    /// [`RankedStream`] offers `next` and `receipt`, so the only way to learn
-    /// that a stream does *not* hold a candidate is to read it to its end. A
-    /// consumer that certified earlier without a declaration would be emitting
-    /// a score that a still-open stream might have raised — a lower bound
-    /// presented as an exact value — so exact scores and a k-bounded read over
-    /// strata that do not overlap are jointly unachievable unless the producers
-    /// say which candidates they can name. They say it here.
+    /// Because a stream that says nothing about its own candidates offers no
+    /// random access. Against such a producer a [`RankedStream`] is `next` and
+    /// `receipt`, so the only way to learn that it does *not* hold a candidate
+    /// is to read it to its end. A consumer that certified earlier knowing
+    /// nothing would be emitting a score that a still-open stream might have
+    /// raised — a lower bound presented as an exact value — so exact scores and
+    /// a k-bounded read over strata that do not overlap are jointly unachievable
+    /// unless the producers say something. This is one of the two things they
+    /// can say, and [`Self::exclusion`] is the other: this promises about whole
+    /// blocks, once, and is read without asking; that is answered per candidate,
+    /// and reaches the case this cannot — two producers over one block whose
+    /// results never overlap, where both declarations are true and neither
+    /// settles anything.
     ///
     /// # It is verified over the rows pulled, and nowhere else
     ///
@@ -209,6 +218,44 @@ pub struct StreamContract {
     /// false [`DuplicatePolicy::Unique`] is detected when the repeat is pulled,
     /// and not before.
     pub domains: CandidateDomains,
+    /// What the producer's answer to an **exclusion lookup** means, or
+    /// [`ExclusionBasis::Unavailable`] where it answers none.
+    ///
+    /// The one term of this contract that is not a promise about rows nobody has
+    /// read: it is permission to *ask*. [`Self::domains`] says which blocks of
+    /// the universe this producer can reach, which settles finality only where
+    /// the blocks separate the producers; this is how a consumer settles it
+    /// where they do not, by asking about one candidate and being answered from
+    /// the producer's own index.
+    ///
+    /// # Why the basis travels here and the verdict does not
+    ///
+    /// The basis is a standing declaration — true from registration, unchanged
+    /// by how deep anyone reads — so it belongs beside the three terms that are
+    /// already read once, before the first row. The verdict is a *measurement*,
+    /// taken per candidate against the dataset, and it arrives through
+    /// [`RankedStream::exclusion`] where its failures can fail the request that
+    /// asked for it.
+    ///
+    /// # It is believed as a basis and checked as an answer
+    ///
+    /// Nothing here can verify that a producer's `Membership` really is
+    /// membership. What is verified is the *agreement* between this channel and
+    /// the rows: a producer that excludes a candidate and then names it is
+    /// refused by name ([`ProtocolError::ExclusionContradicted`]), and a
+    /// producer that calls a candidate possible while its own declared domains
+    /// put that candidate out of reach is refused as the domain violation it is
+    /// ([`ProtocolError::OutsideDeclaredDomain`]).
+    ///
+    /// # Why there is no default here either
+    ///
+    /// [`ExclusionBasis::Unavailable`] looks like the safe default and is not
+    /// one to fabricate: it is the *narrow* answer, so defaulting to it would
+    /// silently discard a capability a producer really has, and defaulting to
+    /// either of the others would put a claim about a host's corpus in the mouth
+    /// of a producer that made none. Both directions are wrong, which is why the
+    /// term is positional in [`Self::new`] like its neighbours.
+    pub exclusion: ExclusionBasis,
 }
 
 impl StreamContract {
@@ -217,6 +264,7 @@ impl StreamContract {
     pub fn declared(declaration: &RankedDeclaration) -> Self {
         Self {
             duplicates: declaration.duplicates,
+            exclusion: declaration.exclusion,
             // Cloned, never rebuilt. The evidence inside is an `Arc<str>` the
             // producer authored, and a consumer reads those bytes rather than a
             // summary of them, so this hop must move the string itself — one
@@ -234,20 +282,28 @@ impl StreamContract {
     /// fidelity or does not compile.
     ///
     /// ```compile_fail
-    /// # use purrdf_retrieval::{StreamContract, DuplicatePolicy, CandidateDomains};
-    /// // The arity before the fidelity term existed. There is no overload and no
-    /// // default to fall back to.
-    /// let _ = StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted);
-    /// ```
-    ///
-    /// ```
     /// # use purrdf_retrieval::{StreamContract, DuplicatePolicy, CandidateDomains, RankFidelity};
-    /// let contract = StreamContract::new(
+    /// // The arity before the exclusion term existed. There is no overload and
+    /// // no default to fall back to.
+    /// let _ = StreamContract::new(
     ///     DuplicatePolicy::Unique,
     ///     RankFidelity::EXACT,
     ///     CandidateDomains::Unrestricted,
     /// );
+    /// ```
+    ///
+    /// ```
+    /// # use purrdf_retrieval::{
+    /// #     StreamContract, DuplicatePolicy, CandidateDomains, RankFidelity, ExclusionBasis,
+    /// # };
+    /// let contract = StreamContract::new(
+    ///     DuplicatePolicy::Unique,
+    ///     RankFidelity::EXACT,
+    ///     CandidateDomains::Unrestricted,
+    ///     ExclusionBasis::Unavailable,
+    /// );
     /// assert_eq!(contract.fidelity, RankFidelity::EXACT);
+    /// assert_eq!(contract.exclusion, ExclusionBasis::Unavailable);
     /// ```
     ///
     /// The pair is the proof: the `compile_fail` block alone would pass for any
@@ -266,13 +322,48 @@ impl StreamContract {
         duplicates: DuplicatePolicy,
         fidelity: RankFidelity,
         domains: CandidateDomains,
+        exclusion: ExclusionBasis,
     ) -> Self {
         Self {
             duplicates,
             fidelity,
             domains,
+            exclusion,
         }
     }
+}
+
+/// What a producer says about one candidate when it is asked whether that
+/// candidate is out of its reach.
+///
+/// Two variants and a third outcome. The `Err` arm of
+/// [`RankedStream::exclusion`] is the third, and it is not a variant here on
+/// purpose: a lookup that *failed* has said nothing, and the one value a failure
+/// must never collapse into is [`Self::Possible`] — which reads as the safe,
+/// conservative answer while being indistinguishable from a working lookup that
+/// answered honestly. Such a collapse costs nothing that any test would notice:
+/// the answer stays correct, the read merely stops narrowing, and a dataset read
+/// that has been failing for months looks exactly like a corpus whose producers
+/// overlap. So the failure is a typed error that fails the fused request, and
+/// this enum has no arm for it to hide in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExclusionVerdict {
+    /// This producer will never name this candidate.
+    ///
+    /// What that *means* is [`StreamContract::exclusion`]'s basis: under
+    /// [`ExclusionBasis::Membership`] the producer's index holds no entry
+    /// through which this request could reach the candidate. A consumer may
+    /// stop waiting for this stream to name it — and if the stream names it
+    /// anyway, that is [`ProtocolError::ExclusionContradicted`] rather than a
+    /// quietly merged extra contribution.
+    Excluded,
+    /// This producer may still name this candidate.
+    ///
+    /// The honest answer whenever the producer cannot rule the candidate out,
+    /// and the answer a consumer already assumed before it asked — so a fusion
+    /// over producers that answer `Possible` to everything reads exactly what it
+    /// read before exclusion lookups existed, minus nothing.
+    Possible,
 }
 
 /// Which block of the candidate universe one row was drawn from, or an honest
@@ -896,6 +987,182 @@ pub enum ProtocolError {
         /// The arithmetic refusal, rendered.
         reason: String,
     },
+
+    /// A producer answered an exclusion lookup with
+    /// [`ExclusionVerdict::Excluded`] for a candidate and then emitted a row
+    /// naming it.
+    ///
+    /// The two statements cannot both be true, and this names the one that was
+    /// contradicted. It is deliberately **not**
+    /// [`Self::OutsideDeclaredDomain`]: that refusal blames a *declaration*
+    /// made once at registration about whole blocks of the universe, and
+    /// nothing about this producer's domains was broken — what was broken is an
+    /// observation it made about this one candidate, through a channel its
+    /// registration merely opened. Reporting it as a domain violation would
+    /// send a host to fix a `CandidateDomains` that is perfectly correct.
+    ///
+    /// It is refused rather than repaired because the repair is a wrong answer
+    /// either way. Merging the row would add a contribution to a candidate whose
+    /// score a consumer may already have certified as final *on the strength of
+    /// this producer's own word*; dropping it would silently discard a row the
+    /// producer emitted under the rank law.
+    #[error("stratum {stratum} excluded item {item} and then named it")]
+    ExclusionContradicted {
+        /// The candidate, in its canonical lexical form.
+        item: String,
+        /// The stratum whose producer contradicted itself.
+        stratum: String,
+    },
+
+    /// An exclusion lookup could not be performed at all.
+    ///
+    /// The third outcome [`ExclusionVerdict`] deliberately has no variant for:
+    /// the producer was asked and something failed — the dataset read, the
+    /// prepared plan, the producer's own row bound — so nothing is known about
+    /// this candidate. It fails the fused request, because the alternative is
+    /// reading a failed measurement as [`ExclusionVerdict::Possible`], which is
+    /// a swallowed error wearing the costume of a conservative answer.
+    #[error("exclusion lookup for stratum {stratum} failed: {reason}")]
+    ExclusionLookupFailed {
+        /// The stratum whose lookup failed.
+        stratum: String,
+        /// The underlying refusal, rendered.
+        reason: String,
+    },
+
+    /// A stream was asked for an exclusion verdict while declaring
+    /// [`ExclusionBasis::Unavailable`].
+    ///
+    /// Unreachable from this crate's own fusion engine, which asks only the
+    /// streams whose contract declared a basis. It is reachable from a stream a
+    /// caller assembled by hand whose contract and whose implementation of
+    /// [`RankedStream::exclusion`] disagree, and it is that disagreement — not a
+    /// fabricated [`ExclusionVerdict::Possible`] — that is reported.
+    #[error("stream was asked for an exclusion verdict but declares no exclusion basis")]
+    ExclusionUnavailable,
+
+    /// The read behind a stream failed after the consumer had started merging its
+    /// rows, or failed in a way that invalidates the whole run.
+    ///
+    /// A stream read on demand produces each row when it is pulled, so a producer's
+    /// failure at its fortieth row surfaces at the fortieth pull — after thirty-nine
+    /// rows have already been merged and, possibly, emitted. Those rows cannot be
+    /// taken back, and a failed stratum reported as an ordinary status beside an
+    /// answer built partly out of it would be the answer claiming a stratum it did
+    /// not have. So such a failure fails the fused request, naming the stratum, how
+    /// far the read had got, and the producer's own reason. A failure *before* the
+    /// first row is not this: it is reported as that stratum's
+    /// [`ProducerReceipt::ExecutionFailed`], exactly as a materialised read's
+    /// failure is, and every other stratum answers.
+    ///
+    /// The one failure that is this at any depth is a producer that returned more
+    /// rows than its registry declared it could — the whole-run refusal a
+    /// materialised read reports as
+    /// [`ExecutionError::RowBoundBreached`](crate::ExecutionError::RowBoundBreached),
+    /// because the broken number is not confined to the stratum that exposed it.
+    ///
+    /// It is not [`Self::ErrorAfterRows`], which is a hand-built stream's own report
+    /// and carries no reason: a producer read through this layer always has one, and
+    /// dropping it would leave a host with a count and nothing to fix.
+    #[error("stratum {stratum}: the read failed after {rows_before} row(s): {reason}")]
+    ReadFailed {
+        /// The stratum whose read failed.
+        stratum: String,
+        /// How many rows the stream had handed out before the failure.
+        rows_before: u64,
+        /// The producer's or the executor's own refusal, rendered.
+        reason: String,
+    },
+
+    /// The read behind a stream ended under a different attestation from the one it
+    /// announced before its first row.
+    ///
+    /// A consumer reads a stream's [`RankedStream::attestation`] before it pulls a
+    /// row and certifies every row under it — an attested-short index widens the
+    /// intervals it certifies against, and the trailer's exactness and evidence
+    /// identity are derived from it. A read held open while its consumer merges is
+    /// therefore held to that announcement when it stops
+    /// ([`RankedStream::settle`]): the generation it pinned must be the only
+    /// generation it served from, and the service level it reports at the stop must
+    /// be the one it reported at the open. Either moving means the rows were
+    /// certified under evidence the read did not end with — an index rebuilt under
+    /// the read, or a shortfall discovered after the rows it affects were merged as
+    /// whole. The answer is refused rather than relabelled, because relabelling
+    /// would keep rows that were certified under the wrong law.
+    ///
+    /// The same family as [`Self::ContributionMismatch`] and for the same reason: a
+    /// value the consumer holds is checked against the value the producer ends up
+    /// standing behind, and a disagreement is named with both sides, repaired never.
+    #[error(
+        "stratum {stratum}: the read ended under a different attestation from the one it \
+         announced before its first row: {reason}"
+    )]
+    AttestationMoved {
+        /// The stratum whose read moved.
+        stratum: String,
+        /// Both sides of the disagreement, or the witness rule the read's own receipt
+        /// broke, rendered.
+        reason: String,
+    },
+
+    /// An exclusion lookup was answered under a different attestation from the one
+    /// its stream's read pinned.
+    ///
+    /// A verdict and a ranked read are two answers to one question — whether this
+    /// producer names a candidate — and they must agree for the verdict to settle
+    /// anything: an `Excluded` a fusion acts on stands in for the rows the ranked
+    /// read would have named had it been read further. That is only true of rows the
+    /// *same* index generation would have named. A lookup answered by another
+    /// generation — an index rebuilt between the read's open and the lookup — can
+    /// exclude a candidate the pinned generation holds, and a fusion that stops
+    /// before the stream would have named it returns a different answer with nothing
+    /// in it to say so. So each lookup's own witness is read under the sole-witness
+    /// rule and held to the attestation the read pinned — generation and service
+    /// level both, because a lookup served from an index that has since found itself
+    /// short is no more the pinned index than a rebuilt one — and a disagreement
+    /// fails the request, naming both sides.
+    ///
+    /// The same family as [`Self::AttestationMoved`] and
+    /// [`Self::ContributionMismatch`]: a value the consumer holds is checked against
+    /// the value the producer stood behind, and a disagreement is named with both
+    /// sides, repaired never. It is its own variant because it is a different
+    /// promise broken at a different instant: that one is the read disagreeing with
+    /// its own announcement when it stops, this is a point answer disagreeing with
+    /// the read it was asked beside, at the moment it is asked.
+    #[error(
+        "stratum {stratum}: an exclusion lookup was answered under a different attestation \
+         from the one its stream's read pinned: {reason}"
+    )]
+    ExclusionAttestationMoved {
+        /// The stratum whose lookup was answered elsewhere.
+        stratum: String,
+        /// Both sides of the disagreement, or the witness rule the lookup's own
+        /// receipt broke, rendered.
+        reason: String,
+    },
+}
+
+/// What a stream's read stands behind at the instant its consumer stops reading it.
+///
+/// Returned by [`RankedStream::settle`]. A read materialised before its first row
+/// was readable settles to what it already said; a read produced on demand settles
+/// here, because this is the first instant at which how far it was read is known.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadSettlement {
+    /// What the index behind the rows attests now that the read has stopped.
+    ///
+    /// Held against [`RankedStream::attestation`], which the consumer read before the
+    /// first row; see [`ProtocolError::AttestationMoved`].
+    pub attestation: PfAttestation,
+    /// How many rows the read behind the stream produced, when the stream knows:
+    /// [`RankedStream::rows_materialised`] as of this instant.
+    pub rows_materialised: Option<u64>,
+    /// How many rows the stream handed its consumer, when the stream counts them.
+    ///
+    /// Held against the rows the consumer pulled
+    /// ([`ProtocolError::ForgedReceipt`]), so a settlement cannot describe a read the
+    /// consumer did not take. `None` for a stream that keeps no such count.
+    pub rows_emitted: Option<u64>,
 }
 
 /// A producer's ranked rows, pulled one at a time.
@@ -972,6 +1239,51 @@ pub trait RankedStream {
     /// A caller that means "anything" says so in one word.
     fn contract(&self) -> StreamContract;
 
+    /// Ask this producer whether `candidate` is out of its reach.
+    ///
+    /// The one channel in this protocol that carries a question *in*. Every
+    /// other method reports what the producer has already decided; this asks it
+    /// about one candidate the consumer names, and what the answer means is
+    /// [`StreamContract::exclusion`]'s basis.
+    ///
+    /// The candidate is named in the canonical term lexical rather than in
+    /// [`Self::Item`], because that is the only spelling the consumer still
+    /// holds. A fused frontier keys candidates by [`Term`] — `Item` is converted
+    /// on the way in and the original is dropped with the row — so an `Item`
+    /// parameter would oblige this layer to keep a second copy of every frontier
+    /// candidate for a question most fusions never ask. Round-tripping through
+    /// that lexical is exactly what [`Self::Item`]'s `Into<Term>` bound is for.
+    ///
+    /// # Called only where the contract says it may be
+    ///
+    /// [`FusionStream`](crate::FusionStream) asks this of a stream whose
+    /// contract declared a basis, and never of one that declared
+    /// [`ExclusionBasis::Unavailable`]. A producer that declared no basis may
+    /// therefore return [`ProtocolError::ExclusionUnavailable`] unconditionally,
+    /// and that is the honest body for it.
+    ///
+    /// # There is no default, and the reason is the one `contract` gives
+    ///
+    /// A default would have to be either [`ExclusionVerdict::Possible`] — this
+    /// layer answering a question about a host's corpus that only the producer
+    /// can answer, and answering it in the direction that is never wrong and
+    /// never useful — or an error, which would make every conforming
+    /// hand-written producer's declared basis a lie its author never wrote. The
+    /// declaration and the implementation belong to the same author, so both are
+    /// required of that author.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::ExclusionLookupFailed`] when the lookup itself failed,
+    /// [`ProtocolError::ExclusionAttestationMoved`] when it was answered under an
+    /// attestation other than the one this stream's read pinned, and
+    /// [`ProtocolError::ExclusionUnavailable`] when the producer answers no
+    /// such lookup. None is degraded to a verdict: a failed measurement
+    /// reported as [`ExclusionVerdict::Possible`] is a swallowed error that
+    /// leaves the answer correct and the read unbounded, which nothing
+    /// downstream could ever notice.
+    async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError>;
+
     /// The pinned plan these rows descend from, when the stream has one.
     ///
     /// This is how a plan's identity reaches the answer: [`execute`] tags each
@@ -1032,6 +1344,14 @@ pub trait RankedStream {
     /// by travelling with the stream instead of being re-fetched from the
     /// registry at the end.
     ///
+    /// A read produced on demand announces here what its invocation attested the
+    /// instant it opened, and is then **held to it** when the fusion stops
+    /// ([`settle`](Self::settle)): an index that moved under the read, or a
+    /// service level that changed between the open and the stop, is refused
+    /// ([`ProtocolError::AttestationMoved`]) rather than reported. So reading the
+    /// announcement first loses nothing a read discovered later: a later discovery
+    /// that would change the announcement fails the answer built on it.
+    ///
     /// # Why this is not a [`ProducerReceipt`] variant
     ///
     /// An incomplete index is not a read ending. Every [`ProducerReceipt`]
@@ -1064,5 +1384,83 @@ pub trait RankedStream {
     /// says the producer said nothing, which is what happened.
     fn attestation(&self) -> PfAttestation {
         PfAttestation::UNDECLARED
+    }
+
+    /// How many rows the read behind this stream actually produced, when the
+    /// stream knows.
+    ///
+    /// **The work, beside the consumption.** Every other number a fusion reports
+    /// about a stratum counts what the *fusion* did with the stream:
+    /// [`StratumResolution::ranks_pulled`](crate::StratumResolution::ranks_pulled)
+    /// is how far down the ranking the answer needed to go, and it is the number
+    /// a narrowing is judged by. It is also, on its own, a measurement of the
+    /// counter the narrowing was built to lower. A plan whose depth the planner
+    /// could not narrow materialises its whole declared length and then hands
+    /// six ranks of it to a fusion that certifies immediately; `ranks_pulled`
+    /// says six, and the four hundred rows that were read to produce them are
+    /// invisible. This is that number.
+    ///
+    /// Counted in rows the producer's read returned, including the probe row an
+    /// emitted bound carries one past the depth — the probe is a row the read
+    /// paid for, and a figure that excluded it would report a read as cheaper
+    /// than it was by exactly the row that makes its ending observable.
+    ///
+    /// Read by [`FusionStream::trailer`](crate::FusionStream::trailer), through
+    /// [`settle`](Self::settle), when the fusion stops — not when it starts. For a
+    /// read materialised before its first row was readable the two instants give
+    /// the same number; for a read produced on demand only the second is the cost,
+    /// because the rows it produced are exactly the rows the fusion asked for, and
+    /// the fusion decides that by stopping.
+    ///
+    /// # Why the default is `None` and not zero
+    ///
+    /// The default is `None`, for exactly the reason [`plan_id`](Self::plan_id)
+    /// defaults to `None`: a stream may honestly have no materialised read
+    /// behind it — a generator, a computation over its arguments, a hand-built
+    /// list of rows a test wrote — and "there is no read to count" is that
+    /// stream's true answer rather than a gap in it. Zero is not that answer.
+    /// Zero is a measurement, and a stream that reported it would be claiming
+    /// its read was free; the whole use of this number is comparing what a read
+    /// cost against what the fusion consumed, and a fabricated zero would make
+    /// every such comparison flattering.
+    ///
+    /// [`execute`](crate::execute) answers it for every stream it returns,
+    /// because it is the party that made the read.
+    fn rows_materialised(&self) -> Option<u64> {
+        None
+    }
+
+    /// What the read behind this stream stands behind now that its consumer has
+    /// stopped reading it: the attestation it ends under, what it cost, and how many
+    /// rows it handed out.
+    ///
+    /// Called by [`FusionStream::trailer`](crate::FusionStream::trailer) on **every**
+    /// stream — one that ran out and one a bounded fusion stopped alike — because the
+    /// trailer is the instant each read's extent is final. A stream the fusion stopped
+    /// never returns a receipt, so this is the one report such a stream makes about
+    /// its own end, and it is where a read produced on demand closes its evidence:
+    /// the witness of an invocation held open while the fusion merged is only
+    /// complete once the merging stops.
+    ///
+    /// Non-consuming: a caller that reads the trailer and then pulls further rows may
+    /// settle again, and the later settlement describes the longer read.
+    ///
+    /// # Default
+    ///
+    /// The attestation the stream already announced, its
+    /// [`rows_materialised`](Self::rows_materialised), and no emitted-row count — the
+    /// true settlement of a stream whose read finished before its first row was
+    /// readable, which has nothing left to learn about itself.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::AttestationMoved`] when the read's own receipt cannot be a
+    /// single attestation — the index it served from moved under it.
+    async fn settle(&mut self) -> Result<ReadSettlement, ProtocolError> {
+        Ok(ReadSettlement {
+            attestation: self.attestation(),
+            rows_materialised: self.rows_materialised(),
+            rows_emitted: None,
+        })
     }
 }

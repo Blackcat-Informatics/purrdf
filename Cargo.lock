@@ -1287,6 +1287,7 @@ dependencies = [
 name = "purrdf"
 version = "2.0.2"
 dependencies = [
+ "criterion",
  "purrdf-columnar",
  "purrdf-datalog",
  "purrdf-entail",
@@ -1589,6 +1590,7 @@ version = "2.0.2"
 dependencies = [
  "ahash",
  "blake3",
+ "criterion",
  "pretty_assertions",
  "purrdf-alloc-probe",
  "purrdf-core",

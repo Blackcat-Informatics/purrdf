@@ -106,7 +106,7 @@ use purrdf_core::TermValue;
 use crate::error::TextError;
 use crate::fixed::{Fixed, SCALE_DIGITS};
 use crate::index::{PartitionKey, TextIndex};
-use crate::ranking::{PreparedCorpus, QUERY_TERMS_MAX};
+use crate::ranking::{PreparedCorpus, PreparedQuery, QUERY_TERMS_MAX};
 
 /// The raw constants below are written at [`SCALE_DIGITS`] fractional digits, so
 /// the scale and the literals cannot drift apart unnoticed.
@@ -336,7 +336,7 @@ pub fn rank_partition(
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    rank_terms(index, partition, &terms, limit)
+    rank_terms(index, partition, &terms, limit, &mut ScoringWork::default())
 }
 
 /// Rank every partition `filter` admits, and emit the rows in
@@ -362,6 +362,25 @@ pub fn select(
     ceiling: Option<u64>,
     partition_rank: Option<u32>,
 ) -> Result<Vec<Scored>, TextError> {
+    select_counted(
+        index,
+        needle,
+        filter,
+        ceiling,
+        partition_rank,
+        &mut ScoringWork::default(),
+    )
+}
+
+/// [`select`], adding the work it did to `work`.
+pub(crate) fn select_counted(
+    index: &TextIndex,
+    needle: &[String],
+    filter: &PartitionFilter,
+    ceiling: Option<u64>,
+    partition_rank: Option<u32>,
+    work: &mut ScoringWork,
+) -> Result<Vec<Scored>, TextError> {
     let terms = distinct_terms(needle)?;
     if terms.is_empty() {
         return Ok(Vec::new());
@@ -380,7 +399,7 @@ pub fn select(
         if !filter.matches(key) {
             continue;
         }
-        let mut partition_rows = rank_terms(index, key, &terms, limit)?;
+        let mut partition_rows = rank_terms(index, key, &terms, limit, work)?;
         if let Some(wanted) = partition_rank {
             partition_rows.retain(|row| row.partition_rank == wanted);
         }
@@ -417,15 +436,8 @@ pub fn explain(
             "document {document} names a partition the index does not hold"
         ))
     })?;
-    let totals = index
-        .field_totals(partition)
-        .ok_or_else(|| TextError::data("partition has no field totals"))?;
-    let corpus = PreparedCorpus::new(index.ranking_profile(), stats.document_count(), totals)?;
-    let frequencies: Vec<(&str, u64)> = terms
-        .iter()
-        .map(|term| (*term, index.document_frequency(partition, term)))
-        .collect();
-    let query = corpus.prepare_query(&frequencies)?;
+    let corpus = prepared_corpus(index, partition, stats.document_count())?;
+    let query = prepare_terms(index, partition, &corpus, &terms)?;
     let mut out = Vec::with_capacity(terms.len());
     for (ordinal, term) in terms.into_iter().enumerate() {
         let (document_frequency, inverse_document_frequency) = query
@@ -496,7 +508,7 @@ impl PartialOrd for ByRank {
 /// Sorted by the same byte order the index's dictionary is sorted by, so "visit
 /// the query's terms in order" and "visit the dictionary in order" are the same
 /// traversal.
-fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
+pub(crate) fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
     let mut terms: Vec<&str> = needle.iter().map(String::as_str).collect();
     terms.sort_unstable();
     terms.dedup();
@@ -515,8 +527,9 @@ fn rank_terms(
     partition: &PartitionKey,
     terms: &[&str],
     limit: Option<u64>,
+    work: &mut ScoringWork,
 ) -> Result<Vec<Scored>, TextError> {
-    let candidates = candidates(index, partition, terms)?;
+    let candidates = candidates(index, partition, terms, work)?;
     let limit = limit.map(|value| usize::try_from(value).unwrap_or(usize::MAX));
     let ordered = match limit {
         Some(keep) => bounded(candidates, keep),
@@ -558,6 +571,7 @@ fn candidates(
     index: &TextIndex,
     partition: &PartitionKey,
     terms: &[&str],
+    work: &mut ScoringWork,
 ) -> Result<Vec<Candidate>, TextError> {
     let Some(stats) = index.partition_stats(partition).copied() else {
         // Not a partition this index holds, so it holds no documents there. That
@@ -565,14 +579,11 @@ fn candidates(
         return Ok(Vec::new());
     };
 
-    let mut frequencies = Vec::with_capacity(terms.len());
     // `(document, term ordinal, predicate frequencies)`. Sorting this groups the whole
     // working set by document while leaving each document's terms in the sorted
     // term order the sum is defined to run in.
     let mut occurrences: Vec<CandidateOccurrence<'_>> = Vec::new();
     for (ordinal, term) in terms.iter().enumerate() {
-        let document_frequency = index.document_frequency(partition, term);
-        frequencies.push((*term, document_frequency));
         for (document, counts) in index.field_postings(partition, term) {
             occurrences.push(CandidateOccurrence {
                 document,
@@ -581,39 +592,152 @@ fn candidates(
             });
         }
     }
+    work.posting_lists += terms.len() as u64;
+    work.postings += occurrences.len() as u64;
     occurrences.sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
-    let totals = index
-        .field_totals(partition)
-        .ok_or_else(|| TextError::data("partition has no field totals"))?;
-    let corpus = PreparedCorpus::new(index.ranking_profile(), stats.document_count(), totals)?;
-    let query = corpus.prepare_query(&frequencies)?;
+    let corpus = prepared_corpus(index, partition, stats.document_count())?;
+    let query = prepare_terms(index, partition, &corpus, terms)?;
 
     let mut out: Vec<Candidate> = Vec::new();
     let mut at = 0;
     while at < occurrences.len() {
         let document = occurrences[at].document;
-        let mut score = Fixed::ZERO;
-        let mut matched: u32 = 0;
-        while at < occurrences.len() && occurrences[at].document == document {
-            let CandidateOccurrence {
-                ordinal, counts, ..
-            } = occurrences[at];
-            let fields = index.field_inputs_from_counts(document, counts)?;
-            let contribution = query.contribution(
-                ordinal as usize,
-                &fields[..index.ranking_profile().fields().len()],
-            )?;
-            score = score.checked_add(contribution)?;
-            matched += 1;
-            at += 1;
-        }
-        out.push(Candidate {
-            document,
-            score: index.ranking_profile().validate_score(score)?,
-            matched,
-        });
+        let run = occurrences[at..]
+            .iter()
+            .take_while(|entry| entry.document == document)
+            .count();
+        let held = occurrences[at..at + run]
+            .iter()
+            .map(|entry| (entry.ordinal as usize, entry.counts));
+        out.push(score_document(index, &query, document, held, work)?);
+        at += run;
     }
     Ok(out)
+}
+
+/// One partition's corpus, prepared from the statistics the index already holds.
+///
+/// Nothing here walks the corpus: the population is the partition's stored count
+/// and the field totals were summed once, when the index was built. So preparing
+/// it costs a function of the ranking profile's field count, whether the caller
+/// then scores a thousand candidates or one.
+fn prepared_corpus<'i>(
+    index: &'i TextIndex,
+    partition: &PartitionKey,
+    documents: u64,
+) -> Result<PreparedCorpus<'i>, TextError> {
+    let totals = index
+        .field_totals(partition)
+        .ok_or_else(|| TextError::data("partition has no field totals"))?;
+    PreparedCorpus::new(index.ranking_profile(), documents, totals)
+}
+
+/// `terms`' inverse document frequencies over `corpus`, in their sorted order.
+///
+/// A document frequency is the length of the term's posting run within the
+/// partition, which [`TextIndex::document_frequency`] reads off the dictionary
+/// in two binary searches without visiting a single posting.
+fn prepare_terms<'c, 'p>(
+    index: &TextIndex,
+    partition: &PartitionKey,
+    corpus: &'c PreparedCorpus<'p>,
+    terms: &[&str],
+) -> Result<PreparedQuery<'c, 'p>, TextError> {
+    let frequencies: Vec<(&str, u64)> = terms
+        .iter()
+        .map(|term| (*term, index.document_frequency(partition, term)))
+        .collect();
+    corpus.prepare_query(&frequencies)
+}
+
+/// One document's exact score: the **one** summation every score in this crate is
+/// produced by.
+///
+/// `held` is the document's postings for the query terms it holds, as `(term
+/// ordinal, predicate frequencies)` in ascending ordinal order — the sorted term
+/// order the sum is defined to run in. The ranker hands it a run of its grouped
+/// occurrences; the point scorer hands it the postings its lookups located. Both
+/// reach the same additions in the same order, so the two scores are one number
+/// rather than two numbers that agree.
+fn score_document<'a>(
+    index: &TextIndex,
+    query: &PreparedQuery<'_, '_>,
+    document: u32,
+    held: impl Iterator<Item = (usize, &'a [(u32, u64)])>,
+    work: &mut ScoringWork,
+) -> Result<Candidate, TextError> {
+    let field_count = index.ranking_profile().fields().len();
+    let mut score = Fixed::ZERO;
+    let mut matched: u32 = 0;
+    for (ordinal, counts) in held {
+        let fields = index.field_inputs_from_counts(document, counts)?;
+        score = score.checked_add(query.contribution(ordinal, &fields[..field_count])?)?;
+        matched += 1;
+    }
+    work.documents_scored += 1;
+    Ok(Candidate {
+        document,
+        score: index.ranking_profile().validate_score(score)?,
+        matched,
+    })
+}
+
+/// The work one scoring call did, counted where it is done.
+///
+/// Every field is a count of an operation, never a duration, so two calls over the
+/// same index and request report the same numbers on every run and every target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScoringWork {
+    /// Posting lists walked from end to end: one per `(partition ranked, needle
+    /// term)`.
+    pub(crate) posting_lists: u64,
+    /// Individual postings those walks read.
+    pub(crate) postings: u64,
+    /// Documents a score was computed for.
+    pub(crate) documents_scored: u64,
+}
+
+/// A document's score and matched-term count, computed **without ranking
+/// anything**: the point scorer a caller reaches for when the one position a
+/// rank would fill is read by nothing.
+///
+/// `located` is what that caller's membership lookups found — the document's
+/// posting for each needle term it holds, as `(term ordinal, predicate
+/// frequencies)` over `terms` in ascending ordinal order — so no posting is
+/// searched for twice and none is walked. `terms` must be the needle's
+/// [`distinct_terms`], the same list the ranker would have been handed.
+///
+/// The score is the one the ranker gives this document, exactly: the corpus is
+/// prepared from the same stored statistics, the inverse document frequencies
+/// from the same posting-run lengths, and the sum runs through
+/// [`score_document`], the one summation the ranker uses too. What is missing is
+/// only [`Scored::partition_rank`], because a rank is a fact about every other
+/// candidate of the partition and computing it is exactly the corpus-wide work
+/// this function exists not to do.
+///
+/// Work is independent of the corpus: one binary search per needle term for its
+/// document frequency, and one field-input assembly per held term.
+pub(crate) fn score_located(
+    index: &TextIndex,
+    document: u32,
+    terms: &[&str],
+    located: &[(usize, &[(u32, u64)])],
+    work: &mut ScoringWork,
+) -> Result<(Fixed, u32), TextError> {
+    let partition = index.partition_key_of(document).ok_or_else(|| {
+        TextError::data(format!(
+            "document {document} is not in this index, so there is nothing to score"
+        ))
+    })?;
+    let stats = index.partition_stats(partition).copied().ok_or_else(|| {
+        TextError::data(format!(
+            "document {document} names a partition the index does not hold"
+        ))
+    })?;
+    let corpus = prepared_corpus(index, partition, stats.document_count())?;
+    let query = prepare_terms(index, partition, &corpus, terms)?;
+    let scored = score_document(index, &query, document, located.iter().copied(), work)?;
+    Ok((scored.score, scored.matched))
 }
 
 /// Every candidate, in rank order.

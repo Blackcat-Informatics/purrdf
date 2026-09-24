@@ -40,8 +40,9 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DuplicatePolicy, EvalError,
-    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankFidelity,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    Volatility,
 };
 
 mod common;
@@ -306,6 +307,7 @@ fn registry(
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );
@@ -387,7 +389,7 @@ fn run(registry: &PropertyFunctionRegistry) -> Result<(u32, ProducerStatus), Exe
     };
     let compiled = compile(&planned, &env).expect("the plan is admitted");
     let depth = compiled.units[0].depth();
-    let execution = block_on(execute(&compiled, registry, &*common::empty_dataset()))?;
+    let execution = block_on(execute(&compiled, registry, common::empty_dataset()))?;
     let status = execution.statuses[&iri(&ex(DOCS))].clone();
     Ok((depth, status))
 }
@@ -798,8 +800,8 @@ fn a_self_bounding_producer_is_asked_for_its_invoked_modes_number() {
             fusion_profile: None,
         };
         let compiled = compile(&planned, &env).expect("a depth of two is inside the declaration");
-        let execution = block_on(execute(&compiled, &shallow, &*common::empty_dataset()))
-            .expect("the unit runs");
+        let execution =
+            block_on(execute(&compiled, &shallow, common::empty_dataset())).expect("the unit runs");
         assert_eq!(
             execution.statuses[&iri(&ex(DOCS))],
             ProducerStatus::DepthReached { rank: 2 },
@@ -909,6 +911,7 @@ fn registry_declaring(
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );

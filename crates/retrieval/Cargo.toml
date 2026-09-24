@@ -36,12 +36,14 @@ purrdf-core.workspace = true
 # The property-function seam: `RegistryId` is the instance identity a plan
 # records, and the producer-capability declarations are consumed from here.
 purrdf-sparql-eval.workspace = true
-# The SPARQL front end the evaluator above parses with, used at exactly one seam:
-# `StratumUnit::new` reads a caller-supplied query text through it, so a text that
-# is not a query (or not a `SELECT`) is refused at construction, and the two clauses
-# the wrapping `SELECT` has no place for — the prologue and the dataset clause — are
-# found and moved onto the wrapper that bounds it. Nothing else in this crate looks
-# at SPARQL as anything but a string.
+# The SPARQL front end the evaluator above parses with, used at exactly one seam: a
+# caller-supplied query text. `StratumUnit::new` reads it through this parser, so a
+# text that is not a query (or not a `SELECT`) is refused at construction, the two
+# clauses the wrapping `SELECT` has no place for — the prologue and the dataset
+# clause — are found and moved onto the wrapper that bounds it, and a text declaring
+# an exclusion basis is checked for a call its candidate column is drawn from. Each
+# lookup is written as algebra from a prepared call and serialised by this crate's
+# writer. Nothing else in this crate looks at SPARQL as anything but a string.
 purrdf-sparql-algebra.workspace = true
 # The exact base-10 fixed-point type (`Fixed`) stratum weights are expressed in,
 # so a plan never carries a float where exactness is the whole point.
@@ -70,6 +72,8 @@ purrdf-alloc-probe = { workspace = true }
 pretty_assertions.workspace = true
 # A document format for the serde round-trip test.
 serde_json.workspace = true
+# The timed benches (`benches/on_demand_read.rs`). Report-only.
+criterion = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # The wasm32 test harness, for `tests/wasm_determinism.rs` — the one test in this
@@ -87,4 +91,11 @@ wasm-bindgen-test = { workspace = true }
 # enforced by `tests/fusion_frontier_alloc.rs`, which compares two runs.
 [[bench]]
 name = "fusion_frontier_alloc"
+harness = false
+
+# The fused read taken on demand against the same read materialised, over the three
+# shapes that decide what reading a row per pull is worth. Report-only: the
+# deterministic counterparts are asserted in `tests/multimodal_read_bound.rs`.
+[[bench]]
+name = "on_demand_read"
 harness = false

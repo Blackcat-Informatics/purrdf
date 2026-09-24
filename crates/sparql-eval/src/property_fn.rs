@@ -132,10 +132,30 @@ impl core::fmt::Display for PfArity {
 /// evaluator's per-invocation buffer, and deep-cloning heap-string-owning
 /// [`TermValue`]s on a per-row invocation path would be pure overhead. A relation
 /// that must retain a value past [`PropertyFunction::open`] clones it itself.
+///
+/// # Unobserved positions
+///
+/// A free position may also be **unobserved**: the call site wrote a blank node
+/// there that occurs nowhere else in the call. The engine binds such a position,
+/// compares nothing against it and projects it away before the call's rows leave
+/// (see the blank-node rule in `crate::property_fn_eval`), so no operator, filter,
+/// projection or join can ever read the value a relation emits there. That makes it
+/// the one kind of position whose value a relation need not *compute*: it still
+/// emits a term, because a row carries a value for every position, but whatever
+/// term it emits is discarded unread. [`Self::is_unobserved`] reports it, and a
+/// relation that ignores the report is exactly as correct as before — it merely
+/// computes a value nothing reads.
+///
+/// It is a fact about the query text and nothing else, so it cannot be wrong in the
+/// direction that matters: a position is reported unobserved only where the call
+/// site spelled "I do not care" in SPARQL's own vocabulary for it.
 #[derive(Debug, Clone, Copy)]
 pub struct PfArgs<'a> {
     subject: &'a [Option<&'a TermValue>],
     object: &'a [Option<&'a TermValue>],
+    /// Per flattened position, whether its emitted value is read by nothing. Empty
+    /// means every position is observed — the reading [`Self::new`] gives.
+    unobserved: &'a [bool],
 }
 
 impl<'a> PfArgs<'a> {
@@ -145,7 +165,36 @@ impl<'a> PfArgs<'a> {
         subject: &'a [Option<&'a TermValue>],
         object: &'a [Option<&'a TermValue>],
     ) -> Self {
-        Self { subject, object }
+        Self {
+            subject,
+            object,
+            unobserved: &[],
+        }
+    }
+
+    /// This view with the positions `unobserved` marks reported as unobserved.
+    ///
+    /// Indexed by flattened position; a position past the slice's end is
+    /// observed. Only a **free** position is ever reported unobserved, whatever
+    /// the slice says about a bound one: a bound position carries a value the
+    /// engine compares every emitted row against, so it is observed by
+    /// construction. See the type's documentation for what the engine guarantees
+    /// about a position it marks.
+    #[must_use]
+    pub const fn with_unobserved(mut self, unobserved: &'a [bool]) -> Self {
+        self.unobserved = unobserved;
+        self
+    }
+
+    /// Whether flattened position `pos` is free **and** its emitted value is read
+    /// by nothing — see the type's documentation.
+    ///
+    /// A relation may put any term at such a position, and may therefore skip
+    /// whatever work computing the real value would have cost. `false` for a bound
+    /// position, an observed free one, and a position out of range.
+    #[must_use]
+    pub fn is_unobserved(&self, pos: usize) -> bool {
+        self.get(pos).is_none() && self.unobserved.get(pos) == Some(&true)
     }
 
     /// The subject-side arguments, in written order.
@@ -578,6 +627,107 @@ impl DuplicatePolicy {
     }
 }
 
+/// What a producer's answer to *is this candidate out of reach for you* is a
+/// fact **about**.
+///
+/// A ranked stream offers rank order and nothing else: the only way a consumer
+/// can learn that a producer will never name a given candidate is to read that
+/// producer to its end. [`CandidateDomains`] is the declarative way out of that
+/// — a promise about whole blocks of the universe, made once at registration.
+/// This is the *observational* way out: the producer is asked about one
+/// candidate and answers from its own index, which is a fact no declaration
+/// about blocks could carry.
+///
+/// The variant does not say whether the producer can answer cheaply. That is
+/// derived from declarations the registry already holds — a mode with
+/// [`RankedDeclaration::candidate_position`] bound and the
+/// [`RankedDeclaration::depth_placement`] position, where there is one, free,
+/// whose [`PropertyFunction::rows_per_invocation`] is a point bound: the shape
+/// [`RankedDeclaration::exclusion_lookup_mode`] derives for the lookup — and
+/// [`PropertyFunctionRegistry::register_ranked`] refuses a declared basis
+/// without one, so a producer that can only answer by scanning is never looked
+/// up into a table scan. What cannot be derived is what the answer *means*, and
+/// that is the whole of what this field declares.
+///
+/// There is deliberately no `Default`. A producer either answers such a lookup
+/// or it does not, and a defaulted value would be this layer putting a claim in
+/// the mouth of a producer that made none, which is the refusal
+/// [`RankFidelity`] and [`CandidateDomains`] already make for the same reason.
+///
+/// # Why there is no basis of *my search did not find it*
+///
+/// The verdict is not computed from this field. A lookup is the producer's own
+/// call with the candidate bound, so `Excluded` means exactly what that
+/// call's empty answer means, and the field only says which kind of fact that
+/// is. A search-result basis would claim more than [`Self::Membership`] only for
+/// a producer whose lookup reran its search and reported the candidate missing
+/// from what it found — and that answer is exact only where the search is
+/// complete, while an index-keyed answer is exact whatever the search dropped.
+/// Every relation in this workspace that answers lookups answers them from its
+/// index, and where the index is keyed by the request, that answer already
+/// excludes every candidate a complete search would not name: the lexical
+/// relation answers from the needle's own posting lists, and its ranker scores
+/// exactly the documents those lists hold. A second basis would change no
+/// verdict any of them gives, would read no shorter, and would add one
+/// declaration a lossy producer could make unsoundly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExclusionBasis {
+    /// This producer answers no exclusion lookup at all.
+    ///
+    /// The honest state for every producer that was registered before the field
+    /// existed and for every producer that cannot cheaply answer *do you hold
+    /// this one*. A consumer holding this learns nothing and reads the stream
+    /// exactly as it always did.
+    Unavailable,
+    /// An exclusion is a fact about the producer's own **index**: it holds no
+    /// entry through which this request could reach the candidate.
+    ///
+    /// What counts as such an entry is the index's own structure. For a vector
+    /// space it is a row for the term, whatever the query vector. For an index
+    /// keyed by the request itself it is narrower, and the verdict sharper for
+    /// it: the lexical relation's entry for a document is a posting under one
+    /// of the needle's terms, so a document it holds under other terms only is
+    /// excluded too — it is in no candidate set for this needle, and so named
+    /// at no rank.
+    ///
+    /// Exact **independently of [`Completeness`]**. A candidate the index holds
+    /// no such entry for is one the producer will not name at any rank,
+    /// whatever a beam width, a candidate cut or a probe budget does to the
+    /// *order* it would have named things in. So a lossy producer's membership
+    /// answer is as sound as an exhaustive one's, and refusing it on
+    /// completeness grounds would throw away a provably exact answer.
+    ///
+    /// It is exact about the universe the index *holds*, and that is all. An
+    /// index that attests [`ServiceLevel::Incomplete`] has said its universe is
+    /// short of the corpus — a shard offline, a rebuild half done — so "I hold
+    /// no entry for it" from such an index is true and still says nothing about
+    /// whether the corpus holds one. A consumer may stop waiting for the stream
+    /// to name the candidate, because it will not, and must keep charging the
+    /// missing documents to the candidate's score, because the answer is silent
+    /// about exactly them.
+    Membership,
+}
+
+impl ExclusionBasis {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Membership => "membership",
+        }
+    }
+
+    /// Whether this producer answers an exclusion lookup at all.
+    ///
+    /// The one question every consumer asks first, spelled once so a reader
+    /// cannot get the polarity of the `Unavailable` comparison backwards.
+    #[must_use]
+    pub const fn is_declared(self) -> bool {
+        !matches!(self, Self::Unavailable)
+    }
+}
+
 /// Whether a producer names every row that was due to it, above the boundary it
 /// read to.
 ///
@@ -684,7 +834,7 @@ pub enum OrderFidelity {
 /// the field does not compile —
 ///
 /// ```compile_fail
-/// # use purrdf_sparql_eval::{RankedDeclaration, DuplicatePolicy, CandidateDomains};
+/// # use purrdf_sparql_eval::{RankedDeclaration, DuplicatePolicy, CandidateDomains, ExclusionBasis};
 /// # let stratum = purrdf_core::parse_iri("http://example.org/s").unwrap();
 /// // No `fidelity`. This is a compile error, not a silent default.
 /// let _ = RankedDeclaration {
@@ -695,6 +845,7 @@ pub enum OrderFidelity {
 ///     duplicates: DuplicatePolicy::Unique,
 ///     domains: CandidateDomains::Unrestricted,
 ///     block_position: None,
+///     exclusion: ExclusionBasis::Unavailable,
 ///     mandatory: false,
 /// };
 /// ```
@@ -705,7 +856,7 @@ pub enum OrderFidelity {
 /// the field is the reason.
 ///
 /// ```
-/// # use purrdf_sparql_eval::{RankedDeclaration, RankFidelity, DuplicatePolicy, CandidateDomains};
+/// # use purrdf_sparql_eval::{RankedDeclaration, RankFidelity, DuplicatePolicy, CandidateDomains, ExclusionBasis};
 /// # let stratum = purrdf_core::parse_iri("http://example.org/s").unwrap();
 /// let declaration = RankedDeclaration {
 ///     stratum,
@@ -716,6 +867,7 @@ pub enum OrderFidelity {
 ///     fidelity: RankFidelity::EXACT,
 ///     domains: CandidateDomains::Unrestricted,
 ///     block_position: None,
+///     exclusion: ExclusionBasis::Unavailable,
 ///     mandatory: false,
 /// };
 /// assert_eq!(declaration.fidelity, RankFidelity::EXACT);
@@ -1269,6 +1421,23 @@ pub struct RankedDeclaration {
     /// restricted stream's block does. Refusing the combination would throw away
     /// evidence a host volunteered and corrupt nothing.
     pub block_position: Option<usize>,
+    /// What this producer's answer to an **exclusion lookup** means, or
+    /// [`ExclusionBasis::Unavailable`] where it answers none.
+    ///
+    /// The fourth promise a producer makes about its own rows, and the only one
+    /// that is answered per *candidate* rather than declared once for the whole
+    /// stream. [`Self::domains`] lets a consumer learn that a producer cannot
+    /// name a whole block; this lets it learn — by asking — that a producer will
+    /// never name one particular candidate, which is the only evidence that can
+    /// settle finality where two producers declare the same block and their
+    /// results do not overlap.
+    ///
+    /// It declares the **basis** and nothing else. Whether the producer can
+    /// answer cheaply is derived from the modes and row bounds the registry
+    /// already holds, and a declared basis without a point-bound candidate mode
+    /// that leaves the depth free is refused at registration — see [`ExclusionBasis`] for why the basis is
+    /// the one half that cannot be derived.
+    pub exclusion: ExclusionBasis,
     /// Whether a request that reaches this producer must actually be served by
     /// it. Declared by the host, never inferred by a consumer: admission
     /// enforces whatever the registry declared and adds nothing of its own.
@@ -1300,6 +1469,14 @@ impl RankedDeclaration {
         // may be read to claim.
         self.fidelity.push_canonical(&mut out);
         self.domains.push_canonical(&mut out);
+        // Beside the fidelity and the domains, because it is the same kind of
+        // fact and it changes the same thing: a registry whose producers answer
+        // exclusion lookups fuses a different read from one whose producers do
+        // not, and two registries that fuse differently must not share a digest.
+        // An always-present field rather than a present/absent discriminant,
+        // because `Unavailable` is a declaration ("I answer none") rather than
+        // a gap in one.
+        push_canonical_field(&mut out, self.exclusion.as_str());
         push_canonical_field(&mut out, &self.candidate_position.to_string());
         // Beside the domains for the same reason they are beside the duplicate
         // policy: this position decides whether a consumer can hold the
@@ -1339,6 +1516,52 @@ impl RankedDeclaration {
             }
         }
         out
+    }
+
+    /// The access pattern an exclusion lookup of this producer is invoked in,
+    /// over its `total` flattened argument positions.
+    ///
+    /// * **Bound**: [`Self::candidate_position`], always — the lookup is the
+    ///   question *do you hold this candidate* — and every other position
+    ///   `supplies` answers `true` for: a position the lookup's text fills with
+    ///   a constant, or with a variable a pattern it evaluates first binds.
+    /// * **Free**: the [`Self::depth_placement`] position, where there is one,
+    ///   **whatever `supplies` says**. A depth is an offer of how many rows to
+    ///   rank, and a producer handed one answers *is this candidate among your
+    ///   best n*, whose absences are not exclusions — a candidate at rank n+1 is
+    ///   one the stream still names. And every position `supplies` answers
+    ///   `false` for: an output, a blank node, a variable nothing binds first.
+    ///
+    /// This is the one derivation of that shape, read by both sides of the
+    /// contract. [`PropertyFunctionRegistry::register_ranked`] admits a declared
+    /// [`ExclusionBasis`] against the widest shape any lookup can take — every
+    /// position supplied, so only the candidate and the freed depth are
+    /// decided — and requires a declared mode that
+    /// [subsumes](BindingPattern::subsumes) it, binds the candidate and is a
+    /// point bound. A compiler deriving the lookup of one call asks the
+    /// registry to serve that call's own shape, derived here from the positions
+    /// its text really fills. Because a lookup's shape can only be narrower than
+    /// the widest one, a mode registration admitted is exactly a mode that frees
+    /// the depth, and no lookup is ever refused for a depth the producer's
+    /// declaration requires bound.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `total` exceeds [`BindingPattern::MAX_ARITY`], the ceiling every
+    /// pattern over a relation's positions is held to.
+    #[must_use]
+    pub fn exclusion_lookup_mode(
+        &self,
+        total: usize,
+        supplies: impl Fn(usize) -> bool,
+    ) -> BindingPattern {
+        let depth = self
+            .depth_placement
+            .as_ref()
+            .map(|placement| placement.position);
+        BindingPattern::from_bools((0..total).map(|position| {
+            position == self.candidate_position || (depth != Some(position) && supplies(position))
+        }))
     }
 
     /// Every placement of every accepted term, in declaration order.
@@ -1801,6 +2024,20 @@ impl PropertyFunctionRegistry {
     ///   name nothing is not a narrow domain, it is a producer that should not
     ///   be registered; a host that does not want to restrict its candidates
     ///   declares [`CandidateDomains::Unrestricted`].
+    /// * `decl.exclusion` declares a basis ([`ExclusionBasis::Membership`]) and
+    ///   `relation` declares no access mode binding `decl.candidate_position`,
+    ///   leaving the `decl.depth_placement` position free where there is one,
+    ///   whose [`PropertyFunction::rows_per_invocation`] is a point bound. A
+    ///   producer that cannot answer *do you hold this one* cheaply must never
+    ///   be looked up into a table scan. The depth must be free because every
+    ///   exclusion lookup frees it
+    ///   ([`RankedDeclaration::exclusion_lookup_mode`]): a producer handed a
+    ///   depth answers *is this among your best n*, whose absences are not
+    ///   exclusions, so a mode binding it serves no lookup at all. Every other
+    ///   position the mode binds is one a lookup may supply, and is not refused
+    ///   here. Completeness is deliberately not consulted: a candidate the
+    ///   producer's index holds no entry for is one it names at no rank,
+    ///   whatever its search dropped.
     /// * `decl.stratum` is already claimed by another registered producer — one
     ///   stratum carries one producer, because a rank means something only inside
     ///   the list that assigned it. The panic message carries the whole argument:
@@ -1839,7 +2076,7 @@ impl PropertyFunctionRegistry {
              observable difference is which rows the query returns"
         );
         if let Some(decl) = decl {
-            validate_declaration(&iri, &decl, relation.arity());
+            validate_declaration(&iri, &decl, relation.as_ref());
             assert_stratum_unclaimed(&iri, &decl, &self.ranked);
             self.ranked.insert(iri.clone(), decl);
         }
@@ -2116,16 +2353,24 @@ fn assert_stratum_unclaimed(
     );
 }
 
-/// Check that `decl` can actually be rendered against a relation of `arity`.
+/// Check that `decl` can actually be rendered against, and answered by,
+/// `relation`.
 ///
 /// Every failure here is host misconfiguration committed at registration, so it
 /// panics and names the offending value rather than deferring to the first query
 /// that tries to render the declaration and finds it cannot.
 ///
+/// It takes the relation rather than only its [`PfArity`] because one term —
+/// [`RankedDeclaration::exclusion`] — is checked against the relation's declared
+/// *modes and row bounds* rather than against its positions: a producer may only
+/// declare an exclusion basis if the registry already holds a mode that binds the
+/// candidate and a row bound that makes such a call a point lookup.
+///
 /// # Panics
 ///
 /// See [`PropertyFunctionRegistry::register_ranked`] for the full list.
-fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
+fn validate_declaration(iri: &str, decl: &RankedDeclaration, relation: &dyn PropertyFunction) {
+    let arity = relation.arity();
     let total = arity.total();
     // An empty restriction is not a narrow producer, it is a producer that
     // promised to name nothing. Read literally by a consumer it is a stream
@@ -2264,6 +2509,110 @@ fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
             );
         }
     }
+    validate_exclusion(iri, decl, relation, total);
+}
+
+/// Hold [`RankedDeclaration::exclusion`] to the one thing a declared basis
+/// requires of the producer that declared it: a cheap way to answer the lookup
+/// it will actually be asked.
+///
+/// That lookup's shape is [`RankedDeclaration::exclusion_lookup_mode`]'s: the
+/// candidate bound, the depth — where the declaration places one — free, every
+/// other position bound only where a text supplies it. So the declared mode
+/// that answers it must bind the candidate, leave the depth free, and be a
+/// point bound. A cheap mode that binds the depth is not one: no lookup is ever
+/// invoked in it, and admitting the basis on its strength would move the
+/// refusal from here to the first search.
+///
+/// Split out of [`validate_declaration`] because it asks a different kind of
+/// question: every check above is about *positions*, and this one is about what
+/// the relation already says elsewhere — the modes and row bounds the registry
+/// holds.
+///
+/// # What is NOT checked here, and why that is the point
+///
+/// [`ExclusionBasis::Membership`] is admitted from any producer, a
+/// [`Completeness::Lossy`] one included. Keying a refusal on completeness would
+/// be the mirror of a silent drop: it would refuse a provably exact answer — a
+/// candidate the producer's index holds no entry for is a candidate it never
+/// names, at any rank, whatever its search dropped — and the refusal would look
+/// like correct strictness while quietly costing every lossy producer the only
+/// evidence that can settle finality for it.
+///
+/// # Panics
+///
+/// See [`PropertyFunctionRegistry::register_ranked`].
+fn validate_exclusion(
+    iri: &str,
+    decl: &RankedDeclaration,
+    relation: &dyn PropertyFunction,
+    total: usize,
+) {
+    if !decl.exclusion.is_declared() {
+        return;
+    }
+    let basis = decl.exclusion.as_str();
+    // A mode that binds the candidate and emits at most one row is what turns
+    // "does this producer hold x" into a point lookup. Read off the modes the
+    // registry already holds rather than declared again beside the basis: a
+    // second spelling of a capability is a second chance to declare one the
+    // relation does not have.
+    //
+    // The mode must also serve a lookup at all, and a lookup never binds the
+    // depth. So the question is asked against the widest shape any lookup can
+    // take — every position a text could fill, bound; the depth, free — through
+    // the one derivation of that shape the lookup side reads too. A mode that
+    // binds the depth subsumes no lookup however cheap it is, and admitting the
+    // basis on its strength would only move the refusal to the first search,
+    // where every stratum's lookup fails to prepare.
+    let widest = decl.exclusion_lookup_mode(total, |_| true);
+    let point_lookup = relation.modes().iter().any(|mode| {
+        mode.subsumes(widest)
+            && mode.is_bound(decl.candidate_position)
+            && relation.rows_per_invocation(*mode) <= 1
+    });
+    if point_lookup {
+        return;
+    }
+    let declared = relation
+        .modes()
+        .iter()
+        .map(|mode| mode.code())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let depth = decl
+        .depth_placement
+        .as_ref()
+        .map_or_else(String::new, |depth| {
+            format!(
+                ", that leaves its per-stratum depth position ({}) free,",
+                depth.position
+            )
+        });
+    let why_depth = decl
+        .depth_placement
+        .as_ref()
+        .map_or_else(String::new, |depth| {
+            format!(
+                " The depth is free because every exclusion lookup frees it: a producer handed \
+             a depth answers `is this candidate among your best n`, whose absences are not \
+             exclusions, so a lookup is invoked no more bound than `{}` and a mode binding \
+             position {} serves none of them, however cheap it is.",
+                widest.code(),
+                depth.position
+            )
+        });
+    panic!(
+        "ranked declaration for <{iri}> declares an exclusion basis of {basis} but the relation \
+         declares no access mode that binds its candidate position ({}){depth} with a row bound \
+         of one; it declares [{declared}].{why_depth} An exclusion lookup asks `do you hold this \
+         candidate` once per candidate, so a producer that can only answer it by scanning would \
+         be looked up into a table scan — one per frontier candidate per stratum. Declare the \
+         mode the candidate-bound call really has, with the row bound it really has, or declare \
+         ExclusionBasis::Unavailable, which is the honest statement that this producer answers \
+         no such lookup",
+        decl.candidate_position
+    );
 }
 
 // ---------------------------------------------------------------------------

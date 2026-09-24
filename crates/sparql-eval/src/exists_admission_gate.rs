@@ -1594,8 +1594,8 @@ mod tests {
         // `false`, no case analysis at all). `MembershipRelation` above declares
         // EXACTLY ONE access pattern — subject bound — so the definition path (which
         // substitutes the outer `?s` into the call's subject argument BEFORE dispatch:
-        // `substitute_term_pattern`'s IRI-only value substitution — see
-        // `crate::expr::substitute_pattern`'s doc, "Property-function arguments") always
+        // `crate::substitute::bind_call_arguments`, which writes an IRI in as a constant
+        // — see `crate::expr::substitute_pattern`'s doc, "Property-function arguments") always
         // invokes it correctly, while the forced probe evaluates the call UNCONSTRAINED
         // — `?s` still a free VARIABLE, not a bound value — which no declared mode
         // admits at all.

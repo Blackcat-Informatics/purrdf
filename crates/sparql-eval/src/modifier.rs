@@ -244,7 +244,9 @@ fn dedup_lifted<D: DatasetView + Sync>(
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
-    Ok(lift.finish(dedup(seq)))
+    // A shared blank's column is not part of a solution: two rows that differ only
+    // there are the same solution (see `crate::blank_scope`).
+    Ok(lift.finish(dedup(crate::blank_scope::without_joined_blanks(seq))))
 }
 
 /// Drop duplicate rows, preserving first-seen order (SolutionTerm equality is exact
@@ -1380,17 +1382,31 @@ fn eval_aggregate<D: DatasetView + Sync>(
         // charge precedes the dedup check. An explicit loop, rather than
         // `Iterator::count`, so a refused charge stops the count exactly where
         // the budget ran out instead of after the whole group was scanned.
-        let mut seen: Option<DetHashSet<&Solution<D::Id>>> = agg.distinct.then(DetHashSet::default);
+        // A solution is its pattern's variables only, so a shared blank's column
+        // (see `crate::blank_scope`) is left out of the row identity `DISTINCT *`
+        // compares; `None` — every schema without one — compares the row itself.
+        let visible = agg
+            .distinct
+            .then(|| crate::blank_scope::visible_columns(schema))
+            .flatten();
+        let mut seen: Option<DetHashSet<std::borrow::Cow<'_, Solution<D::Id>>>> =
+            agg.distinct.then(DetHashSet::default);
         let mut survivors: usize = 0;
         for &i in idxs {
             if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
                 ctx.expression_barrier.record(tripped);
                 return Ok(None);
             }
-            if let Some(seen) = seen.as_mut()
-                && !seen.insert(&rows[i])
-            {
-                continue;
+            if let Some(seen) = seen.as_mut() {
+                let identity = match &visible {
+                    None => std::borrow::Cow::Borrowed(&rows[i]),
+                    Some(keep) => std::borrow::Cow::Owned(
+                        keep.iter().map(|&column| rows[i][column]).collect(),
+                    ),
+                };
+                if !seen.insert(identity) {
+                    continue;
+                }
             }
             survivors += 1;
         }
