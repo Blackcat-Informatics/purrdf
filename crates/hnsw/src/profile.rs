@@ -108,9 +108,9 @@
 //! Version 2 of the image is the first whose distances are folded by the sixteen-lane
 //! exact arithmetic, and its `arithmetic` field (the `u32` version 1 reserved as zero)
 //! records that. A version-1 image is refused with
-//! [`HnswError::VersionMismatch`](crate::HnswError::VersionMismatch), and an image whose
+//! [`HnswError::VersionMismatch`], and an image whose
 //! field names another arithmetic with
-//! [`HnswError::ArithmeticMismatch`](crate::HnswError::ArithmeticMismatch).
+//! [`HnswError::ArithmeticMismatch`].
 //!
 //! # The arithmetic is part of the profile
 //!

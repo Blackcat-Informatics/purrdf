@@ -209,9 +209,14 @@ pub const fn byte_run_count(table: &[u8; 256]) -> usize {
 /// the law. `ByteClass` is how such a writer gets the same kernel without
 /// retyping it: it supplies its class as a `const [u8; 256]` membership table
 /// (entry `b` non-zero when byte `b` is a member), and [`find_first`](Self::find_first)
-/// runs the sixteen-byte `0x00`/`0xFF`-lane scan described in the
-/// [module documentation](self) over the table's runs, which are derived from
-/// the table at compile time.
+/// runs the same scan every scanner in this module runs, over the table's
+/// runs (derived from the table at compile time): the input walked in
+/// sixteen-byte chunks, each byte answered by one wrapping subtraction and
+/// one unsigned comparison per run with no data-dependent branch, the
+/// sixteen per-chunk answers OR-folded for a branch-free clean-chunk test,
+/// and — in the one chunk that holds a hit — the first hit's offset read as
+/// the trailing-zero count over 8 of the lanes taken as a little-endian
+/// `u128`.
 ///
 /// `RUNS` must be [`byte_run_count`] of the same table; any other value is a
 /// compile-time failure when the class is a `const`, so the runs are always the

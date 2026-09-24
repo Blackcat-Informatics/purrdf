@@ -122,11 +122,12 @@ const HELD_REFERENCES: usize = 32;
 /// Validation and the search for references are one pass: one
 /// [`find_first_xml_special`] scan stops at every byte that begins a scalar
 /// outside `Char` or a scalar needing a reference, the scalar there is checked
-/// and classified at once, and the offsets of the first
-/// [`HELD_REFERENCES`] references are held on the stack. Emission then copies
-/// the runs between them whole, with no second scan; only a value holding more
-/// references than that is scanned again, from the first one not held. Nothing
-/// is allocated.
+/// and classified at once, and the offsets of the first references found are
+/// held in a small fixed-size array on the stack rather than rediscovered.
+/// Emission then copies the runs between them whole, with no second scan;
+/// only a value holding more references than the array holds has its tail,
+/// from the first reference not held, scanned a second time for emission
+/// only. Nothing is allocated.
 ///
 /// Emission itself is infallible here by contract: a sink that can fail records
 /// its own sticky error and surfaces it at its own terminal, so this function

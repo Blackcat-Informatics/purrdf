@@ -80,8 +80,10 @@ const fn nibble_digit(n: u8) -> u8 {
 /// `2 * bytes.len()`. An empty slice renders as an empty string.
 ///
 /// The digits are written into a buffer sized up front, two per input byte,
-/// each nibble mapped to its digit by [`nibble_digit`]'s comparisons, so the
-/// loop has no formatting call and no branch per byte.
+/// each nibble mapped to its digit by comparisons only — `n + b'0'` is the
+/// digit for `n <= 9`; the letters start 39 bytes after `b'9' + 1`, so a
+/// nibble above 9 adds 39 more, with the addend selected by masking and no
+/// branch — so the loop has no formatting call and no branch per byte.
 ///
 /// ```
 /// use purrdf_core::hex;
