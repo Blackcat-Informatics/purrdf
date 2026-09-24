@@ -411,7 +411,10 @@ pub enum EntailError {
     /// regime they did. So the refusal names the regime, and a caller that wants those two
     /// reaches [`materialize`] with the input they are defined by.
     UnsupportedRegime(Regime),
-    /// A premise `owl:imports` a document the caller's [`ImportMap`] does not resolve.
+    /// A premise `owl:imports` a document the caller's [`ImportMap`] does not resolve, that
+    /// is not the premise document itself, and that the premise does not already contain (the
+    /// rule
+    /// [`entails::imports::unresolved_imports`] states).
     ///
     /// OWL 2 defines an ontology's imports closure to BE the ontology, so this is not a
     /// slightly smaller premise — it is a different one, and every answer over it would be
@@ -495,7 +498,8 @@ impl std::fmt::Display for EntailError {
             ),
             Self::UnresolvedImport(iri) => write!(
                 f,
-                "the premise owl:imports <{iri}>, which the supplied import map does not resolve"
+                "the premise owl:imports <{iri}>, which the supplied import map does not \
+                 resolve and the premise does not contain"
             ),
             Self::MatchBudget => write!(
                 f,

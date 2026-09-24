@@ -849,10 +849,11 @@ unsafe fn import_pairs<'a>(
 /// an `owl:imports` states that its axioms are its own PLUS those of the documents it names,
 /// so this is where those documents arrive — and the `owl:imports` triple stays exactly
 /// where the caller wrote it. **PurRDF fetches nothing**: an ontology IRI the table does not
-/// resolve is an error naming the document, never a network access and never a silently
-/// empty import. `import_count == 0` with two NULL arrays is the ordinary "imports nothing"
-/// case and is accepted; a NULL array with a non-zero count is a caller error and is
-/// refused, never dereferenced. Resolution is transitive to a fixpoint.
+/// resolve, and the premise does not already hold (`<X> a owl:Ontology`, or an
+/// `owl:versionIRI` naming it), is an error naming the document, never a network access
+/// and never a silently empty import. `import_count == 0` with two NULL arrays is the
+/// ordinary "imports nothing" case and is accepted; a NULL array with a non-zero count is a
+/// caller error and is refused, never dereferenced. Resolution is transitive to a fixpoint.
 ///
 /// # Safety
 /// `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings; when
@@ -894,7 +895,7 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
                 "purrdf_entail_certain_answers",
             )?;
             store_answer(
-                certain_answers_to_string(regime, document, pattern, &imports),
+                certain_answers_to_string(regime, document, pattern, &imports, &[]),
                 out_answer,
                 out_certificate,
             )
@@ -970,7 +971,7 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
                 "purrdf_entail_graph_entails",
             )?;
             store_answer(
-                graph_entails_to_string(regime, premise, conclusion, &imports),
+                graph_entails_to_string(regime, premise, conclusion, &imports, &[]),
                 out_answer,
                 out_certificate,
             )
@@ -1037,7 +1038,7 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
                 "purrdf_entail_verify_entailment",
             )?;
             store_answer(
-                verify_entailment_to_string(regime, premise, conclusion, &imports),
+                verify_entailment_to_string(regime, premise, conclusion, &imports, &[]),
                 out_answer,
                 out_certificate,
             )

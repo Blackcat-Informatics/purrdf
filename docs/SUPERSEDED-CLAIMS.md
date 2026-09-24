@@ -486,3 +486,38 @@ same ending for the same rows. Pinned by
 `multimodal_read_bound::the_on_demand_read_returns_the_answer_the_materialised_read_returns`,
 which holds every configuration's terminal statuses, and its rows, to the
 materialized read's.
+
+### An unresolved shapes-graph import warns and validates the shapes graph alone
+
+**Was stated in** `crates/cli/src/shapes_source.rs`, the module documentation:
+
+> Naming no `--import` at all leaves the imports UNRESOLVED but does not refuse them: it
+> reports each one on stderr and the caller proceeds with the shapes graph alone. That
+> asymmetry is deliberate and load-bearing.
+
+**Why it was believed.** Some shapes documents, including two in the vendored W3C
+SHACL corpus, carry an `owl:Ontology` header whose imports do not affect their shapes.
+Refusing every unresolved import looked like it would reject valid input. The check
+also had no rule for telling a missing ontology from one already in hand: every
+`owl:imports` object counted as unresolved.
+
+**What changed.** The over-refusal risk came from that missing rule, not from
+refusing. An import is now resolved when it names a document already read (the
+shapes document's own retrieval IRI, `--shapes-base`, `shacl pack --base` or
+`@base`, or an `--import` document), or when the closure already holds the
+ontology it names (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is
+`<X>`). The first case is SHACL's `sh:prefixes/owl:imports*` idiom, which points
+at the document's own IRI. A shapes document that merges the W3C SHACL 1.2 vocabularies is therefore complete as written.
+With that rule in place, the warn-and-continue path could only mean one thing: a
+verdict about a smaller shapes graph than the one named, printed next to a warning
+that does not undo it.
+
+**The rule now.** `purrdf_entail::entails::imports::unresolved_imports` decides, and
+every host takes its verdict from it: `validate --shapes` and `shacl pack` refuse an
+unresolved import with exit 1, naming each IRI and its `--import IRI=FILE` pair;
+`pack_shapes_product` refuses it on `UnsupportedCapability`; and `entails` refuses it
+with `EntailError::UnresolvedImport`. Pinned by `merged_vocabulary_needs_no_import_flag`
+and `unresolved_import_is_refused` (CLI), `merged_vocabulary_packs` and
+`unresolved_import_refused` (product), `import_present_in_graph_is_resolved`,
+`absent_import_is_unresolved` and `self_import_is_resolved` (the rule), and
+`a_self_imported_prefix_document_needs_no_import_flag` (the W3C `prefixes-001` vector).

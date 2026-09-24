@@ -618,6 +618,64 @@ fn an_open_predicate_renders_the_limit_that_makes_the_answer_honest() {
 
 // ── `--import`: the documents the premise says it is not all of ─────────────────
 
+/// A premise that `owl:imports` its OWN document IRI — by its `file://` retrieval IRI, or by
+/// `--base` — needs no pair: the import names the document being read. The neighbour, an
+/// import of a document that is NOT the premise, is still refused by name.
+#[test]
+fn a_premise_importing_its_own_iri_needs_no_pair() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let conclusion = write_file(dir, "derived.ttl", DERIVED_CONCLUSION);
+    let own = write_file(
+        dir,
+        "own.ttl",
+        &format!("<#o> <http://www.w3.org/2002/07/owl#imports> <> .\n{SUBCLASS_PREMISE}"),
+    );
+    for extra in [&[][..], &["--base", "http://example.org/premise"][..]] {
+        let mut args = vec![
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            &own,
+            "--conclusion",
+            &conclusion,
+        ];
+        args.extend_from_slice(extra);
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(0), "{extra:?}: {}", stderr(&o));
+        assert!(
+            stdout(&o).contains("\nentailment entailed\n"),
+            "{extra:?}: {}",
+            stdout(&o)
+        );
+    }
+
+    let other = write_file(
+        dir,
+        "other.ttl",
+        &format!(
+            "<#o> <http://www.w3.org/2002/07/owl#imports> <http://example.org/elsewhere> .\n\
+             {SUBCLASS_PREMISE}"
+        ),
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &other,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("owl:imports <http://example.org/elsewhere>"),
+        "{}",
+        stderr(&o)
+    );
+}
+
 /// `--import` ANSWERS A PREMISE WHOSE `owl:imports` IS INTACT.
 ///
 /// OWL 2 defines an ontology's imports closure to BE the ontology, so the conclusion is

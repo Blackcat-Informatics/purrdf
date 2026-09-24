@@ -75,17 +75,34 @@ one and explicitly permits `A` to import `B` to import `A`. Each imported
 document's own `@prefix` declarations travel with it, so a SHACL-AF `sh:select`
 written in an imported file resolves against the prefixes that file declares.
 
-Naming **any** pair makes the closure mandatory: an `owl:imports` no pair
-resolves is refused by name rather than folded in as an empty graph, and a pair
-the closure never reaches is refused as unused rather than read and ignored.
+The shapes document parses under its own `file://` retrieval IRI, or under
+`--shapes-base IRI` when given. That flag is the same one `shacl pack --base`
+is, and it is separate from `validate --base`, which sets only the DATA
+graph's base. An `@base` inside the shapes document still wins inside it, as
+Turtle specifies.
 
-Naming **no** pair is not a refusal. Each unresolved import is reported on
-stderr and the shapes graph validates alone — a shapes document may legitimately
-carry an ontology header whose imports are irrelevant to its shapes, and
-refusing those would reject input that is valid. What is gone is the silence:
-before PurRDF 1.0.1 an unresolved `owl:imports` was ignored without a word, so a
-shapes graph whose shapes all lived in an imported document reported `conforms
-true` against no shapes at all.
+An import whose document or ontology is **already loaded** needs no pair. It
+is resolved when it names a document that was read: the shapes document's
+own base (its `file://` retrieval IRI, `--shapes-base`, or `shacl pack
+--base`), an in-document `@base`, or an `--import` document's IRI. SHACL
+relies on this. `sh:prefixes` collects `sh:declare`s along `owl:imports*`, and a document often points that
+path at its own IRI from a node that is not an `owl:Ontology`. An import is
+also resolved when the graph holds `<X> a owl:Ontology`, or an ontology whose
+`owl:versionIRI` is `<X>`, and the rule applies across the whole closure. A
+shapes document that merges the W3C SHACL 1.2 vocabularies — `shnex.ttl`
+imports `sh:`, and `shacl.ttl` beside it declares `sh:` — is complete as
+written.
+
+Every **other** `owl:imports` no pair resolves is refused (exit 1). The refusal
+names each missing IRI and the `--import IRI=FILE` pair that resolves it, and
+suggests `--shapes-base IRI` for a document that imports its own published
+IRI — the W3C test vectors are such documents, read here from a local file.
+Validating without the imported document would be a verdict about a smaller
+shapes graph than the one named, so there is no warn-and-continue path. A pair
+the closure never reaches is refused as unused (exit 2) rather than read and
+ignored. The prepared-product packer that the WebAssembly and C-ABI hosts call
+applies the same rule, so every host agrees on which shapes graphs are
+complete.
 
 ## The SHACL 1.2 reifier-shape draft scope
 

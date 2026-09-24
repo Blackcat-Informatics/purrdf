@@ -89,8 +89,8 @@ const DATA: &str = concat!(
 
 // ── `shacl pack --import` and the owl:imports closure ───────────────────────────
 //
-// `shacl pack` used to read raw Turtle text through a route with no import table and no
-// stderr to warn on, so an `owl:imports` it could not see was silently dropped: the product
+// `shacl pack` used to read raw Turtle text through a route with no import table, so an
+// `owl:imports` it could not see was silently dropped: the product
 // carried FEWER shapes than the document it was packed from, and validating through it
 // reported a decided, well-formed, WRONG verdict with nothing printed to say so. These tests
 // pin the two lanes to the same answer, which is what the shared seam exists to guarantee.
@@ -189,14 +189,16 @@ fn packing_with_import_agrees_byte_for_byte_with_validating_the_document_with_im
     }
 }
 
-/// WITHOUT `--import`, `shacl pack` reports the unresolved `owl:imports` on stderr and still
-/// packs the root graph alone — the same warn-not-refuse asymmetry `validate --shapes`
-/// carries, and for the same reason (see `crate::shapes_source`'s module documentation, or
-/// its mirror in `validate --shapes`'s doc comment): a shapes document may legitimately carry
-/// an inert `owl:Ontology` header, and refusing every one of them would reject input that is
-/// valid.
+/// WITHOUT `--import`, `shacl pack` REFUSES an `owl:imports` whose ontology is not in the
+/// shapes graph, exactly as `validate --shapes` does: packing the root graph alone would
+/// write a product carrying fewer shapes than the document it was packed from. The refusal
+/// names the import and the pair that resolves it, and no product is written.
+///
+/// The neighbouring VALID case is the same root with the imported ontology merged INTO it:
+/// the import is then resolved in place, the product is written with no `--import`, and it
+/// enforces the shape.
 #[test]
-fn packing_an_unresolved_import_emits_a_warning_and_still_packs() {
+fn packing_an_unresolved_import_is_refused_and_an_in_graph_one_packs() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", PACK_IMPORT_ROOT);
     let data = write_file(dir.path(), "data.ttl", PACK_IMPORT_DATA);
@@ -205,29 +207,44 @@ fn packing_an_unresolved_import_emits_a_warning_and_still_packs() {
 
     let packed = run(&["shacl", "pack", "--shapes", &root, "--out", product_path]);
     let err = stderr(&packed);
-    assert_eq!(code(&packed), 0, "an unresolved import still packs: {err}");
-    assert!(
-        err.contains("shacl warning") && err.contains("http://example.org/lib"),
-        "the unresolved import is reported, not silently dropped: {err}"
+    assert_eq!(
+        code(&packed),
+        1,
+        "an unresolved import is a runtime refusal: {err}"
     );
     assert!(
-        err.contains("--import"),
-        "the warning names the remedy: {err}"
+        err.contains("<http://example.org/lib>")
+            && err.contains("--import http://example.org/lib=FILE"),
+        "the refusal names the import and the remedy: {err}"
     );
     assert!(
-        err.contains("shacl product bytes "),
-        "the product is still written: {err}"
+        !err.contains("shacl product bytes ") && !product.exists(),
+        "no product is written: {err}"
     );
 
-    // The root graph alone carries no shapes, so validating through the product decides
-    // `conforms true` — the SAME verdict `validate --shapes root.ttl` (no `--import`) reaches,
-    // never a report that pretends the imported shape ran.
+    // The same root, with the imported ontology's header and shape in the SAME document.
+    let merged = write_file(
+        dir.path(),
+        "merged.ttl",
+        &format!(
+            "{PACK_IMPORT_ROOT}<http://example.org/lib> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://www.w3.org/2002/07/owl#Ontology> .\n{PACK_IMPORT_LIB}"
+        ),
+    );
+    let packed = run(&["shacl", "pack", "--shapes", &merged, "--out", product_path]);
+    let err = stderr(&packed);
+    assert_eq!(code(&packed), 0, "an import resolved in place packs: {err}");
+    assert!(
+        !err.contains("owl:imports"),
+        "and is neither warned about nor required: {err}"
+    );
     let via_product = run(&["validate", "--shapes-product", product_path, &data]);
     assert_eq!(code(&via_product), 0, "{}", stderr(&via_product));
     assert!(
-        stderr(&via_product).contains("shacl conforms true\n")
-            && stderr(&via_product).contains("shacl results 0\n"),
-        "validating against the root alone still decides, honestly: {}",
+        stderr(&via_product).contains("shacl conforms false\n")
+            && stderr(&via_product).contains("shacl results 1\n"),
+        "the merged shape is enforced through the product: {}",
         stderr(&via_product)
     );
 }

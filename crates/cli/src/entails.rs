@@ -44,8 +44,10 @@
 //! `owl:imports` this command was not handed is a DIFFERENT premise from the one the operator
 //! asked about. PurRDF fetches nothing and mints no vocabulary, so the closure is
 //! caller-supplied configuration: each `--import` pair resolves one ontology IRI to one local
-//! document. An `owl:imports` no pair resolves is refused BY NAME by the boundary — never a
-//! silently truncated premise — and a malformed pair (no `=`) is a usage error here, never a
+//! document. An `owl:imports` no pair resolves, that does not name the premise document
+//! itself (its `file://` retrieval IRI or `--base`), and whose ontology the premise does not
+//! already hold, is refused BY NAME by the boundary — never a silently truncated premise —
+//! and a malformed pair (no `=`) is a usage error here, never a
 //! silently skipped one.
 //!
 //! ## The ontology-IRI half is an IRI, and it is checked as one
@@ -111,7 +113,7 @@
 //! `-`.
 
 use purrdf_iri::BaseScope;
-use purrdf_rdf::JsonLdSerializeOptions;
+use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::regime::{
     ReasoningAnswer, certain_answers_to_string, graph_entails_to_string,
     verify_entailment_to_string,
@@ -209,6 +211,17 @@ pub(crate) fn run(
     // import fails against the file the operator named rather than as a refusal attributed
     // to the premise's `owl:imports`.
     let premise = read_as_nquads(options.premise, "--premise", options)?;
+    // The IRI the premise document was read FROM — the base it parsed under, which is its
+    // `file://` retrieval IRI or `--base`. An `owl:imports` of that IRI names the premise
+    // itself, so the boundary resolves it in place rather than refusing it as missing. A
+    // container (pack, GTS) stores resolved IRIs and has no document base.
+    let premise_base = match format::resolve(options.from, options.premise)? {
+        SourceFormat::Native(native) => {
+            source::effective_base(options.premise, native, options.base)?
+        }
+        SourceFormat::Pack | SourceFormat::Gts => None,
+    };
+    let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
     let imports = read_imports(&import_pairs, options)?;
     let table: Vec<(&str, &str)> = imports
         .iter()
@@ -224,11 +237,12 @@ pub(crate) fn run(
             } else {
                 graph_entails_to_string
             };
-            decide(regime, &premise, &conclusion, &table).map_err(CliError::Runtime)?
+            decide(regime, &premise, &conclusion, &table, &premise_iris)
+                .map_err(CliError::Runtime)?
         }
         Question::Pattern { path } => {
             let pattern = read_verbatim(path, "--pattern")?;
-            certain_answers_to_string(regime, &premise, &pattern, &table)
+            certain_answers_to_string(regime, &premise, &pattern, &table, &premise_iris)
                 .map_err(CliError::Runtime)?
         }
     };

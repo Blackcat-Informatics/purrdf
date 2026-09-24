@@ -305,8 +305,8 @@ impl Completeness {
 /// * the six reverse-mapping constructs — `Kb::boundaries`, driven per construct by
 ///   `every_owl2_construct_is_handled_or_bounded`;
 /// * [`Construct::ResolvedOntologyImport`] — [`entails`](crate::entails()), through
-///   `ReasoningReport::with_resolved_imports`, once `imports::resolve` has merged the whole
-///   `owl:imports` closure into the premise. It is the one construct that is a fact about
+///   `ReasoningReport::with_resolved_imports`, once `imports::resolve` has resolved the whole
+///   `owl:imports` closure — merged from the caller's map, or already in the premise. It is the one construct that is a fact about
 ///   what the CALLER supplied rather than about what a lane read, which is exactly why the
 ///   chase cannot raise it: `boundaries` surveys the MERGED dataset, which still carries the
 ///   `owl:imports` triples, so the survey alone cannot tell a resolved import from an
@@ -647,11 +647,14 @@ impl Construct {
             Self::ResolvedOntologyImport => {
                 "owl:imports names another ontology DOCUMENT, and OWL 2's imports closure is \
                  the union of the importing ontology with every document it transitively \
-                 names. THIS RUN HAD THAT CLOSURE: purrdf_entail::entails resolved the \
-                 caller's ImportMap into the premise before the chase started — transitively, \
-                 to a fixpoint, each document standardized apart — and an import the map did \
-                 not resolve would have refused the whole call with \
-                 EntailError::UnresolvedImport rather than quietly shrinking the premise. So \
+                 names. THIS RUN HAD THAT CLOSURE: purrdf_entail::entails resolved every \
+                 imported ontology before the chase started — either already IN the premise \
+                 (its owl:Ontology header, an owl:versionIRI naming it, or the premise \
+                 document's own IRI) or supplied by the \
+                 caller's ImportMap and merged in transitively, to a fixpoint, each document \
+                 standardized apart — and an import neither resolved would have refused the \
+                 whole call with EntailError::UnresolvedImport rather than quietly shrinking \
+                 the premise. So \
                  every imported axiom was a premise here and every conclusion it licenses was \
                  drawn; this boundary names the documents the merge was ABOUT, and names no \
                  missing one. \
@@ -659,8 +662,9 @@ impl Construct {
                  What it does disclose is the one thing the run could not establish for \
                  itself. PurRDF fetches nothing, so WHICH document an ontology IRI denotes is \
                  the caller's declaration and not a fact this library checked: the answer is \
-                 complete for the imports closure that map describes and says nothing about \
-                 the one those IRIs dereference to elsewhere. A caller comparing this answer \
+                 complete for the imports closure the map and premise describe and says \
+                 nothing about the one those IRIs dereference to elsewhere. A caller \
+                 comparing this answer \
                  against the document it passed in is comparing against a SMALLER premise \
                  than the run used"
             }
@@ -1455,9 +1459,9 @@ impl ReasoningReport {
     ///
     /// The fact lives one level up, in a REFUSAL: `imports::resolve` returns
     /// [`EntailError::UnresolvedImport`](crate::EntailError) naming the first document its
-    /// map does not resolve, so a call that reached a chase at all is a call whose every
-    /// declared import was resolved and merged. That is the whole warrant for this method,
-    /// and it is why its only caller is the one that made the merge.
+    /// map does not resolve and the premise does not already contain, so a call that reached
+    /// a chase at all is a call whose every declared import was resolved. That is the whole
+    /// warrant for this method, and it is why its only caller is the one that resolved them.
     ///
     /// Order is preserved: the two constructs are adjacent in [`Construct`] declaration
     /// order and the boundary list is sorted by it, so swapping one for the other cannot

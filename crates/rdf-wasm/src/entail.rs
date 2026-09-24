@@ -645,7 +645,7 @@ pub(crate) fn certain_answers_impl(
     import_documents: &[String],
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
-    certain_answers_to_string(regime, document, pattern, &imports).map(ReasoningAnswer::from)
+    certain_answers_to_string(regime, document, pattern, &imports, &[]).map(ReasoningAnswer::from)
 }
 
 /// `entailCertainAnswers(regime, document, pattern)` → the substitutions the knowledge
@@ -682,8 +682,9 @@ pub(crate) fn certain_answers_impl(
 /// denotes the N-Quads document `importDocuments[i]`. A premise carrying an `owl:imports`
 /// states that its axioms are its own PLUS those of the documents it names, so this is where
 /// those documents arrive and the `owl:imports` triple stays exactly where the caller wrote
-/// it. **PurRDF fetches nothing**: an ontology IRI the table does not resolve throws by name,
-/// never a network access and never a silently empty import. Two empty arrays are the
+/// it. **PurRDF fetches nothing**: an ontology IRI the table does not resolve, and the premise
+/// does not already hold (`<X> a owl:Ontology`, or an `owl:versionIRI` naming it), throws by
+/// name, never a network access and never a silently empty import. Two empty arrays are the
 /// ordinary "imports nothing" case, and both are required rather than defaulted.
 ///
 /// Throws on an unknown regime, on `owl-direct` or `rif` (each defined by an input this
@@ -691,7 +692,7 @@ pub(crate) fn certain_answers_impl(
 /// arrays of different lengths, on a duplicate or empty import IRI, on a pattern that names
 /// a graph, on a pattern that writes a variable in a literal's DATATYPE — a slot RDF reserves
 /// for an IRI, and one a basic graph pattern has no binding to project — on an `owl:imports`
-/// the table does not resolve, and on an inconsistent premise — whose refusal carries the
+/// the table does not resolve and the premise does not hold, and on an inconsistent premise — whose refusal carries the
 /// full report.
 #[wasm_bindgen(js_name = entailCertainAnswers)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
@@ -715,7 +716,7 @@ pub(crate) fn graph_entails_impl(
     import_documents: &[String],
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
-    graph_entails_to_string(regime, premise, conclusion, &imports).map(ReasoningAnswer::from)
+    graph_entails_to_string(regime, premise, conclusion, &imports, &[]).map(ReasoningAnswer::from)
 }
 
 /// `entailGraphEntails(regime, premise, conclusion)` → does the premise entail the
@@ -764,7 +765,8 @@ pub(crate) fn verify_entailment_impl(
     import_documents: &[String],
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
-    verify_entailment_to_string(regime, premise, conclusion, &imports).map(ReasoningAnswer::from)
+    verify_entailment_to_string(regime, premise, conclusion, &imports, &[])
+        .map(ReasoningAnswer::from)
 }
 
 /// `entailVerifyEntailment(regime, premise, conclusion)` → [`entail_graph_entails`] with

@@ -109,8 +109,11 @@ the question rather than of any host:
   *is* the ontology, so a premise carrying an `owl:imports` the call was not handed
   is a different premise. PurRDF fetches nothing, so the closure arrives as
   caller-supplied configuration: an ordered list of `(ontology IRI, document)`
-  pairs, spelled `--import IRI=FILE` on the command line. An unresolved import is a
-  refusal naming the document, never a silently truncated premise.
+  pairs, spelled `--import IRI=FILE` on the command line. An import needs no pair
+  when it names the premise document itself (the CLI's `file://` retrieval IRI or
+  `--base`), or an ontology the premise already holds (`<X> a owl:Ontology`, or an
+  `owl:versionIRI` naming it). Any other unresolved import is a refusal naming the document, never
+  a silently truncated premise.
 
 A pattern is N-Triples with `?name` (or `$name`) in any position, the **predicate**
 included. RDF reserves that position for an IRI, so the boundary reaches it by

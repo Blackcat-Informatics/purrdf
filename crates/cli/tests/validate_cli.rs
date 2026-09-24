@@ -505,10 +505,10 @@ fn a_tripped_governor_writes_no_report_and_exits_three() {
     let receipt = stderr(&out);
     // The banner is a LINE of the receipt rather than its first byte. `validate` writes its
     // own `shacl ` receipt lines to the same stream before the engine is reached — the
-    // `shapes-provenance` line naming where these shapes came from, and a `shacl warning`
-    // for each unresolved `owl:imports` — and a trip must not suppress the answer to "which
-    // shapes were we validating against when the budget ran out?", which is the first thing
-    // an operator needs in order to re-run with a bigger budget.
+    // `shapes-provenance` line naming where these shapes came from — and a trip must not
+    // suppress the answer to "which shapes were we validating against when the budget ran
+    // out?", which is the first thing an operator needs in order to re-run with a bigger
+    // budget.
     assert!(
         receipt
             .lines()
@@ -1378,9 +1378,17 @@ fn a_malformed_shapes_graph_is_a_named_usage_error() {
 //
 // Jena's SHACL validator dereferences `owl:imports` over HTTP. PurRDF ships no HTTP client
 // and must stay wasm32-clean, so the closure is caller-supplied — the same answer `entails
-// --import` and `shex --import` give. What was a BUG is that an unresolved import used to be
-// SILENT: a shapes graph whose shapes all lived in an imported document reported `conforms
-// true / results 0` against no shapes at all, with exit 0 and not a word on stderr.
+// --import` and `shex --import` give. An import whose ontology is already IN the shapes graph
+// needs no pair; any other unresolved import is REFUSED, because a shapes graph whose shapes
+// all live in an imported document would otherwise report `conforms true / results 0`
+// against no shapes at all.
+
+/// The W3C SHACL 1.2 core vocabulary, vendored beside the shapes engine.
+const SHACL_TTL: &str = include_str!("../../shapes/spec/shacl.ttl");
+/// The W3C SHACL 1.2 node-expression vocabulary; it `owl:imports <sh:>`.
+const SHNEX_TTL: &str = include_str!("../../shapes/spec/shnex.ttl");
+/// The W3C SHACL 1.2 SPARQL node-expression vocabulary; it `owl:imports <shnex:>`.
+const SHNEX_SPARQL_TTL: &str = include_str!("../../shapes/spec/shnex-sparql.ttl");
 
 /// A root shapes document that is nothing but an ontology header importing `shapes-a`.
 const IMPORT_ROOT: &str = concat!(
@@ -1452,32 +1460,343 @@ fn shapes_graph_imports_are_folded_transitively_from_the_import_table() {
     );
 }
 
-/// WITHOUT `--import`, an unresolved `owl:imports` is REPORTED and the run proceeds.
-///
-/// This is the actual defect: the pre-fix behaviour was silence. It is deliberately a
-/// diagnostic rather than a refusal — see the neighbouring-valid-case test below.
+/// WITHOUT `--import`, an `owl:imports` whose ontology is not in the shapes graph is REFUSED
+/// by name, with the pair that resolves it, and no verdict is written — validating the root
+/// alone would decide `conforms true` against a shapes graph with no shapes in it.
 #[test]
-fn an_unresolved_shapes_import_is_reported_rather_than_dropped_in_silence() {
+fn an_unresolved_shapes_import_is_refused_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
     let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
 
     let out = run(&["validate", "--shapes", &root, &data]);
     let err = stderr(&out);
-    assert_eq!(code(&out), 0, "still a decided verdict: {err}");
-    assert!(
-        err.contains("http://example.org/shapes-a"),
-        "the warning names the import it could not resolve: {err}"
+    assert_eq!(
+        code(&out),
+        1,
+        "an unresolved import is a runtime refusal: {err}"
     );
     assert!(
-        err.contains("--import"),
-        "and the flag that resolves it: {err}"
+        err.contains("<http://example.org/shapes-a>"),
+        "the refusal names the import it could not resolve: {err}"
     );
-    // The verdict is unchanged from the pre-fix behaviour — the shapes graph really does
-    // carry no shapes. What changed is that the operator is now TOLD why it is empty.
     assert!(
-        err.contains("shacl conforms true\n") && err.contains("shacl results 0\n"),
-        "validating against the root alone still decides: {err}"
+        err.contains("--import http://example.org/shapes-a=FILE"),
+        "and the pair that resolves it: {err}"
+    );
+    assert!(
+        !err.contains("shacl conforms"),
+        "no verdict is decided over a shapes graph smaller than the one named: {err}"
+    );
+    assert!(stdout(&out).is_empty(), "and no report is written");
+}
+
+/// The W3C SHACL 1.2 vocabularies merged into ONE shapes document, beside a user shape:
+/// `shnex.ttl` imports `sh:` and `shnex-sparql.ttl` imports `shnex:`, and both ontologies are
+/// declared in the same document — so the closure is complete as written. It validates with
+/// no `--import` and nothing on stderr but the receipt, and the user shape decides.
+#[test]
+fn merged_vocabulary_needs_no_import_flag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "merged.ttl",
+        &format!("{SHACL_TTL}\n{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{IMPORT_B}"),
+    );
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    let out = run(&["validate", "--shapes", &shapes, &data]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "a complete closure is a decided run: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "the user shape beside the vocabulary fires: {err}"
+    );
+    assert!(
+        !err.contains("warning") && !err.contains("owl:imports"),
+        "an import the graph already holds is neither warned about nor required: {err}"
+    );
+}
+
+/// The neighbour of [`merged_vocabulary_needs_no_import_flag`]: the same document WITHOUT
+/// `shacl.ttl`, so `shnex.ttl`'s import of `sh:` names an ontology nothing declares. Exactly
+/// that import is refused — `shnex:`, which `shnex-sparql.ttl` imports and `shnex.ttl`
+/// declares, is still resolved in place and is not named.
+#[test]
+fn unresolved_import_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "partial.ttl",
+        &format!("{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{IMPORT_B}"),
+    );
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    let out = run(&["validate", "--shapes", &shapes, &data]);
+    let err = stderr(&out);
+    assert_eq!(
+        code(&out),
+        1,
+        "an unresolved import is a runtime refusal: {err}"
+    );
+    assert!(
+        err.contains("<http://www.w3.org/ns/shacl#>")
+            && err.contains("--import http://www.w3.org/ns/shacl#=FILE"),
+        "the refusal names the missing ontology and the pair that resolves it: {err}"
+    );
+    assert!(
+        !err.contains("<http://www.w3.org/ns/shacl-node-expr#>"),
+        "the import the graph already holds is not named: {err}"
+    );
+    assert!(stdout(&out).is_empty(), "no report is written");
+}
+
+/// The vendored W3C `sparql/node/prefixes-001` test: `ex:TestPrefixes owl:imports` the test
+/// document's OWN IRI, which is SHACL's `sh:prefixes/owl:imports*/sh:declare` path reaching
+/// the `test:` prefix the document declares on itself. Nothing needs fetching: the import
+/// names the document being read.
+const PREFIXES_001: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../vectors/shacl/sparql/node/prefixes-001.ttl"
+);
+/// The IRI the W3C suite publishes `prefixes-001` under — the document's own IRI.
+const PREFIXES_001_IRI: &str = "http://datashapes.org/sh/tests/sparql/node/prefixes-001.test";
+
+/// The W3C expected report for `prefixes-001`: one violation, on `ex:InvalidResource1`, whose
+/// value is `test:Value` — reachable only if the `test:` prefix the self-import leads to was
+/// honoured by the `sh:select`.
+fn assert_prefixes_001_verdict(out: &Output) {
+    let err = stderr(out);
+    assert_eq!(code(out), 0, "a decided verdict: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "the W3C verdict is non-conforming with exactly one result: {err}"
+    );
+    let report = stdout(out);
+    assert!(
+        report.contains(&format!(
+            "<http://www.w3.org/ns/shacl#focusNode> <{PREFIXES_001_IRI}#InvalidResource1>"
+        )),
+        "the result is on ex:InvalidResource1: {report}"
+    );
+    assert!(
+        report.contains("<http://www.w3.org/ns/shacl#value> <http://test.com/ns#Value>"),
+        "with test:Value as its value, so the declared prefix resolved: {report}"
+    );
+    assert!(
+        !report.contains(&format!(
+            "<http://www.w3.org/ns/shacl#focusNode> <{PREFIXES_001_IRI}#ValidResource1>"
+        )),
+        "ex:ValidResource1 is not the focus node of any result: {report}"
+    );
+}
+
+/// A shapes document that `owl:imports` its OWN IRI validates with no `--import` once it is
+/// read under that IRI: `--shapes-base` names the IRI the W3C suite publishes the vector at,
+/// the import then names the document being read, and the run reaches the W3C verdict with
+/// the same file as data.
+///
+/// The neighbour: read under its `file://` retrieval IRI instead, the document is NOT the
+/// document its import names, so the import is refused by name — and the refusal names both
+/// remedies, `--shapes-base` and `--import`.
+#[test]
+fn a_self_imported_prefix_document_needs_no_import_flag() {
+    assert_prefixes_001_verdict(&run(&[
+        "validate",
+        "--shapes",
+        PREFIXES_001,
+        "--shapes-base",
+        PREFIXES_001_IRI,
+        PREFIXES_001,
+    ]));
+
+    let refused = run(&["validate", "--shapes", PREFIXES_001, PREFIXES_001]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 1, "{err}");
+    assert!(
+        err.contains(&format!("<{PREFIXES_001_IRI}>")),
+        "the refusal names the import: {err}"
+    );
+    assert!(
+        err.contains(&format!("--shapes-base {PREFIXES_001_IRI}")),
+        "and suggests reading the document under that IRI: {err}"
+    );
+    assert!(
+        err.contains(&format!("--import {PREFIXES_001_IRI}=FILE")),
+        "and the pair that resolves it: {err}"
+    );
+    assert!(stdout(&refused).is_empty(), "no report is written");
+
+    // `shacl pack --base` is the same flag for the document it packs, and the product it
+    // writes reaches the same verdict.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let product = dir.path().join("prefixes-001.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        PREFIXES_001,
+        "--base",
+        PREFIXES_001_IRI,
+        "--out",
+        product_path,
+    ]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    assert_prefixes_001_verdict(&run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        PREFIXES_001,
+    ]));
+}
+
+/// `--shapes-base` is the shapes document's PARSE base: a relative shape IRI resolves against
+/// it, observed in the report's `sh:sourceShape`, while without it the same reference
+/// resolves against the file's `file://` retrieval IRI. `--base` sets only the DATA graph's
+/// base and leaves the shapes document alone. The flag is refused against `--shapes-product`,
+/// which recorded its base when it was packed.
+#[test]
+fn shapes_base_is_the_shapes_documents_parse_base() {
+    const RELATIVE_SHAPES: &str = concat!(
+        "@prefix sh:  <http://www.w3.org/ns/shacl#> .\n",
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+        "@prefix ex:  <http://example.org/> .\n",
+        "<#AgeShape> a sh:PropertyShape ; sh:targetClass ex:Person ;\n",
+        "    sh:path ex:age ; sh:datatype xsd:integer .\n",
+    );
+    const SOURCE_SHAPE: &str = "<http://www.w3.org/ns/shacl#sourceShape>";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "relative.ttl", RELATIVE_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    let based = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--shapes-base",
+        "http://example.org/shapes/doc",
+        &data,
+    ]);
+    assert_eq!(code(&based), 0, "{}", stderr(&based));
+    assert!(
+        stdout(&based).contains(&format!(
+            "{SOURCE_SHAPE} <http://example.org/shapes/doc#AgeShape>"
+        )),
+        "the relative shape IRI resolves against --shapes-base: {}",
+        stdout(&based)
+    );
+
+    // An `@base` inside the document still wins inside it, as Turtle specifies.
+    let declared = write_file(
+        dir.path(),
+        "declared.ttl",
+        &format!("@base <http://example.org/declared/doc> .\n{RELATIVE_SHAPES}"),
+    );
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &declared,
+        "--shapes-base",
+        "http://example.org/shapes/doc",
+        &data,
+    ]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(&format!(
+            "{SOURCE_SHAPE} <http://example.org/declared/doc#AgeShape>"
+        )),
+        "the document's own @base wins: {}",
+        stdout(&out)
+    );
+
+    for args in [
+        vec!["validate", "--shapes", &shapes, &data],
+        vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--base",
+            "http://example.org/shapes/doc",
+            &data,
+        ],
+    ] {
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+        let report = stdout(&out);
+        assert!(
+            report.contains(&format!("{SOURCE_SHAPE} <file://"))
+                && report.contains("relative.ttl#AgeShape>"),
+            "{args:?}: without --shapes-base the shape resolves against the file: {report}"
+        );
+    }
+
+    let product = dir.path().join("relative.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let refused = run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        "--shapes-base",
+        "http://example.org/shapes/doc",
+        &data,
+    ]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 2, "a usage error: {err}");
+    assert!(
+        err.contains("--shapes-base"),
+        "the refusal names the flag: {err}"
+    );
+}
+
+/// The vendored W3C `sparql/component/validator-001` test imports DASH, a genuinely external
+/// ontology no document here holds, so it is refused without `--import` — and validates to
+/// the W3C verdict once a document is named for it. No DASH document is vendored, so a
+/// minimal stand-in declaring the imported ontology proves the `--import` path.
+#[test]
+fn an_external_import_is_refused_until_a_document_is_named_for_it() {
+    const VALIDATOR_001: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vectors/shacl/sparql/component/validator-001.ttl"
+    );
+    const DASH: &str = "http://datashapes.org/dash";
+
+    let refused = run(&["validate", "--shapes", VALIDATOR_001, VALIDATOR_001]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 1, "{err}");
+    assert!(
+        err.contains(&format!("<{DASH}>")) && err.contains(&format!("--import {DASH}=FILE")),
+        "the refusal names the external import and its pair: {err}"
+    );
+    assert!(stdout(&refused).is_empty(), "no report is written");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stand_in = write_file(
+        dir.path(),
+        "dash-stand-in.ttl",
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         <http://datashapes.org/dash> a owl:Ontology .\n",
+    );
+    let out = run(&[
+        "validate",
+        "--shapes",
+        VALIDATOR_001,
+        "--import",
+        &format!("{DASH}={stand_in}"),
+        VALIDATOR_001,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "a named document resolves the import: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "the W3C verdict: one violation: {err}"
+    );
+    assert!(
+        stdout(&out).contains("<http://www.w3.org/ns/shacl#focusNode> \"Hallo Welt\""),
+        "on the focus node \"Hallo Welt\": {}",
+        stdout(&out)
     );
 }
 
@@ -1547,34 +1866,66 @@ fn a_named_import_table_must_resolve_the_whole_closure_and_be_fully_used() {
 
 /// THE NEIGHBOURING VALID CASES. Every one of these must still SUCCEED.
 ///
-/// Over-refusal is the mirror image of the silent drop this change fixes, and it is exactly
-/// what a stricter reading of `owl:imports` would produce. Two documents in this repo's own
-/// vendored W3C SHACL corpus carry an inert `owl:imports`
-/// (`vectors/shacl/sparql/component/validator-001.ttl`,
-/// `vectors/shacl/sparql/node/prefixes-001.ttl`); hard-failing on an unresolved import would
-/// reject them, and `make conformance` would go red for input that is valid.
+/// Over-refusal is the mirror image of the silent drop the import refusal closes: an
+/// `owl:imports` is only missing when the closure does not already hold the ontology it
+/// names, and a graph that does hold it — by its `owl:Ontology` header or by an
+/// `owl:versionIRI` — must validate with no `--import` at all.
 #[test]
 fn valid_shapes_graphs_are_not_refused_by_the_import_machinery() {
     let dir = tempfile::tempdir().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
 
-    // 1. A shapes graph with an INERT owl:imports and its own shapes: the shapes decide, and
-    //    the unresolved import does not stop the run. This is the corpus case.
-    let inert = write_file(
+    // 1. A shapes graph that imports an ontology it ALSO declares — by header, and by
+    //    version IRI — and carries its own shape: the imports are resolved in place, the
+    //    shape decides, and nothing is asked of the operator. The same document importing an
+    //    ontology it does NOT declare is refused (`an_unresolved_shapes_import_is_refused_by_name`).
+    let in_place = write_file(
         dir.path(),
-        "inert.ttl",
+        "in-place.ttl",
         &format!(
             "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-             <http://example.org/inert> owl:imports <http://example.org/never-supplied> .\n{IMPORT_B}"
+             <http://example.org/in-place> owl:imports <http://example.org/present> ,\n\
+                 <http://example.org/present/1.0> .\n\
+             <http://example.org/present> a owl:Ontology ;\n\
+                 owl:versionIRI <http://example.org/present/1.0> .\n{IMPORT_B}"
         ),
     );
-    let out = run(&["validate", "--shapes", &inert, &data]);
+    let out = run(&["validate", "--shapes", &in_place, &data]);
     let err = stderr(&out);
-    assert_eq!(code(&out), 0, "an inert import is not a refusal: {err}");
+    assert_eq!(
+        code(&out),
+        0,
+        "an import resolved in place is not a refusal: {err}"
+    );
     assert!(
         err.contains("shacl results 1\n"),
         "the shapes graph's OWN shape still fires: {err}"
     );
+
+    // 1b. A document importing its OWN IRI — by its in-document `@base`, and by its
+    //     `file://` retrieval IRI through `<>` with no `@base` — names a document already
+    //     loaded, from a node that is no `owl:Ontology`.
+    for (name, header) in [
+        (
+            "self-base.ttl",
+            "@base <http://example.org/shapes/self> .\n\
+             <#Prefixes> <http://www.w3.org/2002/07/owl#imports> <> .\n",
+        ),
+        (
+            "self-retrieval.ttl",
+            "<#Prefixes> <http://www.w3.org/2002/07/owl#imports> <> .\n",
+        ),
+    ] {
+        let own = write_file(dir.path(), name, &format!("{header}{IMPORT_B}"));
+        let out = run(&["validate", "--shapes", &own, &data]);
+        let err = stderr(&out);
+        assert_eq!(
+            code(&out),
+            0,
+            "{name}: a self-import is not a refusal: {err}"
+        );
+        assert!(err.contains("shacl results 1\n"), "{name}: {err}");
+    }
 
     // 2. A shapes graph with no imports and no --import: byte-for-byte the pre-flag path.
     let plain = write_file(dir.path(), "plain.ttl", IMPORT_B);

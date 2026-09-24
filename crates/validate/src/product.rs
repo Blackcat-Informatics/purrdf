@@ -147,13 +147,18 @@ impl std::error::Error for ShapesProductRefusal {}
 /// # An unresolved `owl:imports` is refused here, not silently dropped
 ///
 /// This is the text-in/bytes-out surface the Python, C-ABI and WebAssembly hosts
-/// call, and none of the three carries an import table or a place to print a
-/// warning: there is no `--import IRI=FILE` for them to pass and no stderr for
-/// them to read. The CLI's `shacl pack` is different — it has both, folds the
-/// closure or reports each unresolved IRI on stderr, and calls
-/// [`pack_shapes_product_from_dataset`] once that decision is made — but a host
-/// with neither capability has exactly one non-silent option when the shapes
-/// graph declares an import it has no way to honour: refuse. Packing the root
+/// call, and none of the three carries an import table: there is no
+/// `--import IRI=FILE` for them to pass. An import whose ontology is already IN
+/// the shapes graph — `<X> a owl:Ontology`, or an ontology whose `owl:versionIRI`
+/// is `<X>`, as when the W3C SHACL 1.2 vocabularies are merged into one document —
+/// is resolved and packs, and so is an import of the document's OWN IRI — `shapes_base`,
+/// or the IRI an in-document `@base` declares; the rule is
+/// [`purrdf_entail::entails::imports::unresolved_imports`], the same one the CLI's
+/// `validate --shapes` and `shacl pack` apply, so every host agrees on which shapes
+/// graphs are complete. The CLI can additionally fold the closure from local files
+/// before calling [`pack_shapes_product_from_dataset`]; a host with no table has
+/// exactly one non-silent option when the shapes graph declares an import it has
+/// no way to honour: refuse. Packing the root
 /// graph alone and calling it done is exactly the silent omission this whole
 /// codec exists to rule out; see [`ProductDimension::UnsupportedCapability`],
 /// which is also where a declared function nothing in the shapes model reaches
@@ -163,26 +168,41 @@ impl std::error::Error for ShapesProductRefusal {}
 ///
 /// [`ShapesProductRefusal::Shapes`] when the document does not parse;
 /// [`ShapesProductRefusal::Admission`] on [`ProductDimension::UnsupportedCapability`]
-/// when the shapes graph declares an `owl:imports` this entry point has no table to
-/// resolve it against, and on any other dimension the shapes graph declares
+/// when the shapes graph declares an `owl:imports` whose ontology it does not contain,
+/// naming every such IRI, and on any other dimension the shapes graph declares
 /// something the product format cannot carry.
 pub fn pack_shapes_product(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
-    let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(shapes_ttl, shapes_base)
-        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
-    let unresolved = purrdf_entail::entails::imports::imported_iris(&dataset);
-    if let Some(iri) = unresolved.first() {
+    let (dataset, document_base) =
+        purrdf_shapes::text_ingest::parse_turtle_document(shapes_ttl, shapes_base)
+            .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
+    // The document's own IRIs: the base the host parsed it under, and the base an
+    // in-document `@base` established. An import of either names this very document.
+    let loaded: Vec<&str> = shapes_base
+        .into_iter()
+        .chain(document_base.as_deref())
+        .collect();
+    let unresolved = purrdf_entail::entails::imports::unresolved_imports(&dataset, &loaded);
+    if !unresolved.is_empty() {
+        let named: Vec<String> = unresolved.iter().map(|iri| format!("<{iri}>")).collect();
+        let remedy: Vec<String> = unresolved
+            .iter()
+            .map(|iri| format!("--import {iri}=FILE"))
+            .collect();
         return Err(ShapesProductRefusal::Admission(ShapesProductError::new(
             ProductDimension::UnsupportedCapability,
             format!(
-                "this shapes graph owl:imports <{iri}>, and this entry point has no \
-                 `--import IRI=FILE` table and no diagnostic channel to report an unresolved \
-                 one on; packing the shapes graph alone would silently validate against a \
-                 different, smaller shapes graph than the one named. Fold the closure before \
-                 calling this function — `purrdf shacl pack --import <{iri}>=FILE` does so on \
-                 the command line, and {caller} does the same over a dataset it already holds",
+                "this shapes graph owl:imports {named}, whose ontology is not in the shapes \
+                 graph, and this entry point has no `--import IRI=FILE` table to resolve it \
+                 from; packing the shapes graph alone would silently validate against a \
+                 different, smaller shapes graph than the one named. Merge the imported \
+                 ontology into the shapes document, or fold the closure before calling this \
+                 function — `purrdf shacl pack {remedy}` does so on the command line, and \
+                 {caller} does the same over a dataset it already holds",
+                named = named.join(", "),
+                remedy = remedy.join(" "),
                 caller = "`pack_shapes_product_from_dataset`"
             ),
         )));
@@ -1068,6 +1088,77 @@ mod tests {
             Some(ProductDimension::UnsupportedCapability)
         );
         assert!(refusal.to_string().contains("http://example.org/lib"));
+    }
+
+    /// The W3C SHACL 1.2 core vocabulary, vendored beside the shapes engine.
+    const SHACL_TTL: &str = include_str!("../../shapes/spec/shacl.ttl");
+    /// The W3C SHACL 1.2 node-expression vocabulary; it `owl:imports <sh:>`.
+    const SHNEX_TTL: &str = include_str!("../../shapes/spec/shnex.ttl");
+    /// The W3C SHACL 1.2 SPARQL node-expression vocabulary; it `owl:imports <shnex:>`.
+    const SHNEX_SPARQL_TTL: &str = include_str!("../../shapes/spec/shnex-sparql.ttl");
+
+    /// The three SHACL 1.2 vocabularies merged into one shapes document beside a user shape:
+    /// every `owl:imports` names an ontology the same document declares, so the closure is
+    /// complete and the text-only entry point packs it — and the product enforces the user
+    /// shape, so the pack is observed to be the WHOLE shapes graph and not an empty one.
+    #[test]
+    fn merged_vocabulary_packs() {
+        let merged = format!("{SHACL_TTL}\n{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{SHAPES}");
+        let product =
+            pack_shapes_product(&merged, None).expect("a complete in-graph closure packs");
+        let sarif = validate_with_shapes_product(&product, DATA, &SarifOptions::default())
+            .expect("validate with the product");
+        assert!(
+            sarif.contains("\"level\": \"error\""),
+            "the user shape is enforced through the product: {sarif}"
+        );
+    }
+
+    /// The neighbour of [`merged_vocabulary_packs`]: the same document WITHOUT `shacl.ttl`.
+    /// `shnex.ttl`'s import of `sh:` now names an ontology nothing declares, so the pack is
+    /// refused on the same dimension as any unresolved import, naming exactly that IRI —
+    /// `shnex:`, still declared in place, is not named.
+    #[test]
+    fn unresolved_import_refused() {
+        let partial = format!("{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{SHAPES}");
+        let refusal = pack_shapes_product(&partial, None)
+            .expect_err("an import of an absent ontology is refused");
+        assert_eq!(
+            refusal.dimension(),
+            Some(ProductDimension::UnsupportedCapability)
+        );
+        let message = refusal.to_string();
+        assert!(
+            message.contains("<http://www.w3.org/ns/shacl#>"),
+            "the refusal names the missing ontology: {message}"
+        );
+        assert!(
+            !message.contains("<http://www.w3.org/ns/shacl-node-expr#>"),
+            "and not the one the graph already holds: {message}"
+        );
+    }
+
+    /// A shapes document importing its OWN IRI packs once the host names that IRI — as the
+    /// base it passes, or through the document's own `@base` — and is refused, naming the
+    /// IRI, when the host passes no base or a different one.
+    #[test]
+    fn a_self_import_packs_under_its_own_base() {
+        const DOC: &str = "http://example.org/shapes/doc";
+        let own = format!(
+            "<http://example.org/shapes/doc#Prefixes> \
+             <http://www.w3.org/2002/07/owl#imports> <{DOC}> .\n{SHAPES}"
+        );
+        pack_shapes_product(&own, Some(DOC)).expect("the base names the imported document");
+        for base in [None, Some("http://example.org/shapes/other")] {
+            let refusal = pack_shapes_product(&own, base).expect_err("a different document");
+            assert_eq!(
+                refusal.dimension(),
+                Some(ProductDimension::UnsupportedCapability)
+            );
+            assert!(refusal.to_string().contains(&format!("<{DOC}>")));
+        }
+        let declared = format!("@base <{DOC}> .\n{own}");
+        pack_shapes_product(&declared, None).expect("the document's own @base names it");
     }
 
     /// The neighbouring VALID case: a graph with NO `owl:imports` at all still packs
