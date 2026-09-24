@@ -521,3 +521,17 @@ the reassociated kNN relation, and the reassociated HNSW build and search. §3 e
 them as the `Reassociated` implementation of `Arithmetic`, with their own names,
 their own evidence and their own recorded identifiers, and the static scan keeps
 them off every identity path. The MSRV therefore moves to 1.98.
+
+**What moved with it.** `rust-version` in the workspace manifest, the CI `msrv` job
+(its toolchain, both `RUSTUP_TOOLCHAIN` values and the assertion that the resolved
+compiler really is 1.98), `clippy.toml`, the README badge and MSRV policy, the
+contributor and agent guides, and every crate README that states the floor. The
+floor is proven in both directions: a 1.98 compiler checks the workspace, and a 1.97
+compiler, with cargo's `rust-version` guard set aside, rejects the crate on
+`float_algebraic` itself (E0658), so the floor comes from the code, not the manifest.
+
+**The consequence, accepted deliberately.** 1.98 was the current stable release when
+the floor moved, so a consumer has no headroom: the oldest compiler PurRDF supports is
+the newest one available. Every other capability this document relies on (the x86,
+aarch64 and wasm intrinsics, safe `#[target_feature]` functions, `as_chunks`) was
+already inside the previous floor; `algebraic_*` alone required the move.

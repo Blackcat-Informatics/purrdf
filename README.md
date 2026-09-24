@@ -718,7 +718,9 @@ for drift. Built with cargo-c: `make capi-build`.
   target: [full-text scoring](./docs/design/purrdf-text-scoring.md),
   [GeoSPARQL exactness](./docs/design/purrdf-geo-exactness.md),
   [embedding kNN](./docs/design/purrdf-embedding-knn.md),
-  [the retrieval ladder](./docs/design/purrdf-retrieval-ladder.md).
+  [the retrieval ladder](./docs/design/purrdf-retrieval-ladder.md); and how the hot
+  paths vectorize without giving that up, site by site with the emitted instructions
+  measured on every target: [SIMD and arithmetic contracts](./docs/design/purrdf-simd.md).
 
 ## Fast by measurement, not by assertion
 
