@@ -598,11 +598,16 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# one's bits. The reassociated kNN file runs on the same two builds: its bits are
 	@# not pinned, so it asserts instead that each build resolves its own path
 	@# (wasm-scalar, wasm-simd128) and stays within the error bound of the exact
-	@# answer. +simd128 travels in CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS,
-	@# which Cargo ignores whenever RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS is set, so a
-	@# caller's RUSTFLAGS is folded into it and RUSTFLAGS unset for that one run, and
-	@# CARGO_ENCODED_RUSTFLAGS is refused. A target-scoped value also REPLACES
-	@# build.rustflags, so the workspace's -D warnings bar is restated in it.
+	@# answer. The reassociated HNSW file runs on the same two builds too: it builds,
+	@# records, decodes, verifies and searches a reassociated index there, asserts the
+	@# image records that build's path (code 7 wasm-scalar, code 6 wasm-simd128) and
+	@# shape, ranks bit for bit as the reassociated kernel's brute force does, and
+	@# refuses an image recorded on the other wasm path. +simd128 travels in
+	@# CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS, which Cargo ignores whenever
+	@# RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS is set, so a caller's RUSTFLAGS is folded
+	@# into it and RUSTFLAGS unset for that one run, and CARGO_ENCODED_RUSTFLAGS is
+	@# refused. A target-scoped value also REPLACES build.rustflags, so the
+	@# workspace's -D warnings bar is restated in it.
 	@if [ -n "$${CARGO_ENCODED_RUSTFLAGS:-}" ]; then \
 		echo "FAIL: CARGO_ENCODED_RUSTFLAGS is set; Cargo would ignore the +simd128 run's target-scoped flags and run the baseline build twice"; exit 1; \
 	fi
@@ -623,11 +628,19 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hnsw --test wasm_reassociated \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hnsw --test wasm_reassociated \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-text --test wasm_determinism \

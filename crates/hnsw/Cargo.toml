@@ -29,6 +29,14 @@ rayon = { workspace = true }
 # build, and the receipt schema (not serde) is what fixes the record's shape.
 serde_json = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# The wasm32 test harness, for `tests/wasm_reassociated.rs` — the test that builds,
+# records, decodes, verifies and searches a reassociated index ON wasm32-unknown-unknown
+# rather than merely compiling for it. The reassociated image records the wasm dispatch
+# path (`wasm-simd128` or `wasm-scalar`) and the build shape, and refuses the other path;
+# a claim about wasm32 is evidence only when it executes there. Run by `make wasm-test`.
+wasm-bindgen-test = { workspace = true }
+
 [lints]
 workspace = true
 

@@ -421,7 +421,9 @@ jobs:
         # they ANSWER the same way there: the embedding kNN surface ranks by binary64
         # arithmetic, and a reassociated sum or a fused multiply-add would swap two
         # near-tied neighbours rather than merely shift a last digit. Same test body,
-        # same pinned expectations, executed on both targets.
+        # same pinned expectations, executed on both targets. The reassociated HNSW
+        # index is built, recorded, decoded, verified and searched here too, on the
+        # baseline (wasm-scalar) and +simd128 (wasm-simd128) builds alike.
         run: make wasm-test
 
       - name: TypeScript emitter schema oracle
@@ -501,10 +503,12 @@ jobs:
           cargo test --locked -p purrdf-sparql-eval --test knn_wasm_determinism
           cargo test --locked -p purrdf-sparql-eval --test knn_wasm_reassociated
 
-      - name: Compare the HNSW canonical image digests with the pinned goldens on aarch64
+      - name: Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
-        run: cargo test --locked -p purrdf-hnsw --lib --test determinism --test conformance
+        run: |
+          cargo test --locked -p purrdf-hnsw --lib --test determinism --test conformance \
+            --test wasm_reassociated
 
   # The architectures whose float control register this build does not read. On them the
   # float environment is proven by the behavioural probe alone, so a kernel that computes
@@ -560,7 +564,8 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
             --test knn_wasm_determinism --test knn_wasm_reassociated
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hnsw \
-            --lib --test determinism --test conformance --test float_environment
+            --lib --test determinism --test conformance --test float_environment \
+            --test wasm_reassociated
 
   # riscv64 runs apart from i686 because the distribution's multilib and riscv64
   # cross compilers cannot be installed together. Its HNSW worker-count digest under
@@ -598,7 +603,7 @@ jobs:
           cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval \
             --test knn_wasm_determinism --test knn_wasm_reassociated
           cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-hnsw \
-            --test determinism --test conformance
+            --test determinism --test conformance --test wasm_reassociated
 
   # The x86_64 dispatch paths a hosted runner does not guarantee, EXECUTED. GitHub's
   # x86_64 runners promise neither AVX2+FMA nor AVX-512F, so without this job the
