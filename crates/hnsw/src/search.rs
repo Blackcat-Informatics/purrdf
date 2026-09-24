@@ -198,7 +198,8 @@ impl<'a, A: Arithmetic> Query<'a, A> {
         vector: &'a [f64],
     ) -> Self {
         let norm = if kernel.needs_norms() {
-            purrdf_sparql_eval::knn::norm(vector)
+            // The norm is the exact fold whatever arithmetic ranks the candidates.
+            arithmetic.exact().norm(vector)
         } else {
             0.0
         };

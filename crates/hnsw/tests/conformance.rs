@@ -50,7 +50,7 @@ use purrdf_hnsw::{
     HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params,
     VectorMatrix, profile,
 };
-use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
+use purrdf_sparql_eval::knn::{Kernel, Ranked, best};
 use std::fmt::Write as _;
 
 use serde_json::{Value, json};
@@ -231,8 +231,9 @@ fn family() -> Vec<Fixture> {
 
 /// Every row's L2 norm, computed once per fixture.
 fn norms_of(matrix: &VectorMatrix) -> Vec<f64> {
+    let exact = Exact::resolve().expect("the test thread runs the default float environment");
     (0..matrix.rows())
-        .map(|row| norm(matrix.row(row)))
+        .map(|row| exact.norm(matrix.row(row)))
         .collect()
 }
 

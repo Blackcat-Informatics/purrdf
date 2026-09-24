@@ -525,3 +525,114 @@ fn every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain() {
         );
     }
 }
+
+/// A row whose L2 norm is subnormal: the 3-4-5 triangle scaled into the subnormal range,
+/// so its norm is `5e-310`. The fold's own ratios stay normal (`0.75`, `0.5625`, `1.5625`);
+/// only the final product `scale · √ssq` is subnormal, and a thread that flushes subnormal
+/// results returns `+0` for it.
+const SUBNORMAL_ROW: [f64; 2] = [3e-310, 4e-310];
+
+/// PURREMB §13.2's scaled L2 fold, transcribed from the specification's written order:
+/// the reference every public norm entry point is held to, and the arithmetic a flushed
+/// thread is shown to run differently. No handle, so it can be run where none can be
+/// obtained; `black_box` keeps the compiler from folding it at compile time, under the
+/// default environment, instead of on the thread under test.
+fn reference_norm(values: &[f64]) -> f64 {
+    let mut scale = 0.0_f64;
+    let mut ssq = 1.0_f64;
+    for &value in core::hint::black_box(values) {
+        let value = value.abs();
+        if value == 0.0 {
+            continue;
+        }
+        if scale < value {
+            let ratio = scale / value;
+            let square = ratio * ratio;
+            let product = ssq * square;
+            ssq = 1.0 + product;
+            scale = value;
+        } else {
+            let ratio = value / scale;
+            let square = ratio * ratio;
+            ssq += square;
+        }
+    }
+    let root = ssq.sqrt();
+    core::hint::black_box(scale) * root
+}
+
+#[test]
+fn every_norm_entry_point_needs_the_exact_handle_a_flushing_thread_cannot_obtain() {
+    // The public norm entry points -- `Resolved::<Exact>::norm` (re-exported by the kNN
+    // module), reached directly or from a reassociated handle through `Resolved::exact`,
+    // and `VectorMatrix::norm_of_row` -- all take the exact handle, so the only way to
+    // reach one is through `resolve`/`resolve_recorded`, each of which refuses a flushing
+    // thread by name. So no norm, and no cosine kernel dividing by one, is computed there.
+    let matrix = VectorMatrix::new(1, 2, SUBNORMAL_ROW.to_vec()).expect("finite row");
+    let (flushed_norm, exact, fast, recorded) = {
+        let flushed = Flushed::new();
+        let norm = reference_norm(&SUBNORMAL_ROW);
+        let exact = Exact::resolve();
+        let fast = Reassociated::resolve();
+        let recorded = Exact::resolve_recorded(Exact::IMAGE_CODE);
+        drop(flushed);
+        (norm, exact, fast, recorded)
+    };
+    // The observation that makes the refusal worth something: on that thread the normative
+    // fold itself returns +0 for this row, a norm a cosine kernel would divide by (or a
+    // zero-norm check would reject a row that has a direction).
+    assert_eq!(
+        flushed_norm.to_bits(),
+        0,
+        "the flushed thread folds the row's norm to +0"
+    );
+    assert!(
+        is_ftz_refusal(&exact.expect_err("refused")),
+        "Exact::resolve"
+    );
+    assert!(
+        is_ftz_refusal(&fast.expect_err("refused")),
+        "Reassociated::resolve, the only source of a handle `exact` converts"
+    );
+    assert!(
+        matches!(
+            recorded.expect_err("refused"),
+            RecordedPathError::FloatEnvironment(ref refusal) if is_ftz_refusal(refusal)
+        ),
+        "Exact::resolve_recorded"
+    );
+
+    // The valid neighbour: the same thread, register restored. The reference fold now
+    // keeps the subnormal norm, and every public entry point returns exactly its bits --
+    // the nonzero value the flushed thread lost.
+    let expected = reference_norm(&SUBNORMAL_ROW);
+    assert!(
+        expected.is_subnormal(),
+        "the default environment keeps the subnormal norm, got {expected:e}"
+    );
+    let exact = Exact::resolve().expect("the default environment resolves");
+    let fast = Reassociated::resolve().expect("the default environment resolves");
+    let recorded = Exact::resolve_recorded(Exact::IMAGE_CODE).expect("resolves");
+    for (entry, value) in [
+        ("Resolved::<Exact>::norm", exact.norm(&SUBNORMAL_ROW)),
+        (
+            "Resolved::<Exact>::norm on a recorded handle",
+            recorded.norm(&SUBNORMAL_ROW),
+        ),
+        (
+            "Resolved::<Reassociated>::exact().norm",
+            fast.exact().norm(&SUBNORMAL_ROW),
+        ),
+        ("VectorMatrix::norm_of_row", matrix.norm_of_row(exact, 0)),
+        (
+            "VectorMatrix::norm_of_row from a reassociated handle",
+            matrix.norm_of_row(fast.exact(), 0),
+        ),
+    ] {
+        assert_eq!(
+            value.to_bits(),
+            expected.to_bits(),
+            "{entry}: {value:e} against the reference {expected:e}"
+        );
+    }
+}

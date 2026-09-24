@@ -1996,7 +1996,8 @@ fn row_named<'a>(rows: &'a [(&str, Vec<f64>)], name: &str) -> (&'a [f64], f64) {
         .find(|(local, _)| *local == name)
         .expect("a fixture row")
         .1;
-    (vector, norm(vector))
+    let exact = Exact::resolve().expect("the test thread runs the default float environment");
+    (vector, exact.norm(vector))
 }
 
 /// Whether `path` contracts multiplies into adds, so the crafted pair's reassociated

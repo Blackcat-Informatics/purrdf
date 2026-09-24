@@ -36,8 +36,9 @@ It would also disagree with the spec. `docs/PURREMB.md` states the arithmetic
 contract normatively for the artifact's own folds: *"All intermediate operations are
 IEEE-754 binary64, round-to-nearest ties-to-even, performed in the written order
 without a fused multiply-add."* The L2 norm is one of those folds (§13.2), so the kNN
-kernels do not compute a norm of their own: `knn::norm` is `purrdf_core`'s normative
-`norm_fold`, the single copy of that order in the workspace. For the distance sums,
+kernels do not compute a norm of their own: `Resolved::<Exact>::norm` (re-exported
+through `knn`) is `purrdf_core`'s normative `norm_fold`, the single copy of that order in
+the workspace, and the artifact writer's own normalization runs it too. For the distance sums,
 PURREMB §7.4 lets a kernel optimize evaluation as long as it preserves the metric and
 the row-number tie-break, so their order is this crate's contract rather than the
 format's, and it is pinned just as hard: every dot product and squared Euclidean sum is
@@ -79,7 +80,13 @@ The per-pair entry points follow the same law: `Kernel::distance` and
 returns (both re-exported from `knn`), and the reassociated pair take a
 `Resolved<Reassociated>`, so there is no pair distance a flushing thread can compute
 without first being refused by name. A caller resolves once per call site and passes
-the `Copy` handle to every pair it scores.
+the `Copy` handle to every pair it scores. The norms those pairs divide by follow it too:
+the norm is a method of the exact handle only, `Resolved::<Exact>::norm`, because the fold
+has one written order and no reassociated form, and a reassociated consumer reaches it
+through `Resolved::exact`. On a flushing thread a row whose norm is subnormal would fold
+to `+0`, so no norm is computed without the check either. `EmbeddingSpace::from_artifact`
+passes the handle it resolves first to PURREMB's deterministic-L2 row reader
+(`EffectiveMatrixView::f32_row`/`f64_row`) and to the norms it computes.
 
 The metric does not change with the arithmetic. `DistanceMetric` names *what* is
 measured, and the family-contract digest is computed from it alone; the arithmetic is

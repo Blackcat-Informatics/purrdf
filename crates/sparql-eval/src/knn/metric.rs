@@ -171,9 +171,9 @@ impl Kernel {
     /// inside the fold, so the answer is bit-identical to one computed from operands widened
     /// in advance. See [`Scalar`].
     ///
-    /// `query_norm` and `candidate_norm` are the operands' [`norm`]s. They are
-    /// parameters rather than recomputed here because a candidate's norm does not depend
-    /// on the query: a search over `n` candidates computes each one once at index
+    /// `query_norm` and `candidate_norm` are the operands' L2 norms, from
+    /// [`Resolved::<Exact>::norm`]. They are parameters rather than recomputed here
+    /// because a candidate's norm does not depend on the query: a search over `n` candidates computes each one once at index
     /// construction instead of `n` times per invocation, and — more to the point — a norm
     /// computed once is a norm that cannot be computed two ways. They are ignored by the
     /// kernels that do not divide by them.
@@ -221,7 +221,10 @@ impl Kernel {
     /// exactly as [`Kernel::distance`] refuses it.
     ///
     /// `arithmetic` comes from `Reassociated::resolve`, called once per scan, which
-    /// checked the float environment and chose the path.
+    /// checked the float environment and chose the path. The norms are not reassociated:
+    /// PURREMB's norm fold has one written order, so they come from
+    /// [`Resolved::<Exact>::norm`] on `arithmetic.exact()` ([`Resolved::exact`]), exactly
+    /// as [`Kernel::distance`]'s do.
     #[must_use]
     pub fn distance_reassociated<A: Scalar, B: Scalar>(
         self,
@@ -262,30 +265,6 @@ impl Kernel {
             bound,
         )
     }
-}
-
-/// The Euclidean (L2) norm of `vector`, by the same scaled fold PURREMB's own
-/// deterministic normalization uses.
-///
-/// The obvious `sum(x²).sqrt()` overflows for a vector whose components are individually
-/// representable but whose squares are not, and underflows to zero for a vector of
-/// subnormals — in both cases producing a norm that is wrong rather than imprecise, which
-/// for cosine means dividing by it. The scaled fold carries a running maximum magnitude
-/// and a sum of squared *ratios* instead, so it is exact in the same places and finite in
-/// many more.
-///
-/// It is `purrdf_core`'s normative fold itself, not a copy of it: a space stored with
-/// `PrefixPostprocessing::DeterministicL2` was normalized by that fold, and a cosine
-/// kernel that measured its norms by a second transcription could drift from the
-/// artifact's own arithmetic. PURREMB §13.2 fixes its sequential written order, so it is
-/// never reordered.
-///
-/// A zero-length vector, and a vector of all zeros, both norm to `0.0`. That is reported
-/// rather than refused here; refusing it is [`Kernel::needs_norms`]'s caller's job,
-/// because a zero norm is fatal for cosine and harmless for the other two.
-#[must_use]
-pub fn norm<T: Scalar>(vector: &[T]) -> f64 {
-    purrdf_core::distance::norm(vector)
 }
 
 /// One scored candidate: how far it is, and which row of the space it is.
@@ -393,6 +372,11 @@ mod tests {
     /// point takes.
     fn exact() -> Resolved<Exact> {
         Exact::resolve().expect("the test thread runs the default float environment")
+    }
+
+    /// `vector`'s L2 norm, through the only public form of the fold: the exact handle.
+    fn norm<T: Scalar>(vector: &[T]) -> f64 {
+        exact().norm(vector)
     }
 
     /// A ranked candidate, tersely.

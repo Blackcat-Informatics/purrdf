@@ -38,7 +38,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::knn::{Bound, Bounded, Exact, Reassociated, Resolved};
 use purrdf_sparql_eval::{
-    EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, PfArgs, PropertyFunction, knn::norm,
+    EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, PfArgs, PropertyFunction,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -111,7 +111,9 @@ fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
         let a = stream(len, seed);
         let b = stream(len, seed ^ 0xA5A5);
         let a32: Vec<f32> = a.iter().map(|&value| value as f32).collect();
-        let (na, nb) = (norm(&a), norm(&b));
+        // The norms are the exact fold whatever arithmetic ranks: a reassociated consumer
+        // reaches it through its own handle's `exact`.
+        let (na, nb) = (fast.exact().norm(&a), fast.exact().norm(&b));
         // Components in [-1, 1) make every term at most 4, so `Σ|tᵢ| ≤ 4·n` and the
         // contract's `2·n·ε·Σ|tᵢ|` is at most `8·n²·ε`.
         let bound = 8.0 * (len * len) as f64 * f64::EPSILON;
@@ -145,7 +147,7 @@ fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
             );
             // A narrow operand runs its own compilation; it is held to the same bound
             // against the exact answer for the same (widened) values.
-            let na32 = norm(&a32);
+            let na32 = fast.exact().norm(&a32);
             let exact32 = kernel
                 .distance(exact_handle, &a32, na32, &b, nb)
                 .expect("finite");

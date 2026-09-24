@@ -214,7 +214,8 @@ fn every_api<Q: Store, T: Store>(
     let b_buffer: Vec<T> = at_offset(b, offset);
     let a_typed = &a_buffer[offset..];
     let b_typed = &b_buffer[offset..];
-    let (a_norm, b_norm) = (norm(a_typed), norm(b_typed));
+    let exact = path.exact();
+    let (a_norm, b_norm) = (exact.norm(a_typed), exact.norm(b_typed));
     let norms = [b_norm];
     let view = RowsRef::new(b_typed, 1, a.len(), &norms).expect("one row");
     let mut batch = [None];

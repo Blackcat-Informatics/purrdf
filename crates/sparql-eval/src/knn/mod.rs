@@ -129,7 +129,7 @@ use crate::property_fn::{
 use crate::user_fn::Volatility;
 
 pub use metric::{
-    Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, best, norm,
+    Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, best,
 };
 
 /// The `?neighbour` position: the retrieved term.
@@ -324,7 +324,7 @@ impl EmbeddingSpace {
     ) -> Result<Self, EvalError> {
         // The float environment first: every number this constructor computes (the norms
         // a cosine space divides by) is already arithmetic under it.
-        Exact::resolve().map_err(EvalError::FloatEnvironment)?;
+        let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
         let mut view = EmbeddingView::from_bytes(artifact)
             .map_err(|e| EvalError::data(format!("the PURREMB artifact is unreadable: {e}")))?;
         verify_embedding(&mut view)
@@ -377,8 +377,8 @@ impl EmbeddingSpace {
 
         let dimension = space.dimension() as usize;
         let terms = bind_terms(&set, bindings)?;
-        let vectors = read_vectors(&effective, row_count, dimension)?;
-        let norms = read_norms(kernel, &vectors, dimension, row_count)?;
+        let vectors = read_vectors(&effective, row_count, dimension, exact)?;
+        let norms = read_norms(exact, kernel, &vectors, dimension, row_count)?;
         check_index_guards(&view, target_set, vector_space, &effective)?;
 
         let mut rows_by_term: Vec<usize> = (0..row_count).collect();
@@ -679,10 +679,13 @@ fn space_generation(
 }
 
 /// Read every row of `effective` into one row-major `f64` buffer.
+///
+/// `exact` is the handle a normalized projection's rows are computed under.
 fn read_vectors(
     effective: &purrdf_core::EffectiveMatrixView<'_>,
     row_count: usize,
     dimension: usize,
+    exact: Resolved<Exact>,
 ) -> Result<Vec<f64>, EvalError> {
     let dtype = effective
         .matrix()
@@ -694,7 +697,7 @@ fn read_vectors(
         let before = out.len();
         match dtype {
             VectorDtype::F32 => {
-                let values = effective.f32_row(index).map_err(|e| {
+                let values = effective.f32_row(index, exact).map_err(|e| {
                     EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
                 })?;
                 for value in values {
@@ -706,7 +709,7 @@ fn read_vectors(
                 }
             }
             VectorDtype::F64 => {
-                let values = effective.f64_row(index).map_err(|e| {
+                let values = effective.f64_row(index, exact).map_err(|e| {
                     EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
                 })?;
                 for value in values {
@@ -728,6 +731,7 @@ fn read_vectors(
 
 /// Every row's L2 norm, for a kernel that divides by one; empty otherwise.
 fn read_norms(
+    exact: Resolved<Exact>,
     kernel: Kernel,
     vectors: &[f64],
     dimension: usize,
@@ -739,7 +743,7 @@ fn read_norms(
     let mut norms = Vec::with_capacity(row_count);
     for row in 0..row_count {
         let start = row * dimension;
-        let value = norm(&vectors[start..start + dimension]);
+        let value = exact.norm(&vectors[start..start + dimension]);
         // PURREMB v1: "Cosine distance is undefined for a zero-norm operand and hard-fails
         // rather than inventing a score." Caught here rather than per invocation, so a
         // space that verifies can never fail a query this way.

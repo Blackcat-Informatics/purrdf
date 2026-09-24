@@ -63,7 +63,7 @@ mod corpus;
 use corpus::CorpusShape;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
-use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
+use purrdf_sparql_eval::knn::{Kernel, Ranked, best};
 
 /// The one kernel both paths rank by.
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
@@ -213,7 +213,10 @@ fn main() {
 /// not a query-time override: every search still runs at whatever its index declares.
 fn report(name: &str, rows: usize, dims: usize) {
     let vectors = family(name, rows, dims);
-    let norms: Vec<f64> = (0..rows).map(|row| norm(vectors.row(row))).collect();
+    let arithmetic = Exact::resolve().expect("the default float environment is the IEEE one");
+    let norms: Vec<f64> = (0..rows)
+        .map(|row| arithmetic.norm(vectors.row(row)))
+        .collect();
 
     // The exact ordering for every query, computed once: it is the oracle the index is
     // scored against, and recomputing it per `ef` would not change a bit of it.

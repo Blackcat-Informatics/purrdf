@@ -13,6 +13,7 @@ use std::io::{Seek, SeekFrom, Write};
 use sha2::{Digest as _, Sha256};
 
 use crate::ContentDigest;
+use crate::distance::{Arithmetic as _, Exact, Resolved, Scalar};
 
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError, EmbeddingWriteError};
@@ -1363,6 +1364,9 @@ fn matrix_content_hasher(commitment: &MatrixCommitment) -> Result<FramedHasher, 
 struct ProjectionHashState {
     spec: ProjectionSpec,
     hasher: FramedHasher,
+    /// The exact handle a deterministic-L2 projection is normalized under; `None` exactly
+    /// when the projection is raw, whose digest folds stored bytes and no arithmetic.
+    normalize: Option<Resolved<Exact>>,
 }
 
 fn projection_hashers(
@@ -1397,7 +1401,20 @@ fn projection_hashers_from_specs<T: MatrixScalar>(
     specs: &[ProjectionSpec],
 ) -> Result<Vec<ProjectionHashState>, EmbeddingError> {
     let mut states = Vec::with_capacity(specs.len());
+    // A normalized projection's digest folds binary64 arithmetic, the §13.2 norm and the
+    // division by it, so the float environment is checked once, here, before any row is
+    // hashed; a thread that flushes subnormals would otherwise seal a digest no IEEE
+    // reader recomputes. The rows are hashed on this thread, inside the same call. A
+    // matrix with only raw projections involves no arithmetic and is not checked.
+    let mut exact = None;
     for spec in specs {
+        let normalize = match spec.postprocessing {
+            PrefixPostprocessing::None => None,
+            PrefixPostprocessing::DeterministicL2 => Some(match exact {
+                Some(handle) => handle,
+                None => *exact.insert(Exact::resolve()?),
+            }),
+        };
         let mut hasher = FramedHasher::new(D_PROJECTION_CONTENT);
         hasher.field(&T::DTYPE.code().to_le_bytes());
         hasher.field(&row_count.to_le_bytes());
@@ -1411,6 +1428,7 @@ fn projection_hashers_from_specs<T: MatrixScalar>(
         states.push(ProjectionHashState {
             spec: *spec,
             hasher,
+            normalize,
         });
     }
     if specs.last().map(|spec| spec.effective_dimension) != Some(stored_dimension) {
@@ -1434,15 +1452,16 @@ fn update_projection_hashers<T: MatrixScalar>(
                 offset: 0,
                 length: u64::from(state.spec.effective_dimension),
             })?;
-        match state.spec.postprocessing {
-            PrefixPostprocessing::None => {
+        match state.normalize {
+            None => {
                 for &value in prefix {
                     let bytes = value.raw_bytes();
                     state.hasher.update(bytes.as_slice());
                 }
             }
-            PrefixPostprocessing::DeterministicL2 => {
-                let norm = deterministic_l2_norm(prefix, row, state.spec.effective_dimension)?;
+            Some(arithmetic) => {
+                let norm =
+                    deterministic_l2_norm(arithmetic, prefix, row, state.spec.effective_dimension)?;
                 for &value in prefix {
                     let bytes = T::rounded_bytes(value.to_f64() / norm);
                     state.hasher.update(bytes.as_slice());
@@ -1481,33 +1500,17 @@ fn verify_projection_hashers(
 }
 
 fn deterministic_l2_norm<T: MatrixScalar>(
+    arithmetic: Resolved<Exact>,
     values: &[T],
     row: u64,
     dimension: u32,
 ) -> Result<f64, EmbeddingError> {
-    let mut scale = 0.0f64;
-    let mut ssq = 1.0f64;
-    for &value in values {
-        let absolute = value.to_f64().abs();
-        if absolute != 0.0 {
-            if scale < absolute {
-                let ratio = scale / absolute;
-                let square = ratio * ratio;
-                let product = ssq * square;
-                ssq = 1.0 + product;
-                scale = absolute;
-            } else {
-                let ratio = absolute / scale;
-                let square = ratio * ratio;
-                ssq += square;
-            }
-        }
-    }
-    if scale == 0.0 {
+    // The one copy of the §13.2 fold, the one readers and the kNN and HNSW norms run.
+    let norm = arithmetic.norm(values);
+    if norm == 0.0 {
         return Err(EmbeddingError::ZeroNorm { row, dimension });
     }
-    let norm = scale * ssq.sqrt();
-    if !norm.is_finite() || norm == 0.0 {
+    if !norm.is_finite() {
         return Err(EmbeddingError::Malformed("invalid deterministic L2 norm"));
     }
     Ok(norm)
@@ -1554,7 +1557,7 @@ impl ScalarBytes {
     }
 }
 
-trait MatrixScalar: Copy {
+trait MatrixScalar: Scalar {
     const DTYPE: VectorDtype;
     const WIDTH: u32;
 
@@ -1733,7 +1736,8 @@ mod tests {
 
     #[test]
     fn deterministic_l2_rejects_a_zero_prefix() {
-        let error = deterministic_l2_norm(&[0.0f64, -0.0], 4, 2).unwrap_err();
+        let exact = Exact::resolve().expect("the test thread runs the default float environment");
+        let error = deterministic_l2_norm(exact, &[0.0f64, -0.0], 4, 2).unwrap_err();
         assert_eq!(
             error,
             EmbeddingError::ZeroNorm {

@@ -338,6 +338,11 @@ impl From<purrdf_core::distance::FloatEnvironmentError> for HnswError {
 
 impl From<purrdf_core::EmbeddingError> for HnswError {
     fn from(error: purrdf_core::EmbeddingError) -> Self {
+        // A refused float environment is the same refusal whichever layer met it, and
+        // keeps its name rather than becoming an artifact defect.
+        if let purrdf_core::EmbeddingError::FloatEnvironment(refusal) = error {
+            return Self::FloatEnvironment(refusal);
+        }
         Self::Embedding {
             description: error.to_string(),
         }

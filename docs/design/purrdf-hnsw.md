@@ -248,7 +248,13 @@ first, which refuses a flush-to-zero or re-rounding float environment with
 kernel over its unvisited neighbours. The public per-pair methods follow the same law:
 `VectorMatrix::distance`, `distance_from_query` and `distance_bounded` take the
 `Resolved<A>` handle that `A::resolve` (or `A::resolve_recorded`) returns, so no pair
-distance is computed on a thread whose environment was not checked.
+distance is computed on a thread whose environment was not checked. So do the norms a
+cosine index divides by: `VectorMatrix::norm_of_row` takes a `Resolved<Exact>`, which an
+index under either arithmetic obtains from its own handle with `Resolved::exact` (the
+norm is PURREMB's one-order fold, never reassociated), and `guard::read_effective_matrix`
+takes one for the deterministic-L2 rows it reads. `HnswSpace::from_artifact` resolves the
+exact arithmetic before it verifies the artifact, so a flushing thread is refused as
+`EvalError::FloatEnvironment` rather than as an artifact that failed to verify.
 
 ### 2.5 What a binding proves before a search runs
 

@@ -222,8 +222,9 @@ fn check_group<Q: Store, T: Store>(
     let rows_wide: Vec<Vec<f64>> = (0..rows.len())
         .map(|row| widened(&row_typed[row * dims..(row + 1) * dims]))
         .collect();
-    let query_norm = norm(query_typed);
-    let norms: Vec<f64> = rows_wide.iter().map(|row| norm(row)).collect();
+    let exact = Resolved::<Exact>::on(Path::Portable);
+    let query_norm = exact.norm(query_typed);
+    let norms: Vec<f64> = rows_wide.iter().map(|row| exact.norm(row)).collect();
     let view = RowsRef::new(row_typed, rows.len(), dims, &norms).expect("a well-shaped matrix");
     let ids: Vec<usize> = (0..rows.len()).rev().chain([0, rows.len() / 2]).collect();
 

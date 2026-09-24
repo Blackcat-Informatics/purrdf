@@ -54,7 +54,11 @@ replaced with a fixed rule:
   `HnswError::FloatEnvironment`. The public per-pair methods
   (`VectorMatrix::distance`, `distance_from_query`, `distance_bounded`) take
   the `Resolved<A>` handle that resolving returns, so there is no way to
-  compute a distance that skips the check.
+  compute a distance that skips the check. The norm a cosine index divides by
+  is arithmetic too: `VectorMatrix::norm_of_row` and
+  `guard::read_effective_matrix` take a `Resolved<Exact>`, obtained from any
+  resolved handle with `Resolved::exact`, since the norm is PURREMB's one-order
+  fold whatever arithmetic ranks the distances.
 * **The digest** committed by a guard is a hand-rolled FNV-1a fold of the
   canonical payload bytes, stable across toolchain bumps; it is never
   `DefaultHasher` (SipHash, unspecified) or a randomly seeded map.

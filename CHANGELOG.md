@@ -1730,6 +1730,30 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   - `purrdf_core::distance::Exact::distance` and `Exact::distance_bounded`, the
     handle-free pair functions, are removed; `Resolved::distance` and
     `Resolved::distance_bounded` are the per-pair forms.
+  - The L2 norm a cosine kernel divides by follows the same law, because the
+    norm fold is arithmetic too: under flush-to-zero a row with a subnormal norm
+    folded to `+0`. `purrdf_core::distance::norm` and `knn::norm` are removed;
+    the norm is `Resolved::<Exact>::norm(vector)`, a method of the exact handle
+    only, since PURREMB §13.2 gives the fold one written order and no
+    reassociated form. A caller holding another arithmetic's handle obtains the
+    exact one with the new `Resolved::exact()`, which carries the environment
+    that handle already proved: `arithmetic.exact().norm(query)`.
+  - `purrdf_hnsw::VectorMatrix::norm_of_row(row)` becomes
+    `norm_of_row(arithmetic, row)` with a `Resolved<Exact>`.
+  - PURREMB's deterministic-L2 projection is the same fold and a division, so
+    `purrdf_core::EffectiveMatrixView::f32_row` and `f64_row` take a
+    `Resolved<Exact>` after the row (exact stored bytes stay readable without one
+    through `raw_prefix_bytes` and `native_f32_row`/`native_f64_row`), and
+    `purrdf_hnsw::guard::read_effective_matrix` takes one after the view. The
+    writer (`EmbeddingBuilder::build`, `EmbeddingStreamWriter`) and
+    `verify_embedding` resolve it themselves, once, where a normalized projection
+    is present, and refuse a flushing thread with the new
+    `EmbeddingError::FloatEnvironment` rather than sealing a digest no IEEE reader
+    recomputes or reporting an honest artifact as a digest mismatch; an artifact
+    with only raw projections involves no arithmetic and is still written and
+    verified on any thread. `HnswError` maps that variant to its own
+    `FloatEnvironment`, and `HnswSpace::from_artifact` now resolves before it
+    verifies, so the refusal keeps its name.
 
 - **hnsw:** goldens that moved, re-pinned by hand. Distances now fold in the
   16-lane tree order, and the image header carries the arithmetic field.

@@ -13,6 +13,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::io::Cursor;
 
+use purrdf_core::distance::{Exact, Resolved};
 use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
     CertifiedPurrpckSource, ContentDigest, CorpusTarget, DimensionalityPolicy, DistanceMetric,
@@ -406,17 +407,21 @@ impl Ord for RankedRow {
     }
 }
 
-pub(crate) fn effective_row(matrix: EffectiveMatrixView<'_>, row: u64) -> Vec<f32> {
+pub(crate) fn effective_row(
+    exact: Resolved<Exact>,
+    matrix: EffectiveMatrixView<'_>,
+    row: u64,
+) -> Vec<f32> {
     matrix
-        .f32_row(row)
+        .f32_row(row, exact)
         .expect("effective f32 row")
         .map(|value| value.expect("finite f32 coordinate"))
         .collect()
 }
 
-fn dot(matrix: EffectiveMatrixView<'_>, row: u64, query: &[f32]) -> f32 {
+fn dot(exact: Resolved<Exact>, matrix: EffectiveMatrixView<'_>, row: u64, query: &[f32]) -> f32 {
     matrix
-        .f32_row(row)
+        .f32_row(row, exact)
         .expect("effective f32 row")
         .zip(query)
         .map(|(value, query)| value.expect("finite f32 coordinate") * query)
@@ -424,6 +429,7 @@ fn dot(matrix: EffectiveMatrixView<'_>, row: u64, query: &[f32]) -> f32 {
 }
 
 pub(crate) fn top_k(
+    exact: Resolved<Exact>,
     matrix: EffectiveMatrixView<'_>,
     query: &[f32],
     count: usize,
@@ -435,7 +441,7 @@ pub(crate) fn top_k(
             continue;
         }
         let candidate = RankedRow {
-            score: dot(matrix, row, query),
+            score: dot(exact, matrix, row, query),
             row,
         };
         if best.len() < count {
@@ -451,6 +457,7 @@ pub(crate) fn top_k(
 }
 
 pub(crate) fn rerank(
+    exact: Resolved<Exact>,
     matrix: EffectiveMatrixView<'_>,
     query: &[f32],
     candidates: &[RankedRow],
@@ -459,7 +466,7 @@ pub(crate) fn rerank(
     let mut reranked = candidates
         .iter()
         .map(|candidate| RankedRow {
-            score: dot(matrix, candidate.row, query),
+            score: dot(exact, matrix, candidate.row, query),
             row: candidate.row,
         })
         .collect::<Vec<_>>();

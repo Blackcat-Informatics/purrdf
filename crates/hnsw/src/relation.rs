@@ -252,6 +252,10 @@ impl<A: Arithmetic> HnswSpace<A> {
         guard: KnnGuard,
         load: Loader<A>,
     ) -> Result<Self, EvalError> {
+        // The float environment first: verifying a normalized projection and reading its
+        // rows are exact arithmetic, and a refused environment must be reported as one,
+        // not as an artifact that failed to verify.
+        let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
         let mut view = EmbeddingView::from_bytes(artifact)
             .map_err(|e| EvalError::data(format!("the PURREMB artifact is unreadable: {e}")))?;
         verify_embedding(&mut view)
@@ -308,7 +312,7 @@ impl<A: Arithmetic> HnswSpace<A> {
             )));
         }
 
-        let matrix = crate::guard::read_effective_matrix(&effective)
+        let matrix = crate::guard::read_effective_matrix(&effective, exact)
             .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?;
         let index =
             load(&guard_view, matrix).map_err(|e| eval_error("the HNSW payload is unusable", e))?;

@@ -4,81 +4,7 @@
 //! The **build shape**: the compile-time facts that decide what the
 //! [`Reassociated`](super::Reassociated) body compiles to.
 //!
-//! A dispatch [`Path`](super::Path) names *which* compilation of the reassociated body ran,
-//! but not what that compilation became. Each compilation is built with the consumer
-//! build's own `-C target-cpu`/`-C target-feature` in addition to whatever
-//! `#[target_feature]` the path enables, so the same path compiles to different
-//! instructions in different builds: the baseline `x86_64` path contracts to FMA in a build
-//! whose global features include `fma`, the AVX-512F path runs `ymm` rather than `zmm`
-//! registers under `x86-64-v4`, and the NEON path becomes SVE under a Neoverse target. Two
-//! builds recording the same path can therefore compute different bits. A [`BuildShape`] is
-//! the part of that difference the compiler exposes to the source: the target architecture
-//! and the `cfg(target_feature)` set relevant to that architecture's vector and
-//! fused-multiply-add code generation, as the crate holding the body was compiled.
-//!
-//! # What it does not capture
-//!
-//! `rustc` exposes no `cfg` for `-C target-cpu`, and the CPU's *tuning* is not a target
-//! feature: `x86-64-v4`'s preference for 256-bit vectors and a Neoverse core's scheduling
-//! model change the emitted code without changing a single `cfg(target_feature)`. Neither
-//! is the compiler version, whose optimizer may vectorize one source differently from the
-//! next. So two builds of equal shape are not guaranteed to compute the same bits; only
-//! the same compiled artifact is. Equal shape is a necessary condition, checked; the rest
-//! is refused by name where it is observed (a rebuild that diverges under an equal shape),
-//! never answered as a tamper-looking `false`.
-//!
-//! # The layout, version 1
-//!
-//! A shape is one `u64`, little-endian wherever it is stored:
-//!
-//! | bits | field |
-//! |---:|---|
-//! | 0..8 | the layout version, [`BuildShape::LAYOUT`] (1) |
-//! | 8..16 | the architecture code, from the table below; `0xFF` for an architecture this layout does not name |
-//! | 16..64 | one bit per feature of that architecture's row, bit `16 + i` for the row's `i`-th feature; set when the build compiled with it |
-//!
-//! | code | `target_arch` | features, in bit order |
-//! |---:|---|---|
-//! | 1 | `x86_64` | `x87`, `sse`, `sse2`, `sse3`, `ssse3`, `sse4.1`, `sse4.2`, `avx`, `avx2`, `fma`, `avx512f`, `avx512cd`, `avx512dq`, `avx512bw`, `avx512vl`, `soft-float` |
-//! | 2 | `x86` | as `x86_64` |
-//! | 3 | `aarch64` | `neon`, `fp16`, `fcma`, `rdm`, `dotprod`, `f64mm`, `sve`, `sve2` |
-//! | 4 | `arm64ec` | as `aarch64` |
-//! | 5 | `arm` | `vfp2`, `vfp3`, `vfp4`, `d32`, `fp-armv8`, `neon` |
-//! | 6 | `wasm32` | `simd128`, `relaxed-simd` |
-//! | 7 | `wasm64` | as `wasm32` |
-//! | 8 | `riscv64` | `f`, `d`, `zfh`, `v`, `zve64d` |
-//! | 9 | `riscv32` | as `riscv64` |
-//! | 10 | `powerpc64` | `altivec`, `vsx`, `power8-vector`, `power9-vector` |
-//! | 11 | `powerpc` | as `powerpc64` |
-//! | 12 | `s390x` | `vector`, `vector-enhancements-1`, `vector-enhancements-2` |
-//! | 13 | `loongarch64` | `f`, `d`, `lsx`, `lasx` |
-//! | 14 | `loongarch32` | as `loongarch64` |
-//! | 15 | `mips` | `fp64`, `msa` |
-//! | 16 | `mips64` | as `mips` |
-//! | 17 | `mips32r6` | as `mips` |
-//! | 18 | `mips64r6` | as `mips` |
-//! | 19 | `sparc` | none |
-//! | 20 | `sparc64` | none |
-//! | 21 | `m68k` | none |
-//! | 22 | `csky` | none |
-//! | 23 | `hexagon` | `hvx` |
-//! | 24 | `bpf` | none |
-//! | 25 | `avr` | none |
-//! | 26 | `msp430` | none |
-//! | 27 | `nvptx64` | none |
-//! | 28 | `amdgpu` | none |
-//! | 29 | `xtensa` | none |
-//!
-//! The table is append-only: a row's code and its features' bit positions never move, a
-//! new architecture takes the next code, and a new feature of an existing row takes the
-//! next bit. Anything else is a new layout version. Two builds of architectures this layout
-//! does not name share the code `0xFF`; such a build still records its dispatch path, and
-//! its residual divergence is still refused by name.
-//!
-//! On wasm, `relaxed-simd` is recorded because a build that enables it globally lets the
-//! compiler contract the reassociated body into relaxed fused multiply-adds, whose results
-//! the engine chooses. PurRDF never enables it; a build that does records the bit, so its
-//! images are never accepted by a build without it, and vice versa.
+//! The layout and what a shape does not capture are documented on [`BuildShape`].
 
 use core::fmt;
 
@@ -275,10 +201,84 @@ const _: () = {
 };
 
 /// The compile-time shape of a build's reassociated arithmetic: its target architecture
-/// and the target features that decide what the reassociated body compiles to.
+/// and the target features that decide what the reassociated body compiles to. Two shapes
+/// are the same shape exactly when their bits are equal.
 ///
-/// See the [module documentation](self) for the versioned layout and for what it does
-/// not capture. Two shapes are the same shape exactly when their bits are equal.
+/// A dispatch [`Path`](super::Path) names *which* compilation of the reassociated body ran,
+/// but not what that compilation became. Each compilation is built with the consumer
+/// build's own `-C target-cpu`/`-C target-feature` in addition to whatever
+/// `#[target_feature]` the path enables, so the same path compiles to different
+/// instructions in different builds: the baseline `x86_64` path contracts to FMA in a build
+/// whose global features include `fma`, the AVX-512F path runs `ymm` rather than `zmm`
+/// registers under `x86-64-v4`, and the NEON path becomes SVE under a Neoverse target. Two
+/// builds recording the same path can therefore compute different bits. A [`BuildShape`] is
+/// the part of that difference the compiler exposes to the source: the target architecture
+/// and the `cfg(target_feature)` set relevant to that architecture's vector and
+/// fused-multiply-add code generation, as the crate holding the body was compiled.
+///
+/// # What it does not capture
+///
+/// `rustc` exposes no `cfg` for `-C target-cpu`, and the CPU's *tuning* is not a target
+/// feature: `x86-64-v4`'s preference for 256-bit vectors and a Neoverse core's scheduling
+/// model change the emitted code without changing a single `cfg(target_feature)`. Neither
+/// is the compiler version, whose optimizer may vectorize one source differently from the
+/// next. So two builds of equal shape are not guaranteed to compute the same bits; only
+/// the same compiled artifact is. Equal shape is a necessary condition, checked; the rest
+/// is refused by name where it is observed (a rebuild that diverges under an equal shape),
+/// never answered as a tamper-looking `false`.
+///
+/// # The layout, version 1
+///
+/// A shape is one `u64`, little-endian wherever it is stored:
+///
+/// | bits | field |
+/// |---:|---|
+/// | 0..8 | the layout version, [`BuildShape::LAYOUT`] (1) |
+/// | 8..16 | the architecture code, from the table below; `0xFF` for an architecture this layout does not name |
+/// | 16..64 | one bit per feature of that architecture's row, bit `16 + i` for the row's `i`-th feature; set when the build compiled with it |
+///
+/// | code | `target_arch` | features, in bit order |
+/// |---:|---|---|
+/// | 1 | `x86_64` | `x87`, `sse`, `sse2`, `sse3`, `ssse3`, `sse4.1`, `sse4.2`, `avx`, `avx2`, `fma`, `avx512f`, `avx512cd`, `avx512dq`, `avx512bw`, `avx512vl`, `soft-float` |
+/// | 2 | `x86` | as `x86_64` |
+/// | 3 | `aarch64` | `neon`, `fp16`, `fcma`, `rdm`, `dotprod`, `f64mm`, `sve`, `sve2` |
+/// | 4 | `arm64ec` | as `aarch64` |
+/// | 5 | `arm` | `vfp2`, `vfp3`, `vfp4`, `d32`, `fp-armv8`, `neon` |
+/// | 6 | `wasm32` | `simd128`, `relaxed-simd` |
+/// | 7 | `wasm64` | as `wasm32` |
+/// | 8 | `riscv64` | `f`, `d`, `zfh`, `v`, `zve64d` |
+/// | 9 | `riscv32` | as `riscv64` |
+/// | 10 | `powerpc64` | `altivec`, `vsx`, `power8-vector`, `power9-vector` |
+/// | 11 | `powerpc` | as `powerpc64` |
+/// | 12 | `s390x` | `vector`, `vector-enhancements-1`, `vector-enhancements-2` |
+/// | 13 | `loongarch64` | `f`, `d`, `lsx`, `lasx` |
+/// | 14 | `loongarch32` | as `loongarch64` |
+/// | 15 | `mips` | `fp64`, `msa` |
+/// | 16 | `mips64` | as `mips` |
+/// | 17 | `mips32r6` | as `mips` |
+/// | 18 | `mips64r6` | as `mips` |
+/// | 19 | `sparc` | none |
+/// | 20 | `sparc64` | none |
+/// | 21 | `m68k` | none |
+/// | 22 | `csky` | none |
+/// | 23 | `hexagon` | `hvx` |
+/// | 24 | `bpf` | none |
+/// | 25 | `avr` | none |
+/// | 26 | `msp430` | none |
+/// | 27 | `nvptx64` | none |
+/// | 28 | `amdgpu` | none |
+/// | 29 | `xtensa` | none |
+///
+/// The table is append-only: a row's code and its features' bit positions never move, a
+/// new architecture takes the next code, and a new feature of an existing row takes the
+/// next bit. Anything else is a new layout version. Two builds of architectures this layout
+/// does not name share the code `0xFF`; such a build still records its dispatch path, and
+/// its residual divergence is still refused by name.
+///
+/// On wasm, `relaxed-simd` is recorded because a build that enables it globally lets the
+/// compiler contract the reassociated body into relaxed fused multiply-adds, whose results
+/// the engine chooses. PurRDF never enables it; a build that does records the bit, so its
+/// images are never accepted by a build without it, and vice versa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BuildShape(u64);
 

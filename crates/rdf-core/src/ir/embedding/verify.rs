@@ -13,6 +13,8 @@ use crate::{
     dataset_from_view, try_canonicalize, verify_pack,
 };
 
+use crate::distance::{Arithmetic as _, Exact};
+
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
@@ -27,7 +29,10 @@ use super::target::{
     RdfAnnotationTarget, RdfDatasetTarget, RdfGraphTarget, RdfReifierTarget, RdfStatementTarget,
     RdfTermTargetRef, TargetKind,
 };
-use super::view::{EmbeddingView, ExternalBindingView, MatrixView, ProjectionView, TargetView};
+use super::view::{
+    EmbeddingView, ExternalBindingView, F32Scalars, F64Scalars, MatrixView, ProjectionView,
+    TargetView,
+};
 use super::wire::{PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_HEADER_LENGTH};
 
 const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
@@ -183,6 +188,16 @@ impl<'a> EmbeddingVerificationReport<'a> {
 /// Structural validation must already have succeeded through
 /// [`EmbeddingView::from_bytes`]. On success, the supplied view is marked fully
 /// verified and may expose aligned native scalar slices.
+///
+/// # Errors
+///
+/// Every defect the artifact carries, as the [`EmbeddingError`] naming it. A projection
+/// with deterministic L2 postprocessing is recomputed in binary64, so an artifact holding
+/// one is refused with [`EmbeddingError::FloatEnvironment`] on a thread whose float
+/// environment flushes subnormals or rounds other than to nearest: its digest would be
+/// recomputed from different bits and reported as a mismatch the artifact does not have.
+/// An artifact with no normalized projection involves no arithmetic and verifies on any
+/// thread.
 pub fn verify_embedding<'a>(
     view: &mut EmbeddingView<'a>,
 ) -> Result<EmbeddingVerificationReport<'a>, EmbeddingError> {
@@ -510,15 +525,33 @@ fn verify_projection(
 
     let postprocessing = projection.postprocessing()?;
     let mut hasher = projection_hasher(matrix, projection, postprocessing)?;
+    // A normalized projection's values are binary64 arithmetic -- the §13.2 norm and the
+    // division by it -- so its digest is recomputed only on a thread whose float
+    // environment is the IEEE one, checked once per projection. A raw projection's values
+    // are the stored bytes, involve no arithmetic, and verify on any thread.
+    let arithmetic = match postprocessing {
+        PrefixPostprocessing::None => None,
+        PrefixPostprocessing::DeterministicL2 => Some(Exact::resolve()?),
+    };
     for row in 0..matrix.row_count() {
-        match matrix.dtype()? {
-            VectorDtype::F32 => {
-                for value in effective.f32_row(row)? {
+        match (matrix.dtype()?, arithmetic) {
+            (VectorDtype::F32, Some(arithmetic)) => {
+                for value in effective.f32_row(row, arithmetic)? {
                     hasher.update(&value?.to_le_bytes());
                 }
             }
-            VectorDtype::F64 => {
-                for value in effective.f64_row(row)? {
+            (VectorDtype::F32, None) => {
+                for value in F32Scalars::new(effective.raw_prefix_bytes(row)?, row, 0) {
+                    hasher.update(&value?.to_le_bytes());
+                }
+            }
+            (VectorDtype::F64, Some(arithmetic)) => {
+                for value in effective.f64_row(row, arithmetic)? {
+                    hasher.update(&value?.to_le_bytes());
+                }
+            }
+            (VectorDtype::F64, None) => {
+                for value in F64Scalars::new(effective.raw_prefix_bytes(row)?, row, 0) {
                     hasher.update(&value?.to_le_bytes());
                 }
             }

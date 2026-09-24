@@ -27,7 +27,7 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{EmbeddingView, TermValue, verify_embedding};
 use purrdf_hnsw::relation::{HnswRelation, HnswSpace, register_hnsw_relation};
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, guard, level::splitmix64, profile};
-use purrdf_sparql_eval::knn::{Arithmetic as _, Exact, Kernel, Ranked, best, norm};
+use purrdf_sparql_eval::knn::{Arithmetic as _, Exact, Kernel, Ranked, best};
 use purrdf_sparql_eval::{
     EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction, PropertyFunctionRegistry,
 };
@@ -66,8 +66,8 @@ fn fixture_space(rows: usize, dims: usize, params: Params) -> (VectorMatrix, Arc
 fn exact_top_k(matrix: &VectorMatrix, query_row: usize, k: usize) -> Vec<usize> {
     let kernel = Kernel::SquaredEuclidean;
     let query = matrix.row(query_row);
-    let query_norm = norm(query);
     let exact = Exact::resolve().expect("the test thread runs the default float environment");
+    let query_norm = exact.norm(query);
     let scored: Vec<Ranked> = (0..matrix.rows())
         .map(|row| Ranked {
             distance: kernel
@@ -76,7 +76,7 @@ fn exact_top_k(matrix: &VectorMatrix, query_row: usize, k: usize) -> Vec<usize> 
                     query,
                     query_norm,
                     matrix.row(row),
-                    norm(matrix.row(row)),
+                    exact.norm(matrix.row(row)),
                 )
                 .expect("finite"),
             row,

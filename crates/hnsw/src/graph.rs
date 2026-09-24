@@ -32,11 +32,11 @@
 
 use std::collections::BTreeSet;
 
-use purrdf_core::distance::{Arithmetic, BuildShape, Resolved, RowsRef};
+use purrdf_core::distance::{Arithmetic, BuildShape, Exact, Resolved, RowsRef};
 
 use crate::error::{HnswError, Result};
 use crate::params::Params;
-use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked, norm};
+use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked};
 
 /// The canonical image's magic marker; identifies the format before any length is trusted.
 pub(crate) const IMAGE_MAGIC: [u8; 8] = *b"PURHNSW1";
@@ -290,13 +290,25 @@ impl VectorMatrix {
         }
     }
 
-    /// The L2 norm of row `row`, at whatever width it is stored.
+    /// The L2 norm of row `row`, at whatever width it is stored, by PURREMB's normative
+    /// fold ([`Resolved::<Exact>::norm`]).
+    ///
+    /// `arithmetic` is the exact handle, for the reason every distance here takes one: the
+    /// fold is binary64 arithmetic, and on a thread that flushes subnormals it would
+    /// return different bits for a row whose squared ratios are subnormal, which a cosine
+    /// kernel then divides by. Such a thread cannot obtain the handle. An index running
+    /// under another arithmetic obtains it with [`Resolved::exact`]: the norm has one
+    /// written order, whatever arithmetic ranks the distances.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` is not a valid row index.
     #[must_use]
-    pub fn norm_of_row(&self, row: usize) -> f64 {
+    pub fn norm_of_row(&self, arithmetic: Resolved<Exact>, row: usize) -> f64 {
         let start = row * self.dims;
         match &self.data {
-            Vectors::F64(data) => norm(&data[start..start + self.dims]),
-            Vectors::F32(data) => norm(&data[start..start + self.dims]),
+            Vectors::F64(data) => arithmetic.norm(&data[start..start + self.dims]),
+            Vectors::F32(data) => arithmetic.norm(&data[start..start + self.dims]),
         }
     }
 }

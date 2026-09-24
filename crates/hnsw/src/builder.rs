@@ -54,7 +54,7 @@ use std::collections::BTreeSet;
 
 use rayon::prelude::*;
 
-use purrdf_core::distance::{Arithmetic, Resolved};
+use purrdf_core::distance::{Arithmetic, Exact, Resolved};
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
 use crate::error::{HnswError, Result};
@@ -150,7 +150,7 @@ pub(crate) fn build_graph<A: Arithmetic>(
     let levels: Vec<u32> = (0..n)
         .map(|row| level_from_index(row as u64, params.m(), cap))
         .collect();
-    let norms = compute_norms(matrix, kernel)?;
+    let norms = compute_norms(matrix, arithmetic.exact(), kernel)?;
 
     let mut graph = Graph::with_levels(levels.clone());
 
@@ -343,13 +343,21 @@ fn choose_host(
 /// Computed once, before any graph work, so a space that cannot be searched under the
 /// chosen metric fails at construction rather than mid-build. PURREMB v1: cosine distance
 /// is undefined for a zero-norm operand.
-pub(crate) fn compute_norms(matrix: &VectorMatrix, kernel: Kernel) -> Result<Vec<f64>> {
+///
+/// `arithmetic` is the exact handle the norms are folded under, whatever arithmetic the
+/// index ranks by; a caller holding another arithmetic's handle passes its
+/// [`Resolved::exact`].
+pub(crate) fn compute_norms(
+    matrix: &VectorMatrix,
+    arithmetic: Resolved<Exact>,
+    kernel: Kernel,
+) -> Result<Vec<f64>> {
     if !kernel.needs_norms() {
         return Ok(Vec::new());
     }
     let mut norms = Vec::with_capacity(matrix.rows());
     for row in 0..matrix.rows() {
-        let value = matrix.norm_of_row(row);
+        let value = matrix.norm_of_row(arithmetic, row);
         if value <= 0.0 {
             return Err(HnswError::ZeroNorm { row });
         }

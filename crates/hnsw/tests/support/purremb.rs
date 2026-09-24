@@ -15,7 +15,7 @@
 #![allow(dead_code, unreachable_pub)]
 
 use purrdf_core::IndexGuardView;
-use purrdf_core::distance::Arithmetic;
+use purrdf_core::distance::{Arithmetic, Exact};
 use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
     CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
@@ -131,7 +131,8 @@ impl Fixture {
             .effective_matrix(target_set, vector_space)
             .expect("the effective matrix is readable")
             .expect("the effective matrix exists");
-        let matrix = guard::read_effective_matrix(&effective).expect("the matrix reads");
+        let exact = Exact::resolve().expect("the test thread runs the default float environment");
+        let matrix = guard::read_effective_matrix(&effective, exact).expect("the matrix reads");
         let coordinates =
             guard::coordinates(&view, target_set, vector_space).expect("the coordinates derive");
         let index = build_index(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)

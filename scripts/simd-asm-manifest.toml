@@ -4460,7 +4460,7 @@ summary = "`reassociated::body::squared_euclidean_bounded`, the reassociated squ
 
 [[site]]
 id = "knn.norm"
-summary = "`metric::norm`, the normative PURREMB L2 norm, measured in `hnsw::builder::compute_norms`"
+summary = "`Resolved::<Exact>::norm`, the normative PURREMB L2 norm, measured in `hnsw::builder::compute_norms`"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]

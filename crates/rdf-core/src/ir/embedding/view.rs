@@ -6,6 +6,7 @@
 use core::mem::size_of;
 
 use crate::ContentDigest;
+use crate::distance::{Exact, Resolved};
 
 use super::contract::{
     DistanceMetric, PrefixPostprocessing, TlvEntryRef, TlvWireType, VectorDtype, canonical_tlv,
@@ -693,7 +694,22 @@ impl<'a> EffectiveMatrixView<'a> {
     }
 
     /// Allocation-free logical `f32` projection row.
-    pub fn f32_row(self, row: u64) -> Result<EffectiveF32Row<'a>, EmbeddingError> {
+    ///
+    /// Under [`PrefixPostprocessing::DeterministicL2`] the row is divided by its norm,
+    /// PURREMB §13.2's normative fold, and both are binary64 arithmetic whose bits a
+    /// thread that flushes subnormals or rounds other than to nearest would change.
+    /// `arithmetic` is the handle `Exact::resolve` returned after checking this thread's
+    /// float environment, resolved once per scan rather than per row. It is taken under
+    /// every policy, because a caller does not know statically which one a projection
+    /// declares: code that reads a raw projection today reads a normalized one the day
+    /// the artifact changes, and must already hold the proof. Exact stored bytes, which
+    /// involve no arithmetic, are read without it through
+    /// [`EffectiveMatrixView::raw_prefix_bytes`] and [`EffectiveMatrixView::native_f32_row`].
+    pub fn f32_row(
+        self,
+        row: u64,
+        arithmetic: Resolved<Exact>,
+    ) -> Result<EffectiveF32Row<'a>, EmbeddingError> {
         if self.matrix.dtype()? != VectorDtype::F32 {
             return Err(EmbeddingError::UnsupportedCode {
                 field: "projection dtype for f32 row",
@@ -708,13 +724,22 @@ impl<'a> EffectiveMatrixView<'a> {
                     self.raw_prefix_bytes(row)?,
                     row,
                     self.projection.effective_dimension(),
+                    arithmetic,
                 )?))
             }
         }
     }
 
     /// Allocation-free logical `f64` projection row.
-    pub fn f64_row(self, row: u64) -> Result<EffectiveF64Row<'a>, EmbeddingError> {
+    ///
+    /// `arithmetic` is taken for the reason [`EffectiveMatrixView::f32_row`] gives; exact
+    /// stored bytes are read without it through [`EffectiveMatrixView::raw_prefix_bytes`]
+    /// and [`EffectiveMatrixView::native_f64_row`].
+    pub fn f64_row(
+        self,
+        row: u64,
+        arithmetic: Resolved<Exact>,
+    ) -> Result<EffectiveF64Row<'a>, EmbeddingError> {
         if self.matrix.dtype()? != VectorDtype::F64 {
             return Err(EmbeddingError::UnsupportedCode {
                 field: "projection dtype for f64 row",
@@ -729,6 +754,7 @@ impl<'a> EffectiveMatrixView<'a> {
                     self.raw_prefix_bytes(row)?,
                     row,
                     self.projection.effective_dimension(),
+                    arithmetic,
                 )?))
             }
         }
@@ -765,7 +791,7 @@ pub struct F32Scalars<'a> {
 }
 
 impl<'a> F32Scalars<'a> {
-    const fn new(bytes: &'a [u8], row: u64, first_column: u32) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8], row: u64, first_column: u32) -> Self {
         Self {
             bytes,
             position: 0,
@@ -917,7 +943,7 @@ pub struct F64Scalars<'a> {
 }
 
 impl<'a> F64Scalars<'a> {
-    const fn new(bytes: &'a [u8], row: u64, first_column: u32) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8], row: u64, first_column: u32) -> Self {
         Self {
             bytes,
             position: 0,
@@ -1044,8 +1070,13 @@ pub struct L2F32Scalars<'a> {
 }
 
 impl<'a> L2F32Scalars<'a> {
-    fn new(bytes: &'a [u8], row: u64, dimension: u32) -> Result<Self, EmbeddingError> {
-        let norm = deterministic_norm_f32(bytes, row, dimension)?;
+    fn new(
+        bytes: &'a [u8],
+        row: u64,
+        dimension: u32,
+        arithmetic: Resolved<Exact>,
+    ) -> Result<Self, EmbeddingError> {
+        let norm = deterministic_norm_f32(bytes, row, dimension, arithmetic)?;
         Ok(Self {
             raw: F32Scalars::new(bytes, row, 0),
             norm,
@@ -1077,8 +1108,13 @@ pub struct L2F64Scalars<'a> {
 }
 
 impl<'a> L2F64Scalars<'a> {
-    fn new(bytes: &'a [u8], row: u64, dimension: u32) -> Result<Self, EmbeddingError> {
-        let norm = deterministic_norm_f64(bytes, row, dimension)?;
+    fn new(
+        bytes: &'a [u8],
+        row: u64,
+        dimension: u32,
+        arithmetic: Resolved<Exact>,
+    ) -> Result<Self, EmbeddingError> {
+        let norm = deterministic_norm_f64(bytes, row, dimension, arithmetic)?;
         Ok(Self {
             raw: F64Scalars::new(bytes, row, 0),
             norm,
@@ -4520,7 +4556,14 @@ fn validate_relation_endpoints(
     Ok(())
 }
 
-fn deterministic_norm_f32(bytes: &[u8], row: u64, dimension: u32) -> Result<f64, EmbeddingError> {
+// `_arithmetic` is the proof, not an input: holding it means this thread's float
+// environment was checked, so the fold below computes the bits §13.2 defines.
+fn deterministic_norm_f32(
+    bytes: &[u8],
+    row: u64,
+    dimension: u32,
+    _arithmetic: Resolved<Exact>,
+) -> Result<f64, EmbeddingError> {
     let mut scale = 0.0f64;
     let mut ssq = 1.0f64;
     let (chunks, _rest) = bytes.as_chunks::<4>();
@@ -4537,7 +4580,14 @@ fn deterministic_norm_f32(bytes: &[u8], row: u64, dimension: u32) -> Result<f64,
     finish_norm(scale, ssq, row, dimension)
 }
 
-fn deterministic_norm_f64(bytes: &[u8], row: u64, dimension: u32) -> Result<f64, EmbeddingError> {
+// `_arithmetic` is the proof, not an input: holding it means this thread's float
+// environment was checked, so the fold below computes the bits §13.2 defines.
+fn deterministic_norm_f64(
+    bytes: &[u8],
+    row: u64,
+    dimension: u32,
+    _arithmetic: Resolved<Exact>,
+) -> Result<f64, EmbeddingError> {
     let mut scale = 0.0f64;
     let mut ssq = 1.0f64;
     let (chunks, _rest) = bytes.as_chunks::<8>();
@@ -4557,9 +4607,9 @@ fn deterministic_norm_f64(bytes: &[u8], row: u64, dimension: u32) -> Result<f64,
 /// One step of PURREMB's normative scaled L2 fold (§13.2): fold the magnitude `value`
 /// into the running `scale` and sum of squared ratios `ssq`.
 ///
-/// The single copy of that order in the workspace. `crate::distance::norm` folds a whole
-/// vector through it, so the kNN and HNSW norms and the artifact's own normalization
-/// cannot drift apart.
+/// The single copy of that order in the workspace. `Resolved::<Exact>::norm` folds a
+/// whole vector through it, and the artifact writer normalizes through that, so the kNN
+/// and HNSW norms, the writer's and this reader's cannot drift apart.
 // PURREMB v1 prescribes separate rounded multiply and add operations; fusing
 // them would change portable projection bytes.
 #[allow(clippy::suboptimal_flops)]
@@ -5154,6 +5204,12 @@ fn validate_external_lookup_index(
 mod tests {
     use super::super::contract::push_tlv;
     use super::*;
+    use crate::distance::Arithmetic;
+
+    /// The exact handle a normalized row is computed under.
+    fn exact() -> Resolved<Exact> {
+        Exact::resolve().expect("the test thread runs the default float environment")
+    }
 
     fn test_tlv(output: &mut Vec<u8>, tag: u16, wire: TlvWireType, value: &[u8]) {
         push_tlv(output, tag, wire, true, value).expect("test TLV");
@@ -5250,7 +5306,9 @@ mod tests {
         let dimension = values.len() as u32;
         for row in [
             EffectiveF32Row::Raw(F32Scalars::new(&bytes, 0, 0)),
-            EffectiveF32Row::Normalized(L2F32Scalars::new(&bytes, 0, dimension).expect("nonzero")),
+            EffectiveF32Row::Normalized(
+                L2F32Scalars::new(&bytes, 0, dimension, exact()).expect("nonzero"),
+            ),
         ] {
             let mut out = vec![42.0_f32];
             let decoded = row.clone().decode_into(&mut out);
@@ -5293,7 +5351,7 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&3.0f32.to_bits().to_le_bytes());
         bytes.extend_from_slice(&4.0f32.to_bits().to_le_bytes());
-        let values = L2F32Scalars::new(&bytes, 0, 2)
+        let values = L2F32Scalars::new(&bytes, 0, 2, exact())
             .expect("nonzero row")
             .collect::<Result<Vec<_>, _>>()
             .expect("finite normalized row");
@@ -5304,7 +5362,7 @@ mod tests {
     fn deterministic_l2_rejects_zero_norm() {
         let bytes = [0u8; 16];
         assert_eq!(
-            L2F64Scalars::new(&bytes, 3, 2).expect_err("zero row"),
+            L2F64Scalars::new(&bytes, 3, 2, exact()).expect_err("zero row"),
             EmbeddingError::ZeroNorm {
                 row: 3,
                 dimension: 2,

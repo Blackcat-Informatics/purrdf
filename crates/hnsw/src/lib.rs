@@ -787,7 +787,7 @@ impl<A: Arithmetic> HnswIndex<A> {
         image
             .params
             .validate_against(matrix.rows(), matrix.dims())?;
-        let norms = builder::compute_norms(&matrix, image.kernel)?;
+        let norms = builder::compute_norms(&matrix, here.exact(), image.kernel)?;
         Ok(Self::new(
             matrix,
             image.kernel,
@@ -1821,7 +1821,7 @@ mod tests {
                 // the same pair as the stored row and must score the same bits.
                 if let Some(query) = matrix.row_f64(0) {
                     let query_norm = if kernel.needs_norms() {
-                        purrdf_sparql_eval::knn::norm(query)
+                        arithmetic.exact().norm(query)
                     } else {
                         0.0
                     };

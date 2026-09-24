@@ -47,7 +47,7 @@ use purrdf_core::{
     IndexUseRole, TargetSetId, TlvEntryRef, TlvWireType, VectorDtype, VectorSpaceId, canonical_tlv,
 };
 
-use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
+use purrdf_core::distance::{Arithmetic, Exact, Reassociated, Resolved};
 
 use crate::error::{HnswError, Result};
 use crate::graph::VectorMatrix;
@@ -599,11 +599,19 @@ fn load_as<A: Arithmetic>(
 /// and the relation's row-to-term mapping rely on. Casting every stored scalar to `f64` is
 /// exact for an `f32` and identity for an `f64`, so there is one arithmetic path.
 ///
+/// A projection with deterministic L2 postprocessing is normalized as it is read, by
+/// PURREMB's norm fold and a binary64 division; `arithmetic` is the exact handle that
+/// arithmetic runs under (see [`EffectiveMatrixView::f32_row`]), resolved once by the
+/// caller for the whole matrix.
+///
 /// # Errors
 ///
 /// [`HnswError::Embedding`] for an unreadable scalar type or row, and
 /// [`HnswError::ParameterValidation`] if the shape is unusable.
-pub fn read_effective_matrix(effective: &EffectiveMatrixView<'_>) -> Result<VectorMatrix> {
+pub fn read_effective_matrix(
+    effective: &EffectiveMatrixView<'_>,
+    arithmetic: Resolved<Exact>,
+) -> Result<VectorMatrix> {
     let dtype = effective.matrix().dtype()?;
     let row_count =
         usize::try_from(effective.matrix().row_count()).map_err(|_| HnswError::Embedding {
@@ -630,7 +638,7 @@ pub fn read_effective_matrix(effective: &EffectiveMatrixView<'_>) -> Result<Vect
             let mut data: Vec<f32> = Vec::with_capacity(expected);
             for row in 0..row_count {
                 let before = data.len();
-                for value in effective.f32_row(row as u64)? {
+                for value in effective.f32_row(row as u64, arithmetic)? {
                     data.push(value?);
                 }
                 check_row_width(row, data.len() - before, dimension)?;
@@ -641,7 +649,7 @@ pub fn read_effective_matrix(effective: &EffectiveMatrixView<'_>) -> Result<Vect
             let mut data: Vec<f64> = Vec::with_capacity(expected);
             for row in 0..row_count {
                 let before = data.len();
-                for value in effective.f64_row(row as u64)? {
+                for value in effective.f64_row(row as u64, arithmetic)? {
                     data.push(value?);
                 }
                 check_row_width(row, data.len() - before, dimension)?;

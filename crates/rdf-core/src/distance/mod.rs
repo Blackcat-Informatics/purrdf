@@ -122,10 +122,14 @@
 //! The check cannot be skipped, because nothing public computes a distance without the
 //! handle it produces: every distance entry point in this module is a method of
 //! [`Resolved`], and the per-pair and batch kernels built on it elsewhere in the
-//! workspace take a [`Resolved`] too. A flushing thread is therefore refused before any
-//! distance, per-pair or batch, is computed on it, rather than handed different bits by
-//! whichever entry point did not ask. The handle is resolved once per scan or call site
-//! and is `Copy`, so the check is never repeated per pair.
+//! workspace take a [`Resolved`] too. The same holds for the L2 norm a cosine kernel
+//! divides by: [`Resolved::<Exact>::norm`] is the only public form of PURREMB's
+//! normative norm fold, and a [`Reassociated`] consumer reaches it through
+//! [`Resolved::exact`], which carries the environment its handle already proved. A
+//! flushing thread is therefore refused before any distance or norm, per-pair or batch,
+//! is computed on it, rather than handed different bits by whichever entry point did
+//! not ask. The handle is resolved once per scan or call site and is `Copy`, so the
+//! check is never repeated per pair.
 
 mod dispatch;
 mod env;
@@ -722,6 +726,47 @@ impl<A: Arithmetic> Resolved<A> {
     }
 }
 
+impl<A: Arithmetic> Resolved<A> {
+    /// The [`Exact`] arithmetic's handle, under the float environment this handle already
+    /// proved.
+    ///
+    /// The environment check is the same for every arithmetic, so a thread that resolved
+    /// one has proved what the other needs; only the dispatch path is selected afresh, as
+    /// [`Exact`]'s resolve would select it. This is how a consumer running under
+    /// [`Reassociated`] obtains the norm its cosine kernel divides by: the norm is
+    /// PURREMB's normative fold and has no reassociated form, so it is computed by
+    /// [`Resolved::<Exact>::norm`] whatever arithmetic ranks the distances.
+    #[must_use]
+    pub fn exact(self) -> Resolved<Exact> {
+        Resolved::on(dispatch::exact_path())
+    }
+}
+
+impl Resolved<Exact> {
+    /// The Euclidean (L2) norm of `vector`, by PURREMB's normative scaled fold.
+    ///
+    /// PURREMB §13.2 fixes this fold's written order (no fused multiply-add, sequential
+    /// over ascending index), and a space stored with deterministic L2 postprocessing was
+    /// normalized by it, so it is never reordered and has no second arithmetic: it is a
+    /// method of the exact handle only, and a [`Reassociated`] consumer reaches it through
+    /// [`Resolved::exact`]. It carries a running maximum magnitude and a sum of squared
+    /// *ratios*, which keeps it finite for vectors whose squares would overflow or
+    /// underflow.
+    ///
+    /// Taking the handle is what makes that finiteness a fact rather than a hope: the
+    /// ratios of a vector with components near `1e-160` square into the subnormal range,
+    /// and a thread that flushes subnormals would fold zeros there and return different
+    /// bits, which a cosine kernel would then divide by. Such a thread cannot obtain the
+    /// handle ([`Arithmetic::resolve`] refuses it by name), so no norm is computed on it.
+    ///
+    /// A zero-length vector and a vector of zeros both norm to `0.0`; refusing a zero norm
+    /// is the job of a caller whose metric divides by it.
+    #[must_use]
+    pub fn norm<T: Scalar>(self, vector: &[T]) -> f64 {
+        l2_norm(vector)
+    }
+}
+
 impl<A: Arithmetic> PartialEq for Resolved<A> {
     fn eq(&self, other: &Self) -> bool {
         self.path == other.path
@@ -937,18 +982,9 @@ impl Arithmetic for Reassociated {
     }
 }
 
-/// The Euclidean (L2) norm of `vector`, by PURREMB's normative scaled fold.
-///
-/// PURREMB §13.2 fixes this fold's written order (no fused multiply-add, sequential
-/// over ascending index), and a space stored with deterministic L2 postprocessing was
-/// normalized by it, so it is never reordered and has no second arithmetic. It carries
-/// a running maximum magnitude and a sum of squared *ratios*, which keeps it finite for
-/// vectors whose squares would overflow or underflow.
-///
-/// A zero-length vector and a vector of zeros both norm to `0.0`; refusing a zero norm
-/// is the job of a caller whose metric divides by it.
-#[must_use]
-pub fn norm<T: Scalar>(vector: &[T]) -> f64 {
+/// The PURREMB §13.2 fold itself, for the crate's own callers, each of which holds a
+/// [`Resolved`] handle proving the float environment before it reaches here.
+pub(crate) fn l2_norm<T: Scalar>(vector: &[T]) -> f64 {
     let mut scale = 0.0_f64;
     let mut sum_of_squares = 1.0_f64;
     for value in vector {
