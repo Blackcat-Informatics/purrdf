@@ -66,9 +66,9 @@ use purrdf_core::{
     TargetSetView, TermValue, VectorSpaceId, verify_embedding,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, CandidateDomains, Completeness, DeclaredArithmetic, DepthPlacement,
-    DuplicatePolicy, EvalError, IndexGeneration, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankFidelity, Ranked,
+    AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DuplicatePolicy, EvalError,
+    IndexGeneration, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, RankArithmetic, RankFidelity, Ranked,
     RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
@@ -181,7 +181,7 @@ impl HnswSpace<Reassociated> {
     /// # Errors
     ///
     /// As [`HnswSpace::from_artifact`]; a guard naming the exact implementation, or a
-    /// payload recorded on a dispatch path this process does not run, is
+    /// payload recorded on a dispatch path this process cannot run, is
     /// [`EvalError::Data`].
     pub fn from_artifact_reassociated(
         artifact: &[u8],
@@ -481,7 +481,7 @@ fn check_distinct_terms(terms: &[TermValue]) -> Result<(), EvalError> {
 /// of its rows computed by a shared kernel under the index's arithmetic. Under [`Exact`] an
 /// invocation's rows are the same on the main thread, on a fork-join worker, and on
 /// `wasm32-unknown-unknown`; under [`Reassociated`] they are the same wherever this process
-/// runs the dispatch path the index recorded, and a process on another path is refused.
+/// runs the dispatch path the index recorded, and a process that cannot run it is refused.
 #[derive(Debug, Clone)]
 pub struct HnswRelation<A: Arithmetic = Exact> {
     /// The space every invocation searches.
@@ -659,7 +659,7 @@ impl<A: Arithmetic> HnswRelation<A> {
             // Every distance this relation ranks by is computed under the index's
             // arithmetic, so the declaration names that law and the registry's
             // content fingerprint binds it.
-            arithmetic: Some(DeclaredArithmetic::of::<A>()),
+            arithmetic: RankArithmetic::float_distance::<A>(),
             domains,
             // This relation projects a neighbour and a distance; it knows
             // nothing of a host's partition, so it has no position to read a

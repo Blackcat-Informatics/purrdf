@@ -16,7 +16,8 @@ use purrdf_core::Iri;
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, Completeness, DeclaredArithmetic, DepthPlacement, DomainTag,
     DuplicatePolicy, MemoryRelation, OrderFidelity, PropertyFunction, PropertyFunctionRegistry,
-    RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    RankArithmetic, RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern,
+    TermPlacement,
 };
 
 const EX_REL: &str = "http://example.org/ns#search";
@@ -97,7 +98,7 @@ fn declaration() -> RankedDeclaration {
         // lie, which is the widest promise and the one every producer made
         // before the term existed. The tests that are ABOUT the term state
         // their own.
-        arithmetic: None,
+        arithmetic: RankArithmetic::FloatFree,
         domains: CandidateDomains::Unrestricted,
         // And it names no per-row block, which is the honest answer for a
         // producer that restricts nothing: there is no promise for a row to
@@ -1282,7 +1283,7 @@ fn exact_declares_nothing_and_claims_nothing() {
 }
 
 /// The reference declaration with every field fixed but its arithmetic.
-fn declaration_with(arithmetic: Option<DeclaredArithmetic>) -> RankedDeclaration {
+fn declaration_with(arithmetic: RankArithmetic) -> RankedDeclaration {
     RankedDeclaration {
         arithmetic,
         ..declaration()
@@ -1290,23 +1291,45 @@ fn declaration_with(arithmetic: Option<DeclaredArithmetic>) -> RankedDeclaration
 }
 
 #[test]
-fn the_declared_arithmetic_is_folded_injectively_and_absence_changes_no_byte() {
+fn the_declared_arithmetic_is_folded_injectively_and_float_free_changes_no_byte() {
     use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 
-    let none = declaration_with(None).canonical_description();
-    let exact = declaration_with(Some(DeclaredArithmetic::of::<Exact>())).canonical_description();
-    let fast =
-        declaration_with(Some(DeclaredArithmetic::of::<Reassociated>())).canonical_description();
-    assert_ne!(none, exact);
-    assert_ne!(none, fast);
+    let float_free = declaration_with(RankArithmetic::FloatFree).canonical_description();
+    let exact = declaration_with(RankArithmetic::FloatDistance(
+        DeclaredArithmetic::of::<Exact>(),
+    ))
+    .canonical_description();
+    let fast = declaration_with(RankArithmetic::FloatDistance(DeclaredArithmetic::of::<
+        Reassociated,
+    >()))
+    .canonical_description();
+    assert_ne!(float_free, exact);
+    assert_ne!(float_free, fast);
     assert_ne!(exact, fast, "two laws are two descriptions");
-    // A declared law extends the arithmetic-free description rather than
-    // re-encoding it, so a producer that names none describes itself in
-    // exactly the bytes it did before arithmetic was a declared field.
-    assert_eq!(exact, format!("{none};a{}:{}", Exact::ID.len(), Exact::ID));
+    // A declared law extends the float-free description rather than
+    // re-encoding it, so a float-free producer describes itself in exactly the
+    // bytes it did before arithmetic was a declared field.
+    assert_eq!(
+        exact,
+        format!("{float_free};a{}:{}", Exact::ID.len(), Exact::ID)
+    );
     assert_eq!(
         fast,
-        format!("{none};a{}:{}", Reassociated::ID.len(), Reassociated::ID)
+        format!(
+            "{float_free};a{}:{}",
+            Reassociated::ID.len(),
+            Reassociated::ID
+        )
+    );
+    // The typed constructor is the variant over the sealed law, not a second
+    // spelling of it.
+    assert_eq!(
+        RankArithmetic::float_distance::<Exact>(),
+        RankArithmetic::FloatDistance(DeclaredArithmetic::of::<Exact>())
+    );
+    assert_ne!(
+        RankArithmetic::float_distance::<Reassociated>(),
+        RankArithmetic::float_distance::<Exact>()
     );
     assert_eq!(
         DeclaredArithmetic::of::<Exact>().id(),

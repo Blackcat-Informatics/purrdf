@@ -215,9 +215,9 @@ pub use property_fn::{
     AcceptedTerm, CandidateDomains, Completeness, DeclaredArithmetic, DepthPlacement, DomainTag,
     DuplicatePolicy, IndexGeneration, MemoryRelation, OrderFidelity, PfArgs, PfArity,
     PfAttestation, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, RankFidelity, RankedDeclaration, RequestFacet, ServiceLevel,
-    TermKind, TermPattern, TermPlacement, composed_order_fidelity, generation_contained,
-    service_level_contained,
+    PropertyFunctionRegistry, RankArithmetic, RankFidelity, RankedDeclaration, RequestFacet,
+    ServiceLevel, TermKind, TermPattern, TermPlacement, composed_order_fidelity,
+    generation_contained, service_level_contained,
 };
 // The property-function registry's CONTENT-only identity. It lives in the private
 // planning module beside the instance-bearing fingerprint, which renders it rather

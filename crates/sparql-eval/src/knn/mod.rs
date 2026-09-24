@@ -121,8 +121,8 @@ use purrdf_core::{
 
 use crate::error::EvalError;
 use crate::property_fn::{
-    AcceptedTerm, CandidateDomains, DeclaredArithmetic, DepthPlacement, DuplicatePolicy,
-    IndexGeneration, OrderFidelity, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+    AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, IndexGeneration,
+    OrderFidelity, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankArithmetic,
     RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
     composed_order_fidelity,
 };
@@ -1114,7 +1114,7 @@ impl<A: Arithmetic> EmbeddingKnnRelation<A> {
                 completeness: fidelity.completeness,
                 order: composed_order_fidelity(self.arithmetic_order(), fidelity.order),
             },
-            arithmetic: Some(DeclaredArithmetic::of::<A>()),
+            arithmetic: RankArithmetic::float_distance::<A>(),
             domains,
             // This relation projects a neighbour and a distance; it knows
             // nothing of a host's partition, so it has no position to read a

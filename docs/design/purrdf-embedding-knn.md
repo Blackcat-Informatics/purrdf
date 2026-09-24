@@ -109,8 +109,9 @@ nothing the exact one would name; what it can do is order two near-tied rows
 differently.
 
 That difference is declared, not hidden. `ranked_declaration` names the law in
-`RankedDeclaration::arithmetic` (`binary64-lane16-tree-v1` or
-`binary64-reassociated-v1`), which `canonical_description` folds, so the registry's
+`RankedDeclaration::arithmetic` as `RankArithmetic::FloatDistance`
+(`binary64-lane16-tree-v1` or `binary64-reassociated-v1`), which
+`canonical_description` folds, so the registry's
 content fingerprint and every plan id drawn from it bind the arithmetic: an exact and a
 reassociated producer over one space are two plans. The reassociated relation also
 composes the host's order fidelity with `OrderFidelity::Perturbed`, carrying the

@@ -811,8 +811,8 @@ mod tests {
     use purrdf_core::binding_pattern::BindingPattern;
     use purrdf_sparql_eval::{
         AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode,
-        RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
-        Volatility,
+        RankArithmetic, RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern,
+        TermPlacement, Volatility,
     };
 
     fn ex(suffix: &str) -> String {
@@ -849,7 +849,7 @@ mod tests {
             // Placement is about rendering arguments, not about fusion, so
             // these fixtures make the widest promise there is on both terms.
             fidelity: RankFidelity::EXACT,
-            arithmetic: None,
+            arithmetic: RankArithmetic::FloatFree,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,

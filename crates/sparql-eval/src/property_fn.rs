@@ -685,7 +685,7 @@ pub enum OrderFidelity {
 /// the field does not compile —
 ///
 /// ```compile_fail
-/// # use purrdf_sparql_eval::{RankedDeclaration, DuplicatePolicy, CandidateDomains};
+/// # use purrdf_sparql_eval::{RankedDeclaration, DuplicatePolicy, CandidateDomains, RankArithmetic};
 /// # let stratum = purrdf_core::parse_iri("http://example.org/s").unwrap();
 /// // No `fidelity`. This is a compile error, not a silent default.
 /// let _ = RankedDeclaration {
@@ -694,7 +694,7 @@ pub enum OrderFidelity {
 ///     depth_placement: None,
 ///     candidate_position: 0,
 ///     duplicates: DuplicatePolicy::Unique,
-///     arithmetic: None,
+///     arithmetic: RankArithmetic::FloatFree,
 ///     domains: CandidateDomains::Unrestricted,
 ///     block_position: None,
 ///     mandatory: false,
@@ -707,7 +707,7 @@ pub enum OrderFidelity {
 /// the field is the reason.
 ///
 /// ```
-/// # use purrdf_sparql_eval::{RankedDeclaration, RankFidelity, DuplicatePolicy, CandidateDomains};
+/// # use purrdf_sparql_eval::{RankedDeclaration, RankFidelity, DuplicatePolicy, CandidateDomains, RankArithmetic};
 /// # let stratum = purrdf_core::parse_iri("http://example.org/s").unwrap();
 /// let declaration = RankedDeclaration {
 ///     stratum,
@@ -716,7 +716,7 @@ pub enum OrderFidelity {
 ///     candidate_position: 0,
 ///     duplicates: DuplicatePolicy::Unique,
 ///     fidelity: RankFidelity::EXACT,
-///     arithmetic: None,
+///     arithmetic: RankArithmetic::FloatFree,
 ///     domains: CandidateDomains::Unrestricted,
 ///     block_position: None,
 ///     mandatory: false,
@@ -875,7 +875,8 @@ pub fn composed_order_fidelity(derived: OrderFidelity, host: OrderFidelity) -> O
 /// The only constructor is [`Self::of`], over the sealed trait, so a
 /// declaration can name a law this workspace defines and no other string. A
 /// producer that ranks by no float arithmetic at all — BM25F over fixed-point
-/// integers, say — declares `None` rather than a law it does not run.
+/// integers, say — declares [`RankArithmetic::FloatFree`] rather than a law it
+/// does not run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeclaredArithmetic {
     /// [`purrdf_core::distance::Arithmetic::ID`] of the law.
@@ -893,6 +894,48 @@ impl DeclaredArithmetic {
     #[must_use]
     pub const fn id(self) -> &'static str {
         self.id
+    }
+}
+
+/// The arithmetic that decides a ranked producer's order, stated by the
+/// producer as one of the two things it can be.
+///
+/// Every ranked producer's order is decided by *some* arithmetic, and which kind
+/// is part of what its answer means, so the declaration names it in every case
+/// rather than leaving one case to an absent value. There are exactly two:
+///
+/// * [`Self::FloatFree`] — no floating-point operation takes part in deciding
+///   the order. BM25F over fixed-point integers is one such producer; a table
+///   whose rows arrive already ranked is another. Integer arithmetic is fully
+///   specified on every target, so the order is the same everywhere and there
+///   is no law to name.
+/// * [`Self::FloatDistance`] — the order is decided by floating-point distances
+///   computed under one of the sealed [`purrdf_core::distance::Arithmetic`]
+///   laws, named by its [`DeclaredArithmetic`]. Which law it is decides whether
+///   near-tied rows may swap between targets, builds and dispatch paths.
+///
+/// Both reach [`RankedDeclaration::canonical_description`], and so the
+/// registry's content fingerprint: two registries whose producers differ only
+/// here are two different plans. The enum is exhaustive on purpose — a consumer
+/// reading it matches both states, and a third kind of ranking arithmetic is a
+/// change every consumer has to answer for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RankArithmetic {
+    /// No floating-point operation decides this producer's order: it ranks in
+    /// integer or fixed-point arithmetic, or emits ranks it did not compute.
+    FloatFree,
+    /// This producer ranks by floating-point distances computed under the named
+    /// law.
+    FloatDistance(DeclaredArithmetic),
+}
+
+impl RankArithmetic {
+    /// The declaration of a producer ranking by floating-point distances under
+    /// arithmetic `A`: [`Self::FloatDistance`] holding
+    /// [`DeclaredArithmetic::of::<A>()`](DeclaredArithmetic::of).
+    #[must_use]
+    pub const fn float_distance<A: purrdf_core::distance::Arithmetic>() -> Self {
+        Self::FloatDistance(DeclaredArithmetic::of::<A>())
     }
 }
 
@@ -1289,17 +1332,19 @@ pub struct RankedDeclaration {
     /// [`RankFidelity`] for why the two axes are independent and why only one of
     /// them admits a finite bound.
     pub fidelity: RankFidelity,
-    /// The distance arithmetic this producer ranks by, or `None` for a producer
-    /// whose ranking involves no floating-point distance.
+    /// The arithmetic that decides this producer's order:
+    /// [`RankArithmetic::FloatDistance`] naming the law of the floating-point
+    /// distances it ranks by, or [`RankArithmetic::FloatFree`] for a producer
+    /// whose order no floating-point operation decides.
     ///
     /// Stated by the producer, because it is a fact about its own kernel: the
     /// embedding kNN and HNSW relations fill it from the law they were built
-    /// under, and a lexical producer ranking fixed-point integers states `None`.
-    /// It reaches [`Self::canonical_description`], so two registries that differ
-    /// only in a producer's arithmetic have different content fingerprints and a
-    /// plan admitted against one does not run against the other. See
-    /// [`DeclaredArithmetic`].
-    pub arithmetic: Option<DeclaredArithmetic>,
+    /// under, and a lexical producer ranking fixed-point integers states
+    /// [`RankArithmetic::FloatFree`]. It reaches [`Self::canonical_description`],
+    /// so two registries that differ only in a producer's arithmetic have
+    /// different content fingerprints and a plan admitted against one does not
+    /// run against the other. See [`RankArithmetic`].
+    pub arithmetic: RankArithmetic,
     /// Which blocks of the candidate universe this producer may name.
     ///
     /// The second promise a producer makes about its own rows. A consumer
@@ -1431,19 +1476,23 @@ impl RankedDeclaration {
                 push_canonical_option(&mut out, placement.datatype.as_deref());
             }
         }
-        // The arithmetic closes the description, and only when one is declared.
-        // Everything before it is self-delimiting — the accepted-term list is
-        // count-prefixed and each of its parts is framed — so a reader knows
-        // exactly where that list ends, and a description that stops there is
-        // distinguishable from one that goes on to `;a` and a framed law: the
-        // encoding stays injective without a present/absent byte. Written this
-        // way so a producer ranking by no float arithmetic describes itself in
+        // The arithmetic closes the description. A float-distance producer
+        // appends `;a` and its framed law; a float-free one appends nothing.
+        // Everything before this point is self-delimiting — the accepted-term
+        // list is count-prefixed and each of its parts is framed — so a reader
+        // knows exactly where that list ends, and a description that stops there
+        // is distinguishable from one that goes on to `;a`: the encoding stays
+        // injective with two states and no discriminant byte for the float-free
+        // one. Written this way so a float-free producer describes itself in
         // exactly the bytes it did before arithmetic was a declared fact, while
-        // every producer that does rank by one names its law.
-        if let Some(arithmetic) = self.arithmetic {
-            out.push(';');
-            out.push('a');
-            push_canonical_field(&mut out, arithmetic.id());
+        // every float-distance producer names its law.
+        match self.arithmetic {
+            RankArithmetic::FloatFree => {}
+            RankArithmetic::FloatDistance(law) => {
+                out.push(';');
+                out.push('a');
+                push_canonical_field(&mut out, law.id());
+            }
         }
         out
     }

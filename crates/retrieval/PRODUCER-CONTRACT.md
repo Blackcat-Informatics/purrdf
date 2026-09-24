@@ -1197,8 +1197,11 @@ arithmetic's own evidence for that path verbatim, through the same
 never upgrade it, and a host that declared a perturbation of its own keeps its
 words there. Either way the fused answer reports the stratum as having no finite
 bound. Both kNN relations, and the HNSW relation, also name their arithmetic in
-`RankedDeclaration::arithmetic`, which a compiled plan is identified by (below): an
-exact and a reassociated producer over one space are two plans.
+`RankedDeclaration::arithmetic` as `RankArithmetic::FloatDistance`, which a compiled
+plan is identified by (below): an exact and a reassociated producer over one space
+are two plans. A producer whose order no floating-point operation decides, such as
+the fixed-point BM25F text relation, declares `RankArithmetic::FloatFree` there
+instead; the field has no absent state, so every producer states which it is.
 
 The reassociated HNSW relation, `HnswRelation<Reassociated>` over an index built by
 `HnswIndex::build_reassociated`, says the same thing on both of its axes. Its
@@ -1210,8 +1213,8 @@ that its canonical image is reproducible only by a build running that path
 derived value with `Perturbed` carrying the arithmetic's own evidence for that path,
 the words the reassociated kNN relation carries, and then with the host's
 `OrderFidelity`, through the same `composed_order_fidelity`. It declares
-`DeclaredArithmetic::of::<Reassociated>()`. The exact HNSW relation declares what it
-always did.
+`RankArithmetic::float_distance::<Reassociated>()`. The exact HNSW relation
+declares what it always did, now spelled `RankArithmetic::float_distance::<Exact>()`.
 
 **This is not the attestation channel, and does not duplicate it.**
 `ServiceLevel::Incomplete` answers a different question — was the index *version*

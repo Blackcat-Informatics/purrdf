@@ -23,7 +23,7 @@ use purrdf_hnsw::relation::{
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, profile};
 use purrdf_sparql_eval::{
     CandidateDomains, Completeness, DuplicatePolicy, KnnGuard, OrderFidelity,
-    PropertyFunctionRegistry, TermKind,
+    PropertyFunctionRegistry, RankArithmetic, TermKind,
 };
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -478,11 +478,13 @@ fn reassociated_hnsw_declares_its_evidence_perturbed_order_and_law() {
         "the order axis carries the arithmetic's own evidence, as the reassociated kNN \
          relation's does"
     );
-    assert_eq!(
-        decl.arithmetic
-            .map(purrdf_sparql_eval::DeclaredArithmetic::id),
-        Some(Reassociated::ID)
-    );
+    let RankArithmetic::FloatDistance(law) = decl.arithmetic else {
+        panic!(
+            "an HNSW relation ranks by float distances, got {:?}",
+            decl.arithmetic
+        );
+    };
+    assert_eq!(law.id(), Reassociated::ID);
 
     // The control: the exact space over the same vectors declares what it always did,
     // so each difference above is the arithmetic's and not the fixture's.
@@ -495,12 +497,13 @@ fn reassociated_hnsw_declares_its_evidence_perturbed_order_and_law() {
     };
     assert_eq!(&**exact_lossy, profile::LOSS_EVIDENCE);
     assert_eq!(exact.fidelity.order, OrderFidelity::Faithful);
-    assert_eq!(
-        exact
-            .arithmetic
-            .map(purrdf_sparql_eval::DeclaredArithmetic::id),
-        Some(Exact::ID)
-    );
+    let RankArithmetic::FloatDistance(exact_law) = exact.arithmetic else {
+        panic!(
+            "an HNSW relation ranks by float distances, got {:?}",
+            exact.arithmetic
+        );
+    };
+    assert_eq!(exact_law.id(), Exact::ID);
     assert_ne!(
         decl.canonical_description(),
         exact.canonical_description(),

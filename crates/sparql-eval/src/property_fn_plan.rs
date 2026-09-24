@@ -1425,7 +1425,7 @@ mod content_fingerprint_tests {
     use crate::error::EvalError;
     use crate::property_fn::{
         CandidateDomains, DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-        PropertyFunctionRegistry, RankFidelity, RankedDeclaration,
+        PropertyFunctionRegistry, RankArithmetic, RankFidelity, RankedDeclaration,
     };
     use crate::user_fn::Volatility;
 
@@ -1519,7 +1519,7 @@ mod content_fingerprint_tests {
             duplicates: DuplicatePolicy::Unique,
             // The fixture producer is an in-memory table read end to end.
             fidelity: RankFidelity::EXACT,
-            arithmetic: None,
+            arithmetic: RankArithmetic::FloatFree,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,

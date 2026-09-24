@@ -2054,10 +2054,13 @@ fn reassociated_relation_declares_perturbed_order() {
         Completeness::Complete,
         "the completeness axis is the host's: a reassociated scan still scores every row"
     );
-    assert_eq!(
-        declaration.arithmetic.map(DeclaredArithmetic::id),
-        Some(Reassociated::ID)
-    );
+    let RankArithmetic::FloatDistance(law) = declaration.arithmetic else {
+        panic!(
+            "a kNN relation ranks by float distances, got {:?}",
+            declaration.arithmetic
+        );
+    };
+    assert_eq!(law.id(), Reassociated::ID);
     assert!(
         declaration
             .canonical_description()
@@ -2084,10 +2087,13 @@ fn reassociated_relation_declares_perturbed_order() {
         hosted.fidelity.order,
         OrderFidelity::Perturbed { evidence: host }
     );
-    assert_eq!(
-        hosted.arithmetic.map(DeclaredArithmetic::id),
-        Some(Reassociated::ID)
-    );
+    let RankArithmetic::FloatDistance(law) = hosted.arithmetic else {
+        panic!(
+            "a kNN relation ranks by float distances, got {:?}",
+            hosted.arithmetic
+        );
+    };
+    assert_eq!(law.id(), Reassociated::ID);
 }
 
 #[test]
@@ -2107,10 +2113,13 @@ fn exact_relation_names_exact_arithmetic() {
         RankFidelity::EXACT,
         "the exact arithmetic perturbs nothing, so the host's word stands"
     );
-    assert_eq!(
-        declaration.arithmetic.map(DeclaredArithmetic::id),
-        Some("binary64-lane16-tree-v1")
-    );
+    let RankArithmetic::FloatDistance(law) = declaration.arithmetic else {
+        panic!(
+            "a kNN relation ranks by float distances, got {:?}",
+            declaration.arithmetic
+        );
+    };
+    assert_eq!(law.id(), "binary64-lane16-tree-v1");
     let description = declaration.canonical_description();
     assert!(description.contains("binary64-lane16-tree-v1"));
     assert!(!description.contains("reassociated"));

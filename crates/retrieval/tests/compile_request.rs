@@ -31,8 +31,8 @@ use purrdf_retrieval::{
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
     EvalError, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankArithmetic, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -325,7 +325,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
                 candidate_position: spec.candidate,
                 duplicates: spec.duplicates,
                 fidelity: RankFidelity::EXACT,
-                arithmetic: None,
+                arithmetic: RankArithmetic::FloatFree,
                 domains: spec.domains,
                 block_position: None,
                 mandatory: spec.mandatory,
