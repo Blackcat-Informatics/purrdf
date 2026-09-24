@@ -730,6 +730,11 @@ fn lateral_dataset() -> Arc<RdfDataset> {
         let value = builder.intern_literal(RdfLiteral::simple(value));
         builder.push_quad(subject, p, value, None);
     }
+    // One named graph, so a call inside `GRAPH ?g { … }` is evaluated once. Its
+    // predicate is no other pattern's, and the default graph does not include it.
+    let graph = builder.intern_iri(&format!("{EX}g"));
+    let marker = builder.intern_iri(&format!("{EX}marker"));
+    builder.push_quad(graph, marker, graph, Some(graph));
     builder.freeze().expect("the fixture must validate")
 }
 
@@ -1277,6 +1282,128 @@ fn an_aggregate_or_key_that_can_be_unbound_is_not_a_source() {
     );
 }
 
+/// A dataset whose one `?s <p> ?v` row has a blank-node object — the input on which
+/// `STR` errors.
+fn blank_object_data() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri(&format!("{EX}s"));
+    let p = builder.intern_iri(&format!("{EX}p"));
+    let b = builder.intern_blank("b0", purrdf_core::BlankScope::DEFAULT);
+    builder.push_quad(s, p, b, None);
+    builder.freeze().expect("the fixture must validate")
+}
+
+/// **A `FILTER` binds every variable its condition requires bound for it to be true.**
+///
+/// After `OPTIONAL { ?s <p> ?q }`, `?q` may be unbound, so a `GROUP BY ?q` key or a
+/// sub-`SELECT`'s `?q` over it used to be no source. A `FILTER` on `BOUND(?q)`, on
+/// `sameTerm(?q, ?o)` with `?o` bound, on `isLiteral(?q)`, or on a conjunction holding
+/// one of them passes only rows that bind `?q`, so each feeds the call: the bound-only
+/// relation is admitted and invoked bound, and the free-capable one answers the same,
+/// invoked bound only.
+#[test]
+fn a_filter_binds_what_its_condition_requires() {
+    let call = format!("?q <{EXPAND}> ?out");
+    let optional = format!("?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}p> ?q }}");
+    let expected = Outcome {
+        answer: Ok(rows(&[("beta", "beta/1")])),
+        invocations: calls(&["bf:beta"]),
+    };
+    for condition in [
+        "BOUND(?q)",
+        "sameTerm(?q, ?o)",
+        "isLiteral(?q)",
+        "BOUND(?q) && ?o != \"zzz\"",
+        "!(!BOUND(?q))",
+        "BOUND(?q) || sameTerm(?q, ?o)",
+    ] {
+        for body in [
+            format!(
+                "{{ SELECT ?q WHERE {{ {optional} FILTER({condition}) }} GROUP BY ?q }} {call}"
+            ),
+            format!("{{ SELECT ?q WHERE {{ {optional} FILTER({condition}) }} }} {call}"),
+        ] {
+            assert_eq!(run(Variant::BoundOnly, &body), expected, "{body}");
+            assert_eq!(run(Variant::FreeCapable, &body), expected, "{body}");
+        }
+    }
+}
+
+/// **A `FILTER` binds nothing its condition can be true without.** `!BOUND(?q)` is true
+/// exactly when `?q` is unbound; `BOUND(?q) || BOUND(?w)` is true on a row binding only
+/// `?w`. Each is refused for the bound-only relation, and the free-capable one is
+/// observed invoked free on the row the condition let through.
+#[test]
+fn a_filter_binds_nothing_its_condition_can_be_true_without() {
+    let call = format!("?q <{EXPAND}> ?out");
+    let free = Outcome {
+        answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
+        invocations: calls(&["ff:-"]),
+    };
+    for body in [
+        format!(
+            "{{ SELECT ?q WHERE {{ ?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}nothing> ?q }} \
+             FILTER(!BOUND(?q)) }} }} {call}"
+        ),
+        format!(
+            "{{ SELECT ?q WHERE {{ ?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}nothing> ?q }} \
+             OPTIONAL {{ ?s <{EX}p> ?w }} FILTER(BOUND(?q) || BOUND(?w)) }} }} {call}"
+        ),
+    ] {
+        assert_refused_at_prepare(&run(Variant::BoundOnly, &body));
+        assert_eq!(run(Variant::FreeCapable, &body), free, "{body}");
+    }
+}
+
+/// **`SAMPLE`, `MIN` and `MAX` of an expression that cannot error on what every row
+/// binds feed the call; of one that can, they do not.**
+///
+/// `COALESCE(STR(?v), ?v)` answers `?v` itself where `STR` errors, and
+/// `IF(isLiteral(?v), ?v, "none")` answers on every term: under `GROUP BY` each is bound
+/// on every group row, so the bound-only relation is admitted and invoked bound.
+///
+/// `STR(?v)` errors on a blank node, and `IRI(STR(?v))` with it, so over a group whose
+/// every `?v` is a blank node `MAX(STR(?v))` and `SAMPLE(IRI(STR(?v)))` are unbound. Both
+/// are refused for the bound-only relation — over data where they would have bound, too:
+/// the planner cannot tell the data apart — and over the blank-object data the
+/// free-capable relation is observed invoked FREE, which is what the refusal prevents.
+#[test]
+fn an_aggregate_over_an_expression_is_a_source_exactly_when_it_cannot_error() {
+    let call = format!("?q <{EXPAND}> ?out");
+    let expected = Outcome {
+        answer: Ok(rows(&[("beta", "beta/1")])),
+        invocations: calls(&["bf:beta"]),
+    };
+    for aggregate in [
+        "SAMPLE(COALESCE(STR(?v), ?v))",
+        "MAX(IF(isLiteral(?v), ?v, \"none\"))",
+        "MIN(COALESCE(IRI(STR(?v)), ?v))",
+    ] {
+        let body = format!(
+            "{{ SELECT ?s ({aggregate} AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
+        );
+        assert_eq!(run(Variant::BoundOnly, &body), expected, "{body}");
+        assert_eq!(run(Variant::FreeCapable, &body), expected, "{body}");
+    }
+
+    let free = Outcome {
+        answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
+        invocations: calls(&["ff:-"]),
+    };
+    for aggregate in ["MAX(STR(?v))", "SAMPLE(IRI(STR(?v)))"] {
+        let body = format!(
+            "{{ SELECT ?s ({aggregate} AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
+        );
+        assert_refused_at_prepare(&run(Variant::BoundOnly, &body));
+        assert_refused_at_prepare(&run_over(&blank_object_data(), Variant::BoundOnly, &body));
+        assert_eq!(
+            run_over(&blank_object_data(), Variant::FreeCapable, &body),
+            free,
+            "{body}: the group's every argument errored, so the aggregate is unbound"
+        );
+    }
+}
+
 /// One differential case: the query body, its substitutions, the rewrite they are
 /// bound under, and the exact answer.
 type Shape = (
@@ -1376,6 +1503,77 @@ fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
             ]),
         ),
     ];
+    // A `LATERAL` right side the ordinary rewrite writes the substitution into beyond a
+    // bare call, each answering every left row joined with its rows for "alpha" — as
+    // many times over as the right side repeats them.
+    let times = |copies: usize| -> Vec<(String, String)> {
+        let mut expected: Vec<(String, String)> = (0..3 * copies)
+            .flat_map(|_| {
+                ["alpha/1", "alpha/2"]
+                    .into_iter()
+                    .map(|out| ("alpha".to_owned(), out.to_owned()))
+            })
+            .collect();
+        expected.sort();
+        expected
+    };
+    let other = format!("?s2 <{EX}p> ?v2");
+    let lateral_sides: [(String, usize); 10] = [
+        (format!("BIND(1 AS ?one) {call}"), 1),
+        (format!("VALUES ?z {{ 1 }} {call}"), 1),
+        (format!("{other} . {call}"), 3),
+        (format!("{call} FILTER(BOUND(?out))"), 1),
+        (format!("{other} LATERAL {{ {call} }}"), 3),
+        (format!("SELECT ?q ?out WHERE {{ {call} }}"), 1),
+        (format!("SELECT * WHERE {{ {call} }}"), 1),
+        (
+            format!("SELECT DISTINCT ?q ?out WHERE {{ {call} }} ORDER BY ?out"),
+            1,
+        ),
+        (format!("{{ {call} }} UNION {{ {call} }}"), 2),
+        (format!("GRAPH ?g {{ {call} }}"), 1),
+    ];
+    let mut shapes = shapes;
+    for (right, copies) in lateral_sides {
+        shapes.push((
+            format!("?s <{EX}p> ?v LATERAL {{ {right} }}"),
+            alpha(),
+            ShaclPrebinding::None,
+            times(copies),
+        ));
+    }
+    // A key or an aggregate a `FILTER` or a non-erroring argument makes certain.
+    let every_value = || {
+        rows(&[
+            ("alpha", "alpha/1"),
+            ("alpha", "alpha/2"),
+            ("beta", "beta/1"),
+        ])
+    };
+    let optional = format!("?s <{EX}p> ?o OPTIONAL {{ ?s <{EX}p> ?q }}");
+    for condition in ["BOUND(?q)", "sameTerm(?q, ?o)"] {
+        shapes.push((
+            format!(
+                "{{ SELECT ?q WHERE {{ {optional} FILTER({condition}) }} GROUP BY ?q }} {call}"
+            ),
+            none(),
+            ShaclPrebinding::None,
+            every_value(),
+        ));
+    }
+    for aggregate in [
+        "SAMPLE(COALESCE(STR(?v), ?v))",
+        "MAX(IF(isLiteral(?v), ?v, \"none\"))",
+    ] {
+        shapes.push((
+            format!(
+                "{{ SELECT ?s ({aggregate} AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
+            ),
+            none(),
+            ShaclPrebinding::None,
+            every_value(),
+        ));
+    }
     for (body, substitutions, lane, expected) in &shapes {
         let reference = run_pairs_with(&["ff"], true, body, substitutions, *lane);
         assert_eq!(

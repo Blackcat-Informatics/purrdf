@@ -4188,51 +4188,51 @@ mod tests {
     }
 
     #[test]
-    fn prebinding_is_not_pushed_into_a_lateral_right_arm() {
+    fn prebinding_is_pushed_into_a_lateral_right_arm() {
         // `?this :p ?o LATERAL { ?this :p ?v }` with $this := :a.
         //
-        // `push_probes` descends a `Lateral`'s LEFT operand only. Unlike `OPTIONAL`
-        // and `MINUS`, whose right arms diverge on the ANSWER, a `LATERAL` is an
-        // inner join and restricting its right arm would agree with the seed's filter
-        // — so what is pinned here is the rewrite itself, not a bag difference: the
-        // right arm must come out BYTE-IDENTICAL to the way it parsed.
-        //
-        // That matters because a `LATERAL`'s right arm is re-evaluated per left row
-        // through `crate::expr`'s substitution walk, which keys on node identity; a
-        // rewrite here would hand that machinery a different subtree than the one the
-        // plan was admitted with.
+        // A `LATERAL` is an inner join whose right arm is re-evaluated once per left
+        // row, so restricting a leaf inside that arm to the pre-bound constant
+        // restricts the node exactly as restricting a `Join` operand does — every row
+        // it removes binds $this to another term, and the seed would have dropped it
+        // (see `crate::substitute::push_probe_constants`). The pushdown therefore
+        // writes the constant into the right arm's triple pattern, and restores the
+        // column there with a one-row `VALUES`, so the arm's schema is unchanged.
         const QUERY: &str =
             "SELECT ?o WHERE { ?this <http://ex/p> ?o LATERAL { ?this <http://ex/p> ?v } }";
         let subs = [("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))];
-
-        let parsed = SparqlParser::new().parse_query(QUERY).expect("parse");
-        let Query::Select {
-            pattern: original, ..
-        } = parsed
-        else {
-            panic!("the fixture is a SELECT");
-        };
-        let (_, original_right) = find_lateral(&original).expect("the fixture has a LATERAL");
 
         let rewritten = prebound_pattern(QUERY, &subs);
         let (rewritten_left, rewritten_right) =
             find_lateral(&rewritten).expect("the rewrite must not remove the LATERAL");
 
-        assert_eq!(
-            rewritten_right, original_right,
-            "the LATERAL's right arm must be untouched by the pushdown"
+        let written = |pattern: &GraphPattern| {
+            let GraphPattern::Bgp { patterns } = pattern else {
+                return false;
+            };
+            patterns.iter().all(|triple| {
+                matches!(&triple.subject, purrdf_sparql_algebra::TermPattern::NamedNode(node) if node.as_str() == "http://ex/a")
+            })
+        };
+        let GraphPattern::Join { left, right } = rewritten_right else {
+            panic!("the right arm is restored with a one-row VALUES: {rewritten_right:?}");
+        };
+        assert!(
+            written(left),
+            "the right arm's pattern carries the constant: {left:?}"
         );
-        // Non-vacuity: the LEFT arm really was rewritten, so the assertion above is
-        // reading a boundary rather than a rewrite that never ran at all.
-        let (_, original_left) = find_lateral(&original)
-            .map(|(l, r)| (r, l))
-            .expect("lateral");
-        assert_ne!(
-            rewritten_left, original_left,
-            "the LATERAL's LEFT arm must carry the pushed constant; if it does not, \
-             this test's right-arm assertion is vacuous because nothing was pushed \
-             anywhere"
+        assert!(
+            matches!(&**right, GraphPattern::Values { variables, bindings }
+                if variables.len() == 1 && variables[0].as_str() == "this" && bindings.len() == 1),
+            "the right arm's $this column is restored: {right:?}"
         );
+        let GraphPattern::Join {
+            left: left_leaf, ..
+        } = rewritten_left
+        else {
+            panic!("the left arm is restored the same way: {rewritten_left:?}");
+        };
+        assert!(written(left_leaf), "the left arm carries the constant too");
     }
 
     #[test]

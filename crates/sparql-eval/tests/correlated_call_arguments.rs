@@ -678,13 +678,16 @@ fn a_prepared_parameter_reaches_the_correlated_call_on_every_run() {
                 // A blank-node parameter is never written into the left side's
                 // triple — a blank in a pattern is an anonymous variable — so that
                 // side is narrowed by the seed join above the `LATERAL`, not before
-                // it, and the call also runs, bound, for the left rows the seed
-                // then discards. Every other kind is written into the triple.
+                // it. A call the rewrite reaches inside the `LATERAL`'s right side is
+                // driven with the parameter itself and runs for it alone; a call in an
+                // `OPTIONAL` arm there, which the rewrite does not enter, is handed each
+                // left row's own value, bound, so it also runs for the left rows the
+                // seed then discards. Every other kind is written into the triple.
                 let expected: Vec<String> = match kind {
                     Kind::Blank
-                        if !matches!(
+                        if matches!(
                             shape,
-                            Shape::Exists | Shape::NotExists | Shape::ExistsAfterAtom
+                            Shape::LateralOptional | Shape::NestedLateralOptional
                         ) =>
                     {
                         bound_invocations(kind)

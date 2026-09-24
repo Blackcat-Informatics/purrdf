@@ -438,9 +438,16 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 /// * `Join`, `Union`, `Graph`, `Filter`, `Extend` — both/inner operands;
 /// * a property-function call — a leaf like a `Bgp`, written into and restored the
 ///   same way, so the relation is invoked with the pre-bound position bound;
-/// * `Lateral` — the left operand, and the right one only when it is a
-///   property-function call, which is the shape the parser gives every call that
-///   follows another atom;
+/// * `Lateral` — both operands. The right one is re-evaluated once per left row and
+///   INNER-joined with it, so a right row that binds `var` to some other `d` yields
+///   only output rows carrying `var = d`, which the seed join drops — removing it
+///   first changes nothing else. A call that IS the right operand (the shape the parser
+///   gives every call following another atom) is written into in place, so the
+///   evaluator keeps driving it per left row; any other right operand is recursed into
+///   by this same rule;
+/// * a sub-`SELECT`, for the variables its projection carries — each is the same
+///   variable inside, and its rows' bindings of it pass out unchanged — and `DISTINCT`,
+///   `REDUCED` and `ORDER BY`, which keep, drop or reorder whole rows;
 /// * `LeftJoin`, `Minus` — the LEFT operand only. Restricting the right
 ///   arm of an `OPTIONAL` is NOT the same rewrite: a left row whose only match
 ///   binds `var` to some other `d` is a MATCH before the rewrite (and its `var = d`
@@ -448,9 +455,12 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 ///   a MISS after it (so the left row survives, null-padded). `MINUS` diverges the
 ///   same way through its compatibility test. Both keep their right arms untouched.
 ///
-/// Every other operator stops the descent. `Project` is the one worth naming: a
-/// sub-`SELECT` is a separate scope, and a `var` inside one that the projection does
-/// not carry is a DIFFERENT variable that the seed join cannot correlate with.
+/// Every other operator stops the descent. Three are worth naming: a `var` inside a
+/// sub-`SELECT` whose projection does not carry it is a DIFFERENT variable that the seed
+/// join cannot correlate with; a slice keeps rows by their position, so which rows
+/// `LIMIT` keeps beneath a restriction is not which it keeps above one; and a
+/// `GROUP BY` folds its rows into groups whose values the removed rows would have
+/// changed.
 ///
 /// `Extend` binds `var` itself when `var` is its target, so that variable is dropped
 /// from the candidate set for its operand rather than pushed into a subtree where it
@@ -584,34 +594,67 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
         // See [`drive_call_arguments`].
         GraphPattern::Lateral { left, right } => {
             push_probes(left, probes, false);
+            let Some(call) = lateral_call_mut(right) else {
+                // Any other right operand is re-evaluated once per left row and
+                // inner-joined with it, and every operator this recursion enters
+                // keeps a restricted row's variable in its output — so restricting a
+                // leaf inside it restricts the node exactly as restricting a leaf
+                // inside a `Join`'s operand does. See [`push_probe_constants`].
+                push_probes(right, probes, false);
+                return;
+            };
             let mut probed = Vec::new();
-            if let Some(call) = lateral_call_mut(right) {
-                for argument in call
-                    .subject_args
-                    .iter_mut()
-                    .chain(call.object_args.iter_mut())
-                {
-                    probe_term_pattern(argument, probes, &mut probed);
-                }
+            for argument in call
+                .subject_args
+                .iter_mut()
+                .chain(call.object_args.iter_mut())
+            {
+                probe_term_pattern(argument, probes, &mut probed);
             }
             drive_call_arguments(pattern, probes, Unwritable::InPattern);
             restore_probed_bindings(pattern, &probed, probes, at_core_root);
         }
+        // A sub-`SELECT` projecting the variable passes each of its rows' binding of it
+        // out unchanged, so restricting its inner rows restricts its output the same
+        // way; a variable it does NOT project is a different variable inside it, and is
+        // not pushed. `DISTINCT`, `REDUCED` and `ORDER BY` keep, drop or reorder whole
+        // rows, so a row they would have passed with the variable bound to another term
+        // is simply absent. A slice and a `GROUP BY` are not entered — see
+        // [`push_probe_constants`].
+        GraphPattern::Project { inner, variables } => {
+            if probes.iter().all(|(var, _)| variables.contains(var)) {
+                push_probes(inner, probes, false);
+            } else {
+                let projected: Vec<(Variable, GroundTerm)> = probes
+                    .iter()
+                    .filter(|(var, _)| variables.contains(var))
+                    .cloned()
+                    .collect();
+                if !projected.is_empty() {
+                    push_probes(inner, &projected, false);
+                }
+            }
+        }
+        GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::OrderBy { inner, .. } => push_probes(inner, probes, false),
         _ => {}
     }
 }
 
 /// The property-function call a `Lateral`'s right operand IS, when it is one — the
-/// one right operand of a `Lateral` the pushdown writes a pre-bound value into.
+/// right operand the pushdown writes a pre-bound value into IN PLACE, rather than by
+/// recursing into it.
 ///
-/// This is the single definition of that position. [`push_probes`] writes into it,
-/// [`drive_call_arguments`] and the SHACL walk drive into it, the evaluator drives a
-/// call there once per left row with that row in hand, and the prepare-time planner
-/// (`crate::property_fn_plan`'s `collect_chain`) admits a call under the pushdown's
-/// promise exactly when the plan it produces puts the call here. Any other right
-/// operand — a group holding a call beside something else, an `OPTIONAL`, a
-/// sub-`SELECT` — is one the pushdown does not enter, and the planner admits a call
-/// inside it as though the pre-bound variable were free.
+/// This is the single definition of that position. [`push_probes`] writes into it and
+/// wraps the whole `Lateral` in the restoring `VALUES`, [`drive_call_arguments`] and
+/// the SHACL walk drive into it, the evaluator drives a call there once per left row
+/// with that row in hand, and the prepare-time planner (`crate::property_fn_plan`'s
+/// `collect_chain`) makes a call a member of the enclosing chain exactly when the plan
+/// it produces puts the call here. Any other right operand is one [`push_probes`]
+/// recurses into by its ordinary rule, and the planner hands it the same promise
+/// (`crate::property_fn_plan`'s `map_children`); the planner's drift guard holds the
+/// two to the same reach, shape by shape.
 pub(crate) const fn lateral_call(right: &GraphPattern) -> Option<&PropertyFunctionCall> {
     match right {
         GraphPattern::PropertyFunction(call) => Some(call),
@@ -830,10 +873,15 @@ fn plant_left_driver(left: &mut GraphPattern, seed: GraphPattern) {
 enum WalkScope {
     /// On the solution-modifier descent to the core `WHERE` pattern — the wrappers
     /// `Query::map_core_pattern` passes through, which the `VALUES` seed is joined
-    /// beneath. Every row an expression here reads carries every pre-bound value, so
-    /// nothing needs driving. A call is never reached here: the first node that is not
-    /// such a wrapper is the seed's own `Join`, and everything beneath it is
-    /// [`Self::Group`].
+    /// beneath. A row an expression here reads carries a pre-bound value exactly when
+    /// no wrapper between it and the seed hides that value's column — a `GROUP BY`, or
+    /// a sub-`SELECT` whose projection drops it, both of which the descent passes
+    /// through — and when it carries one, it carries the pre-bound term itself,
+    /// because every row beneath is joined with the seed. So an expression here reads
+    /// the row where the row carries the value and has the value driven in where it
+    /// does not (see [`drive_expression_reads`]). A call is never reached here: the
+    /// first node that is not such a wrapper is the seed's own `Join`, and everything
+    /// beneath it is [`Self::Group`].
     Descent,
     /// Beneath the seed and outside every `EXISTS` body: a call's driver binds the
     /// driven variable where the call is, as the `VALUES` seed binds it.
@@ -1149,12 +1197,13 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
 /// * replaces `Expression::Bound(v)` with the `true` boolean literal,
 ///
 /// recursing into nested graph patterns (`EXISTS`, `GRAPH`, sub-queries, etc.).
-/// Blank-node and quoted-triple values are deliberately left unsubstituted in
-/// expression positions: above the core the VALUES-join binds them, and beneath it an
-/// expression that reads one has the value driven into the node that evaluates it —
-/// see `drive_expression_reads`. In a property-function call's arguments they are
-/// driven in too, wherever the call is, so the relation is invoked with them bound —
-/// see `drive_call_arguments`.
+/// Blank-node and quoted-triple values have no expression form. An expression above the
+/// core whose rows still carry the seed's column reads the value from the row; every
+/// other expression that reads one — beneath the core, or above a `GROUP BY` or a
+/// sub-`SELECT` that hides the column — reads it through a stand-in variable bound
+/// beside the node that evaluates it — see `drive_expression_reads`. In a
+/// property-function call's arguments they are driven in too, wherever the call is, so
+/// the relation is invoked with them bound — see `drive_call_arguments`.
 ///
 /// Returns a diagnostic on the same error conditions as [`apply_substitutions`].
 pub(crate) fn apply_shacl_prebinding(
@@ -1292,19 +1341,29 @@ fn map_patterns_in_query(query: &mut Query, f: impl FnOnce(&mut GraphPattern)) {
     }
 }
 
-/// Recursively substitute pre-bound variables into a [`GraphPattern`].
-fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs, scope: WalkScope) {
+/// Recursively substitute pre-bound variables into a [`GraphPattern`], returning which
+/// pre-bound values its output rows carry from the `VALUES` seed ([`SeedColumns`]).
+fn substitute_in_graph_pattern(
+    pattern: &mut GraphPattern,
+    expr_subs: &ExprSubs,
+    scope: WalkScope,
+) -> SeedColumns {
     // A node that is not a solution-modifier wrapper hands its children the scope
     // beneath the seed; a wrapper hands its inner pattern its own.
     let beneath = scope.beneath();
+    // What a node that is not a wrapper carries: on the descent it is the seed's own
+    // `Join`, so every value; beneath the seed, nothing the seed put there.
+    let core = SeedColumns::at_core(scope, expr_subs.0.len());
     // Wildcard-free on purpose: a `GraphPattern` variant added later must fail to
     // compile here rather than silently pass through unsubstituted.
-    let reads_expressions = match pattern {
+    let (reads_expressions, carried) = match pattern {
         // A leaf's term positions are matched against the graph, not evaluated, and
         // `apply_substitutions`' pushdown has already written the pre-bound constants
         // into the ones that can carry them. A `Values` block's cells are data for the
         // same reason.
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => false,
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {
+            (false, core)
+        }
         // BOTH arms, unlike the pushdown. Replacing a variable with a constant
         // EXPRESSION removes no column from any schema, so the divergence that stops
         // the pushdown at an `OPTIONAL`'s or a `MINUS`'s right arm does not arise here.
@@ -1314,7 +1373,7 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
         | GraphPattern::Minus { left, right } => {
             substitute_in_graph_pattern(left, expr_subs, beneath);
             substitute_in_graph_pattern(right, expr_subs, beneath);
-            false
+            (false, core)
         }
         // A call that is a `Lateral`'s right operand is substituted in place and never
         // walked as a stand-alone call: that position is what hands it its left rows,
@@ -1344,7 +1403,7 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
             } else {
                 substitute_in_graph_pattern(right, expr_subs, beneath);
             }
-            false
+            (false, core)
         }
         GraphPattern::LeftJoin {
             left,
@@ -1356,17 +1415,16 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
             if let Some(expression) = expression {
                 substitute_in_expression(expression, expr_subs);
             }
-            expression.is_some()
+            (expression.is_some(), core)
         }
         GraphPattern::Filter { expr, inner } => {
             substitute_in_expression(expr, expr_subs);
-            substitute_in_graph_pattern(inner, expr_subs, scope);
-            true
+            (true, substitute_in_graph_pattern(inner, expr_subs, scope))
         }
         GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
             substitute_in_named_node_pattern(name, expr_subs);
             substitute_in_graph_pattern(inner, expr_subs, beneath);
-            false
+            (false, core)
         }
         // The operand and the expression are substituted; the target bindings
         // (`Extend`'s `variable`, `Unfold`'s `element`/`companion`) are this node's
@@ -1377,26 +1435,29 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
         | GraphPattern::Unfold {
             inner, expression, ..
         } => {
-            substitute_in_graph_pattern(inner, expr_subs, scope);
+            let carried = substitute_in_graph_pattern(inner, expr_subs, scope);
             substitute_in_expression(expression, expr_subs);
-            true
+            (true, carried)
         }
         GraphPattern::OrderBy { inner, expression } => {
-            substitute_in_graph_pattern(inner, expr_subs, scope);
+            let carried = substitute_in_graph_pattern(inner, expr_subs, scope);
             for order in expression.iter_mut() {
                 substitute_in_order_expression(order, expr_subs);
             }
-            true
+            (true, carried)
         }
         // No `Project`-boundary narrowing: a SHACL pre-binding must reach an
         // UNPROJECTED scope inside a nested sub-`SELECT`, which is divergence 1 in
-        // `crate::enf`'s module doc.
-        GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
+        // `crate::enf`'s module doc. What the projection does narrow is which seed
+        // columns its rows carry out.
+        GraphPattern::Project { inner, variables } => {
+            let carried = substitute_in_graph_pattern(inner, expr_subs, scope);
+            (false, carried.kept(expr_subs, variables))
+        }
+        GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
         | GraphPattern::Slice { inner, .. } => {
-            substitute_in_graph_pattern(inner, expr_subs, scope);
-            false
+            (false, substitute_in_graph_pattern(inner, expr_subs, scope))
         }
         // A property function's arguments are INVOCATION INPUTS, evaluated per row like
         // a function call's arguments rather than matched against the graph like a BGP
@@ -1422,12 +1483,16 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
                     }
                 }
             }
-            false
+            (false, core)
         }
+        // A group's row carries a seed column only as a grouping key.
         GraphPattern::Group {
-            inner, aggregates, ..
+            inner,
+            variables,
+            aggregates,
         } => {
-            substitute_in_graph_pattern(inner, expr_subs, scope);
+            let operand = substitute_in_graph_pattern(inner, expr_subs, scope);
+            let carried = operand.kept(expr_subs, variables);
             // `AggregateExpression` is rebuilt through its consuming `into_parts`, so
             // the entries are taken by value and collected back. `Vec::into_iter().
             // collect()` into the same element type reuses the buffer, so the take and
@@ -1437,105 +1502,175 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
                 .into_iter()
                 .map(|(var, agg)| (var, substitute_in_aggregate(agg, expr_subs)))
                 .collect();
-            true
+            drive_expression_reads(pattern, expr_subs, scope, operand);
+            return carried;
         }
     };
-    if reads_expressions && scope != WalkScope::Descent {
-        drive_expression_reads(pattern, expr_subs);
+    if reads_expressions {
+        // Every expression-bearing node but a `GROUP BY` passes its operand's rows
+        // through, so its operand carries what the node carries.
+        drive_expression_reads(pattern, expr_subs, scope, carried);
+    }
+    carried
+}
+
+/// Which pre-bound values a node's output rows carry from the `VALUES` seed — a bit per
+/// index into the [`ExprSubs`] list.
+///
+/// Meaningful on the [`WalkScope::Descent`] only: every row beneath the seed's `Join`
+/// carries every value, and each wrapper above it passes a column on, or — a `GROUP BY`
+/// that does not group by it, a projection that does not carry it — hides it. Beneath
+/// the seed nothing the seed binds is in any row yet, so nothing is carried. A value
+/// past the sixty-fourth is never counted as carried, which only ever drives a value a
+/// row already held: never wrong, merely not free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SeedColumns(u64);
+
+impl SeedColumns {
+    /// What a node that is not a wrapper carries in `scope`, with `count` values.
+    const fn at_core(scope: WalkScope, count: usize) -> Self {
+        match scope {
+            WalkScope::Descent => Self(if count >= 64 {
+                u64::MAX
+            } else {
+                (1_u64 << count) - 1
+            }),
+            WalkScope::Group | WalkScope::ExistsBody => Self(0),
+        }
+    }
+
+    /// Whether the value at `index` is carried.
+    const fn carries(self, index: usize) -> bool {
+        index < 64 && self.0 & (1_u64 << index) != 0
+    }
+
+    /// What survives a node whose output columns are `columns`.
+    fn kept(self, expr_subs: &ExprSubs, columns: &[Variable]) -> Self {
+        let mut kept = self.0;
+        for (index, (var, _)) in expr_subs.0.iter().enumerate().take(64) {
+            if !columns.contains(var) {
+                kept &= !(1_u64 << index);
+            }
+        }
+        Self(kept)
     }
 }
 
-/// Drive into an expression-bearing node beneath the seed every pre-bound value its
-/// expressions still read — a blank node or a quoted triple, which have no expression
-/// form and so were left in place as the variable — so the expression reads the value
-/// rather than an unbound variable.
+/// Make every expression of an expression-bearing node read each pre-bound value it
+/// names, wherever the node sits — the SHACL pre-binding law that the value is
+/// substituted for the variable everywhere in the query — for a value that has no
+/// expression form to be written in as.
 ///
 /// # The defect this closes
 ///
 /// An IRI or a literal is written into every expression as a constant. A blank node
 /// and a quoted triple are not, on the premise that "the `VALUES` seed binds them" —
-/// which holds only where the seed reaches: on the solution-modifier descent above the
-/// core. Beneath it the seed is a sibling, joined AFTER the node is evaluated, so
+/// which holds only where the seed's column reaches. Beneath the core the seed is a
+/// sibling, joined AFTER the node is evaluated, so
 /// `SELECT $this WHERE { BIND($this AS ?x) ?x <rel> ?why }` read `$this` unbound for a
-/// blank or quoted focus node: `?x` was left unbound, the relation was invoked with
-/// its input FREE and answered from its whole extent, and every focus node the
-/// relation held ANY row for was reported — while the same constraint over an IRI
-/// focus node reported only its own verdict.
+/// blank or quoted focus node: `?x` was left unbound, the relation was invoked with its
+/// input FREE and answered from its whole extent. Above the core the seed is joined
+/// beneath the node, but a `GROUP BY` or a sub-`SELECT` whose projection drops the
+/// variable sits between them and hides its column, so
+/// `SELECT ?v WHERE { ?x ex:tag ?v } GROUP BY ?v HAVING(SAMPLE(?x) = $this)` compared
+/// against an unbound `$this` and reported nothing for a blank focus node while the same
+/// constraint reported a violation for an IRI one.
 ///
-/// # The rewrite, and why it changes nothing else
+/// # The two kinds of read, and the rewrite for each
 ///
-/// The node's evaluated operand (the inner pattern; an `OPTIONAL`'s left operand,
-/// whose rows its condition reads) is joined with a one-row `VALUES` binding the
-/// value — the same driver a call is given — and the node is wrapped in a projection
-/// onto exactly the columns it exposed before. A value the operand's rows already
-/// carry is not driven: the expression reads that row's binding, which the seed or the
-/// enclosing correlation restricts as before. So the node's schema is unchanged, the
-/// driven variable never escapes it — no `MINUS` sees a new shared variable, no
-/// `EXISTS` body rebinds the row it filters (a projection is a scope boundary for
-/// both) — and the only change is the one intended: the expression reads the value.
+/// * A **plain read** names the variable itself. Its reference is renamed to a
+///   stand-in variable no query can spell ([`stand_in`]), and a one-row `VALUES`
+///   binding the stand-in to the value is joined onto the node's evaluated operand (the
+///   inner pattern; an `OPTIONAL`'s left operand, whose rows its condition reads). The
+///   expression then reads exactly the term it would have been written as had it a
+///   constant form, whatever the operand's rows bind the pre-bound variable itself to —
+///   which is what an IRI focus node gets, term for term. The one read left alone is a
+///   node on the [`WalkScope::Descent`] whose operand still exposes the variable: every
+///   row there carries the pre-bound term itself, because the seed is joined beneath it
+///   and nothing between hides the column, so the row already holds the value. That is
+///   the shape of every constraint whose `FILTER` sits over its core pattern, and it
+///   pays for nothing.
+/// * An **`EXISTS` read** is an `EXISTS` in the expression whose body names the
+///   variable. The body is evaluated against the node's rows, and a triple pattern or a
+///   call naming the variable there is matched through them, so the value has to be in
+///   the rows: where the operand does not expose the variable, the variable itself is
+///   driven — for every class of value, an IRI included, because an IRI written into
+///   the body's expressions still leaves the body's triple patterns reading the row.
+///   Where the operand exposes it, the body reads the row's binding, as an IRI focus
+///   node's body does.
 ///
-/// An `EXISTS` inside the expression reads the node's rows too, so an expression
-/// holding one is driven with every value that has no expression form, whether or not
-/// the body names it — its body's own reads (a triple pattern naming `$this`, which
-/// cannot carry a blank node either) are correlated through those rows.
+/// # Why nothing else changes
 ///
-/// A `GROUP BY` hides its operand's columns already, so it is driven without the
-/// projection.
-fn drive_expression_reads(node: &mut GraphPattern, expr_subs: &ExprSubs) {
-    // An IRI or a literal was written into the expression, so a run whose every value
-    // is one — every IRI focus node — has nothing to drive and reads nothing more.
-    if !expr_subs
-        .0
-        .iter()
-        .any(|(_, ground)| Unwritable::InArgument.holds(ground))
-    {
+/// The driven variables never escape the node: it is wrapped in a projection onto the
+/// columns it exposed before (a `GROUP BY` hides its operand's columns already, and is
+/// not wrapped). So its schema is unchanged, no `MINUS` sees a new shared variable, and
+/// no `EXISTS` body rebinds the row it filters — a projection is a scope boundary for
+/// both. Beneath the descent a node may also be evaluated with a row substituted into it
+/// — an `EXISTS` body, a `LATERAL`'s right side — and a projection is a boundary for
+/// that substitution too, so there the projection also carries every other variable the
+/// node names: an outer binding reaches every variable it reached before, and one the
+/// node does not bind stays unbound in its output, as it was.
+fn drive_expression_reads(
+    node: &mut GraphPattern,
+    expr_subs: &ExprSubs,
+    scope: WalkScope,
+    operand: SeedColumns,
+) {
+    // On the descent, an operand that carries every value's seed column has every read
+    // answered by its rows — the common case, and it costs nothing more.
+    if scope == WalkScope::Descent && (0..expr_subs.0.len()).all(|index| operand.carries(index)) {
         return;
     }
-    let mut read = Vec::new();
-    match &*node {
-        GraphPattern::Extend { expression, .. } | GraphPattern::Unfold { expression, .. } => {
-            unwritten_reads(expression, expr_subs, &mut read);
-        }
-        GraphPattern::Filter { expr, .. } => unwritten_reads(expr, expr_subs, &mut read),
-        GraphPattern::LeftJoin {
-            expression: Some(expression),
-            ..
-        } => unwritten_reads(expression, expr_subs, &mut read),
-        GraphPattern::OrderBy { expression, .. } => {
-            for order in expression {
-                match order {
-                    OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
-                        unwritten_reads(expr, expr_subs, &mut read);
-                    }
-                }
-            }
-        }
-        GraphPattern::Group { aggregates, .. } => {
-            for (_, aggregate) in aggregates {
-                for arg in aggregate.args() {
-                    unwritten_reads(arg, expr_subs, &mut read);
-                }
-                for order in aggregate.order_by() {
-                    match order {
-                        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
-                            unwritten_reads(expr, expr_subs, &mut read);
-                        }
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-    if read.is_empty() {
+    let mut reads = Reads::default();
+    for_each_node_expression(node, &mut |expr| note_reads(expr, expr_subs, &mut reads));
+    if reads.plain.is_empty() && reads.in_exists.is_empty() {
         return;
     }
-    let exposed = crate::eval::syntactic_schema(node);
-    read.retain(|&index| !exposed.contains(&expr_subs.0[index].0));
-    if read.is_empty() {
+    if scope == WalkScope::Descent {
+        // On the descent a column the operand exposes is the seed's column: the seed is
+        // joined beneath, and nothing between rebinds a pre-bound variable.
+        reads.plain.retain(|&index| !operand.carries(index));
+        reads.in_exists.retain(|&index| !operand.carries(index));
+    } else if !reads.in_exists.is_empty() {
+        // Beneath the seed a column the operand exposes is whatever its own patterns
+        // bound, and an `EXISTS` body reads that binding exactly as an IRI focus node's
+        // body does; only a value the operand does not expose at all is driven.
+        let exposed = operand_schema(node);
+        reads
+            .in_exists
+            .retain(|&index| !exposed.contains(&expr_subs.0[index].0));
+    }
+    if reads.plain.is_empty() && reads.in_exists.is_empty() {
         return;
     }
-    let seed = seed_row(&read, &expr_subs.0);
     let hides_operand = matches!(node, GraphPattern::Group { .. });
+    let carried = (!hides_operand).then(|| carried_columns(node, expr_subs, &reads, scope));
+
+    let renames: Vec<(Variable, Variable)> = reads
+        .plain
+        .iter()
+        .map(|&index| {
+            let var = &expr_subs.0[index].0;
+            (var.clone(), stand_in(var))
+        })
+        .collect();
+    if !renames.is_empty() {
+        for_each_node_expression_mut(node, &mut |expr| rename_reads(expr, &renames));
+    }
+    let mut variables = Vec::with_capacity(renames.len() + reads.in_exists.len());
+    let mut row = Vec::with_capacity(variables.capacity());
+    for (&index, (_, stand_in)) in reads.plain.iter().zip(renames) {
+        variables.push(stand_in);
+        row.push(Some(expr_subs.0[index].1.clone()));
+    }
+    for &index in &reads.in_exists {
+        variables.push(expr_subs.0[index].0.clone());
+        row.push(Some(expr_subs.0[index].1.clone()));
+    }
+    let seed = GraphPattern::Values {
+        variables,
+        bindings: vec![row],
+    };
     match node {
         GraphPattern::Extend { inner, .. }
         | GraphPattern::Unfold { inner, .. }
@@ -1545,8 +1680,7 @@ fn drive_expression_reads(node: &mut GraphPattern, expr_subs: &ExprSubs) {
         | GraphPattern::LeftJoin { left: inner, .. } => plant_left_driver(inner, seed),
         _ => return,
     }
-    if !hides_operand {
-        let variables = exposed.vars().to_vec();
+    if let Some(variables) = carried {
         purrdf_sparql_algebra::substitute::take_and_replace(node, |node| GraphPattern::Project {
             inner: Box::new(node),
             variables,
@@ -1554,16 +1688,41 @@ fn drive_expression_reads(node: &mut GraphPattern, expr_subs: &ExprSubs) {
     }
 }
 
-/// The indices into `expr_subs` of the pre-bound values `expr` still reads after
-/// [`substitute_in_expression`] — each one a value with no expression form, left in
-/// place as its variable — plus every such value when `expr` holds an `EXISTS`. See
-/// [`drive_expression_reads`].
-fn unwritten_reads(expr: &Expression, expr_subs: &ExprSubs, read: &mut Vec<usize>) {
-    let mut note = |index: usize| {
-        if !read.contains(&index) {
-            read.push(index);
+/// The prefix of every [`stand_in`] variable. A NUL is no character a SPARQL
+/// variable name can hold, so no query text can name one, and it matches neither of
+/// the evaluator's own internal prefixes (`crate::bgp`'s blank-node variables,
+/// `crate::blank_scope`'s joined blank labels).
+const STAND_IN_PREFIX: &str = "\u{0}prebound:";
+
+/// The variable an expression reads in place of the pre-bound `var` where the value has
+/// no expression form — see [`drive_expression_reads`]. One per pre-bound name, so the
+/// tree the rewrite builds depends on the names and never on the value, which is what
+/// [`crate::prebind_memo`] relies on.
+fn stand_in(var: &Variable) -> Variable {
+    interned_variable(&format!("{STAND_IN_PREFIX}{}", var.as_str()))
+}
+
+/// What one node's expressions read of the pre-bound values, as indices into the
+/// [`ExprSubs`] list — see [`drive_expression_reads`].
+#[derive(Default)]
+struct Reads {
+    /// Values an expression names as a variable, which [`substitute_in_expression`]
+    /// left in place because they have no expression form.
+    plain: Vec<usize>,
+    /// Values an `EXISTS` in an expression names in its body.
+    in_exists: Vec<usize>,
+}
+
+/// Record what `expr` reads of the pre-bound values into `reads`. An `EXISTS` body's
+/// own expressions are the body's nodes' business — the walk drives them there — so
+/// only the variables the body NAMES count here, as reads of the rows it is matched
+/// against.
+fn note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
+    fn note(list: &mut Vec<usize>, index: usize) {
+        if !list.contains(&index) {
+            list.push(index);
         }
-    };
+    }
     match expr {
         Expression::Variable(var) => {
             if let Some(index) = expr_subs
@@ -1571,13 +1730,15 @@ fn unwritten_reads(expr: &Expression, expr_subs: &ExprSubs, read: &mut Vec<usize
                 .iter()
                 .position(|(candidate, _)| candidate == var)
             {
-                note(index);
+                note(&mut reads.plain, index);
             }
         }
-        Expression::Exists(_) => {
-            for (index, (_, ground)) in expr_subs.0.iter().enumerate() {
-                if Unwritable::InArgument.holds(ground) {
-                    note(index);
+        Expression::Exists(body) => {
+            let mut named = crate::DetHashSet::default();
+            crate::expr::pattern_all_vars(body, &mut named);
+            for (index, (var, _)) in expr_subs.0.iter().enumerate() {
+                if named.contains(var) {
+                    note(&mut reads.in_exists, index);
                 }
             }
         }
@@ -1594,29 +1755,211 @@ fn unwritten_reads(expr: &Expression, expr_subs: &ExprSubs, read: &mut Vec<usize
         | Expression::Subtract(left, right)
         | Expression::Multiply(left, right)
         | Expression::Divide(left, right) => {
-            unwritten_reads(left, expr_subs, read);
-            unwritten_reads(right, expr_subs, read);
+            note_reads(left, expr_subs, reads);
+            note_reads(right, expr_subs, reads);
         }
         Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            unwritten_reads(inner, expr_subs, read);
+            note_reads(inner, expr_subs, reads);
         }
         Expression::In(target, list) => {
-            unwritten_reads(target, expr_subs, read);
+            note_reads(target, expr_subs, reads);
             for item in list {
-                unwritten_reads(item, expr_subs, read);
+                note_reads(item, expr_subs, reads);
             }
         }
         Expression::If(cond, then_expr, else_expr) => {
-            unwritten_reads(cond, expr_subs, read);
-            unwritten_reads(then_expr, expr_subs, read);
-            unwritten_reads(else_expr, expr_subs, read);
+            note_reads(cond, expr_subs, reads);
+            note_reads(then_expr, expr_subs, reads);
+            note_reads(else_expr, expr_subs, reads);
         }
         Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
             for item in list {
-                unwritten_reads(item, expr_subs, read);
+                note_reads(item, expr_subs, reads);
             }
         }
     }
+}
+
+/// Rename every plain read of a `renames` source in `expr` to its stand-in. An `EXISTS`
+/// body is not entered: a variable there is matched against rows, not read as a value,
+/// and the body's own expressions were already driven by the walk.
+fn rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
+    match expr {
+        Expression::Variable(var) => {
+            if let Some((_, to)) = renames.iter().find(|(from, _)| from == var) {
+                *var = to.clone();
+            }
+        }
+        Expression::Exists(_)
+        | Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Bound(_) => {}
+        Expression::Or(left, right)
+        | Expression::And(left, right)
+        | Expression::Equal(left, right)
+        | Expression::SameTerm(left, right)
+        | Expression::Greater(left, right)
+        | Expression::GreaterOrEqual(left, right)
+        | Expression::Less(left, right)
+        | Expression::LessOrEqual(left, right)
+        | Expression::Add(left, right)
+        | Expression::Subtract(left, right)
+        | Expression::Multiply(left, right)
+        | Expression::Divide(left, right) => {
+            rename_reads(left, renames);
+            rename_reads(right, renames);
+        }
+        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
+            rename_reads(inner, renames);
+        }
+        Expression::In(target, list) => {
+            rename_reads(target, renames);
+            for item in list.iter_mut() {
+                rename_reads(item, renames);
+            }
+        }
+        Expression::If(cond, then_expr, else_expr) => {
+            rename_reads(cond, renames);
+            rename_reads(then_expr, renames);
+            rename_reads(else_expr, renames);
+        }
+        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+            for item in list.iter_mut() {
+                rename_reads(item, renames);
+            }
+        }
+    }
+}
+
+/// Every expression `node` itself evaluates — its `FILTER`, `BIND` or `UNFOLD`
+/// expression, its `OPTIONAL` condition, its sort keys, or its aggregates' arguments and
+/// `FOLD` sort keys — and no expression of a node beneath it.
+fn for_each_node_expression(node: &GraphPattern, f: &mut dyn FnMut(&Expression)) {
+    match node {
+        GraphPattern::Extend { expression, .. }
+        | GraphPattern::Unfold { expression, .. }
+        | GraphPattern::Filter {
+            expr: expression, ..
+        }
+        | GraphPattern::LeftJoin {
+            expression: Some(expression),
+            ..
+        } => f(expression),
+        GraphPattern::OrderBy { expression, .. } => {
+            for order in expression {
+                f(crate::modifier::order_sort_key(order));
+            }
+        }
+        GraphPattern::Group { aggregates, .. } => {
+            for (_, aggregate) in aggregates {
+                for arg in aggregate.args() {
+                    f(arg);
+                }
+                for order in aggregate.order_by() {
+                    f(crate::modifier::order_sort_key(order));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`for_each_node_expression`], rewriting each expression in place.
+fn for_each_node_expression_mut(node: &mut GraphPattern, f: &mut dyn FnMut(&mut Expression)) {
+    fn key(order: &mut OrderExpression) -> &mut Expression {
+        match order {
+            OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
+        }
+    }
+    match node {
+        GraphPattern::Extend { expression, .. }
+        | GraphPattern::Unfold { expression, .. }
+        | GraphPattern::Filter {
+            expr: expression, ..
+        }
+        | GraphPattern::LeftJoin {
+            expression: Some(expression),
+            ..
+        } => f(expression),
+        GraphPattern::OrderBy { expression, .. } => {
+            for order in expression.iter_mut() {
+                f(key(order));
+            }
+        }
+        GraphPattern::Group { aggregates, .. } => {
+            // Rebuilt through the consuming `into_parts`, as `substitute_in_aggregate`
+            // does; collecting back into the same element type reuses the buffer.
+            let taken = std::mem::take(aggregates);
+            *aggregates = taken
+                .into_iter()
+                .map(|(var, aggregate)| {
+                    let (function, mut args, scalarvals, mut order_by, distinct) =
+                        aggregate.into_parts();
+                    for arg in &mut args {
+                        f(arg);
+                    }
+                    for order in &mut order_by {
+                        f(key(order));
+                    }
+                    let rebuilt =
+                        AggregateExpression::new(function, args, scalarvals, order_by, distinct)
+                            .expect(
+                                "renaming a read preserves argument count, so arity stays valid",
+                            );
+                    (var, rebuilt)
+                })
+                .collect();
+        }
+        _ => {}
+    }
+}
+
+/// The columns of the rows a node's expressions read: a `GROUP BY`'s and each wrapper's
+/// inner pattern, or — for an `OPTIONAL`, whose condition reads the joined rows — the
+/// node's own.
+fn operand_schema(node: &GraphPattern) -> std::sync::Arc<crate::solution::VarSchema> {
+    match node {
+        GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::Filter { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. } => crate::eval::syntactic_schema(inner),
+        other => crate::eval::syntactic_schema(other),
+    }
+}
+
+/// The projection [`drive_expression_reads`] wraps a driven node in: the columns it
+/// exposed before, and — beneath the descent, where the node may be evaluated with a row
+/// substituted into it — every other variable it names, so that substitution reaches
+/// every variable it reached before. A variable driven for an `EXISTS` is left out,
+/// which is what keeps the driven binding inside the node, and a stand-in is never named
+/// by the node before it is driven, so none is carried.
+fn carried_columns(
+    node: &GraphPattern,
+    expr_subs: &ExprSubs,
+    reads: &Reads,
+    scope: WalkScope,
+) -> Vec<Variable> {
+    let exposed = crate::eval::syntactic_schema(node);
+    let mut carried = exposed.vars().to_vec();
+    if scope != WalkScope::Descent {
+        let mut named = crate::DetHashSet::default();
+        crate::expr::pattern_all_vars(node, &mut named);
+        let driven = |var: &Variable| {
+            reads
+                .in_exists
+                .iter()
+                .any(|&index| &expr_subs.0[index].0 == var)
+        };
+        let mut extra: Vec<Variable> = named
+            .into_iter()
+            .filter(|var| !exposed.contains(var) && !driven(var))
+            .collect();
+        // Sorted, so the projection's column order is a function of the query alone.
+        extra.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+        carried.extend(extra);
+    }
+    carried
 }
 
 /// Replace a pre-bound variable in a property-function argument position with its
@@ -2255,7 +2598,9 @@ mod tests {
     /// rebinds the `?this` of the row it filters. The `FILTER` itself sits beneath the
     /// seed, so the rows it filters are driven with `?this` too, under a projection
     /// onto the columns the `FILTER` exposed — none — which keeps `?this` from escaping
-    /// it (see [`drive_expression_reads`]).
+    /// it, plus every other variable the `FILTER` names (`?o`, `?out`, `?p`, sorted), so
+    /// a row substituted into it still reaches its `EXISTS` body's variables (see
+    /// [`drive_expression_reads`]).
     #[test]
     fn a_call_inside_an_exists_body_is_driven_in_a_scope_of_its_own() {
         let this = Variable::new("this");
@@ -2310,7 +2655,7 @@ mod tests {
                             }),
                         }),
                     }),
-                    variables: Vec::new(),
+                    variables: vec![Variable::new("o"), Variable::new("out"), Variable::new("p")],
                 }),
             }
         );

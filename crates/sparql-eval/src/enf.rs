@@ -75,7 +75,11 @@
 //!      sub-`SELECT` — the shapes language's focus-node binding is not subject to
 //!      SPARQL's own scope rule the way an `EXISTS` correlation is, so
 //!      `apply_shacl_prebinding` rewrites `Expression::Variable`/`Expression::Bound`
-//!      unconditionally through every nested pattern, `Project` included.
+//!      unconditionally through every nested pattern, `Project` included. A value
+//!      with no expression form — a blank node, a quoted triple — is read through a
+//!      stand-in variable a one-row `VALUES` binds beside the expression's node,
+//!      which is what lets it reach an expression above a `GROUP BY` or a
+//!      sub-`SELECT` that hides the seed's column too.
 //!   2. **Single query-level injection, not per-row.** A pre-binding substitutes
 //!      ONE caller-supplied value into the whole query ONCE, before any row is
 //!      evaluated — there is no "current row" to restrict against, unlike
@@ -97,9 +101,10 @@
 //!   and it restores the column the rewrite consumed with exactly this module's
 //!   Values-Insertion device — a single-row `VALUES` joined onto the rewritten leaf.
 //!   That pushdown descends only the operators for which restricting an operand
-//!   restricts the node's output the same way, which is why it stops at an
-//!   `OPTIONAL`'s or a `MINUS`'s right arm; `crate::substitute::push_probe_constants`
-//!   states the argument and `engine`'s `prebinding_is_not_pushed_into_*` tests pin
+//!   restricts the node's output the same way, which is why it enters a `LATERAL`'s
+//!   right side and stops at an `OPTIONAL`'s or a `MINUS`'s right arm;
+//!   `crate::substitute::push_probe_constants` states the argument, and `engine`'s
+//!   `prebinding_is_not_pushed_into_*` and `prebinding_is_pushed_into_*` tests pin
 //!   it.
 //!
 //! # Existential Normal Form itself (Part A)

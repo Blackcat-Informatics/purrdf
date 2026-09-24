@@ -224,6 +224,11 @@ fn dataset() -> Arc<RdfDataset> {
             builder.push_quad(subject, holds, value, None);
         }
     }
+    // One named graph, so a call written inside `GRAPH ?g { … }` is evaluated once. Its
+    // predicate is no other pattern's, so nothing else reads it.
+    let graph = builder.intern_iri(&format!("{EX}g"));
+    let marker = builder.intern_iri(&format!("{EX}marker"));
+    builder.push_quad(graph, marker, graph, Some(graph));
     builder.freeze().expect("the fixture dataset freezes")
 }
 
@@ -836,23 +841,208 @@ fn a_call_a_lateral_drives_is_admitted_bound() {
 }
 
 /// **A right operand the rewrite does not write into stays refused.** An `OPTIONAL`'s
-/// right arm, a `MINUS`'s right arm, and a `LATERAL` whose right group holds an atom
-/// beside the call: the ordinary rewrite leaves the call's input free in each, so the
-/// bound-only relation is refused, and the free-capable one is observed invoked free.
+/// right arm and a `MINUS`'s right arm — at the top, or inside a `LATERAL`'s right side
+/// — a sub-`SELECT` inside a `LATERAL` that does not project `?q`, and one whose rows a
+/// `LIMIT` cuts: restricting the call to the substituted value there is not the same as
+/// joining the value on above it, so the ordinary rewrite leaves the call's input free
+/// in each. The bound-only relation is refused, and the free-capable one is observed
+/// invoked free.
 #[test]
 fn a_right_operand_the_rewrite_does_not_reach_stays_refused() {
     let held = holds();
     let call = format!("?q <{REL}> ?out");
+    let other = format!("?h2 <{EX}holds> ?v2");
     let shapes = [
         format!("SELECT ?q ?out WHERE {{ {held} OPTIONAL {{ {call} }} }}"),
         format!("SELECT ?q ?out WHERE {{ {held} MINUS {{ {call} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ ?h2 <{EX}holds> ?v2 . {call} }} }}"),
+        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ OPTIONAL {{ {call} }} }} }}"),
+        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ {other} MINUS {{ {call} }} }} }}"),
+        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?out WHERE {{ {call} }} }} }}"),
+        format!(
+            "SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} LIMIT 1 \
+             }} }}"
+        ),
     ];
     for query in &shapes {
         for kind in KINDS {
             let value = kind.term("alpha");
             let context = format!("{query} ?q = {}:alpha", kind.tag());
             refused_and_free_when_served(ShaclPrebinding::None, query, &value, &context);
+        }
+    }
+}
+
+/// A `LATERAL` right side the rewrite writes a substitution into: where the call sits,
+/// the right side's text, and how many rows it answers per left row for a value with a
+/// given number of table rows.
+type LateralRightSide = (&'static str, String, fn(usize) -> usize);
+
+/// Every [`LateralRightSide`] beyond a bare call.
+fn lateral_right_sides() -> Vec<LateralRightSide> {
+    let call = format!("?q <{REL}> ?out");
+    let other = format!("?h2 <{EX}holds> ?v2");
+    vec![
+        (
+            "a BIND beside the call",
+            format!("BIND(1 AS ?one) {call}"),
+            |rows| rows,
+        ),
+        (
+            "a VALUES beside the call",
+            format!("VALUES ?z {{ 1 }} {call}"),
+            |rows| rows,
+        ),
+        (
+            "an atom beside the call",
+            format!("{other} . {call}"),
+            |rows| HELD * rows,
+        ),
+        (
+            "a FILTER after the call",
+            format!("{call} FILTER(BOUND(?out))"),
+            |rows| rows,
+        ),
+        (
+            "a nested LATERAL",
+            format!("{other} LATERAL {{ {call} }}"),
+            |rows| HELD * rows,
+        ),
+        (
+            "a projecting sub-SELECT",
+            format!("SELECT ?q ?out WHERE {{ {call} }}"),
+            |rows| rows,
+        ),
+        (
+            "a SELECT *",
+            format!("SELECT * WHERE {{ {call} }}"),
+            |rows| rows,
+        ),
+        (
+            "an ordered DISTINCT sub-SELECT",
+            format!("SELECT DISTINCT ?q ?out WHERE {{ {call} }} ORDER BY ?out"),
+            |rows| rows,
+        ),
+        (
+            "a UNION",
+            format!("{{ {call} }} UNION {{ {call} }}"),
+            |rows| 2 * rows,
+        ),
+        ("a GRAPH", format!("GRAPH ?g {{ {call} }}"), |rows| rows),
+    ]
+}
+
+/// **A call anywhere in a `LATERAL`'s right side where substituting is joining is
+/// admitted bound, and answers the bottom-up join.**
+///
+/// Beyond the bare call: a `BIND`, a `VALUES` or an atom beside it, a `FILTER` after
+/// it, a nested `LATERAL`, a sub-`SELECT` projecting `?q` (`SELECT *` included, and
+/// under `DISTINCT` and `ORDER BY`), a `UNION`, a `GRAPH`. The right side is evaluated
+/// once per left row and inner-joined with it, so writing the value into the call there
+/// is the same as joining it on above — and each used to be refused, as "reachable only
+/// as `ff`", while the same text with `VALUES ?q { … }` written in was admitted.
+///
+/// Each shape, for every term kind and name, under both rewrites and on every door and
+/// the prepared execution, answers the rows the bottom-up join gives — every left row
+/// joined with the right side's rows for the substituted value, counted by hand per
+/// shape — and invokes the bound-only relation bound with exactly that value. The
+/// free-capable relation is invoked bound only, which is the proof the admission is
+/// right. For the kinds a query can spell, the same text with the value written into a
+/// `VALUES` block answers the same rows.
+#[test]
+fn a_call_in_a_lateral_right_side_is_admitted_bound_and_answers_the_bottom_up_join() {
+    let (env, invocations) = relations();
+    for (position, right, per_left_row) in lateral_right_sides() {
+        let query = format!(
+            "SELECT ?q ?out WHERE {{ {} LATERAL {{ {right} }} }}",
+            holds()
+        );
+        for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+            for kind in KINDS {
+                for name in NAMES {
+                    let value = kind.term(name);
+                    let context =
+                        format!("{lane:?} {position}: {query} ?q = {}:{name}", kind.tag());
+                    let per_value: Vec<Vec<Option<TermValue>>> = (1..=rows_for(name))
+                        .map(|n| vec![Some(value.clone()), Some(kind.output(name, n))])
+                        .collect();
+                    // Every left row, joined with the right side's rows for the
+                    // substituted value: `per_left_row(1)` copies of them each.
+                    let expected: Vec<Vec<Option<TermValue>>> = (0..HELD * per_left_row(1))
+                        .flat_map(|_| per_value.iter().cloned())
+                        .collect();
+                    admitted_bound_everywhere(
+                        &env,
+                        &invocations,
+                        lane,
+                        &query,
+                        &value,
+                        &expected,
+                        &context,
+                    );
+
+                    let (free_env, free_invocations) = relations_declaring(&["bf", "ff"]);
+                    let substitutions = [("q".to_owned(), value.clone())];
+                    let answer = request(
+                        &NativeSparqlEngine::new(),
+                        &dataset(),
+                        &free_env,
+                        Door::OptionsView,
+                        lane,
+                        &query,
+                        &substitutions,
+                    )
+                    .unwrap_or_else(|message| panic!("{context}: free-capable: {message}"));
+                    assert_eq!(answer, sorted(expected), "{context}: free-capable");
+                    let seen = drain(&free_invocations);
+                    assert!(!seen.is_empty(), "{context}: free-capable invoked");
+                    for invocation in seen {
+                        assert_eq!(
+                            invocation,
+                            ("bf".to_owned(), Some(value.clone())),
+                            "{context}: the free-capable relation is invoked bound, with the \
+                             substituted value — the proof the admission is right"
+                        );
+                    }
+                }
+            }
+        }
+        // The in-text neighbour: `VALUES ?q { … }` written at the top of the group,
+        // for the kinds a query can spell, answers the substituted request's rows.
+        for (kind, spelled) in [
+            (Kind::Iri, format!("<{EX}alpha>")),
+            (Kind::Literal, "\"alpha\"".to_owned()),
+        ] {
+            let in_text =
+                query.replacen("WHERE {", &format!("WHERE {{ VALUES ?q {{ {spelled} }}"), 1);
+            let context = format!("{position}: {in_text}");
+            let written = request(
+                &NativeSparqlEngine::new(),
+                &dataset(),
+                &env,
+                Door::OptionsView,
+                ShaclPrebinding::None,
+                &in_text,
+                &[],
+            )
+            .unwrap_or_else(|message| {
+                panic!("{context}: the in-text VALUES is admitted: {message}")
+            });
+            let substituted = request(
+                &NativeSparqlEngine::new(),
+                &dataset(),
+                &env,
+                Door::OptionsView,
+                ShaclPrebinding::None,
+                &query,
+                &[("q".to_owned(), kind.term("alpha"))],
+            )
+            .unwrap_or_else(|message| panic!("{context}: the substituted request: {message}"));
+            assert!(!written.is_empty(), "{context}: rows to compare");
+            assert_eq!(
+                substituted, written,
+                "{context}: the in-text neighbour's rows"
+            );
+            drain(&invocations);
         }
     }
 }

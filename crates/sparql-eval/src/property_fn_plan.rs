@@ -256,11 +256,13 @@ pub(crate) fn plan_where_pattern(
 ///   value INTO the leaves it can reach — triple patterns, paths, and
 ///   property-function calls — so a call there is invoked with that argument bound.
 ///   That is [`Self::Pushed`], and it follows the pushdown's own reach exactly: into
-///   both operands of a `Join` and a `UNION`, the inner of a `GRAPH`, `FILTER` and
-///   `BIND`, the left operand of an `OPTIONAL`, a `MINUS` and a `LATERAL`, and the
-///   call a `LATERAL` drives. Everywhere else — an `OPTIONAL`'s or a `MINUS`'s right
-///   arm, the body of an `EXISTS` beneath the core, a nested sub-`SELECT` — the
-///   pushdown does not write, and a call there is invoked with the parameter free.
+///   both operands of a `Join`, a `UNION` and a `LATERAL`, the inner of a `GRAPH`,
+///   `FILTER`, `BIND`, `DISTINCT`, `REDUCED` and `ORDER BY`, the left operand of an
+///   `OPTIONAL` and a `MINUS`, and a sub-`SELECT` for the parameters it projects.
+///   Everywhere else — an `OPTIONAL`'s or a `MINUS`'s right arm, the body of an
+///   `EXISTS` beneath the core, a sub-`SELECT` that does not project the parameter,
+///   the inner of a slice or a `GROUP BY` — the pushdown does not write, and a call
+///   there is invoked with the parameter free.
 ///   Admitting it as though it were bound would exchange a refusal at prepare for a
 ///   refusal on every run.
 ///
@@ -501,9 +503,10 @@ fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bo
 /// the node that holds it.
 ///
 /// The pushdown writes a pre-bound value into a call that is a `Lateral`'s right
-/// operand ([`crate::substitute::lateral_call`]), and nowhere else on that side — and
-/// it runs on the PLANNED query, not the text. The two differ in exactly one way this
-/// pass controls: a group whose only member is a call parses to `Lateral(Z, call)`
+/// operand in place ([`crate::substitute::lateral_call`]), and recurses into any other
+/// right operand — and it runs on the PLANNED query, not the text. The two differ in
+/// exactly one way this pass controls: a group whose only member is a call parses to
+/// `Lateral(Z, call)`
 /// (the empty `Bgp` the parser opens every block with), and [`order_chain`] rebuilds
 /// that chain as the bare call, because [`push_atom`] drops `Z`. So
 /// `?s ?p ?o LATERAL { ?q <rel> ?out }` is PLANNED as `Lateral(?s ?p ?o, call)` — the
@@ -854,14 +857,16 @@ fn map_children(
         // The right side of a `Lateral` is evaluated once per left row with that row in
         // hand, so it sees what the left side certainly binds. A `Lateral` whose right
         // operand plans to a call is a chain ([`planned_lateral_call`]) and never
-        // reaches this arm, so the right operand here is a pattern the pushdown does not
-        // enter.
+        // reaches this arm; any other right operand is one the pushdown recurses into.
         GraphPattern::Lateral { left, right } => {
             let mut inner = outer.clone();
             collect_bound(left, outer, here.written(), &mut inner);
             GraphPattern::Lateral {
                 left: recurse(left, outer, here)?,
-                right: recurse(right, &inner, promise.beyond_pushdown())?,
+                // The pushdown enters every right operand too: it is re-evaluated per
+                // left row and inner-joined with it, so restricting a leaf inside it
+                // restricts the node (see `crate::substitute`'s `push_probes`).
+                right: recurse(right, &inner, here)?,
             }
         }
         // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated independently
@@ -986,7 +991,8 @@ fn map_children(
             let mut scope = outer.clone();
             collect_bound(inner, outer, promise.written(), &mut scope);
             GraphPattern::OrderBy {
-                inner: recurse(inner, outer, wrapped)?,
+                // The pushdown enters an `ORDER BY` beneath the core as well as above it.
+                inner: recurse(inner, outer, promise)?,
                 expression: expression
                     .iter()
                     .map(|order| {
@@ -1017,15 +1023,42 @@ fn map_children(
         // in. The projection a caller's own `SELECT` produces sits on the descent to the
         // core, so the promise survives it there; a sub-`SELECT` anywhere else is a
         // scope nothing binds a parameter in.
-        GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: recurse(inner, &narrowed_to(outer, variables), wrapped)?,
-            variables: variables.clone(),
-        },
+        //
+        // Beneath the core the pushdown enters a sub-`SELECT` too, for exactly the
+        // parameters it projects: a projected variable is the same variable inside, and
+        // restricting the inner rows restricts the output the same way. A parameter it
+        // does not project is a different variable inside, and nothing is promised for it.
+        GraphPattern::Project { inner, variables } => {
+            let projected: DetHashSet<Variable>;
+            let into = match promise {
+                Promise::Pushed(parameters)
+                    if parameters
+                        .iter()
+                        .all(|parameter| variables.contains(parameter)) =>
+                {
+                    promise
+                }
+                Promise::Pushed(parameters) => {
+                    projected = narrowed_to(parameters, variables);
+                    if projected.is_empty() {
+                        Promise::None
+                    } else {
+                        Promise::Pushed(&projected)
+                    }
+                }
+                other => other,
+            };
+            GraphPattern::Project {
+                inner: recurse(inner, &narrowed_to(outer, variables), into)?,
+                variables: variables.clone(),
+            }
+        }
+        // Row-for-row wrappers the pushdown enters beneath the core as well as above it.
         GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: recurse(inner, outer, wrapped)?,
+            inner: recurse(inner, outer, promise)?,
         },
         GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: recurse(inner, outer, wrapped)?,
+            inner: recurse(inner, outer, promise)?,
         },
         GraphPattern::Slice {
             inner,
@@ -1355,11 +1388,15 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 ///   binds by this same rule, or variables the context it is evaluated in holds bound
 ///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound`]
 ///   and [`collect_certainly_bound_in`]);
+/// * a variable a `FILTER`'s condition requires bound for it to be true
+///   ([`truth_requires`]): `FILTER(BOUND(?v))`, `FILTER(sameTerm(?v, ?o))`,
+///   `FILTER(isIRI(?v))` and their conjunctions bind `?v`; a disjunction binds only
+///   what both of its sides do, and `FILTER(!BOUND(?v))` binds nothing;
 /// * the variable naming a `GRAPH`;
 /// * a grouping key every row of the grouped pattern binds;
 /// * an aggregate's output when [`aggregate_certainly_binds`] says every group row
-///   holds one — `COUNT` always, `SAMPLE`/`MIN`/`MAX` of a variable every row binds
-///   under an explicit `GROUP BY`, nothing else;
+///   holds one — `COUNT` always, `SAMPLE`/`MIN`/`MAX` under an explicit `GROUP BY` of
+///   an argument that cannot error on what every row binds, nothing else;
 /// * bound by both operands of a `UNION`, by either operand of a `Join` or a
 ///   `LATERAL` (the right one judged with the left one's bindings in hand), by the
 ///   left operand of an `OPTIONAL` or a `MINUS`, by the inner pattern of a `FILTER`,
@@ -1518,9 +1555,22 @@ fn collect_bound(
             collect_bound(right, context, beneath, &mut r);
             out.extend(l.intersection(&r).cloned());
         }
+        // A `FILTER` passes only rows its condition is true on, and every variable the
+        // condition requires bound for that is therefore bound in each row it passes —
+        // see [`truth_requires`]. A variable the run writes into the condition itself
+        // (under the SHACL pre-binding rewrite) is read there as the written value, not
+        // from the row, so the condition constrains nothing about the row's binding of
+        // it.
+        GraphPattern::Filter { expr, inner } => {
+            collect_bound(inner, context, written, out);
+            out.extend(
+                truth_requires(expr)
+                    .into_iter()
+                    .filter(|variable| !written.writes(variable)),
+            );
+        }
         // The solution-modifier wrappers the seed descends through keep `written`.
-        GraphPattern::Filter { expr: _, inner }
-        | GraphPattern::OrderBy {
+        GraphPattern::OrderBy {
             inner,
             expression: _,
         }
@@ -1646,12 +1696,15 @@ const fn is_descent_wrapper(pattern: &GraphPattern) -> bool {
 /// * `COUNT` — always. It answers `0` for an empty group, including the one group an
 ///   aggregate without `GROUP BY` produces over an empty input, and never errors.
 /// * `SAMPLE`, `MIN`, `MAX` — only under an explicit `GROUP BY`, and only over an
-///   argument every row binds (a variable `row_binds` holds, or a constant). A group a
-///   `GROUP BY` produces holds at least one row, so the argument yields at least one
-///   value; `SAMPLE` answers the first, and `MIN`/`MAX` fold under the total SPARQL
-///   term order, which orders any two terms — neither can answer unbound over a
-///   non-empty list. WITHOUT a `GROUP BY` the one implicit group exists even over an
-///   empty input, where all three answer unbound, so none of them counts.
+///   argument that yields a value on every row: one reading only variables `row_binds`
+///   holds, and unable to error on them ([`cannot_error`]) — a variable, a constant,
+///   `BOUND`, `EXISTS`, `sameTerm`, a type test, `COALESCE` with such an argument, and
+///   the boolean and conditional forms over such arguments. A group a `GROUP BY`
+///   produces holds at least one row, so the argument yields at least one value;
+///   `SAMPLE` answers the first, and `MIN`/`MAX` fold under the total SPARQL term
+///   order, which orders any two terms — neither can answer unbound over a non-empty
+///   list. WITHOUT a `GROUP BY` the one implicit group exists even over an empty
+///   input, where all three answer unbound, so none of them counts.
 /// * `SUM`, `AVG` — never: a non-numeric value (or an arithmetic failure) poisons the
 ///   fold to unbound, and whether one occurs is a fact about the data.
 /// * `GROUP_CONCAT` — never: a blank node or a quoted triple has no lexical form, and
@@ -1659,18 +1712,19 @@ const fn is_descent_wrapper(pattern: &GraphPattern) -> bool {
 /// * A custom aggregate and `FOLD` — never: their answers are the host's and the
 ///   composite's, and neither promises one.
 ///
-/// An argument that is any other expression does not count: an expression can error
-/// on every row of a group, and a group whose every argument errored has no value.
+/// An argument that CAN error on bound input does not count, even when it reads only
+/// bound variables: it can error on every row of a group, and a group whose every
+/// argument errored has no value. `STR(?x)` errors on a blank node or a quoted triple,
+/// `IRI(STR(?x))` on a string that is not an IRI, `?x + 1` on a non-number — whether
+/// one does is a fact about the data, and the aggregate over it is then unbound in that
+/// group, so `MAX(STR(?q))` and `SAMPLE(IRI(STR(?q)))` are not sources.
+/// `SAMPLE(COALESCE(IRI(STR(?q)), ?q))` is: its last argument cannot error.
 fn aggregate_certainly_binds(
     aggregate: &AggregateExpression,
     grouped: bool,
     row_binds: &dyn Fn(&Variable) -> bool,
 ) -> bool {
-    let total = |expr: &Expression| match expr {
-        Expression::NamedNode(_) | Expression::Literal(_) => true,
-        Expression::Variable(variable) => row_binds(variable),
-        _ => false,
-    };
+    let total = |expr: &Expression| cannot_error(expr, row_binds);
     match aggregate.function() {
         AggregateFunction::Count => true,
         AggregateFunction::Sample | AggregateFunction::Min | AggregateFunction::Max => {
@@ -1739,6 +1793,255 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
         Expression::Coalesce(items) => items.iter().any(reads),
         Expression::FunctionCall(_, args) => args.iter().all(reads),
     }
+}
+
+/// Whether `expr` yields a value on every row on which `is_bound` holds for every
+/// variable it reads — it can neither read an unbound variable nor error on a bound one.
+///
+/// Narrow on purpose, and exact for what it admits:
+///
+/// * a constant, a variable `is_bound` holds, `BOUND(…)` and `EXISTS { … }` — the last
+///   two answer a boolean for any row;
+/// * `sameTerm(a, b)` and a type test (`isIRI`, `isURI`, `isBlank`, `isLiteral`,
+///   `isNumeric`, `isTRIPLE`) over arguments that cannot error: each compares or
+///   classifies any two terms, or any one, and answers a boolean;
+/// * `!`, `&&` and `||` over [`boolean_cannot_error`] operands: their effective boolean
+///   value is defined for a boolean, and it is an error for an IRI or a blank node, so
+///   an operand must be known to be a boolean;
+/// * `IF(c, t, e)` with such a condition and branches that cannot error;
+/// * `COALESCE(…)` with any argument that cannot error: it answers the first argument
+///   that evaluates.
+///
+/// Everything else — `=` and the orderings, arithmetic, `STR`, `IRI`, `IN`, every other
+/// function — can error on some bound input, and does not qualify.
+fn cannot_error(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
+    match expr {
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Bound(_)
+        | Expression::Exists(_) => true,
+        Expression::Variable(variable) => is_bound(variable),
+        Expression::SameTerm(a, b) => cannot_error(a, is_bound) && cannot_error(b, is_bound),
+        Expression::FunctionCall(function, args) => {
+            is_type_test(function) && args.iter().all(|arg| cannot_error(arg, is_bound))
+        }
+        Expression::Not(_) | Expression::And(..) | Expression::Or(..) => {
+            boolean_cannot_error(expr, is_bound)
+        }
+        Expression::If(condition, then, otherwise) => {
+            boolean_cannot_error(condition, is_bound)
+                && cannot_error(then, is_bound)
+                && cannot_error(otherwise, is_bound)
+        }
+        Expression::Coalesce(items) => items.iter().any(|item| cannot_error(item, is_bound)),
+        Expression::Equal(..)
+        | Expression::Greater(..)
+        | Expression::GreaterOrEqual(..)
+        | Expression::Less(..)
+        | Expression::LessOrEqual(..)
+        | Expression::Add(..)
+        | Expression::Subtract(..)
+        | Expression::Multiply(..)
+        | Expression::Divide(..)
+        | Expression::UnaryPlus(_)
+        | Expression::UnaryMinus(_)
+        | Expression::In(..) => false,
+    }
+}
+
+/// Whether `expr` [`cannot_error`] AND answers a boolean, so its effective boolean value
+/// is defined: `BOUND`, `EXISTS`, `sameTerm`, a type test, a boolean literal, and `!`,
+/// `&&`, `||` over such operands.
+fn boolean_cannot_error(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
+    match expr {
+        Expression::Literal(literal) => {
+            literal.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#boolean"
+                && matches!(literal.value(), "true" | "false")
+        }
+        Expression::Bound(_) | Expression::Exists(_) => true,
+        Expression::SameTerm(..) | Expression::FunctionCall(..) => cannot_error(expr, is_bound),
+        Expression::Not(a) => boolean_cannot_error(a, is_bound),
+        Expression::And(a, b) | Expression::Or(a, b) => {
+            boolean_cannot_error(a, is_bound) && boolean_cannot_error(b, is_bound)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `function` is a type test: total over terms, answering a boolean.
+const fn is_type_test(function: &purrdf_sparql_algebra::Function) -> bool {
+    use purrdf_sparql_algebra::Function;
+    matches!(
+        function,
+        Function::IsIri
+            | Function::IsUri
+            | Function::IsBlank
+            | Function::IsLiteral
+            | Function::IsNumeric
+            | Function::IsTriple
+    )
+}
+
+/// The variables `expr` must have bound for it to be TRUE — which a `FILTER` over `expr`
+/// therefore binds in every row it passes.
+///
+/// # The rule, and why each case is sound
+///
+/// A variable read where the expression has no value unless it is bound — an operand of
+/// `=`, `sameTerm`, a comparison or arithmetic, or the expression itself — errors when
+/// unbound, and an error is not true. So:
+///
+/// * `?v` alone, `BOUND(?v)`: `?v`;
+/// * `a && b`: both are true, so the union of what each requires;
+/// * `a || b`: at least one is true, and which is not known, so the INTERSECTION of
+///   what each requires — `BOUND(?a) || BOUND(?b)` binds neither;
+/// * `!a`: `a` is false — what `a` needs to be false ([`falsity_requires`]), so
+///   `!BOUND(?v)` binds nothing and `!!BOUND(?v)` binds `?v`;
+/// * a type test `isIRI(a)` and its kin: `a` has a value of that type, so what `a`
+///   needs for a value;
+/// * `IF(c, t, e)`: `c` has a value, and one of the branches is true;
+/// * `COALESCE(…)`: the first argument with a value is true, so the intersection over
+///   the arguments;
+/// * `a IN (…)`: `a` has a value;
+/// * every other operator and comparison: its value needs its operands' values, so
+///   what the whole expression needs for a value.
+///
+/// `EXISTS` requires nothing, and a function this crate does not classify is taken to
+/// require nothing — narrow, never wrong.
+fn truth_requires(expr: &Expression) -> DetHashSet<Variable> {
+    match expr {
+        Expression::Variable(variable) | Expression::Bound(variable) => {
+            std::iter::once(variable.clone()).collect()
+        }
+        Expression::And(a, b) => {
+            let mut both = truth_requires(a);
+            both.extend(truth_requires(b));
+            both
+        }
+        Expression::Or(a, b) => intersection(truth_requires(a), &truth_requires(b)),
+        Expression::Not(a) => falsity_requires(a),
+        Expression::FunctionCall(function, args) if is_type_test(function) => {
+            args.iter().flat_map(value_requires).collect()
+        }
+        Expression::If(condition, then, otherwise) => {
+            let mut required = value_requires(condition);
+            required.extend(intersection(
+                truth_requires(then),
+                &truth_requires(otherwise),
+            ));
+            required
+        }
+        Expression::Coalesce(items) => items
+            .iter()
+            .map(truth_requires)
+            .reduce(|left, right| intersection(left, &right))
+            .unwrap_or_default(),
+        Expression::In(needle, _) => value_requires(needle),
+        _ => value_requires(expr),
+    }
+}
+
+/// The variables `expr` must have bound for it to be FALSE — the dual of
+/// [`truth_requires`], which reads it through `!`.
+///
+/// `BOUND(?v)` is false exactly when `?v` is unbound, and a type test is false on an
+/// unbound argument too, so neither requires anything; `EXISTS` requires nothing. `!a`
+/// is false when `a` is true ([`truth_requires`]); `a && b` when at least one is
+/// false, so what both require; `a || b` when both are, so what either requires.
+/// `IF`, `COALESCE` and `IN` follow [`truth_requires`]'s reasoning, and every other
+/// expression needs what it needs for any value ([`value_requires`]).
+fn falsity_requires(expr: &Expression) -> DetHashSet<Variable> {
+    match expr {
+        Expression::Variable(variable) => std::iter::once(variable.clone()).collect(),
+        Expression::Bound(_) | Expression::Exists(_) => DetHashSet::default(),
+        Expression::FunctionCall(function, _) if is_type_test(function) => DetHashSet::default(),
+        Expression::Not(a) => truth_requires(a),
+        Expression::And(a, b) => intersection(falsity_requires(a), &falsity_requires(b)),
+        Expression::Or(a, b) => {
+            let mut both = falsity_requires(a);
+            both.extend(falsity_requires(b));
+            both
+        }
+        Expression::If(condition, then, otherwise) => {
+            let mut required = value_requires(condition);
+            required.extend(intersection(
+                falsity_requires(then),
+                &falsity_requires(otherwise),
+            ));
+            required
+        }
+        Expression::Coalesce(items) => items
+            .iter()
+            .map(falsity_requires)
+            .reduce(|left, right| intersection(left, &right))
+            .unwrap_or_default(),
+        Expression::In(needle, _) => value_requires(needle),
+        _ => value_requires(expr),
+    }
+}
+
+/// The variables `expr` must have bound for it to have any value at all — see
+/// [`truth_requires`].
+///
+/// `BOUND`, `EXISTS` and a type test answer for any row. `&&` and `||` can answer
+/// with one operand in error (`false && error` is false, `true || error` is true), so
+/// they need only what BOTH operands need; `IF` needs its condition and what both
+/// branches need; `COALESCE` what every argument needs; `IN` its needle. Every other
+/// operator — a comparison, `sameTerm`, arithmetic — needs every operand. A function
+/// call other than a type test needs nothing here: this crate does not classify how
+/// each treats an unbound argument, and requiring nothing is the narrow answer.
+fn value_requires(expr: &Expression) -> DetHashSet<Variable> {
+    match expr {
+        Expression::Variable(variable) => std::iter::once(variable.clone()).collect(),
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Bound(_)
+        | Expression::Exists(_)
+        | Expression::FunctionCall(..) => DetHashSet::default(),
+        Expression::And(a, b) | Expression::Or(a, b) => {
+            intersection(value_requires(a), &value_requires(b))
+        }
+        Expression::Equal(a, b)
+        | Expression::SameTerm(a, b)
+        | Expression::Greater(a, b)
+        | Expression::GreaterOrEqual(a, b)
+        | Expression::Less(a, b)
+        | Expression::LessOrEqual(a, b)
+        | Expression::Add(a, b)
+        | Expression::Subtract(a, b)
+        | Expression::Multiply(a, b)
+        | Expression::Divide(a, b) => {
+            let mut both = value_requires(a);
+            both.extend(value_requires(b));
+            both
+        }
+        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+            value_requires(a)
+        }
+        Expression::If(condition, then, otherwise) => {
+            let mut required = value_requires(condition);
+            required.extend(intersection(
+                value_requires(then),
+                &value_requires(otherwise),
+            ));
+            required
+        }
+        Expression::Coalesce(items) => items
+            .iter()
+            .map(value_requires)
+            .reduce(|left, right| intersection(left, &right))
+            .unwrap_or_default(),
+        Expression::In(needle, _) => value_requires(needle),
+    }
+}
+
+/// `left ∩ right`, reusing `left`.
+fn intersection(
+    mut left: DetHashSet<Variable>,
+    right: &DetHashSet<Variable>,
+) -> DetHashSet<Variable> {
+    left.retain(|variable| right.contains(variable));
+    left
 }
 
 /// Add a triple pattern's variables (recursing through quoted triples).
@@ -2617,8 +2920,18 @@ mod pushdown_reach_tests {
         };
         let mut found = Vec::new();
         calls(pattern, &mut found);
-        assert_eq!(found.len(), 1, "{body}: one call");
-        matches!(&found[0].subject_args[0], TermPattern::NamedNode(node) if node.as_str() == VALUE)
+        assert!(!found.is_empty(), "{body}: a call");
+        let written: Vec<bool> = found
+            .iter()
+            .map(|call| {
+                matches!(&call.subject_args[0], TermPattern::NamedNode(node) if node.as_str() == VALUE)
+            })
+            .collect();
+        assert!(
+            written.iter().all(|w| *w == written[0]),
+            "{body}: the rewrite writes every call of this corpus's shapes or none — {written:?}"
+        );
+        written[0]
     }
 
     /// Whether a bound-only relation is admitted in `body` with `?q` declared.
@@ -2644,13 +2957,65 @@ mod pushdown_reach_tests {
             (format!("{atom} . {call}"), true),
             (format!("{atom} LATERAL {{ {call} }}"), true),
             (format!("{atom} LATERAL {{ LATERAL {{ {call} }} }}"), true),
+            // A `LATERAL`'s right side, whatever surrounds the call there, wherever the
+            // rewrite's restriction is a join-equivalent one.
             (
                 format!("{atom} LATERAL {{ {other} LATERAL {{ {call} }} }}"),
+                true,
+            ),
+            (format!("{atom} LATERAL {{ {other} . {call} }}"), true),
+            (format!("{atom} LATERAL {{ BIND(1 AS ?one) {call} }}"), true),
+            (
+                format!("{atom} LATERAL {{ VALUES ?z {{ 1 }} {call} }}"),
+                true,
+            ),
+            (
+                format!("{atom} LATERAL {{ {call} FILTER(BOUND(?out)) }}"),
+                true,
+            ),
+            (
+                format!("{atom} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} }}"),
+                true,
+            ),
+            (
+                format!("{atom} LATERAL {{ SELECT * WHERE {{ {call} }} }}"),
+                true,
+            ),
+            (
+                format!(
+                    "{atom} LATERAL {{ SELECT DISTINCT ?q ?out WHERE {{ {call} }} ORDER BY ?out }}"
+                ),
+                true,
+            ),
+            (
+                format!("{atom} LATERAL {{ {{ {call} }} UNION {{ {call} }} }}"),
+                true,
+            ),
+            (format!("{atom} LATERAL {{ GRAPH ?g {{ {call} }} }}"), true),
+            // ... and where it is not: a sub-`SELECT` that does not project the
+            // variable, a slice or a `GROUP BY` beneath the projection, an `OPTIONAL` or
+            // a `MINUS` right arm inside the right side.
+            (
+                format!("{atom} LATERAL {{ SELECT ?out WHERE {{ {call} }} }}"),
                 false,
             ),
-            (format!("{atom} LATERAL {{ {other} . {call} }}"), false),
             (
-                format!("{atom} LATERAL {{ BIND(1 AS ?one) {call} }}"),
+                format!("{atom} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} LIMIT 1 }}"),
+                false,
+            ),
+            (
+                format!(
+                    "{atom} LATERAL {{ SELECT ?q (COUNT(?out) AS ?n) WHERE {{ {call} }} GROUP BY ?q }}"
+                ),
+                false,
+            ),
+            (format!("{atom} LATERAL {{ OPTIONAL {{ {call} }} }}"), false),
+            (
+                format!("{atom} LATERAL {{ {other} OPTIONAL {{ {call} }} }}"),
+                false,
+            ),
+            (
+                format!("{atom} LATERAL {{ {other} MINUS {{ {call} }} }}"),
                 false,
             ),
             (format!("{{ {atom} }} {{ {call} }}"), true),
@@ -2669,6 +3034,10 @@ mod pushdown_reach_tests {
             ),
             (
                 format!("{atom} {{ SELECT ?q ?out WHERE {{ {call} }} }}"),
+                true,
+            ),
+            (
+                format!("{atom} {{ SELECT ?out WHERE {{ {call} }} }}"),
                 false,
             ),
             (format!("VALUES ?w {{ 1 2 }} {call}"), true),
