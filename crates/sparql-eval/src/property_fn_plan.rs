@@ -1369,13 +1369,15 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Add to `out` every variable `pattern` binds in **every** solution it produces, save
-/// only a solution in which a `BIND`'s own expression raised an error.
+/// only a solution in which a `BIND`'s own expression raised an error, or an aggregate
+/// failed on the values its group handed it.
 ///
 /// This is deliberately narrower than a scope walk. A variable that is merely *in
 /// scope* may be unbound in a row for a reason the query text fixes — `OPTIONAL`'s
 /// right side, a `UNION` branch that does not mention it, an `UNDEF` cell of a `VALUES`
-/// column, an aggregate over an empty group — and treating one of those as bound
-/// would admit an invocation the text itself guarantees some row cannot make.
+/// column, a `SAMPLE` over the one implicit group an aggregate without `GROUP BY`
+/// forms over an empty input — and treating one of those as bound would admit an
+/// invocation the text itself guarantees some row cannot make.
 ///
 /// # The rule, exactly
 ///
@@ -1395,15 +1397,17 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// * the variable naming a `GRAPH`;
 /// * a grouping key every row of the grouped pattern binds;
 /// * an aggregate's output when [`aggregate_certainly_binds`] says every group row
-///   holds one — `COUNT` always, `SAMPLE`/`MIN`/`MAX` under an explicit `GROUP BY` of
-///   an argument that cannot error on what every row binds, nothing else;
+///   holds one save a row whose aggregate failed on present values — `COUNT`, `SUM`,
+///   `AVG`, `GROUP_CONCAT` and `FOLD` always, `SAMPLE`/`MIN`/`MAX` and a custom
+///   aggregate under an explicit `GROUP BY` of arguments reading only what every row
+///   binds;
 /// * bound by both operands of a `UNION`, by either operand of a `Join` or a
 ///   `LATERAL` (the right one judged with the left one's bindings in hand), by the
 ///   left operand of an `OPTIONAL` or a `MINUS`, by the inner pattern of a `FILTER`,
 ///   `BIND`, `UNFOLD`, `ORDER BY`, `DISTINCT`, `REDUCED` or slice, or by the inner
 ///   pattern of a sub-`SELECT` that projects it.
 ///
-/// # Why a `BIND` counts although its expression can error
+/// # Why a `BIND` or an aggregate counts although it can fail
 ///
 /// An expression that errors leaves its variable unbound in that row (SPARQL 1.1
 /// §18.6). When every variable it reads is bound, that is an outcome of evaluating one
@@ -1417,6 +1421,13 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// `crate::property_fn_eval`). A relation is therefore never invoked with a position
 /// free that its declared modes require bound; a relation that ALSO declares the free
 /// mode is invoked free on that row, as the row's own access pattern is.
+///
+/// An aggregate's output follows the same rule: it counts when every value it is
+/// computed from is certainly present, and a group whose aggregate failed on those
+/// values — a `MAX(STR(?x))` whose every `?x` is a blank node, a `SUM` over a string —
+/// is a row refused (or, for a relation that also serves the free mode, invoked free)
+/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds`] states which
+/// absences of input the text itself fixes.
 ///
 /// A `BIND` that reads a variable its inner pattern does NOT certainly bind —
 /// `BIND(?x AS ?q)` after an `OPTIONAL` that may leave `?x` unbound, or over an
@@ -1688,53 +1699,76 @@ const fn is_descent_wrapper(pattern: &GraphPattern) -> bool {
     )
 }
 
-/// Whether an aggregate's output is bound in every row its `GROUP BY` produces, given
-/// `row_binds` — what every row of every group binds.
+/// Whether an aggregate's output is bound in every row its `GROUP BY` produces, save
+/// only a row whose aggregate failed on the values it was handed — given `row_binds`,
+/// what every row of every group binds.
 ///
-/// # The rule, and why each case is sound
+/// # One rule for every computed value
 ///
-/// * `COUNT` — always. It answers `0` for an empty group, including the one group an
-///   aggregate without `GROUP BY` produces over an empty input, and never errors.
-/// * `SAMPLE`, `MIN`, `MAX` — only under an explicit `GROUP BY`, and only over an
-///   argument that yields a value on every row: one reading only variables `row_binds`
-///   holds, and unable to error on them ([`cannot_error`]) — a variable, a constant,
-///   `BOUND`, `EXISTS`, `sameTerm`, a type test, `COALESCE` with such an argument, and
-///   the boolean and conditional forms over such arguments. A group a `GROUP BY`
-///   produces holds at least one row, so the argument yields at least one value;
-///   `SAMPLE` answers the first, and `MIN`/`MAX` fold under the total SPARQL term
-///   order, which orders any two terms — neither can answer unbound over a non-empty
-///   list. WITHOUT a `GROUP BY` the one implicit group exists even over an empty
-///   input, where all three answer unbound, so none of them counts.
-/// * `SUM`, `AVG` — never: a non-numeric value (or an arithmetic failure) poisons the
-///   fold to unbound, and whether one occurs is a fact about the data.
-/// * `GROUP_CONCAT` — never: a blank node or a quoted triple has no lexical form, and
-///   one among the values poisons the fold to unbound.
-/// * A custom aggregate and `FOLD` — never: their answers are the host's and the
-///   composite's, and neither promises one.
+/// A value computed from inputs counts as certainly bound when every input it is
+/// computed from is certainly PRESENT: then it is unbound only where its evaluation
+/// failed on present values, which is a fact about the data met one row at a time,
+/// not a shape of the query. That is the rule a `BIND` target follows (see
+/// [`collect_certainly_bound`]), and an aggregate's output follows it exactly: a
+/// group row whose aggregate failed reaches a call with the input unbound, where the
+/// evaluator re-derives the invocation's access pattern from the row in hand and
+/// refuses one the relation does not declare, with a typed error (`admit_mode` in
+/// `crate::property_fn_eval`). That check reads the call's arguments off whatever row
+/// arrives, so it covers a row a `GROUP BY` produced as it covers any other: a
+/// relation serving only the bound mode is never invoked free, and one that also
+/// serves the free mode is invoked free on that row, as the row's own access pattern
+/// is.
 ///
-/// An argument that CAN error on bound input does not count, even when it reads only
-/// bound variables: it can error on every row of a group, and a group whose every
-/// argument errored has no value. `STR(?x)` errors on a blank node or a quoted triple,
-/// `IRI(STR(?x))` on a string that is not an IRI, `?x + 1` on a non-number — whether
-/// one does is a fact about the data, and the aggregate over it is then unbound in that
-/// group, so `MAX(STR(?q))` and `SAMPLE(IRI(STR(?q)))` are not sources.
-/// `SAMPLE(COALESCE(IRI(STR(?q)), ?q))` is: its last argument cannot error.
+/// What an aggregate is computed from is its group's argument values. Absence of
+/// those — as opposed to a failure on them — has two causes the query text fixes:
+/// an argument reading a variable the grouped pattern may leave unbound (the right
+/// side of an `OPTIONAL`, an `UNDEF` column), and the one implicit group an aggregate
+/// WITHOUT `GROUP BY` forms even over an empty input. Whether either matters depends
+/// on what the aggregate answers when handed no value at all:
+///
+/// * `COUNT`, `SUM`, `AVG`, `GROUP_CONCAT` and `FOLD` answer a value over no values —
+///   `0`, `0`, `0`, `""` and the empty composite — and skip (or, for `FOLD`, keep as
+///   a `null` element) a row whose argument is unbound. Absence therefore never
+///   leaves them unbound, and they count with or without `GROUP BY`, whatever their
+///   argument reads. `SUM` and `AVG` are unbound only when a present value is not a
+///   number or the arithmetic fails, and `GROUP_CONCAT` only when a present value is
+///   a blank node or a quoted triple, which has no lexical form: failures on present
+///   values, met per row. `COUNT` and `FOLD` never answer unbound.
+/// * `SAMPLE`, `MIN`, `MAX` and a custom aggregate may answer unbound over no values —
+///   the first three always do, and a host's aggregate may. They count only under an
+///   explicit `GROUP BY`, whose every group holds at least one row, and only over
+///   arguments that read nothing but what every row binds (or constants —
+///   [`expression_reads_only_bound`], the test a `BIND` expression passes). Every row
+///   of a group then hands the aggregate a value unless its argument errored on
+///   present values — `STR(?x)` on a blank node, `IRI(STR(?x))` on a string that is
+///   not an IRI — and the aggregate is unbound only if every row's argument errored,
+///   or a custom aggregate declined to answer over the values it was given. So
+///   `MAX(STR(?q))` and `SAMPLE(IRI(STR(?q)))` count exactly as
+///   `BIND(IRI(STR(?q)) AS ?y)` followed by `SAMPLE(?y)` does, and `SAMPLE(?w)` over
+///   an `OPTIONAL`'s `?w` does not, as `BIND(?w AS ?y)` does not. WITHOUT a
+///   `GROUP BY` the implicit group may hold no row, where these answer unbound for
+///   want of any input: the same structural absence, so none of them counts there.
 fn aggregate_certainly_binds(
     aggregate: &AggregateExpression,
     grouped: bool,
     row_binds: &dyn Fn(&Variable) -> bool,
 ) -> bool {
-    let total = |expr: &Expression| cannot_error(expr, row_binds);
     match aggregate.function() {
-        AggregateFunction::Count => true,
-        AggregateFunction::Sample | AggregateFunction::Min | AggregateFunction::Max => {
-            grouped && aggregate.args().iter().all(total)
-        }
-        AggregateFunction::Sum
+        AggregateFunction::Count
+        | AggregateFunction::Sum
         | AggregateFunction::Avg
         | AggregateFunction::GroupConcat
-        | AggregateFunction::Custom(_)
-        | AggregateFunction::Fold => false,
+        | AggregateFunction::Fold => true,
+        AggregateFunction::Sample
+        | AggregateFunction::Min
+        | AggregateFunction::Max
+        | AggregateFunction::Custom(_) => {
+            grouped
+                && aggregate
+                    .args()
+                    .iter()
+                    .all(|arg| expression_reads_only_bound(arg, row_binds))
+        }
     }
 }
 
@@ -1792,79 +1826,6 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
         Expression::In(needle, haystack) => reads(needle) && haystack.iter().all(reads),
         Expression::Coalesce(items) => items.iter().any(reads),
         Expression::FunctionCall(_, args) => args.iter().all(reads),
-    }
-}
-
-/// Whether `expr` yields a value on every row on which `is_bound` holds for every
-/// variable it reads — it can neither read an unbound variable nor error on a bound one.
-///
-/// Narrow on purpose, and exact for what it admits:
-///
-/// * a constant, a variable `is_bound` holds, `BOUND(…)` and `EXISTS { … }` — the last
-///   two answer a boolean for any row;
-/// * `sameTerm(a, b)` and a type test (`isIRI`, `isURI`, `isBlank`, `isLiteral`,
-///   `isNumeric`, `isTRIPLE`) over arguments that cannot error: each compares or
-///   classifies any two terms, or any one, and answers a boolean;
-/// * `!`, `&&` and `||` over [`boolean_cannot_error`] operands: their effective boolean
-///   value is defined for a boolean, and it is an error for an IRI or a blank node, so
-///   an operand must be known to be a boolean;
-/// * `IF(c, t, e)` with such a condition and branches that cannot error;
-/// * `COALESCE(…)` with any argument that cannot error: it answers the first argument
-///   that evaluates.
-///
-/// Everything else — `=` and the orderings, arithmetic, `STR`, `IRI`, `IN`, every other
-/// function — can error on some bound input, and does not qualify.
-fn cannot_error(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
-    match expr {
-        Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Bound(_)
-        | Expression::Exists(_) => true,
-        Expression::Variable(variable) => is_bound(variable),
-        Expression::SameTerm(a, b) => cannot_error(a, is_bound) && cannot_error(b, is_bound),
-        Expression::FunctionCall(function, args) => {
-            is_type_test(function) && args.iter().all(|arg| cannot_error(arg, is_bound))
-        }
-        Expression::Not(_) | Expression::And(..) | Expression::Or(..) => {
-            boolean_cannot_error(expr, is_bound)
-        }
-        Expression::If(condition, then, otherwise) => {
-            boolean_cannot_error(condition, is_bound)
-                && cannot_error(then, is_bound)
-                && cannot_error(otherwise, is_bound)
-        }
-        Expression::Coalesce(items) => items.iter().any(|item| cannot_error(item, is_bound)),
-        Expression::Equal(..)
-        | Expression::Greater(..)
-        | Expression::GreaterOrEqual(..)
-        | Expression::Less(..)
-        | Expression::LessOrEqual(..)
-        | Expression::Add(..)
-        | Expression::Subtract(..)
-        | Expression::Multiply(..)
-        | Expression::Divide(..)
-        | Expression::UnaryPlus(_)
-        | Expression::UnaryMinus(_)
-        | Expression::In(..) => false,
-    }
-}
-
-/// Whether `expr` [`cannot_error`] AND answers a boolean, so its effective boolean value
-/// is defined: `BOUND`, `EXISTS`, `sameTerm`, a type test, a boolean literal, and `!`,
-/// `&&`, `||` over such operands.
-fn boolean_cannot_error(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
-    match expr {
-        Expression::Literal(literal) => {
-            literal.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#boolean"
-                && matches!(literal.value(), "true" | "false")
-        }
-        Expression::Bound(_) | Expression::Exists(_) => true,
-        Expression::SameTerm(..) | Expression::FunctionCall(..) => cannot_error(expr, is_bound),
-        Expression::Not(a) => boolean_cannot_error(a, is_bound),
-        Expression::And(a, b) | Expression::Or(a, b) => {
-            boolean_cannot_error(a, is_bound) && boolean_cannot_error(b, is_bound)
-        }
-        _ => false,
     }
 }
 

@@ -35,7 +35,8 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, EvalError, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
+    AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
+    CustomAggregate, EvalError, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
     PropertyFunction, PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, Volatility,
 };
 
@@ -241,6 +242,19 @@ fn run_relation_with(
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(iri.to_owned(), relation);
     let env = ExtensionEnv::over_relations(registry).expect("the fixture declarations read");
+    run_in(&env, data, invocations, body, substitutions, lane)
+}
+
+/// Run `body` as `SELECT ?q ?out WHERE { body }` over `data` in `env`, whose relation
+/// records into `invocations`.
+fn run_in(
+    env: &ExtensionEnv,
+    data: &RdfDataset,
+    invocations: &Mutex<Vec<String>>,
+    body: &str,
+    substitutions: &[(String, TermValue)],
+    lane: ShaclPrebinding,
+) -> Outcome {
     let query = format!("SELECT ?q ?out WHERE {{ {body} }}");
     let answer = NativeSparqlEngine::new()
         .query_with_options_view(
@@ -251,7 +265,7 @@ fn run_relation_with(
                 substitutions,
             },
             QueryOptions {
-                env: &env,
+                env,
                 prebinding: lane,
                 ..QueryOptions::EMPTY
             },
@@ -971,16 +985,27 @@ const PAIR_TABLE: &[(&str, &str)] = &[
     ("delta", "delta/1"),
 ];
 
-/// `?input <pairs> ?output` over [`PAIR_TABLE`], serving `bf` and `ff` CONSISTENTLY:
+/// `?input <pairs> ?output` over a fixed table ([`PAIR_TABLE`] by default), serving `bf` and `ff` CONSISTENTLY:
 /// bound, it answers the table's rows for that key; free, the whole table. So a
 /// query answered with its input bound must equal the free evaluation joined with
 /// the rest of the query afterwards — SPARQL's bottom-up answer.
 struct Pairs {
     modes: Vec<BindingPattern>,
+    /// The `(input, output)` rows it serves — [`PAIR_TABLE`] unless a test says
+    /// otherwise.
+    table: Vec<(TermValue, TermValue)>,
     /// Answer the whole table whatever the input, leaving the engine to join the rows
     /// with the call's bound arguments afterwards — the bottom-up reference.
     ignores_input: bool,
     invocations: Arc<Mutex<Vec<String>>>,
+}
+
+/// [`PAIR_TABLE`] as the terms [`Pairs`] serves.
+fn pair_table() -> Vec<(TermValue, TermValue)> {
+    PAIR_TABLE
+        .iter()
+        .map(|&(input, output)| (simple_literal(input), simple_literal(output)))
+        .collect()
 }
 
 fn simple_literal(text: &str) -> TermValue {
@@ -1024,9 +1049,9 @@ impl PropertyFunction for Pairs {
                 key.as_deref().unwrap_or("-")
             ));
         let mut rows: Vec<PfRow> = Vec::new();
-        for &(input, output) in PAIR_TABLE {
-            if self.ignores_input || key.as_deref().is_none_or(|key| key == input) {
-                rows.push(vec![simple_literal(input), simple_literal(output)]);
+        for (input, output) in &self.table {
+            if self.ignores_input || key.as_deref().is_none_or(|key| key == key_of(input)) {
+                rows.push(vec![input.clone(), output.clone()]);
             }
         }
         Ok(Box::new(Rows(rows.into_iter())))
@@ -1041,6 +1066,7 @@ fn run_pairs(modes: &[&str], body: &str) -> Outcome {
             .iter()
             .map(|code| BindingPattern::from_code(code))
             .collect(),
+        table: pair_table(),
         ignores_input: false,
         invocations: Arc::clone(&invocations),
     };
@@ -1068,6 +1094,7 @@ fn run_pairs_with(
             .iter()
             .map(|code| BindingPattern::from_code(code))
             .collect(),
+        table: pair_table(),
         ignores_input,
         invocations: Arc::clone(&invocations),
     };
@@ -1208,78 +1235,94 @@ fn an_aggregate_over_a_group_by_feeds_the_call() {
     assert_eq!(run(Variant::FreeCapable, &lateral), expected, "{lateral}");
 }
 
-/// **Without a `GROUP BY`, `SAMPLE`, `MIN` and `MAX` are not a source, and `COUNT` is.**
-/// An aggregate with no `GROUP BY` answers one row even over an empty input, where
-/// the first three are unbound: over `?s <nothing> ?v`, which matches nothing, the
-/// free-capable variant is invoked FREE — the observation the refusal rests on. `COUNT`
-/// answers `0` there, bound, so it feeds the call.
+/// **Without a `GROUP BY`, `SAMPLE`, `MIN`, `MAX` and a custom aggregate are not a
+/// source; `COUNT`, `SUM`, `AVG`, `GROUP_CONCAT` and `FOLD` are.**
+///
+/// An aggregate with no `GROUP BY` answers one row even over an empty input. The
+/// first four may answer unbound there for want of any value — a structural absence,
+/// like an `OPTIONAL`'s — so over `?s <nothing> ?v`, which matches nothing, the
+/// bound-only relation is refused at prepare and the free-capable one is observed
+/// invoked FREE. The last five answer a value over no values — `0`, `0`, `0`, `""` and
+/// the empty list — so each feeds the call, invoked bound with exactly that value.
 #[test]
 fn an_aggregate_without_group_by_over_a_possibly_empty_input() {
-    let call = format!("?q <{EXPAND}> ?out");
-    for aggregate in ["SAMPLE", "MIN", "MAX"] {
-        let body =
-            format!("{{ SELECT ({aggregate}(?v) AS ?q) WHERE {{ ?s <{EX}nothing> ?v }} }} {call}");
-        assert_refused_at_prepare(&run(Variant::BoundOnly, &body));
-        assert_eq!(
-            run(Variant::FreeCapable, &body),
-            Outcome {
-                answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
-                invocations: calls(&["ff:-"]),
-            },
-            "{body}: the one implicit group's {aggregate} is unbound"
-        );
-    }
-    let body = format!("{{ SELECT (COUNT(?v) AS ?q) WHERE {{ ?s <{EX}nothing> ?v }} }} {call}");
-    let expected = Outcome {
-        answer: Ok(rows(&[("0", "0/1")])),
-        invocations: calls(&["bf:0"]),
-    };
-    assert_eq!(run(Variant::BoundOnly, &body), expected, "{body}");
-    assert_eq!(run(Variant::FreeCapable, &body), expected, "{body}");
-}
-
-/// **An aggregate that can answer unbound over a non-empty group is not a source, and
-/// neither is a grouping key some row leaves unbound.**
-///
-/// `SUM` of a string poisons to unbound; `GROUP_CONCAT` of a blank node does (it has no
-/// lexical form); `GROUP BY ?q` over an `OPTIONAL` that matched nothing forms a group
-/// whose key is unbound. Each is refused for the bound-only relation, and the
-/// free-capable variant is observed invoked free on exactly those rows.
-#[test]
-fn an_aggregate_or_key_that_can_be_unbound_is_not_a_source() {
     let call = format!("?q <{EXPAND}> ?out");
     let free = Outcome {
         answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
         invocations: calls(&["ff:-"]),
     };
-    let sum =
-        format!("{{ SELECT ?s (SUM(?v) AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}");
-    let key = format!(
-        "{{ SELECT ?q WHERE {{ ?s <{EX}p> ?v OPTIONAL {{ ?s <{EX}nothing> ?q }} }} \
-         GROUP BY ?q }} {call}"
-    );
-    for body in [&sum, &key] {
-        assert_refused_at_prepare(&run(Variant::BoundOnly, body));
-        assert_eq!(run(Variant::FreeCapable, body), free, "{body}");
+    for aggregate in [
+        "SAMPLE(?v)".to_owned(),
+        "MIN(?v)".to_owned(),
+        "MAX(?v)".to_owned(),
+        format!("AGG(<{FIRST_LITERAL}>, ?v)"),
+    ] {
+        let body =
+            format!("{{ SELECT ({aggregate} AS ?q) WHERE {{ ?s <{EX}nothing> ?v }} }} {call}");
+        assert_refused_at_prepare(&run_aggregating(&dataset(), Variant::BoundOnly, &body));
+        assert_eq!(
+            run_aggregating(&dataset(), Variant::FreeCapable, &body),
+            free,
+            "{body}: the one implicit group's {aggregate} is unbound"
+        );
     }
+    for (aggregate, value) in [
+        ("COUNT(?v)", "0"),
+        ("SUM(?v)", "0"),
+        ("AVG(?v)", "0"),
+        ("GROUP_CONCAT(?v)", ""),
+        ("FOLD(?v)", "[]"),
+    ] {
+        let body =
+            format!("{{ SELECT ({aggregate} AS ?q) WHERE {{ ?s <{EX}nothing> ?v }} }} {call}");
+        let expected = Outcome {
+            answer: Ok(rows(&[(value, &format!("{value}/1"))])),
+            invocations: calls(&[&format!("bf:{value}")]),
+        };
+        assert_eq!(run(Variant::BoundOnly, &body), expected, "{body}");
+        assert_eq!(run(Variant::FreeCapable, &body), expected, "{body}");
+    }
+}
 
-    let blank_data = {
-        let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri(&format!("{EX}s"));
-        let p = builder.intern_iri(&format!("{EX}p"));
-        let b = builder.intern_blank("b0", purrdf_core::BlankScope::DEFAULT);
-        builder.push_quad(s, p, b, None);
-        builder.freeze().expect("the fixture must validate")
+/// **An aggregate whose every value may be absent is not a source, and neither is a
+/// grouping key some row leaves unbound — exactly as a `BIND` over the same variable
+/// is not.**
+///
+/// `GROUP BY ?q` over an `OPTIONAL` that matched nothing forms a group whose key is
+/// unbound; `SAMPLE(?w)` over an `OPTIONAL`'s `?w` has no value in a group none of
+/// whose rows binds it, and neither has `SAMPLE(?y)` after `BIND(?w AS ?y)`. Each is
+/// refused for the bound-only relation, and the free-capable variant is observed
+/// invoked free on exactly those rows. The neighbour: `SUM(?w)` over the same rows
+/// answers `0` over no values, so it feeds the call, invoked bound.
+#[test]
+fn a_key_or_an_aggregate_over_a_variable_the_text_may_leave_unbound_is_not_a_source() {
+    let call = format!("?q <{EXPAND}> ?out");
+    let free = Outcome {
+        answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
+        invocations: calls(&["ff:-"]),
     };
-    let concat = format!(
-        "{{ SELECT ?s (GROUP_CONCAT(?v) AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
-    );
-    assert_refused_at_prepare(&run_over(&blank_data, Variant::BoundOnly, &concat));
-    assert_eq!(
-        run_over(&blank_data, Variant::FreeCapable, &concat),
-        free,
-        "{concat}"
-    );
+    let optional = format!("?s <{EX}p> ?v OPTIONAL {{ ?s <{EX}nothing> ?w }}");
+    for body in [
+        format!(
+            "{{ SELECT ?q WHERE {{ ?s <{EX}p> ?v OPTIONAL {{ ?s <{EX}nothing> ?q }} }} \
+             GROUP BY ?q }} {call}"
+        ),
+        format!("{{ SELECT ?s (SAMPLE(?w) AS ?q) WHERE {{ {optional} }} GROUP BY ?s }} {call}"),
+        format!(
+            "{{ SELECT ?s (SAMPLE(?y) AS ?q) WHERE {{ {optional} BIND(?w AS ?y) }} \
+             GROUP BY ?s }} {call}"
+        ),
+    ] {
+        assert_refused_at_prepare(&run(Variant::BoundOnly, &body));
+        assert_eq!(run(Variant::FreeCapable, &body), free, "{body}");
+    }
+    let sum = format!("{{ SELECT ?s (SUM(?w) AS ?q) WHERE {{ {optional} }} GROUP BY ?s }} {call}");
+    let zero = Outcome {
+        answer: Ok(rows(&[("0", "0/1")])),
+        invocations: calls(&["bf:0"]),
+    };
+    assert_eq!(run(Variant::BoundOnly, &sum), zero, "{sum}");
+    assert_eq!(run(Variant::FreeCapable, &sum), zero, "{sum}");
 }
 
 /// A dataset whose one `?s <p> ?v` row has a blank-node object — the input on which
@@ -1355,51 +1398,369 @@ fn a_filter_binds_nothing_its_condition_can_be_true_without() {
     }
 }
 
-/// **`SAMPLE`, `MIN` and `MAX` of an expression that cannot error on what every row
-/// binds feed the call; of one that can, they do not.**
+/// Assert `outcome` is the evaluator's per-row refusal of `iri`, a relation serving
+/// only `bf`: a row reached the call with its input unbound, and the relation was never
+/// invoked free — every invocation it did see was bound.
+fn assert_refused_per_row(outcome: &Outcome, iri: &str) {
+    let Err(message) = &outcome.answer else {
+        panic!("the row whose input is unbound must be refused, got {outcome:?}");
+    };
+    assert!(
+        message.contains(&format!(
+            "property function <{iri}> cannot serve the invocation `ff`; it declares [bf]"
+        )),
+        "the per-row refusal names the relation and the row's access pattern: {message}"
+    );
+    assert!(
+        outcome
+            .invocations
+            .iter()
+            .all(|invocation| invocation.starts_with("bf:")),
+        "a bound-only relation is never invoked free: {:?}",
+        outcome.invocations
+    );
+}
+
+/// **`SAMPLE`, `MIN` and `MAX` of an expression reading only what every row binds feed
+/// the call, whether or not the expression can error — exactly as the same expression
+/// `BIND` before the aggregate does.**
 ///
-/// `COALESCE(STR(?v), ?v)` answers `?v` itself where `STR` errors, and
-/// `IF(isLiteral(?v), ?v, "none")` answers on every term: under `GROUP BY` each is bound
-/// on every group row, so the bound-only relation is admitted and invoked bound.
-///
-/// `STR(?v)` errors on a blank node, and `IRI(STR(?v))` with it, so over a group whose
-/// every `?v` is a blank node `MAX(STR(?v))` and `SAMPLE(IRI(STR(?v)))` are unbound. Both
-/// are refused for the bound-only relation — over data where they would have bound, too:
-/// the planner cannot tell the data apart — and over the blank-object data the
-/// free-capable relation is observed invoked FREE, which is what the refusal prevents.
+/// Over `"beta"` every form below binds, so the bound-only relation is admitted and
+/// invoked bound with `"beta"`. `STR` errors on a blank node, and `IRI(STR(?v))` with
+/// it, so over the blank-node object `MAX(STR(?v))` and `SAMPLE(IRI(STR(?v)))` are
+/// unbound in that group — a failure on a present value, met per row: the bound-only
+/// relation is refused with the evaluator's typed access-pattern error and never
+/// invoked, and the free-capable one is invoked free on that row. Each form's `BIND`
+/// chain — `BIND(STR(?v) AS ?y)` then `MAX(?y)` — does exactly the same on both data.
 #[test]
-fn an_aggregate_over_an_expression_is_a_source_exactly_when_it_cannot_error() {
+fn an_aggregate_over_an_expression_reading_only_bound_variables_is_a_source() {
     let call = format!("?q <{EXPAND}> ?out");
-    let expected = Outcome {
+    let beta = Outcome {
         answer: Ok(rows(&[("beta", "beta/1")])),
         invocations: calls(&["bf:beta"]),
     };
+    let grouped = |aggregate: &str, pattern: &str| {
+        format!("{{ SELECT ?s ({aggregate} AS ?q) WHERE {{ {pattern} }} GROUP BY ?s }} {call}")
+    };
+    let triple = format!("?s <{EX}p> ?v");
     for aggregate in [
         "SAMPLE(COALESCE(STR(?v), ?v))",
         "MAX(IF(isLiteral(?v), ?v, \"none\"))",
         "MIN(COALESCE(IRI(STR(?v)), ?v))",
+        "MAX(STR(?v))",
+        "MIN(STR(?v))",
+        "SAMPLE(STR(?v))",
     ] {
-        let body = format!(
-            "{{ SELECT ?s ({aggregate} AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
-        );
-        assert_eq!(run(Variant::BoundOnly, &body), expected, "{body}");
-        assert_eq!(run(Variant::FreeCapable, &body), expected, "{body}");
+        let body = grouped(aggregate, &triple);
+        assert_eq!(run(Variant::BoundOnly, &body), beta, "{body}");
+        assert_eq!(run(Variant::FreeCapable, &body), beta, "{body}");
     }
 
     let free = Outcome {
         answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
         invocations: calls(&["ff:-"]),
     };
-    for aggregate in ["MAX(STR(?v))", "SAMPLE(IRI(STR(?v)))"] {
-        let body = format!(
-            "{{ SELECT ?s ({aggregate} AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
-        );
-        assert_refused_at_prepare(&run(Variant::BoundOnly, &body));
-        assert_refused_at_prepare(&run_over(&blank_object_data(), Variant::BoundOnly, &body));
+    let blank = blank_object_data();
+    for (aggregate, bind, over_bound) in [
+        ("MAX(STR(?v))", "BIND(STR(?v) AS ?y)", "MAX(?y)"),
+        (
+            "SAMPLE(IRI(STR(?v)))",
+            "BIND(IRI(STR(?v)) AS ?y)",
+            "SAMPLE(?y)",
+        ),
+    ] {
+        let direct = grouped(aggregate, &triple);
+        let chain = grouped(over_bound, &format!("{triple} {bind}"));
+        for body in [&direct, &chain] {
+            assert_refused_per_row(&run_over(&blank, Variant::BoundOnly, body), EXPAND);
+            assert_eq!(
+                run_over(&blank, Variant::FreeCapable, body),
+                free,
+                "{body}: the group's every argument errored, so the aggregate is unbound"
+            );
+        }
+        for data in [&dataset(), &blank] {
+            for variant in [Variant::BoundOnly, Variant::FreeCapable] {
+                assert_eq!(
+                    run_over(data, variant, &direct),
+                    run_over(data, variant, &chain),
+                    "{direct} behaves as its BIND chain {chain}"
+                );
+            }
+        }
+    }
+}
+
+/// The custom aggregate the aggregate differential registers — host configuration,
+/// never minted vocabulary.
+const FIRST_LITERAL: &str = "https://example.org/agg/first-literal";
+
+/// A host aggregate answering its group's first value when that value is a literal, and
+/// declining — unbound — when it is not, or when it was handed no value at all.
+struct FirstLiteral;
+
+/// [`FirstLiteral`]'s state: whether a value has arrived, and that first value if it is
+/// a literal.
+struct FirstLiteralState {
+    seen: bool,
+    first: Option<TermValue>,
+}
+
+impl AggregateAccumulator for FirstLiteralState {
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if !self.seen {
+            self.seen = true;
+            self.first = args
+                .first()
+                .filter(|value| matches!(value, TermValue::Literal { .. }))
+                .cloned();
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        let other = other
+            .into_any()
+            .downcast::<Self>()
+            .map_err(|_| EvalError::internal("a first-literal state combined with another"))?;
+        if !self.seen {
+            self.seen = other.seen;
+            self.first = other.first;
+        }
+        Ok(())
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(self.first)
+    }
+}
+
+impl CustomAggregate for FirstLiteral {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::OrderDependent
+    }
+    fn state_bound(&self) -> u64 {
+        0
+    }
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        Box::new(FirstLiteralState {
+            seen: false,
+            first: None,
+        })
+    }
+}
+
+/// The environment `relation`, registered at `iri`, runs in beside [`FirstLiteral`].
+fn aggregating_env(iri: &str, relation: Arc<dyn PropertyFunction>) -> ExtensionEnv {
+    let mut aggregates = AggregateRegistry::new();
+    aggregates.register(FIRST_LITERAL, Arc::new(FirstLiteral));
+    let mut relations = PropertyFunctionRegistry::new();
+    relations.register(iri.to_owned(), relation);
+    ExtensionEnv::over_aggregates(aggregates)
+        .and_then(|env| env.with_relations(relations))
+        .expect("the fixture declarations read")
+}
+
+/// [`run_over`], with [`FirstLiteral`] registered.
+fn run_aggregating(data: &RdfDataset, variant: Variant, body: &str) -> Outcome {
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let relation = match variant {
+        Variant::BoundOnly => Expand::bound_only(Arc::clone(&invocations)),
+        Variant::FreeCapable => Expand::free_capable(Arc::clone(&invocations)),
+    };
+    let env = aggregating_env(EXPAND, Arc::new(relation));
+    run_in(&env, data, &invocations, body, &[], ShaclPrebinding::None)
+}
+
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+
+/// Two subjects, `<a>` and `<b>`, each with a string (`<p>`), an IRI (`<r>`) and
+/// integers (`<n>`): `"alpha"`, `<x>`, `1` and `2` for `<a>`; `"beta"`, `<y>` and `4`
+/// for `<b>`. `poisoned` adds `<c>`, whose `<p>` and `<r>` are a blank node — on which
+/// `STR` errors and `GROUP_CONCAT` poisons — and whose `<n>` is the string `"zzz"`, on
+/// which `SUM` and `AVG` poison.
+fn aggregate_data(poisoned: bool) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let p = builder.intern_iri(&format!("{EX}p"));
+    let r = builder.intern_iri(&format!("{EX}r"));
+    let n = builder.intern_iri(&format!("{EX}n"));
+    for (subject, text, iri, numbers) in [
+        ("a", "alpha", "x", &["1", "2"][..]),
+        ("b", "beta", "y", &["4"][..]),
+    ] {
+        let subject = builder.intern_iri(&format!("{EX}{subject}"));
+        let text = builder.intern_literal(RdfLiteral::simple(text));
+        builder.push_quad(subject, p, text, None);
+        let iri = builder.intern_iri(&format!("{EX}{iri}"));
+        builder.push_quad(subject, r, iri, None);
+        for number in numbers {
+            let number = builder.intern_literal(RdfLiteral::typed(*number, XSD_INTEGER));
+            builder.push_quad(subject, n, number, None);
+        }
+    }
+    if poisoned {
+        let c = builder.intern_iri(&format!("{EX}c"));
+        let blank = builder.intern_blank("b0", purrdf_core::BlankScope::DEFAULT);
+        builder.push_quad(c, p, blank, None);
+        builder.push_quad(c, r, blank, None);
+        let zzz = builder.intern_literal(RdfLiteral::simple("zzz"));
+        builder.push_quad(c, n, zzz, None);
+    }
+    builder.freeze().expect("the fixture must validate")
+}
+
+/// The table the aggregate differential's [`Pairs`] serves: a row for every value an
+/// aggregate below answers over the clean data, and `"delta"`, which none answers.
+fn aggregate_table() -> Vec<(TermValue, TermValue)> {
+    let x = format!("{EX}x");
+    let y = format!("{EX}y");
+    [
+        (simple_literal("alpha"), "alpha/1"),
+        (simple_literal("alpha"), "alpha/2"),
+        (simple_literal("beta"), "beta/1"),
+        (TermValue::iri(x), "x/1"),
+        (TermValue::iri(y), "y/1"),
+        (TermValue::typed_literal("3", XSD_INTEGER), "3/1"),
+        (TermValue::typed_literal("4", XSD_INTEGER), "4/1"),
+        (TermValue::typed_literal("1.5", XSD_DECIMAL), "1.5/1"),
+        (TermValue::typed_literal("4", XSD_DECIMAL), "4.0/1"),
+        (simple_literal("delta"), "delta/1"),
+    ]
+    .into_iter()
+    .map(|(input, output)| (input, simple_literal(output)))
+    .collect()
+}
+
+/// Run `body` over `data` against [`Pairs`] serving [`aggregate_table`] in `modes` —
+/// or, with `ignores_input`, against the bottom-up reference — beside [`FirstLiteral`].
+fn run_table(data: &RdfDataset, modes: &[&str], ignores_input: bool, body: &str) -> Outcome {
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let relation = Pairs {
+        modes: modes
+            .iter()
+            .map(|code| BindingPattern::from_code(code))
+            .collect(),
+        table: aggregate_table(),
+        ignores_input,
+        invocations: Arc::clone(&invocations),
+    };
+    let env = aggregating_env(PAIRS, Arc::new(relation));
+    run_in(&env, data, &invocations, body, &[], ShaclPrebinding::None)
+}
+
+/// **Every aggregate whose output can be unbound only by failing on present values
+/// feeds the call, and a group where it failed is refused per row — never invoked
+/// free.**
+///
+/// `MIN`/`MAX` of `STR(?v)`, `SAMPLE(IRI(STR(?v)))`, `SUM`, `AVG`, `GROUP_CONCAT`, a
+/// custom aggregate, and the `BIND` chains of the first forms, each under `GROUP BY`:
+///
+/// * over the clean data every group binds, and the answer is exactly the listed rows
+///   — the bottom-up reference's too — for a relation serving only `bf` and for one
+///   serving both, invoked bound with exactly the listed values;
+/// * over the poisoned data the `<c>` group's aggregate is unbound. The bound-only
+///   relation is refused with the evaluator's typed per-row error and never invoked
+///   free; the free-capable one is invoked bound on the other groups and free on
+///   `<c>`'s row, answering the listed rows plus the whole table (the unbound `?q`
+///   joins every row) — exactly the bottom-up reference.
+#[test]
+fn aggregates_failing_on_present_values_answer_the_bottom_up_join_and_never_invoke_free() {
+    let call = format!("?q <{PAIRS}> ?out");
+    let text = format!("?s <{EX}p> ?v");
+    let iri = format!("?s <{EX}r> ?v");
+    let number = format!("?s <{EX}n> ?v");
+    let strings: (&[(&str, &str)], &[&str]) = (
+        &[
+            ("alpha", "alpha/1"),
+            ("alpha", "alpha/2"),
+            ("beta", "beta/1"),
+        ],
+        &["bf:alpha", "bf:beta"],
+    );
+    let iris: (&[(&str, &str)], &[&str]) = (
+        &[
+            ("https://example.org/d/x", "x/1"),
+            ("https://example.org/d/y", "y/1"),
+        ],
+        &["bf:https://example.org/d/x", "bf:https://example.org/d/y"],
+    );
+    let sums: (&[(&str, &str)], &[&str]) = (&[("3", "3/1"), ("4", "4/1")], &["bf:3", "bf:4"]);
+    let averages: (&[(&str, &str)], &[&str]) =
+        (&[("1.5", "1.5/1"), ("4", "4.0/1")], &["bf:1.5", "bf:4"]);
+    let first_literal = format!("AGG(<{FIRST_LITERAL}>, ?v)");
+    let forms: [(&str, String, _); 9] = [
+        ("MAX(STR(?v))", text.clone(), strings),
+        ("MIN(STR(?v))", text.clone(), strings),
+        ("MAX(?y)", format!("{text} BIND(STR(?v) AS ?y)"), strings),
+        ("GROUP_CONCAT(?v)", text.clone(), strings),
+        (&first_literal, text, strings),
+        ("SAMPLE(IRI(STR(?v)))", iri.clone(), iris),
+        (
+            "SAMPLE(?y)",
+            format!("{iri} BIND(IRI(STR(?v)) AS ?y)"),
+            iris,
+        ),
+        ("SUM(?v)", number.clone(), sums),
+        ("AVG(?v)", number, averages),
+    ];
+    let whole_table: Vec<(String, String)> = aggregate_table()
+        .iter()
+        .map(|(input, output)| (key_of(input), key_of(output)))
+        .collect();
+    let (clean, poisoned) = (aggregate_data(false), aggregate_data(true));
+    for (aggregate, pattern, (listed, invoked)) in forms {
+        let body =
+            format!("{{ SELECT ?s ({aggregate} AS ?q) WHERE {{ {pattern} }} GROUP BY ?s }} {call}");
+
+        let expected = rows(listed);
+        let reference = run_table(&clean, &["ff"], true, &body);
         assert_eq!(
-            run_over(&blank_object_data(), Variant::FreeCapable, &body),
-            free,
-            "{body}: the group's every argument errored, so the aggregate is unbound"
+            reference.answer.as_ref(),
+            Ok(&expected),
+            "{body}: the reference"
+        );
+        for modes in [&["bf"][..], &["bf", "ff"][..]] {
+            assert_eq!(
+                run_table(&clean, modes, false, &body),
+                Outcome {
+                    answer: Ok(expected.clone()),
+                    invocations: calls(invoked),
+                },
+                "{body} declaring {modes:?} over the clean data"
+            );
+        }
+
+        let mut with_free_row = expected;
+        with_free_row.extend(whole_table.iter().cloned());
+        with_free_row.sort();
+        let reference = run_table(&poisoned, &["ff"], true, &body);
+        assert_eq!(
+            reference.answer.as_ref(),
+            Ok(&with_free_row),
+            "{body}: the reference over the poisoned data"
+        );
+        assert_refused_per_row(&run_table(&poisoned, &["bf"], false, &body), PAIRS);
+        let mut invoked_free = calls(invoked);
+        invoked_free.push("ff:-".to_owned());
+        invoked_free.sort();
+        assert_eq!(
+            run_table(&poisoned, &["bf", "ff"], false, &body),
+            Outcome {
+                answer: Ok(with_free_row),
+                invocations: invoked_free,
+            },
+            "{body} declaring both modes over the poisoned data"
         );
     }
 }
@@ -1542,7 +1903,7 @@ fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
             times(copies),
         ));
     }
-    // A key or an aggregate a `FILTER` or a non-erroring argument makes certain.
+    // A key a `FILTER` makes certain, and an aggregate over a non-erroring argument.
     let every_value = || {
         rows(&[
             ("alpha", "alpha/1"),
