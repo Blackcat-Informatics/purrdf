@@ -89,7 +89,7 @@ pub(crate) fn select_neighbors<A: Arithmetic>(
             // The value is never kept -- only whether it falls under the candidate's own
             // distance -- so the kernel may stop as soon as it cannot. Equality already
             // falsifies the test, hence `AtOrAbove`.
-            match matrix.distance_bounded_with(
+            match matrix.distance_bounded(
                 arithmetic,
                 kernel,
                 candidate.row,
@@ -159,7 +159,7 @@ mod tests {
             .iter()
             .map(|&row| Ranked {
                 distance: Kernel::SquaredEuclidean
-                    .distance(matrix.row(query), 0.0, matrix.row(row), 0.0)
+                    .distance(exact(), matrix.row(query), 0.0, matrix.row(row), 0.0)
                     .expect("finite"),
                 row,
             })

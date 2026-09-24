@@ -245,7 +245,10 @@ and dispatch path.
 Every build, rebuild, decode and search resolves the exact arithmetic on its own thread
 first, which refuses a flush-to-zero or re-rounding float environment with
 `HnswError::FloatEnvironment`, and a beam expands each node by one call to the batch
-kernel over its unvisited neighbours.
+kernel over its unvisited neighbours. The public per-pair methods follow the same law:
+`VectorMatrix::distance`, `distance_from_query` and `distance_bounded` take the
+`Resolved<A>` handle that `A::resolve` (or `A::resolve_recorded`) returns, so no pair
+distance is computed on a thread whose environment was not checked.
 
 ### 2.5 What a binding proves before a search runs
 

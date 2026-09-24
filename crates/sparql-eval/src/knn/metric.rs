@@ -70,13 +70,15 @@
 use core::cmp::Ordering;
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{Exact, Measure};
+use purrdf_core::distance::Measure;
 
 /// The stored-scalar width trait, the bound a partial fold is tested against, the
-/// bounded outcome, and the reassociated arithmetic with the resolved handle its entry
-/// points take, re-exported from the module that defines them so a caller names one
-/// type for each.
-pub use purrdf_core::distance::{Bound, Bounded, Reassociated, Resolved, Scalar};
+/// bounded outcome, the two arithmetics, the trait that resolves them and the resolved
+/// handle every distance entry point takes, re-exported from the module that defines
+/// them so a caller names one type for each.
+pub use purrdf_core::distance::{
+    Arithmetic, Bound, Bounded, Exact, Reassociated, Resolved, Scalar,
+};
 
 /// The three built-in metrics, decoded from a family contract's declaration.
 ///
@@ -138,16 +140,19 @@ impl Kernel {
     /// whose partial sums can move in either direction, so a partial sum proves nothing
     /// about the total; those are computed in full and then classified. The API is total so
     /// a caller need not branch on the kernel to stay correct.
+    ///
+    /// `arithmetic` is the checked handle [`Kernel::distance`] takes, for the same reason.
     #[must_use]
     pub fn distance_bounded<A: Scalar, B: Scalar>(
         self,
+        arithmetic: Resolved<Exact>,
         query: &[A],
         query_norm: f64,
         candidate: &[B],
         candidate_norm: f64,
         bound: Bound,
     ) -> Bounded {
-        Exact::distance_bounded(
+        arithmetic.distance_bounded(
             self.measure(),
             query,
             query_norm,
@@ -180,9 +185,19 @@ impl Kernel {
     /// range. An infinity would still *sort*, and it would sort last, so a caller would
     /// receive a confidently-ranked answer computed from a number that overflowed. Saying
     /// so instead is the whole difference between a wrong answer and an error.
+    ///
+    /// # The float environment
+    ///
+    /// `arithmetic` comes from `Exact::resolve` ([`Arithmetic::resolve`]), called once per
+    /// scan or call site on the thread that computes, which checked the float environment
+    /// and chose the dispatch path. A thread that flushes subnormals or rounds other than
+    /// to nearest is refused there, by name, so it never reaches this function: there is
+    /// no entry point that computes an exact distance without that check. Every exact path
+    /// returns the same bits, so which one the handle names does not change the answer.
     #[must_use]
     pub fn distance<A: Scalar, B: Scalar>(
         self,
+        arithmetic: Resolved<Exact>,
         query: &[A],
         query_norm: f64,
         candidate: &[B],
@@ -190,7 +205,7 @@ impl Kernel {
     ) -> Option<f64> {
         // Cosine is written exactly as PURREMB v1 states it -- one product, one quotient,
         // one subtraction, each rounded on its own -- inside the exact arithmetic.
-        Exact::distance(self.measure(), query, query_norm, candidate, candidate_norm)
+        arithmetic.distance(self.measure(), query, query_norm, candidate, candidate_norm)
     }
 
     /// The distance from `query` to `candidate` under the [`Reassociated`] arithmetic,
@@ -374,6 +389,12 @@ pub fn best(k: usize, candidates: impl IntoIterator<Item = Ranked>) -> Vec<Ranke
 mod tests {
     use super::*;
 
+    /// The exact arithmetic this process resolves: the checked handle every exact entry
+    /// point takes.
+    fn exact() -> Resolved<Exact> {
+        Exact::resolve().expect("the test thread runs the default float environment")
+    }
+
     /// A ranked candidate, tersely.
     const fn r(distance: f64, row: usize) -> Ranked {
         Ranked { distance, row }
@@ -418,18 +439,18 @@ mod tests {
 
         // sum((3-0)^2 + (4-5)^2) = 9 + 1 = 10.
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&a, norm_a, &b, norm_b),
+            Kernel::SquaredEuclidean.distance(exact(), &a, norm_a, &b, norm_b),
             Some(10.0)
         );
         // -dot = -20.
         assert_eq!(
-            Kernel::NegativeDot.distance(&a, norm_a, &b, norm_b),
+            Kernel::NegativeDot.distance(exact(), &a, norm_a, &b, norm_b),
             Some(-20.0)
         );
         // 1 - 20/(5*5) = 1 - 0.8 = 0.19999999999999996 in binary64: pinned by BITS, not
         // by a decimal that would hide which of two adjacent doubles this is.
         let cosine = Kernel::Cosine
-            .distance(&a, norm_a, &b, norm_b)
+            .distance(exact(), &a, norm_a, &b, norm_b)
             .expect("finite");
         assert_eq!(
             cosine.to_bits(),
@@ -445,7 +466,7 @@ mod tests {
         let v = [1.0_f64, 2.0, 3.0];
         let n = norm(&v);
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&v, n, &v, n),
+            Kernel::SquaredEuclidean.distance(exact(), &v, n, &v, n),
             Some(0.0),
             "sum of squared zero differences"
         );
@@ -457,7 +478,9 @@ mod tests {
         // states, not a defect in this kernel: what the surface actually needs is that a
         // vector ranks ahead of everything else, which it does, and it is asserted that
         // way rather than by a zero that is not there.
-        let cosine = Kernel::Cosine.distance(&v, n, &v, n).expect("finite");
+        let cosine = Kernel::Cosine
+            .distance(exact(), &v, n, &v, n)
+            .expect("finite");
         assert!(
             cosine.abs() <= 4.0 * f64::EPSILON,
             "cosine self-distance is within a few ULP of zero, got {cosine}"
@@ -465,7 +488,7 @@ mod tests {
         let other = [3.0_f64, 2.0, 1.0];
         let other_norm = norm(&other);
         let across = Kernel::Cosine
-            .distance(&v, n, &other, other_norm)
+            .distance(exact(), &v, n, &other, other_norm)
             .expect("finite");
         assert!(
             cosine < across,
@@ -489,7 +512,7 @@ mod tests {
         let ones = [1.0_f64; 16];
 
         let pinned = Kernel::NegativeDot
-            .distance(&a, 0.0, &ones, 0.0)
+            .distance(exact(), &a, 0.0, &ones, 0.0)
             .expect("finite");
         assert_eq!(
             pinned, -1.0,
@@ -569,7 +592,7 @@ mod tests {
         let a = [f64::MAX, f64::MAX];
         let b = [-f64::MAX, -f64::MAX];
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&a, 0.0, &b, 0.0),
+            Kernel::SquaredEuclidean.distance(exact(), &a, 0.0, &b, 0.0),
             None,
             "an infinite sum of squares still sorts, and would sort LAST — a confidently \
              ranked answer computed from a number that overflowed"
@@ -587,7 +610,7 @@ mod tests {
         let expected = 0.0_f64 + square + square;
         assert!(expected.is_finite());
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&c, 0.0, &d, 0.0),
+            Kernel::SquaredEuclidean.distance(exact(), &c, 0.0, &d, 0.0),
             Some(expected),
             "two squares of 1e150 are finite and must be ranked, not refused"
         );
@@ -727,8 +750,9 @@ mod tests {
                 Kernel::Cosine,
             ] {
                 let (na, nb) = (norm(&a), norm(&b));
-                let full = kernel.distance(&a, na, &b, nb).expect("finite");
-                let bounded = kernel.distance_bounded(&a, na, &b, nb, Bound::Above(f64::INFINITY));
+                let full = kernel.distance(exact(), &a, na, &b, nb).expect("finite");
+                let bounded =
+                    kernel.distance_bounded(exact(), &a, na, &b, nb, Bound::Above(f64::INFINITY));
                 match bounded {
                     Bounded::Below(value) => assert_eq!(
                         value.to_bits(),
@@ -751,13 +775,13 @@ mod tests {
         let b = stream(300, 0xB0B_0002);
         let (na, nb) = (norm(&a), norm(&b));
         let truth = Kernel::SquaredEuclidean
-            .distance(&a, na, &b, nb)
+            .distance(exact(), &a, na, &b, nb)
             .expect("finite");
 
         for scale in [0.0_f64, 0.25, 0.5, 0.99, 1.0, 1.01, 2.0] {
             let limit = truth * scale;
             for bound in [Bound::AtOrAbove(limit), Bound::Above(limit)] {
-                let got = Kernel::SquaredEuclidean.distance_bounded(&a, na, &b, nb, bound);
+                let got = Kernel::SquaredEuclidean.distance_bounded(exact(), &a, na, &b, nb, bound);
                 match got {
                     Bounded::Below(value) => {
                         assert_eq!(value.to_bits(), truth.to_bits());
@@ -785,6 +809,7 @@ mod tests {
         let zero = vec![0.0_f64; 8];
         assert_eq!(
             Kernel::SquaredEuclidean.distance_bounded(
+                exact(),
                 &huge,
                 0.0,
                 &zero,
@@ -795,7 +820,7 @@ mod tests {
             "an overflow is an error even when a bound would otherwise have abandoned"
         );
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&huge, 0.0, &zero, 0.0),
+            Kernel::SquaredEuclidean.distance(exact(), &huge, 0.0, &zero, 0.0),
             None,
             "and the unbounded fold still refuses it too"
         );
@@ -803,7 +828,6 @@ mod tests {
 
     /// The reassociated arithmetic this process resolves.
     fn reassociated() -> Resolved<Reassociated> {
-        use purrdf_core::distance::Arithmetic as _;
         Reassociated::resolve().expect("the test thread runs the default float environment")
     }
 
@@ -820,7 +844,7 @@ mod tests {
             // that bound of each other.
             let bound = 8.0 * (len * len) as f64 * f64::EPSILON;
             for kernel in [Kernel::SquaredEuclidean, Kernel::NegativeDot] {
-                let exact = kernel.distance(&a, na, &b, nb).expect("finite");
+                let exact = kernel.distance(exact(), &a, na, &b, nb).expect("finite");
                 let reassociated = kernel
                     .distance_reassociated(fast, &a, na, &b, nb)
                     .expect("finite");
@@ -940,8 +964,12 @@ mod tests {
                 Kernel::Cosine,
             ] {
                 let (na, nb) = (norm(&a64), norm(&b64));
-                let narrow = kernel.distance(&a32, na, &b32, nb).expect("finite");
-                let wide = kernel.distance(&a64, na, &b64, nb).expect("finite");
+                let narrow = kernel
+                    .distance(exact(), &a32, na, &b32, nb)
+                    .expect("finite");
+                let wide = kernel
+                    .distance(exact(), &a64, na, &b64, nb)
+                    .expect("finite");
                 assert_eq!(
                     narrow.to_bits(),
                     wide.to_bits(),
@@ -950,7 +978,9 @@ mod tests {
 
                 // And the mixed case, which is the ordinary one: a query embedded at query
                 // time is f64, the corpus it searches is f32.
-                let mixed = kernel.distance(&a64, na, &b32, nb).expect("finite");
+                let mixed = kernel
+                    .distance(exact(), &a64, na, &b32, nb)
+                    .expect("finite");
                 assert_eq!(
                     mixed.to_bits(),
                     wide.to_bits(),

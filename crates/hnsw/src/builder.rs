@@ -255,7 +255,7 @@ fn repair_connectivity<A: Arithmetic>(
             }
             let host = choose_host(graph, &reachable, &protected, bound, entry, orphan)?;
             let distance = matrix
-                .distance_with(
+                .distance(
                     arithmetic,
                     kernel,
                     host,

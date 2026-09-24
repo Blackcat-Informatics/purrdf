@@ -44,7 +44,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{Arithmetic, Reassociated};
+use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{
     HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params,
@@ -238,11 +238,12 @@ fn norms_of(matrix: &VectorMatrix) -> Vec<f64> {
 
 /// Every row scored against `query`, in the exact path's order.
 fn exact_scored(matrix: &VectorMatrix, norms: &[f64], query: usize) -> Vec<Ranked> {
+    let exact = Exact::resolve().expect("the test thread runs the default float environment");
     let vector = matrix.row(query);
     (0..matrix.rows())
         .map(|row| Ranked {
             distance: KERNEL
-                .distance(vector, norms[query], matrix.row(row), norms[row])
+                .distance(exact, vector, norms[query], matrix.row(row), norms[row])
                 .expect("the fixture is finite and the kernel keeps it so"),
             row,
         })
@@ -265,8 +266,9 @@ type Oracle<'a> = &'a dyn Fn(&[f64], f64, &[f64], f64) -> f64;
 
 /// The exact kernel, as the exact index's oracle.
 fn exact_oracle(query: &[f64], query_norm: f64, row: &[f64], row_norm: f64) -> f64 {
+    let exact = Exact::resolve().expect("the test thread runs the default float environment");
     KERNEL
-        .distance(query, query_norm, row, row_norm)
+        .distance(exact, query, query_norm, row, row_norm)
         .expect("the fixture is finite and the kernel keeps it so")
 }
 

@@ -25,7 +25,8 @@
 //!   site (build, neighbour selection, search, decode and rebuild verification) runs under
 //!   an arithmetic resolved for its thread, which refuses a flush-to-zero or re-rounding
 //!   float environment with [`HnswError::FloatEnvironment`]; a beam expands each node by
-//!   one call to the batch kernel.
+//!   one call to the batch kernel. The public per-pair methods of [`VectorMatrix`] take the
+//!   same resolved handle, so no distance is computed on a thread that was not checked.
 //!
 //! The exact index's **canonical byte image** is byte-identical across thread counts,
 //! across dispatch paths and across `wasm32-unknown-unknown` with or without `+simd128`.
@@ -1327,7 +1328,7 @@ mod tests {
             let wide = Reassociated::resolve_recorded(widest).expect("the widest path");
             let pair = |handle: Resolved<Reassociated>, a: usize, b: usize| {
                 matrix
-                    .distance_with(handle, decoded.kernel(), a, 0.0, b, 0.0)
+                    .distance(handle, decoded.kernel(), a, 0.0, b, 0.0)
                     .expect("finite")
             };
             let mut told_apart = 0_usize;
@@ -1751,7 +1752,7 @@ mod tests {
                 let norms = &index.norms;
                 let pair = |a: usize, b: usize| {
                     matrix
-                        .distance_with(
+                        .distance(
                             arithmetic,
                             kernel,
                             a,
@@ -1784,7 +1785,7 @@ mod tests {
                                 Bound::Above(f64::INFINITY),
                                 Bound::AtOrAbove(expected.next_up()),
                             ] {
-                                match matrix.distance_bounded_with(
+                                match matrix.distance_bounded(
                                     arithmetic,
                                     kernel,
                                     row,

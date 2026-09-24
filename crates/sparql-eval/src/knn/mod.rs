@@ -112,7 +112,7 @@ mod metric;
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::distance::{Arithmetic, Exact, RowsRef};
+use purrdf_core::distance::RowsRef;
 use purrdf_core::{
     ContentDigest, DistanceMetric, EmbeddingView, FamilyContractDigest, Iri,
     ProjectionContentDigest, TargetId, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
@@ -128,7 +128,9 @@ use crate::property_fn::{
 };
 use crate::user_fn::Volatility;
 
-pub use metric::{Bound, Bounded, Kernel, Ranked, Reassociated, Resolved, Scalar, best, norm};
+pub use metric::{
+    Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, best, norm,
+};
 
 /// The `?neighbour` position: the retrieved term.
 const KNN_NEIGHBOUR: usize = 0;

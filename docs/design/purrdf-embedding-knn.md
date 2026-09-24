@@ -74,6 +74,12 @@ target — eight binary64 operations whose IEEE-754 results are known constants,
 read of the control register where one is readable (MXCSR on x86-64, FPCR on aarch64) —
 and refuses such a thread with `EvalError::FloatEnvironment`, at space
 construction and again at every search, since an invocation may run on another thread.
+The per-pair entry points follow the same law: `Kernel::distance` and
+`Kernel::distance_bounded` take the `Resolved<Exact>` handle that `Exact::resolve`
+returns (both re-exported from `knn`), and the reassociated pair take a
+`Resolved<Reassociated>`, so there is no pair distance a flushing thread can compute
+without first being refused by name. A caller resolves once per call site and passes
+the `Copy` handle to every pair it scores.
 
 The metric does not change with the arithmetic. `DistanceMetric` names *what* is
 measured, and the family-contract digest is computed from it alone; the arithmetic is

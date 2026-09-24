@@ -1713,6 +1713,24 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 - **BREAKING** **core:** `Arithmetic` exposes `IMAGE_CODES` and
   `image_code(path)`, and `Path` gains the reassociated variants.
 
+- **BREAKING** **sparql-eval/hnsw/core:** every public distance entry point takes
+  the resolved handle that checked the float environment, so no distance can be
+  computed on a thread that flushes subnormals or rounds other than to nearest.
+  Before, the batch scans refused such a thread by name while the per-pair entry
+  points computed on it and returned different bits.
+  - `knn::Kernel::distance` and `knn::Kernel::distance_bounded` take a
+    `Resolved<Exact>` as their first argument after `self`:
+    `kernel.distance(Exact::resolve()?, query, query_norm, candidate, candidate_norm)`.
+    `knn` now re-exports `Exact` and `Arithmetic` beside `Reassociated` and
+    `Resolved`, so a caller resolves through the same path it names the kernel by.
+    Resolve once per call site and pass the `Copy` handle to every pair.
+  - `purrdf_hnsw::VectorMatrix::distance`, `distance_from_query` and
+    `distance_bounded` take a `Resolved<A>` for either arithmetic as their first
+    argument, before the `Kernel`. The unresolved forms are gone.
+  - `purrdf_core::distance::Exact::distance` and `Exact::distance_bounded`, the
+    handle-free pair functions, are removed; `Resolved::distance` and
+    `Resolved::distance_bounded` are the per-pair forms.
+
 - **hnsw:** goldens that moved, re-pinned by hand. Distances now fold in the
   16-lane tree order, and the image header carries the arithmetic field.
   - `GOLDEN_DIGEST`: `0x0c71_b169_ebb4_4d7e` → `0xa367_d6c5_8963_1389`.

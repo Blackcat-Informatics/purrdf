@@ -56,7 +56,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::Arithmetic;
+use purrdf_core::distance::{Arithmetic, Exact};
 #[path = "../tests/support/corpus.rs"]
 mod corpus;
 
@@ -105,11 +105,12 @@ fn uniform(rows: usize, dims: usize) -> VectorMatrix {
 
 /// Every row scored against `query_row`, in the exact path's order.
 fn exact_scored(vectors: &VectorMatrix, norms: &[f64], query_row: usize) -> Vec<Ranked> {
+    let exact = Exact::resolve().expect("the default float environment is the IEEE one");
     let query = vectors.row(query_row);
     (0..vectors.rows())
         .map(|row| Ranked {
             distance: KERNEL
-                .distance(query, norms[query_row], vectors.row(row), norms[row])
+                .distance(exact, query, norms[query_row], vectors.row(row), norms[row])
                 .expect("the fixture is finite and the kernel keeps it so"),
             row,
         })

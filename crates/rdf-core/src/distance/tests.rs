@@ -295,11 +295,6 @@ fn check_group<Q: Store, T: Store>(
                 compared += 4;
             }
         }
-        // The per-pair entry point without a handle is the portable compilation.
-        for (row, want) in expected.iter().enumerate() {
-            let pair = Exact::distance(measure, query_typed, query_norm, view.row(row), norms[row]);
-            assert_eq!(bits(pair), *want, "{measure:?} Exact::distance row {row}");
-        }
     }
     compared
 }

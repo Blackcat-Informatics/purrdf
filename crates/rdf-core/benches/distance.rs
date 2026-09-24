@@ -227,7 +227,9 @@ fn bounded<A: Arithmetic, Q: Scalar, T: Scalar>(
 ) {
     // The half bound is taken from the exact distance so both arithmetics abandon at the
     // same threshold; it is met near the midpoint of the fold under either one.
-    let full = Exact::distance(Measure::SquaredEuclidean, query, 0.0, row, 0.0)
+    let full = exact()
+        .resolved
+        .distance(Measure::SquaredEuclidean, query, 0.0, row, 0.0)
         .expect("the fixture is finite");
     group.throughput(Throughput::Elements(dims as u64));
     for (bound_label, bound) in [

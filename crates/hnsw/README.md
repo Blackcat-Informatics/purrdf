@@ -48,6 +48,13 @@ replaced with a fixed rule:
   pairwise tree, a sequential tail, the same bits on every target and dispatch
   path. The image header records that arithmetic (format version 2); a version-1
   image is refused by name.
+* **The float environment is checked before any distance.** Every build,
+  decode, rebuild and search resolves its arithmetic on the calling thread
+  first and refuses a flush-to-zero or re-rounding environment with
+  `HnswError::FloatEnvironment`. The public per-pair methods
+  (`VectorMatrix::distance`, `distance_from_query`, `distance_bounded`) take
+  the `Resolved<A>` handle that resolving returns, so there is no way to
+  compute a distance that skips the check.
 * **The digest** committed by a guard is a hand-rolled FNV-1a fold of the
   canonical payload bytes, stable across toolchain bumps; it is never
   `DefaultHasher` (SipHash, unspecified) or a randomly seeded map.

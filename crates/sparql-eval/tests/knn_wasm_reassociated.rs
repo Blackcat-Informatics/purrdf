@@ -36,7 +36,7 @@ use purrdf_core::{
     EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
     RdfDatasetBuilder, RdfTermTarget, StageImplementation, TargetSet, TermValue, VectorDtype,
 };
-use purrdf_sparql_eval::knn::{Bound, Bounded, Reassociated, Resolved};
+use purrdf_sparql_eval::knn::{Bound, Bounded, Exact, Reassociated, Resolved};
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, PfArgs, PropertyFunction, knn::norm,
 };
@@ -106,6 +106,7 @@ fn the_reassociated_path_is_the_one_this_build_was_made_for() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
     let fast = resolved();
+    let exact_handle = Exact::resolve().expect("the default float environment");
     for (len, seed) in [(6_usize, 1_u64), (64, 2), (70, 3), (200, 4), (1_024, 5)] {
         let a = stream(len, seed);
         let b = stream(len, seed ^ 0xA5A5);
@@ -119,7 +120,9 @@ fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
             Kernel::NegativeDot,
             Kernel::Cosine,
         ] {
-            let exact = kernel.distance(&a, na, &b, nb).expect("finite");
+            let exact = kernel
+                .distance(exact_handle, &a, na, &b, nb)
+                .expect("finite");
             let reassociated = kernel
                 .distance_reassociated(fast, &a, na, &b, nb)
                 .expect("finite");
@@ -143,7 +146,9 @@ fn the_reassociated_distance_is_within_the_error_bound_of_the_exact_one() {
             // A narrow operand runs its own compilation; it is held to the same bound
             // against the exact answer for the same (widened) values.
             let na32 = norm(&a32);
-            let exact32 = kernel.distance(&a32, na32, &b, nb).expect("finite");
+            let exact32 = kernel
+                .distance(exact_handle, &a32, na32, &b, nb)
+                .expect("finite");
             let fast32 = kernel
                 .distance_reassociated(fast, &a32, na32, &b, nb)
                 .expect("finite");

@@ -118,6 +118,14 @@
 //! control register can be read (MXCSR on `x86_64`, FPCR on `aarch64`) it is read first,
 //! so the refusal can name it. A departure is refused with a named
 //! [`FloatEnvironmentError`] whose [`FloatEnvironmentEvidence`] says what was observed.
+//!
+//! The check cannot be skipped, because nothing public computes a distance without the
+//! handle it produces: every distance entry point in this module is a method of
+//! [`Resolved`], and the per-pair and batch kernels built on it elsewhere in the
+//! workspace take a [`Resolved`] too. A flushing thread is therefore refused before any
+//! distance, per-pair or batch, is computed on it, rather than handed different bits by
+//! whichever entry point did not ask. The handle is resolved once per scan or call site
+//! and is `Copy`, so the check is never repeated per pair.
 
 mod dispatch;
 mod env;
@@ -745,40 +753,6 @@ impl Exact {
     /// The one code an image records the exact arithmetic under: every path computes
     /// the same bits, so the path is not recorded.
     pub const IMAGE_CODE: u32 = 1;
-
-    /// The exact distance from `a` to `b`, computed by the portable compilation of the
-    /// law, for a per-pair caller that holds no [`Resolved`] handle.
-    ///
-    /// Bit-identical to every dispatch path. It does not read the float environment;
-    /// a caller that ranks many pairs resolves once and uses [`Resolved::distance`],
-    /// which is where a flushing environment is refused.
-    #[must_use]
-    pub fn distance<Q: Scalar, T: Scalar>(
-        measure: Measure,
-        a: &[Q],
-        a_norm: f64,
-        b: &[T],
-        b_norm: f64,
-    ) -> Option<f64> {
-        dispatch::portable::distance(measure, a, a_norm, b, b_norm)
-    }
-
-    /// [`Exact::distance`], permitted to stop once the answer cannot clear `bound`.
-    ///
-    /// Only [`Measure::SquaredEuclidean`] can abandon: its terms are squares, so every
-    /// lane is non-decreasing. The other two measures accumulate signed products, so
-    /// they are computed in full and then classified.
-    #[must_use]
-    pub fn distance_bounded<Q: Scalar, T: Scalar>(
-        measure: Measure,
-        a: &[Q],
-        a_norm: f64,
-        b: &[T],
-        b_norm: f64,
-        bound: Bound,
-    ) -> Bounded {
-        dispatch::portable::distance_bounded(measure, a, a_norm, b, b_norm, bound)
-    }
 }
 
 impl Arithmetic for Exact {

@@ -299,100 +299,20 @@ impl VectorMatrix {
             Vectors::F32(data) => norm(&data[start..start + self.dims]),
         }
     }
-
-    /// The distance between two stored rows under `kernel`, or `None` if it left the finite
-    /// range.
-    #[must_use]
-    pub fn distance(
-        &self,
-        kernel: Kernel,
-        a: usize,
-        a_norm: f64,
-        b: usize,
-        b_norm: f64,
-    ) -> Option<f64> {
-        let (a_start, b_start) = (a * self.dims, b * self.dims);
-        match &self.data {
-            Vectors::F64(data) => kernel.distance(
-                &data[a_start..a_start + self.dims],
-                a_norm,
-                &data[b_start..b_start + self.dims],
-                b_norm,
-            ),
-            Vectors::F32(data) => kernel.distance(
-                &data[a_start..a_start + self.dims],
-                a_norm,
-                &data[b_start..b_start + self.dims],
-                b_norm,
-            ),
-        }
-    }
-
-    /// The distance from an external `binary64` query to a stored row.
-    ///
-    /// The query is `f64` because it was computed rather than stored -- an embedding produced
-    /// at query time has no artifact width. A mixed-width pair is the ordinary case and is
-    /// bit-identical to a matched one.
-    #[must_use]
-    pub fn distance_from_query(
-        &self,
-        kernel: Kernel,
-        query: &[f64],
-        query_norm: f64,
-        row: usize,
-        row_norm: f64,
-    ) -> Option<f64> {
-        let start = row * self.dims;
-        match &self.data {
-            Vectors::F64(data) => {
-                kernel.distance(query, query_norm, &data[start..start + self.dims], row_norm)
-            }
-            Vectors::F32(data) => {
-                kernel.distance(query, query_norm, &data[start..start + self.dims], row_norm)
-            }
-        }
-    }
-
-    /// [`VectorMatrix::distance`], permitted to stop once it cannot clear `bound`.
-    #[must_use]
-    pub fn distance_bounded(
-        &self,
-        kernel: Kernel,
-        a: usize,
-        a_norm: f64,
-        b: usize,
-        b_norm: f64,
-        bound: Bound,
-    ) -> Bounded {
-        let (a_start, b_start) = (a * self.dims, b * self.dims);
-        match &self.data {
-            Vectors::F64(data) => kernel.distance_bounded(
-                &data[a_start..a_start + self.dims],
-                a_norm,
-                &data[b_start..b_start + self.dims],
-                b_norm,
-                bound,
-            ),
-            Vectors::F32(data) => kernel.distance_bounded(
-                &data[a_start..a_start + self.dims],
-                a_norm,
-                &data[b_start..b_start + self.dims],
-                b_norm,
-                bound,
-            ),
-        }
-    }
 }
 
 impl VectorMatrix {
     /// The distance between two stored rows under `kernel`, along `arithmetic`'s
-    /// resolved dispatch path.
+    /// resolved dispatch path, or `None` if it left the finite range.
     ///
-    /// The crate's own call sites use this rather than [`VectorMatrix::distance`], so
-    /// every distance the index computes runs under an arithmetic whose float
-    /// environment was checked. Under [`purrdf_core::distance::Exact`] the two return
-    /// the same bits.
-    pub(crate) fn distance_with<A: Arithmetic>(
+    /// `arithmetic` comes from [`Arithmetic::resolve`] (or
+    /// [`Arithmetic::resolve_recorded`]), called once per scan or call site on the thread
+    /// that computes. That call is where a thread that flushes subnormals or rounds other
+    /// than to nearest is refused, by name; every distance this type computes takes the
+    /// handle it returns, so none is computed on a thread that was not checked. The handle
+    /// is `Copy`, and passing it costs nothing per pair.
+    #[must_use]
+    pub fn distance<A: Arithmetic>(
         &self,
         arithmetic: Resolved<A>,
         kernel: Kernel,
@@ -421,13 +341,52 @@ impl VectorMatrix {
         }
     }
 
-    /// [`VectorMatrix::distance_with`], permitted to stop once it cannot clear `bound`.
+    /// The distance from an external `binary64` query to stored row `row`, along
+    /// `arithmetic`'s resolved dispatch path.
+    ///
+    /// The query is `f64` because it was computed rather than stored -- an embedding produced
+    /// at query time has no artifact width. A mixed-width pair is the ordinary case, and under
+    /// an arithmetic whose bits do not depend on the path it is bit-identical to a matched one.
+    /// `arithmetic` is the checked handle [`VectorMatrix::distance`] takes, for the same
+    /// reason.
+    #[must_use]
+    pub fn distance_from_query<A: Arithmetic>(
+        &self,
+        arithmetic: Resolved<A>,
+        kernel: Kernel,
+        query: &[f64],
+        query_norm: f64,
+        row: usize,
+        row_norm: f64,
+    ) -> Option<f64> {
+        let start = row * self.dims;
+        let measure = kernel.measure();
+        match &self.data {
+            Vectors::F64(data) => arithmetic.distance(
+                measure,
+                query,
+                query_norm,
+                &data[start..start + self.dims],
+                row_norm,
+            ),
+            Vectors::F32(data) => arithmetic.distance(
+                measure,
+                query,
+                query_norm,
+                &data[start..start + self.dims],
+                row_norm,
+            ),
+        }
+    }
+
+    /// [`VectorMatrix::distance`], permitted to stop once it cannot clear `bound`.
+    #[must_use]
     #[allow(
         clippy::too_many_arguments,
         reason = "the resolved arithmetic, the kernel, both endpoints with their norms and \
                   the bound are each an independent input of one distance"
     )]
-    pub(crate) fn distance_bounded_with<A: Arithmetic>(
+    pub fn distance_bounded<A: Arithmetic>(
         &self,
         arithmetic: Resolved<A>,
         kernel: Kernel,

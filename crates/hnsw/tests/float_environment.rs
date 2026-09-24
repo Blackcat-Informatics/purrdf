@@ -26,8 +26,11 @@ mod purremb;
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
-use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, relation::HnswSpace};
+use purrdf_core::distance::{
+    Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
+    Reassociated, RecordedPathError, Resolved, RowsRef,
+};
+use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Params, VectorMatrix, guard, relation::HnswSpace};
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PropertyFunction,
 };
@@ -316,4 +319,209 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
     assert_eq!(index.search_vector(&query, 4).expect("searches").len(), 4);
     assert!(guard::verify_rebuild(&selected, &matrix, &params()).expect("verifies"));
     assert!(open().is_ok());
+}
+
+/// The smallest-magnitude row this suite scores: its square, and its product with itself,
+/// are subnormal, so a thread that flushes subnormal results computes zero for them.
+const TINY: f64 = 1e-160;
+
+/// Three two-component rows: `[TINY, 0]`, `[0, 0]`, `[TINY, 0]`. Row 0 to row 1 is a
+/// squared Euclidean distance of `TINY²`, and row 0 against row 2 a dot product of `TINY²`,
+/// both subnormal.
+fn subnormal_rows() -> Vec<f64> {
+    vec![TINY, 0.0, 0.0, 0.0, TINY, 0.0]
+}
+
+/// The batch kernel's value for `(query, row)` under `resolved`: the oracle every pair
+/// entry point is held to.
+fn batch<A: Arithmetic>(
+    resolved: Resolved<A>,
+    measure: Measure,
+    data: &[f64],
+    query: usize,
+    row: usize,
+) -> Option<f64> {
+    let rows = RowsRef::new(data, 3, 2, &[]).expect("a 3x2 matrix");
+    let mut out = [None; 3];
+    resolved.distances(measure, rows.row(query), 0.0, rows, &mut out);
+    out[row]
+}
+
+/// Every public pair entry point on the handle `resolved`, for the pair `(query, row)` of
+/// `matrix`, alongside the batch kernel's value for the same pair.
+fn pairs_equal_batch<A: Arithmetic>(
+    resolved: Resolved<A>,
+    matrix: &VectorMatrix,
+    kernel: Kernel,
+    query: usize,
+    row: usize,
+    pair: Option<f64>,
+) -> f64 {
+    let data = subnormal_rows();
+    let expected = batch(resolved, kernel.measure(), &data, query, row).expect("finite");
+    let bits = Some(expected.to_bits());
+    let law = A::ID;
+    assert_eq!(
+        pair.map(f64::to_bits),
+        bits,
+        "{law} {kernel:?}: Kernel pair"
+    );
+    assert_eq!(
+        matrix
+            .distance(resolved, kernel, query, 0.0, row, 0.0)
+            .map(f64::to_bits),
+        bits,
+        "{law} {kernel:?}: VectorMatrix::distance"
+    );
+    assert_eq!(
+        matrix
+            .distance_from_query(
+                resolved,
+                kernel,
+                &data[query * 2..query * 2 + 2],
+                0.0,
+                row,
+                0.0
+            )
+            .map(f64::to_bits),
+        bits,
+        "{law} {kernel:?}: VectorMatrix::distance_from_query"
+    );
+    assert_eq!(
+        matrix.distance_bounded(
+            resolved,
+            kernel,
+            query,
+            0.0,
+            row,
+            0.0,
+            Bound::Above(f64::INFINITY)
+        ),
+        Bounded::Below(expected),
+        "{law} {kernel:?}: VectorMatrix::distance_bounded"
+    );
+    expected
+}
+
+#[test]
+fn every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain() {
+    // The pair entry points -- `Kernel::distance` and its bounded and reassociated
+    // siblings, and `VectorMatrix::distance`, `distance_from_query` and
+    // `distance_bounded` -- all take a `Resolved` handle, so the only way to reach one is
+    // through `resolve`/`resolve_recorded`. On a flushing thread every one of those is
+    // refused by name, so no pair distance can be computed there.
+    let matrix = VectorMatrix::new(3, 2, subnormal_rows()).expect("finite rows");
+    let (flushed_square, exact, fast, recorded, fast_recorded) = {
+        let flushed = Flushed::new();
+        let square = core::hint::black_box(TINY) * core::hint::black_box(TINY);
+        let exact = Exact::resolve();
+        let fast = Reassociated::resolve();
+        let recorded = Exact::resolve_recorded(Exact::IMAGE_CODE);
+        let fast_recorded = Reassociated::resolve_recorded(8);
+        drop(flushed);
+        (square, exact, fast, recorded, fast_recorded)
+    };
+    // The observation that makes the refusal worth something: on that thread the very term
+    // these pairs are made of flushes to zero, so a pair computed there would have
+    // returned different bits from the default environment's.
+    assert_eq!(
+        flushed_square.to_bits(),
+        0,
+        "the flushed thread computes TINY² as +0"
+    );
+    assert!(
+        is_ftz_refusal(&exact.expect_err("refused")),
+        "Exact::resolve"
+    );
+    assert!(
+        is_ftz_refusal(&fast.expect_err("refused")),
+        "Reassociated::resolve"
+    );
+    assert!(
+        matches!(
+            recorded.expect_err("refused"),
+            RecordedPathError::FloatEnvironment(ref refusal) if is_ftz_refusal(refusal)
+        ),
+        "Exact::resolve_recorded"
+    );
+    assert!(
+        matches!(
+            fast_recorded.expect_err("refused"),
+            RecordedPathError::FloatEnvironment(ref refusal) if is_ftz_refusal(refusal)
+        ),
+        "Reassociated::resolve_recorded checks the environment before the code"
+    );
+
+    // The valid neighbour: the same thread, register restored. Every pair entry point
+    // answers, bit for bit what the batch kernel answers for the same pair, and the answer
+    // is the subnormal the flushed thread would have lost.
+    let square = core::hint::black_box(TINY) * core::hint::black_box(TINY);
+    assert!(
+        square.is_subnormal(),
+        "the default environment keeps TINY² = {square:e}"
+    );
+    let exact = Exact::resolve().expect("the default environment resolves");
+    let data = subnormal_rows();
+    let (a, zero, b) = (&data[0..2], &data[2..4], &data[4..6]);
+    let euclid = pairs_equal_batch(
+        exact,
+        &matrix,
+        Kernel::SquaredEuclidean,
+        0,
+        1,
+        Kernel::SquaredEuclidean.distance(exact, a, 0.0, zero, 0.0),
+    );
+    assert_eq!(euclid.to_bits(), square.to_bits(), "the exact TINY²");
+    assert_eq!(
+        Kernel::SquaredEuclidean.distance_bounded(
+            exact,
+            a,
+            0.0,
+            zero,
+            0.0,
+            Bound::Above(f64::INFINITY)
+        ),
+        Bounded::Below(euclid),
+        "Kernel::distance_bounded"
+    );
+    let dot = pairs_equal_batch(
+        exact,
+        &matrix,
+        Kernel::NegativeDot,
+        0,
+        2,
+        Kernel::NegativeDot.distance(exact, a, 0.0, b, 0.0),
+    );
+    assert_eq!(dot.to_bits(), (-square).to_bits(), "the exact -TINY²");
+
+    let fast = Reassociated::resolve().expect("the default environment resolves");
+    for (kernel, row, other) in [
+        (Kernel::SquaredEuclidean, 1, zero),
+        (Kernel::NegativeDot, 2, b),
+    ] {
+        let value = pairs_equal_batch(
+            fast,
+            &matrix,
+            kernel,
+            0,
+            row,
+            kernel.distance_reassociated(fast, a, 0.0, other, 0.0),
+        );
+        assert!(
+            value.is_subnormal(),
+            "{kernel:?} reassociated keeps the subnormal: {value:e}"
+        );
+        assert_eq!(
+            kernel.distance_bounded_reassociated(
+                fast,
+                a,
+                0.0,
+                other,
+                0.0,
+                Bound::Above(f64::INFINITY)
+            ),
+            Bounded::Below(value),
+            "{kernel:?}: Kernel::distance_bounded_reassociated"
+        );
+    }
 }

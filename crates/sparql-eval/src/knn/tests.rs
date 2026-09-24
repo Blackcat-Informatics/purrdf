@@ -2168,12 +2168,15 @@ fn exact_scan_matches_kernel_bits() {
     ] {
         let kernel = Kernel::of(&metric).expect("built-in");
         let relation = EmbeddingKnnRelation::new(Arc::new(space(&metric, &rows)));
+        let exact = Exact::resolve().expect("the test thread runs the default float environment");
         let emitted = every_distance(&relation, &rows);
         assert_eq!(emitted.len(), rows.len() * rows.len());
         for (query, neighbour, distance) in emitted {
             let (q, q_norm) = row_named(&rows, &query);
             let (c, c_norm) = row_named(&rows, &neighbour);
-            let expected = kernel.distance(q, q_norm, c, c_norm).expect("finite");
+            let expected = kernel
+                .distance(exact, q, q_norm, c, c_norm)
+                .expect("finite");
             assert_eq!(
                 distance.to_bits(),
                 expected.to_bits(),

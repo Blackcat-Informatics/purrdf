@@ -262,7 +262,7 @@ impl<'a, A: Arithmetic> Query<'a, A> {
                 );
                 out[0]
             }
-            Target::Row(seed) => self.matrix.distance_with(
+            Target::Row(seed) => self.matrix.distance(
                 self.arithmetic,
                 self.kernel,
                 seed,

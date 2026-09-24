@@ -171,8 +171,10 @@ rather than kept by hand. A further arithmetic (binned, quantized) is one more
 ### 3.2 Two functions, two contracts
 
 The named entry points stay: `Kernel::distance` is `Exact`, and
-`Kernel::distance_reassociated` is `Reassociated`. The exact kernel keeps its name
-and its promise. There is never a mode argument, an environment variable or a
+`Kernel::distance_reassociated` is `Reassociated`. Each takes the resolved handle of its
+own arithmetic (`Resolved<Exact>`, `Resolved<Reassociated>`), so passing one law's handle
+to the other's entry point is a type error, and neither runs without the environment check
+(§3.7). The exact kernel keeps its name and its promise. There is never a mode argument, an environment variable or a
 switch that turns one into the other.
 
 ### 3.3 The fast contract names its divergence
@@ -326,8 +328,22 @@ the probe runs there too, since it is eight operations and an engine departing f
 the specification is then refused by name rather than trusted. No target is refused
 for being unread: an environment is refused only when it has been observed to depart.
 
-The probe runs on every resolve, which is once per scan, relation, index or search: a
-handful of operations and no allocation. The `cross-arch` CI job checks the kernels on
+The check cannot be bypassed by choosing a different entry point, because every public
+entry point that computes a distance takes the resolved handle the check produces
+(`Resolved<A>`): the batch and pair kernels on `Resolved` in `purrdf-core`,
+`Kernel::distance`, `Kernel::distance_bounded` (a `Resolved<Exact>`) and their
+`_reassociated` siblings (a `Resolved<Reassociated>`) in `purrdf-sparql-eval`, and
+`VectorMatrix::distance`, `distance_from_query` and `distance_bounded` (a `Resolved<A>`)
+in `purrdf-hnsw`. There is no handle-free distance. A flushing thread is refused by name
+when it asks for the handle, so it never obtains one and no distance, per-pair or batch,
+is computed on it; `crates/hnsw/tests/float_environment.rs` executes that refusal and, as
+its valid neighbour, every pair entry point in the default environment agreeing bit for
+bit with the batch kernel on a pair whose distance is subnormal, so a flushing thread
+would have returned zero for it.
+
+The probe runs on every resolve, which is once per scan, relation, index, search or pair
+call site, never once per pair: the handle is `Copy`, and a loop passes the one it holds.
+A resolve is a handful of operations and no allocation. The `cross-arch` CI job checks the kernels on
 i686, armv7, riscv64, powerpc64le, s390x and loongarch64, and executes the distance,
 kNN and HNSW suites on i686 and on riscv64 under emulation, where no register is read
 and the probe alone decides.

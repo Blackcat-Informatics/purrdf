@@ -436,11 +436,6 @@ fn no_substitution_exact_never_fast() {
         "the exact arithmetic equals its reference on {}",
         exact.path()
     );
-    assert_eq!(
-        (-Exact::distance(Measure::NegativeDot, &a, 0.0, &b, 0.0).expect("finite")).to_bits(),
-        reference.to_bits(),
-        "and so does the handle-free exact entry point"
-    );
 
     let paths = host_paths();
     let fused = fma_paths(&paths);

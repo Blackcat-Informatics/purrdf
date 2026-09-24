@@ -21,7 +21,7 @@ mod corpus;
 use corpus::CorpusShape;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, Params, Ranked, VectorMatrix};
-use purrdf_sparql_eval::knn::{Kernel, best, norm};
+use purrdf_sparql_eval::knn::{Arithmetic as _, Exact, Kernel, best, norm};
 
 const METRIC: DistanceMetric = DistanceMetric::SquaredEuclidean;
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
@@ -38,10 +38,17 @@ fn corpus(rows: usize, dims: usize) -> VectorMatrix {
 /// The exact top-`k` rows for `query`, by the shared kernel — this suite's oracle.
 fn exact_top_k(matrix: &VectorMatrix, query: &[f64], k: usize) -> Vec<usize> {
     let query_norm = norm(query);
+    let exact = Exact::resolve().expect("the test thread runs the default float environment");
     let scored: Vec<Ranked> = (0..matrix.rows())
         .map(|row| Ranked {
             distance: KERNEL
-                .distance(query, query_norm, matrix.row(row), norm(matrix.row(row)))
+                .distance(
+                    exact,
+                    query,
+                    query_norm,
+                    matrix.row(row),
+                    norm(matrix.row(row)),
+                )
                 .expect("the fixture is finite"),
             row,
         })
