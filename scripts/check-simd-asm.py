@@ -1942,13 +1942,13 @@ def self_test() -> int:
     expect([f.path for f in picked] == ["demo::fast::dot"] and len(picked[0].instructions) == 5, "the name prefilter keeps only the selected function, clones included")
     # -- a closure nested in a measured function is not a second copy of the site
     parent = collect_functions([("f.s", _X86_PACKED)], "x86")[0]
-    stub = Function(parent.symbol + "c", parent.path + "::{closure#0}", parent.crate, parent.unit)
-    judged = measured([parent, stub], _measure())
+    nested = Function(parent.symbol + "c", parent.path + "::{closure#0}", parent.crate, parent.unit)
+    judged = measured([parent, nested], _measure())
     expect(judged == [parent], "a scalar closure nested in a vectorized match is not judged against its floor")
-    expect(measured([stub], _measure()) == [stub], "a closure that is the only match is still measured, never dropped")
-    expect(any("below the floor" in p for p in evaluate(Site("fixture", "fixture", (_measure(),)), _measure(), next(c for c in CONFIGS if c.arch == "x86"), [stub]).problems), "a closure-only match still fails its floor")
+    expect(measured([nested], _measure()) == [nested], "a closure that is the only match is still measured, never dropped")
+    expect(any("below the floor" in p for p in evaluate(Site("fixture", "fixture", (_measure(),)), _measure(), next(c for c in CONFIGS if c.arch == "x86"), [nested]).problems), "a closure-only match still fails its floor")
     named = _measure(symbol=parent.path + "::{closure#0}")
-    expect(measured([parent, stub], named) == [stub], "a symbol that names the closure measures the closure")
+    expect(measured([parent, nested], named) == [nested], "a symbol that names the closure measures the closure")
     wasm_funcs = collect_functions([("w.s", _WASM_EXACT)], "wasm")
     expect(len(wasm_funcs) == 1 and wasm_funcs[0].path == "demo::kernel::dot", "wasm function split")
 
