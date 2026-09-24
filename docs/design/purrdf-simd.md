@@ -229,9 +229,10 @@ The choice of arithmetic is recorded wherever it outlives the call:
   path once at construction (a flushing float environment is refused there, and on
   every search, with the named `EvalError::FloatEnvironment`), and the scan runs
   `A`'s batch kernel on that path. Its ranked declaration names the law in
-  `RankedDeclaration::arithmetic`, which `canonical_description` folds, so an exact
+  `RankedDeclaration::arithmetic` as `RankArithmetic::FloatDistance`, which
+  `canonical_description` folds, so an exact
   and a reassociated producer over one space have different registry content
-  fingerprints and so different plan ids. A declaration that names no arithmetic
+  fingerprints and so different plan ids. A `RankArithmetic::FloatFree` declaration
   (the lexical producer, which ranks fixed-point integers) describes itself in the
   bytes it always did. A reassociated relation also composes the host's order
   fidelity with `OrderFidelity::Perturbed`, carrying the evidence text for its

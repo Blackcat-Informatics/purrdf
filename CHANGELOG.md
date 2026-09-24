@@ -66,10 +66,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   by name. The relation carries `OrderFidelity::Perturbed`, composed with the
   resolved path's evidence verbatim, and `FusionTrailer::fidelities` carries that
   evidence too. `RankedDeclaration::arithmetic` is a new field holding a
-  `DeclaredArithmetic`, which can only be built from the sealed trait. It appends
+  `RankArithmetic`: `FloatDistance(DeclaredArithmetic)`, whose payload can only be
+  built from the sealed trait (`RankArithmetic::float_distance::<A>()`), or
+  `FloatFree`, which declares that no floating-point operation decides the order
+  (the BM25F text relation, or a table of given ranks). `FloatDistance` appends
   the law's id to `canonical_description`, so exact and reassociated plans have
-  different identities. A declaration without it keeps exactly its old bytes, and
-  the integer-ranked producers declare none, so no pinned fingerprint moves.
+  different identities; `FloatFree` adds no byte, so the integer-ranked
+  producers keep exactly their old bytes and no pinned fingerprint moves.
   `composed_order_fidelity` has one implementation, here, and `purrdf-hnsw`
   re-exports it at its old path.
 
@@ -1659,8 +1662,9 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
     and search entry point under a flush-to-zero or non-nearest environment.
 
 - **BREAKING** **sparql-eval:** `Scalar` is sealed and implemented for `f32` and
-  `f64` only. `RankedDeclaration` gains the public `arithmetic` field, so a
-  struct literal must name it. `EmbeddingKnnRelation` gains a type parameter,
+  `f64` only. `RankedDeclaration` gains the public `arithmetic` field, a
+  `RankArithmetic`, so a struct literal must state the ranking arithmetic in
+  every case. `EmbeddingKnnRelation` gains a type parameter,
   `EmbeddingKnnRelation<A: Arithmetic = Exact>`, and `new` is unchanged and
   exact.
 

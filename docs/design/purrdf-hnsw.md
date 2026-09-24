@@ -314,7 +314,7 @@ index's pinned recall on every regime.
 | evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by a build running the same dispatch path." (`profile::loss_evidence_reassociated`) |
 | profile declaration | `arithmetic=binary64-lane16-tree-v1` | `arithmetic=binary64-reassociated-v1`, and the path's revision |
 | `IndexLossContract` | `transforms_vectors: false` | `transforms_vectors: false` |
-| ranked declaration | `DeclaredArithmetic::of::<Exact>()` | `DeclaredArithmetic::of::<Reassociated>()` |
+| ranked declaration | `RankArithmetic::float_distance::<Exact>()` | `RankArithmetic::float_distance::<Reassociated>()` |
 | relation fidelity | `Lossy` with `LOSS_EVIDENCE`; order faithful | `Lossy` with the reassociated revision; order `Perturbed` with the arithmetic's evidence |
 
 The loss contract does not change, deliberately: an arithmetic decides how a distance
