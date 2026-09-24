@@ -221,9 +221,11 @@ fn install(shapes: &mut Shapes, host: &HostBindings<'_>) -> Result<(), ShapesPro
 }
 
 /// The user-function registry a restore assembles: the host's injected table, plus
-/// BOTH kinds of declaration the shapes graph itself states — the SPARQL-bodied
-/// `sh:SPARQLFunction`s re-derived from the carried shapes dataset, and the
-/// expression-bodied §7.3 declarations registered from the model.
+/// every kind of declaration the shapes graph itself states — the SPARQL-bodied
+/// `sh:SPARQLFunction`s and the custom list-parameter functions no node expression
+/// calls, both re-derived from the carried shapes dataset; the expression-bodied
+/// §7.3 declarations registered from the model; and the declared BUILT-IN
+/// list-parameter functions, registered with their native implementations.
 ///
 /// The direction is forced and it is worth stating. `UserFunctionRegistry` exposes
 /// registration but not enumeration — a registered native closure cannot be read
@@ -259,9 +261,11 @@ pub(super) fn assemble_functions(
 ) -> Result<UserFunctionRegistry, ShapesProductError> {
     let declarations = ast::custom_functions(shapes)?;
     let mut registry = host.functions().clone();
-    crate::shapes::register_declared_sparql_functions(
+    let native_list = crate::shapes::register_declared_sparql_functions(
         shapes.dataset(),
         shapes.provenance(),
+        &declarations,
+        &shapes.node_shapes,
         &mut registry,
     )
     .map_err(|error| {
@@ -275,6 +279,16 @@ pub(super) fn assemble_functions(
             ),
         )
     })?;
+    // The built-in list-parameter functions the graph declares, registered with
+    // their native implementations exactly as the linking pass registers them. A
+    // `shnex:conformsToShape` registration resolves shapes against an index of this
+    // model's own shapes; nothing else reads one, so it is built only then.
+    let shape_index = if native_list.contains(crate::model::shnex::CONFORMS_TO_SHAPE) {
+        link::standalone_shape_index(&shapes.node_shapes)
+    } else {
+        Arc::default()
+    };
+    link::register_native_list_functions(&native_list, &shape_index, &mut registry);
     link::register_expression_bodied_functions(&declarations, &mut registry);
     Ok(registry)
 }

@@ -422,7 +422,18 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// The property this test is actually about is untouched: the figure is still
 /// the same for both seam datasets, which is the assertion above this one, and
 /// which is what says admission does not read the data.
-const ADMIT_ALLOC_CONST: u64 = 296;
+///
+/// # Why it moved from 296
+///
+/// Admission re-runs the function linker over the carried shapes graph, and that
+/// linker now scans THREE declaring classes (`sh:NodeExpressionFunction` joined the
+/// two parameter-function classes, so a built-in declared under the wrong class is
+/// caught). Each class scan now first asks the dataset's term table whether the
+/// class IRI occurs at all, and skips the pattern probe — with the two IRI terms it
+/// used to build for it — when it does not. The seam shapes graph declares no
+/// function, so all three scans end at that lookup: seven allocations fewer than
+/// the two unconditional probes cost before.
+const ADMIT_ALLOC_CONST: u64 = 289;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;

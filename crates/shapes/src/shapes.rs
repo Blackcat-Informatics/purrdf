@@ -521,6 +521,70 @@ pub fn from_dataset(dataset: &Arc<RdfDataset>) -> Result<Shapes, String> {
     from_dataset_with_prefixes(dataset, &[])
 }
 
+/// What the linker ([`crate::spec`]) made of a shapes graph's DECLARATIONS: the
+/// custom node-expression functions it indexed, their key parameters, the built-in
+/// list-parameter functions it bound natively, and the custom constraint
+/// components it registered.
+///
+/// An inspection surface for the linker's guarantees — above all that a built-in's
+/// declaration indexes and registers NOTHING — which a parsed [`Shapes`] cannot
+/// show, because neither the custom-function index nor the component registry
+/// outlives the parse.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinkedDeclarations {
+    /// The custom node-expression functions indexed, in IRI order.
+    pub custom_functions: Vec<String>,
+    /// Every custom key parameter, with the function it identifies, in path order.
+    pub custom_key_parameters: Vec<(String, String)>,
+    /// The built-in list-parameter functions bound natively, in IRI order.
+    pub native_list_functions: Vec<String>,
+    /// The custom constraint components registered, in IRI order.
+    pub registered_components: Vec<String>,
+}
+
+impl LinkedDeclarations {
+    /// Whether the custom-function index holds `iri`.
+    #[must_use]
+    pub fn custom_function(&self, iri: &str) -> bool {
+        self.custom_functions.iter().any(|f| f == iri)
+    }
+
+    /// The custom function the key parameter `path` identifies, if any.
+    #[must_use]
+    pub fn by_key_parameter(&self, path: &str) -> Option<&str> {
+        self.custom_key_parameters
+            .iter()
+            .find(|(key, _)| key == path)
+            .map(|(_, function)| function.as_str())
+    }
+}
+
+/// Run the linker over `dataset`'s declarations alone — the two steps a parse
+/// runs before any shape is read — and report what it indexed and registered.
+///
+/// # Errors
+///
+/// The linker's own refusal, exactly as a parse of `dataset` would report it.
+#[doc(hidden)]
+pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarations, String> {
+    let registry = ComponentRegistry::parse(dataset.as_ref(), &[])?;
+    let parser = Parser::new(dataset.as_ref(), None, &[], None, Arc::clone(dataset), None);
+    let linked = parser.discover_custom_functions()?;
+    let mut registered_components: Vec<String> = registry.components.keys().cloned().collect();
+    registered_components.sort();
+    Ok(LinkedDeclarations {
+        custom_functions: linked
+            .custom
+            .iter()
+            .map(|f| f.iri.as_str().to_owned())
+            .collect(),
+        custom_key_parameters: linked.custom.key_parameters(),
+        native_list_functions: linked.native_list.into_iter().collect(),
+        registered_components,
+    })
+}
+
 /// Parse shapes from a dataset, with the shapes document's `@prefix` declarations
 /// available as a fallback prefix map for SHACL-AF `sh:select` queries.
 ///
@@ -725,6 +789,12 @@ pub(crate) struct Parser<'s> {
     /// [`crate::shapes::parser::custom_fn`] gives: a body may call any declared
     /// function, itself included.
     custom_fns: parser::custom_fn::CustomFnIndex,
+    /// The built-in LIST-parameter functions the shapes graph DECLARES (the
+    /// vocabulary's `shnex:conformsToShape`, `sparql:<NAME>`), bound natively by
+    /// the linker. Kept apart from [`Self::custom_fns`]: a built-in declaration
+    /// adds nothing to the custom index, and is recorded only so SHACL 1.2 SPARQL
+    /// Extensions §7.3 registration can give it its native implementation.
+    native_list_fns: std::collections::BTreeSet<String>,
     /// Whether `sh:rule` is parsed on the shape currently being read.
     ///
     /// It is switched OFF for the duration of a `sh:condition`'s own shape parse,
@@ -865,6 +935,7 @@ impl<'s> Parser<'s> {
             target_types: std::collections::BTreeMap::new(),
             node_shape_index: Arc::new(OnceLock::new()),
             custom_fns: parser::custom_fn::CustomFnIndex::default(),
+            native_list_fns: std::collections::BTreeSet::new(),
             parse_rules_enabled: true,
             node_by_expr_constants: Vec::new(),
             current_shape: None,
@@ -901,14 +972,9 @@ impl<'s> Parser<'s> {
             property_shape_nodes.insert(subject);
         }
 
-        // 3. Subjects of Core target predicates and SHACL-AF sh:target.
-        for pred in [
-            sh::TARGET_CLASS,
-            sh::TARGET_SUBJECTS_OF,
-            sh::TARGET_OBJECTS_OF,
-            sh::TARGET_NODE,
-            sh::TARGET,
-        ] {
+        // 3. Subjects of Core target predicates and SHACL-AF sh:target — the
+        //    target rows of the spec symbol table.
+        for pred in crate::spec::target_predicates() {
             for (subject, _, _) in self.quads_with(None, Some(pred), None) {
                 shape_ids.insert(subject);
             }
@@ -954,7 +1020,9 @@ impl<'s> Parser<'s> {
         // up front, before any shape is parsed, so a `[ ex:f ( … ) ]` call site
         // inside a shape resolves to the interned declaration rather than to a
         // builtin. Their bodies are installed after shape parsing (see below).
-        self.custom_fns = self.discover_custom_functions()?;
+        let linked = self.discover_custom_functions()?;
+        self.custom_fns = linked.custom;
+        self.native_list_fns = linked.native_list;
 
         // Parse each top-level shape in stable (sorted) order. A node with
         // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
@@ -998,6 +1066,7 @@ impl<'s> Parser<'s> {
             &node_shapes,
             &self.node_shape_index,
             &declarations,
+            &self.native_list_fns,
             bodies,
             &mut functions,
         )
@@ -1098,13 +1167,7 @@ impl<'s> Parser<'s> {
     /// `sh:targetSubjectsOf`, `sh:targetObjectsOf`, `sh:targetNode`,
     /// SHACL-AF `sh:target`, or the implicit `rdfs:Class` target).
     fn has_own_targets(&self, id: &Term) -> bool {
-        for pred in [
-            sh::TARGET_CLASS,
-            sh::TARGET_SUBJECTS_OF,
-            sh::TARGET_OBJECTS_OF,
-            sh::TARGET_NODE,
-            sh::TARGET,
-        ] {
+        for pred in crate::spec::target_predicates() {
             if self.first_object_of(id, pred).is_some() {
                 return true;
             }

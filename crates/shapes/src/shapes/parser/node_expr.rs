@@ -14,6 +14,7 @@ use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
 };
 use crate::model::{rdf, sh, shnex, sparql_ns};
+use crate::spec::{ExprKind, non_function_keys, primary_keys};
 use crate::term::{NamedNode, Term};
 
 use crate::shapes::{ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Shape};
@@ -47,6 +48,27 @@ impl Parser<'_> {
         is_property_shape: bool,
     ) -> Result<Vec<Constraint>, String> {
         let mut constraints: Vec<Constraint> = Vec::new();
+
+        // A parameter of a component the SHACL 1.2 vocabulary declares and this
+        // engine does not evaluate. Reading past it would let the shape silently
+        // conform, so it is a load error — unless the shapes graph itself supplies
+        // the component with a validator, in which case the custom-component
+        // registry below evaluates it like any other.
+        for (parameter, component) in crate::spec::unimplemented_component_params() {
+            if self.first_object_of(id, parameter).is_some()
+                && !self
+                    .component_registry
+                    .by_parameter_path
+                    .contains_key(parameter)
+            {
+                return Err(format!(
+                    "shape {id} uses <{parameter}>, a parameter of <{}>, which is a SHACL 1.2 \
+                     Core component this engine does not implement; the shape is refused rather \
+                     than silently conforming",
+                    component.iri()
+                ));
+            }
+        }
 
         // sh:class — sorted for determinism
         let mut classes: Vec<NamedNode> = self
@@ -737,7 +759,7 @@ impl Parser<'_> {
     ///
     /// Both spec surfaces are accepted: the SHACL Advanced Features `sh:` spelling
     /// and the SHACL 1.2 Node Expressions `shnex:` spelling. They are NOT two
-    /// dialects with two behaviours — [`PRIMARY_KEYS`] maps each IRI onto one
+    /// dialects with two behaviours — [`primary_keys`] maps each IRI onto one
     /// [`ExprKind`], every kind lowers to one [`NodeExpr`] arm, and that arm has
     /// exactly one evaluation path. A node that carries BOTH spellings of the same
     /// kind is ambiguous and hard-fails exactly like a node carrying two different
@@ -768,7 +790,7 @@ impl Parser<'_> {
         // Which mutually-exclusive structural key does the node carry? Both the
         // `sh:` and the `shnex:` spelling of a kind appear in this scan, so a node
         // carrying both is caught by the very same arity check.
-        let present: Vec<(&str, ExprKind)> = PRIMARY_KEYS
+        let present: Vec<(&str, ExprKind)> = primary_keys()
             .iter()
             .copied()
             .filter(|&(iri, _)| self.first_object_of(node, iri).is_some())
@@ -916,7 +938,7 @@ impl Parser<'_> {
     /// Refuse a node-expression key that the SELECTED expression kind does not
     /// read, so an authored operand is never silently discarded.
     ///
-    /// `parse_node_expr_core` picks a kind from [`PRIMARY_KEYS`] and the arm for
+    /// `parse_node_expr_core` picks a kind from [`primary_keys`] and the arm for
     /// that kind then reads its OWN operand keys by name. Every other
     /// node-expression key on the node is, without this check, simply never
     /// looked at — accepted and dropped. The failure is invisible and it changes
@@ -935,7 +957,7 @@ impl Parser<'_> {
     ///   the ambient focus node instead.
     ///
     /// Two classes of predicate are refused: a key that IS node-expression
-    /// vocabulary ([`NON_FUNCTION_KEYS`]) but belongs to another kind or to the
+    /// vocabulary ([`non_function_keys`]) but belongs to another kind or to the
     /// other SPELLING of this one, and any unrecognised term in the `shnex:`
     /// namespace — that namespace is entirely node-expression vocabulary and is
     /// fully enumerated in [`crate::model::shnex`], so a term outside it is a
@@ -1002,7 +1024,7 @@ impl Parser<'_> {
             if accepted.contains(&p) {
                 continue;
             }
-            if NON_FUNCTION_KEYS.contains(&p) {
+            if non_function_keys().contains(&p) {
                 return Err(format!(
                     "{owner} node expression on {node} also carries <{p}>, which {owner} does not \
                      read; it would be silently discarded. Spell the operand the way the \
@@ -1524,7 +1546,7 @@ impl Parser<'_> {
             .filter(|(_, predicate, _)| {
                 let p = predicate.as_str();
                 p != rdf::TYPE
-                    && !NON_FUNCTION_KEYS.contains(&p)
+                    && !non_function_keys().contains(&p)
                     && !CALL_SITE_ANNOTATIONS.contains(&p)
             })
             .map(|(_, predicate, object)| (predicate, object))
@@ -1666,71 +1688,6 @@ impl Parser<'_> {
     }
 }
 
-/// A node-expression KIND, independent of which spec surface spelled it.
-///
-/// SHACL Advanced Features and SHACL 1.2 Node Expressions give several of the same
-/// operations two IRIs (`sh:union` / `shnex:concat` aside, which are genuinely
-/// different operations). This enum is the one name each operation has inside
-/// PurRDF: [`PRIMARY_KEYS`] maps every accepted IRI onto a kind, every kind lowers
-/// to one [`NodeExpr`] arm, and that arm has exactly one evaluator. Nothing here is
-/// conditional or feature-gated — two spec-defined surfaces, one implementation,
-/// exactly as two RDF syntaxes parse to one graph model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExprKind {
-    /// `sh:path` / `shnex:pathValues` — path value nodes.
-    Path,
-    /// `sh:filterShape` / `shnex:filterShape` — shape-filtered nodes.
-    FilterShape,
-    /// `sh:union` — SHACL-AF set union (no `shnex:` spelling exists).
-    Union,
-    /// `sh:intersection` / `shnex:intersection` — set intersection.
-    Intersection,
-    /// `shnex:concat` — sequence concatenation (no `sh:` spelling exists).
-    Concat,
-    /// `sh:if` / `shnex:if` — conditional.
-    If,
-    /// `sh:count` / `shnex:count` — cardinality.
-    Count,
-    /// `sh:distinct` / `shnex:distinct` — duplicate elimination.
-    Distinct,
-    /// `sh:min` / `shnex:min` — minimum.
-    Min,
-    /// `sh:max` / `shnex:max` — maximum.
-    Max,
-    /// `sh:sum` / `shnex:sum` — sum.
-    Sum,
-    /// `sh:exists` / `shnex:exists` — existence predicate.
-    Exists,
-    /// `shnex:var` — a scope/focus variable reference.
-    Var,
-    /// `rdf:first` — an RDF collection read as a `shnex:ListExpression`.
-    List,
-    /// `shnex:remove` — set difference preserving input order.
-    Remove,
-    /// `shnex:limit` — the named-parameter limit expression.
-    Limit,
-    /// `shnex:offset` — the named-parameter offset expression.
-    Offset,
-    /// `shnex:orderBy` — the named-parameter order-by expression.
-    OrderBy,
-    /// `shnex:flatMap` — per-node mapping with concatenation.
-    FlatMap,
-    /// `shnex:findFirst` — the first conforming input node.
-    FindFirst,
-    /// `shnex:matchAll` — whether every input node conforms.
-    MatchAll,
-    /// `shnex:instancesOf` — the SHACL instances of a class.
-    InstancesOf,
-    /// `shnex:nodesMatching` — every conforming node of the focus graph.
-    NodesMatching,
-    /// `shnex:conformsToShape` — a two-argument conformance predicate.
-    ConformsToShape,
-    /// `sh:select` / `sh:sparqlExpr` — a SPARQL-based node expression.
-    Select,
-    /// `shnex:arg` — an argument reference inside a custom function's body.
-    Arg,
-}
-
 /// The single variable a SHACL 1.2 SPARQL-based node expression's SELECT query
 /// projects (SPARQL Extensions §6.1).
 ///
@@ -1766,127 +1723,6 @@ fn single_projected_variable(query: &Query) -> Result<String, String> {
     }
 }
 
-/// Every IRI that identifies a node-expression kind, with the kind it identifies.
-///
-/// Both spec surfaces appear here, so `parse_node_expr_core`'s single
-/// "exactly one key" check rejects a node carrying two DIFFERENT kinds and a node
-/// carrying the two spellings of the SAME kind with the same message — the writer
-/// is asked which they meant rather than silently given one of them.
-///
-/// `sh:limit` / `sh:offset` / `sh:orderby` are deliberately ABSENT: on the
-/// SHACL-AF surface those keys WRAP the node's own core expression (peeled by
-/// `parse_node_expr_wrapped`), whereas their `shnex:` counterparts are
-/// named-parameter functions carrying their own `shnex:nodes` operand and so are
-/// cores in their own right. Both spellings still lower to the same `NodeExpr` arm.
-static PRIMARY_KEYS: &[(&str, ExprKind)] = &[
-    // SHACL Advanced Features spellings.
-    (sh::PATH, ExprKind::Path),
-    (sh::FILTER_SHAPE, ExprKind::FilterShape),
-    (sh::UNION, ExprKind::Union),
-    (sh::INTERSECTION, ExprKind::Intersection),
-    (sh::IF, ExprKind::If),
-    (sh::COUNT, ExprKind::Count),
-    (sh::DISTINCT, ExprKind::Distinct),
-    (sh::MIN, ExprKind::Min),
-    (sh::MAX, ExprKind::Max),
-    (sh::SUM, ExprKind::Sum),
-    (sh::EXISTS, ExprKind::Exists),
-    // SHACL 1.2 Node Expressions spellings.
-    (shnex::PATH_VALUES, ExprKind::Path),
-    (shnex::FILTER_SHAPE, ExprKind::FilterShape),
-    (shnex::INTERSECTION, ExprKind::Intersection),
-    (shnex::CONCAT, ExprKind::Concat),
-    (shnex::IF, ExprKind::If),
-    (shnex::COUNT, ExprKind::Count),
-    (shnex::DISTINCT, ExprKind::Distinct),
-    (shnex::MIN, ExprKind::Min),
-    (shnex::MAX, ExprKind::Max),
-    (shnex::SUM, ExprKind::Sum),
-    (shnex::EXISTS, ExprKind::Exists),
-    (shnex::VAR, ExprKind::Var),
-    (rdf::FIRST, ExprKind::List),
-    (shnex::REMOVE, ExprKind::Remove),
-    (shnex::LIMIT, ExprKind::Limit),
-    (shnex::OFFSET, ExprKind::Offset),
-    (shnex::ORDER_BY, ExprKind::OrderBy),
-    (shnex::FLAT_MAP, ExprKind::FlatMap),
-    (shnex::FIND_FIRST, ExprKind::FindFirst),
-    (shnex::MATCH_ALL, ExprKind::MatchAll),
-    (shnex::INSTANCES_OF, ExprKind::InstancesOf),
-    (shnex::NODES_MATCHING, ExprKind::NodesMatching),
-    (shnex::CONFORMS_TO_SHAPE, ExprKind::ConformsToShape),
-    (shnex::ARG, ExprKind::Arg),
-    // SHACL 1.2 SPARQL Extensions spellings.
-    (sh::SELECT, ExprKind::Select),
-    (sh::SPARQL_EXPR, ExprKind::Select),
-];
-
-/// Every vocabulary term that structures a node expression — none of them can be
-/// the predicate of a function-call expression, so `parse_call_or_constant` must
-/// not mistake one for a function IRI.
-///
-/// This is the union of [`PRIMARY_KEYS`], the operand/modifier keys of both
-/// surfaces (`sh:nodes`, `sh:then`, `shnex:nodes`, `shnex:desc`, …) and the
-/// SHACL-AF paging wrappers.
-static NON_FUNCTION_KEYS: &[&str] = &[
-    // SHACL Advanced Features.
-    sh::PATH,
-    sh::FILTER_SHAPE,
-    sh::NODES,
-    sh::UNION,
-    sh::INTERSECTION,
-    sh::IF,
-    sh::THEN,
-    sh::ELSE,
-    sh::COUNT,
-    sh::DISTINCT,
-    sh::MIN,
-    sh::MAX,
-    sh::SUM,
-    sh::LIMIT,
-    sh::OFFSET,
-    sh::ORDERBY,
-    sh::DESC,
-    sh::EXISTS,
-    // SHACL 1.2 Node Expressions.
-    shnex::VAR,
-    shnex::PATH_VALUES,
-    shnex::FOCUS_NODE,
-    shnex::EXISTS,
-    shnex::IF,
-    shnex::THEN,
-    shnex::ELSE,
-    shnex::DISTINCT,
-    shnex::INTERSECTION,
-    shnex::CONCAT,
-    shnex::REMOVE,
-    shnex::NODES,
-    shnex::FILTER_SHAPE,
-    shnex::LIMIT,
-    shnex::OFFSET,
-    shnex::ORDER_BY,
-    shnex::DESC,
-    shnex::FLAT_MAP,
-    shnex::FIND_FIRST,
-    shnex::MATCH_ALL,
-    shnex::COUNT,
-    shnex::MIN,
-    shnex::MAX,
-    shnex::SUM,
-    shnex::INSTANCES_OF,
-    shnex::NODES_MATCHING,
-    shnex::CONFORMS_TO_SHAPE,
-    shnex::ARG,
-    // SHACL 1.2 SPARQL Extensions: the two SPARQL-based expression keys and the
-    // `sh:prefixes` each may carry (§6.1 / §6.2).
-    sh::SELECT,
-    sh::SPARQL_EXPR,
-    sh::PREFIXES,
-    // RDF collection cells — a list expression's own structure, never a call.
-    rdf::FIRST,
-    rdf::REST,
-];
-
 /// The SHACL annotations an expression node may carry ALONGSIDE its expression,
 /// which therefore never name a function.
 ///
@@ -1899,7 +1735,7 @@ static NON_FUNCTION_KEYS: &[&str] = &[
 /// expression (`[ sh:count … ; sh:message "…" ]`) loads fine, because that path
 /// short-circuits before the candidate scan. That asymmetry was the bug.
 ///
-/// They are deliberately NOT in [`NON_FUNCTION_KEYS`]: that table is the
+/// They are deliberately NOT in [`non_function_keys`]: that table is the
 /// node-expression VOCABULARY, and `check_expression_keys` refuses a member of it
 /// that the selected kind does not read. An annotation is not vocabulary and must
 /// stay ignorable everywhere.
@@ -1920,18 +1756,18 @@ fn parse_node_kind(iri: &str) -> Option<NodeKindValue> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExprKind, NON_FUNCTION_KEYS, PRIMARY_KEYS};
     use crate::model::{sh, shnex};
+    use crate::spec::{ExprKind, non_function_keys, primary_keys};
     use std::collections::BTreeSet;
 
-    /// The kinds `PRIMARY_KEYS` gives BOTH a `sh:` and a `shnex:` spelling, as
+    /// The kinds `primary_keys()` gives BOTH a `sh:` and a `shnex:` spelling, as
     /// the table itself defines them.
     fn dual_spelled() -> BTreeSet<&'static str> {
         // (kind, has a `sh:` spelling, the `shnex:` local name if it has one).
         // `ExprKind` is deliberately neither `Ord` nor `Hash`, so the grouping is
         // a linear scan over a table of ~35 entries rather than a map.
         let mut surfaces: Vec<(ExprKind, bool, Option<&'static str>)> = Vec::new();
-        for &(iri, kind) in PRIMARY_KEYS {
+        for &(iri, kind) in primary_keys() {
             let slot = match surfaces.iter_mut().find(|(k, _, _)| *k == kind) {
                 Some(slot) => slot,
                 None => {
@@ -1987,17 +1823,17 @@ mod tests {
         );
     }
 
-    /// Every IRI in `PRIMARY_KEYS` is also in `NON_FUNCTION_KEYS`.
+    /// Every IRI in `primary_keys()` is also in `non_function_keys()`.
     ///
     /// `parse_call_or_constant` decides "is this a function call?" by subtracting
-    /// `NON_FUNCTION_KEYS` from the node's predicates, and `check_expression_keys`
+    /// `non_function_keys()` from the node's predicates, and `check_expression_keys`
     /// decides "is this key vocabulary?" the same way. A primary key missing from
     /// that table would therefore be read as a FUNCTION IRI — a structural key
     /// silently reinterpreted as a call.
     #[test]
     fn every_primary_key_is_node_expression_vocabulary() {
-        let non_function: BTreeSet<&str> = NON_FUNCTION_KEYS.iter().copied().collect();
-        let missing: Vec<&str> = PRIMARY_KEYS
+        let non_function: BTreeSet<&str> = non_function_keys().iter().copied().collect();
+        let missing: Vec<&str> = primary_keys()
             .iter()
             .map(|&(iri, _)| iri)
             .filter(|iri| !non_function.contains(iri))

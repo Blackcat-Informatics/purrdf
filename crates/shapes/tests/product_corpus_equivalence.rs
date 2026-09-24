@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! **Three ways to obtain a shapes graph must answer the same question the same
-//! way, over every shapes graph the two SHACL corpora contain.**
+//! way, over every shapes graph the three SHACL corpora contain** — the vendored
+//! W3C data-shapes suite, the `sht:Validate` entries of the vendored W3C SHACL 1.2
+//! suite, and the first-party corpus.
 //!
 //! A prepared shapes product exists so that a shapes graph compiled once can be
 //! executed later without being compiled again. That makes three lanes to the
@@ -112,30 +114,95 @@ use purrdf_shapes::product::{
 };
 use purrdf_shapes::shapes::Shapes;
 
+use shacl_corpora::shacl12::{Body, shacl12_cases};
 use shacl_corpora::{
     Expected, FIRST_PARTY_TOTAL_CASES, W3C_TOTAL_CASES, file_iri, first_party_box_role_vocab,
     first_party_cases, w3c_cases,
 };
 
-/// Every case both corpora contribute. Asserted exactly, so a corpus that grew or
-/// shrank without this harness noticing fails rather than quietly measuring less.
-const TOTAL_CASES: usize = W3C_TOTAL_CASES + FIRST_PARTY_TOTAL_CASES;
+/// The `sht:Validate` entries of the vendored W3C SHACL 1.2 suite — the third
+/// corpus whose shapes graphs the product must carry.
+const W3C12_VALIDATE_CASES: usize = 174;
+
+/// Every case the three corpora contribute. Asserted exactly, so a corpus that grew
+/// or shrank without this harness noticing fails rather than quietly measuring less.
+const TOTAL_CASES: usize = W3C_TOTAL_CASES + FIRST_PARTY_TOTAL_CASES + W3C12_VALIDATE_CASES;
 
 // ── Bucket 1: cases whose own RDF does not load ────────────────────────────────
 
 /// The exact number of cases whose shapes graph or data graph does not load.
 ///
-/// Today every one of them is a case the vendored manifest itself declares
-/// `mf:result sht:Failure` — an input the validator is REQUIRED to reject — and
-/// the corpus contains exactly seven such cases, all under
-/// `sparql/pre-binding/`, each carrying a `sh:sparql` body that SHACL's
-/// pre-binding rules forbid. So this bucket is not an excuse list: it is the
-/// suite's own refusal set, and `Case::refusal_is_declared` enforces that
-/// correspondence case by case rather than trusting the number.
+/// Two kinds of case land here, and both are declared rather than discovered:
+///
+/// * a case the vendored manifest itself declares `mf:result sht:Failure` — an
+///   input the validator is REQUIRED to reject. The SHACL 1.0 suite has exactly
+///   seven, all under `sparql/pre-binding/`, each carrying a `sh:sparql` body that
+///   SHACL's pre-binding rules forbid; the SHACL 1.2 suite has
+///   [`W3C12_DECLARED_FAILURES`];
+/// * a SHACL 1.2 case named in [`W3C12_REFUSED_AT_LOAD`], with its reason.
+///
+/// So this bucket is not an excuse list, and `Case::refusal_is_declared` enforces
+/// that correspondence case by case rather than trusting the number.
 ///
 /// The count is asserted in addition to the rule, because the rule alone would
 /// be satisfied by a parser that had started refusing NOTHING at all.
-const UNLOADABLE_CASES: usize = 7;
+const UNLOADABLE_CASES: usize = 7 + W3C12_DECLARED_FAILURES + W3C12_REFUSED_AT_LOAD.len();
+
+/// The W3C SHACL 1.2 `sht:Validate` entries whose manifest declares
+/// `mf:result sht:Failure` — inputs a validator must reject, admitted to the
+/// unloadable bucket by the same rule as the seven SHACL 1.0 ones.
+const W3C12_DECLARED_FAILURES: usize = 5;
+
+/// W3C SHACL 1.2 `sht:Validate` entries whose shapes graph this engine REFUSES at
+/// load, each with the reason — SHACL 1.2 features `w3c12_conformance.rs` ledgers
+/// as unevaluated, where the engine's answer is a load error rather than a report. There is no shapes graph to pack, so the codec has nothing to say
+/// about them. The ledger runs both ways: an entry whose shapes graph starts
+/// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
+const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
+    ("w3c12/core/node/in-003", R_LIST_COMPONENTS),
+    ("w3c12/core/node/xone-003", R_LIST_COMPONENTS),
+    ("w3c12/core/node/minListLength-001", R_LIST_COMPONENTS),
+    ("w3c12/core/node/maxListLength-001", R_LIST_COMPONENTS),
+    ("w3c12/core/node/memberShape-001", R_LIST_COMPONENTS),
+    ("w3c12/core/node/uniqueMembers-001", R_LIST_COMPONENTS),
+    ("w3c12/core/property/minListLength-001", R_LIST_COMPONENTS),
+    ("w3c12/core/property/maxListLength-001", R_LIST_COMPONENTS),
+    ("w3c12/core/property/memberShape-001", R_LIST_COMPONENTS),
+    ("w3c12/core/property/uniqueMembers-001", R_LIST_COMPONENTS),
+    ("w3c12/core/node/uniqueValuesFor-001", R_UNIQUE_VALUES_FOR),
+    ("w3c12/core/node/uniqueValuesFor-002", R_UNIQUE_VALUES_FOR),
+    ("w3c12/core/node/uniqueValuesFor-003", R_UNIQUE_VALUES_FOR),
+    ("w3c12/core/node/uniqueValuesFor-004", R_UNIQUE_VALUES_FOR),
+    ("w3c12/core/node/uniqueValuesFor-005", R_UNIQUE_VALUES_FOR),
+    ("w3c12/core/property/rootClass-001", R_OTHER_COMPONENTS),
+    ("w3c12/core/property/singleLine-001", R_OTHER_COMPONENTS),
+    ("w3c12/core/property/someValue-001", R_OTHER_COMPONENTS),
+    ("w3c12/core/property/subsetOf-001", R_OTHER_COMPONENTS),
+    ("w3c12/core/property/subsetOf-002", R_OTHER_COMPONENTS),
+    ("w3c12/core/property/equals-002", R_PATH_PAIRS),
+    ("w3c12/core/property/disjoint-002", R_PATH_PAIRS),
+    ("w3c12/core/property/lessThan-003", R_PATH_PAIRS),
+    ("w3c12/core/property/lessThanOrEquals-002", R_PATH_PAIRS),
+    (
+        "w3c12/sparql/functions/instanceCount-example",
+        R_INSTANCES_OF_EXPR,
+    ),
+];
+
+const R_LIST_COMPONENTS: &str = "uses sh:minListLength / sh:maxListLength / sh:memberShape / \
+     sh:uniqueMembers, SHACL 1.2 Core components the engine refuses at load as unimplemented";
+
+const R_UNIQUE_VALUES_FOR: &str =
+    "uses sh:uniqueValuesFor, which the engine refuses at load as unimplemented";
+
+const R_OTHER_COMPONENTS: &str = "uses sh:rootClass / sh:singleLine / sh:someValue / sh:subsetOf, \
+     which the engine refuses at load as unimplemented";
+
+const R_PATH_PAIRS: &str = "a path-valued sh:equals / sh:disjoint / sh:lessThan / \
+     sh:lessThanOrEquals, which the parser refuses because it requires an IRI";
+
+const R_INSTANCES_OF_EXPR: &str = "a custom function body passes a node-expression argument to \
+     shnex:instancesOf, which the parser refuses because it requires an IRI";
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
 
@@ -174,7 +241,16 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// Moved from 192 when the first-party corpus gained its relation-reaching
 /// `sh:SPARQLFunction` case; see [`AGREED_WITH_RESULTS_CASES`] for why that case's
 /// arrival is visible in two counts rather than one.
-const AGREED_ON_REPORT_CASES: usize = 193;
+///
+/// Moved from 193 to 338 when two things arrived together: the first-party case
+/// whose shapes graph carries the W3C vocabulary's own declarations of three
+/// built-ins (+1), and the 144 `sht:Validate` entries of the W3C SHACL 1.2 suite
+/// whose shapes graphs load (+144 — its 174 entries minus the 5 declared failures
+/// and the 25 [`W3C12_REFUSED_AT_LOAD`] entries). Every one of them agreed on a
+/// report, including the two whose custom list function is called only from
+/// SPARQL text and which the product writer used to refuse, because the model does
+/// not carry an uncalled declaration and the restore did not re-derive it.
+const AGREED_ON_REPORT_CASES: usize = 338;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -199,7 +275,15 @@ const AGREED_ON_REPORT_CASES: usize = 193;
 /// counted toward `AGREED_ON_REPORT_CASES` and not toward this one. It now counts
 /// toward both, because the relation resolved and produced the violation the corpus
 /// expects.
-const AGREED_WITH_RESULTS_CASES: usize = 180;
+///
+/// # Why it moved from 180 to 310
+///
+/// The same two arrivals as [`AGREED_ON_REPORT_CASES`]: the first-party
+/// built-in-declarations case reports three violations (+1), and 129 of the 144
+/// loadable SHACL 1.2 `sht:Validate` entries expect at least one result (+129) —
+/// the other 15 expect conformance and are agreed on as empty reports, which is
+/// why the two counts moved by different amounts.
+const AGREED_WITH_RESULTS_CASES: usize = 310;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 
@@ -489,6 +573,20 @@ fn product_corpus_equivalence() {
             loaded: load_first_party(&case),
         });
     }
+    for case in shacl12_cases() {
+        let Body::Validate(case) = case.body else {
+            continue;
+        };
+        let id = format!("w3c12/{}", case.id);
+        cases.push(Case {
+            refusal_is_declared: matches!(case.expected, Expected::Failure)
+                || W3C12_REFUSED_AT_LOAD
+                    .iter()
+                    .any(|(ledgered, _)| *ledgered == id),
+            loaded: load_w3c(&case),
+            id,
+        });
+    }
     assert_eq!(
         cases.len(),
         TOTAL_CASES,
@@ -573,6 +671,15 @@ fn product_corpus_equivalence() {
             }
             Bucket::Agreed(outcome) => {
                 agreed += 1;
+                if W3C12_REFUSED_AT_LOAD
+                    .iter()
+                    .any(|(ledgered, _)| *ledgered == id)
+                {
+                    errors.push(format!(
+                        "XLOAD [{id}]: W3C12_REFUSED_AT_LOAD says this shapes graph is refused \
+                         at load, but it loads, packs and agrees now; remove the entry"
+                    ));
+                }
                 if let Ok((_, results)) = &outcome.answer {
                     agreed_on_report += 1;
                     if *results > 0 {

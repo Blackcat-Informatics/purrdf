@@ -195,8 +195,9 @@ const SECTION_AST: u32 = 2;
 const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 
 /// The PREPARATION STAGE ID: a content-derived capability digest over the whole
-/// declarative model, the tables the model's meaning depends on, and the CLASS
-/// ANALYSIS DERIVATION a product carries the result of.
+/// declarative model, the tables the model's meaning depends on — the spec symbol
+/// table ([`crate::spec`]) among them — and the CLASS ANALYSIS DERIVATION a product
+/// carries the result of.
 ///
 /// The last of those is the one that is not a declaration. The class walk is an
 /// algorithm, so its meaning lives in function bodies: a build could stop
@@ -218,8 +219,8 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x10, 0xfb, 0x65, 0x93, 0x69, 0x14, 0x91, 0x0c, 0x8e, 0xf2, 0x6a, 0x51, 0x76, 0xf5, 0x80, 0x1f,
-    0x4f, 0x6d, 0x2a, 0x36, 0x45, 0xe3, 0xb0, 0xb3, 0xf3, 0x42, 0x48, 0x60, 0x21, 0x30, 0x12, 0xce,
+    0x60, 0x0b, 0x88, 0xff, 0x04, 0x3e, 0x5c, 0x2a, 0x5f, 0xcc, 0x9d, 0x3e, 0x82, 0x71, 0x3f, 0xea,
+    0xe2, 0x47, 0xcf, 0xcf, 0x4a, 0x8e, 0x95, 0xf4, 0x9e, 0x0b, 0x94, 0x30, 0xcd, 0xd5, 0x6f, 0x3b,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -1264,9 +1265,11 @@ impl<'a> ShapesProductView<'a> {
         // is what the restored `Shapes` must carry for identity row 6 to be the row
         // a parse of this graph would have produced.
         let mut functions = UserFunctionRegistry::new();
-        crate::shapes::register_declared_sparql_functions(
+        let native_list = crate::shapes::register_declared_sparql_functions(
             &dataset,
             &self.provenance,
+            &parts.custom_functions,
+            &parts.node_shapes,
             &mut functions,
         )
         .map_err(|error| {
@@ -1280,6 +1283,7 @@ impl<'a> ShapesProductView<'a> {
             &parts.node_shapes,
             &parts.shape_index,
             &parts.custom_functions,
+            &native_list,
             BTreeMap::new(),
             &mut functions,
         )?;

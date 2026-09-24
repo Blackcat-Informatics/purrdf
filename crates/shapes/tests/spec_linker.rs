@@ -1,0 +1,801 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The spec symbol table and its linker (`purrdf_shapes::spec`).
+//!
+//! Three claims, each executed rather than asserted in prose:
+//!
+//! 1. **The ratchet.** What the vendored W3C SHACL 1.2 vocabularies DECLARE and
+//!    what the table IMPLEMENTS agree exactly — every component, every function,
+//!    every key parameter and every parameter set — with the one gap there is
+//!    pinned by name.
+//! 2. **The linker's outcomes.** A built-in's bare declaration binds and indexes
+//!    nothing; a second definition, a kind or signature mismatch, a key clash and a
+//!    parameter of an unimplemented component are refused. Every refusal is proven
+//!    next to a VALID neighbour whose outcome differs from the refusal's.
+//! 3. **The resolution report.** Every call site names what it bound to.
+//!
+//! Test IRIs live under `example.org`; every `sh:` / `shnex:` / `sparql:` term used
+//! here is defined by the W3C specification that declares it.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use purrdf::RdfDataset;
+use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
+use purrdf_shapes::function_resolution::FunctionBinding;
+use purrdf_shapes::report::ValidationReport;
+use purrdf_shapes::shapes::{__linked_declarations, Constraint};
+use purrdf_shapes::spec::{
+    ComponentStatus, FunctionClass, SPEC_TEXT_OPTIONALITY, declared, implemented,
+};
+use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+
+const PREFIXES: &str = r"
+@prefix ex:     <http://example.org/ns#> .
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix shnex:  <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix sparql: <http://www.w3.org/ns/sparql#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+";
+
+/// The three vendored vocabulary files, byte for byte.
+const VOCABULARY_FILES: [&str; 3] = [
+    include_str!("../spec/shacl.ttl"),
+    include_str!("../spec/shnex.ttl"),
+    include_str!("../spec/shnex-sparql.ttl"),
+];
+
+/// The SHACL 1.2 Core components the vocabulary declares and this engine does not
+/// evaluate — the declared-vs-implemented gap, pinned by name. A shape using one
+/// of their parameters is a load error, never a silent conformance.
+const UNIMPLEMENTED_DECLARED_COMPONENTS: [&str; 9] = [
+    "http://www.w3.org/ns/shacl#MaxListLengthConstraintComponent",
+    "http://www.w3.org/ns/shacl#MemberShapeConstraintComponent",
+    "http://www.w3.org/ns/shacl#MinListLengthConstraintComponent",
+    "http://www.w3.org/ns/shacl#RootClassConstraintComponent",
+    "http://www.w3.org/ns/shacl#SingleLineConstraintComponent",
+    "http://www.w3.org/ns/shacl#SomeValueConstraintComponent",
+    "http://www.w3.org/ns/shacl#SubsetOfConstraintComponent",
+    "http://www.w3.org/ns/shacl#UniqueMembersConstraintComponent",
+    "http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent",
+];
+
+const SPARQL_NS: &str = "http://www.w3.org/ns/sparql#";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn load(shapes_ttl: &str) -> Result<purrdf_shapes::shapes::Shapes, String> {
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
+}
+
+fn load_error(shapes_ttl: &str) -> String {
+    load(shapes_ttl).expect_err("the shapes graph must be refused at load")
+}
+
+fn data_of(data_ttl: &str) -> Arc<RdfDataset> {
+    parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parses")
+}
+
+fn validate(shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
+    let shapes = load(shapes_ttl).expect("shapes load");
+    validate_dataset_with_shapes_graph(&data_of(data_ttl), &shapes, None).expect("validation runs")
+}
+
+/// The focus nodes a report names, sorted.
+fn focus_nodes(report: &ValidationReport) -> Vec<String> {
+    let mut out: Vec<String> = report
+        .results
+        .iter()
+        .map(|r| r.focus_node.to_string())
+        .collect();
+    out.sort();
+    out
+}
+
+fn linked(shapes_ttl: &str) -> purrdf_shapes::shapes::LinkedDeclarations {
+    let dataset =
+        parse_turtle_to_dataset(&format!("{PREFIXES}{shapes_ttl}"), None).expect("parses");
+    __linked_declarations(&dataset).expect("the declarations link")
+}
+
+/// The merged vocabulary as ONE dataset.
+fn vocabulary_dataset() -> Arc<RdfDataset> {
+    let merged: String = VOCABULARY_FILES.concat();
+    parse_turtle_to_dataset(&merged, None).expect("the merged vocabulary parses")
+}
+
+/// The number of function declarations in the raw vocabulary TEXT, counted by
+/// scanning the files for the declaring `a <class>` lines — independently of the
+/// RDF reader under test.
+fn function_declarations_in_text() -> usize {
+    VOCABULARY_FILES
+        .iter()
+        .flat_map(|text| text.lines())
+        .filter(|line| {
+            let line = line.trim();
+            line == "a sh:NamedParameterExpressionFunction ;"
+                || line == "a sh:ListParameterExpressionFunction ;"
+                || line == "a sh:NodeExpressionFunction ;"
+        })
+        .count()
+}
+
+/// The number of component declarations in the raw vocabulary text.
+fn component_declarations_in_text() -> usize {
+    VOCABULARY_FILES
+        .iter()
+        .flat_map(|text| text.lines())
+        .filter(|line| line.trim() == "a sh:ConstraintComponent ;")
+        .count()
+}
+
+// ── 1. The ratchet ────────────────────────────────────────────────────────────
+
+/// Every function the vocabularies declare binds to the table with the SAME class
+/// and the SAME parameter set, key flags and optionality included (optionality
+/// modulo the pinned spec-text ledger); every table row is declared.
+#[test]
+fn every_declared_function_binds_with_its_declared_signature() {
+    let vocab = declared().expect("the vendored vocabularies read");
+    let counted = function_declarations_in_text();
+    assert_eq!(
+        vocab.functions.len(),
+        counted,
+        "the RDF reader and the text scan disagree on how many functions are declared"
+    );
+    let table = implemented();
+    let optionality_overrides: BTreeSet<(&str, &str)> =
+        SPEC_TEXT_OPTIONALITY.iter().copied().collect();
+    let mut overrides_used: BTreeSet<(&str, &str)> = BTreeSet::new();
+    for (iri, declaration) in &vocab.functions {
+        let (class, params) = table
+            .function(iri)
+            .unwrap_or_else(|| panic!("<{iri}> is declared but the engine does not bind it"));
+        assert_eq!(class, declaration.class, "<{iri}>: declaring class");
+        let implemented_params: BTreeMap<&str, (bool, bool)> = params
+            .iter()
+            .map(|p| (p.path, (p.key, p.optional)))
+            .collect();
+        let declared_params: BTreeMap<&str, (bool, bool)> = declaration
+            .params
+            .iter()
+            .map(|p| (p.path.as_str(), (p.key, p.optional)))
+            .collect();
+        assert_eq!(
+            implemented_params.keys().collect::<Vec<_>>(),
+            declared_params.keys().collect::<Vec<_>>(),
+            "<{iri}>: the parameter set"
+        );
+        for (path, &(key, optional)) in &implemented_params {
+            let (declared_key, declared_optional) = declared_params[path];
+            assert_eq!(key, declared_key, "<{iri}> <{path}>: sh:keyParameter");
+            if optional != declared_optional {
+                let entry = optionality_overrides
+                    .get(&(iri.as_str(), *path))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "<{iri}> <{path}>: optionality differs from the vocabulary and the \
+                             spec-text ledger does not record it"
+                        )
+                    });
+                overrides_used.insert(*entry);
+            }
+        }
+    }
+    assert_eq!(
+        overrides_used, optionality_overrides,
+        "every spec-text optionality entry must be a REAL disagreement with the vocabulary"
+    );
+    for row in table.functions() {
+        assert!(
+            vocab.functions.contains_key(row.iri()),
+            "the table implements <{}>, which the vocabulary does not declare",
+            row.iri()
+        );
+    }
+    // The sparql: declarations are bound by the SPARQL lowering, not by table rows;
+    // the two alias spellings the vocabulary uses are among them.
+    let sparql_declared: BTreeSet<&str> = vocab
+        .functions
+        .keys()
+        .filter_map(|iri| iri.strip_prefix(SPARQL_NS))
+        .collect();
+    for alias in table.sparql_aliases() {
+        assert!(
+            sparql_declared.contains(alias.local),
+            "the alias sparql:{} is not a spelling the vocabulary declares",
+            alias.local
+        );
+    }
+    // Pinned from the files: 2 sh: + 22 shnex: named + shnex:conformsToShape +
+    // shnex:EmptyExpression + 77 sparql:.
+    assert_eq!(table.functions().len() + sparql_declared.len(), counted);
+    assert_eq!(
+        counted, 103,
+        "the vendored vocabularies declare 103 functions"
+    );
+}
+
+/// Every component the vocabulary declares is a table row with the SAME parameter
+/// set and optionality, and the rows the engine does not evaluate are EXACTLY the
+/// pinned gap.
+#[test]
+fn every_declared_component_is_a_row_and_the_gap_is_exactly_pinned() {
+    let vocab = declared().expect("the vendored vocabularies read");
+    assert_eq!(
+        vocab.components.len(),
+        component_declarations_in_text(),
+        "the RDF reader and the text scan disagree on how many components are declared"
+    );
+    assert_eq!(vocab.components.len(), 42);
+    let table = implemented();
+    let rows: BTreeSet<&str> = table
+        .components()
+        .iter()
+        .map(purrdf_shapes::spec::ComponentRow::iri)
+        .collect();
+    let declared_iris: BTreeSet<&str> = vocab.components.keys().map(String::as_str).collect();
+    assert_eq!(rows, declared_iris, "component rows == declared components");
+    for row in table.components() {
+        let declared_params: BTreeSet<(&str, bool)> = vocab.components[row.iri()]
+            .iter()
+            .map(|p| (p.path.as_str(), p.optional))
+            .collect();
+        let row_params: BTreeSet<(&str, bool)> =
+            row.params().iter().map(|p| (p.path, p.optional)).collect();
+        assert_eq!(row_params, declared_params, "<{}>: parameters", row.iri());
+    }
+    let native: BTreeSet<&str> = table
+        .components()
+        .iter()
+        .filter(|row| row.status() == ComponentStatus::Native)
+        .map(purrdf_shapes::spec::ComponentRow::iri)
+        .collect();
+    let gap: BTreeSet<&str> = declared_iris.difference(&native).copied().collect();
+    let pinned: BTreeSet<&str> = UNIMPLEMENTED_DECLARED_COMPONENTS.into_iter().collect();
+    assert_eq!(gap, pinned, "declared − implemented components");
+}
+
+/// The table's canonical text is deterministic and names every row.
+#[test]
+fn the_table_renders_every_row_deterministically() {
+    let table = implemented();
+    let text = table.canonical_text();
+    assert_eq!(text, implemented().canonical_text());
+    for row in table.functions() {
+        assert!(text.contains(row.iri()), "{} missing", row.iri());
+    }
+    for row in table.components() {
+        assert!(text.contains(row.iri()), "{} missing", row.iri());
+    }
+    assert!(text.contains("sparql-alias plus = add"));
+    assert!(text.contains("sparql-alias encode = encodeForUri"));
+}
+
+// ── 2. The linker: kept refusals, each beside a valid neighbour ──────────────
+
+const BODYLESS_EX_F: &str = r"
+ex:F a sh:ListParameterExpressionFunction ;
+  sh:parameter [ sh:path shnex:arg0 ] .
+ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+  sh:expression [ sparql:equals ( [ ex:F ( 2 ) ] 4 ) ] .
+";
+
+const BODIED_EX_F: &str = r"
+ex:F a sh:ListParameterExpressionFunction ;
+  sh:parameter [ sh:path shnex:arg0 ] ;
+  sh:bodyExpression [ sparql:multiply ( [ shnex:arg 0 ] 2 ) ] .
+ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+  sh:expression [ sparql:equals ( [ ex:F ( [ sh:path ex:n ] ) ] 4 ) ] .
+";
+
+#[test]
+fn a_bodiless_custom_function_is_refused() {
+    let error = load_error(BODYLESS_EX_F);
+    assert!(error.contains("declares 0 sh:bodyExpression"), "{error}");
+}
+
+#[test]
+fn a_bodied_custom_function_loads_and_evaluates() {
+    let report = validate(BODIED_EX_F, "ex:a ex:n 2 . ex:b ex:n 3 .");
+    assert_eq!(
+        focus_nodes(&report),
+        vec!["<http://example.org/ns#b>".to_owned()],
+        "2*2 = 4 conforms, 3*2 = 6 does not"
+    );
+}
+
+const BODYLESS_NOT_A_BUILTIN: &str = r"
+sh:NotABuiltin a sh:NamedParameterExpressionFunction ;
+  sh:parameter [ sh:path ex:notABuiltinKey ; sh:keyParameter true ] .
+";
+
+/// The issue's own declaration of `sh:SPARQLExprExpression`, verbatim.
+const ISSUE_SNIPPET: &str = r#"
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+"#;
+
+#[test]
+fn a_bodiless_non_builtin_in_the_sh_namespace_is_refused() {
+    let error = load_error(BODYLESS_NOT_A_BUILTIN);
+    assert!(
+        error.contains("NotABuiltin") && error.contains("declares 0 sh:bodyExpression"),
+        "nativeness is decided by implementation, not namespace: {error}"
+    );
+}
+
+#[test]
+fn the_builtin_sparql_expr_declaration_loads() {
+    let shapes = load(ISSUE_SNIPPET).expect("the W3C declaration binds natively");
+    assert!(
+        shapes.node_shapes.is_empty(),
+        "a declaration is not a shape"
+    );
+}
+
+/// Two custom named-parameter functions keyed `(ex:F key, ex:G key)`.
+fn two_named_functions(f_key: &str, g_key: &str) -> String {
+    format!(
+        "ex:F a sh:NamedParameterExpressionFunction ;
+           sh:parameter [ sh:path {f_key} ; sh:keyParameter true ] ;
+           sh:bodyExpression [ shnex:arg {f_key} ] .
+         ex:G a sh:NamedParameterExpressionFunction ;
+           sh:parameter [ sh:path {g_key} ; sh:keyParameter true ] ;
+           sh:bodyExpression [ shnex:arg {g_key} ] ."
+    )
+}
+
+#[test]
+fn colliding_custom_keys_are_refused_and_distinct_keys_load() {
+    let error = load_error(&two_named_functions("ex:k", "ex:k"));
+    assert!(error.contains("claimed by both"), "{error}");
+    let linked = linked(&two_named_functions("ex:k", "ex:j"));
+    assert_eq!(
+        linked.by_key_parameter("http://example.org/ns#k"),
+        Some("http://example.org/ns#F")
+    );
+    assert_eq!(
+        linked.by_key_parameter("http://example.org/ns#j"),
+        Some("http://example.org/ns#G")
+    );
+}
+
+// ── 2. The linker: new refusals, each beside a valid neighbour ───────────────
+
+/// A custom named-parameter function keyed by a built-in's key (or its AF
+/// spelling) could never be called: the call site dispatches to the built-in.
+#[test]
+fn a_custom_key_that_is_a_builtin_key_is_refused() {
+    for key in ["shnex:count", "sh:count"] {
+        let error = load_error(&format!(
+            "ex:MyCount a sh:NamedParameterExpressionFunction ;
+               sh:parameter [ sh:path {key} ; sh:keyParameter true ] ;
+               sh:bodyExpression [ shnex:count [ shnex:arg {key} ] ] ."
+        ));
+        assert!(
+            error.contains(
+                "The key parameters of all node expression functions (including the \
+                            built-in ones from the shnex: namespace) must be disjoint."
+            ),
+            "{key}: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_custom_key_of_its_own_evaluates() {
+    let shapes = r"
+        ex:MyCount a sh:NamedParameterExpressionFunction ;
+          sh:parameter [ sh:path ex:myCount ; sh:keyParameter true ] ;
+          sh:bodyExpression [ shnex:count [ shnex:arg ex:myCount ] ] .
+        ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+          sh:expression [ sparql:equals ( [ ex:myCount [ shnex:pathValues ex:p ] ] 2 ) ] .
+    ";
+    let report = validate(shapes, "ex:a ex:p 1, 2 . ex:b ex:p 1 .");
+    assert_eq!(
+        focus_nodes(&report),
+        vec!["<http://example.org/ns#b>".to_owned()],
+        "ex:a has two ex:p values, ex:b one"
+    );
+}
+
+/// A custom LIST-parameter function's own IRI is its call key, so a built-in key
+/// there is the same clash.
+#[test]
+fn a_custom_list_function_named_by_a_builtin_key_is_refused() {
+    let error = load_error(
+        "sh:count a sh:ListParameterExpressionFunction ;
+           sh:parameter [ sh:path shnex:arg0 ] ;
+           sh:bodyExpression [ shnex:arg 0 ] .",
+    );
+    assert!(error.contains("must be disjoint"), "{error}");
+    // The neighbour: the same declaration under an IRI of its own.
+    let ok = linked(
+        "ex:count a sh:ListParameterExpressionFunction ;
+           sh:parameter [ sh:path shnex:arg0 ] ;
+           sh:bodyExpression [ shnex:arg 0 ] .",
+    );
+    assert!(ok.custom_function("http://example.org/ns#count"));
+}
+
+#[test]
+fn a_builtin_function_given_a_body_is_a_duplicate_definition() {
+    let error = load_error(&format!(
+        "{ISSUE_SNIPPET}
+         sh:SPARQLExprExpression sh:bodyExpression [ shnex:var \"focusNode\" ] ."
+    ));
+    assert!(
+        error.contains("duplicate definition") && error.contains("SPARQLExprExpression"),
+        "{error}"
+    );
+    // The bare declaration binds (see `the_builtin_sparql_expr_declaration_loads`)
+    // and — the observing half — indexes nothing.
+    let bare = linked(ISSUE_SNIPPET);
+    assert!(!bare.custom_function("http://www.w3.org/ns/shacl#SPARQLExprExpression"));
+}
+
+const MIN_COUNT_DECLARATION: &str = r"
+sh:MinCountConstraintComponent a sh:ConstraintComponent ;
+  sh:parameter sh:MinCountConstraintComponent-minCount .
+sh:MinCountConstraintComponent-minCount a sh:Parameter ;
+  sh:path sh:minCount ; sh:datatype xsd:integer ; sh:maxCount 1 .
+";
+
+const MIN_COUNT_SHAPE: &str = r"
+ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+  sh:property [ sh:path ex:p ; sh:minCount 1 ] .
+";
+
+#[test]
+fn a_builtin_component_given_a_validator_is_a_duplicate_definition() {
+    let error = load_error(&format!(
+        "{MIN_COUNT_DECLARATION}
+         sh:MinCountConstraintComponent sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {{}}\" ] .
+         {MIN_COUNT_SHAPE}"
+    ));
+    assert!(
+        error.contains("duplicate definition") && error.contains("MinCountConstraintComponent"),
+        "{error}"
+    );
+}
+
+/// The bare declaration binds, and sh:minCount keeps its NATIVE semantics: ex:b
+/// (no ex:p) violates, ex:a conforms — a row that differs from the refusal's.
+#[test]
+fn the_bare_builtin_component_declaration_binds_natively() {
+    let report = validate(
+        &format!("{MIN_COUNT_DECLARATION}{MIN_COUNT_SHAPE}"),
+        "ex:a ex:p 1 .",
+    );
+    assert_eq!(
+        focus_nodes(&report),
+        vec!["<http://example.org/ns#b>".to_owned()]
+    );
+    assert_eq!(
+        linked(MIN_COUNT_DECLARATION).registered_components,
+        Vec::<String>::new(),
+        "a built-in component's declaration registers no custom component"
+    );
+}
+
+#[test]
+fn a_list_builtin_declared_as_named_is_a_kind_mismatch() {
+    let error = load_error("sparql:abs a sh:NamedParameterExpressionFunction .");
+    assert!(
+        error.contains("kind mismatch") && error.contains("sparql#abs"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_list_builtin_declared_as_list_binds_and_evaluates() {
+    let shapes = r"
+        sparql:abs a sh:ListParameterExpressionFunction .
+        ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+          sh:expression [ sparql:equals ( [ sparql:abs ( [ sh:path ex:n ] ) ] 42 ) ] .
+    ";
+    let report = validate(shapes, "ex:a ex:n -42 . ex:b ex:n -41 .");
+    assert_eq!(
+        focus_nodes(&report),
+        vec!["<http://example.org/ns#b>".to_owned()]
+    );
+    let bound = linked("sparql:abs a sh:ListParameterExpressionFunction .");
+    assert_eq!(bound.custom_functions, Vec::<String>::new());
+    assert_eq!(bound.native_list_functions, vec![format!("{SPARQL_NS}abs")]);
+}
+
+#[test]
+fn a_builtin_component_declared_as_a_function_is_a_kind_mismatch() {
+    let error = load_error(
+        "sh:MinCountConstraintComponent a sh:NamedParameterExpressionFunction ;
+           sh:parameter [ sh:path ex:k ; sh:keyParameter true ] .",
+    );
+    assert!(error.contains("kind mismatch"), "{error}");
+    // Neighbour: the component declared as a component binds.
+    load(MIN_COUNT_DECLARATION).expect("the component declaration binds");
+}
+
+#[test]
+fn a_builtin_function_declared_as_a_component_is_a_kind_mismatch() {
+    let error = load_error("shnex:CountExpression a sh:ConstraintComponent .");
+    assert!(error.contains("kind mismatch"), "{error}");
+    // Neighbour: declared under its own class, it binds.
+    load(
+        "shnex:CountExpression a sh:NamedParameterExpressionFunction ;
+           sh:parameter [ sh:path shnex:count ; sh:keyParameter true ] .",
+    )
+    .expect("the function declaration binds");
+}
+
+#[test]
+fn a_builtin_declaration_stating_a_foreign_parameter_is_a_signature_mismatch() {
+    let error = load_error(&format!(
+        "{ISSUE_SNIPPET}
+         sh:SPARQLExprExpression sh:parameter [ sh:path ex:extra ] ."
+    ));
+    assert!(error.contains("signature mismatch"), "{error}");
+    // Neighbour: a declaration stating FEWER of the built-in's parameters is an
+    // incomplete description, not a contradiction, and binds.
+    load(
+        "sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+           sh:parameter [ sh:path sh:sparqlExpr ; sh:keyParameter true ] .",
+    )
+    .expect("a subset of the signature binds");
+}
+
+#[test]
+fn a_builtin_declaration_keying_a_non_key_parameter_is_a_signature_mismatch() {
+    let error = load_error(
+        "sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+           sh:parameter [ sh:path sh:prefixes ; sh:keyParameter true ] .",
+    );
+    assert!(error.contains("signature mismatch"), "{error}");
+    // Neighbour: the W3C spelling states sh:prefixes with no sh:keyParameter.
+    load(ISSUE_SNIPPET).expect("the W3C declaration binds");
+}
+
+#[test]
+fn a_builtin_redefined_as_a_sparql_function_is_a_duplicate_definition() {
+    let error = load_error(
+        "sparql:abs a sh:SPARQLFunction ;
+           sh:parameter [ sh:path ex:x ] ;
+           sh:select \"SELECT (ABS($x) AS ?r) WHERE {}\" .",
+    );
+    assert!(error.contains("duplicate definition"), "{error}");
+    // Neighbour: the same SPARQL function under an IRI of its own loads.
+    load(
+        "ex:abs a sh:SPARQLFunction ;
+           sh:parameter [ sh:path ex:x ] ;
+           sh:select \"SELECT (ABS($x) AS ?r) WHERE {}\" .",
+    )
+    .expect("a SPARQL function under its own IRI loads");
+}
+
+// ── Declared-but-unimplemented components ────────────────────────────────────
+
+const SINGLE_LINE_DECLARATION: &str = r"
+sh:SingleLineConstraintComponent a sh:ConstraintComponent ;
+  sh:parameter sh:SingleLineConstraintComponent-singleLine .
+sh:SingleLineConstraintComponent-singleLine a sh:Parameter ;
+  sh:path sh:singleLine ; sh:datatype xsd:boolean ; sh:maxCount 1 .
+";
+
+const SINGLE_LINE_SHAPE: &str = r"
+ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+  sh:property [ sh:path ex:text ; sh:singleLine true ] .
+";
+
+#[test]
+fn a_shape_using_an_unimplemented_component_is_refused() {
+    for shapes in [
+        SINGLE_LINE_SHAPE.to_owned(),
+        format!("{SINGLE_LINE_DECLARATION}{SINGLE_LINE_SHAPE}"),
+    ] {
+        let error = load_error(&shapes);
+        assert!(
+            error.contains("SingleLineConstraintComponent") && error.contains("does not implement"),
+            "{error}"
+        );
+    }
+}
+
+/// The bare declaration of an unimplemented component loads and registers
+/// nothing; a shape that does not use its parameter validates as usual.
+#[test]
+fn a_bare_unimplemented_component_declaration_loads() {
+    let report = validate(
+        &format!(
+            "{SINGLE_LINE_DECLARATION}
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:property [ sh:path ex:text ; sh:minCount 1 ] ."
+        ),
+        "",
+    );
+    assert_eq!(
+        focus_nodes(&report),
+        vec!["<http://example.org/ns#a>".to_owned()]
+    );
+    assert_eq!(
+        linked(SINGLE_LINE_DECLARATION).registered_components,
+        Vec::<String>::new()
+    );
+}
+
+/// A shapes graph that IMPLEMENTS the component itself — a SHACL-SPARQL validator
+/// on the spec IRI — has it evaluated like any custom component: the two data
+/// rows below differ, so the parameter is honoured, not dropped.
+#[test]
+fn a_user_implemented_unimplemented_component_is_evaluated() {
+    let shapes = format!(
+        r#"{SINGLE_LINE_DECLARATION}
+        sh:SingleLineConstraintComponent sh:validator [
+          a sh:SPARQLAskValidator ;
+          sh:ask """ASK {{ FILTER (!$singleLine || !CONTAINS(STR($value), "\\n")) }}"""
+        ] .
+        {SINGLE_LINE_SHAPE}"#
+    );
+    let multi = validate(&shapes, "ex:a ex:text \"one\\ntwo\" .");
+    let single = validate(&shapes, "ex:a ex:text \"one two\" .");
+    assert_eq!(
+        focus_nodes(&multi),
+        vec!["<http://example.org/ns#a>".to_owned()]
+    );
+    assert!(single.conforms, "a single-line value conforms");
+    assert_eq!(
+        linked(&shapes).registered_components,
+        vec!["http://www.w3.org/ns/shacl#SingleLineConstraintComponent".to_owned()]
+    );
+}
+
+// ── 5. The index stays empty ─────────────────────────────────────────────────
+
+/// The whole merged vocabulary indexes no custom function, claims no key
+/// parameter, registers no component — and binds exactly the built-in
+/// list-parameter functions it declares.
+#[test]
+fn the_merged_vocabulary_indexes_and_registers_nothing() {
+    let linked = __linked_declarations(&vocabulary_dataset()).expect("the vocabulary links");
+    assert_eq!(
+        linked.custom_functions,
+        Vec::<String>::new(),
+        "{:?}",
+        linked.custom_functions
+    );
+    assert!(!linked.custom_function("http://www.w3.org/ns/shacl#SPARQLExprExpression"));
+    assert_eq!(
+        linked.by_key_parameter("http://www.w3.org/ns/shacl#sparqlExpr"),
+        None
+    );
+    assert_eq!(linked.custom_key_parameters, Vec::<(String, String)>::new());
+    assert_eq!(
+        linked.registered_components,
+        Vec::<String>::new(),
+        "{:?}",
+        linked.registered_components
+    );
+    let vocab = declared().expect("vocabularies read");
+    let list: Vec<String> = vocab
+        .functions
+        .iter()
+        .filter(|(_, f)| f.class == FunctionClass::ListParameter)
+        .map(|(iri, _)| iri.clone())
+        .collect();
+    assert_eq!(linked.native_list_functions, list);
+    assert_eq!(list.len(), 78, "shnex:conformsToShape + 77 sparql:");
+}
+
+#[test]
+fn the_issue_snippet_indexes_nothing() {
+    let linked = linked(ISSUE_SNIPPET);
+    assert!(!linked.custom_function("http://www.w3.org/ns/shacl#SPARQLExprExpression"));
+    assert_eq!(
+        linked.by_key_parameter("http://www.w3.org/ns/shacl#sparqlExpr"),
+        None
+    );
+    assert_eq!(linked.registered_components, Vec::<String>::new());
+}
+
+/// The whole merged vocabulary also loads as a shapes graph, with no shape: its
+/// `sh:Parameter` nodes stay inert.
+#[test]
+fn the_merged_vocabulary_loads_with_no_shape() {
+    let shapes = purrdf_shapes::shapes::from_dataset(&vocabulary_dataset())
+        .expect("the merged vocabulary loads");
+    assert!(shapes.node_shapes.is_empty());
+}
+
+// ── 3. The function-resolution report ────────────────────────────────────────
+
+#[test]
+fn every_call_site_names_what_it_bound_to() {
+    let shapes = load(
+        r#"
+        ex:f a sh:ListParameterExpressionFunction ;
+          sh:parameter [ sh:path shnex:arg0 ] ;
+          sh:bodyExpression [ sparql:abs ( [ shnex:arg 0 ] ) ] .
+        ex:g a sh:SPARQLFunction ;
+          sh:parameter [ sh:path ex:x ] ;
+          sh:select "SELECT (ABS($x) AS ?r) WHERE {}" .
+        ex:Target a sh:NodeShape ; sh:targetNode ex:a .
+        ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+          sh:expression [ sparql:equals ( [ ex:f ( 1 ) ] 1 ) ] ;
+          sh:expression [ sparql:equals ( [ ex:g ( 1 ) ] 1 ) ] ;
+          sh:expression [ sparql:equals ( [ ex:h ( 1 ) ] 1 ) ] ;
+          sh:expression [ sh:sparqlExpr "true" ] ;
+          sh:expression [ shnex:conformsToShape ( sh:this ex:Target ) ] .
+        "#,
+    )
+    .expect("shapes load");
+    let report = shapes.function_resolution();
+    let expect = [
+        (format!("{SPARQL_NS}equals"), FunctionBinding::Native),
+        (format!("{SPARQL_NS}abs"), FunctionBinding::Native),
+        (
+            "http://example.org/ns#f".to_owned(),
+            FunctionBinding::Custom,
+        ),
+        (
+            "http://example.org/ns#g".to_owned(),
+            FunctionBinding::SparqlRegistered,
+        ),
+        (
+            "http://example.org/ns#h".to_owned(),
+            FunctionBinding::HostExtension,
+        ),
+        (
+            "http://www.w3.org/ns/shacl#SPARQLExprExpression".to_owned(),
+            FunctionBinding::Native,
+        ),
+        (
+            "http://www.w3.org/ns/shacl-node-expr#conformsToShape".to_owned(),
+            FunctionBinding::Native,
+        ),
+    ];
+    for (function, binding) in &expect {
+        assert_eq!(
+            report.bindings_of(function),
+            BTreeSet::from([*binding]),
+            "{function}"
+        );
+    }
+    // The call inside ex:f's BODY is reported under the calling site.
+    assert!(
+        report
+            .sites()
+            .any(|site| site.function == format!("{SPARQL_NS}abs")
+                && site.owner.contains("via <http://example.org/ns#f>")),
+        "the body of a custom function is walked"
+    );
+    assert!(
+        !shapes.node_shapes.iter().any(|s| s
+            .constraints
+            .iter()
+            .any(|c| matches!(c, Constraint::Component { .. }))),
+        "no component instance was made from a function declaration"
+    );
+}

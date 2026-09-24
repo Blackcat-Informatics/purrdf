@@ -135,14 +135,24 @@ impl ComponentRegistry {
             let Term::NamedNode(component) = subject else {
                 continue;
             };
-            // Built-in components already have native parsing and evaluation.
-            // Importing their RDF declarations must not add a second dispatch.
-            if is_native_component(component.as_str()) {
+            if !seen.insert(component.as_str().to_owned()) {
                 continue;
             }
-            if seen.insert(component.as_str().to_owned()) {
-                component_iris.push(component.as_str().to_owned());
+            // The linker (`crate::spec`): a declaration of a component the spec
+            // symbol table knows is a SIGNATURE, bound against the table rather than
+            // registered as a custom component. A native component's bare
+            // declaration binds and registers nothing; one carrying a validator is
+            // a duplicate definition; a declaration of a built-in FUNCTION IRI is a
+            // kind mismatch. Only a validator-bearing declaration of a component
+            // the engine does not evaluate is a user implementation, registered
+            // like any custom component.
+            crate::spec::refuse_component_declared_function(component.as_str())?;
+            if let Some(row) = crate::spec::component(component.as_str())
+                && !crate::spec::bind_spec_component(data, row)?
+            {
+                continue;
             }
+            component_iris.push(component.as_str().to_owned());
         }
         component_iris.sort();
 
@@ -166,48 +176,6 @@ impl ComponentRegistry {
         }
         Ok(registry)
     }
-}
-
-/// Components executed by the native SHACL engines, even when their vocabulary
-/// declarations occur in the input dataset. Custom IRIs in the SHACL namespace
-/// remain discoverable; this list identifies implementations, not namespaces.
-fn is_native_component(iri: &str) -> bool {
-    matches!(
-        iri,
-        "http://www.w3.org/ns/shacl#PropertyConstraintComponent"
-            | sh::SPARQL_CONSTRAINT_COMPONENT
-            | sh::EXPRESSION_CONSTRAINT_COMPONENT
-            | sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT
-            | sh::MIN_COUNT_CONSTRAINT_COMPONENT
-            | sh::MAX_COUNT_CONSTRAINT_COMPONENT
-            | sh::CLASS_CONSTRAINT_COMPONENT
-            | sh::DATATYPE_CONSTRAINT_COMPONENT
-            | sh::NODE_KIND_CONSTRAINT_COMPONENT
-            | sh::IN_CONSTRAINT_COMPONENT
-            | sh::HAS_VALUE_CONSTRAINT_COMPONENT
-            | sh::PATTERN_CONSTRAINT_COMPONENT
-            | sh::MIN_LENGTH_CONSTRAINT_COMPONENT
-            | sh::UNIQUE_LANG_CONSTRAINT_COMPONENT
-            | sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT
-            | sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT
-            | sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT
-            | sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT
-            | sh::AND_CONSTRAINT_COMPONENT
-            | sh::OR_CONSTRAINT_COMPONENT
-            | sh::XONE_CONSTRAINT_COMPONENT
-            | sh::NODE_CONSTRAINT_COMPONENT
-            | sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT
-            | sh::MAX_LENGTH_CONSTRAINT_COMPONENT
-            | sh::NOT_CONSTRAINT_COMPONENT
-            | sh::LANGUAGE_IN_CONSTRAINT_COMPONENT
-            | sh::CLOSED_CONSTRAINT_COMPONENT
-            | sh::EQUALS_CONSTRAINT_COMPONENT
-            | sh::DISJOINT_CONSTRAINT_COMPONENT
-            | sh::LESS_THAN_CONSTRAINT_COMPONENT
-            | sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT
-            | sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT
-            | sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT
-    )
 }
 
 /// Map an `sh:severity` object term to a [`Severity`]: the three built-in

@@ -646,6 +646,19 @@ impl UserFunctionRegistry {
         self.fns.get(iri)
     }
 
+    /// Remove the SPARQL-bodied function registered under `iri`, returning it.
+    ///
+    /// The seam SHACL 1.2 SPARQL Extensions §7.3's redefinition rule needs: "If a
+    /// function with the same IRI is already registered, SHACL engines MUST ignore
+    /// the attempt to redefine it unless the function was previously added as a
+    /// custom SPARQL function." A custom SPARQL function is therefore the one kind
+    /// an expression-bodied registration replaces, and the cross-kind guard on
+    /// [`Self::register_expr`] requires it gone first. Native and expression-bodied
+    /// entries have no removal: §7.3 keeps them.
+    pub fn remove_sparql_bodied(&mut self, iri: &str) -> Option<UserFunction> {
+        self.fns.remove(iri)
+    }
+
     /// Resolve a call-position IRI to its declared native function, if any.
     #[must_use]
     pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
