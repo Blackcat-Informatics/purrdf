@@ -328,7 +328,7 @@ index's pinned recall on every regime.
 |---|---|---|
 | image header `arithmetic` field | `1` | the code of the dispatch path the build resolved: `2` sse2, `3` avx2+fma, `4` avx512f, `5` neon, `6` wasm-simd128, `7` wasm-scalar, `8` portable (every target other than x86-64, aarch64 and wasm) |
 | image header `shape` field | absent | the build's `BuildShape`: target architecture and the target features that decide the reassociated body's code |
-| implementation identifier | `hnsw-v2` (`hnsw-reassociated-v2` for the reassociated index, §3.1) | `hnsw-reassociated-v2` |
+| implementation identifier | `hnsw-v2` | `hnsw-reassociated-v2` |
 | evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by the compiled build that made it, running the same dispatch path: the image records that build's target architecture and features, and CPU tuning and the compiler version, which it cannot record, may change its bits too." (`profile::loss_evidence_reassociated`) |
 | profile declaration | `arithmetic=binary64-lane16-tree-v1` | `arithmetic=binary64-reassociated-v1`, the path's revision, and `build-shape=<bits>` |
 | `IndexLossContract` | `transforms_vectors: false` | `transforms_vectors: false` |

@@ -431,8 +431,8 @@ impl core::fmt::Display for EvalError {
             ),
             Self::FloatEnvironment(error) => write!(
                 f,
-                "the floating-point environment cannot run the exact distance arithmetic: \
-                 {error}"
+                "the thread's floating-point environment cannot run the distance \
+                 arithmetic: {error}"
             ),
         }
     }
