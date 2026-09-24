@@ -1398,59 +1398,322 @@ summary = "`Interner::intern`, the fixed-key ahash term interner"
 
 [[site]]
 id = "core.content-id-hex"
-summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_hex_32`)"
+summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_hex_32_lower` / `decode_hex_32`): sixteen-byte compare lanes, a vertical rejection accumulator folded once, then the nibble pack"
 
+  # Sixteen-byte lanes: unsigned range compares as `pminub` + `pcmpeqb`, the rejection fold by `pmovmskb`. Measured v83.
   [[site.measure]]
-  label = "content-id"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "content-id sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  min_vector_ops = 41
+  require_mnemonics = ["pcmpeqb", "pminub", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v60.
+  [[site.measure]]
+  label = "content-id avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  min_vector_ops = 30
+  require_mnemonics = ["vpcmpeqb", "vpminub", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the unsigned compares are native and write mask registers. Measured v28.
+  [[site.measure]]
+  label = "content-id avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  min_vector_ops = 14
+  require_mnemonics = ["vpcmpltub", "vpcmpnleub"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON unsigned byte compares; `addp` folds the rejection lanes. Measured v58 (aarch64), v58 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "content-id neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  min_vector_ops = 29
+  require_mnemonics = ["cmhi", "cmhs"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "content-id scalar"
+  configs = ["wasm32"]
   crate = "purrdf_core"
   symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
+  # Packed unsigned byte compares. Measured v58.
   [[site.measure]]
-  label = "content-store"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "content-id simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  min_vector_ops = 29
+  require_mnemonics = ["i8x16.lt_u", "i8x16.gt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Sixteen-byte lanes: unsigned range compares as `pminub` + `pcmpeqb`, the rejection fold by `pmovmskb`. Measured v87.
+  [[site.measure]]
+  label = "content-store sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  min_vector_ops = 43
+  require_mnemonics = ["pcmpeqb", "pminub", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v64.
+  [[site.measure]]
+  label = "content-store avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  min_vector_ops = 32
+  require_mnemonics = ["vpcmpeqb", "vpminub", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 in the build the unsigned compares are native and write mask registers. Measured v32.
+  [[site.measure]]
+  label = "content-store avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  min_vector_ops = 16
+  require_mnemonics = ["vpcmpltub", "vpcmpnleub"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON unsigned byte compares; `addp` folds the rejection lanes. Measured v62 (aarch64), v62 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "content-store neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  min_vector_ops = 31
+  require_mnemonics = ["cmhi", "cmhs"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
+  [[site.measure]]
+  label = "content-store scalar"
+  configs = ["wasm32"]
   crate = "purrdf_core"
   symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
+  # Packed unsigned byte compares. Measured v61.
+  [[site.measure]]
+  label = "content-store simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  min_vector_ops = 30
+  require_mnemonics = ["i8x16.lt_u", "i8x16.gt_u"]
+  max_fma = 0
+  forbid_relaxed = true
+
 [[site]]
 id = "core.hex-lower"
-summary = "`hex::lower`, lowercase hex encoding"
+summary = "`hex::lower`, lowercase hex encoding: each nibble mapped to its digit by a compare-selected addend, written into a buffer sized up front"
 
+  # Packed byte compares select the letter addend; `punpcklbw` interleaves the two digits of each byte. Measured v36.
   [[site.measure]]
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::hex::lower"
+  min_vector_ops = 18
+  require_mnemonics = ["pcmpgtb", "paddb", "punpcklbw"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v27.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::hex::lower"
+  min_vector_ops = 13
+  require_mnemonics = ["vpcmpgtb", "vpaddb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape at AVX-512. Measured v25.
+  [[site.measure]]
+  label = "avx512"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::hex::lower"
+  min_vector_ops = 12
+  require_mnemonics = ["vpcmpgtb", "vpaddb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON byte compares and adds. Measured v27.
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::hex::lower"
+  min_vector_ops = 13
+  require_mnemonics = ["cmhi", "add"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With SVE in the build part of the loop compares into predicate registers. Measured v23.
+  [[site.measure]]
+  label = "sve"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::hex::lower"
+  min_vector_ops = 11
+  require_mnemonics = ["cmphi", "cmhi"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the digit loop is scalar, same result. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
   crate = "purrdf_core"
   symbol = "purrdf_core::hex::lower"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
+  # Packed byte compares and adds. Measured v12.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::hex::lower"
+  min_vector_ops = 6
+  require_mnemonics = ["i8x16.gt_u", "i8x16.add"]
+  max_fma = 0
+  forbid_relaxed = true
+
 [[site]]
 id = "core.pack-dict-prefix"
-summary = "`pack::dict::encode_values` with its inlined `common_prefix_len` front coding"
+summary = "`pack::dict::encode_values` with its inlined `common_prefix_len` front coding: eight-byte XOR words, the first difference by a 64-bit trailing-zero count"
 
+  # SWAR, not vector: the word loop exits on a 64-bit trailing-zero count (`bsfq`; hashbrown's group probes, which the count also holds, use 32-bit `bsfl` on a 16-bit mask). The vector ops are hashbrown's. Measured v66.
   [[site.measure]]
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "swar"
+  configs = ["x86_64"]
   crate = "purrdf_core"
   symbol = "purrdf_core::ir::pack::dict::encode_values"
   min_vector_ops = 0
+  require_mnemonics = ["rep bsfq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same exit as `tzcntq`. Measured v58 (x86_64-v3), v24 (x86_64-v4).
+  [[site.measure]]
+  label = "swar"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::dict::encode_values"
+  min_vector_ops = 0
+  require_mnemonics = ["tzcntq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The trailing-zero count as `rbit` + `clz`. Measured v23 (aarch64), v18 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "swar"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::dict::encode_values"
+  min_vector_ops = 0
+  require_mnemonics = ["rbit", "clz"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The trailing-zero count as `i64.ctz`. Measured v0 (wasm32), v3 (wasm32-simd128).
+  [[site.measure]]
+  label = "swar"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::dict::encode_values"
+  min_vector_ops = 0
+  require_mnemonics = ["i64.ctz"]
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
 id = "core.pack-select-in-word"
-summary = "`pack::bits::select_in_word`, the bit-by-bit in-word select"
+summary = "`pack::bits::select_in_word`, the broadword in-word select: SWAR byte popcounts, a multiply prefix sum, a compare-and-count for the byte, a 256×8 table for the bit"
 
+  # Loop-free SWAR: the byte prefix sums and the byte count are `imulq` by the byte-ones constant. Measured v0.
   [[site.measure]]
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  label = "broadword"
+  configs = ["x86_64"]
   crate = "purrdf_core"
   symbol = "purrdf_core::ir::pack::bits::select_in_word"
   min_vector_ops = 0
+  require_mnemonics = ["imulq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same, with the range check's total recognized as `popcntq`. Measured v0.
+  [[site.measure]]
+  label = "broadword"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::bits::select_in_word"
+  min_vector_ops = 0
+  require_mnemonics = ["imulq", "popcntq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The prefix sums as `mul`/`madd`; the range check's total as NEON `cnt` + `addv`. Measured v2.
+  [[site.measure]]
+  label = "broadword"
+  configs = ["aarch64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::bits::select_in_word"
+  min_vector_ops = 1
+  require_mnemonics = ["madd", "cnt .8b"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same, with the total as SVE `cnt`. Measured v1.
+  [[site.measure]]
+  label = "broadword"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::bits::select_in_word"
+  min_vector_ops = 0
+  require_mnemonics = ["madd", "cnt .d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The prefix sums as `i64.mul`; the total as `i64.popcnt`. Measured v0.
+  [[site.measure]]
+  label = "broadword"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::pack::bits::select_in_word"
+  min_vector_ops = 0
+  require_mnemonics = ["i64.mul", "i64.popcnt"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -1527,12 +1790,90 @@ summary = "`IntVector::get`, the fixed-width packed read (a two-word gather)"
 
 [[site]]
 id = "core.dataset-scan-filter"
-summary = "the residual `(s, p, o, g)` filter of `RdfDataset::quads_for_pattern_with_plan`, in the `Map<Filter<..>>::next` its callers instantiate"
+summary = "the residual `(s, p, o, g)` filter of `RdfDataset::quads_for_pattern_with_plan`: eight rows at a time, masked `u32` compares against broadcast keys, in `QuadMatches::next` (inlined into each crate that iterates it)"
 
+  # Packed `u32` compares of the masked XOR words against zero, `movmskps` extracts the row lanes. Measured v73 in every copy.
   [[site.measure]]
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "core"
-  symbol = "<core::iter::adapters::map::Map<core::iter::adapters::filter::Filter<purrdf_core::ir::dataset::QuadCandidates, <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan::{closure#0}>, <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan::{closure#1}> as core::iter::traits::iterator::Iterator>::next"
+  label = "sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 36
+  require_mnemonics = ["pcmpeqd", "movmskps"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape at 256 bits. Measured v47.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 23
+  require_mnemonics = ["vpcmpeqd", "vmovmskps"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 the zero test is `vptestnmd` into a mask register. Measured v18.
+  [[site.measure]]
+  label = "avx512 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 9
+  require_mnemonics = ["vptestnmd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON word compares and tests; `addv` folds the row bits. Measured v58 (aarch64), v58 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 29
+  require_mnemonics = ["cmeq", "cmtst"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the chunk loop is straight-line scalar code, same rows in the same order. Measured v0.
+  [[site.measure]]
+  label = "scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed `u32` compares, `i16x8.bitmask` extracts the row lanes. Measured v57.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 28
+  require_mnemonics = ["i32x4.eq", "i16x8.bitmask"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The owned cursor (`quads_for_pattern_cursor`): a sequential run is searched by `QuadKey::first_match`, the same eight-row kernel, inlined; a permuted run tests each row with `QuadKey::matches`. The call-site entry records its counts; the kernel's floors are the `QuadMatches::next` measures above. Measured v97 (x86_64), with the kernel's `pcmpeqd` + `movmskps`.
+  [[site.measure]]
+  label = "cursor"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::dataset::QuadPatternCursor as core::iter::traits::iterator::Iterator>::next"
+  min_vector_ops = 0
+  require_mnemonics = ["pcmpeqd", "movmskps"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same call site on the other configurations; the entry records its counts.
+  [[site.measure]]
+  label = "cursor"
+  configs = ["x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "<purrdf_core::ir::dataset::QuadPatternCursor as core::iter::traits::iterator::Iterator>::next"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1726,9 +2067,76 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
 
 [[site]]
 id = "core.purremb-f32-decode"
-summary = "`F32Scalars::next`, the per-scalar f32 row decode, inlined into `EffectiveF32Row::next`"
+summary = "the PURREMB f32 finite fold behind `F32Scalars::check_finite` / `decode_into`: sixteen exponent-field compares per block and a branch-free OR; the lazy per-scalar `EffectiveF32Row::next` recorded beside it"
 
+  # Packed `u32` compares of the exponent field, `pmovmskb` tests the block. Measured v36.
   [[site.measure]]
+  label = "fold sse2"
+  configs = ["x86_64"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::embedding::view::first_non_finite_f32"
+  min_vector_ops = 18
+  require_mnemonics = ["pcmpeqd", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same shape, VEX-encoded. Measured v30.
+  [[site.measure]]
+  label = "fold avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::embedding::view::first_non_finite_f32"
+  min_vector_ops = 15
+  require_mnemonics = ["vpcmpeqd", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # With AVX-512 the compares write mask registers. Measured v10.
+  [[site.measure]]
+  label = "fold avx512"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::embedding::view::first_non_finite_f32"
+  min_vector_ops = 5
+  require_mnemonics = ["vpcmpeqd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # NEON word compares; `addp` folds the block. Measured v13 (aarch64), v12 (aarch64-neoverse-v1).
+  [[site.measure]]
+  label = "fold neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::embedding::view::first_non_finite_f32"
+  min_vector_ops = 6
+  require_mnemonics = ["cmeq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm32 has no vector instructions: the lane loop is scalar, same first index. Measured v0.
+  [[site.measure]]
+  label = "fold scalar"
+  configs = ["wasm32"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::embedding::view::first_non_finite_f32"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Packed `u32` compares, `v128.any_true` tests the block. Measured v48.
+  [[site.measure]]
+  label = "fold simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::embedding::view::first_non_finite_f32"
+  min_vector_ops = 24
+  require_mnemonics = ["i32x4.eq", "v128.any_true"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The lazy per-scalar iterator, kept for callers that consume one value at a time: one `from_le_bytes` and a finiteness branch per scalar; the entry records its counts.
+  [[site.measure]]
+  label = "iterator"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_core"
   symbol = "<purrdf_core::ir::embedding::view::EffectiveF32Row as core::iter::traits::iterator::Iterator>::next"

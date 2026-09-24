@@ -1050,8 +1050,32 @@ def matches(func: Function, measure: Measure) -> bool:
     return func.crate == measure.crate and measure.symbol in func.path
 
 
-def evaluate(site: Site, measure: Measure, config: Config, functions: list[Function]) -> Result:
+def _is_nested_closure(func: Function, symbol: str) -> bool:
+    """Whether `func` is a closure nested inside the function `symbol` names.
+
+    A `|_| unreachable!(..)` handed to `unwrap_or_else`, or any other closure a
+    measured function defines, is its own out-of-line symbol whose path extends the
+    parent's with `::{closure#N}`. It carries none of the parent's evidence, so when
+    the parent itself is matched the closure is not a second copy of the site.
+    """
+    at = func.path.find(symbol)
+    return at >= 0 and "{closure" in func.path[at + len(symbol):] and "{closure" not in symbol
+
+
+def measured(functions: list[Function], measure: Measure) -> list[Function]:
+    """The functions a measure judges: its matches, less closures nested in a match.
+
+    Closures are dropped only when a non-closure match remains, so a site whose
+    evidence genuinely lives in a closure is still measured there, never reported as
+    absent.
+    """
     matched = [f for f in functions if matches(f, measure)]
+    parents = [f for f in matched if not _is_nested_closure(f, measure.symbol)]
+    return parents or matched
+
+
+def evaluate(site: Site, measure: Measure, config: Config, functions: list[Function]) -> Result:
+    matched = measured(functions, measure)
     problems: list[str] = []
     where = f"`{site.id}`{' [' + measure.label + ']' if measure.label else ''} on {config.name}"
     if not matched:
@@ -1916,6 +1940,15 @@ def self_test() -> int:
     expect(all(".LBB" not in f.symbol for f in collect_functions([("f.s", _X86_SCALAR)], "x86")), ".LBB is never a function")
     picked = collect_functions([("f.s", _X86_FAST + _X86_PACKED)], "x86", select=lambda d: d.path == "demo::fast::dot")
     expect([f.path for f in picked] == ["demo::fast::dot"] and len(picked[0].instructions) == 5, "the name prefilter keeps only the selected function, clones included")
+    # -- a closure nested in a measured function is not a second copy of the site
+    parent = collect_functions([("f.s", _X86_PACKED)], "x86")[0]
+    stub = Function(parent.symbol + "c", parent.path + "::{closure#0}", parent.crate, parent.unit)
+    judged = measured([parent, stub], _measure())
+    expect(judged == [parent], "a scalar closure nested in a vectorized match is not judged against its floor")
+    expect(measured([stub], _measure()) == [stub], "a closure that is the only match is still measured, never dropped")
+    expect(any("below the floor" in p for p in evaluate(Site("fixture", "fixture", (_measure(),)), _measure(), next(c for c in CONFIGS if c.arch == "x86"), [stub]).problems), "a closure-only match still fails its floor")
+    named = _measure(symbol=parent.path + "::{closure#0}")
+    expect(measured([parent, stub], named) == [stub], "a symbol that names the closure measures the closure")
     wasm_funcs = collect_functions([("w.s", _WASM_EXACT)], "wasm")
     expect(len(wasm_funcs) == 1 and wasm_funcs[0].path == "demo::kernel::dot", "wasm function split")
 

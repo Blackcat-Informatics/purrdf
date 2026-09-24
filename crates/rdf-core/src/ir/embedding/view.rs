@@ -804,6 +804,109 @@ impl Iterator for F32Scalars<'_> {
 
 impl ExactSizeIterator for F32Scalars<'_> {}
 
+/// Scalars per block of the bulk finite fold: 64 bytes of `f32`.
+const F32_FOLD_BLOCK: usize = 16;
+
+/// The exponent field of a binary32: all ones exactly when the value is an
+/// infinity or a NaN.
+const F32_EXPONENT: u32 = 0x7F80_0000;
+
+/// The index of the first non-finite scalar of `words` (little-endian
+/// binary32 encodings), or `None` when every scalar is finite.
+///
+/// Sixteen scalars per block: each lane is a `0x0000_0000`/`0xFFFF_FFFF` word
+/// from one masked comparison of the exponent field (the finiteness test of
+/// [`f32::is_finite`], on the bits), and a branch-free OR of the lanes is the
+/// clean-block test. Only a block holding a non-finite scalar is searched again
+/// for its first one, out of line. The scalars after the last whole block are
+/// tested one at a time.
+///
+/// Out of line on purpose: [`F32Scalars::check_finite`] and
+/// [`F32Scalars::decode_into`] share this one kernel rather than each carrying a
+/// copy of it.
+#[inline(never)]
+fn first_non_finite_f32(words: &[[u8; 4]]) -> Option<usize> {
+    let (blocks, tail) = words.as_chunks::<F32_FOLD_BLOCK>();
+    for (k, block) in blocks.iter().enumerate() {
+        let mut lanes = [0_u32; F32_FOLD_BLOCK];
+        for (lane, word) in lanes.iter_mut().zip(block) {
+            let exponent = u32::from_le_bytes(*word) & F32_EXPONENT;
+            *lane = u32::from(exponent == F32_EXPONENT).wrapping_neg();
+        }
+        if lanes.iter().fold(0, |any, &lane| any | lane) != 0 {
+            return Some(k * F32_FOLD_BLOCK + first_non_finite_in_block(block));
+        }
+    }
+    tail.iter()
+        .position(|word| u32::from_le_bytes(*word) & F32_EXPONENT == F32_EXPONENT)
+        .map(|i| blocks.len() * F32_FOLD_BLOCK + i)
+}
+
+/// The first non-finite scalar of a block the fold found one in.
+#[cold]
+#[inline(never)]
+fn first_non_finite_in_block(block: &[[u8; 4]; F32_FOLD_BLOCK]) -> usize {
+    block
+        .iter()
+        .position(|word| u32::from_le_bytes(*word) & F32_EXPONENT == F32_EXPONENT)
+        .unwrap_or(F32_FOLD_BLOCK)
+}
+
+impl F32Scalars<'_> {
+    /// The whole scalars not yet yielded, as little-endian encodings. A final
+    /// partial scalar is not one, exactly as [`Iterator::next`] never yields it.
+    fn remaining_words(&self) -> &[[u8; 4]] {
+        self.bytes
+            .get(self.position..)
+            .map_or(&[], |rest| rest.as_chunks::<4>().0)
+    }
+
+    /// The error [`Iterator::next`] yields for the non-finite scalar `index`
+    /// scalars past the current position.
+    fn non_finite_at(&self, index: usize) -> EmbeddingError {
+        let column = self
+            .first_column
+            .saturating_add(u32::try_from(self.position / 4 + index).unwrap_or(u32::MAX));
+        EmbeddingError::NonFiniteScalar {
+            row: self.row,
+            column,
+        }
+    }
+
+    /// Check that every remaining scalar is finite, in one pass with no
+    /// per-scalar branch.
+    ///
+    /// The result is the one the iterator gives when drained with `?`: `Ok`
+    /// when every scalar is finite, and otherwise the
+    /// [`EmbeddingError::NonFiniteScalar`] of the first non-finite scalar, at
+    /// the same column.
+    pub fn check_finite(self) -> Result<(), EmbeddingError> {
+        match first_non_finite_f32(self.remaining_words()) {
+            None => Ok(()),
+            Some(index) => Err(self.non_finite_at(index)),
+        }
+    }
+
+    /// Append every remaining scalar to `out`, in order.
+    ///
+    /// Exactly `for value in self { out.push(value?) }`, in bulk: the finite
+    /// fold of [`check_finite`](Self::check_finite) runs first, then the
+    /// scalars are decoded with one `from_le_bytes` each and no per-scalar
+    /// branch. When a scalar is not finite, the scalars before it are appended
+    /// and its [`EmbeddingError::NonFiniteScalar`] is returned, at the same
+    /// column the iterator reports.
+    pub fn decode_into(self, out: &mut Vec<f32>) -> Result<(), EmbeddingError> {
+        let words = self.remaining_words();
+        let first_bad = first_non_finite_f32(words);
+        let clean = &words[..first_bad.unwrap_or(words.len())];
+        out.extend(clean.iter().map(|word| f32::from_le_bytes(*word)));
+        match first_bad {
+            None => Ok(()),
+            Some(index) => Err(self.non_finite_at(index)),
+        }
+    }
+}
+
 /// Portable little-endian `f64` decoder that rejects non-finite values lazily.
 #[derive(Debug, Clone)]
 pub struct F64Scalars<'a> {
@@ -881,6 +984,28 @@ impl Iterator for EffectiveF32Row<'_> {
 }
 
 impl ExactSizeIterator for EffectiveF32Row<'_> {}
+
+impl EffectiveF32Row<'_> {
+    /// Append every remaining logical value to `out`, in order.
+    ///
+    /// Exactly `for value in self { out.push(value?) }`, in bulk: a raw row is
+    /// [`F32Scalars::decode_into`]; a normalized row decodes the same way and
+    /// then divides each appended value by the row's normative norm in binary64,
+    /// rounding once to binary32, as [`Iterator::next`] does.
+    pub fn decode_into(self, out: &mut Vec<f32>) -> Result<(), EmbeddingError> {
+        match self {
+            Self::Raw(values) => values.decode_into(out),
+            Self::Normalized(values) => {
+                let start = out.len();
+                let decoded = values.raw.decode_into(out);
+                for value in &mut out[start..] {
+                    *value = (f64::from(*value) / values.norm) as f32;
+                }
+                decoded
+            }
+        }
+    }
+}
 
 /// Logical `f64` prefix values, raw or deterministically L2-normalized.
 #[derive(Debug, Clone)]
@@ -5032,6 +5157,111 @@ mod tests {
 
     fn test_tlv(output: &mut Vec<u8>, tag: u16, wire: TlvWireType, value: &[u8]) {
         push_tlv(output, tag, wire, true, value).expect("test TLV");
+    }
+
+    /// What draining the iterator with `?` gives: the values appended before
+    /// the first error, and the error. The oracle of the bulk helpers.
+    fn drain_f32(
+        values: impl Iterator<Item = Result<f32, EmbeddingError>>,
+    ) -> (Vec<u32>, Result<(), EmbeddingError>) {
+        let mut out = Vec::new();
+        for value in values {
+            match value {
+                Ok(value) => out.push(value.to_bits()),
+                Err(error) => return (out, Err(error)),
+            }
+        }
+        (out, Ok(()))
+    }
+
+    fn bulk_f32(values: F32Scalars<'_>) -> (Vec<u32>, Result<(), EmbeddingError>) {
+        let checked = values.clone().check_finite();
+        let mut out = Vec::new();
+        let decoded = values.decode_into(&mut out);
+        assert_eq!(checked, decoded, "check_finite and decode_into agree");
+        (out.into_iter().map(f32::to_bits).collect(), decoded)
+    }
+
+    /// Every non-finite class (both infinities, quiet and signalling NaNs of
+    /// both signs, and a NaN with a payload) at every position of rows of every
+    /// length around the sixteen-scalar block, with a second non-finite value
+    /// after it so only the first may be reported; the iterator advanced first
+    /// and a nonzero first column, so the reported column carries both offsets;
+    /// and a trailing partial scalar, which neither path yields.
+    #[test]
+    fn bulk_f32_decode_matches_the_iterator_at_every_position() {
+        let non_finite = [
+            f32::INFINITY.to_bits(),
+            f32::NEG_INFINITY.to_bits(),
+            f32::NAN.to_bits(),
+            (-f32::NAN).to_bits(),
+            0x7F80_0001, // signalling NaN
+            0xFFC0_1234, // negative quiet NaN with a payload
+        ];
+        // Finite values that share bits with the exponent test: the largest
+        // finite, the smallest subnormal, signed zeros.
+        let finite = [f32::MAX, f32::MIN, f32::from_bits(1), -0.0, 0.0, 1.5, -2.25];
+        for len in 0..=40_usize {
+            let clean: Vec<u32> = (0..len)
+                .map(|i| finite[i % finite.len()].to_bits())
+                .collect();
+            let mut rows = vec![clean.clone()];
+            for position in 0..len {
+                for &bad in &non_finite {
+                    let mut row = clean.clone();
+                    row[position] = bad;
+                    rows.push(row.clone());
+                    if position + 1 < len {
+                        row[len - 1] = f32::INFINITY.to_bits();
+                        rows.push(row);
+                    }
+                }
+            }
+            for row in rows {
+                let mut bytes: Vec<u8> = row.iter().flat_map(|bits| bits.to_le_bytes()).collect();
+                for trailing in [0_usize, 3] {
+                    bytes.resize(len * 4 + trailing, 0xFF);
+                    for skip in [0_usize, 1, 17] {
+                        let mut values = F32Scalars::new(&bytes, 7, 5);
+                        let mut iter = values.clone();
+                        for _ in 0..skip {
+                            let _ = values.next();
+                            let _ = iter.next();
+                        }
+                        assert_eq!(
+                            bulk_f32(values),
+                            drain_f32(iter),
+                            "len {len} trailing {trailing} skip {skip} row {row:08x?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The normalized row's bulk decode divides exactly as its iterator does.
+    #[test]
+    fn bulk_effective_f32_decode_matches_the_iterator() {
+        let values = [
+            3.0_f32, -4.0, 0.1, 1e-30, 7.5e30, -0.0, 12.0, 0.333, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0,
+            11.0, 13.0, 14.0, 15.0, 16.0,
+        ];
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let dimension = values.len() as u32;
+        for row in [
+            EffectiveF32Row::Raw(F32Scalars::new(&bytes, 0, 0)),
+            EffectiveF32Row::Normalized(L2F32Scalars::new(&bytes, 0, dimension).expect("nonzero")),
+        ] {
+            let mut out = vec![42.0_f32];
+            let decoded = row.clone().decode_into(&mut out);
+            let (expected, result) = drain_f32(row);
+            assert_eq!(decoded, result);
+            assert_eq!(out[0], 42.0, "decode_into appends");
+            assert_eq!(
+                out[1..].iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[test]

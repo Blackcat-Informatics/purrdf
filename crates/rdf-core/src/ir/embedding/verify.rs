@@ -476,11 +476,7 @@ fn verify_matrices_and_projections(view: &EmbeddingView<'_>) -> Result<u64, Embe
 fn scan_matrix_scalars(matrix: MatrixView<'_>) -> Result<u64, EmbeddingError> {
     for row in 0..matrix.row_count() {
         match matrix.dtype()? {
-            VectorDtype::F32 => {
-                for value in matrix.f32_row(row)? {
-                    value?;
-                }
-            }
+            VectorDtype::F32 => matrix.f32_row(row)?.check_finite()?,
             VectorDtype::F64 => {
                 for value in matrix.f64_row(row)? {
                     value?;

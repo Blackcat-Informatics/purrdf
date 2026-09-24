@@ -451,45 +451,72 @@ impl BitVec {
     }
 }
 
+/// Byte `i` of a word whose every byte is `1`: a multiply by it sums the bytes
+/// of the multiplicand into each byte at or above their position.
+const BYTE_ONES: u64 = 0x0101_0101_0101_0101;
+/// The high bit of every byte.
+const BYTE_HIGHS: u64 = 0x8080_8080_8080_8080;
+
+/// `SELECT_IN_BYTE[byte][k]` is the position (`0..8`) of the `k`-th (0-based)
+/// set bit of `byte`; entries at `k >= byte.count_ones()` are `8` and never
+/// read.
+const SELECT_IN_BYTE: [[u8; 8]; 256] = {
+    let mut table = [[8_u8; 8]; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        let mut k = 0;
+        let mut bit = 0;
+        while bit < 8 {
+            if byte & (1 << bit) != 0 {
+                table[byte][k] = bit as u8;
+                k += 1;
+            }
+            bit += 1;
+        }
+        byte += 1;
+    }
+    table
+};
+
 /// The bit position (`0..64`) of the `r`-th (0-based) set bit of `word`.
 ///
-/// Skips whole bytes via `u8::count_ones` before falling back to a bit-by-bit
-/// scan of the one byte that contains the target bit (a `count_ones`-guided
-/// scan followed by a within-word bit select).
+/// Broadword select, with no loop:
+///
+/// 1. The per-byte popcounts are computed in parallel (the SWAR bit count,
+///    stopped at the byte level), and one multiply by [`BYTE_ONES`] turns them
+///    into inclusive prefix sums: byte `i` of `prefix` is the number of set bits
+///    in bytes `0..=i`, at most 64, so no byte overflows.
+/// 2. The target byte is the number of bytes whose inclusive prefix is at most
+///    `r`: every byte of `(r | 0x80) - prefix` (with `r` broadcast to every
+///    byte) keeps its high bit exactly when its prefix is at most `r`, no borrow
+///    crosses a byte because every prefix is below `0x80`, and a second multiply
+///    counts the high bits.
+/// 3. The rank left inside that byte is `r` less the prefix of the bytes before
+///    it, and [`SELECT_IN_BYTE`] answers the bit.
 ///
 /// # Panics
 ///
 /// Panics if `r >= word.count_ones()`; every call site bounds `r` by the rank
 /// directory first, so this is a broken-invariant bug if it ever fires.
 fn select_in_word(word: u64, r: usize) -> u32 {
-    let mut remaining = r;
-    let mut base = 0u32;
-    let mut w = word;
-    while base < 64 {
-        let byte = (w & 0xFF) as u8;
-        let ones = byte.count_ones() as usize;
-        if remaining < ones {
-            break;
-        }
-        remaining -= ones;
-        w >>= 8;
-        base += 8;
-    }
+    let pairs = word - ((word >> 1) & 0x5555_5555_5555_5555);
+    let nibbles = (pairs & 0x3333_3333_3333_3333) + ((pairs >> 2) & 0x3333_3333_3333_3333);
+    let bytes = (nibbles + (nibbles >> 4)) & 0x0F0F_0F0F_0F0F_0F0F;
+    let prefix = bytes.wrapping_mul(BYTE_ONES);
     assert!(
-        base < 64,
+        r < (prefix >> 56) as usize,
         "select_in_word: r out of range for word's popcount"
     );
-    let mut byte = (w & 0xFF) as u8;
-    loop {
-        if byte & 1 == 1 {
-            if remaining == 0 {
-                return base;
-            }
-            remaining -= 1;
-        }
-        byte >>= 1;
-        base += 1;
-    }
+    // `r < 64` now, so the broadcast leaves every byte's high bit clear.
+    let at_most_r = (((r as u64).wrapping_mul(BYTE_ONES) | BYTE_HIGHS) - prefix) & BYTE_HIGHS;
+    let byte_index = ((at_most_r >> 7).wrapping_mul(BYTE_ONES) >> 56) as u32;
+    let shift = byte_index * 8;
+    // The prefix of the bytes before the target: byte `byte_index - 1` of
+    // `prefix`, which the one-byte left shift moves to byte `byte_index`.
+    let before = ((prefix << 8) >> shift) & 0xFF;
+    let byte = ((word >> shift) & 0xFF) as usize;
+    let rank_in_byte = r - before as usize;
+    shift + u32::from(SELECT_IN_BYTE[byte][rank_in_byte])
 }
 
 /// Shared rank/select directory algorithm, implemented once and reused by both
@@ -1493,6 +1520,151 @@ mod tests {
             }
             for k in 0..=total_ones {
                 prop_assert_eq!(r.select1(k), naive_select1(&bits, k));
+            }
+        }
+    }
+
+    // -- select_in_word -------------------------------------------------------
+
+    /// The byte-skip-then-bit-loop select [`select_in_word`] replaced: the
+    /// oracle of the broadword version.
+    fn select_in_word_bitwise(word: u64, r: usize) -> u32 {
+        let mut remaining = r;
+        let mut base = 0u32;
+        let mut w = word;
+        while base < 64 {
+            let byte = (w & 0xFF) as u8;
+            let ones = byte.count_ones() as usize;
+            if remaining < ones {
+                break;
+            }
+            remaining -= ones;
+            w >>= 8;
+            base += 8;
+        }
+        assert!(
+            base < 64,
+            "select_in_word: r out of range for word's popcount"
+        );
+        let mut byte = (w & 0xFF) as u8;
+        loop {
+            if byte & 1 == 1 {
+                if remaining == 0 {
+                    return base;
+                }
+                remaining -= 1;
+            }
+            byte >>= 1;
+            base += 1;
+        }
+    }
+
+    /// Both selects agree on `word` at every rank `0..popcount`, and the
+    /// broadword answer is a set bit with exactly `r` set bits below it.
+    fn assert_select_agrees(word: u64) {
+        for r in 0..word.count_ones() as usize {
+            let bit = select_in_word(word, r);
+            assert_eq!(
+                bit,
+                select_in_word_bitwise(word, r),
+                "word {word:#018x} rank {r}"
+            );
+            assert!(
+                word & (1 << bit) != 0,
+                "word {word:#018x} rank {r}: bit {bit} is clear"
+            );
+            assert_eq!(
+                (word & ((1_u64 << bit) - 1)).count_ones() as usize,
+                r,
+                "word {word:#018x} rank {r}: bit {bit} has the wrong rank"
+            );
+        }
+    }
+
+    #[test]
+    fn select_in_word_edge_words() {
+        // `0` has no rank to select; `!0` has every one.
+        assert_select_agrees(0);
+        assert_select_agrees(u64::MAX);
+        for bit in 0..64 {
+            assert_select_agrees(1 << bit);
+            assert_select_agrees(!(1_u64 << bit));
+            assert_eq!(select_in_word(1 << bit, 0), bit);
+        }
+        // One whole byte set, every other clear, and every byte but one set.
+        for byte in 0..8 {
+            assert_select_agrees(0xFF << (8 * byte));
+            assert_select_agrees(!(0xFF_u64 << (8 * byte)));
+        }
+        // Alternating patterns, which stress the SWAR pair and nibble sums.
+        for word in [
+            0x5555_5555_5555_5555,
+            0xAAAA_AAAA_AAAA_AAAA,
+            0x0F0F_0F0F_0F0F_0F0F,
+        ] {
+            assert_select_agrees(word);
+            assert_select_agrees(!word);
+        }
+    }
+
+    #[test]
+    fn select_in_word_matches_bitwise_on_seeded_words() {
+        // A splitmix64 stream, so the words are the same on every run. Every
+        // word is also thinned and thickened, so sparse and dense words are both
+        // well represented, not only popcounts near 32.
+        let mut state = 0x5E1E_C7ED_u64;
+        for _ in 0..4096 {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            let word = z ^ (z >> 31);
+            assert_select_agrees(word);
+            assert_select_agrees(word & word.rotate_left(17) & word.rotate_left(41));
+            assert_select_agrees(word | word.rotate_left(17) | word.rotate_left(41));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "select_in_word: r out of range for word's popcount")]
+    fn select_in_word_refuses_a_rank_at_the_popcount() {
+        let _ = select_in_word(0b1011, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "select_in_word: r out of range for word's popcount")]
+    fn select_in_word_refuses_any_rank_of_zero() {
+        let _ = select_in_word(0, 0);
+    }
+
+    #[test]
+    fn select_in_word_accepts_the_last_rank() {
+        // The neighbour of the refusals: the highest in-range rank is answered.
+        assert_eq!(select_in_word(0b1011, 2), 3);
+        assert_eq!(select_in_word(u64::MAX, 63), 63);
+    }
+
+    #[test]
+    fn select_in_byte_table_matches_the_bits() {
+        for byte in 0..=u8::MAX {
+            for k in 0..8_u32 {
+                let expected = if k < byte.count_ones() {
+                    select_in_word_bitwise(u64::from(byte), k as usize) as u8
+                } else {
+                    8
+                };
+                assert_eq!(SELECT_IN_BYTE[usize::from(byte)][k as usize], expected);
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1024))]
+
+        #[test]
+        fn proptest_select_in_word_matches_bitwise(word in any::<u64>()) {
+            for r in 0..word.count_ones() as usize {
+                prop_assert_eq!(select_in_word(word, r), select_in_word_bitwise(word, r));
             }
         }
     }

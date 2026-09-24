@@ -444,19 +444,191 @@ pub struct QuadProbePlan {
     prefix: usize,
 }
 
-/// The candidate-quad source for an indexed pattern query. Unifies the two access
-/// shapes into one `Iterator<Item = &QuadRow>` so `quads_for_pattern` returns a single
+/// The residual `(s, p, o, g)` filter of an indexed pattern query, as masked
+/// word comparisons.
+///
+/// A quad row is four `u32` words: the three ids and the graph slot, whose
+/// `None` (the default graph) is the niche value `0`. The pattern becomes one
+/// key word and one mask word per field: a bound field keys its id under an
+/// all-ones mask, a wildcard keys nothing under a zero mask. `GraphMatch::Any`
+/// is the graph wildcard, `Default` keys the `0` of `None`, and `Named(id)`
+/// keys `id`. A row matches exactly when every `(word ^ key) & mask` is zero,
+/// which is the predicate `s.is_none_or(|id| q.s == id) && … && g.matches(q.g)`
+/// with no branch per field.
+#[derive(Clone, Copy, Debug)]
+struct QuadKey {
+    key: [u32; 4],
+    mask: [u32; 4],
+}
+
+impl QuadKey {
+    fn new(s: Option<TermId>, p: Option<TermId>, o: Option<TermId>, g: GraphMatch) -> Self {
+        let field = |id: Option<TermId>| id.map_or((0, 0), |id| (id.raw(), u32::MAX));
+        let (ks, ms) = field(s);
+        let (kp, mp) = field(p);
+        let (ko, mo) = field(o);
+        let (kg, mg) = match g {
+            GraphMatch::Any => (0, 0),
+            GraphMatch::Default => (0, u32::MAX),
+            GraphMatch::Named(id) => (id.raw(), u32::MAX),
+        };
+        Self {
+            key: [ks, kp, ko, kg],
+            mask: [ms, mp, mo, mg],
+        }
+    }
+
+    /// The non-zero bits of `row`'s fields where the pattern binds them
+    /// differently: zero exactly when `row` matches.
+    #[allow(
+        clippy::inline_always,
+        reason = "the per-row test must inline into the eight-row chunk loop so its words \
+                  stay in registers and the chunk's compares pack"
+    )]
+    #[inline(always)]
+    fn misses(&self, row: &QuadRow) -> u32 {
+        let words = [
+            row.s.raw(),
+            row.p.raw(),
+            row.o.raw(),
+            row.g.map_or(0, TermId::raw),
+        ];
+        let mut misses = 0;
+        for ((word, key), mask) in words.iter().zip(&self.key).zip(&self.mask) {
+            misses |= (word ^ key) & mask;
+        }
+        misses
+    }
+
+    #[inline]
+    fn matches(&self, row: &QuadRow) -> bool {
+        self.misses(row) == 0
+    }
+
+    /// Which rows of an eight-row chunk match: bit `i` for row `i`.
+    ///
+    /// Each row's answer is first a `0x0000_0000`/`0xFFFF_FFFF` lane, with no
+    /// branch and no cross-row dependence, then the lanes are masked to their
+    /// own bit and OR-folded.
+    ///
+    /// Inlined into both of its loops ([`ScanMatches`] and
+    /// [`Self::first_match`]). Measured: with `#[inline]` alone, the second
+    /// caller changed how LLVM compiled this crate's `QuadMatches::next`, whose
+    /// packed vector ops fell from 73 to 8 on x86_64; forced inline, both loops
+    /// carry the packed kernel.
+    #[allow(
+        clippy::inline_always,
+        reason = "the chunk kernel must inline into each scan loop: with two callers and a \
+                  plain #[inline], the iterator's compiled loop lost its packed compares"
+    )]
+    #[inline(always)]
+    fn chunk_matches(&self, chunk: &[QuadRow; SCAN_CHUNK]) -> u8 {
+        let mut lanes = [0_u32; SCAN_CHUNK];
+        for (lane, row) in lanes.iter_mut().zip(chunk) {
+            *lane = u32::from(self.misses(row) == 0).wrapping_neg();
+        }
+        let mut bits = 0_u32;
+        for (i, lane) in lanes.iter().enumerate() {
+            bits |= lane & (1 << i);
+        }
+        bits as u8
+    }
+
+    /// The offset of the first row of `rows` that matches, or `None`.
+    ///
+    /// The same eight-row kernel [`ScanMatches`] runs ([`Self::chunk_matches`]),
+    /// for a caller that cannot hold a borrowing iterator across calls (the
+    /// owned [`QuadPatternCursor`]): the first chunk with a set bit gives the
+    /// offset as its trailing-zero count, and the rows after the last whole chunk
+    /// are tested one at a time.
+    #[inline]
+    fn first_match(&self, rows: &[QuadRow]) -> Option<usize> {
+        let (chunks, tail) = rows.as_chunks::<SCAN_CHUNK>();
+        for (k, chunk) in chunks.iter().enumerate() {
+            let bits = self.chunk_matches(chunk);
+            if bits != 0 {
+                return Some(k * SCAN_CHUNK + bits.trailing_zeros() as usize);
+            }
+        }
+        tail.iter()
+            .position(|row| self.matches(row))
+            .map(|i| chunks.len() * SCAN_CHUNK + i)
+    }
+}
+
+/// Rows per chunk of the sequential residual filter.
+const SCAN_CHUNK: usize = 8;
+
+/// The matches of a pattern over a contiguous run of the freeze-sorted quad
+/// table, in row order.
+///
+/// Eight rows at a time: [`QuadKey::chunk_matches`] answers the whole chunk as
+/// a bit per row, and the set bits are yielded lowest first, which is row order.
+/// The rows after the last whole chunk are tested one at a time.
+struct ScanMatches<'a> {
+    chunks: std::slice::Iter<'a, [QuadRow; SCAN_CHUNK]>,
+    tail: std::slice::Iter<'a, QuadRow>,
+    /// The chunk `pending` indexes into.
+    current: &'a [QuadRow],
+    /// The matching rows of `current` not yet yielded, one bit per row.
+    pending: u8,
+    key: QuadKey,
+}
+
+impl<'a> ScanMatches<'a> {
+    fn new(rows: &'a [QuadRow], key: QuadKey) -> Self {
+        let (chunks, tail) = rows.as_chunks::<SCAN_CHUNK>();
+        Self {
+            chunks: chunks.iter(),
+            tail: tail.iter(),
+            current: &[],
+            pending: 0,
+            key,
+        }
+    }
+}
+
+impl<'a> Iterator for ScanMatches<'a> {
+    type Item = &'a QuadRow;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a QuadRow> {
+        while self.pending == 0 {
+            let Some(chunk) = self.chunks.next() else {
+                let key = self.key;
+                return self.tail.find(|row| key.matches(row));
+            };
+            self.pending = self.key.chunk_matches(chunk);
+            self.current = chunk;
+        }
+        let lane = self.pending.trailing_zeros() as usize;
+        self.pending &= self.pending - 1;
+        Some(&self.current[lane])
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let pending = self.pending.count_ones() as usize;
+        let rest = self.chunks.len() * SCAN_CHUNK + self.tail.len();
+        (0, Some(pending + rest))
+    }
+}
+
+/// The matches of an indexed pattern query. Unifies the two access shapes into
+/// one `Iterator<Item = &QuadRow>` so `quads_for_pattern` returns a single
 /// concrete type regardless of which permutation the dispatch chose:
-/// - `Slice` — a contiguous sub-slice of the freeze-sorted `quads` table, iterated
-///   SEQUENTIALLY (SPOG bisection, or the low-selectivity fallback). Bounds-check-free.
+/// - `Scan` — a contiguous sub-slice of the freeze-sorted `quads` table, filtered
+///   SEQUENTIALLY eight rows at a time ([`ScanMatches`]): SPOG bisection, or the
+///   low-selectivity fallback over the whole table.
 /// - `Permuted` — a sub-slice of a permutation array whose `u32` ordinals index back
 ///   into `quads` (the only path that pays random-access indirection; taken only when
-///   the candidate run is small enough to beat a sequential scan).
-enum QuadCandidates<'a> {
-    Slice(std::slice::Iter<'a, QuadRow>),
+///   the candidate run is small enough to beat a sequential scan), each row tested
+///   by the same [`QuadKey`].
+enum QuadMatches<'a> {
+    Scan(ScanMatches<'a>),
     Permuted {
         ordinals: std::slice::Iter<'a, u32>,
         quads: &'a [QuadRow],
+        key: QuadKey,
     },
 }
 
@@ -466,22 +638,28 @@ enum QuadCandidateAccess {
     Permuted(QuadPermutation),
 }
 
-impl<'a> Iterator for QuadCandidates<'a> {
+impl<'a> Iterator for QuadMatches<'a> {
     type Item = &'a QuadRow;
     #[inline]
     fn next(&mut self) -> Option<&'a QuadRow> {
         match self {
-            QuadCandidates::Slice(iter) => iter.next(),
-            QuadCandidates::Permuted { ordinals, quads } => ordinals.next().map(|&ord| {
-                debug_assert!(
-                    (ord as usize) < quads.len(),
-                    "permutation ordinal out of range"
-                );
-                // SAFETY: every permutation array is built as a sort of `0..quads.len()`
-                // (see `permutation`), so each ordinal is a valid index into the SAME
-                // `quads` slice. The `debug_assert` pins the invariant in test builds.
-                unsafe { quads.get_unchecked(ord as usize) }
-            }),
+            QuadMatches::Scan(scan) => scan.next(),
+            QuadMatches::Permuted {
+                ordinals,
+                quads,
+                key,
+            } => ordinals
+                .map(|&ord| {
+                    debug_assert!(
+                        (ord as usize) < quads.len(),
+                        "permutation ordinal out of range"
+                    );
+                    // SAFETY: every permutation array is built as a sort of `0..quads.len()`
+                    // (see `permutation`), so each ordinal is a valid index into the SAME
+                    // `quads` slice. The `debug_assert` pins the invariant in test builds.
+                    unsafe { quads.get_unchecked(ord as usize) }
+                })
+                .find(|row| key.matches(row)),
         }
     }
 }
@@ -489,8 +667,8 @@ impl<'a> Iterator for QuadCandidates<'a> {
 /// An owned, row-materialization-free cursor over one indexed quad pattern.
 ///
 /// The cursor pins the frozen dataset with an [`Arc`], stores only the selected
-/// index source, candidate bounds, and pattern IDs, and resolves candidates on
-/// demand. It therefore remains valid after every other dataset handle is
+/// index source, candidate bounds, and the pattern (as the residual filter's
+/// key and mask words), and resolves candidates on demand. It therefore remains valid after every other dataset handle is
 /// dropped without materializing matching [`QuadIds`] into a result vector.
 #[derive(Debug)]
 pub struct QuadPatternCursor {
@@ -498,10 +676,8 @@ pub struct QuadPatternCursor {
     access: QuadCandidateAccess,
     next: usize,
     end: usize,
-    s: Option<TermId>,
-    p: Option<TermId>,
-    o: Option<TermId>,
-    g: GraphMatch,
+    /// The pattern, as the residual filter's masked word comparisons.
+    key: QuadKey,
 }
 
 impl QuadPatternCursor {
@@ -515,26 +691,34 @@ impl QuadPatternCursor {
 impl Iterator for QuadPatternCursor {
     type Item = QuadIds;
 
+    // The next match, by the same law as the borrowed query path: a sequential
+    // run is searched with `QuadKey::first_match` (the eight-row chunked kernel
+    // of `ScanMatches`), a permuted run tests each row with `QuadKey::matches`.
     fn next(&mut self) -> Option<Self::Item> {
-        while self.next < self.end {
-            let index = self.next;
-            self.next += 1;
-            let row = match self.access {
-                QuadCandidateAccess::Sequential => &self.dataset.quads[index],
-                QuadCandidateAccess::Permuted(permutation) => {
-                    let ordinal = self.dataset.permutation(permutation)[index] as usize;
-                    &self.dataset.quads[ordinal]
+        match self.access {
+            QuadCandidateAccess::Sequential => {
+                let rows = &self.dataset.quads[self.next..self.end];
+                if let Some(offset) = self.key.first_match(rows) {
+                    let row = rows[offset];
+                    self.next += offset + 1;
+                    Some(QuadIds::from(row))
+                } else {
+                    self.next = self.end;
+                    None
                 }
-            };
-            if self.s.is_none_or(|id| row.s == id)
-                && self.p.is_none_or(|id| row.p == id)
-                && self.o.is_none_or(|id| row.o == id)
-                && self.g.matches(row.g)
-            {
-                return Some(QuadIds::from(*row));
+            }
+            QuadCandidateAccess::Permuted(permutation) => {
+                while self.next < self.end {
+                    let ordinal = self.dataset.permutation(permutation)[self.next] as usize;
+                    self.next += 1;
+                    let row = &self.dataset.quads[ordinal];
+                    if self.key.matches(row) {
+                        return Some(QuadIds::from(*row));
+                    }
+                }
+                None
             }
         }
-        None
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1052,10 +1236,7 @@ impl RdfDataset {
             access,
             next,
             end,
-            s,
-            p,
-            o,
-            g,
+            key: QuadKey::new(s, p, o, g),
         }
     }
 
@@ -1074,23 +1255,20 @@ impl RdfDataset {
         g: GraphMatch,
     ) -> impl Iterator<Item = QuadIds> + '_ + use<'_> {
         let (access, lo, hi) = self.candidate_access(plan, s, p, o, g);
-        let candidates = match access {
-            QuadCandidateAccess::Sequential => QuadCandidates::Slice(self.quads[lo..hi].iter()),
-            QuadCandidateAccess::Permuted(permutation) => QuadCandidates::Permuted {
+        // The same predicate the linear-scan default applies (dataset_view.rs),
+        // as masked word comparisons.
+        let key = QuadKey::new(s, p, o, g);
+        let matches = match access {
+            QuadCandidateAccess::Sequential => {
+                QuadMatches::Scan(ScanMatches::new(&self.quads[lo..hi], key))
+            }
+            QuadCandidateAccess::Permuted(permutation) => QuadMatches::Permuted {
                 ordinals: self.permutation(permutation)[lo..hi].iter(),
                 quads: &self.quads,
+                key,
             },
         };
-
-        candidates
-            // The same predicate the linear-scan default applies (dataset_view.rs).
-            .filter(move |q| {
-                s.is_none_or(|id| q.s == id)
-                    && p.is_none_or(|id| q.p == id)
-                    && o.is_none_or(|id| q.o == id)
-                    && g.matches(q.g)
-            })
-            .map(|q| QuadIds::from(*q))
+        matches.map(|q| QuadIds::from(*q))
     }
 
     /// Whether a term known to be an interned IRI equals `expected` (zero-alloc).
@@ -3600,5 +3778,161 @@ mod tests {
             assert_eq!(r1, vec![bb]);
             assert_eq!(r1, r2);
         }
+    }
+
+    impl RdfDataset {
+        /// The per-row `Option` filter the chunked [`ScanMatches`] replaced,
+        /// over the same candidate access: the oracle of
+        /// [`Self::quads_for_pattern_with_plan`], order included.
+        fn quads_for_pattern_with_plan_per_row(
+            &self,
+            plan: &QuadProbePlan,
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> Vec<QuadIds> {
+            let (access, lo, hi) = self.candidate_access(plan, s, p, o, g);
+            let candidates: Vec<&QuadRow> = match access {
+                QuadCandidateAccess::Sequential => self.quads[lo..hi].iter().collect(),
+                QuadCandidateAccess::Permuted(permutation) => self.permutation(permutation)[lo..hi]
+                    .iter()
+                    .map(|&ord| &self.quads[ord as usize])
+                    .collect(),
+            };
+            candidates
+                .into_iter()
+                .filter(|q| {
+                    s.is_none_or(|id| q.s == id)
+                        && p.is_none_or(|id| q.p == id)
+                        && o.is_none_or(|id| q.o == id)
+                        && g.matches(q.g)
+                })
+                .map(|q| QuadIds::from(*q))
+                .collect()
+        }
+    }
+
+    /// The per-row cursor loop [`QuadPatternCursor::next`] replaced, over the
+    /// same candidate access: the oracle of the cursor, order included.
+    fn quads_for_pattern_cursor_per_row(
+        ds: &RdfDataset,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> Vec<QuadIds> {
+        let plan = RdfDataset::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        let (access, mut next, end) = ds.candidate_access(&plan, s, p, o, g);
+        let mut out = Vec::new();
+        while next < end {
+            let index = next;
+            next += 1;
+            let row = match access {
+                QuadCandidateAccess::Sequential => &ds.quads[index],
+                QuadCandidateAccess::Permuted(permutation) => {
+                    let ordinal = ds.permutation(permutation)[index] as usize;
+                    &ds.quads[ordinal]
+                }
+            };
+            if s.is_none_or(|id| row.s == id)
+                && p.is_none_or(|id| row.p == id)
+                && o.is_none_or(|id| row.o == id)
+                && g.matches(row.g)
+            {
+                out.push(QuadIds::from(*row));
+            }
+        }
+        out
+    }
+
+    /// The chunked residual filter, borrowed ([`RdfDataset::quads_for_pattern_with_plan`])
+    /// and owned ([`QuadPatternCursor`]), yields exactly the per-row filter's rows, in
+    /// the same order, for every `(s?, p?, o?) × GraphMatch` combination over
+    /// seeded random datasets of every size from empty to several chunks past a
+    /// multiple of eight (so the whole-table fallback, the SPOG slice and the
+    /// permuted run, each with and without a tail, are all exercised). Every
+    /// bound value is tried, including ids present in the dataset but never in
+    /// that position, and a graph id that names no graph.
+    #[test]
+    fn chunked_scan_filter_matches_per_row_filter() {
+        let mut state = 0x0DA7_A5E7_u64;
+        let mut next = move |bound: u64| {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            (z ^ (z >> 31)) % bound
+        };
+        let mut sequential = 0_usize;
+        let mut permuted = 0_usize;
+        for rows in (0..=40).chain([63, 64, 65, 127, 200]) {
+            let mut b = RdfDatasetBuilder::new();
+            let pool: Vec<TermId> = (0..4)
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .collect();
+            let graphs: Vec<TermId> = (0..2)
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .collect();
+            let unused = b.intern_iri("http://example.org/unused");
+            for _ in 0..rows {
+                let g = match next(3) {
+                    0 => None,
+                    n => Some(graphs[n as usize - 1]),
+                };
+                b.push_quad(
+                    pool[next(4) as usize],
+                    pool[next(4) as usize],
+                    pool[next(4) as usize],
+                    g,
+                );
+            }
+            let ds = b.freeze().expect("random valid dataset must freeze");
+            let choices: Vec<Option<TermId>> = std::iter::once(None)
+                .chain(pool.iter().copied().map(Some))
+                .chain([Some(unused)])
+                .collect();
+            let graph_choices = [
+                GraphMatch::Any,
+                GraphMatch::Default,
+                GraphMatch::Named(graphs[0]),
+                GraphMatch::Named(graphs[1]),
+                GraphMatch::Named(unused),
+            ];
+            for &s in &choices {
+                for &p in &choices {
+                    for &o in &choices {
+                        for &g in &graph_choices {
+                            let plan =
+                                RdfDataset::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+                            match ds.candidate_access(&plan, s, p, o, g).0 {
+                                QuadCandidateAccess::Sequential => sequential += 1,
+                                QuadCandidateAccess::Permuted(_) => permuted += 1,
+                            }
+                            let chunked: Vec<QuadIds> =
+                                ds.quads_for_pattern_with_plan(&plan, s, p, o, g).collect();
+                            let per_row = ds.quads_for_pattern_with_plan_per_row(&plan, s, p, o, g);
+                            assert_eq!(
+                                chunked, per_row,
+                                "rows {rows}: pattern ({s:?}, {p:?}, {o:?}, {g:?})"
+                            );
+                            let cursor = ds.quads_for_pattern_cursor(s, p, o, g);
+                            assert!(std::ptr::eq(cursor.dataset(), Arc::as_ptr(&ds)));
+                            let cursor: Vec<QuadIds> = cursor.collect();
+                            assert_eq!(
+                                cursor,
+                                quads_for_pattern_cursor_per_row(&ds, s, p, o, g),
+                                "rows {rows}: cursor pattern ({s:?}, {p:?}, {o:?}, {g:?})"
+                            );
+                            assert_eq!(cursor, per_row, "the cursor and the borrowed path agree");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            sequential > 0 && permuted > 0,
+            "both access shapes were exercised ({sequential} sequential, {permuted} permuted)"
+        );
     }
 }

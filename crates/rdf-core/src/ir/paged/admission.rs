@@ -195,7 +195,7 @@ pub(crate) fn estimate_admitted_page(
 /// A zero-allocation cursor over the candidate `PageId`s for one graph constraint:
 /// either every page (`GraphMatch::Any`) in ascending order, or a graph index
 /// posting list (`Default`/`Named`), which is already ascending by construction
-/// ([`GraphPageIndex::derive`]). Mirrors `QuadCandidates` in `ir/dataset.rs`.
+/// ([`GraphPageIndex::derive`]). Mirrors the two access shapes of `QuadMatches` in `ir/dataset.rs`.
 pub(crate) enum PageCandidates<'a> {
     /// Every page, ascending — used when the graph axis is unconstrained.
     All(std::ops::Range<u32>),
