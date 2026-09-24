@@ -69,15 +69,15 @@ pub mod cover;
 // `DatasetView` + `GraphMatch`. PyO3-free, oxigraph-free — pure kernel.
 pub mod dataset_view;
 pub mod describe;
+/// Structured diagnostics: severity, source/GTS locations, conversion losses,
+/// and the [`RdfDiagnostic`] record callers translate to their reporting layer.
+pub mod diagnostic;
 // The binary64 distance arithmetics every ranked-retrieval surface computes with: the
 // sealed `Arithmetic` contract, the fixed-lane `Exact` law, the target-dependent
 // reassociated law, their batch kernels and once-per-scan dispatch, and the
 // float-environment precondition. Outside `ir` on purpose: dispatch needs `std`'s CPU
 // detection and `unsafe` calls into `#[target_feature]` compilations, neither of which
 // belongs in the `no_std`-ready IR.
-/// Structured diagnostics: severity, source/GTS locations, conversion losses,
-/// and the [`RdfDiagnostic`] record callers translate to their reporting layer.
-pub mod diagnostic;
 pub mod distance;
 // Native FnO (W3C Function Ontology) typed catalog model + serializer.
 // PyO3-free; the `purrdf-slice` FnO emitter builds a `FnoCatalog` from the slice
