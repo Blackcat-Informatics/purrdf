@@ -10,6 +10,103 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **core:** `purrdf_core::distance`, the binary64 distance arithmetic that every
+  ranked-retrieval surface computes with. The module holds:
+  - `Scalar`, `Bound` and `Bounded`, which moved here from
+    `purrdf_sparql_eval::knn` and are still re-exported at their old paths;
+  - the sealed `Arithmetic` trait. Its `ID` is the law's identifier. Its
+    `IMAGE_CODES` and `image_code(path)` give the codes an index image records.
+    Its `evidence(path)` gives the divergence text, and `resolve()` checks the
+    float environment and selects a dispatch path;
+  - `Resolved<A>`, an arithmetic bound to its dispatch `Path` for one scan, with
+    `distances`, `distances_indexed`, `distance` and `distance_bounded`;
+  - `Exact` (`binary64-lane16-tree-v1`). It accumulates 16 f64 lanes over array
+    chunks, combines them in a fixed pairwise tree, adds the tail sequentially
+    and uses no FMA. Every dispatch path returns the same bits;
+  - `Reassociated` (`binary64-reassociated-v1`). It uses `f64::algebraic_*`
+    inside each 64-element block and combines the block sums in ascending order,
+    so every bounded checkpoint is a true prefix. On x86_64 it dispatches at run
+    time to avx512f, then avx2+fma, then sse2. NEON, wasm simd128 and wasm scalar
+    are chosen at compile time. Each path has exactly one out-of-line copy, so
+    every call site on a path gets the same bits;
+  - `Path` (`#[non_exhaustive]`), with one variant per dispatch path: `Portable`
+    and `Avx2` for `Exact`; `Sse2`, `Avx2Fma`, `Avx512f`, `Neon`, `WasmSimd128`
+    and `WasmScalar` for `Reassociated`;
+  - the batch kernels, which are the unit of dispatch. `Exact` has a
+    bit-identical AVX2 path chosen once per scan. They come with `RowsRef`,
+    `Measure`, `EXACT_LANES` and a `norm` that delegates to the one normative
+    PURREMB norm fold;
+  - the float-environment refusal. `FloatEnvironmentError` (`FlushToZero`,
+    `RoundingMode`, `Uninspectable`) names a thread whose control register flushes
+    subnormals to zero, treats denormals as zero, or rounds other than to
+    nearest. It also names a target whose register cannot be read.
+
+- **sparql-eval:** `Kernel::distance_reassociated` and
+  `Kernel::distance_bounded_reassociated` are named entry points for the
+  reassociated law. The exact names are unchanged.
+  `EmbeddingKnnRelation::new_reassociated` builds a relation over `Reassociated`.
+  It resolves the dispatch path once and refuses an unsupported float environment
+  by name. The relation carries `OrderFidelity::Perturbed`, composed with the
+  resolved path's evidence verbatim, and `FusionTrailer::fidelities` carries that
+  evidence too. `RankedDeclaration::arithmetic` is a new field holding a
+  `DeclaredArithmetic`, which can only be built from the sealed trait. It appends
+  the law's id to `canonical_description`, so exact and reassociated plans have
+  different identities. A declaration without it keeps exactly its old bytes, and
+  the integer-ranked producers declare none, so no pinned fingerprint moves.
+  `composed_order_fidelity` has one implementation, here, and `purrdf-hnsw`
+  re-exports it at its old path.
+
+- **hnsw:** a reassociated HNSW index. `HnswIndex::build_reassociated`,
+  `HnswIndex::decode_reassociated`, `HnswSpace::from_artifact_reassociated`,
+  `guard::load_reassociated` and the crate-level `build_reassociated` construct
+  it. Each one refuses the other arithmetic's image codes. The image records the
+  dispatch path that built it. Rebuilding or searching on another path is refused
+  with `HnswError::ArithmeticPathUnavailable`, never a bare mismatch. Its profile
+  is `hnsw-reassociated-v2` (`IMPLEMENTATION_ID_REASSOCIATED`). The loss evidence
+  adds the arithmetic's divergence text and says that the image is bound to its
+  build's dispatch path. `profile_declaration` folds in the arithmetic id. The
+  guard derives its legal (implementation, revision, code set) pairs from both
+  arithmetics and refuses cross pairings. `IndexLossContract` is unchanged,
+  because the arithmetic transforms no vectors. Reassociated recall meets the
+  exact floor in the tests.
+
+- **iri:** byte-class scanners in `purrdf_iri::terminals`:
+  `find_first_trivia`, `find_first_iri_body_special`,
+  `find_first_json_string_special` and `find_first_xml_special`. `ByteClass`
+  (built with `ByteClass::from_table`) and `byte_run_count` let a writer bring
+  its own `const [u8; 256]` table and use the same kernel. Each scanner maps a
+  16-byte chunk to a lane mask built from compares. It tests the chunk with a
+  branch-free OR and finds the offset with `u128::trailing_zeros`. A class with
+  one run uses a max-fold instead. The crate stays dependency-free and
+  `forbid(unsafe_code)`. The byte predicates now read `const [u8; 256]` tables,
+  which `const fn` derives from the range tables. The range tables remain the
+  single source.
+
+- **core:** `purrdf_core::ir::canon::write_literal_escaped` is now public.
+  `purrdf_core::iri_escape` gains `push_escaped`, `escape` and
+  `find_first_candidate`. PURREMB `F32Scalars` gains `check_finite` and
+  `decode_into`, which report the same first non-finite column as the iterator.
+
+- **build:** `make simd-asm` and `scripts/check-simd-asm.py`, an asm evidence
+  gate. It emits per-crate asm for x86_64 (baseline, x86-64-v3, x86-64-v4),
+  aarch64 (generic, neoverse-v1) and wasm32 (baseline, +simd128). For each
+  function it counts packed-arithmetic and compare mnemonics, excluding move and
+  zeroing idioms. It enforces the floors and ceilings pinned in
+  `scripts/simd-asm-manifest.toml`: required mnemonics, FMA floors and ceilings,
+  a relaxed-simd ban and single-copy enforcement. It refuses unknown manifest
+  keys. With `--doc` it holds `docs/design/purrdf-simd.md` to the measurements.
+  That covers parity, coverage, a roster of minimum sites, and a ban on speed
+  multipliers in the document and in this section. The gate has its own CI job.
+  Its self-test, which proves each refusal beside a valid neighbour, also runs in
+  `make check` and in the CI workspace job.
+
+- **ci:** an aarch64 job on an arm64 runner. It runs the distance module's path
+  and reference-model tests on NEON, the kNN kernel tests, and the pinned
+  cross-target kNN answers, exact and reassociated. It also runs the HNSW
+  determinism and conformance tests. It compares against the same goldens that
+  x86_64 and wasm32 hold, so an aarch64 fold that diverges fails there. Before
+  this job, NEON code was only disassembled, never executed.
+
 - **serialization:** an incremental `io::Write` path beside the byte-vector one,
   for the native RDF codecs and the SPARQL-results serializers. `TextSink` stages
   into a bounded 64 KiB window over a pluggable `ByteDrain`; `WriterDrain` adapts
@@ -61,6 +158,24 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **sparql-results:** the SPARQL-JSON reader accepted raw control characters
+  U+0000 to U+001F inside strings, including in skipped members. RFC 8259 §7
+  forbids them. The reader now refuses them with a named error. Escaped controls
+  and raw DEL still parse.
+
+- **hnsw:** `HnswIndex::search_batch` reused one row-keyed distance memo across
+  queries, so later queries saw the distances of earlier ones. Each query now
+  gets its own memo.
+
+- **retrieval:** the renderer kept its own copies of the IRI and canonical
+  literal escape laws, because the kernel's version was private. It now
+  delegates to `purrdf_core::iri_escape` and
+  `purrdf_core::ir::canon::write_literal_escaped`, and so does entail. The canonical
+  N-Quads writer, the Turtle writer and the native serializer also delegate IRI
+  escaping to `iri_escape`. The native serializer's literal law, which also
+  escapes C1, and the Turtle literal law remain separate laws. Every writer's
+  bytes are unchanged.
 
 - **cli:** a failed write could unlink a symlinked output path, destroying the link
   and leaving the half-written bytes in its target — the exact loss the guard's own
@@ -1463,6 +1578,81 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Changed
 
+- **release:** under this suite's full-semver rule, the breaking changes below
+  make the next release a MAJOR version. Several of them change surfaces that no
+  release has shipped yet: `purrdf-hnsw`, `purrdf_core::distance`,
+  `RankedDeclaration` and `Scalar`. They are listed so that a consumer of an
+  intermediate build can see every break. The exact-kNN fold order, the
+  float-environment refusal and the MSRV change released behaviour.
+
+- **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
+  `Reassociated` uses `f64::algebraic_*`, which was stabilized as
+  `float_algebraic` in Rust 1.98.0. A 1.97 compiler rejects the crate with
+  E0658. Cargo, the CI msrv job, `clippy.toml`, the READMEs, AGENTS,
+  CONTRIBUTING and the book all say 1.98.
+
+- **BREAKING** **sparql-eval/hnsw:** the exact kNN scan and every HNSW distance
+  site now fold in the `Exact` 16-lane tree order instead of sequentially.
+  Distances can differ in the last bits, so the order of near-tied exact kNN
+  answers can change. This supersedes the earlier entry in this section that
+  said the accumulation order of `knn::Kernel::distance` was unchanged. Every
+  dispatch path and target returns the same bits, and a scalar reference model
+  of the fold order proves this in the tests. `knn::norm` delegates to the single
+  normative PURREMB norm fold.
+
+- **BREAKING** **sparql-eval:** the float-environment refusal. kNN checks the
+  calling thread's floating-point environment when an embedding space is built
+  from an artifact and on every search, exact or reassociated. It refuses an
+  environment that flushes subnormals to zero, treats denormals as zero, or
+  rounds other than to nearest. The refusal is the new
+  `EvalError::FloatEnvironment`. `EvalError` is `#[non_exhaustive]`, so the variant
+  itself breaks no match, but a query that used to run under such an environment
+  now fails by name.
+
+- **BREAKING** **hnsw:** the image and index version is now 2 (`INDEX_VERSION`,
+  `profile::PAYLOAD_VERSION`). The header's reserved word becomes the arithmetic
+  field, and zero names no arithmetic. A version-1 image, whose distances were
+  folded sequentially, is refused with `HnswError::VersionMismatch`. Rebuild the
+  index from its vectors. The implementation id is now `hnsw-v2`
+  (`IMPLEMENTATION_ID`), `hnsw-reassociated-v2` is added beside it, and the
+  profile declaration binds the arithmetic id.
+
+- **BREAKING** **hnsw:** `HnswIndex<A: Arithmetic = Exact>`, and likewise
+  `HnswSpace<A>` and `HnswRelation<A>`. `build`, `decode`, `load` and
+  `from_artifact` are unchanged and exact. `HnswError` is not
+  `#[non_exhaustive]`, and it gains three variants, so an exhaustive `match`
+  stops compiling:
+  - `ArithmeticMismatch`, when a payload records another arithmetic's code;
+  - `ArithmeticPathUnavailable`, when a payload records a dispatch path this
+    process does not run;
+  - `FloatEnvironment(FloatEnvironmentError)`, raised by every build, rebuild
+    and search entry point under a flush-to-zero or non-nearest environment.
+
+- **BREAKING** **sparql-eval:** `Scalar` is sealed and implemented for `f32` and
+  `f64` only. `RankedDeclaration` gains the public `arithmetic` field, so a
+  struct literal must name it. `EmbeddingKnnRelation` gains a type parameter,
+  `EmbeddingKnnRelation<A: Arithmetic = Exact>`, and `new` is unchanged and
+  exact.
+
+- **BREAKING** **core:** `Arithmetic` exposes `IMAGE_CODES` and
+  `image_code(path)`, and `Path` gains the reassociated variants.
+
+- **hnsw:** goldens that moved, re-pinned by hand. Distances now fold in the
+  16-lane tree order, and the image header carries the arithmetic field.
+  - `GOLDEN_DIGEST`: `0x0c71_b169_ebb4_4d7e` → `0xa367_d6c5_8963_1389`.
+  - `GOLDEN_SERIAL_DIGEST`: `0x7e11_7799_b79a_b829` → `0xf0b2_fd33_0bcc_fcc7`.
+
+  The `knn_wasm_determinism` expectation did not move, because its
+  6-dimension fixture only reaches the sequential tail. New 70-dimension
+  fixtures pin the lane path natively, on wasm32 and on wasm32+simd128.
+
+- **build:** `make wasm-test` and `make hnsw-determinism` also run a +simd128
+  build. The HNSW script reads its module path from cargo's artifact messages.
+  The maintainer binaries `capture_sparql_goldens`, `gen_dict_vectors` and
+  `gen_streamable_vectors` are renamed `capture-sparql-goldens`,
+  `gen-dict-vectors` and `gen-streamable-vectors`. Their source paths are
+  unchanged.
+
 - **BREAKING** **retrieval:** The read bound moved into `RetrievalRequest`, so a
   bounded answer costs a bounded *read*. `RetrievalRequest` gains a `bound` field
   of the new `ReadBound` -- a total enum over the bounded case and the complete
@@ -1959,6 +2149,102 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Performance
 
+Each site below is stated with its measured vector-instruction evidence from
+`make simd-asm`. Every rewrite is proven equal to its previous implementation,
+which is kept as a test oracle, and no emitted byte changes.
+
+- **core/sparql-eval/hnsw:** the `Exact` fold. Its 16 lanes pack into
+  `addpd`/`mulpd` on x86_64, `vaddpd`/`vmulpd` on the AVX2 path, `fadd .2d`/`fmul .2d`
+  on NEON and `f64x2.add`/`f64x2.mul` on wasm simd128. It uses no FMA and no
+  `relaxed_` op, and the same order runs scalar on the baseline. The `Reassociated`
+  fold uses `vfmadd231pd` on avx2+fma (`%ymm`) and avx512f (`%zmm`), and `fmla .2d`
+  on NEON. On wasm simd128 it uses `f64x2` lanes with no FMA, because relaxed SIMD
+  is never enabled. The HNSW search and graph build call these kernels through
+  function pointers set by non-generic constructors, so both arithmetics are
+  compiled inside `purrdf-hnsw` and measured there.
+
+- **iri/sparql-algebra/xsd:** the four byte-class scanners use packed byte
+  compares and a mask: `pcmpeqb`+`pmovmskb` on x86_64, `vpcmpeqb`+`vpmovmskb` on
+  x86-64-v3, mask-register compares (`vpcmpeqb %k`, `vpcmpltub %k`) on x86-64-v4,
+  `cmeq`/`cmhi .16b` on NEON and `i8x16.eq`/`i8x16.lt_u` on simd128. On the baseline wasm build they run as straight-line scalar lanes. The
+  SPARQL lexer's trivia skip and IRI body now make one pass over them, and
+  `cur`/`peek` gain an ASCII fast path. IRI component validation gains an 8-byte
+  clean-run precheck, packed on every SIMD configuration, alongside the
+  `i32x4.lt_u` range test of the `ucschar` arm on simd128. XSD whitespace replace
+  and collapse gain chunked prechecks, which are `i8x16` compares with
+  `v128.any_true` on simd128.
+
+- **core/rdf/entail/retrieval/sparql-results/json/markdown:** escape and string
+  scans. These are the canonical IRI and literal escapes, the native serializer's
+  IRI escape, `xml_escape::push_into` (which now validates and finds replacements
+  in one pass, and still writes nothing for a refused value), CSV quoting, the
+  SPARQL-JSON string writer, the `purrdf-json` string parser and the markdown
+  line splitter. Each scan is packed byte compares (`pcmpeqb`+`pmovmskb` on
+  x86_64, `cmeq .16b` on NEON, `i8x16.eq` on simd128). The drivers around them
+  stay scalar, and non-ASCII runs are copied in bulk. Markdown gains no
+  dependency.
+
+- **core:** pack, dataset, hex and embedding kernels.
+  - The pack dictionary's `common_prefix_len` compares 8-byte words by XOR and
+    finds the first differing byte with a trailing-zero count (`rep bsfq` or
+    `tzcntq` on x86_64, `rbit`+`clz` on aarch64, `i64.ctz` on wasm).
+  - `select_in_word` is a loop-free broadword select. It computes SWAR byte
+    popcounts and a multiply prefix sum, then compares and counts to find the
+    byte, then reads a const in-byte select table (`imulq`/`popcntq`,
+    `madd`/`cnt`, `i64.mul`/`i64.popcnt`).
+  - The dataset's sequential pattern scans filter eight rows at a time with a
+    branchless key-and-mask compare over four `u32` columns, and emit matches in
+    row order (`pcmpeqd`+`movmskps` on x86_64, `vptestnmd` on x86-64-v4,
+    `cmeq`/`cmtst` on NEON, `i32x4.eq` with an `i16x8.bitmask` row mask on
+    simd128). The
+    owned `QuadPatternCursor` shares that one match law.
+  - `hex::lower` writes compare-selected digits into a buffer sized up front
+    (`pcmpgtb`+`paddb` on x86_64, `cmhi`+`add` on NEON, `i8x16.gt_u`,
+    `i8x16.add` and `i8x16.shuffle` on simd128). Content-id hex decoding
+    classifies 16 digits at a time with a vertical rejection accumulator
+    (`pcmpeqb`/`pminub`/`pmovmskb` on x86_64, `cmhi`/`cmhs` on NEON,
+    `i8x16.lt_u`/`i8x16.gt_u` and `i8x16.shuffle` on simd128), and
+    accepts and refuses exactly the inputs it did before.
+  - PURREMB f32 rows get a bulk finite check and decode (`pcmpeqd`+`pmovmskb`
+    on x86_64, `cmeq` on NEON, `i32x4.eq` with `v128.any_true` on simd128).
+  - The sorted triples intersect is left as it is, with the fixture's measured
+    list lengths recorded.
+
+- **datalog:** a relation's mutable tail is held as structure-of-arrays columns
+  of subjects, objects and row ids. The duplicate probe on insert OR-folds
+  `(s == subject) & (o == object)` over the two key columns, with no exit on a
+  hit. Over the old `(subject, object, row)` tuples the same fold compiled to a
+  scalar `xor`/`sete`/`orb` loop, because consecutive keys sat three words apart.
+  Over the columns it packs on every SIMD configuration measured:
+  `pcmpeqd`+`movmskps` on x86_64, `vpcmpeqd %k` on x86-64-v4, `cmeq .4s`+`addp`
+  on NEON, SVE `cmpeq` on neoverse-v1, and `i32x4.eq` answered by
+  `v128.any_true` on simd128. The baseline wasm build runs a scalar
+  loop with no exit. The cursors read the tail in insertion order, and sealing
+  drains it in that order, so the batches built from it are unchanged.
+
+- **shapes:** the SHACL path frontier's linear dedup stage (fewer than 16
+  admitted ids) tests every id with no exit on a hit, four `u32` lanes at a time.
+  The lanes are OR-ed into an accumulator that is folded once. This is
+  `pcmpeqd`+`por`, folded by `movmskps`, on x86_64, `vpcmpeqd %k` on x86-64-v4,
+  `cmeq .4s`+`addv` on NEON and `i32x4.eq` with `v128.any_true` on simd128. The baseline wasm build uses straight-line scalar
+  compares.
+
+- **columnar:** the PLAIN `INT64` codec. BYTE_ARRAY values keep their loop.
+  - Encode and decode are out-of-line functions. A count of the present rows
+    sizes the output exactly on encode. On decode it fixes the body's length
+    before any word is read, and the `Truncated` and trailing-bytes `Malformed`
+    answers stay those of the per-value loop.
+  - A null-mask pass then runs eight rows at a time. Runs of null-free chunks go
+    through one counted copy, and chunks holding a null go value by value.
+  - The encode copy reads each payload only under its discriminant, so it
+    vectorizes only where masked loads exist: x86-64-v4 (`vptestmd` masks,
+    masked `vpgatherqq`) and neoverse-v1 SVE (`ld2d`, with a `cmpne`-predicated
+    payload load).
+  - The decode copy vectorizes with 256-bit or wider vectors (`vpermq` with
+    `vpunpckhqdq` on x86-64-v3, `vpermt2q` on x86-64-v4, SVE `st2d`).
+  - On SSE2, NEON and wasm simd128, both copies stay scalar, and the only vector
+    op is the presence count (`i32x4.add` on simd128).
+
 - **sparql-eval/text:** Attesting an index generation is a refcount bump instead of
   a string copy, and an entry point that cannot carry the answer no longer asks the
   question. `IndexGeneration::Declared` holds a shared `Arc<str>`, so a producer over
@@ -1990,6 +2276,17 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   vector and the frozen product golden are unaffected.
 
 ### Documentation
+
+- **design:** `docs/design/purrdf-simd.md` records the stable-channel
+  ceiling, the three float regimes, and the contract law for separate fast
+  functions. It inventories every hot site with its class, blocker, verdict and
+  reason, including the sites that are left alone. Each site has measured
+  vector-op counts on all seven configurations. The document also maps each
+  bench to its sites and gives a crate coverage table. `make simd-asm` runs
+  with `--doc`, which holds it to the measurements. Measurement corrected one planned verdict:
+  `json_escape_body` was expected to be covered, but it had no vector scan, so it
+  became a rewrite. A comment in the wasm package that claimed a blake3 simd128
+  backend is corrected, because that backend is not enabled.
 
 - **sparql-eval/book:** `RelationAttestations::invocations` says, where a host reads
   it, that it is a fact about the schedule rather than about the index: under a
