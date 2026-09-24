@@ -618,6 +618,47 @@ pub fn from_dataset_with_base(
     parser.parse()
 }
 
+/// Parse a shapes graph AND, in the same parse, the node expressions rooted at
+/// `roots` — each a node of `dataset` that is itself a node expression (SHACL 1.2
+/// Node Expressions §3), such as the `sht:nodeExpr` of a W3C test entry or a
+/// caller's own free-standing expression.
+///
+/// A node expression is not self-contained: it may call a custom function the
+/// shapes graph declares (§6), name a shape it judges nodes against, or compute a
+/// shape IRI resolved against the shapes graph's own top-level shapes (§7.2).
+/// Every one of those is bound by the shapes parse — declarations are interned
+/// before any expression is read, and bodies and the shape index are installed by
+/// the one linking pass afterwards — so the roots are parsed by the SAME parser,
+/// after the shapes and before that linking pass. An expression parsed any other
+/// way would carry call sites to declarations no linking pass ever reached.
+///
+/// The returned expressions are in `roots` order, one per root. They evaluate
+/// through [`crate::expression::eval_node_expr_in_scope`] with the returned
+/// [`Shapes`]' `functions` and `aggregates` in scope
+/// ([`crate::sparql::enter_function_scope`], [`crate::sparql::enter_aggregate_scope`]),
+/// exactly as validation evaluates the expressions its shapes carry.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on anything [`from_dataset_with_config_and_graph`]
+/// refuses, and when any root is not a well-formed node expression.
+pub fn from_dataset_with_node_expressions(
+    dataset: &Arc<RdfDataset>,
+    doc_prefixes: &[(String, String)],
+    shapes_graph: Option<String>,
+    roots: &[Term],
+) -> Result<(Shapes, Vec<NodeExpr>), String> {
+    let mut parser = Parser::new(
+        dataset.as_ref(),
+        None,
+        doc_prefixes,
+        None,
+        Arc::clone(dataset),
+        shapes_graph,
+    );
+    parser.parse_with_expressions(roots)
+}
+
 // ── Internal parser ────────────────────────────────────────────────────────────
 
 /// A parse currently on the parser's stack.
@@ -831,6 +872,17 @@ impl<'s> Parser<'s> {
     }
 
     fn parse(&mut self) -> Result<Shapes, String> {
+        self.parse_with_expressions(&[]).map(|(shapes, _)| shapes)
+    }
+
+    /// The whole shapes parse, plus the free-standing node expressions rooted at
+    /// `roots` (see [`from_dataset_with_node_expressions`]), parsed after the
+    /// shapes and before the linking pass so their call sites and shape handles
+    /// are the ones that pass installs.
+    fn parse_with_expressions(
+        &mut self,
+        roots: &[Term],
+    ) -> Result<(Shapes, Vec<NodeExpr>), String> {
         self.check_builtin_cardinalities()?;
 
         // --- collect all top-level shape node terms ---
@@ -919,6 +971,13 @@ impl<'s> Parser<'s> {
             node_shapes.push(shape);
         }
 
+        // The caller's free-standing node expressions, read by the same parser so
+        // the linking pass below reaches their call sites too.
+        let expressions: Vec<NodeExpr> = roots
+            .iter()
+            .map(|root| self.parse_node_expr(root))
+            .collect::<Result<_, _>>()?;
+
         // The custom functions' own bodies. Deferred to here because a body is a
         // node expression that may call any declared function — itself included —
         // so it can only be parsed once every declaration is interned. They are
@@ -946,7 +1005,7 @@ impl<'s> Parser<'s> {
 
         self.check_node_by_expression_constants()?;
 
-        Ok(Shapes {
+        let shapes = Shapes {
             node_shapes,
             box_role_vocab: self.box_role_vocab.clone(),
             functions: Arc::new(functions),
@@ -968,7 +1027,8 @@ impl<'s> Parser<'s> {
                 self.box_role_vocab.clone(),
                 self.shapes_graph.clone(),
             ),
-        })
+        };
+        Ok((shapes, expressions))
     }
 
     /// Resolve NOW every shape IRI a `sh:nodeByExpression` already names, against

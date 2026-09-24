@@ -35,6 +35,14 @@
 //!
 //! Nothing here asserts a verdict. A consumer that discovered zero cases gets a
 //! panic from the count assertions, not an empty vector.
+//!
+//! Two submodules extend this reader rather than copying it:
+//!
+//! * [`shacl12`] discovers the vendored W3C SHACL 1.2 suite
+//!   (`vectors/shacl12/tests/`) through the same [`walk_manifest`] and the same
+//!   `sht:Validate` entry parser, adding the 1.2 test types.
+//! * [`report_grading`] is the one `sht:Validate` grader. It returns verdicts and
+//!   asserts none, so both W3C harnesses grade a validation case identically.
 
 #![allow(
     dead_code,
@@ -51,6 +59,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf::RdfDataset;
 use purrdf_shapes::data::{GraphFilter, native_quads};
+
+pub(crate) mod report_grading;
+pub(crate) mod shacl12;
 use purrdf_shapes::model::{BoxRoleVocab, rdf, sh};
 use purrdf_shapes::term::{NamedNode, Term};
 
@@ -155,12 +166,12 @@ pub(crate) fn first_party_box_role_vocab() -> BoxRoleVocab {
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
 
-fn named(iri: &str) -> Term {
+pub(crate) fn named(iri: &str) -> Term {
     Term::NamedNode(NamedNode::new_unchecked(iri))
 }
 
 /// All objects of `(subject, predicate, ?)`.
-fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
+pub(crate) fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     native_quads(
         g,
         Some(subject),
@@ -174,26 +185,41 @@ fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
 }
 
 /// The first object of `(subject, predicate, ?)`, if any.
-fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
+pub(crate) fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
     objects(g, subject, predicate).into_iter().next()
 }
 
 /// Walk an RDF collection (`rdf:first`/`rdf:rest`) into a vec, in list order.
-fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
+///
+/// The corpora are frozen, so a malformed list — a cell with no `rdf:first`, no
+/// `rdf:rest`, more than one of either, or a `rdf:rest` chain that revisits a
+/// cell — is a discovery bug, not something to read around: stopping early would
+/// hand every consumer a SHORTER list (fewer entries, fewer expected results),
+/// and a shorter list is a greener harness. It panics instead.
+pub(crate) fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
     let mut items = Vec::new();
+    let mut visited: BTreeSet<String> = BTreeSet::new();
     let mut node = head.clone();
     loop {
         if matches!(&node, Term::NamedNode(n) if n.as_str() == RDF_NIL) {
             break;
         }
-        let Some(first) = object(g, &node, RDF_FIRST) else {
-            break; // malformed list — stop rather than loop
+        assert!(
+            visited.insert(node.to_string()),
+            "malformed RDF list: the rdf:rest chain from {head} revisits {node}"
+        );
+        let firsts = objects(g, &node, RDF_FIRST);
+        let rests = objects(g, &node, RDF_REST);
+        let ([first], [rest]) = (firsts.as_slice(), rests.as_slice()) else {
+            panic!(
+                "malformed RDF list: cell {node} (from {head}) has {} rdf:first and {} \
+                 rdf:rest values, exactly one of each is required",
+                firsts.len(),
+                rests.len()
+            );
         };
-        items.push(first);
-        match object(g, &node, RDF_REST) {
-            Some(rest) => node = rest,
-            None => break,
-        }
+        items.push(first.clone());
+        node = rest.clone();
     }
     items
 }
@@ -217,7 +243,7 @@ pub(crate) fn file_iri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
-fn iri_to_path(iri: &str) -> PathBuf {
+pub(crate) fn iri_to_path(iri: &str) -> PathBuf {
     PathBuf::from(
         iri.strip_prefix("file://")
             .unwrap_or_else(|| panic!("expected a file:// IRI, got {iri}")),
@@ -275,29 +301,67 @@ pub(crate) fn w3c_cases() -> Vec<W3cCase> {
 
 /// Recursively collect `sht:Validate` test cases from `manifest_path`.
 fn collect_manifest(manifest_path: &Path, root: &Path, cases: &mut Vec<W3cCase>) {
-    let g =
-        parse_turtle_file(manifest_path).unwrap_or_else(|e| panic!("manifest walk failed: {e}"));
+    walk_manifest(manifest_path, &mut |g, entry, manifest| {
+        if let Some(tc) = parse_entry(g, entry, manifest, root) {
+            cases.push(tc);
+        }
+    });
+}
 
-    // Sub-manifests: recurse in sorted order for a deterministic scoreboard.
-    let mut includes: Vec<PathBuf> = native_quads(
-        &g,
+/// The `mf:include` targets of one manifest, in sorted order.
+///
+/// Both spellings the W3C suites use are read: one `mf:include <m.ttl>` triple
+/// per sub-manifest (the data-shapes suites), and ONE `mf:include ( <a> <b> )`
+/// whose object is an RDF list (the SPARQL 1.2 RL suite). A list member, like a
+/// single object, must be an IRI.
+fn manifest_includes(g: &RdfDataset, manifest_path: &Path) -> Vec<PathBuf> {
+    let mut includes: Vec<PathBuf> = Vec::new();
+    for (_, _, object) in native_quads(
+        g,
         None,
         Some(&named(mf::INCLUDE)),
         None,
         GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| match object {
-        Term::NamedNode(n) => iri_to_path(n.as_str()),
-        other => panic!(
-            "{}: mf:include object must be an IRI, got {other}",
-            manifest_path.display()
-        ),
-    })
-    .collect();
+    ) {
+        let members = match &object {
+            Term::NamedNode(_) => vec![object.clone()],
+            Term::BlankNode(_) => list_items(g, &object),
+            other => panic!(
+                "{}: mf:include object must be an IRI or a list of IRIs, got {other}",
+                manifest_path.display()
+            ),
+        };
+        for member in members {
+            match member {
+                Term::NamedNode(n) => includes.push(iri_to_path(n.as_str())),
+                other => panic!(
+                    "{}: mf:include member must be an IRI, got {other}",
+                    manifest_path.display()
+                ),
+            }
+        }
+    }
     includes.sort();
-    for include in includes {
-        collect_manifest(&include, root, cases);
+    includes
+}
+
+/// Walk the manifest tree rooted at `manifest_path`: every `mf:include` is
+/// recursed into (sorted, for a deterministic scoreboard), then every member of
+/// every `mf:entries` list is handed to `visit` in list (document) order,
+/// together with the manifest dataset it lives in and that manifest's path.
+///
+/// The walker judges nothing about an entry — which test types a harness grades
+/// is the visitor's decision — so the two SHACL harnesses share one list-chasing
+/// implementation and differ only in what they keep.
+pub(crate) fn walk_manifest(
+    manifest_path: &Path,
+    visit: &mut dyn FnMut(&Arc<RdfDataset>, &Term, &Path),
+) {
+    let g =
+        parse_turtle_file(manifest_path).unwrap_or_else(|e| panic!("manifest walk failed: {e}"));
+
+    for include in manifest_includes(&g, manifest_path) {
+        walk_manifest(&include, visit);
     }
 
     // Entries: an RDF list, in list (document) order.
@@ -313,15 +377,18 @@ fn collect_manifest(manifest_path: &Path, root: &Path, cases: &mut Vec<W3cCase>)
     .collect();
     for head in entry_heads {
         for entry in list_items(&g, &head) {
-            if let Some(tc) = parse_entry(&g, &entry, manifest_path, root) {
-                cases.push(tc);
-            }
+            visit(&g, &entry, manifest_path);
         }
     }
 }
 
 /// Parse one manifest entry into a [`W3cCase`] (skipping non-`sht:Validate`).
-fn parse_entry(g: &RdfDataset, entry: &Term, manifest_path: &Path, root: &Path) -> Option<W3cCase> {
+pub(crate) fn parse_entry(
+    g: &RdfDataset,
+    entry: &Term,
+    manifest_path: &Path,
+    root: &Path,
+) -> Option<W3cCase> {
     let is_validate = objects(g, entry, rdf::TYPE)
         .iter()
         .any(|t| matches!(t, Term::NamedNode(n) if n.as_str() == sht::VALIDATE));

@@ -252,6 +252,36 @@ def _suite_shacl_w3c() -> SuiteResult:
     )
 
 
+_SHACL12_NAME = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
+_SHACL12_SOURCE = "W3C shacl12-test-suite"
+
+
+def _suite_shacl12_w3c() -> SuiteResult:
+    """The vendored W3C SHACL 1.2 suite, every test type: scrape the harness's
+    own `W3C12 TOTAL` line so the row counts suite ENTRIES (sht:Validate,
+    sht:EvalNodeExpr, sht:Infer and the seven srlt: types), not the handful of
+    Rust test functions the cargo tally would report."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-shapes", "--locked",
+        "--test", "w3c12_conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"W3C12 TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)", out)
+    if m:
+        passed, xfailed = int(m.group(1)), int(m.group(2))
+        detail = f"{passed} pass · {xfailed} ledgered"
+        return SuiteResult(
+            _SHACL12_NAME, _SHACL12_SOURCE,
+            passed=passed, xskip=xfailed, failed=0,
+            detail=detail, ok=(rc == 0 and failed == 0), log=out,
+        )
+    return _no_scoreboard(
+        _SHACL12_NAME, _SHACL12_SOURCE,
+        "`W3C12 TOTAL: passed N, xfailed N, ledger N`", cmd, out,
+    )
+
+
 def _suite_shapes_corpus() -> SuiteResult:
     """First-party SHACL corpus: scrape the harness's per-fixture scoreboard so
     the matrix reports a report-level Pass count, not the single test-function
@@ -1131,6 +1161,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_entailment(),
         _suite_entailment_rl(),
         _suite_shacl_w3c(),
+        _suite_shacl12_w3c(),
         _suite_shapes_corpus(),
         _suite_product_equivalence(),
         _suite_xsd_regex_corpus(),
@@ -1406,6 +1437,17 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
             _noise("W3C SHACL conformance scoreboard (9 tests):"),
             _noise("  core/node                     passed   4  xfailed   1"),
             _board("  TOTAL: passed 7, xfailed 2, ledger 2"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        _SHACL12_NAME,
+        _suite_shacl12_w3c,
+        (
+            _noise("W3C SHACL 1.2 conformance scoreboard (9 tests):"),
+            _noise("  core/node                            passed   4  xfailed   1"),
+            _noise("  sht:Validate                         passed   4  xfailed   1"),
+            _board("  W3C12 TOTAL: passed 7, xfailed 2, ledger 2"),
             _noise(_CARGO_OK),
         ),
     ),
