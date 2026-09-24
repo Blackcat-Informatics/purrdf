@@ -188,6 +188,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   so what the reader accepts or refuses is unchanged. The codec bench adds PLAIN
   INT64 encode and decode at 0%, 10% and 90% nulls.
 
+- **core:** a pack's `(?, p, o)` lookup decodes only the shorter of its predicate
+  and object position lists and tests each entry in place — an object-index
+  position against the predicate stored there, a predicate-index position by a
+  binary search of its object slice — instead of decoding and merging both. On the
+  WatDiv and LUBM query sets the two lists differed by at least 32× in most calls,
+  and the merge decoded 73,260,098 entries where the shorter lists hold 86,551.
+  Results and their order are unchanged; the merge is kept as a test oracle.
+- **rdf:** CSVW URI-template expansion (`{name}` and `{+name}`) finds each run of
+  characters that need no percent-encoding with a chunked byte-class scan and
+  copies it whole, instead of testing byte by byte; the expanded IRIs are
+  identical.
+
 ### Measured
 
 Peak allocator bytes, from the deterministic counting allocator rather than timings.
