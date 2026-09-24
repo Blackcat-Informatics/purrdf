@@ -582,7 +582,10 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 - **设计笔记**——`purrdf-core` 之外的兄弟引擎为何在每个目标上给出相同答案：
   [全文评分](./docs/design/purrdf-text-scoring.md)、
   [GeoSPARQL 精确性](./docs/design/purrdf-geo-exactness.md)、
-  [嵌入 k 近邻](./docs/design/purrdf-embedding-knn.md)。
+  [嵌入 k 近邻](./docs/design/purrdf-embedding-knn.md)、
+  [检索阶梯](./docs/design/purrdf-retrieval-ladder.md)；以及热路径如何在不放弃这一点的
+  前提下实现向量化，逐处说明，并在每个目标上度量实际生成的指令：
+  [SIMD 与算术契约](./docs/design/purrdf-simd.md)。
 
 ## 快，靠测量而非断言
 
