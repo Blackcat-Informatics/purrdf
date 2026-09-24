@@ -96,8 +96,7 @@ fn assert_no_term_reaches_itself(graph: &Graph) {
     for start in 0..graph.terms.len() {
         let mut stack: Vec<usize> = graph
             .triple_of(start)
-            .map(|spo| <[usize; 3]>::from(spo).to_vec())
-            .unwrap_or_default();
+            .map_or_default(|spo| <[usize; 3]>::from(spo).to_vec());
         let mut seen = vec![false; graph.terms.len()];
         while let Some(tid) = stack.pop() {
             assert_ne!(

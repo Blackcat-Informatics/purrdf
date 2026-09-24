@@ -1256,10 +1256,7 @@ fn cell(mapping: &SssomMapping, column: &str) -> String {
         "object_id" => mapping.object_id.clone(),
         "object_label" => mapping.object_label.clone().unwrap_or_default(),
         "mapping_justification" => mapping.mapping_justification.clone(),
-        "confidence" => mapping
-            .confidence
-            .map(format_confidence)
-            .unwrap_or_default(),
+        "confidence" => mapping.confidence.map_or_default(format_confidence),
         "comment" => mapping.comment.clone().unwrap_or_default(),
         other => mapping.extras.get(other).cloned().unwrap_or_default(),
     }

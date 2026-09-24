@@ -1859,8 +1859,7 @@ pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
     registry()
         .iter()
         .find(|((f, t), _)| *f == from && *t == to)
-        .map(|(_, codes)| codes.clone())
-        .unwrap_or_default()
+        .map_or_default(|(_, codes)| codes.clone())
 }
 
 // ── Sound + complete verification surface ────────────────────────────────────
