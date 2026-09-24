@@ -36,6 +36,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
+use purrdf_iri::json_escape::{JsonEscapes, push_body};
+
 use crate::RdfLocation;
 
 /// In-band machine code: a `CONSTRUCT` whose `WHERE` bound an RDF-1.2 reifier (via
@@ -2055,24 +2057,12 @@ fn push_bool_field(out: &mut String, key: &str, value: bool) {
     out.push_str(",\n");
 }
 
-/// Escape a string per the JSON string grammar (RFC 8259) into `out`.
+/// Escape a string per the JSON string grammar (RFC 8259) into `out`: the
+/// workspace's one JSON escape law, [`purrdf_iri::json_escape`], in its
+/// [`JsonEscapes::ShortForms`] spelling (`\b` and `\f` short, as this ledger
+/// always has).
 fn escape_json_into(out: &mut String, value: &str) {
-    use std::fmt::Write as _;
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
+    push_body(out, value, JsonEscapes::ShortForms);
 }
 
 #[cfg(test)]
@@ -2232,6 +2222,15 @@ mod tests {
         let mut s = String::new();
         escape_json_into(&mut s, "a\"b\\c\nd\te\u{01}");
         assert_eq!(s, "a\\\"b\\\\c\\nd\\te\\u0001");
+    }
+
+    /// The ledger's spelling, pinned: `\b` and `\f` short, DEL and the C1
+    /// controls raw, non-ASCII and `/` as themselves.
+    #[test]
+    fn json_escape_spelling_is_pinned() {
+        let mut s = String::new();
+        escape_json_into(&mut s, "\u{8}\u{c}\u{1f}\u{7f}\u{85}/caf\u{e9}\u{2028}");
+        assert_eq!(s, "\\b\\f\\u001f\u{7f}\u{85}/caf\u{e9}\u{2028}");
     }
 
     /// Drift gate: the committed artifact must byte-equal the freshly rendered

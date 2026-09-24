@@ -29,6 +29,8 @@ CURIE/prefix handling.
   percent-encoding, and dot-segment normalization; idempotent.
 - **CURIE/prefix** — `expand_curie` / `resolve` / `contract` over a
   `PrefixMap`.
+- **JSON string escape law** — `json_escape`, the one RFC 8259 §7 string-body
+  escaper every PurRDF JSON writer shares, over a chunked clean-run scan.
 - **Hard-fail** — malformed input is a typed `IriError`, never a degraded
   fallback or silent default.
 

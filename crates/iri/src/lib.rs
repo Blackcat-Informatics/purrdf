@@ -53,6 +53,11 @@
 //!   [`terminals::find_first_json_string_special`],
 //!   [`terminals::find_first_xml_special`]): portable chunked scans that find
 //!   the first byte of a class sixteen bytes at a time.
+//! * **JSON string escape law** — [`json_escape`], the one RFC 8259 §7 string
+//!   body escaper every PurRDF JSON writer shares, over the JSON string-body
+//!   scanner above. It lives in this leaf because it is the one crate every
+//!   JSON-emitting crate reaches; [`json_escape::JsonEscapes`] names the three
+//!   spellings those writers pin.
 //!
 //! # Hard-fail
 //!
@@ -131,6 +136,7 @@
 mod base;
 mod curie;
 mod error;
+pub mod json_escape;
 pub mod langtag;
 mod normalize;
 mod parse;

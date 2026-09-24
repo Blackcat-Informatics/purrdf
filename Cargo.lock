@@ -1440,6 +1440,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-iri",
  "purrdf-rdf",
  "purrdf-shapes",
  "purrdf-sparql-eval",

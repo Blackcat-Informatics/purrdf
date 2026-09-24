@@ -169,6 +169,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   output buffer are the same six characters and a gate that refuses both teaches
   authors to route around it.
 
+- **iri:** `purrdf_iri::json_escape`, the workspace's one JSON string-escape law:
+  `escape_body`, `push_body` and `push_string` over four named spellings
+  (`JsonEscapes::{Minimal, ShortForms, Controls, Ascii}`), each copying clean runs
+  whole behind a chunked stop scan. The GTS proof and replication reports, the loss
+  ledger, GeoJSON, the slice registries, the SPARQL results JSON writer and the
+  envelope probe all route through it with byte-identical output; the per-writer
+  copies are gone.
+
 ### Measured
 
 Peak allocator bytes, from the deterministic counting allocator rather than timings.
@@ -198,6 +206,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **slice:** the DSL statistics emitter, pinned byte-for-byte to Python's
+  `json.dumps`, escaped only `"` and `\` in set file names, so a control character
+  produced invalid JSON and a non-ASCII name diverged from the Python output. It now
+  uses the `Ascii` spelling of the shared escape law and matches `json.dumps`
+  exactly; the committed `generated/mappings/dsl-stats.json` is unchanged.
 
 - **sparql-results:** the SPARQL-JSON reader accepted raw control characters
   U+0000 to U+001F inside strings, including in skipped members. RFC 8259 §7

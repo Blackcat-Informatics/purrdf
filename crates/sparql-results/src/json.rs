@@ -53,8 +53,8 @@ use crate::graph::write_dataset_nquads;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::TextOut;
-use purrdf_core::terminals::find_first_json_string_special;
 use purrdf_core::{SparqlResult, TermValue};
+use purrdf_iri::json_escape::{JsonEscapes, escape_body};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
 /// BARE — no `"datatype"` member — per the SPARQL 1.2 Query Results JSON
@@ -351,36 +351,16 @@ impl<W: TextOut + ?Sized> TextOut for JsonEscaping<'_, W> {
 ///
 /// Split out from [`json_string`] so a caller that is assembling one JSON string
 /// from many fragments can write the quotes itself and escape each fragment as it
-/// is produced. Fragment-wise escaping is exact here because every rule below maps
+/// is produced. Fragment-wise escaping is exact here because every rule of the law maps
 /// one `char` independently: a `&str` fragment can never split a `char`, so
 /// escaping the pieces and escaping the concatenation give the same bytes.
+///
+/// The spelling is the workspace's one JSON escape law,
+/// [`purrdf_iri::json_escape`], in its [`JsonEscapes::Minimal`] form: clean runs
+/// end at the first `"`, `\` or C0 control, found by the chunked scan of that
+/// exact class, and are handed to the sink whole.
 fn json_escape_body<W: TextOut + ?Sized>(value: &str, out: &mut W) {
-    let mut rest = value;
-    while !rest.is_empty() {
-        // Bulk-copy the clean run in one `push_str` rather than one `push`
-        // per `char`; only the trigger byte goes through the match below. The
-        // run ends at the first `"`, `\\` or C0 control, found by the chunked
-        // scan of that exact class (RFC 8259 §7's complement of `unescaped`).
-        let run = find_first_json_string_special(rest.as_bytes()).unwrap_or(rest.len());
-        out.push_str(&rest[..run]);
-        rest = &rest[run..];
-        let Some(ch) = rest.chars().next() else {
-            break;
-        };
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                // Writing to a `String` is infallible; the escape bytes are unchanged.
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-        rest = &rest[ch.len_utf8()..];
-    }
+    escape_body(value, JsonEscapes::Minimal, |piece| out.push_str(piece));
 }
 
 /// The original per-`char` escaper, kept as the oracle for [`json_string`].
@@ -482,6 +462,7 @@ mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
     use pretty_assertions::assert_eq;
+    use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
