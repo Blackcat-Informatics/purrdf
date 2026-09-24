@@ -344,14 +344,14 @@ def _suite_product_equivalence() -> SuiteResult:
         )
         return SuiteResult(
             "SHACL prepared-product equivalence",
-            "W3C data-shapes + first-party corpus",
+            "W3C data-shapes + shacl12-test-suite + first-party corpus",
             passed=passed, xskip=ledgered,
             failed=(disagreed + total - passed - ledgered - unparsable),
             detail=detail, ok=(rc == 0 and failed == 0 and disagreed == 0), log=out,
         )
     return _no_scoreboard(
         "SHACL prepared-product equivalence",
-        "W3C data-shapes + first-party corpus",
+        "W3C data-shapes + shacl12-test-suite + first-party corpus",
         "`PRODUCT-EQUIVALENCE: passed N ledgered N unparsable N disagreed N total N`",
         cmd, out,
     )

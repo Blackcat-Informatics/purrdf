@@ -5371,7 +5371,7 @@ mod tests {
             })
             .collect();
         cases.sort();
-        assert_eq!(cases.len(), 71, "first-party corpus cardinality drifted");
+        assert_eq!(cases.len(), 72, "first-party corpus cardinality drifted");
 
         let geometries: Vec<_> = [(2, 1), (4, 7), (4, 64)]
             .into_iter()

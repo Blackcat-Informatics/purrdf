@@ -590,6 +590,92 @@ pub mod sh {
     /// `sh:QualifiedMaxCountConstraintComponent` — the component reported for `sh:qualifiedMaxCount` violations.
     pub const QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT: &str =
         "http://www.w3.org/ns/shacl#QualifiedMaxCountConstraintComponent";
+
+    /// `sh:PropertyConstraintComponent` — the component behind `sh:property`,
+    /// whose argument is carried as a property shape rather than a constraint.
+    pub const PROPERTY_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#PropertyConstraintComponent";
+
+    // ── SHACL 1.2 Core components declared by the vocabulary ──────────────────
+    // Declared in the W3C SHACL 1.2 vocabulary (`shacl.ttl`); the spec symbol
+    // table (`crate::spec`) records which of them this engine evaluates.
+
+    /// `sh:singleLine` — the parameter of `sh:SingleLineConstraintComponent`.
+    pub const SINGLE_LINE: &str = "http://www.w3.org/ns/shacl#singleLine";
+
+    /// `sh:SingleLineConstraintComponent`.
+    pub const SINGLE_LINE_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#SingleLineConstraintComponent";
+
+    /// `sh:minListLength` — the parameter of `sh:MinListLengthConstraintComponent`.
+    pub const MIN_LIST_LENGTH: &str = "http://www.w3.org/ns/shacl#minListLength";
+
+    /// `sh:MinListLengthConstraintComponent`.
+    pub const MIN_LIST_LENGTH_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#MinListLengthConstraintComponent";
+
+    /// `sh:maxListLength` — the parameter of `sh:MaxListLengthConstraintComponent`.
+    pub const MAX_LIST_LENGTH: &str = "http://www.w3.org/ns/shacl#maxListLength";
+
+    /// `sh:MaxListLengthConstraintComponent`.
+    pub const MAX_LIST_LENGTH_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#MaxListLengthConstraintComponent";
+
+    /// `sh:uniqueMembers` — the parameter of `sh:UniqueMembersConstraintComponent`.
+    pub const UNIQUE_MEMBERS: &str = "http://www.w3.org/ns/shacl#uniqueMembers";
+
+    /// `sh:UniqueMembersConstraintComponent`.
+    pub const UNIQUE_MEMBERS_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#UniqueMembersConstraintComponent";
+
+    /// `sh:memberShape` — the parameter of `sh:MemberShapeConstraintComponent`.
+    pub const MEMBER_SHAPE: &str = "http://www.w3.org/ns/shacl#memberShape";
+
+    /// `sh:MemberShapeConstraintComponent`.
+    pub const MEMBER_SHAPE_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#MemberShapeConstraintComponent";
+
+    /// `sh:rootClass` — the parameter of `sh:RootClassConstraintComponent`.
+    pub const ROOT_CLASS: &str = "http://www.w3.org/ns/shacl#rootClass";
+
+    /// `sh:RootClassConstraintComponent`.
+    pub const ROOT_CLASS_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#RootClassConstraintComponent";
+
+    /// `sh:someValue` — the parameter of `sh:SomeValueConstraintComponent`.
+    pub const SOME_VALUE: &str = "http://www.w3.org/ns/shacl#someValue";
+
+    /// `sh:SomeValueConstraintComponent`.
+    pub const SOME_VALUE_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#SomeValueConstraintComponent";
+
+    /// `sh:subsetOf` — the parameter of `sh:SubsetOfConstraintComponent`.
+    pub const SUBSET_OF: &str = "http://www.w3.org/ns/shacl#subsetOf";
+
+    /// `sh:SubsetOfConstraintComponent`.
+    pub const SUBSET_OF_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#SubsetOfConstraintComponent";
+
+    /// `sh:uniqueValuesFor` — the parameter of `sh:UniqueValuesForConstraintComponent`.
+    pub const UNIQUE_VALUES_FOR: &str = "http://www.w3.org/ns/shacl#uniqueValuesFor";
+
+    /// `sh:UniqueValuesForConstraintComponent`.
+    pub const UNIQUE_VALUES_FOR_CONSTRAINT_COMPONENT: &str =
+        "http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent";
+
+    // ── SHACL 1.2 function declarations ───────────────────────────────────────
+
+    /// `sh:NodeExpressionFunction` — the class of node-expression functions that
+    /// are neither list- nor named-parameter functions (`shnex:EmptyExpression`).
+    pub const NODE_EXPRESSION_FUNCTION: &str = "http://www.w3.org/ns/shacl#NodeExpressionFunction";
+
+    /// `sh:SelectExpression` — the built-in named-parameter function keyed by
+    /// `sh:select` (SHACL 1.2 SPARQL Extensions §6.1).
+    pub const SELECT_EXPRESSION: &str = "http://www.w3.org/ns/shacl#SelectExpression";
+
+    /// `sh:SPARQLExprExpression` — the built-in named-parameter function keyed by
+    /// `sh:sparqlExpr` (SHACL 1.2 SPARQL Extensions §6.2).
+    pub const SPARQL_EXPR_EXPRESSION: &str = "http://www.w3.org/ns/shacl#SPARQLExprExpression";
 }
 
 /// SHACL 1.2 node-expression namespace constants

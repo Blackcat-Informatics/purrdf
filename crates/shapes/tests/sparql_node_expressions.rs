@@ -662,3 +662,212 @@ fn an_undeclared_prefix_in_a_select_expression_is_still_a_load_error() {
     );
     assert!(err.contains("unparsable query"), "got: {err}");
 }
+
+// ── Built-in declarations bind natively ─────────────────────────────────────────
+
+/// A shapes graph that merges the W3C SHACL 1.2 vocabulary carries, among much
+/// else, this declaration of the built-in `sh:SPARQLExprExpression` — quoted here
+/// verbatim, as a user met it after resolving `owl:imports` into one stand-alone
+/// shapes graph. It has no `sh:bodyExpression`, because the engine implements it.
+const SPARQL_EXPR_DECLARATION: &str = r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+"#;
+
+/// A node shape whose `sh:sparqlExpr` holds only for focus IRIs longer than 30
+/// characters.
+const LONG_IRI_SHAPE: &str = r#"
+@prefix ex: <http://example.org/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:S a sh:NodeShape ;
+  sh:targetClass ex:C ;
+  sh:expression [ sh:sparqlExpr "STRLEN(STR($this)) > 30" ] .
+"#;
+
+/// Two `ex:C` instances: one with an IRI of 54 characters, one of 20.
+const TWO_INSTANCES: &str = r"
+@prefix ex: <http://example.org/> .
+<http://example.org/a-very-long-focus-node-iri-xxxxxxxx> a ex:C .
+<http://example.org/s> a ex:C .
+";
+
+/// Validate through `validate_dataset_with_shapes_graph`, the entry point the
+/// report was filed against.
+fn validate_graphs(
+    shapes_ttl: &str,
+    data_ttl: &str,
+) -> Result<purrdf_shapes::report::ValidationReport, String> {
+    let shapes = parse_shapes(shapes_ttl, None)?;
+    let data = parse_turtle_to_dataset(data_ttl, None).expect("data parse");
+    purrdf_shapes::engine::validate_dataset_with_shapes_graph(&data, &shapes, None)
+}
+
+/// The built-in's declaration loads, and `sh:sparqlExpr` still evaluates
+/// NATIVELY: exactly the short IRI violates. The control — the same shapes graph
+/// without the declaration — produces a byte-identical report, so the declaration
+/// changed nothing about what the expression means.
+#[test]
+fn the_builtin_sparql_expr_declaration_loads_and_evaluates_natively() {
+    let treatment = validate_graphs(
+        &format!("{SPARQL_EXPR_DECLARATION}{LONG_IRI_SHAPE}"),
+        TWO_INSTANCES,
+    )
+    .expect("the shapes graph carrying the built-in's declaration loads and validates");
+    assert_eq!(treatment.results.len(), 1, "exactly the short IRI fails");
+    assert_eq!(
+        treatment.results[0].focus_node.to_string(),
+        "<http://example.org/s>"
+    );
+    let control = validate_graphs(LONG_IRI_SHAPE, TWO_INSTANCES).expect("control validates");
+    assert_eq!(
+        treatment.to_ntriples(),
+        control.to_ntriples(),
+        "the declaration must not change the report by a single byte"
+    );
+}
+
+/// `sh:prefixes` is observed through the declaration: the expression names `ex:s`
+/// through a `sh:declare`, and the answer depends on which namespace it declares.
+/// The treatment row (ex: → `http://example.org/`) singles out `<http://example.org/s>`;
+/// the control row (ex: → another namespace) singles out nothing. Both carry the
+/// built-in's declaration.
+#[test]
+fn sh_prefixes_is_honoured_beside_the_builtin_declaration() {
+    let shapes = |namespace: &str| {
+        format!(
+            r#"{SPARQL_EXPR_DECLARATION}
+            @prefix ex: <http://example.org/> .
+            ex:Decls sh:declare [ sh:prefix "ex" ; sh:namespace "{namespace}"^^xsd:anyURI ] .
+            ex:S a sh:NodeShape ;
+              sh:targetClass ex:C ;
+              sh:expression [ sh:sparqlExpr "$this != ex:s" ; sh:prefixes ex:Decls ] ."#
+        )
+    };
+    let treatment = validate_graphs(&shapes("http://example.org/"), TWO_INSTANCES)
+        .expect("treatment validates");
+    let control = validate_graphs(&shapes("http://example.org/elsewhere/"), TWO_INSTANCES)
+        .expect("control validates");
+    let focus = |report: &purrdf_shapes::report::ValidationReport| -> Vec<String> {
+        report
+            .results
+            .iter()
+            .map(|r| r.focus_node.to_string())
+            .collect()
+    };
+    assert_eq!(focus(&treatment), vec!["<http://example.org/s>".to_owned()]);
+    assert!(
+        focus(&control).is_empty(),
+        "under another namespace ex:s names neither instance"
+    );
+}
+
+// ── The shnex-sparql.ttl spellings ─────────────────────────────────────────────
+
+/// `shnex-sparql.ttl` spells the SPARQL `+` operator `sparql:plus`; `sparql-ns.ttl`
+/// spells it `sparql:add`. Both answer 42.
+#[test]
+fn sparql_plus_is_the_add_operator() {
+    let plus = outputs(
+        "",
+        r"ex:S a sh:NodeShape ; sh:expression [ sparql:plus ( 38 4 ) ] .",
+        "a",
+    );
+    let add = outputs(
+        "",
+        r"ex:S a sh:NodeShape ; sh:expression [ sparql:add ( 38 4 ) ] .",
+        "a",
+    );
+    assert_eq!(plus, vec![int("42")]);
+    assert_eq!(plus, add);
+}
+
+/// `shnex-sparql.ttl` spells `ENCODE_FOR_URI` `sparql:encode`; `sparql-ns.ttl`
+/// spells it `sparql:encodeForUri`.
+#[test]
+fn sparql_encode_is_encode_for_uri() {
+    let out = outputs(
+        "",
+        r#"ex:S a sh:NodeShape ; sh:expression [ sparql:encode ( "a b" ) ] ."#,
+        "a",
+    );
+    assert_eq!(out, vec!["\"a%20b\"".to_owned()]);
+}
+
+/// The aliases are two NAMES, not a namespace wildcard: a name neither vocabulary
+/// defines is still refused.
+#[test]
+fn the_spelling_aliases_do_not_admit_unknown_names() {
+    let err = load_error(r"ex:S a sh:NodeShape ; sh:expression [ sparql:notAFunction ( 1 ) ] .");
+    assert!(
+        err.contains("is not a callable SPARQL 1.2 function name"),
+        "got: {err}"
+    );
+}
+
+/// A prepared product keeps the spelling the author wrote: encoded and restored,
+/// the call is still `sparql:plus`, and it still answers 42.
+#[test]
+fn a_product_restore_keeps_the_authored_spelling() {
+    use purrdf_shapes::engine::PreparedShapes;
+    use purrdf_shapes::expression::FnCall;
+    use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
+
+    let shapes = parse_shapes(
+        &format!(
+            "{PREFIXES}ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+               sh:expression [ sparql:equals ( [ sparql:plus ( 38 4 ) ] 42 ) ] ."
+        ),
+        None,
+    )
+    .expect("shapes parse");
+    let bytes = PreparedShapes::new(Arc::new(shapes))
+        .to_product(&ShapesProfile::CORE)
+        .expect("the shapes graph packs");
+    let restored = ShapesProduct::open(&bytes)
+        .expect("the product opens")
+        .rebuild(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect("the product rebuilds");
+    let Some(Constraint::Expression { expr, .. }) =
+        restored.shapes().node_shapes[0].constraints.first()
+    else {
+        panic!("the restored shape keeps its expression constraint");
+    };
+    let NodeExpr::Call(FnCall::Sparql { args, .. }) = expr else {
+        panic!("the restored expression is a sparql: call");
+    };
+    let NodeExpr::Call(FnCall::Sparql {
+        iri,
+        expr: rendered,
+        ..
+    }) = &args[0]
+    else {
+        panic!("the inner call is a sparql: call");
+    };
+    assert_eq!(iri.as_str(), "http://www.w3.org/ns/sparql#plus");
+    assert_eq!(rendered, "(?a0 + ?a1)");
+}

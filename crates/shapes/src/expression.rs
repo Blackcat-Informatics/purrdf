@@ -579,7 +579,9 @@ impl SparqlCallForm {
 /// and a name the parser gains is callable here the same day. The explicit table
 /// below covers only the names SPARQL does NOT spell as a function call — the
 /// operators, the functional forms, and the one name whose keyword is not its
-/// own uppercasing (`encodeForUri` → `ENCODE_FOR_URI`).
+/// own uppercasing (`encodeForUri` → `ENCODE_FOR_URI`). The two alias spellings
+/// the W3C `shnex-sparql.ttl` vocabulary declares (`plus`, `encode`) come from
+/// the spec symbol table ([`crate::spec`]), which records their source.
 ///
 /// # Errors
 ///
@@ -632,6 +634,13 @@ pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, String> {
     ];
 
     if let Some(&(_, form)) = NON_CALL_FORMS.iter().find(|&&(name, _)| name == local) {
+        return Ok(form);
+    }
+    // The two names the W3C `shnex-sparql.ttl` vocabulary spells differently from
+    // `sparql-ns.ttl` (`sparql:plus`, `sparql:encode`) — aliases the spec symbol
+    // table records with their source, lowered to the same form as the name each
+    // aliases.
+    if let Some(form) = crate::spec::sparql_alias(local) {
         return Ok(form);
     }
     if let Some(keyword) = purrdf_sparql_algebra::builtin_function_keyword(local) {
@@ -1056,7 +1065,7 @@ pub fn is_true(terms: &[Term]) -> bool {
 /// and purrdf custom functions keep the `<iri>(…)` form).
 ///
 /// A static `match` over `&'static str` — wasm-clean, no runtime allocation.
-fn builtin_keyword(iri: &str) -> Option<&'static str> {
+pub(crate) fn builtin_keyword(iri: &str) -> Option<&'static str> {
     const FN: &str = "http://www.w3.org/2005/xpath-functions#";
     let local = iri.strip_prefix(FN)?;
     Some(match local {

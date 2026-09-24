@@ -252,18 +252,35 @@ fn repeated_parameter_values_preserve_rdf12_term_identity() {
     );
 }
 
+/// A built-in component's declaration carrying a VALIDATOR is a second definition
+/// of the built-in, refused at load — neither silently ignored (the validator would
+/// never run while the author believed it did) nor silently preferred (the native
+/// semantics would be replaced behind the author's back).
 #[test]
-fn imported_native_validator_does_not_duplicate_native_execution() {
+fn imported_native_validator_is_a_duplicate_definition() {
     let body = r#"sh:ClassConstraintComponent a sh:ConstraintComponent ;
         sh:parameter [ sh:path sh:class ] ;
         sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" ] .
         ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ; sh:class ex:Class ."#;
+    let error = shapes(body).expect_err("a built-in cannot be redefined");
+    assert!(error.contains("duplicate definition"), "{error}");
+}
+
+/// The neighbour: the BARE declaration binds to the native component, which runs
+/// exactly once — the focus node that is an `ex:Class` conforms, the one that is
+/// not is reported once.
+#[test]
+fn imported_bare_native_declaration_binds_to_native_execution() {
+    let body = r"sh:ClassConstraintComponent a sh:ConstraintComponent ;
+        sh:parameter [ sh:path sh:class ] .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus, ex:other ; sh:class ex:Class .";
     let parsed = shapes(body).unwrap();
     assert_eq!(parsed.node_shapes[0].constraints.len(), 1);
-    assert!(
-        validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed)
-            .unwrap()
-            .conforms
+    let report = validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed).unwrap();
+    assert_eq!(report.results.len(), 1);
+    assert_eq!(
+        report.results[0].focus_node.to_string(),
+        "<http://example.org/other>"
     );
 }
 

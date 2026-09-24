@@ -776,3 +776,70 @@ fn a_required_parameter_after_an_optional_one_is_a_load_error() {
     );
     assert!(err.contains("after an optional one"), "got: {err}");
 }
+
+// ── SHACL 1.2 SPARQL Extensions §7.3 — built-in list functions ─────────────────
+
+/// A shape a node conforms to only when it has an `ex:name`.
+const NAMED_SHAPE: &str = r"
+ex:Named a sh:NodeShape ;
+  sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+";
+
+/// `ex:S` asks, through SPARQL text, whether each `ex:C` conforms to `ex:Named`.
+const CONFORMS_IN_SPARQL_EXPR: &str = r#"
+ex:S a sh:NodeShape ;
+  sh:targetClass ex:C ;
+  sh:expression [ sh:sparqlExpr "shnex:conformsToShape($this, ex:Named)" ] .
+"#;
+
+const NAMED_DATA: &str = r#"
+ex:a a ex:C ; ex:name "a" .
+ex:b a ex:C .
+"#;
+
+/// §7.3: "SPARQL engines SHOULD register a function for any SHACL instance of
+/// sh:ListParameterExpressionFunction from any provided shapes graph." The
+/// vocabulary's bare declaration of the BUILT-IN `shnex:conformsToShape` is such an
+/// instance, so it is registered with its NATIVE implementation and is callable
+/// from `sh:sparqlExpr`: `ex:b` (no name) fails, `ex:a` conforms.
+#[test]
+fn a_declared_builtin_list_function_is_callable_from_sparql_expr() {
+    let shapes = format!(
+        "shnex:conformsToShape a sh:ListParameterExpressionFunction .
+         {NAMED_SHAPE}{CONFORMS_IN_SPARQL_EXPR}"
+    );
+    let report = validate(NAMED_DATA, &shapes).expect("validation runs");
+    let focus: Vec<String> = report
+        .results
+        .iter()
+        .map(|r| r.focus_node.to_string())
+        .collect();
+    assert_eq!(focus, vec![ex_term("b").to_string()]);
+}
+
+/// The neighbour: WITHOUT the declaration the graph provides no instance of the
+/// class, so nothing registers the IRI and the SPARQL call has no function to
+/// reach — the validation is refused rather than answered, which is a different
+/// row from the declared case's single result.
+#[test]
+fn an_undeclared_builtin_list_function_is_not_registered() {
+    let shapes = format!("{NAMED_SHAPE}{CONFORMS_IN_SPARQL_EXPR}");
+    let outcome = validate(NAMED_DATA, &shapes);
+    assert!(
+        outcome.is_err(),
+        "an unregistered SPARQL function IRI must not evaluate: {:?}",
+        outcome.map(|r| r.results.len())
+    );
+}
+
+/// A declared `sparql:` built-in is registered too, with its SPARQL meaning.
+#[test]
+fn a_declared_sparql_builtin_is_callable_from_sparql_expr() {
+    let shapes = r#"
+        sparql:abs a sh:ListParameterExpressionFunction .
+        ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
+          sh:expression [ sh:sparqlExpr "sparql:abs(-30) = 30" ] .
+    "#;
+    let report = validate(INCOME_DATA, shapes).expect("validation runs");
+    assert!(report.conforms, "{:?}", report.results);
+}

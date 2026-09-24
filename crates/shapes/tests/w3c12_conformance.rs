@@ -72,19 +72,25 @@ use shacl_corpora::{file_iri, parse_turtle_file};
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
 const R_LIST_COMPONENTS: &str = "Core list-valued components: sh:minListLength / sh:maxListLength / sh:uniqueMembers \
-     / sh:memberShape are not implemented, so shapes using them silently conform (in-003 \
-     and xone-003 reach sh:minListLength through their shacl-shacl property shapes)";
+     / sh:memberShape are not implemented, so a shapes graph using them is refused at load \
+     as naming an unimplemented SHACL 1.2 Core component (in-003 and xone-003 reach \
+     sh:minListLength through their shacl-shacl property shapes)";
 
-const R_UNIQUE_VALUES_FOR: &str =
-    "sh:uniqueValuesFor is not implemented; the shape silently conforms";
+const R_UNIQUE_VALUES_FOR: &str = "sh:uniqueValuesFor is not implemented, so a shapes graph using it is refused at \
+     load as naming an unimplemented SHACL 1.2 Core component (uniqueValuesFor-004 expects \
+     conformance, which the former silent drop produced by coincidence)";
 
-const R_SUBSET_OF: &str = "sh:subsetOf is not implemented; the shape silently conforms";
+const R_SUBSET_OF: &str =
+    "sh:subsetOf is not implemented, so a shapes graph using it is refused at load";
 
-const R_SOME_VALUE: &str = "sh:someValue is not implemented; the shape silently conforms";
+const R_SOME_VALUE: &str =
+    "sh:someValue is not implemented, so a shapes graph using it is refused at load";
 
-const R_ROOT_CLASS: &str = "sh:rootClass is not implemented; the shape silently conforms";
+const R_ROOT_CLASS: &str =
+    "sh:rootClass is not implemented, so a shapes graph using it is refused at load";
 
-const R_SINGLE_LINE: &str = "sh:singleLine is not implemented; the shape silently conforms";
+const R_SINGLE_LINE: &str =
+    "sh:singleLine is not implemented, so a shapes graph using it is refused at load";
 
 const R_LIST_VALUED_PARAM: &str = "a SHACL list as the value of sh:class / sh:datatype / sh:nodeKind (disjunction) is \
      not read, so the constraint is dropped and the shape conforms";
@@ -156,10 +162,6 @@ const R_RULE_PROCESSOR: &str = "sh:ruleProcessor is not validated: an unknown pr
 const R_EXPECTED_PREDICATE: &str = "sh:values / sh:defaultValue / sh:expectedPredicate are not implemented, so the rule \
      that depends on the defaulted values derives nothing";
 
-const R_SPARQL_SPELLING: &str = "shnex-sparql.ttl spells the SPARQL functions sparql:plus and sparql:encode; the \
-     engine accepts only the sparql-ns.ttl names sparql:add and sparql:encodeForUri and \
-     refuses these at load";
-
 const R_UNBOUND_ARG: &str = "an unbound shnex:var argument makes the sparql: call yield nothing instead of \
      reaching BOUND/COALESCE as unbound";
 
@@ -194,6 +196,7 @@ const XFAIL: &[(&str, &str)] = &[
     ("core/node/uniqueValuesFor-001", R_UNIQUE_VALUES_FOR),
     ("core/node/uniqueValuesFor-002", R_UNIQUE_VALUES_FOR),
     ("core/node/uniqueValuesFor-003", R_UNIQUE_VALUES_FOR),
+    ("core/node/uniqueValuesFor-004", R_UNIQUE_VALUES_FOR),
     ("core/node/uniqueValuesFor-005", R_UNIQUE_VALUES_FOR),
     ("core/property/subsetOf-001", R_SUBSET_OF),
     ("core/property/subsetOf-002", R_SUBSET_OF),
@@ -289,8 +292,6 @@ const XFAIL: &[(&str, &str)] = &[
         R_EXPECTED_PREDICATE,
     ),
     // ── Node expressions ──
-    ("node-expr/shnex-sparql/plus-example", R_SPARQL_SPELLING),
-    ("node-expr/shnex-sparql/encode-example", R_SPARQL_SPELLING),
     ("node-expr/shnex-sparql/bound-example", R_UNBOUND_ARG),
     ("node-expr/shnex-sparql/coalesce-example", R_UNBOUND_ARG),
     ("node-expr/shnex/filterShape-integers", R_SEQUENCE_ORDER),

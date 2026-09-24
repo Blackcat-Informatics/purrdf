@@ -60,7 +60,7 @@
 //!
 //! Nothing here touches the filesystem, a clock, a thread, or randomness.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::FastMap;
@@ -70,7 +70,7 @@ use crate::expression::{CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg
 use crate::product::ast::MAX_DEPTH;
 use crate::product::{ProductDimension, ShapesProductError};
 use crate::rules::RuleBody;
-use crate::shapes::parser::functions::invoke_expression_function;
+use crate::shapes::parser::functions::{invoke_expression_function, invoke_native_list_function};
 use crate::shapes::{Constraint, PropertyShape, Shape};
 use crate::term::Term;
 
@@ -132,7 +132,10 @@ fn depth_limit() -> ShapesProductError {
 ///    test, and the shape clones are never built in that (normal) case.
 /// 3. **Registration.** Every `sh:ListParameterExpressionFunction` is registered
 ///    into `registry` as a callable SPARQL function (SHACL 1.2 SPARQL Extensions
-///    §7.3), as an `Arc<dyn Fn>` closure over the declaration handle.
+///    §7.3), as an `Arc<dyn Fn>` closure over the declaration handle — a custom
+///    one over its body, a declared BUILT-IN (`native_list`) over its native
+///    implementation. An IRI already registered is not redefined, as §7.3
+///    requires (see [`register_native_list_functions`]).
 ///
 /// # Errors
 ///
@@ -145,13 +148,85 @@ pub(crate) fn link_shapes(
     node_shapes: &[Shape],
     shape_index: &ShapeIndex,
     custom_fns: &[Arc<CustomFunction>],
+    native_list: &BTreeSet<String>,
     bodies: BTreeMap<String, NodeExpr>,
     registry: &mut UserFunctionRegistry,
 ) -> Result<(), ShapesProductError> {
     install_bodies(custom_fns, bodies)?;
+    // Registered BEFORE the shape index is installed: a native
+    // `shnex:conformsToShape` registration holds a handle on the index, and that
+    // handle is what tells the installer somebody will read it.
+    register_native_list_functions(native_list, shape_index, registry);
     install_shape_index(node_shapes, shape_index, custom_fns)?;
     register_expression_bodied_functions(custom_fns, registry);
     Ok(())
+}
+
+/// Whether §7.3's "already registered" rule leaves `iri` alone: SHACL 1.2 SPARQL
+/// Extensions §7.3 — "If a function with the same IRI is already registered, SHACL
+/// engines MUST ignore the attempt to redefine it unless the function was
+/// previously added as a custom SPARQL function."
+///
+/// A native (host) or expression-bodied registration is kept and the new one
+/// ignored. A SPARQL-bodied one — a custom SPARQL function — is the exception the
+/// sentence names, and is replaced.
+fn keep_existing_registration(iri: &str, registry: &mut UserFunctionRegistry) -> bool {
+    if registry.resolve_native(iri).is_some() || registry.resolve_expr(iri).is_some() {
+        return true;
+    }
+    if registry.resolve(iri).is_some() {
+        registry.remove_sparql_bodied(iri);
+    }
+    false
+}
+
+/// Register every built-in LIST-parameter function the shapes graph declares as a
+/// callable SPARQL function with its NATIVE implementation (SHACL 1.2 SPARQL
+/// Extensions §7.3: "SPARQL engines SHOULD register a function for any SHACL
+/// instance of sh:ListParameterExpressionFunction from any provided shapes
+/// graph.").
+///
+/// `shnex:conformsToShape` resolves its shape argument against `shape_index`; a
+/// `sparql:<NAME>` renders its SPARQL form for the call's arity. Only DECLARED
+/// built-ins are registered, so a shapes graph that does not merge the vocabulary
+/// registers nothing and pays nothing.
+pub(crate) fn register_native_list_functions(
+    native_list: &BTreeSet<String>,
+    shape_index: &ShapeIndex,
+    registry: &mut UserFunctionRegistry,
+) {
+    for iri in native_list {
+        if keep_existing_registration(iri, registry) {
+            continue;
+        }
+        let arity = if iri == crate::model::shnex::CONFORMS_TO_SHAPE {
+            Arity::Exact(2)
+        } else {
+            Arity::AtLeast(0)
+        };
+        let callee = iri.clone();
+        let index = Arc::clone(shape_index);
+        registry.register_expr(
+            iri.clone(),
+            arity,
+            Arc::new(move |call: &ExprFnCall<'_>| {
+                invoke_native_list_function(&callee, &index, call)
+            }),
+        );
+    }
+}
+
+/// A shape index filled from `node_shapes`, for a restore path that assembles a
+/// function registry without re-running the linking pass.
+pub(crate) fn standalone_shape_index(node_shapes: &[Shape]) -> ShapeIndex {
+    let index: ShapeIndex = Arc::new(OnceLock::new());
+    let map: FastMap<Term, Shape> = node_shapes
+        .iter()
+        .map(|shape| (shape.id.clone(), shape.clone()))
+        .collect();
+    // A freshly minted cell cannot already be full.
+    let _ = index.set(map);
+    index
 }
 
 /// Step 1: fill each declaration's body cell, then prove every one of them is full.
@@ -272,6 +347,9 @@ pub(crate) fn register_expression_bodied_functions(
 ) {
     for func in custom_fns {
         if !matches!(func.kind, CustomFnKind::ListParameter) {
+            continue;
+        }
+        if keep_existing_registration(func.iri.as_str(), registry) {
             continue;
         }
         let arity = if func.required == func.params.len() {
