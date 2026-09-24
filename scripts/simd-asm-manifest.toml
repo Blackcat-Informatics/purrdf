@@ -4557,164 +4557,79 @@ summary = "`reciprocal_rank::contribution`, reciprocal-rank fusion on fixed poin
 
 [[site]]
 id = "columnar.plain-codec"
-summary = "PLAIN `INT64`: `encode_int64_plain` (from `ColumnValues::encode_plain`) and `decode_int64_plain` (from `decode_plain`), each out of line: a presence count sizes the output, an eight-row null-mask pass extends a run of null-free chunks, and each run is flushed as one contiguous copy"
+summary = "PLAIN `INT64`: `encode_int64_plain` (from `ColumnValues::encode_plain`) and `decode_int64_plain` (from `decode_plain`), each out of line over the split column layout (a presence bitmap beside a dense `Vec<i64>` of the present values): the body is the value vector in little-endian bytes, so each direction is one contiguous copy"
 
-  # The presence count packs (`paddq`); the run copy is scalar: each value's payload is read
-  # under its discriminant, and the vectorizer's cost model refuses the two-word-stride
-  # load and select without masked loads. Measured v7.
+  # With the values dense, the copy is a plain word copy on every little-endian target, and
+  # LLVM's loop-idiom pass replaces it with one `memcpy` call (`memory.copy` on wasm32): the
+  # library routine is the vector body, so the function itself holds no vector work and the
+  # floor is 0. The required call is the proof of shape; losing it (a per-word loop back in
+  # the function) reddens the gate even where a scalar loop would pass a floor of 0.
+  # Measured v0 with one `memcpy` call on each x86_64 configuration.
   [[site.measure]]
   label = "encode"
-  configs = ["x86_64"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::encode_int64_plain"
-  min_vector_ops = 3
-  require_mnemonics = ["paddq"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The presence count at 256 bits; the run copy stays scalar for the same reason. Measured v26.
-  [[site.measure]]
-  label = "encode"
-  configs = ["x86_64-v3"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::encode_int64_plain"
-  min_vector_ops = 13
-  require_mnemonics = ["vpaddq"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The run copy vectorizes: `vptestmd` turns the discriminants into a mask and a masked
-  # `vpgatherqq` reads only the present payloads. Measured v51.
-  [[site.measure]]
-  label = "encode"
-  configs = ["x86_64-v4"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::encode_int64_plain"
-  min_vector_ops = 25
-  require_mnemonics = ["vptestmd", "vpgatherqq"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The presence count packs (`addp` folds it); the run copy is scalar. Measured v8.
-  [[site.measure]]
-  label = "encode"
-  configs = ["aarch64"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::encode_int64_plain"
-  min_vector_ops = 4
-  require_mnemonics = ["addp"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The run copy vectorizes: `ld2d` deinterleaves discriminant and payload words, `cmpne`
-  # predicates the payload load. Measured v18.
-  [[site.measure]]
-  label = "encode"
-  configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::encode_int64_plain"
-  min_vector_ops = 9
-  require_mnemonics = ["ld2d", "cmpne"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # Baseline wasm32 has no vector instructions: the same passes, scalar. Measured v0.
-  [[site.measure]]
-  label = "encode"
-  configs = ["wasm32"]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
   crate = "purrdf_columnar"
   symbol = "purrdf_columnar::parquet::encode_int64_plain"
   min_vector_ops = 0
+  require_mnemonics = ["callq memcpy"]
   max_fma = 0
   forbid_relaxed = true
 
-  # The presence count packs (`i32x4.add`); the run copy is scalar. Measured v3.
+  # The same single call, `bl memcpy`. Measured v0.
   [[site.measure]]
   label = "encode"
-  configs = ["wasm32-simd128"]
+  configs = ["aarch64", "aarch64-neoverse-v1"]
   crate = "purrdf_columnar"
   symbol = "purrdf_columnar::parquet::encode_int64_plain"
-  min_vector_ops = 1
-  require_mnemonics = ["i32x4.add"]
+  min_vector_ops = 0
+  require_mnemonics = ["bl memcpy"]
   max_fma = 0
   forbid_relaxed = true
 
-  # Baseline x86_64: the cost model refuses to interleave the constant discriminant with the
-  # payload words at 128 bits, so the run copy and the presence count are scalar. Measured v0.
+  # wasm32 lowers the copy to the bulk-memory `memory.copy`, with and without `simd128`.
+  # Measured v0.
+  [[site.measure]]
+  label = "encode"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_columnar"
+  symbol = "purrdf_columnar::parquet::encode_int64_plain"
+  min_vector_ops = 0
+  require_mnemonics = ["memory.copy"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Decode: the two length checks against the counted present rows (the popcount runs in
+  # `decode_page`, before the page's null count is checked), then the same single copy.
+  # Measured v0 with one `memcpy` call on each x86_64 configuration.
   [[site.measure]]
   label = "decode"
-  configs = ["x86_64"]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
   crate = "purrdf_columnar"
   symbol = "purrdf_columnar::parquet::decode_int64_plain"
   min_vector_ops = 0
+  require_mnemonics = ["callq memcpy"]
   max_fma = 0
   forbid_relaxed = true
 
-  # The run copy vectorizes: 256-bit word loads, `vpermq` + `vpunpckhqdq` interleave them
-  # with the constant discriminant, 256-bit stores. Measured v61.
+  # The same single call, `bl memcpy`. Measured v0.
   [[site.measure]]
   label = "decode"
-  configs = ["x86_64-v3"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::decode_int64_plain"
-  min_vector_ops = 30
-  require_mnemonics = ["vpermq", "vpunpckhqdq"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The same interleave at 512 bits by two-source `vpermt2q`. Measured v39.
-  [[site.measure]]
-  label = "decode"
-  configs = ["x86_64-v4"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::decode_int64_plain"
-  min_vector_ops = 19
-  require_mnemonics = ["vpermt2q"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The presence count widens and packs (`uaddw`); the run copy is scalar. Measured v59.
-  [[site.measure]]
-  label = "decode"
-  configs = ["aarch64"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::decode_int64_plain"
-  min_vector_ops = 29
-  require_mnemonics = ["uaddw"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The run copy vectorizes: SVE's interleaving `st2d` stores the constant discriminant
-  # beside each word (a store, so not in the count); the counted ops are the presence
-  # count. Measured v21.
-  [[site.measure]]
-  label = "decode"
-  configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_columnar"
-  symbol = "purrdf_columnar::parquet::decode_int64_plain"
-  min_vector_ops = 10
-  require_mnemonics = ["st2d", "uaddv"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # Baseline wasm32 has no vector instructions: the same passes, scalar. Measured v0.
-  [[site.measure]]
-  label = "decode"
-  configs = ["wasm32"]
+  configs = ["aarch64", "aarch64-neoverse-v1"]
   crate = "purrdf_columnar"
   symbol = "purrdf_columnar::parquet::decode_int64_plain"
   min_vector_ops = 0
+  require_mnemonics = ["bl memcpy"]
   max_fma = 0
   forbid_relaxed = true
 
-  # The presence count packs (`i32x4.add`); the run copy is scalar. Measured v7.
+  # `memory.copy`, with and without `simd128`. Measured v0.
   [[site.measure]]
   label = "decode"
-  configs = ["wasm32-simd128"]
+  configs = ["wasm32", "wasm32-simd128"]
   crate = "purrdf_columnar"
   symbol = "purrdf_columnar::parquet::decode_int64_plain"
-  min_vector_ops = 3
-  require_mnemonics = ["i32x4.add"]
+  min_vector_ops = 0
+  require_mnemonics = ["memory.copy"]
   max_fma = 0
   forbid_relaxed = true
 

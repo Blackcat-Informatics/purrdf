@@ -20,10 +20,13 @@
 )]
 #![forbid(unsafe_code)]
 
+mod column;
 mod compact;
 pub mod error;
 mod files;
 mod parquet;
+#[doc(hidden)]
+pub mod plain_bench;
 mod reader;
 pub mod schema;
 mod writer;

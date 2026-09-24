@@ -177,6 +177,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   envelope probe all route through it with byte-identical output; the per-writer
   copies are gone.
 
+- **columnar:** a nullable INT64 column is held the way Parquet stores it — a
+  presence bitmap beside a dense vector of the present values — rather than a
+  `Vec<Option<i64>>`. The PLAIN value body is that vector in little-endian bytes, so
+  encoding and decoding it is one contiguous copy, a single `memcpy` call
+  (`memory.copy` on wasm32) on every measured configuration, and the present-row
+  count is a popcount over the bitmap. Written bytes are unchanged: a new test pins
+  the five files of a seeded dataset, both compressions, to digests taken from the
+  previous encoder. The decoded-table budget still charges 16 bytes per INT64 row,
+  so what the reader accepts or refuses is unchanged. The codec bench adds PLAIN
+  INT64 encode and decode at 0%, 10% and 90% nulls.
+
 ### Measured
 
 Peak allocator bytes, from the deterministic counting allocator rather than timings.

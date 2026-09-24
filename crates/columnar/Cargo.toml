@@ -36,6 +36,7 @@ proptest = { workspace = true }
 
 [[bench]]
 # End-to-end fixed-schema writer/reader latency over a representative RDF 1.2
-# dataset and blob store. Report-only; no performance winner is asserted.
+# dataset and blob store, and the PLAIN INT64 value codec on its own at three
+# null densities. Report-only; no performance winner is asserted.
 name = "codec"
 harness = false
