@@ -49,9 +49,9 @@
 mod shacl_corpora;
 
 use std::collections::BTreeMap;
-use std::fs;
 
-use shacl_corpora::{Expected, Multiset, W3C_TOTAL_CASES, W3cCase, file_iri, norm, w3c_cases};
+use shacl_corpora::report_grading::run_validate_case;
+use shacl_corpora::{W3C_TOTAL_CASES, w3c_cases};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
@@ -67,118 +67,9 @@ const XFAIL: &[(&str, &str)] = &[
 ];
 
 // ── Running one case ──────────────────────────────────────────────────────────
-
-/// Load graphs, run the engine. `Err` carries the parse/validation error.
-fn validate_case(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport, String> {
-    let shapes_text = fs::read_to_string(&tc.shapes_path)
-        .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
-    let shapes_dataset = purrdf::parse_dataset(
-        shapes_text.as_bytes(),
-        "text/turtle",
-        Some(&file_iri(&tc.shapes_path)),
-    )
-    .map_err(|e| format!("shapes graph parse error: {e}"))?;
-    let doc_prefixes = purrdf_shapes::text_ingest::extract_prefixes(&shapes_text);
-    let shapes_graph_iri = tc.shapes_graph_iri.as_deref();
-    let shapes = purrdf_shapes::shapes::from_dataset_with_config_and_graph(
-        &shapes_dataset,
-        &doc_prefixes,
-        None,
-        shapes_graph_iri.map(ToOwned::to_owned),
-    )
-    .map_err(|e| format!("shapes parse error: {e}"))?;
-
-    let data_dataset = if tc.data_path == tc.shapes_path {
-        shapes_dataset
-    } else {
-        shacl_corpora::parse_turtle_file(&tc.data_path)
-            .map_err(|e| format!("data graph parse error: {e}"))?
-    };
-
-    purrdf_shapes::engine::validate_dataset_with_shapes_graph(
-        data_dataset.as_ref(),
-        &shapes,
-        shapes_graph_iri,
-    )
-    .map_err(|e| format!("validation error: {e}"))
-}
-
-/// Multiset of comparison tuples the engine produced.
-fn produced_multiset(report: &purrdf_shapes::report::ValidationReport) -> Multiset {
-    let mut multiset = Multiset::new();
-    for r in &report.results {
-        let focus = norm(&r.focus_node);
-        let path = r.result_path.as_ref().map(norm);
-        let value = r.value.as_ref().map(norm);
-        let component = format!("<{}>", r.source_constraint_component.as_str());
-        let severity = format!("<{}>", r.severity.iri());
-        *multiset
-            .entry((focus, path, value, component, severity))
-            .or_insert(0) += 1;
-    }
-    multiset
-}
-
-/// [`validate_case`] hardened against engine panics: a panic is reported as a
-/// failure string rather than aborting the whole harness. The engine's
-/// SHACL-SPARQL path now rejects restricted queries at shape-load and surfaces
-/// residual evaluation failures as `Err` (no known panicking case remains);
-/// the guard stays as belt-and-braces so a regression reads as a FAIL with a
-/// message instead of a harness abort.
-fn validate_case_no_panic(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate_case(tc))).unwrap_or_else(
-        |payload| {
-            let msg = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("<non-string panic payload>");
-            Err(format!("engine panicked: {msg}"))
-        },
-    )
-}
-
-/// Run one test to a pass (`Ok`) / fail-with-reason (`Err`) verdict.
-fn run_case(tc: &W3cCase) -> Result<(), String> {
-    let outcome = validate_case_no_panic(tc);
-    match (&tc.expected, outcome) {
-        (Expected::Failure, Err(_)) => Ok(()),
-        (Expected::Failure, Ok(_)) => {
-            Err("suite expects sht:Failure but the engine validated successfully".to_owned())
-        }
-        (Expected::Report { .. }, Err(e)) => Err(e),
-        (Expected::Report { conforms, results }, Ok(report)) => {
-            if report.conforms != *conforms {
-                return Err(format!(
-                    "conforms mismatch: produced={}, expected={conforms}",
-                    report.conforms
-                ));
-            }
-            let produced = produced_multiset(&report);
-            if &produced != results {
-                return Err(multiset_diff(results, &produced));
-            }
-            Ok(())
-        }
-    }
-}
-
-/// Human-readable multiset diff for the failure message.
-fn multiset_diff(expected: &Multiset, produced: &Multiset) -> String {
-    let mut lines = vec!["result multiset mismatch:".to_owned()];
-    for (tuple, n) in expected {
-        let have = produced.get(tuple).copied().unwrap_or(0);
-        if have != *n {
-            lines.push(format!("  expected x{n}, produced x{have}: {tuple:?}"));
-        }
-    }
-    for (tuple, n) in produced {
-        if !expected.contains_key(tuple) {
-            lines.push(format!("  expected x0, produced x{n}: {tuple:?}"));
-        }
-    }
-    lines.join("\n")
-}
+//
+// Grading lives in `shacl_corpora::report_grading`, shared with the SHACL 1.2
+// harness so both suites mean the same thing by "agrees with the manifest".
 
 // ── The harness ───────────────────────────────────────────────────────────────
 
@@ -206,7 +97,7 @@ fn w3c_shacl_conformance() {
     let mut total_xfailed = 0usize;
 
     // Silence the default panic hook while running cases: engine panics are
-    // caught by `validate_case_no_panic` and reported as ledgered failures, so
+    // caught by `report_grading::no_panic` and reported as ledgered failures, so
     // their backtraces would only drown the scoreboard.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
@@ -217,7 +108,7 @@ fn w3c_shacl_conformance() {
         }
         let slot = sections.last_mut().expect("section pushed above");
 
-        let verdict = run_case(tc);
+        let verdict = run_validate_case(tc);
         match (verdict, xfail.get(tc.id.as_str())) {
             (Ok(()), None) => {
                 slot.1 += 1;

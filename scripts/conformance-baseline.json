@@ -57,6 +57,10 @@
       "ledgered": 0,
       "note": "no ledgered gaps"
     },
+    "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)": {
+      "ledgered": 280,
+      "note": "the vendored W3C shacl12-test-suite (vectors/shacl12/tests), 547 entries across every test type: 174 sht:Validate, 143 sht:EvalNodeExpr, 27 sht:Infer and 203 SPARQL 1.2 RL (srlt:) tests, each XFAIL entry named with its reason in crates/shapes/tests/w3c12_conformance.rs. 203 of the 280 are the SPARQL 1.2 RL suite, which no engine code evaluates yet; the other 77 are SHACL 1.2 features the engine does not implement or implements differently: list, uniqueValuesFor, subsetOf, someValue, rootClass and singleLine components; list-valued class/datatype/nodeKind; closed ByTypes; path-valued property pairs; reifier annotations, Debug/Trace and conformanceDisallows; reifierShape sh:value and uniqueLang direction; shape, ShapeClass, targetWhere and node-expression targetNode targets; sh:values; a PREFIX scan that reads string literals; the rules features (default sh:subject, global rules, layers, runOnce/tempTriple, rule templates, ruleProcessor, expectedPredicate, RulesEntailment); and six node-expression behaviours (the shnex-sparql spellings sparql:plus/sparql:encode, unbound arguments, sequence order, the empty shape, unbound orderBy keys, an expression argument to shnex:instancesOf). Six node-expression expectations are spelled non-canonically under XSD 1.1 (e.g. \"4.0\" for the xsd:decimal four) and are graded against their canonical form through the harness's NON_CANONICAL_EXPECTATIONS table, not by value equality"
+    },
     "SHACL (first-party corpus)": {
       "ledgered": 0,
       "note": "no ledgered gaps"

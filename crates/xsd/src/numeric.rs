@@ -142,7 +142,8 @@ impl Decimal {
         frac_ord
     }
 
-    /// XSD 1.1 canonical lexical form (§3.3.3.2 `decimalCanonicalMap`): an
+    /// XSD 1.1 canonical lexical form (Part 2 §3.3.3.1, whose canonical
+    /// representation is `decimalCanonicalMap`, defined in §E.1): an
     /// integer-valued decimal has NO decimal point (`3` → `"3"`, `-2` → `"-2"`,
     /// `0` → `"0"`); a non-integer decimal keeps its fractional part with trailing
     /// zeros trimmed (`2.50` → `"2.5"`, `-0.250` → `"-0.25"`).
@@ -172,8 +173,8 @@ impl Decimal {
             ("0", digits.as_str(), scale - digits.len())
         };
 
-        // XSD 1.1 §3.3.3.2: an integer-valued decimal (an empty fractional part
-        // after trimming trailing zeros) has NO decimal point at all. The pad is
+        // XSD 1.1 §E.1 `decimalCanonicalMap`: an integer-valued decimal (an empty
+        // fractional part after trimming trailing zeros) has NO decimal point at all. The pad is
         // all zeros, so the padded fraction trims to empty iff `frac_digits` does.
         let frac_trimmed = frac_digits.trim_end_matches('0');
         out.push_str(int_part);
@@ -1978,7 +1979,7 @@ mod tests {
     #[test]
     fn decimal_parse_and_canonical() {
         assert_eq!(dec("12.34").canonical_lexical(), "12.34");
-        // XSD 1.1 §3.3.3.2: integer-valued decimals canonicalize with no point.
+        // XSD 1.1 §E.1 `decimalCanonicalMap`: integer-valued decimals have no point.
         assert_eq!(dec("12.00").canonical_lexical(), "12");
         assert_eq!(dec("100").canonical_lexical(), "100");
         assert_eq!(dec("-0.5").canonical_lexical(), "-0.5");
@@ -2403,7 +2404,7 @@ mod tests {
         // exact scale-18 quotient is perfectly representable as TEXT, with no
         // magnitude bound at all — `170141183460469231731687303715884105727` (i.e.
         // `i128::MAX`) followed by 18 zero fractional digits, trimmed to an
-        // integer-valued canonical form per XSD 1.1 §3.3.3.2.
+        // integer-valued canonical form per XSD 1.1 §E.1 `decimalCanonicalMap`.
         let mut dividend = crate::bigint::BigInt::from_i128(i128::MAX);
         dividend.add_i128(i128::MAX);
         let lexical = bigint_avg_decimal_lexical(&dividend, 2);

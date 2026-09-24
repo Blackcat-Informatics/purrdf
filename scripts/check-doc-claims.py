@@ -3326,6 +3326,11 @@ def _baseline_note_sites() -> tuple[tuple[str, str, str], ...]:
             _flow(r"(?P<xskip>\d+) upstream-errata fixtures"),
         ),
         (
+            "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)",
+            "the vendored SHACL 1.2 suite size",
+            _flow(r"(?P<total>\d+) entries across every test type"),
+        ),
+        (
             "SPARQL CDT (SEP-0009, vendored corpus)",
             "the vendored SEP-0009 corpus size",
             _flow(r"all (?P<pass>\d+) cases the pinned upstream commit"),

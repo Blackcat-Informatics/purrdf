@@ -197,7 +197,7 @@ impl BigInt {
         }
     }
 
-    /// The XSD 1.1 canonical `xsd:decimal` lexical form (§3.3.3.2
+    /// The XSD 1.1 canonical `xsd:decimal` lexical form (§3.3.3.1, §E.1
     /// `decimalCanonicalMap`) of `self` interpreted as a fixed-point mantissa at
     /// `scale` fractional digits — i.e. as if `self` were a
     /// [`crate::numeric::Decimal`]'s mantissa, but with no `i128` bound on the
@@ -538,7 +538,7 @@ mod tests {
 
     #[test]
     fn to_decimal_lexical_matches_decimal_canonical_lexical_shape() {
-        // Integer-valued: no decimal point, matching XSD 1.1 §3.3.3.2.
+        // Integer-valued: no decimal point, matching XSD 1.1 §E.1 `decimalCanonicalMap`.
         assert_eq!(BigInt::from_i128(0).to_decimal_lexical(0), "0");
         assert_eq!(BigInt::from_i128(42).to_decimal_lexical(0), "42");
         // scale > 0 but the magnitude's digits are all consumed by trailing zeros:
