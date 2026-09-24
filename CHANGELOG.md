@@ -1590,6 +1590,18 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `GROUP BY`, `HAVING`, `ORDER BY` or `VALUES` was already refused, and that is
   now pinned alongside.
 
+- **sparql-eval:** a property-function call that is the whole right-hand side of a `LATERAL` (`?s ?p ?o LATERAL { ?q <rel> ?out }`) is admitted with a request substitution or prepared-execution parameter bound, as the rewrite invokes it, where it was refused as "reachable only as `ff`" against a relation serving only the bound mode; admission and the rewrite share one definition of that position.
+
+- **sparql-eval:** a `BIND` reading a promised parameter makes its target a source for a following call — everywhere under the SHACL pre-binding rewrite, above the core pattern under the ordinary one — so `BIND($this AS ?x) ?x <rel> ?why` is no longer refused.
+
+- **sparql-eval, shapes:** under SHACL pre-binding, a `BIND`, `FILTER` or other expression beneath the core pattern reading a blank-node or quoted-triple focus node sees that node; it saw an unbound variable, so a relation could be invoked with its input free and every node it approved was reported.
+
+- **sparql-eval:** `SAMPLE`, `MIN` and `MAX` of a certainly-bound variable under `GROUP BY`, and `COUNT` always, can feed a relation serving only the bound mode; without `GROUP BY`, and for `SUM`, `AVG` and `GROUP_CONCAT`, they stay non-sources, since each can be unbound; a grouping key is a source only where every grouped row binds it.
+
+- **sparql-eval, retrieval:** `register_ranked` admits a declared `ExclusionBasis::Membership` only against a point mode an exclusion lookup can be invoked in — binding the candidate, leaving any `DepthPlacement` position free, with a row bound of one — because every lookup frees the depth: asked with a depth the producer answers "is this candidate among your best n", and absence from that is not an exclusion. A producer declaring `[fbb, bbb]` with its depth at position 2 was admitted and then failed every stratum's lookup at prepare; it is refused at registration, naming the relation, its modes and why. The lookup's shape is derived once, `RankedDeclaration::exclusion_lookup_mode`, which registration and the retrieval compiler both ask.
+
+- **retrieval:** a stratum this layer renders no longer fails at search when its producer's only candidate-bound point mode binds an argument no request facet fills: `compile` checks the rendered lookup's mode and compiles such a unit declaring `ExclusionBasis::Unavailable`, so the stratum still ranks and its contract and the fused trailer's `exclusion_bases` say no lookup was available.
+
 ### Removed
 
 - **retrieval:** `PlanError::StatisticsUnavailable`. It was the refusal of an unbounded
