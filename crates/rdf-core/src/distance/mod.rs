@@ -82,6 +82,20 @@
 //! but not its code, and its image code (8) is its own. Relaxed wasm SIMD is never used:
 //! its results are left to the engine.
 //!
+//! # A path is not the whole of a compilation: the build shape
+//!
+//! Each reassociated compilation is built with the consumer build's own
+//! `-C target-cpu`/`-C target-feature` as well as the path's `#[target_feature]`, so one
+//! path compiles to different instructions in different builds -- the baseline `x86_64`
+//! path contracts to FMA in a build compiled with `fma`, and the NEON path becomes SVE under
+//! a Neoverse target. [`Arithmetic::build_shape`] names the part of that the compiler
+//! exposes: the target architecture and the target features relevant to the body's vector
+//! and FMA code generation ([`BuildShape`]). A consumer that records a reassociated result
+//! records the shape beside the path, and refuses a result whose shape is not its own.
+//! Equal shape is necessary, not sufficient: CPU tuning and the compiler version are not
+//! visible to the source, so a reassociated result is reproducible only by the same
+//! compiled artifact. [`Exact`] has no shape; its bits are the same in every build.
+//!
 //! A result recorded on one path is recomputed on that path, not on the widest:
 //! [`Arithmetic::resolve_recorded`] resolves the path an image code names whenever this
 //! process can run it -- its compilation is in this build and the processor reports every
@@ -109,6 +123,7 @@ mod dispatch;
 mod env;
 mod exact;
 mod reassociated;
+mod shape;
 
 #[cfg(test)]
 mod reassociated_tests;
@@ -119,6 +134,7 @@ use core::fmt;
 use core::marker::PhantomData;
 
 pub use env::{FloatEnvironmentError, FloatEnvironmentEvidence};
+pub use shape::BuildShape;
 
 /// The number of independent accumulators in the [`Exact`] law.
 pub const EXACT_LANES: usize = exact::LANES;
@@ -492,6 +508,15 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
     /// arithmetic whose bits are the same on every path and target.
     fn evidence(path: Path) -> Option<&'static str>;
 
+    /// The compile shape of this build's compilations of the arithmetic, or `None` for an
+    /// arithmetic whose bits are the same in every build.
+    ///
+    /// For an arithmetic whose bits depend on the compilation, a recorded result is
+    /// reproducible only by a build of the same shape (and, beyond what the shape can
+    /// see, only by the same compiled artifact), so a consumer records it beside the image
+    /// code and refuses a mismatch. See [`BuildShape`].
+    fn build_shape() -> Option<BuildShape>;
+
     /// Check the float environment and select this process's dispatch path.
     ///
     /// Called once per scan, relation or index. The environment is a per-thread
@@ -629,6 +654,13 @@ impl<A: Arithmetic> Resolved<A> {
         })
     }
 
+    /// The compile shape of this build's compilations of the arithmetic; see
+    /// [`Arithmetic::build_shape`].
+    #[must_use]
+    pub fn build_shape(self) -> Option<BuildShape> {
+        A::build_shape()
+    }
+
     /// See [`Arithmetic::distances`].
     pub fn distances<Q: Scalar, T: Scalar>(
         self,
@@ -761,6 +793,10 @@ impl Arithmetic for Exact {
         None
     }
 
+    fn build_shape() -> Option<BuildShape> {
+        None
+    }
+
     fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError> {
         env::check()?;
         Ok(Resolved::on(dispatch::exact_path()))
@@ -831,7 +867,8 @@ impl Arithmetic for Exact {
 /// multiplies into adds; block sums are combined with plain `+` in ascending order.
 ///
 /// Its bits depend on the target, the build and the dispatch path; they are a function
-/// of the inputs only within one build on one path. See the
+/// of the inputs only within one compiled build on one path. [`BuildShape`] names the
+/// part of the build that decides them which the source can see. See the
 /// [module documentation](self) and [`Arithmetic::evidence`] for what it gives up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Reassociated;
@@ -857,6 +894,10 @@ impl Arithmetic for Reassociated {
 
     fn evidence(path: Path) -> Option<&'static str> {
         Some(reassociated::evidence(path))
+    }
+
+    fn build_shape() -> Option<BuildShape> {
+        Some(BuildShape::here())
     }
 
     fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError> {

@@ -233,6 +233,22 @@ impl Fixture {
         })
     }
 
+    /// The artifact carrying `image` as its payload under the fixture's own guard
+    /// contract, folded by the real builder: the guard commits these bytes' length and
+    /// SHA-256, so the payload commitment holds and whatever refuses the artifact is a
+    /// check on the image itself.
+    #[must_use]
+    pub fn with_payload(&self, image: Vec<u8>) -> Vec<u8> {
+        let derived = DerivedIndex::new(
+            self.coordinates,
+            IndexPayloadStorage::Inline(image),
+            IndexBuildDeterminism::Deterministic,
+            &self.guard_contract,
+        )
+        .expect("the substituted payload folds into a derived index");
+        build(&self.context, vec![derived])
+    }
+
     /// The artifact rebuilt with this profile's guard contract mutated by `mutate`.
     ///
     /// The builder is the real one, so the result is a properly sealed artifact that opens and

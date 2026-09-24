@@ -42,15 +42,20 @@
 //! process runs. It is a second type, `HnswIndex<Reassociated>`, not a mode of the first.
 //! Its image is still byte-identical across thread counts, because every call site on one
 //! path computes one pair's distance with the same compiled copy; but it is **bound to its
-//! build and its dispatch path**. The header records the path's image code, the
-//! implementation is [`IMPLEMENTATION_ID_REASSOCIATED`] and its evidence revision names
-//! the path ([`profile::loss_evidence_reassociated`]). Every decode, rebuild verification
-//! and search runs the recorded path, whichever path is widest here: an image built on
-//! `x86_64`'s SSE2 or AVX2+FMA path runs on that path on an AVX-512F processor, whose
-//! binary holds every `x86_64` compilation. A process that cannot run the recorded path
-//! -- its compilation belongs to another target, or the processor lacks a feature it
-//! needs -- is refused with [`HnswError::ArithmeticPathUnavailable`] rather than answered
-//! with bits from a different compilation.
+//! build and its dispatch path**. The header records the path's image code and the
+//! build's [`BuildShape`] -- its target architecture and the target features that decide
+//! what the path compiles to -- the implementation is [`IMPLEMENTATION_ID_REASSOCIATED`]
+//! and its evidence revision names the path ([`profile::loss_evidence_reassociated`]).
+//! Every decode, rebuild verification and search runs the recorded path, whichever path is
+//! widest here: an image built on `x86_64`'s SSE2 or AVX2+FMA path runs on that path on an
+//! AVX-512F processor, whose binary holds every `x86_64` compilation. A process that cannot
+//! run the recorded path -- its compilation belongs to another target, or the processor
+//! lacks a feature it needs -- is refused with [`HnswError::ArithmeticPathUnavailable`],
+//! and a build of another shape with [`HnswError::ArithmeticBuildMismatch`], rather than
+//! answered with bits from a different compilation. Equal path and shape are still not
+//! the same compiled artifact: CPU tuning and the compiler version are invisible to the
+//! source, so a rebuild that diverges under them is refused with
+//! [`HnswError::ArithmeticRebuildDiverged`] rather than answered `false`.
 //!
 //! # The approximation contract, stated honestly
 //!
@@ -105,10 +110,12 @@ pub use purrdf_sparql_eval::knn::{Kernel, Ranked};
 use std::sync::Mutex;
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{Arithmetic, Exact, Reassociated, RecordedPathError, Resolved};
+use purrdf_core::distance::{
+    Arithmetic, BuildShape, Exact, Reassociated, RecordedPathError, Resolved,
+};
 use rayon::prelude::*;
 
-use crate::graph::{Graph, decode_image};
+use crate::graph::{Graph, Recorded, decode_image};
 use crate::search::{DistanceCache, Query, Visited, greedy_descend, search_layer};
 
 /// The canonical image format version.
@@ -166,6 +173,39 @@ pub(crate) fn resolve_recorded<A: Arithmetic>(recorded: u32) -> Result<Resolved<
             actual: recorded,
         }),
     }
+}
+
+/// Refuse an image whose recorded build shape is not this build's.
+///
+/// `recorded` is the shape the image header carries, present exactly when `A` has one, so
+/// an exact image always passes and a reassociated one passes only in a build of its own
+/// shape.
+///
+/// # Errors
+///
+/// [`HnswError::ArithmeticBuildMismatch`] naming both shapes.
+pub(crate) fn check_build<A: Arithmetic>(recorded: Option<BuildShape>) -> Result<()> {
+    match (recorded, A::build_shape()) {
+        (Some(recorded), Some(here)) if recorded != here => {
+            Err(HnswError::ArithmeticBuildMismatch { recorded, here })
+        }
+        (Some(_), Some(_)) | (None, None) => Ok(()),
+        (recorded, here) => unreachable!(
+            "the decoder reads a build shape exactly when {} has one; recorded {recorded:?}, \
+             here {here:?}",
+            A::ID
+        ),
+    }
+}
+
+/// The refusal of a rebuild that produced another image, or `None` for an arithmetic whose
+/// rebuild inequality is an honest "no".
+///
+/// For an arithmetic with a build shape the rebuild ran on the recorded path under the
+/// recorded shape, which [`check_build`] proved is this build's; what can still differ is
+/// only what no shape records, so the answer is [`HnswError::ArithmeticRebuildDiverged`].
+fn diverged<A: Arithmetic>(recorded: u32) -> Option<HnswError> {
+    A::build_shape().map(|shape| HnswError::ArithmeticRebuildDiverged { recorded, shape })
 }
 
 /// The test hook that stands the calling thread on a processor that cannot run a path.
@@ -394,10 +434,12 @@ impl HnswIndex<Reassociated> {
     /// image records it. Its distances may differ in their last bits from
     /// [`HnswIndex::build`]'s, so the graph may differ too wherever two candidates nearly
     /// tie; its recall is measured against the exact oracle exactly as the exact index's
-    /// is. Its canonical image is reproducible only on the same dispatch path, so every
-    /// later decode, rebuild verification and search runs that path, on any process that
-    /// can run it, and refuses one that cannot with
-    /// [`HnswError::ArithmeticPathUnavailable`].
+    /// is. Its canonical image is reproducible only by the compiled build that made it, on
+    /// the same dispatch path, so the image records the path and the build's
+    /// [`BuildShape`]; every later decode, rebuild verification and search runs that path,
+    /// on any process that can run it, and refuses one that cannot with
+    /// [`HnswError::ArithmeticPathUnavailable`] and a build of another shape with
+    /// [`HnswError::ArithmeticBuildMismatch`].
     ///
     /// # Errors
     ///
@@ -419,7 +461,8 @@ impl HnswIndex<Reassociated> {
     /// As [`HnswIndex::decode`], with [`HnswError::ArithmeticMismatch`] for a header that
     /// records a code of another arithmetic (an exact image among them), and
     /// [`HnswError::ArithmeticPathUnavailable`] for one recorded on a dispatch path this
-    /// process cannot run. A path narrower than the widest this process runs is not
+    /// process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for one recorded by a
+    /// build of another shape. A path narrower than the widest this process runs is not
     /// refused: the decoded index searches and verifies on the path it recorded.
     pub fn decode_reassociated(matrix: VectorMatrix, bytes: &[u8]) -> Result<Self> {
         Self::decode_with(matrix, bytes, Compiled::here())
@@ -431,8 +474,13 @@ impl HnswIndex<Reassociated> {
     ///
     /// As [`HnswIndex::verify_bytes_against`], and
     /// [`HnswError::ArithmeticPathUnavailable`] for an image recorded on a dispatch path
-    /// this process cannot run: rebuilding it on another would recompute every distance with
+    /// this process cannot run, or [`HnswError::ArithmeticBuildMismatch`] for one recorded
+    /// by a build of another shape: rebuilding it here would recompute every distance with
     /// other last bits, so the answer would be a "no" that says nothing about the payload.
+    /// [`HnswError::ArithmeticRebuildDiverged`] when the rebuild, on the recorded path under
+    /// the recorded shape, produced another image: that is never `Ok(None)`, because a
+    /// build that differs from the one that built the image only in what no shape records
+    /// cannot be told apart from a payload that differs.
     pub(crate) fn verify_bytes_against_reassociated(
         matrix: &VectorMatrix,
         bytes: &[u8],
@@ -465,6 +513,9 @@ impl<A: Arithmetic> HnswIndex<A> {
     }
 
     /// Arithmetic `A` resolved for the calling thread, on the path this index recorded.
+    ///
+    /// The build shape is not held here: an index in memory was built, or decoded and
+    /// checked, by this build, so its shape is this build's.
     fn resolve_here(&self) -> Result<Resolved<A>> {
         resolve_recorded::<A>(self.arithmetic.image_code())
     }
@@ -707,11 +758,12 @@ impl<A: Arithmetic> HnswIndex<A> {
     ///
     /// This is the image a PURREMB guard commits and the byte string a determinism digest
     /// folds: two builds that agree here are the same index. Its header records the
-    /// arithmetic's image code for the path the build ran.
+    /// arithmetic's image code for the path the build ran, and for an arithmetic whose
+    /// bits depend on the build, the build's shape.
     #[must_use]
     pub fn canonical_image(&self) -> Vec<u8> {
         self.graph
-            .canonical_image(self.kernel, &self.params, self.arithmetic.image_code())
+            .canonical_image(self.kernel, &self.params, Recorded::of(self.arithmetic))
     }
 
     /// Decode an index under `A` from its canonical image.
@@ -720,7 +772,8 @@ impl<A: Arithmetic> HnswIndex<A> {
         // The recorded path, which every later search and rebuild verification runs; the
         // norms computed below are arithmetic under the thread's environment, which this
         // checks too.
-        let here = resolve_recorded::<A>(image.arithmetic)?;
+        let here = resolve_recorded::<A>(image.arithmetic.code)?;
+        check_build::<A>(image.arithmetic.shape)?;
         if image.graph.node_count() != matrix.rows() {
             return Err(HnswError::InvalidPayload {
                 reason: format!(
@@ -761,10 +814,11 @@ impl<A: Arithmetic> HnswIndex<A> {
             ) => return Err(error),
             Err(_) => return Ok(None),
         };
-        // The rebuild runs on the recorded path. A path this process cannot run cannot
-        // rebuild the image, and saying `false` would report a real index as a tampered
-        // one.
-        let here = resolve_recorded::<A>(image.arithmetic)?;
+        // The rebuild runs on the recorded path, in a build of the recorded shape. A path
+        // this process cannot run, or a build of another shape, cannot rebuild the image,
+        // and saying `false` would report a real index as a tampered one.
+        let here = resolve_recorded::<A>(image.arithmetic.code)?;
+        check_build::<A>(image.arithmetic.shape)?;
         if image.graph.node_count() != matrix.rows()
             || image
                 .params
@@ -781,7 +835,7 @@ impl<A: Arithmetic> HnswIndex<A> {
         {
             Ok(Some(image.params))
         } else {
-            Ok(None)
+            diverged::<A>(image.arithmetic.code).map_or(Ok(None), Err)
         }
     }
 
@@ -791,13 +845,20 @@ impl<A: Arithmetic> HnswIndex<A> {
     /// This turns "the payload is rebuildable" into a checkable claim: a `true` means the
     /// canonical image is a pure function of the source data and the declared parameters,
     /// while a `false` would mean the stored graph disagrees with what the declared
-    /// identity builds. A reassociated index is a pure function of them *on the dispatch
-    /// path it recorded*, so the rebuild runs there or not at all.
+    /// identity builds. A reassociated index is a pure function of them only *in the
+    /// compiled artifact that built it, on the dispatch path it recorded*, so the rebuild
+    /// runs there or not at all, and a rebuild that differs is not a `false`.
     ///
     /// # Errors
     ///
     /// As [`HnswIndex::build`], and [`HnswError::ArithmeticPathUnavailable`] if the calling
     /// thread cannot run the dispatch path this index recorded.
+    /// [`HnswError::ArithmeticRebuildDiverged`] for a reassociated index whose rebuild, on
+    /// its recorded path in a build of its recorded shape, produced another image: CPU
+    /// tuning or the compiler version, which no build shape records, differ from the build
+    /// that computed its distances, or its graph differs from the one that build produced,
+    /// and the two cannot be told apart. For an exact index `false` is that answer, and it
+    /// is evidence the graph was altered.
     pub fn verify_rebuild(&self) -> Result<bool> {
         // Rebuilt from a borrow: the vectors are already here, and copying a
         // million-row matrix in order to compare against it is the largest avoidable
@@ -805,10 +866,11 @@ impl<A: Arithmetic> HnswIndex<A> {
         let arithmetic = self.resolve_here()?;
         let (graph, _) =
             (self.compiled.build_graph)(&self.matrix, arithmetic, self.kernel, self.params, None)?;
-        Ok(
-            graph.canonical_image(self.kernel, &self.params, self.arithmetic.image_code())
-                == self.canonical_image(),
-        )
+        let recorded = Recorded::of(self.arithmetic);
+        if graph.canonical_image(self.kernel, &self.params, recorded) == self.canonical_image() {
+            return Ok(true);
+        }
+        diverged::<A>(recorded.code).map_or(Ok(false), Err)
     }
 
     /// The arithmetic every distance of this index is computed under, on the dispatch
@@ -1435,6 +1497,172 @@ mod tests {
         ));
     }
 
+    /// The eight bytes after a reassociated header's code: the build shape.
+    fn header_shape(image: &[u8]) -> BuildShape {
+        BuildShape::from_bits(u64::from_le_bytes(
+            image[64..72].try_into().expect("eight header bytes"),
+        ))
+    }
+
+    /// A shape this build is not: this build's with one more feature of its row, or, on an
+    /// architecture whose row records none, another architecture's.
+    fn another_shape() -> BuildShape {
+        let here = BuildShape::here();
+        let arch = here.architecture().expect("every CI target is a named one");
+        let mut features = here.features();
+        let extra = [
+            "fma",
+            "avx512f",
+            "sve",
+            "neon",
+            "vfp4",
+            "simd128",
+            "relaxed-simd",
+            "v",
+        ]
+        .into_iter()
+        .find(|feature| {
+            !features.contains(feature) && {
+                let mut with = features.clone();
+                with.push(feature);
+                BuildShape::encode(arch, &with) != here
+            }
+        });
+        let other = extra.map_or_else(
+            || BuildShape::encode(if arch == "x86_64" { "x86" } else { "x86_64" }, &[]),
+            |feature| {
+                features.push(feature);
+                BuildShape::encode(arch, &features)
+            },
+        );
+        assert_ne!(other, here);
+        other
+    }
+
+    /// A reassociated image records this build's shape after its code, and a build of
+    /// another shape refuses it by name on every path that reads it; the neighbour, the
+    /// same bytes with this build's shape, decodes, verifies and rebuilds.
+    #[test]
+    fn a_foreign_build_shape_is_refused_named() {
+        let matrix = fixture(48, 70);
+        let index = reassociated(matrix.clone());
+        let image = index.canonical_image();
+        let here = BuildShape::here();
+        assert_eq!(index.arithmetic().build_shape(), Some(here));
+        assert_eq!(header_shape(&image), here, "the image records this build");
+
+        let foreign = another_shape();
+        let mut patched = image.clone();
+        patched[64..72].copy_from_slice(&foreign.bits().to_le_bytes());
+        let refusal = HnswError::ArithmeticBuildMismatch {
+            recorded: foreign,
+            here,
+        };
+        assert_eq!(
+            HnswIndex::decode_reassociated(matrix.clone(), &patched).expect_err("refused"),
+            refusal
+        );
+        assert_eq!(
+            HnswIndex::verify_bytes_against_reassociated(&matrix, &patched)
+                .expect_err("refused by name, never `Ok(None)`"),
+            refusal
+        );
+        let message = refusal.to_string();
+        assert!(
+            message.contains(&foreign.to_string()) && message.contains(&here.to_string()),
+            "the refusal names both shapes: {message}"
+        );
+        for feature in foreign.features() {
+            assert!(message.contains(feature), "{feature} in {message}");
+        }
+
+        // The neighbour: the same-build round trip.
+        let decoded =
+            HnswIndex::decode_reassociated(matrix.clone(), &image).expect("this build decodes");
+        assert_eq!(decoded.canonical_image(), image);
+        assert!(decoded.verify_rebuild().expect("rebuilds"));
+        assert!(index.verify_rebuild().expect("rebuilds"));
+        assert_eq!(
+            HnswIndex::verify_bytes_against_reassociated(&matrix, &image).expect("verifies"),
+            Some(params())
+        );
+        assert_eq!(
+            decoded.search_rows(3, 4).expect("searches"),
+            index.search_rows(3, 4).expect("searches")
+        );
+    }
+
+    /// The image with the last bit of node 0's first layer-0 distance flipped: a payload
+    /// that decodes, and that no rebuild reproduces.
+    fn with_a_perturbed_distance(image: &[u8], header: usize) -> Vec<u8> {
+        // Node 0: row u64, level u32, reserved u32; layer 0: layer u32, reserved u32,
+        // count u64; then its first neighbour's row u64 and distance u64.
+        let count = header + 16 + 8;
+        assert!(
+            u64::from_le_bytes(image[count..count + 8].try_into().expect("eight bytes")) > 0,
+            "node 0 has a layer-0 neighbour"
+        );
+        let distance = count + 8 + 8;
+        let mut perturbed = image.to_vec();
+        perturbed[distance] ^= 1;
+        perturbed
+    }
+
+    /// A reassociated rebuild that produces another image under the recorded path and
+    /// shape is refused by name, never `false`; the same perturbation of an exact image is
+    /// the honest `false` it always was, and both unperturbed images verify.
+    #[test]
+    fn a_diverged_rebuild_is_named_for_reassociated_and_false_for_exact() {
+        let matrix = fixture(48, 70);
+        let fast = reassociated(matrix.clone());
+        let image = fast.canonical_image();
+        let perturbed = with_a_perturbed_distance(&image, 80);
+        let refusal = HnswError::ArithmeticRebuildDiverged {
+            recorded: fast.arithmetic().image_code(),
+            shape: BuildShape::here(),
+        };
+        assert_eq!(
+            HnswIndex::verify_bytes_against_reassociated(&matrix, &perturbed)
+                .expect_err("named, never `Ok(None)`"),
+            refusal
+        );
+        let decoded = HnswIndex::decode_reassociated(matrix.clone(), &perturbed)
+            .expect("a perturbed distance still decodes");
+        assert_eq!(
+            decoded.verify_rebuild().expect_err("named, never `false`"),
+            refusal
+        );
+        let message = refusal.to_string();
+        assert!(
+            message.contains(&profile::path_label(fast.arithmetic().image_code()))
+                && message.contains(&BuildShape::here().to_string())
+                && message.contains("only by the compiled artifact that built it"),
+            "{message}"
+        );
+        // The neighbour: unperturbed, it verifies.
+        assert_eq!(
+            HnswIndex::verify_bytes_against_reassociated(&matrix, &image).expect("verifies"),
+            Some(params())
+        );
+        assert!(fast.verify_rebuild().expect("rebuilds"));
+
+        // The exact index keeps `false` as its tamper evidence.
+        let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
+            .expect("builds");
+        let exact_image = exact.canonical_image();
+        let exact_perturbed = with_a_perturbed_distance(&exact_image, 72);
+        assert_eq!(
+            HnswIndex::verify_bytes_against(&matrix, &exact_perturbed).expect("answers"),
+            None
+        );
+        let decoded = HnswIndex::decode(matrix.clone(), &exact_perturbed).expect("decodes");
+        assert!(!decoded.verify_rebuild().expect("answers"));
+        assert_eq!(
+            HnswIndex::verify_bytes_against(&matrix, &exact_image).expect("verifies"),
+            Some(params())
+        );
+    }
+
     /// The exact arithmetic records one code, and every host runs it on the path a new
     /// exact result runs on.
     #[test]
@@ -1444,6 +1672,11 @@ mod tests {
             .expect("builds");
         let image = exact.canonical_image();
         assert_eq!(header_code(&image), Exact::IMAGE_CODE);
+        assert_eq!(
+            exact.arithmetic().build_shape(),
+            None,
+            "no shape is recorded"
+        );
         let decoded = HnswIndex::decode(matrix, &image).expect("decodes");
         assert_eq!(
             decoded.arithmetic(),

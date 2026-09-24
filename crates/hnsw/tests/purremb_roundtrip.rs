@@ -17,7 +17,7 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
-use purrdf_core::distance::{Arithmetic, Path, Reassociated};
+use purrdf_core::distance::{Arithmetic, BuildShape, Path, Reassociated};
 use purrdf_core::{EmbeddingView, IndexUseRole, verify_embedding};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, profile, relation::HnswSpace};
 use purrdf_sparql_eval::{Completeness, KnnGuard, OrderFidelity, PropertyFunction};
@@ -487,4 +487,51 @@ fn guard_refuses_cross_paired_profile() {
         guard::load(&selected, fast.matrix.clone()).expect_err("loaded as the wrong law"),
     );
     assert!(refusal.contains("hnsw-reassociated-v2"), "{refusal}");
+}
+
+/// A reassociated payload recorded by a build of another shape is refused by name at the
+/// guard, both by the load and by the rebuild verification; the payload commitment is
+/// the artifact's own, so the refusal is the shape check and not a failed checksum. The
+/// neighbour is the same artifact with the payload this build wrote.
+#[test]
+fn a_foreign_build_shape_is_refused_at_the_guard() {
+    let fast = purremb::Fixture::new_reassociated(24, 4, params());
+    let here = BuildShape::here();
+    // The shape follows the code in a reassociated header.
+    assert_eq!(fast.image[64..72], here.bits().to_le_bytes());
+    let foreign = BuildShape::from_bits(here.bits() ^ 1 << 47);
+    assert_ne!(foreign, here);
+    let mut patched = fast.image.clone();
+    patched[64..72].copy_from_slice(&foreign.bits().to_le_bytes());
+    let refusal = HnswError::ArithmeticBuildMismatch {
+        recorded: foreign,
+        here,
+    };
+
+    for (artifact, refused) in [
+        (fast.with_payload(fast.image.clone()), false),
+        (fast.with_payload(patched), true),
+    ] {
+        let mut view = EmbeddingView::from_bytes(&artifact).expect("the artifact opens");
+        verify_embedding(&mut view).expect("the payload commitment is the artifact's own");
+        let selected = guard::select(&view).expect("the guard names the profile");
+        guard::verify_payload_commitment(
+            &selected,
+            guard::payload_bytes(&selected).expect("inline"),
+        )
+        .expect("the guard commits these bytes");
+        let loaded = guard::load_reassociated(&selected, fast.matrix.clone());
+        let verified = guard::verify_rebuild(&selected, &fast.matrix, &fast.params);
+        if refused {
+            assert_eq!(loaded.expect_err("a foreign build is refused"), refusal);
+            assert_eq!(
+                verified.expect_err("refused by name, never `Ok(false)`"),
+                refusal
+            );
+        } else {
+            let index = loaded.expect("this build's payload loads");
+            assert_eq!(index.canonical_image(), fast.image);
+            assert!(verified.expect("this build's payload verifies"));
+        }
+    }
 }

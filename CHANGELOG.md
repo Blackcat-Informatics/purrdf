@@ -86,12 +86,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (another target's compilation, or a missing processor feature) is refused, with
   `HnswError::ArithmeticPathUnavailable`, never a bare mismatch. Its profile
   is `hnsw-reassociated-v2` (`IMPLEMENTATION_ID_REASSOCIATED`). The loss evidence
-  adds the arithmetic's divergence text and says that the image is bound to its
-  build's dispatch path. `profile_declaration` folds in the arithmetic id. The
+  adds the arithmetic's divergence text and says that only the compiled build
+  that made the image reproduces it, on the same dispatch path. `profile_declaration` folds in the arithmetic id. The
   guard derives its legal (implementation, revision, code set) pairs from both
   arithmetics and refuses cross pairings. `IndexLossContract` is unchanged,
   because the arithmetic transforms no vectors. Reassociated recall meets the
   exact floor in the tests.
+
+- **core:** `purrdf_core::distance::BuildShape` and `Arithmetic::build_shape()`
+  (also `Resolved::build_shape()`). A dispatch path does not pin the code that
+  ran: every path is also compiled under the consumer build's
+  `-C target-cpu`/`-C target-feature`, so the sse2 path contracts to FMA in a
+  build compiled with `fma`, the avx512f path runs `ymm` under x86-64-v4, and
+  the neon path becomes SVE under neoverse-v1. A `BuildShape` is a versioned
+  `u64` holding the layout version, the target architecture's code and one bit
+  per target feature that decides the reassociated body's vector and FMA code
+  (x86/x86_64 `x87` through `avx512vl` and `soft-float`; aarch64 `neon`, `fp16`,
+  `fcma`, `rdm`, `dotprod`, `f64mm`, `sve`, `sve2`; wasm `simd128` and
+  `relaxed-simd`; rows for every other `target_arch`). `BuildShape::here()` is
+  this build's, `BuildShape::encode(arch, features)` is the pure encoder, and its
+  `Display` lists the architecture and features. `Reassociated` returns this
+  build's shape and `Exact` returns `None`, because its bits are the same in every
+  build. `rustc` exposes no `cfg` for `-C target-cpu`, so CPU tuning and the
+  compiler version are not captured, and the documentation says so.
 
 - **iri:** byte-class scanners in `purrdf_iri::terminals`:
   `find_first_trivia`, `find_first_iri_body_special`,
@@ -1660,6 +1677,31 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
     process cannot run. `available` is the widest path the process runs;
   - `FloatEnvironment(FloatEnvironmentError)`, raised by every build, rebuild
     and search entry point under a flush-to-zero or non-nearest environment.
+
+- **BREAKING** **hnsw:** a reassociated image records the build that computed it,
+  not only the dispatch path. Two builds recording one path could compute
+  different bits, and a mismatched pair used to pass the path check and then
+  answer `verify_rebuild` with a bare `Ok(false)`, which reads as tampering.
+  - The header of a reassociated image (codes 2 to 8) carries a `u64` build
+    shape (`purrdf_core::distance::BuildShape`) right after the arithmetic code.
+    Exact images carry no shape, so their bytes do not change and
+    `GOLDEN_DIGEST` and `GOLDEN_SERIAL_DIGEST` do not move. No reassociated
+    golden is pinned. An image from an intermediate build of this cycle, which
+    has no shape field, is refused as a truncated payload.
+  - `HnswError` gains `ArithmeticBuildMismatch { recorded, here }`. Decode,
+    `guard::load_reassociated`, `HnswIndex::verify_rebuild` and
+    `guard::verify_rebuild` raise it for an image recorded by a build of another
+    shape, and its message lists both feature sets.
+  - `HnswError` gains `ArithmeticRebuildDiverged { recorded, shape }`. A
+    rebuild on the recorded path and shape can still differ, because CPU tuning
+    and the compiler version are not recorded. That result is now this error,
+    from both `verify_rebuild`s, and never `Ok(false)`. For an exact image,
+    `Ok(false)` still means the payload was altered.
+  - The reassociated profile declaration ends with a `build-shape=<bits>` line,
+    so the implementation digest binds the build. The evidence revision now
+    says the image is reproducible only by the compiled build that made it, on
+    the same dispatch path, and that CPU tuning and the compiler version may also
+    change its bits.
 
 - **BREAKING** **sparql-eval:** `Scalar` is sealed and implemented for `f32` and
   `f64` only. `RankedDeclaration` gains the public `arithmetic` field, a

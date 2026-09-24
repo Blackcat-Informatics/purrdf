@@ -32,7 +32,7 @@
 
 use std::collections::BTreeSet;
 
-use purrdf_core::distance::{Arithmetic, Resolved, RowsRef};
+use purrdf_core::distance::{Arithmetic, BuildShape, Resolved, RowsRef};
 
 use crate::error::{HnswError, Result};
 use crate::params::Params;
@@ -46,10 +46,34 @@ pub(crate) const IMAGE_MAGIC: [u8; 8] = *b"PURHNSW1";
 /// Version 2 is the first whose distances are folded by a named arithmetic, and the
 /// first whose header records that arithmetic's image code (in the `u32` that version 1
 /// reserved as zero): `1` for the sixteen-lane exact arithmetic, and for the
-/// reassociated one the code of the dispatch path the build ran. A version-1 image's distances were folded sequentially,
-/// so its recorded bits are not the ones this build computes; it is refused with
+/// reassociated one the code of the dispatch path the build ran, followed by the build's
+/// [`BuildShape`]. A version-1 image's distances were folded sequentially, so its recorded
+/// bits are not the ones this build computes; it is refused with
 /// [`HnswError::VersionMismatch`] rather than decoded.
 pub(crate) const IMAGE_VERSION: u32 = 2;
+
+/// What an image header records about the arithmetic its distances were computed under:
+/// the image code, and for an arithmetic whose bits depend on the build, the build's shape.
+///
+/// The shape is present exactly when the arithmetic has one ([`Arithmetic::build_shape`]),
+/// so an exact image carries none and its bytes are the ones it always had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Recorded {
+    /// The image code of the arithmetic and dispatch path.
+    pub code: u32,
+    /// The build shape, for an arithmetic whose bits depend on the build.
+    pub shape: Option<BuildShape>,
+}
+
+impl Recorded {
+    /// What an image computed by `arithmetic` in this build records.
+    pub(crate) fn of<A: Arithmetic>(arithmetic: Resolved<A>) -> Self {
+        Self {
+            code: arithmetic.image_code(),
+            shape: A::build_shape(),
+        }
+    }
+}
 
 /// A deterministic, finite-valued, row-major matrix of `f64` vectors.
 ///
@@ -699,12 +723,12 @@ impl Graph {
 
     /// Encode the graph into its canonical byte image, recording `arithmetic` -- the
     /// image code of the arithmetic and dispatch path its distances were computed
-    /// on -- in the header.
+    /// on, and the build shape of one whose bits depend on the build -- in the header.
     pub(crate) fn canonical_image(
         &self,
         kernel: Kernel,
         params: &Params,
-        arithmetic: u32,
+        arithmetic: Recorded,
     ) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&IMAGE_MAGIC);
@@ -716,8 +740,12 @@ impl Graph {
         push_u64(&mut out, as_u64(params.ef_search()));
         push_u64(&mut out, as_u64(self.node_count()));
         push_u32(&mut out, self.max_level);
-        // The arithmetic, and path, the recorded distances were folded under.
-        push_u32(&mut out, arithmetic);
+        // The arithmetic, and path, the recorded distances were folded under, and the
+        // shape of the build that compiled that path, where the arithmetic has one.
+        push_u32(&mut out, arithmetic.code);
+        if let Some(shape) = arithmetic.shape {
+            push_u64(&mut out, shape.bits());
+        }
         push_u64(&mut out, self.entry.map_or(u64::MAX, as_u64));
 
         for row in 0..self.node_count() {
@@ -851,8 +879,9 @@ pub(crate) struct GraphImage {
     pub graph: Graph,
     pub kernel: Kernel,
     pub params: Params,
-    /// The image code the header records, one of the decoding arithmetic's codes.
-    pub arithmetic: u32,
+    /// What the header records about the arithmetic: one of the decoding arithmetic's
+    /// codes, and a build shape exactly when that arithmetic has one.
+    pub arithmetic: Recorded,
 }
 
 /// Decode a canonical image as one computed under arithmetic `A`, validating every
@@ -860,8 +889,8 @@ pub(crate) struct GraphImage {
 ///
 /// A header whose arithmetic field is not one of `A`'s image codes is refused with
 /// [`HnswError::ArithmeticMismatch`]: its distances were folded under another law. Which
-/// of `A`'s codes it records is returned, for the caller to hold against the path it
-/// runs.
+/// of `A`'s codes it records, and the build shape it records when `A` has one, are
+/// returned for the caller to hold against the path it runs and the build it is.
 pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
     let mut cursor = Cursor::new(bytes);
     if cursor.take(IMAGE_MAGIC.len())? != IMAGE_MAGIC.as_slice() {
@@ -885,13 +914,19 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
     )?;
     let node_count = cursor.usize()?;
     let max_level = cursor.u32()?;
-    let arithmetic = cursor.u32()?;
-    if !A::IMAGE_CODES.contains(&arithmetic) {
+    let code = cursor.u32()?;
+    if !A::IMAGE_CODES.contains(&code) {
         return Err(HnswError::ArithmeticMismatch {
             arithmetic: A::ID,
-            actual: arithmetic,
+            actual: code,
         });
     }
+    // The code is one of `A`'s, so the field follows exactly when `A` has a shape.
+    let shape = match A::build_shape() {
+        Some(_) => Some(BuildShape::from_bits(cursor.u64()?)),
+        None => None,
+    };
+    let arithmetic = Recorded { code, shape };
     let entry_raw = cursor.u64()?;
 
     // A node record is at least 16 bytes of fixed fields (row, level, reserved) plus one
@@ -1155,6 +1190,14 @@ mod tests {
         Params::new(4, 8, 16, 8).expect("valid")
     }
 
+    /// What an exact image records: its one code and no shape.
+    const fn exact() -> Recorded {
+        Recorded {
+            code: Exact::IMAGE_CODE,
+            shape: None,
+        }
+    }
+
     fn sample_graph() -> Graph {
         // levels [0, 1, 0, 2, 1]; entry must be row 3 (min row at max level 2).
         let mut graph = Graph::with_levels(vec![0, 1, 0, 2, 1]);
@@ -1247,11 +1290,11 @@ mod tests {
     fn a_canonical_image_round_trips_byte_for_byte() {
         let graph = sample_graph();
         let params = params();
-        let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, Exact::IMAGE_CODE);
+        let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, exact());
         let decoded = decode_image::<Exact>(&image).expect("the image decodes");
         assert_eq!(decoded.kernel, Kernel::SquaredEuclidean);
         assert_eq!(decoded.params, params);
-        assert_eq!(decoded.arithmetic, Exact::IMAGE_CODE);
+        assert_eq!(decoded.arithmetic, exact());
         assert_eq!(decoded.graph, graph, "the graph survives decode");
         let reencoded =
             decoded
@@ -1265,29 +1308,70 @@ mod tests {
         let graph = sample_graph();
         let params = params();
         for &code in Reassociated::IMAGE_CODES {
-            let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, code);
+            let recorded = Recorded {
+                code,
+                shape: Some(BuildShape::here()),
+            };
+            let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, recorded);
             assert_eq!(
                 decode_image::<Reassociated>(&image)
                     .expect("a reassociated code decodes as reassociated")
                     .arithmetic,
-                code
+                recorded
             );
             assert!(matches!(
                 decode_image::<Exact>(&image),
                 Err(HnswError::ArithmeticMismatch { actual, .. }) if actual == code
             ));
         }
-        let exact = graph.canonical_image(Kernel::SquaredEuclidean, &params, Exact::IMAGE_CODE);
+        let exact_image = graph.canonical_image(Kernel::SquaredEuclidean, &params, exact());
         assert!(matches!(
-            decode_image::<Reassociated>(&exact),
+            decode_image::<Reassociated>(&exact_image),
             Err(HnswError::ArithmeticMismatch { actual: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn only_a_reassociated_header_carries_a_build_shape() {
+        let graph = sample_graph();
+        let params = params();
+        let exact_image = graph.canonical_image(Kernel::SquaredEuclidean, &params, exact());
+        let shape = BuildShape::from_bits(0x0123_4567_89ab_cdef);
+        let reassociated = Recorded {
+            code: 3,
+            shape: Some(shape),
+        };
+        let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, reassociated);
+        // The shape is the eight bytes after the arithmetic code; everything else is the
+        // exact image's, shifted by them.
+        assert_eq!(image.len(), exact_image.len() + 8);
+        assert_eq!(image[..60], exact_image[..60]);
+        assert_eq!(image[60..64], 3_u32.to_le_bytes());
+        assert_eq!(image[64..72], shape.bits().to_le_bytes());
+        assert_eq!(image[72..], exact_image[64..]);
+        // The decoder reads the shape back verbatim, whatever build it names; holding it
+        // against this build is the caller's refusal, not the decoder's.
+        let decoded = decode_image::<Reassociated>(&image).expect("decodes");
+        assert_eq!(decoded.arithmetic, reassociated);
+        assert_eq!(
+            decoded
+                .graph
+                .canonical_image(decoded.kernel, &decoded.params, decoded.arithmetic),
+            image
+        );
+        // An image whose shape field is missing is truncated, not an exact image.
+        let mut shapeless = exact_image;
+        shapeless[60..64].copy_from_slice(&3_u32.to_le_bytes());
+        assert!(matches!(
+            decode_image::<Reassociated>(&shapeless),
+            Err(HnswError::InvalidPayload { .. })
         ));
     }
 
     #[test]
     fn truncated_and_corrupt_images_are_refused() {
         let graph = sample_graph();
-        let image = graph.canonical_image(Kernel::Cosine, &params(), Exact::IMAGE_CODE);
+        let image = graph.canonical_image(Kernel::Cosine, &params(), exact());
         assert!(decode_image::<Exact>(&image[..image.len() - 1]).is_err());
         let mut trailing = image.clone();
         trailing.push(0);

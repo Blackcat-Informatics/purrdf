@@ -26,8 +26,9 @@
 //!    container's own verification was never asked to run;
 //! 3. the canonical image decodes over the matrix under the arithmetic the guard names
 //!    ([`load`] for the exact index, [`load_reassociated`] for the reassociated one), its
-//!    header records a code that implementation publishes, and its embedded parameters
-//!    agree with the guard's parameter block.
+//!    header records a code that implementation publishes -- and for the reassociated one,
+//!    this build's shape -- and its embedded parameters agree with the guard's parameter
+//!    block.
 //!
 //! # Rebuildability, made checkable
 //!
@@ -35,7 +36,10 @@
 //! payload the canonical image of building the given matrix under the given parameters?*
 //! It recomputes the graph and compares. A `true` means the payload is a pure function of
 //! the source data and the declared identity; a `false` means it is not — a stale or
-//! tampered payload, or one built under different parameters.
+//! tampered payload, or one built under different parameters. A reassociated payload is a
+//! function of them only in the compiled build that made it, so its rebuild inequality is
+//! refused by name ([`HnswError::ArithmeticRebuildDiverged`]) rather than answered
+//! `false`.
 
 use purrdf_core::{
     ContentDigest, DerivedIndex, EffectiveMatrixView, EmbeddingView, IndexBuildDeterminism,
@@ -541,8 +545,9 @@ pub fn load(guard: &IndexGuardView<'_>, matrix: VectorMatrix) -> Result<HnswInde
 ///
 /// As [`load`], with [`HnswError::GuardProfile`] for a guard naming the exact
 /// implementation or one whose revision names another dispatch path than the payload
-/// records, and [`HnswError::ArithmeticPathUnavailable`] for a payload recorded on a path
-/// this process cannot run.
+/// records, [`HnswError::ArithmeticPathUnavailable`] for a payload recorded on a path
+/// this process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for one recorded by
+/// a build of another shape.
 pub fn load_reassociated(
     guard: &IndexGuardView<'_>,
     matrix: VectorMatrix,
@@ -676,8 +681,16 @@ fn check_row_width(row: usize, decoded: usize, dimension: usize) -> Result<()> {
 /// another image version or arithmetic: a version-1 image is an index folded under a
 /// different law, not a tampered one, and answering `false` would say otherwise.
 /// [`HnswError::ArithmeticPathUnavailable`] for a reassociated payload recorded on a
-/// dispatch path this process cannot run, for the same reason. Any other payload that
+/// dispatch path this process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for
+/// one recorded by a build of another shape, for the same reason. Any other payload that
 /// cannot be read or decoded is `Ok(false)`, since it cannot be the rebuild either.
+///
+/// A reassociated payload whose rebuild, on its recorded path in a build of its recorded
+/// shape, produces another image is [`HnswError::ArithmeticRebuildDiverged`], never
+/// `Ok(false)`: CPU tuning and the compiler version also decide its bits and no image
+/// records them, so the payload is reproducible only by the compiled build that made it,
+/// and a divergence cannot be told apart from a payload that differs. For an exact payload
+/// `Ok(false)` is that answer, and it is evidence of a stale or altered payload.
 ///
 /// The arithmetic the rebuild runs is the one the guard's implementation identifier names:
 /// the reassociated implementation is rebuilt under [`Reassociated`], and anything else

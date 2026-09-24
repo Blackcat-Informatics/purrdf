@@ -117,6 +117,39 @@ pub enum HnswError {
         available: u32,
     },
 
+    /// A payload's header records a build shape for its arithmetic that is not this
+    /// build's.
+    ///
+    /// A reassociated arithmetic's bits depend on what its dispatch path compiled to, and
+    /// that depends on the build's target architecture and target features as well as
+    /// the path: the same path contracts to fused multiply-add in one build and not in
+    /// another. So the image records the shape of the build that computed it, and a build
+    /// of another shape refuses it by name rather than searching it, or rebuilding it and
+    /// answering `false`, with bits another compilation would produce.
+    ArithmeticBuildMismatch {
+        /// The shape the payload records.
+        recorded: purrdf_core::distance::BuildShape,
+        /// This build's shape.
+        here: purrdf_core::distance::BuildShape,
+    },
+
+    /// A rebuild of a payload whose arithmetic depends on its compilation produced another
+    /// image, on the dispatch path the payload records and under the build shape it
+    /// records.
+    ///
+    /// The build shape holds only what the compiler exposes to the source. CPU tuning
+    /// (`-C target-cpu`) and the compiler version also decide what a reassociated path
+    /// compiles to, so an image of this arithmetic is reproducible only by the same
+    /// compiled artifact, and a divergence here cannot be told apart from a payload that
+    /// differs. It is refused by name instead of answered `false`, which for an arithmetic
+    /// whose bits are the same in every build is evidence that the payload was altered.
+    ArithmeticRebuildDiverged {
+        /// The image code of the path the payload records, which the rebuild ran.
+        recorded: u32,
+        /// The build shape the payload records, which is this build's.
+        shape: purrdf_core::distance::BuildShape,
+    },
+
     /// The calling thread's floating-point environment is not the IEEE-754 one the
     /// distance arithmetic defines its results under.
     ///
@@ -237,6 +270,23 @@ impl fmt::Display for HnswError {
                 crate::profile::path_label(*recorded),
                 crate::profile::path_label(*available)
             ),
+            Self::ArithmeticBuildMismatch { recorded, here } => write!(
+                f,
+                "the payload's distances were computed by a build of another shape ({recorded}) \
+                 than this one ({here}); what a dispatch path compiles to depends on the \
+                 build's target architecture and features, so the image is reproducible only \
+                 by a build of its own shape"
+            ),
+            Self::ArithmeticRebuildDiverged { recorded, shape } => write!(
+                f,
+                "rebuilding the payload on the dispatch path it records (arithmetic code \
+                 {recorded}, {}) under the build shape it records ({shape}) produced another \
+                 image; CPU tuning and the compiler version also decide what that path \
+                 compiles to and no build shape records them, so the image is reproducible \
+                 only by the compiled artifact that built it, and this divergence cannot be \
+                 told apart from a payload that differs",
+                crate::profile::path_label(*recorded)
+            ),
             Self::FloatEnvironment(error) => write!(
                 f,
                 "the floating-point environment cannot run the distance arithmetic: {error}"
@@ -334,6 +384,14 @@ mod tests {
                 recorded: 2,
                 available: 3,
             },
+            HnswError::ArithmeticBuildMismatch {
+                recorded: purrdf_core::distance::BuildShape::encode("x86_64", &["sse2"]),
+                here: purrdf_core::distance::BuildShape::encode("x86_64", &["sse2", "fma"]),
+            },
+            HnswError::ArithmeticRebuildDiverged {
+                recorded: 3,
+                shape: purrdf_core::distance::BuildShape::encode("x86_64", &["sse2", "fma"]),
+            },
             HnswError::FloatEnvironment(
                 purrdf_core::distance::FloatEnvironmentError::FlushToZero {
                     evidence: purrdf_core::distance::FloatEnvironmentEvidence::Register {
@@ -364,6 +422,16 @@ mod tests {
                 description: "structure refused".to_owned(),
             },
         ];
+        // The build refusal names both shapes as feature lists, not only as bits.
+        let mismatch = cases
+            .iter()
+            .find(|case| matches!(case, HnswError::ArithmeticBuildMismatch { .. }))
+            .expect("listed")
+            .to_string();
+        assert!(
+            mismatch.contains("x86_64 with sse2)") && mismatch.contains("x86_64 with sse2, fma"),
+            "{mismatch}"
+        );
         let mut seen = std::collections::HashSet::new();
         for error in cases {
             let message = error.to_string();

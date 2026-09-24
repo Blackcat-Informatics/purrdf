@@ -80,6 +80,17 @@ process runs.
   cannot run the recorded path (another target's compilation, or a processor
   without a feature it needs) is refused with
   `HnswError::ArithmeticPathUnavailable` rather than answered with other bits.
+* **The path is not the whole compilation.** Each path is also compiled under
+  the consumer build's own `-C target-cpu`/`-C target-feature`, so one path can
+  contract to FMA, or run SVE instead of NEON, in one build and not another. The
+  header therefore records the build's `BuildShape` too -- the target
+  architecture and the target features that decide the reassociated code -- and
+  a build of another shape is refused with `HnswError::ArithmeticBuildMismatch`,
+  naming both feature sets. CPU tuning and the compiler version are not visible
+  to the source, so a reassociated image is reproducible only by the compiled
+  build that made it: a rebuild that still diverges is
+  `HnswError::ArithmeticRebuildDiverged`, never the `false` that an exact image's
+  rebuild answers when its payload was altered.
 * **Graded against the exact oracle.** Its recall is measured against the exact
   scan exactly as the exact index's is, and meets the exact index's pinned recall
   on the conformance family.

@@ -87,6 +87,9 @@
 //!                        (binary64-lane16-tree-v1); 2..=8 = Reassociated
 //!                        (binary64-reassociated-v1) on the dispatch path the
 //!                        build ran; 0 is refused
+//!   shape      u64       Reassociated codes only: the BuildShape of the build
+//!                        that computed the distances (purrdf_core::distance's
+//!                        versioned layout); absent from an Exact image
 //!   entry      u64       row, or u64::MAX for an empty graph
 //! node records, in ascending row order:
 //!   row        u64       must equal the record's position
@@ -111,6 +114,25 @@
 //! [`HnswError::VersionMismatch`], and an image whose
 //! field names another arithmetic with
 //! [`HnswError::ArithmeticMismatch`].
+//!
+//! # A reassociated image records the build as well as the path
+//!
+//! What a reassociated dispatch path compiles to depends on the consumer build's target
+//! features as well as on the path: the baseline `x86_64` path contracts to fused
+//! multiply-add in a build compiled with `fma`, and the NEON path becomes SVE under a
+//! Neoverse target. So two builds recording the same path can compute different bits, and
+//! the path alone does not pin the code that ran. A reassociated image therefore records,
+//! after its code, the [`BuildShape`] of the build that computed it -- its target
+//! architecture and the target features that decide the reassociated body's code -- and a
+//! build of another shape refuses it with [`HnswError::ArithmeticBuildMismatch`]. An exact
+//! image records no shape: its bits are the same in every build, and its bytes are the
+//! ones version 2 always had.
+//!
+//! Equal path and shape are necessary and not sufficient. CPU tuning (`-C target-cpu`)
+//! and the compiler version are not visible to the source, so a reassociated image is
+//! reproducible only by the compiled artifact that built it; a rebuild that diverges under
+//! a matching path and shape is refused with [`HnswError::ArithmeticRebuildDiverged`], not
+//! answered `false`.
 //!
 //! # The arithmetic is part of the profile
 //!
@@ -140,7 +162,7 @@
 //! these rows; an identifier carrying another row's revision, or a payload recording a
 //! code its guard's revision does not name, is a profile failure.
 
-use purrdf_core::distance::{Arithmetic, Exact, Path, Reassociated};
+use purrdf_core::distance::{Arithmetic, BuildShape, Exact, Path, Reassociated};
 use purrdf_core::{ArtifactIdentity, ArtifactIdentityKind, ContentDigest, IndexLossContract};
 
 use crate::error::{HnswError, Result};
@@ -176,12 +198,15 @@ pub const LOSS_EVIDENCE: &str = "approximate: recall measured against the exact 
 ///
 /// Its own sentence, after the arithmetic's evidence, because it states a different
 /// fact: not how the numbers may differ, but who can reproduce the image they built.
-const REASSOCIATED_REPRODUCIBILITY: &str =
-    "Its canonical image is reproducible only by a build running the same dispatch path.";
+const REASSOCIATED_REPRODUCIBILITY: &str = "Its canonical image is reproducible only by the \
+     compiled build that made it, running the same dispatch path: the image records that \
+     build's target architecture and features, and CPU tuning and the compiler version, which \
+     it cannot record, may change its bits too.";
 
 /// The approximation evidence of an index whose distances are computed under the
 /// [`Reassociated`] arithmetic along `path`: [`LOSS_EVIDENCE`], then the arithmetic's
-/// own evidence for the path, then the reproducibility sentence.
+/// own evidence for the path, then the sentence saying that only the compiled build that
+/// made the image reproduces it.
 ///
 /// It is carried as that implementation's revision, so a guard over a reassociated index
 /// publishes, in the artifact, both what the graph does not promise and what its last
@@ -195,8 +220,8 @@ pub fn loss_evidence_reassociated(path: Path) -> String {
 ///
 /// [`LOSS_EVIDENCE`] for an arithmetic whose bits are the same on every path (it has no
 /// evidence of its own); otherwise [`LOSS_EVIDENCE`], `"; "`, the arithmetic's evidence
-/// along `path`, and the sentence saying that the canonical image is reproducible only on
-/// that path.
+/// along `path`, and the sentence saying that the canonical image is reproducible only by
+/// the compiled build that made it, on that path.
 #[must_use]
 pub fn loss_evidence_for<A: Arithmetic>(path: Path) -> String {
     A::evidence(path).map_or_else(
@@ -384,17 +409,30 @@ pub fn profile_declaration() -> String {
 ///
 /// Folds `A::ID`, the implementation identifier and the evidence revision, so two
 /// arithmetics -- and, for a reassociated index, two dispatch paths -- declare two
-/// different profiles with two different digests.
+/// different profiles with two different digests. For an arithmetic whose bits depend on
+/// the build it also folds this build's [`BuildShape`], as a final
+/// `build-shape=<bits>` line, so the identity digest binds the build that computed the
+/// distances as the image header does; an exact declaration has no such line.
 #[must_use]
 pub fn profile_declaration_for<A: Arithmetic>(path: Path) -> String {
-    format!(
+    let declaration = format!(
         "{}\n{PARAMETER_ENCODING}\n{}\n{}\narithmetic={}\n{}",
         implementation_id_for::<A>(),
         crate::INDEX_MEDIA_TYPE,
         "approximate=true;transforms_vectors=false",
         A::ID,
         loss_evidence_for::<A>(path)
-    )
+    );
+    match A::build_shape() {
+        Some(shape) => format!("{declaration}\n{}", build_shape_line(shape)),
+        None => declaration,
+    }
+}
+
+/// The declaration line that binds a build shape: `build-shape=` and its bits as sixteen
+/// lowercase hexadecimal digits.
+fn build_shape_line(shape: BuildShape) -> String {
+    format!("build-shape={:016x}", shape.bits())
 }
 
 /// The loss contract every HNSW guard carries, under either arithmetic.
@@ -661,7 +699,10 @@ mod tests {
              the avx2+fma dispatch path of this build, so results may differ in the last bits \
              from the exact arithmetic and between dispatch paths or builds, the sign of a \
              zero result is unspecified, and near-ties may order differently. Its canonical \
-             image is reproducible only by a build running the same dispatch path."
+             image is reproducible only by the compiled build that made it, running the same \
+             dispatch path: the image records that build's target architecture and features, \
+             and CPU tuning and the compiler version, which it cannot record, may change its \
+             bits too."
         );
         for path in PATHS {
             let Some(evidence) = Reassociated::evidence(path) else {
@@ -716,10 +757,20 @@ mod tests {
     fn the_reassociated_declaration_binds_its_arithmetic_and_path() {
         let declaration = profile_declaration_for::<Reassociated>(Path::Sse2);
         let lines: Vec<&str> = declaration.lines().collect();
-        assert_eq!(lines.len(), 6);
+        assert_eq!(lines.len(), 7);
         assert_eq!(lines[0], IMPLEMENTATION_ID_REASSOCIATED);
         assert_eq!(lines[4], "arithmetic=binary64-reassociated-v1");
         assert_eq!(lines[5], loss_evidence_reassociated(Path::Sse2));
+        // The build is bound too, as its shape's bits.
+        assert_eq!(
+            lines[6],
+            format!("build-shape={:016x}", BuildShape::here().bits())
+        );
+        assert_ne!(
+            build_shape_line(BuildShape::here()),
+            build_shape_line(BuildShape::from_bits(BuildShape::here().bits() ^ 1 << 40)),
+            "two shapes are two declarations"
+        );
         // Two paths are two profiles, and neither is the exact one.
         assert_ne!(
             declaration,

@@ -199,9 +199,12 @@ header:
   node_count u64
   max_level  u32
   arithmetic u32       the distance arithmetic's image code: 1 = Exact
-                       (binary64-lane16-tree-v1); 2..=7 = Reassociated
+                       (binary64-lane16-tree-v1); 2..=8 = Reassociated
                        (binary64-reassociated-v1) on the dispatch path the
                        build ran; 0 is refused
+  shape      u64       Reassociated codes only: the BuildShape of the build
+                       that computed the distances (§3.1); absent from an
+                       Exact image
   entry      u64       row, or u64::MAX for an empty graph
 node records, in ascending row order:
   row        u64       must equal the record's position
@@ -234,8 +237,10 @@ as tampering. A header whose arithmetic field is not `1` is refused by the exact
 instead (§3.1). The exact canonical image is byte-identical across worker counts,
 across the exact arithmetic's dispatch paths (portable and AVX2 on x86-64), and across
 `wasm32-unknown-unknown` with and without `+simd128`; `make hnsw-determinism` executes
-all three wasm-side and native digests against the one golden. A reassociated image is
-byte-identical across worker counts and bound to its build and dispatch path.
+all three wasm-side and native digests against the one golden; the `shape` field is
+never written into an exact image, so its bytes are the ones version 2 always had. A
+reassociated image is byte-identical across worker counts and bound to its compiled build
+and dispatch path.
 
 Every build, rebuild, decode and search resolves the exact arithmetic on its own thread
 first, which refuses a flush-to-zero or re-rounding float environment with
@@ -256,7 +261,10 @@ coordinate.
 *is this payload the canonical image of building the given matrix under the
 given parameters?* It recomputes the graph and compares. The canonical image is
 the same bytes the determinism digest folds, so rebuildability and determinism
-are one claim rather than two.
+are one claim rather than two. For an exact payload a `false` is evidence of a stale
+or altered payload. A reassociated payload is reproducible only by the compiled build
+that made it, so a rebuild that differs under its recorded path and build shape is the
+named `HnswError::ArithmeticRebuildDiverged` instead (§3.1).
 
 ---
 
@@ -310,9 +318,10 @@ index's pinned recall on every regime.
 | record | exact index | reassociated index |
 |---|---|---|
 | image header `arithmetic` field | `1` | the code of the dispatch path the build resolved: `2` sse2, `3` avx2+fma, `4` avx512f, `5` neon, `6` wasm-simd128, `7` wasm-scalar, `8` portable (every target other than x86-64, aarch64 and wasm) |
+| image header `shape` field | absent | the build's `BuildShape`: target architecture and the target features that decide the reassociated body's code |
 | implementation identifier | `hnsw-v2` (`hnsw-reassociated-v2` for the reassociated index, §3.1) | `hnsw-reassociated-v2` |
-| evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by a build running the same dispatch path." (`profile::loss_evidence_reassociated`) |
-| profile declaration | `arithmetic=binary64-lane16-tree-v1` | `arithmetic=binary64-reassociated-v1`, and the path's revision |
+| evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by the compiled build that made it, running the same dispatch path: the image records that build's target architecture and features, and CPU tuning and the compiler version, which it cannot record, may change its bits too." (`profile::loss_evidence_reassociated`) |
+| profile declaration | `arithmetic=binary64-lane16-tree-v1` | `arithmetic=binary64-reassociated-v1`, the path's revision, and `build-shape=<bits>` |
 | `IndexLossContract` | `transforms_vectors: false` | `transforms_vectors: false` |
 | ranked declaration | `RankArithmetic::float_distance::<Exact>()` | `RankArithmetic::float_distance::<Reassociated>()` |
 | relation fidelity | `Lossy` with `LOSS_EVIDENCE`; order faithful | `Lossy` with the reassociated revision; order `Perturbed` with the arithmetic's evidence |
@@ -339,6 +348,30 @@ widest path this process runs (the one a new build here would record). The refus
 named, never an `Ok(false)` that would read as tampering, and never a search run with
 bits from another compilation. A header naming a code that is not one of the index type's
 own is `HnswError::ArithmeticMismatch`, in both directions.
+
+**The path does not pin the code that ran.** Each path is compiled under the consumer
+build's own `-C target-cpu`/`-C target-feature` as well as its `#[target_feature]`, and
+the asm audit (`distance.reassociated.dot` in `docs/design/purrdf-simd.md`) measures what
+that does: the AVX-512F path is `zmm` FMA under generic tuning and `ymm` under
+x86-64-v4, the SSE2 path is FMA code in any build compiled with `fma` (so in every
+`target-cpu=native` build on an FMA processor), and the NEON path is SVE under a
+neoverse-v1 target. Two builds recording one path can compute different bits. So the
+header also records the build's `purrdf_core::distance::BuildShape` -- a versioned `u64`
+naming the target architecture and the `cfg(target_feature)` set that decides the
+reassociated body's vector and FMA code -- and `decode_reassociated`,
+`guard::load_reassociated`, `verify_rebuild` and `guard::verify_rebuild` refuse another
+build's shape with `HnswError::ArithmeticBuildMismatch { recorded, here }`, whose
+message lists both feature sets. The path is checked first, so an image of another
+target reads as the unavailable path it is.
+
+Equal path and shape are necessary, not sufficient. `rustc` exposes no `cfg` for
+`-C target-cpu`, CPU tuning is not a target feature, and the compiler version is
+invisible to the source, so a reassociated image is reproducible only by the compiled
+artifact that built it. A rebuild on the recorded path, under the recorded shape, that
+produces another image is `HnswError::ArithmeticRebuildDiverged { recorded, shape }`,
+from `HnswIndex::verify_rebuild` and `guard::verify_rebuild` alike: it cannot be told
+apart from a payload that differs, and answering `false` would report a real index as
+tampered. `false` stays the exact index's answer, where it is evidence.
 
 **Compiled in this crate.** The search traversal and the graph build are held by the
 index as walks its non-generic constructors instantiate, so both are compiled in
