@@ -330,8 +330,10 @@ mod tests {
             },
             HnswError::FloatEnvironment(
                 purrdf_core::distance::FloatEnvironmentError::FlushToZero {
-                    register: "MXCSR",
-                    bits: 0x9fc0,
+                    evidence: purrdf_core::distance::FloatEnvironmentEvidence::Register {
+                        name: "MXCSR",
+                        bits: 0x9fc0,
+                    },
                 },
             ),
             HnswError::ArithmeticOverflow,

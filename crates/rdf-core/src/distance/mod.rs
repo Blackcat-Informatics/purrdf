@@ -83,11 +83,15 @@
 //!
 //! # The float environment is a precondition, checked
 //!
-//! Every arithmetic here assumes IEEE-754 round-to-nearest with subnormals preserved.
-//! A thread that has set flush-to-zero or denormals-are-zero, or another rounding
-//! direction, would compute different bits from the same code. [`Arithmetic::resolve`]
-//! reads the control register and refuses such an environment with a named
-//! [`FloatEnvironmentError`].
+//! Every arithmetic here assumes IEEE-754 round-to-nearest, ties-to-even, with
+//! subnormals preserved. A thread that has set flush-to-zero or denormals-are-zero, or
+//! another rounding direction, would compute different bits from the same code.
+//! [`Arithmetic::resolve`] proves the environment by behaviour, on every target: it runs
+//! eight binary64 operations whose IEEE-754 results are known constants, each chosen so
+//! that flushing a subnormal or rounding by any other rule changes the bits. Where the
+//! control register can be read (MXCSR on `x86_64`, FPCR on `aarch64`) it is read first,
+//! so the refusal can name it. A departure is refused with a named
+//! [`FloatEnvironmentError`] whose [`FloatEnvironmentEvidence`] says what was observed.
 
 mod dispatch;
 mod env;
@@ -102,7 +106,7 @@ mod tests;
 use core::fmt;
 use core::marker::PhantomData;
 
-pub use env::FloatEnvironmentError;
+pub use env::{FloatEnvironmentError, FloatEnvironmentEvidence};
 
 /// The number of independent accumulators in the [`Exact`] law.
 pub const EXACT_LANES: usize = exact::LANES;
@@ -397,9 +401,11 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
     ///
     /// # Errors
     ///
-    /// [`FloatEnvironmentError`] when the current thread's floating-point control
-    /// register flushes subnormals or rounds other than to nearest, or when this
-    /// target's register cannot be read.
+    /// [`FloatEnvironmentError`] when the current thread's floating-point environment
+    /// flushes subnormals or rounds other than to nearest, ties to even — shown by its
+    /// control register where one is read, and by the behavioural probe on every target —
+    /// or, as [`FloatEnvironmentError::Uninspectable`], when the arithmetic has no
+    /// compilation for this target.
     fn resolve() -> Result<Resolved<Self>, FloatEnvironmentError>;
 
     /// Score every row of `rows` against `query` into `out`, in row order.

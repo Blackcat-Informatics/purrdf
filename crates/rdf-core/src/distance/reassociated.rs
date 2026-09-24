@@ -73,7 +73,7 @@ pub(crate) const fn evidence(path: Path) -> &'static str {
 }
 
 /// The path the baseline compilation is, on this target; `None` on a target with no
-/// reassociated compilation, which is also one whose float environment cannot be read.
+/// reassociated compilation.
 #[cfg(target_arch = "x86_64")]
 const BASELINE: Option<Path> = Some(Path::Sse2);
 /// The path the baseline compilation is, on this target.

@@ -591,8 +591,10 @@ fn reassociated_refuses_flush_to_zero() {
     assert_eq!(
         refused,
         Err(FloatEnvironmentError::FlushToZero {
-            register: "MXCSR",
-            bits: u64::from(saved | (1 << 15)),
+            evidence: FloatEnvironmentEvidence::Register {
+                name: "MXCSR",
+                bits: u64::from(saved | (1 << 15)),
+            },
         })
     );
     assert!(

@@ -494,6 +494,71 @@ jobs:
       - name: Compare the HNSW canonical image digests with the pinned goldens on aarch64
         run: cargo test --locked -p purrdf-hnsw --test determinism --test conformance
 
+  # The architectures whose float control register this build does not read. On them the
+  # float environment is proven by the behavioural probe alone, so a kernel that computes
+  # on x86_64, aarch64 and wasm32 must compute here too rather than refuse an environment
+  # that was never shown to be wrong. Six targets are type-checked; two of them execute
+  # the distance, kNN and HNSW suites: i686 natively through the multilib C library, and
+  # riscv64 under user-mode emulation, which also sets the RISC-V rounding field and
+  # proves the probe refuses every non-default mode on a target with no register reader.
+  cross-arch:
+    runs-on: ubuntu-latest
+    # Six cold check graphs, two test builds, and the HNSW worker-count digest under
+    # emulation, which is the long pole.
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64 -L /usr/riscv64-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: i686-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu
+
+      - name: Install the i686 C library, the riscv64 cross linker and user-mode emulation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-multilib gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+      - name: Type-check the distance kernels and their consumers on six architectures
+        run: |
+          for target in \
+            i686-unknown-linux-gnu \
+            armv7-unknown-linux-gnueabihf \
+            riscv64gc-unknown-linux-gnu \
+            powerpc64le-unknown-linux-gnu \
+            s390x-unknown-linux-gnu \
+            loongarch64-unknown-linux-gnu
+          do
+            cargo check --locked --target "$target" \
+              -p purrdf-core -p purrdf-sparql-eval -p purrdf-hnsw
+          done
+
+      - name: Run the distance, kNN and HNSW suites on i686
+        run: |
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-core --lib distance
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
+            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hnsw \
+            --test determinism --test conformance --test float_environment
+
+      - name: Run the distance, kNN and HNSW suites on riscv64 under emulation
+        run: |
+          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-core --lib distance
+          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
+          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval \
+            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-hnsw \
+            --test determinism --test conformance
+
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
   # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module
   # with maturin and runs the pytest suite (compat parity + the rdflib/xfail-ledger

@@ -901,8 +901,8 @@ impl EmbeddingKnnRelation<Reassociated> {
     /// # Errors
     ///
     /// [`EvalError::FloatEnvironment`] when the calling thread's floating-point
-    /// environment flushes subnormals or rounds other than to nearest, or when this
-    /// target's control register cannot be read.
+    /// environment flushes subnormals or rounds other than to nearest, ties to even, or
+    /// when the reassociated arithmetic has no compilation for this target.
     pub fn new_reassociated(space: Arc<EmbeddingSpace>) -> Result<Self, EvalError> {
         let resolved = Reassociated::resolve().map_err(EvalError::FloatEnvironment)?;
         Ok(Self {

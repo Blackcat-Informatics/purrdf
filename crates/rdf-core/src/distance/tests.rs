@@ -688,13 +688,109 @@ fn default_float_environment_resolves() {
     );
 }
 
+/// Which probe rows return bits other than the IEEE-754 ones on this thread, by index.
+///
+/// Every row is observed, not only the first failure, so a test can hold the whole
+/// pattern a departure produces against the one the probe's table claims for it.
+fn failing_rows() -> [bool; env::PROBES.len()] {
+    let mut failing = [false; env::PROBES.len()];
+    for (slot, probe) in failing.iter_mut().zip(&env::PROBES) {
+        *slot = probe.observe() != probe.expected;
+    }
+    failing
+}
+
+/// The indices set in `rows`, for a readable assertion.
+fn indices(rows: [bool; env::PROBES.len()]) -> Vec<usize> {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(index, failing)| failing.then_some(index))
+        .collect()
+}
+
+/// A probe refusal, as the probe builds it for row `row` observing `observed`.
+fn probe_refusal(row: usize, observed: f64) -> FloatEnvironmentError {
+    let probe = env::PROBES[row];
+    let evidence = FloatEnvironmentEvidence::Probe {
+        operation: probe.operation,
+        expected: probe.expected,
+        observed: observed.to_bits(),
+    };
+    match probe.departure {
+        env::Departure::Flush => FloatEnvironmentError::FlushToZero { evidence },
+        env::Departure::Rounding => FloatEnvironmentError::RoundingMode { evidence },
+    }
+}
+
+/// `1 + 2⁻⁵²`, the successor of one.
+const ONE_PLUS_ULP: f64 = 1.0 + f64::EPSILON;
+
+#[test]
+fn the_default_environment_passes_every_probe_row() {
+    // The valid neighbour of every refusal below, and the control row of every pattern
+    // they compare: in the default environment no row differs, so a row that fails under
+    // a departure fails because of it.
+    assert_eq!(indices(failing_rows()), Vec::<usize>::new());
+    assert_eq!(env::probe(), Ok(()));
+    assert_eq!(env::check(), Ok(()));
+    for probe in &env::PROBES {
+        assert_eq!(probe.observe(), probe.expected, "{}", probe.operation);
+    }
+    // The table's constants, recomputed from their definitions on this thread.
+    assert_eq!(env::PROBES[0].expected, (f64::MIN_POSITIVE / 2.0).to_bits());
+    assert_eq!(env::PROBES[1].expected, (2.0 * f64::EPSILON).to_bits());
+    assert_eq!(env::PROBES[2].expected, ONE_PLUS_ULP.to_bits());
+    assert_eq!(env::PROBES[5].expected, (-1.0_f64).to_bits());
+    assert_eq!(
+        env::PROBES[7].expected,
+        (ONE_PLUS_ULP + f64::EPSILON).to_bits()
+    );
+}
+
+#[test]
+fn every_probe_row_is_distinct_and_names_its_departure() {
+    // Two rows with the same operands would test one thing twice and leave a departure
+    // the table claims to cover untested.
+    for (index, probe) in env::PROBES.iter().enumerate() {
+        for other in &env::PROBES[..index] {
+            assert_ne!(probe.operation, other.operation);
+        }
+    }
+    let flush = env::PROBES
+        .iter()
+        .filter(|probe| probe.departure == env::Departure::Flush)
+        .count();
+    assert_eq!(
+        flush, 2,
+        "one row for flushed results, one for flushed operands"
+    );
+}
+
+// ---- x86: MXCSR on both widths --------------------------------------------------
+
+/// The current thread's MXCSR.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn read_mxcsr() -> u32 {
+    let mut value: u32 = 0;
+    // SAFETY: `stmxcsr` stores the 32-bit MXCSR, and nothing else, to a live, aligned,
+    // writable `u32` on this stack frame.
+    unsafe {
+        core::arch::asm!(
+            "stmxcsr [{ptr}]",
+            ptr = in(reg) &raw mut value,
+            options(nostack, preserves_flags),
+        );
+    }
+    value
+}
+
 /// Load `value` into the current thread's MXCSR.
-#[cfg(target_arch = "x86_64")]
-fn set_mxcsr(value: u32) {
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. The values loaded here
-    // differ from the saved register only in the FTZ, DAZ and rounding-control fields,
-    // every caller restores the saved value before doing any float arithmetic, and the
-    // register is per-thread, so no other test observes it.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn write_mxcsr(value: u32) {
+    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. Every value loaded here
+    // differs from the saved register only in the FTZ, DAZ and rounding-control fields,
+    // `Mxcsr` restores the saved value on every exit including a panic, and the register
+    // is per-thread, so no other test observes it.
     unsafe {
         core::arch::asm!(
             "ldmxcsr [{ptr}]",
@@ -704,48 +800,123 @@ fn set_mxcsr(value: u32) {
     }
 }
 
+/// MXCSR loaded with a value for as long as the guard lives; the saved value is restored
+/// when it drops, including by unwinding.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+struct Mxcsr(u32);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+impl Mxcsr {
+    fn load(value: u32) -> Self {
+        let saved = read_mxcsr();
+        write_mxcsr(value);
+        Self(saved)
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+impl Drop for Mxcsr {
+    fn drop(&mut self) {
+        write_mxcsr(self.0);
+    }
+}
+
+/// MXCSR flush-to-zero.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+const MXCSR_FTZ: u32 = 1 << 15;
+/// MXCSR denormals-are-zero.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+const MXCSR_DAZ: u32 = 1 << 6;
+/// MXCSR rounding control: down, up and toward zero.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+const MXCSR_DOWN: u32 = 1 << 13;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+const MXCSR_UP: u32 = 2 << 13;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+const MXCSR_TOWARD_ZERO: u32 = 3 << 13;
+
+/// Every MXCSR departure, the probe rows it must fail, and the refusal the probe returns.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn mxcsr_departures() -> [(&'static str, u32, Vec<usize>, FloatEnvironmentError); 5] {
+    [
+        ("FTZ", MXCSR_FTZ, vec![0], probe_refusal(0, 0.0)),
+        ("DAZ", MXCSR_DAZ, vec![1], probe_refusal(1, 0.0)),
+        ("down", MXCSR_DOWN, vec![2, 5, 7], probe_refusal(2, 1.0)),
+        (
+            "up",
+            MXCSR_UP,
+            vec![3, 4, 6],
+            probe_refusal(3, ONE_PLUS_ULP),
+        ),
+        (
+            "toward zero",
+            MXCSR_TOWARD_ZERO,
+            vec![2, 4, 7],
+            probe_refusal(2, 1.0),
+        ),
+    ]
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[test]
+fn the_probe_alone_refuses_every_mxcsr_departure() {
+    // The probe, not the register read: this is the refusal every target without a
+    // register reader relies on, exercised where the environment can be set.
+    let saved = read_mxcsr();
+    for (name, bits, rows, refusal) in mxcsr_departures() {
+        let (failing, outcome) = {
+            let _loaded = Mxcsr::load(saved | bits);
+            (failing_rows(), env::probe())
+        };
+        assert_eq!(read_mxcsr(), saved, "the register was restored");
+        assert_eq!(indices(failing), rows, "{name}: the rows that must fail");
+        assert_eq!(outcome, Err(refusal), "{name}: the probe's refusal");
+    }
+    // The valid neighbour: the saved register loaded through the same guard passes.
+    let (failing, outcome) = {
+        let _loaded = Mxcsr::load(saved);
+        (failing_rows(), env::probe())
+    };
+    assert_eq!(indices(failing), Vec::<usize>::new());
+    assert_eq!(outcome, Ok(()));
+}
+
 /// Resolve under MXCSR `value`, restoring the saved register before returning.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn resolve_under_mxcsr(value: u32) -> Result<Resolved<Exact>, FloatEnvironmentError> {
-    let saved = env::mxcsr();
-    set_mxcsr(value);
-    let outcome = Exact::resolve();
-    set_mxcsr(saved);
-    assert_eq!(env::mxcsr(), saved, "the register was restored");
+    let saved = read_mxcsr();
+    let outcome = {
+        let _loaded = Mxcsr::load(value);
+        Exact::resolve()
+    };
+    assert_eq!(read_mxcsr(), saved, "the register was restored");
     outcome
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[test]
-fn flush_to_zero_is_refused() {
-    let saved = env::mxcsr();
-    for (name, bit) in [("FTZ", 1_u32 << 15), ("DAZ", 1 << 6)] {
-        let refused = resolve_under_mxcsr(saved | bit);
-        assert_eq!(
-            refused,
-            Err(FloatEnvironmentError::FlushToZero {
-                register: "MXCSR",
-                bits: u64::from(saved | bit),
-            }),
-            "{name} set must be refused by name"
-        );
-    }
-    for (name, rounding) in [
-        ("down", 1_u32 << 13),
-        ("up", 2 << 13),
-        ("toward zero", 3 << 13),
-    ] {
-        let refused = resolve_under_mxcsr(saved | rounding);
-        assert!(
-            matches!(
-                refused,
-                Err(FloatEnvironmentError::RoundingMode {
-                    register: "MXCSR",
-                    ..
-                })
-            ),
-            "rounding {name} must be refused, got {refused:?}"
-        );
+fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
+    let saved = read_mxcsr();
+    for (name, bits, _, probe) in mxcsr_departures() {
+        let refused = resolve_under_mxcsr(saved | bits);
+        // On x86_64 the register is read first, so the refusal names it; on 32-bit x86
+        // no register is read and the probe's refusal is the answer.
+        #[cfg(target_arch = "x86_64")]
+        let expected = {
+            let evidence = FloatEnvironmentEvidence::Register {
+                name: "MXCSR",
+                bits: u64::from(saved | bits),
+            };
+            match probe {
+                FloatEnvironmentError::FlushToZero { .. } => {
+                    FloatEnvironmentError::FlushToZero { evidence }
+                }
+                _ => FloatEnvironmentError::RoundingMode { evidence },
+            }
+        };
+        #[cfg(target_arch = "x86")]
+        let expected = probe;
+        assert_eq!(refused, Err(expected), "{name} must be refused by name");
     }
     // The valid neighbour: the same register with those fields clear resolves, so the
     // refusals above are about the bits and not about having touched the register.
@@ -756,75 +927,196 @@ fn flush_to_zero_is_refused() {
     );
 }
 
+// ---- aarch64: FPCR ---------------------------------------------------------------
+
 /// Load `value` into the current thread's FPCR.
 #[cfg(target_arch = "aarch64")]
-fn set_fpcr(value: u64) {
+fn write_fpcr(value: u64) {
     // SAFETY: FPCR is writable at EL0. The values written here differ from the saved
-    // register only in the FZ and rounding-mode fields, every caller restores the saved
-    // value before doing any float arithmetic, and the register is per-thread.
+    // register only in the FZ and rounding-mode fields, `Fpcr` restores the saved value
+    // on every exit including a panic, and the register is per-thread.
     unsafe {
         core::arch::asm!(
             "msr fpcr, {value}",
             value = in(reg) value,
-            options(nomem, nostack, preserves_flags),
+            options(nostack, preserves_flags),
         );
     }
 }
 
-/// Resolve under FPCR `value`, restoring the saved register before returning.
+/// FPCR loaded with a value for as long as the guard lives.
 #[cfg(target_arch = "aarch64")]
-fn resolve_under_fpcr(value: u64) -> Result<Resolved<Exact>, FloatEnvironmentError> {
-    let saved = env::fpcr();
-    set_fpcr(value);
-    let outcome = Exact::resolve();
-    set_fpcr(saved);
-    assert_eq!(env::fpcr(), saved, "the register was restored");
-    outcome
+struct Fpcr(u64);
+
+#[cfg(target_arch = "aarch64")]
+impl Fpcr {
+    fn load(value: u64) -> Self {
+        let saved = env::fpcr();
+        write_fpcr(value);
+        Self(saved)
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Drop for Fpcr {
+    fn drop(&mut self) {
+        write_fpcr(self.0);
+    }
+}
+
+/// Every FPCR departure, the probe rows it must fail, and the refusal the probe returns.
+/// FZ flushes subnormal operands as well as results, so both flush rows fail under it.
+#[cfg(target_arch = "aarch64")]
+fn fpcr_departures() -> [(&'static str, u64, Vec<usize>, FloatEnvironmentError); 4] {
+    [
+        ("FZ", 1 << 24, vec![0, 1], probe_refusal(0, 0.0)),
+        ("RP", 1 << 22, vec![3, 4, 6], probe_refusal(3, ONE_PLUS_ULP)),
+        ("RM", 2 << 22, vec![2, 5, 7], probe_refusal(2, 1.0)),
+        ("RZ", 3 << 22, vec![2, 4, 7], probe_refusal(2, 1.0)),
+    ]
 }
 
 #[cfg(target_arch = "aarch64")]
 #[test]
-fn flush_to_zero_is_refused_on_aarch64() {
+fn the_probe_alone_refuses_every_fpcr_departure() {
     let saved = env::fpcr();
-    let refused = resolve_under_fpcr(saved | (1 << 24));
-    assert_eq!(
-        refused,
-        Err(FloatEnvironmentError::FlushToZero {
-            register: "FPCR",
-            bits: saved | (1 << 24),
-        }),
-        "FZ set must be refused by name"
-    );
-    for rounding in [1_u64 << 22, 2 << 22, 3 << 22] {
-        let refused = resolve_under_fpcr(saved | rounding);
-        assert!(
-            matches!(
-                refused,
-                Err(FloatEnvironmentError::RoundingMode {
-                    register: "FPCR",
-                    ..
-                })
-            ),
-            "a directed rounding mode must be refused, got {refused:?}"
+    for (name, bits, rows, refusal) in fpcr_departures() {
+        let (failing, outcome) = {
+            let _loaded = Fpcr::load(saved | bits);
+            (failing_rows(), env::probe())
+        };
+        assert_eq!(env::fpcr(), saved, "the register was restored");
+        assert_eq!(indices(failing), rows, "{name}: the rows that must fail");
+        assert_eq!(outcome, Err(refusal), "{name}: the probe's refusal");
+    }
+    let (failing, outcome) = {
+        let _loaded = Fpcr::load(saved);
+        (failing_rows(), env::probe())
+    };
+    assert_eq!(indices(failing), Vec::<usize>::new());
+    assert_eq!(outcome, Ok(()));
+}
+
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn resolve_refuses_every_fpcr_departure_by_register() {
+    let saved = env::fpcr();
+    for (name, bits, _, probe) in fpcr_departures() {
+        let refused = {
+            let _loaded = Fpcr::load(saved | bits);
+            Exact::resolve()
+        };
+        let evidence = FloatEnvironmentEvidence::Register {
+            name: "FPCR",
+            bits: saved | bits,
+        };
+        let expected = match probe {
+            FloatEnvironmentError::FlushToZero { .. } => {
+                FloatEnvironmentError::FlushToZero { evidence }
+            }
+            _ => FloatEnvironmentError::RoundingMode { evidence },
+        };
+        assert_eq!(refused, Err(expected), "{name} must be refused by name");
+    }
+    let resolved = {
+        let _loaded = Fpcr::load(saved);
+        Exact::resolve()
+    };
+    assert!(resolved.is_ok(), "the valid neighbour resolves");
+}
+
+// ---- riscv64: the `frm` rounding field, a target with no register reader -----------
+
+/// The current thread's dynamic rounding mode.
+#[cfg(target_arch = "riscv64")]
+fn read_frm() -> u64 {
+    let value: u64;
+    // SAFETY: `frm` is a user-level CSR of the F extension; reading it copies the field
+    // into a general-purpose register and changes no state.
+    unsafe {
+        core::arch::asm!("csrr {value}, frm", value = out(reg) value, options(nostack));
+    }
+    value
+}
+
+/// Set the current thread's dynamic rounding mode.
+#[cfg(target_arch = "riscv64")]
+fn write_frm(value: u64) {
+    // SAFETY: `frm` is a user-level CSR of the F extension. Every value written here is a
+    // defined rounding mode, `Frm` restores the saved one on every exit including a
+    // panic, and the field is per-thread.
+    unsafe {
+        core::arch::asm!("csrw frm, {value}", value = in(reg) value, options(nostack));
+    }
+}
+
+/// `frm` set for as long as the guard lives.
+#[cfg(target_arch = "riscv64")]
+struct Frm(u64);
+
+#[cfg(target_arch = "riscv64")]
+impl Frm {
+    fn load(value: u64) -> Self {
+        let saved = read_frm();
+        write_frm(value);
+        Self(saved)
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+impl Drop for Frm {
+    fn drop(&mut self) {
+        write_frm(self.0);
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+#[test]
+fn the_probe_refuses_every_riscv_rounding_mode_through_resolve() {
+    // RISC-V has no flush-to-zero, but it has four rounding modes besides the default,
+    // one of them round-to-nearest with ties AWAY from zero, which only the tie rows can
+    // tell from ties-to-even. No register is read on this target, so `Exact::resolve`
+    // refuses on the probe's evidence alone.
+    let saved = read_frm();
+    assert_eq!(saved, 0, "the default dynamic rounding mode is RNE");
+    let departures = [
+        ("RTZ", 1, vec![2, 4, 7], probe_refusal(2, 1.0)),
+        ("RDN", 2, vec![2, 5, 7], probe_refusal(2, 1.0)),
+        ("RUP", 3, vec![3, 4, 6], probe_refusal(3, ONE_PLUS_ULP)),
+        ("RMM", 4, vec![6], probe_refusal(6, ONE_PLUS_ULP)),
+    ];
+    for (name, mode, rows, refusal) in departures {
+        let (failing, probed, resolved) = {
+            let _loaded = Frm::load(mode);
+            (failing_rows(), env::probe(), Exact::resolve())
+        };
+        assert_eq!(read_frm(), saved, "the rounding mode was restored");
+        assert_eq!(indices(failing), rows, "{name}: the rows that must fail");
+        assert_eq!(probed, Err(refusal), "{name}: the probe's refusal");
+        assert_eq!(
+            resolved,
+            Err(refusal),
+            "{name}: resolve refuses by the probe"
         );
     }
-    assert!(
-        resolve_under_fpcr(saved).is_ok(),
-        "the valid neighbour resolves"
-    );
+    let resolved = {
+        let _loaded = Frm::load(saved);
+        Exact::resolve()
+    };
+    assert!(resolved.is_ok(), "the valid neighbour resolves");
 }
 
 #[test]
 fn every_refusal_renders_a_distinct_sentence() {
+    let register = FloatEnvironmentEvidence::Register {
+        name: "MXCSR",
+        bits: 0x9fc0,
+    };
     let cases = [
-        FloatEnvironmentError::FlushToZero {
-            register: "MXCSR",
-            bits: 0x9fc0,
-        },
-        FloatEnvironmentError::RoundingMode {
-            register: "FPCR",
-            bits: 0x40_0000,
-        },
+        FloatEnvironmentError::FlushToZero { evidence: register },
+        FloatEnvironmentError::RoundingMode { evidence: register },
+        probe_refusal(0, 0.0),
+        probe_refusal(2, 1.0),
         FloatEnvironmentError::Uninspectable {
             target_arch: "example",
         },
@@ -835,4 +1127,12 @@ fn every_refusal_renders_a_distinct_sentence() {
         assert!(!messages[..index].contains(message), "duplicate: {message}");
     }
     assert!(messages[0].contains("MXCSR") && messages[0].contains("0x9fc0"));
+    assert!(
+        messages[2].contains("f64::MIN_POSITIVE * 0.5")
+            && messages[2].contains("0x0008000000000000")
+            && messages[2].contains("0x0000000000000000"),
+        "a probe refusal names its operation and both bit patterns: {}",
+        messages[2]
+    );
+    assert!(messages[3].contains("1 + 0.75 ulp"), "{}", messages[3]);
 }

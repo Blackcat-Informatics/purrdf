@@ -397,7 +397,7 @@ impl HnswIndex<Reassociated> {
     /// # Errors
     ///
     /// As [`HnswIndex::build`], with [`HnswError::FloatEnvironment`] also raised on a target
-    /// whose float environment cannot be read.
+    /// the reassociated arithmetic has no compilation for.
     pub fn build_reassociated(
         matrix: VectorMatrix,
         metric: &DistanceMetric,

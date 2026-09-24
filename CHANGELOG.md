@@ -36,10 +36,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     bit-identical AVX2 path chosen once per scan. They come with `RowsRef`,
     `Measure`, `EXACT_LANES` and a `norm` that delegates to the one normative
     PURREMB norm fold;
-  - the float-environment refusal. `FloatEnvironmentError` (`FlushToZero`,
-    `RoundingMode`, `Uninspectable`) names a thread whose control register flushes
-    subnormals to zero, treats denormals as zero, or rounds other than to
-    nearest. It also names a target whose register cannot be read.
+  - the float-environment refusal. `FloatEnvironmentError::FlushToZero` and
+    `RoundingMode` name a thread that flushes subnormal results or operands to
+    zero, or rounds by any rule other than to nearest, ties to even. Each carries
+    a `FloatEnvironmentEvidence`: `Register { name, bits }` where the control
+    register was read (MXCSR on x86_64, FPCR on aarch64), or
+    `Probe { operation, expected, observed }` for a binary64 operation whose
+    bits differed from the IEEE-754 result. The environment is proven by that
+    probe on every target: eight operations through `core::hint::black_box`,
+    covering flushed results, flushed operands, all three directed roundings and
+    ties-to-even. So i686, armv7, riscv64, powerpc64le, s390x, loongarch64 and
+    any other target run the exact arithmetic, and are refused only when a
+    departure is observed. `Uninspectable` is produced by no environment check.
+    It remains only for an arithmetic with no compilation for the target.
 
 - **sparql-eval:** `Kernel::distance_reassociated` and
   `Kernel::distance_bounded_reassociated` are named entry points for the
@@ -1604,10 +1613,21 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   calling thread's floating-point environment when an embedding space is built
   from an artifact and on every search, exact or reassociated. It refuses an
   environment that flushes subnormals to zero, treats denormals as zero, or
-  rounds other than to nearest. The refusal is the new
-  `EvalError::FloatEnvironment`. `EvalError` is `#[non_exhaustive]`, so the variant
-  itself breaks no match, but a query that used to run under such an environment
-  now fails by name.
+  rounds other than to nearest, ties to even. The check is behavioural, so it
+  runs on every target and refuses only an environment observed to depart; no
+  target is refused for having a control register this build does not read. The
+  refusal is the new `EvalError::FloatEnvironment`. `EvalError` is
+  `#[non_exhaustive]`, so the variant itself breaks no match, but a query that
+  used to run under such an environment now fails by name.
+
+- **BREAKING** **core:** `FloatEnvironmentError::FlushToZero` and
+  `FloatEnvironmentError::RoundingMode` carry one field, `evidence`, of the new
+  `#[non_exhaustive]` `FloatEnvironmentEvidence`, in place of `register` and
+  `bits`. A pattern that named `register: "MXCSR"` now names
+  `evidence: FloatEnvironmentEvidence::Register { name: "MXCSR", .. }`. A
+  refusal on a target whose register is not read carries
+  `FloatEnvironmentEvidence::Probe`. `Uninspectable` no longer describes an
+  unreadable environment and no environment check returns it.
 
 - **BREAKING** **hnsw:** the image and index version is now 2 (`INDEX_VERSION`,
   `profile::PAYLOAD_VERSION`). The header's reserved word becomes the arithmetic

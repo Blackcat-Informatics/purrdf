@@ -255,11 +255,46 @@ has no reassociated sibling.
 
 ### 3.7 The float-environment precondition
 
-Both arithmetics assume IEEE round-to-nearest with subnormals preserved. A process
-that has set flush-to-zero or denormals-are-zero (MXCSR on x86_64, FPCR on aarch64)
-would compute different bits from the same code. Resolving an arithmetic reads that
-register and refuses such an environment with a named error; wasm always preserves
-subnormals.
+Both arithmetics assume IEEE round-to-nearest, ties-to-even, with subnormals
+preserved. A thread that has set flush-to-zero or denormals-are-zero, or another
+rounding direction (MXCSR on x86_64, FPCR on aarch64, `frm` on RISC-V, FPSCR on
+32-bit Arm and POWER), would compute different bits from the same code.
+
+The law is behavioural, and it holds on every target. Resolving an arithmetic runs a
+probe of eight binary64 operations whose correctly rounded results under the assumed
+environment are known constants, with every operand passed through
+`core::hint::black_box` so none is folded at compile time:
+
+| Operation (`ulp` = 2⁻⁵²) | IEEE-754 result | A mismatch shows |
+|---|---|---|
+| `f64::MIN_POSITIVE × 0.5` | subnormal 2⁻¹⁰²³ | subnormal results flushed |
+| `2⁻¹⁰⁷⁴ × 2¹⁰²³` | normal 2⁻⁵¹ | subnormal operands read as zero |
+| `1 + 0.75 ulp` | `1 + ulp` | rounding toward zero or down |
+| `1 + 0.25 ulp` | `1` | rounding up |
+| `−1 − 0.75 ulp` | `−(1 + ulp)` | rounding toward zero or up |
+| `−1 − 0.25 ulp` | `−1` | rounding down |
+| `1 + 0.5 ulp` | `1` | a tie rounded away from zero, or up |
+| `(1 + ulp) + 0.5 ulp` | `1 + 2 ulp` | a tie rounded toward zero, or down |
+
+The first row whose bits differ is refused as `FloatEnvironmentError::FlushToZero` or
+`RoundingMode`, with `FloatEnvironmentEvidence::Probe` naming the operation and both
+bit patterns. The probe is binary64 only because binary64 is the only precision the
+arithmetics execute: `f32` operands are widened per component before any operation.
+
+Where this build reads the control register — MXCSR on x86_64, FPCR on aarch64 — it
+reads it first, so a refusal names the register and its value
+(`FloatEnvironmentEvidence::Register`), and then runs the probe as well, which proves
+the environment rather than the bits the build knows the meaning of. WebAssembly's
+numeric instructions are specified to round to nearest-even and preserve subnormals;
+the probe runs there too, since it is eight operations and an engine departing from
+the specification is then refused by name rather than trusted. No target is refused
+for being unread: an environment is refused only when it has been observed to depart.
+
+The probe runs on every resolve, which is once per scan, relation, index or search: a
+handful of operations and no allocation. The `cross-arch` CI job checks the kernels on
+i686, armv7, riscv64, powerpc64le, s390x and loongarch64, and executes the distance,
+kNN and HNSW suites on i686 and on riscv64 under emulation, where no register is read
+and the probe alone decides.
 
 ---
 

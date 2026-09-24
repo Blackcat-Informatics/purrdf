@@ -69,8 +69,10 @@ twice" would pass on a kernel with no fixed order at all.
 
 The arithmetic also assumes IEEE-754's default environment. A thread with flush-to-zero
 or denormals-are-zero set, or another rounding direction, computes different bits from
-the same code, so resolving the arithmetic reads the control register (MXCSR on x86-64,
-FPCR on aarch64) and refuses such a thread with `EvalError::FloatEnvironment`, at space
+the same code, so resolving the arithmetic proves the environment by behaviour on every
+target — eight binary64 operations whose IEEE-754 results are known constants, after a
+read of the control register where one is readable (MXCSR on x86-64, FPCR on aarch64) —
+and refuses such a thread with `EvalError::FloatEnvironment`, at space
 construction and again at every search, since an invocation may run on another thread.
 
 The metric does not change with the arithmetic. `DistanceMetric` names *what* is
