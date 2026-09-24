@@ -48,8 +48,8 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SPARQL DESCRIBE (first-party corpus) | purrdf-describe (first-party) | 16 | 0 | 0 | 0 | GREEN |
 | SPARQL CDT (SEP-0009, vendored corpus) | awslabs/SPARQL-CDTs | 658 | 0 | 0 | 0 | GREEN |
 | SPARQL execution governors | purrdf-sparql-governors (first-party) | 50 | 0 | 0 | 0 | GREEN |
-| SPARQL embedding kNN (first-party) | purrdf-embedding-knn (first-party) | 13 | 0 | 0 | 0 | GREEN |
-| HNSW approximate kNN (first-party) | purrdf-hnsw (first-party) | 75 | 0 | 0 | 0 | GREEN |
+| SPARQL embedding kNN (first-party) | purrdf-embedding-knn (first-party) | 15 | 0 | 0 | 0 | GREEN |
+| HNSW approximate kNN (first-party) | purrdf-hnsw (first-party) | 81 | 0 | 0 | 0 | GREEN |
 | GeoSPARQL 1.1 determinism corpus | purrdf-geo (first-party; OGC 22-047r1) | 20 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 258 | 4 | 4 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
