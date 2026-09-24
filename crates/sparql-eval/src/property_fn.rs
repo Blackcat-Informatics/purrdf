@@ -640,8 +640,10 @@ impl DuplicatePolicy {
 ///
 /// The variant does not say whether the producer can answer cheaply. That is
 /// derived from declarations the registry already holds — a mode with
-/// [`RankedDeclaration::candidate_position`] bound whose
-/// [`PropertyFunction::rows_per_invocation`] is a point bound — and
+/// [`RankedDeclaration::candidate_position`] bound and the
+/// [`RankedDeclaration::depth_placement`] position, where there is one, free,
+/// whose [`PropertyFunction::rows_per_invocation`] is a point bound: the shape
+/// [`RankedDeclaration::exclusion_lookup_mode`] derives for the lookup — and
 /// [`PropertyFunctionRegistry::register_ranked`] refuses a declared basis
 /// without one, so a producer that can only answer by scanning is never looked
 /// up into a table scan. What cannot be derived is what the answer *means*, and
@@ -1433,7 +1435,7 @@ pub struct RankedDeclaration {
     /// It declares the **basis** and nothing else. Whether the producer can
     /// answer cheaply is derived from the modes and row bounds the registry
     /// already holds, and a declared basis without a point-bound candidate mode
-    /// is refused at registration — see [`ExclusionBasis`] for why the basis is
+    /// that leaves the depth free is refused at registration — see [`ExclusionBasis`] for why the basis is
     /// the one half that cannot be derived.
     pub exclusion: ExclusionBasis,
     /// Whether a request that reaches this producer must actually be served by
@@ -1514,6 +1516,52 @@ impl RankedDeclaration {
             }
         }
         out
+    }
+
+    /// The access pattern an exclusion lookup of this producer is invoked in,
+    /// over its `total` flattened argument positions.
+    ///
+    /// * **Bound**: [`Self::candidate_position`], always — the lookup is the
+    ///   question *do you hold this candidate* — and every other position
+    ///   `supplies` answers `true` for: a position the lookup's text fills with
+    ///   a constant, or with a variable a pattern it evaluates first binds.
+    /// * **Free**: the [`Self::depth_placement`] position, where there is one,
+    ///   **whatever `supplies` says**. A depth is an offer of how many rows to
+    ///   rank, and a producer handed one answers *is this candidate among your
+    ///   best n*, whose absences are not exclusions — a candidate at rank n+1 is
+    ///   one the stream still names. And every position `supplies` answers
+    ///   `false` for: an output, a blank node, a variable nothing binds first.
+    ///
+    /// This is the one derivation of that shape, read by both sides of the
+    /// contract. [`PropertyFunctionRegistry::register_ranked`] admits a declared
+    /// [`ExclusionBasis`] against the widest shape any lookup can take — every
+    /// position supplied, so only the candidate and the freed depth are
+    /// decided — and requires a declared mode that
+    /// [subsumes](BindingPattern::subsumes) it, binds the candidate and is a
+    /// point bound. A compiler deriving the lookup of one call asks the
+    /// registry to serve that call's own shape, derived here from the positions
+    /// its text really fills. Because a lookup's shape can only be narrower than
+    /// the widest one, a mode registration admitted is exactly a mode that frees
+    /// the depth, and no lookup is ever refused for a depth the producer's
+    /// declaration requires bound.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `total` exceeds [`BindingPattern::MAX_ARITY`], the ceiling every
+    /// pattern over a relation's positions is held to.
+    #[must_use]
+    pub fn exclusion_lookup_mode(
+        &self,
+        total: usize,
+        supplies: impl Fn(usize) -> bool,
+    ) -> BindingPattern {
+        let depth = self
+            .depth_placement
+            .as_ref()
+            .map(|placement| placement.position);
+        BindingPattern::from_bools((0..total).map(|position| {
+            position == self.candidate_position || (depth != Some(position) && supplies(position))
+        }))
     }
 
     /// Every placement of every accepted term, in declaration order.
@@ -1977,12 +2025,19 @@ impl PropertyFunctionRegistry {
     ///   be registered; a host that does not want to restrict its candidates
     ///   declares [`CandidateDomains::Unrestricted`].
     /// * `decl.exclusion` declares a basis ([`ExclusionBasis::Membership`]) and
-    ///   `relation` declares no access mode binding `decl.candidate_position`
+    ///   `relation` declares no access mode binding `decl.candidate_position`,
+    ///   leaving the `decl.depth_placement` position free where there is one,
     ///   whose [`PropertyFunction::rows_per_invocation`] is a point bound. A
     ///   producer that cannot answer *do you hold this one* cheaply must never
-    ///   be looked up into a table scan. Completeness is deliberately not
-    ///   consulted: a candidate the producer's index holds no entry for is one
-    ///   it names at no rank, whatever its search dropped.
+    ///   be looked up into a table scan. The depth must be free because every
+    ///   exclusion lookup frees it
+    ///   ([`RankedDeclaration::exclusion_lookup_mode`]): a producer handed a
+    ///   depth answers *is this among your best n*, whose absences are not
+    ///   exclusions, so a mode binding it serves no lookup at all. Every other
+    ///   position the mode binds is one a lookup may supply, and is not refused
+    ///   here. Completeness is deliberately not consulted: a candidate the
+    ///   producer's index holds no entry for is one it names at no rank,
+    ///   whatever its search dropped.
     /// * `decl.stratum` is already claimed by another registered producer — one
     ///   stratum carries one producer, because a rank means something only inside
     ///   the list that assigned it. The panic message carries the whole argument:
@@ -2458,7 +2513,16 @@ fn validate_declaration(iri: &str, decl: &RankedDeclaration, relation: &dyn Prop
 }
 
 /// Hold [`RankedDeclaration::exclusion`] to the one thing a declared basis
-/// requires of the producer that declared it: a cheap way to answer.
+/// requires of the producer that declared it: a cheap way to answer the lookup
+/// it will actually be asked.
+///
+/// That lookup's shape is [`RankedDeclaration::exclusion_lookup_mode`]'s: the
+/// candidate bound, the depth — where the declaration places one — free, every
+/// other position bound only where a text supplies it. So the declared mode
+/// that answers it must bind the candidate, leave the depth free, and be a
+/// point bound. A cheap mode that binds the depth is not one: no lookup is ever
+/// invoked in it, and admitting the basis on its strength would move the
+/// refusal from here to the first search.
 ///
 /// Split out of [`validate_declaration`] because it asks a different kind of
 /// question: every check above is about *positions*, and this one is about what
@@ -2493,20 +2557,60 @@ fn validate_exclusion(
     // registry already holds rather than declared again beside the basis: a
     // second spelling of a capability is a second chance to declare one the
     // relation does not have.
+    //
+    // The mode must also serve a lookup at all, and a lookup never binds the
+    // depth. So the question is asked against the widest shape any lookup can
+    // take — every position a text could fill, bound; the depth, free — through
+    // the one derivation of that shape the lookup side reads too. A mode that
+    // binds the depth subsumes no lookup however cheap it is, and admitting the
+    // basis on its strength would only move the refusal to the first search,
+    // where every stratum's lookup fails to prepare.
+    let widest = decl.exclusion_lookup_mode(total, |_| true);
     let point_lookup = relation.modes().iter().any(|mode| {
-        mode.arity() == total
+        mode.subsumes(widest)
             && mode.is_bound(decl.candidate_position)
             && relation.rows_per_invocation(*mode) <= 1
     });
-    assert!(
-        point_lookup,
+    if point_lookup {
+        return;
+    }
+    let declared = relation
+        .modes()
+        .iter()
+        .map(|mode| mode.code())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let depth = decl
+        .depth_placement
+        .as_ref()
+        .map_or_else(String::new, |depth| {
+            format!(
+                ", that leaves its per-stratum depth position ({}) free,",
+                depth.position
+            )
+        });
+    let why_depth = decl
+        .depth_placement
+        .as_ref()
+        .map_or_else(String::new, |depth| {
+            format!(
+                " The depth is free because every exclusion lookup frees it: a producer handed \
+             a depth answers `is this candidate among your best n`, whose absences are not \
+             exclusions, so a lookup is invoked no more bound than `{}` and a mode binding \
+             position {} serves none of them, however cheap it is.",
+                widest.code(),
+                depth.position
+            )
+        });
+    panic!(
         "ranked declaration for <{iri}> declares an exclusion basis of {basis} but the relation \
-         declares no access mode that binds its candidate position ({}) with a row bound of one; \
-         an exclusion lookup asks `do you hold this candidate` once per candidate, so a producer \
-         that can only answer it by scanning would be looked up into a table scan — one per \
-         frontier candidate per stratum. Declare the mode the candidate-bound call really has, \
-         with the row bound it really has, or declare ExclusionBasis::Unavailable, which is the \
-         honest statement that this producer answers no such lookup",
+         declares no access mode that binds its candidate position ({}){depth} with a row bound \
+         of one; it declares [{declared}].{why_depth} An exclusion lookup asks `do you hold this \
+         candidate` once per candidate, so a producer that can only answer it by scanning would \
+         be looked up into a table scan — one per frontier candidate per stratum. Declare the \
+         mode the candidate-bound call really has, with the row bound it really has, or declare \
+         ExclusionBasis::Unavailable, which is the honest statement that this producer answers \
+         no such lookup",
         decl.candidate_position
     );
 }

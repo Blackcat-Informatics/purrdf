@@ -429,13 +429,29 @@ exclusions: a candidate outside the best n is one the producer may still name at
 rank n, and a consumer that read that absence as an exclusion would refuse the
 fused read as `ExclusionContradicted` the first time one arrived.
 
-Two things together keep that from happening, and a producer with a depth
-placement should know both, because its basis rests on them.
+Three things together keep that from happening, and a producer with a depth
+placement should know all three, because its basis rests on them.
 
 **The exclusion unit renders no depth.** [`compile`] leaves the depth position a
 free variable in the lookup's text — and *only* in the lookup's text; the
 streaming unit still carries the depth the plan derived. A depth is an offer, and
 a lookup is not asking for an offer to be filled.
+
+**`register_ranked` admits the basis only against a mode that frees the
+depth.** Every lookup — rendered or derived from a caller's text — is invoked
+in the shape `RankedDeclaration::exclusion_lookup_mode` derives: the candidate
+bound, the depth free, and every other position bound only where the text
+supplies it (a constant, or a variable a pattern it evaluates first binds). The
+widest such shape binds everything but the depth, so the point mode a basis
+rests on must bind the candidate, leave the depth position free, and declare a
+row bound of one; the needle and any other input may be bound in it. A
+producer with its depth at position 2 that declares `[fbb, bbb]` is therefore
+refused at registration, naming the relation, its declared modes and the freed
+depth — `bbb` is cheap, but no lookup is ever invoked in it, so a basis admitted
+on its strength would fail every stratum's lookup at the first search. `[fbb,
+bbf]` is admitted, and `bbf` is the mode its lookups arrive in. A producer
+declaring no depth placement frees nothing, and needs only the candidate-bound
+point mode.
 
 **A caller's own text is looked up the same way, through each call its
 candidates come from.** A unit built with `StratumUnit::new` over a hand-written

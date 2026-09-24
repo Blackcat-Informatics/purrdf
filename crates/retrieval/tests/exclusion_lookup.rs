@@ -321,10 +321,21 @@ fn a_basis_needs_a_point_bound_candidate_mode() {
         CandidateMode::BoundButUnbounded,
     )
     .expect("a candidate-bound mode that is not a point lookup is still a scan");
-    assert_eq!(
-        no_mode, wide_mode,
-        "the mode existing is not the question; the row bound is, so both \
-         shapes earn the identical refusal"
+    assert!(
+        wide_mode.contains("declares no access mode that binds its candidate position (0)")
+            && wide_mode.contains("ExclusionBasis::Unavailable"),
+        "the mode existing is not the question; the row bound is, so both shapes \
+         earn the same refusal: {wide_mode}"
+    );
+    assert!(
+        no_mode.contains("it declares [ff]") && wide_mode.contains("it declares [ff, bf]"),
+        "each refusal names the modes its own relation declares, so a host reads \
+         what it registered beside what was missing: {no_mode} / {wide_mode}"
+    );
+    assert!(
+        !no_mode.contains("depth") && !wide_mode.contains("depth"),
+        "a declaration placing no depth is refused on the candidate and the row \
+         bound alone: {wide_mode}"
     );
 
     assert_eq!(

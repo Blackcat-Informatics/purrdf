@@ -2235,14 +2235,7 @@ fn qualifying_lookup(
             })
         })
         .collect();
-    lookup_mode_is_declared(
-        call,
-        registry,
-        source_var,
-        &arguments,
-        depth_position,
-        &inputs,
-    )?;
+    lookup_mode_is_declared(call, registry, declaration, source_var, &arguments, &inputs)?;
     if inputs.is_empty() {
         return Ok(LookupText::point(point_lookup(
             call,
@@ -2281,20 +2274,27 @@ fn qualifying_lookup(
 fn lookup_mode_is_declared(
     call: &PropertyFunctionCall,
     registry: &PropertyFunctionRegistry,
+    declaration: &RankedDeclaration,
     candidate: &Variable,
     arguments: &[&TermPattern],
-    depth_position: Option<usize>,
     inputs: &[&Variable],
 ) -> Result<(), String> {
     let bound_variable = |variable: &Variable| variable == candidate || inputs.contains(&variable);
-    let bound: Vec<bool> = arguments
-        .iter()
-        .enumerate()
-        .map(|(position, term)| {
-            depth_position != Some(position) && lookup_binds(term, &bound_variable)
-        })
+    // The shape is the declaration's own derivation, the one registration admitted
+    // the basis against: what the text supplies is this call's to say, and the
+    // candidate bound and the depth freed are the contract's.
+    let mode = declaration.exclusion_lookup_mode(arguments.len(), |position| {
+        arguments
+            .get(position)
+            .is_some_and(|term| lookup_binds(term, &bound_variable))
+    });
+    let depth_position = declaration
+        .depth_placement
+        .as_ref()
+        .map(|placement| placement.position);
+    let bound: Vec<bool> = (0..arguments.len())
+        .map(|position| mode.is_bound(position))
         .collect();
-    let mode = BindingPattern::from_bools(bound.iter().copied());
     let relation = registry.resolve(&call.iri).ok_or_else(|| {
         format!(
             "the registry registers no relation <{}>, so nothing serves its lookup",
