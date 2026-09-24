@@ -238,3 +238,12 @@ harness = false
 # `make check`.
 name = "regex_eval"
 harness = false
+
+[[bench]]
+# The embedding kNN relation's exhaustive search -- one whole invocation (open, full-space
+# scan, top-k, drain) -- under `EmbeddingKnnRelation::new` (Exact) and
+# `new_reassociated` (Reassociated) over the same deterministic PURREMB space, per
+# metric at 384, 768 and 1536 dimensions. Report-only -- no timing/speedup assertions.
+# `make bench` lane only -- excluded from `make check`.
+name = "knn_relation"
+harness = false

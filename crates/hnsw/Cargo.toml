@@ -45,5 +45,8 @@ name = "build"
 harness = false
 
 [[bench]]
+# Sweeps every corpus twice -- the `Exact` index (`HnswIndex::build`) and the
+# `Reassociated` one (`HnswIndex::build_reassociated`) -- each graded against the same
+# exact oracle and printed side by side, never divided into each other.
 name = "recall"
 harness = false

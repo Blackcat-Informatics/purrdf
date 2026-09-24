@@ -204,3 +204,12 @@ harness = false
 # excluded from `make check`.
 name = "xsd_regex"
 harness = false
+
+[[bench]]
+# The `purrdf_core::distance` kernels -- batch (`distances`), indexed
+# (`distances_indexed`), pair (`distance`) and bounded (`distance_bounded`) -- under
+# `Exact` and `Reassociated`, over f64xf64 / f64xf32 / f32xf32 width pairs at 384, 768
+# and 1536 dimensions. Report-only -- no timing/speedup assertions; the two arithmetics
+# are reported side by side. `make bench` lane only -- excluded from `make check`.
+name = "distance"
+harness = false
