@@ -85,7 +85,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   condition, an aggregate, a `GRAPH` name, `VALUES` — cannot declare a basis
   (`UnitError::ExclusionNotRenderable`, whose `reason` names what is in the way), and
   registration refuses a declared basis on a relation with no candidate-bound access
-  mode whose row bound is one. `FusionTrailer::exclusion_bases` records each
+  mode whose row bound is one and which leaves any declared depth position free (see
+  the `register_ranked` entry below). `FusionTrailer::exclusion_bases` records each
   stream's basis, and `FusionTrailer::evidence_id` now also covers which strata
   answered lookups; an answer that asked none keeps its evidence id byte for byte.
 
