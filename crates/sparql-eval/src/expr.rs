@@ -3913,7 +3913,7 @@ fn eval_regex_expr<D: DatasetView + Sync>(
     let (Some((text, _)), Some((pattern, _))) = (text, pattern) else {
         return Ok(None);
     };
-    let flags = flags.map(|(f, _)| f).unwrap_or_default();
+    let flags = flags.map_or_default(|(f, _)| f);
     match cached_regex(ctx, &pattern, &flags) {
         Some(re) => Ok(Some(bool_term(ctx, re.as_regex().is_match(&text)))),
         None => Ok(None),
@@ -4012,11 +4012,9 @@ fn eval_lang_lexical_expr<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<String>, EvalError> {
     match expr {
-        Expression::Literal(lit) => Ok(Some(
-            lit.language()
-                .map(str::to_ascii_lowercase)
-                .unwrap_or_default(),
-        )),
+        Expression::Literal(lit) => {
+            Ok(Some(lit.language().map_or_default(str::to_ascii_lowercase)))
+        }
         _ => {
             let Some(term) = eval_expr(expr, row, schema, ctx)? else {
                 return Ok(None);
@@ -4345,7 +4343,7 @@ fn eval_replace<D: DatasetView + Sync>(
     else {
         return Ok(None);
     };
-    let flags = string_arg(vals, 3).map(|(f, _)| f).unwrap_or_default();
+    let flags = string_arg(vals, 3).map_or_default(|(f, _)| f);
     let Some(compiled) = cached_regex(ctx, &pattern, &flags) else {
         return Ok(None);
     };

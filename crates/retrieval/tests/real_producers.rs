@@ -462,13 +462,12 @@ fn strata_of(result: &SearchResult, candidate: &str) -> Vec<String> {
         .rows
         .iter()
         .find(|row| row.entity.as_str() == candidate)
-        .map(|row| {
+        .map_or_default(|row| {
             row.contributions
                 .iter()
                 .map(|(stratum, _, _)| stratum.as_str().to_owned())
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------

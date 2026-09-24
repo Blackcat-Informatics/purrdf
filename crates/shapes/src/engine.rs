@@ -1109,13 +1109,8 @@ fn finish_report(mut results: Vec<crate::report::ValidationResult>) -> Validatio
             result
                 .result_path
                 .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            result
-                .value
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
+                .map_or_default(ToString::to_string),
+            result.value.as_ref().map_or_default(ToString::to_string),
             result.message.clone().unwrap_or_default(),
             result.severity.clone(),
         )

@@ -22,7 +22,7 @@
 //!   mixed value, so the next draw mixes the previous draw's output. Used by
 //!   the `distance` bench fixture.
 //!
-//! Both share the same [`mix_rounds`] finalizer; they differ only in what
+//! Both share the same SplitMix64 finalizer; they differ only in what
 //! they feed it.
 
 /// The SplitMix64 finalizer, without the golden-ratio increment: two

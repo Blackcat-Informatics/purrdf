@@ -977,7 +977,7 @@ mod tests {
                 render_term(g, a),
                 render_term(g, b),
                 render_term(g, c),
-                d.map(|x| render_term(g, x)).unwrap_or_default(),
+                d.map_or_default(|x| render_term(g, x)),
             ]
         };
         let mut expected = g.quads.clone();

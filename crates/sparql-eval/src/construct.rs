@@ -257,16 +257,13 @@ pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
     // and only the generic annotation-layer loss code is emitted — the engine never
     // fabricates a default domain predicate.
     let loss_vocab = ctx.loss_vocabulary.clone();
-    let dropped: Vec<DroppedReifier> = loss_vocab
-        .as_ref()
-        .map(|_| {
-            let standpoint_according_to: Option<String> = ctx
-                .standpoint_predicates
-                .as_ref()
-                .map(|p| p.according_to.clone());
-            collect_dropped_reifiers(template, pattern, standpoint_according_to.as_deref())
-        })
-        .unwrap_or_default();
+    let dropped: Vec<DroppedReifier> = loss_vocab.as_ref().map_or_default(|_| {
+        let standpoint_according_to: Option<String> = ctx
+            .standpoint_predicates
+            .as_ref()
+            .map(|p| p.according_to.clone());
+        collect_dropped_reifiers(template, pattern, standpoint_according_to.as_deref())
+    });
 
     // Identify which template quad indices are reifier declarations
     // (predicate == rdf:reifies, object == TermPattern::Triple).  This scan is

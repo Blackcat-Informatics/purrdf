@@ -438,18 +438,15 @@ impl GtsFoldView {
             return self.graph.quads.clone();
         }
         let graph_scope = graph_term_for_scope(key);
-        self.spo
-            .get(&key)
-            .map(|subjects| {
-                let mut rows = Vec::new();
-                for (&s, pairs) in subjects {
-                    for &(p, o) in pairs {
-                        rows.push((s, p, o, graph_scope));
-                    }
+        self.spo.get(&key).map_or_default(|subjects| {
+            let mut rows = Vec::new();
+            for (&s, pairs) in subjects {
+                for &(p, o) in pairs {
+                    rows.push((s, p, o, graph_scope));
                 }
-                rows
-            })
-            .unwrap_or_default()
+            }
+            rows
+        })
     }
 
     /// The (sorted, deduplicated) subject term ids typed `rdf:type

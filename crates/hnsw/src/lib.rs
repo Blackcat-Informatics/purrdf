@@ -1560,10 +1560,19 @@ mod tests {
         let matrix = fixture(48, 70);
         let index = reassociated(matrix.clone());
         let widest = index.arithmetic().image_code();
-        let codes = host_codes();
+        // The first code this BUILD holds no compilation of, whatever the processor
+        // reports: a compiled path the processor lacks is a different refusal.
         let foreign = *Reassociated::IMAGE_CODES
             .iter()
-            .find(|code| !codes.contains(code))
+            .find(|&&code| {
+                matches!(
+                    Reassociated::resolve_recorded(code),
+                    Err(RecordedPathError::Unavailable {
+                        reason: purrdf_core::distance::PathUnavailable::NotCompiled,
+                        ..
+                    })
+                )
+            })
             .expect("every build lacks some target's compilation");
         #[cfg(target_arch = "x86_64")]
         assert_eq!(

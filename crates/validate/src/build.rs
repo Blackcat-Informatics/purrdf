@@ -165,9 +165,7 @@ fn location_sort_key(result: &SarifResult) -> (String, u32, u32) {
         .locations
         .first()
         .and_then(|l| l.physical_location.as_ref());
-    let uri = phys
-        .map(|p| p.artifact_location.uri.clone())
-        .unwrap_or_default();
+    let uri = phys.map_or_default(|p| p.artifact_location.uri.clone());
     let region = phys.and_then(|p| p.region.as_ref());
     let line = region.and_then(|r| r.start_line).unwrap_or(0);
     let column = region.and_then(|r| r.start_column).unwrap_or(0);
@@ -498,14 +496,13 @@ fn assemble_run(
     let invocations = options
         .invocation_times
         .as_ref()
-        .map(|(start, end)| {
+        .map_or_default(|(start, end)| {
             vec![crate::model::Invocation {
                 execution_successful: true,
                 start_time_utc: Some(start.clone()),
                 end_time_utc: Some(end.clone()),
             }]
-        })
-        .unwrap_or_default();
+        });
 
     Run {
         tool: Tool {
