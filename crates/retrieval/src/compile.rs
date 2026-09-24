@@ -627,6 +627,65 @@ impl RenderedQuery {
             self.producer
         )
     }
+
+    /// The access pattern [`Self::exclusion_text`] invokes its producer in.
+    ///
+    /// The declaration's own derivation
+    /// ([`RankedDeclaration::exclusion_lookup_mode`]), asked of the positions this
+    /// text really fills: the candidate, and every position a placement rendered a
+    /// constant into. Every other position — the depth, and a position no placement
+    /// filled — is a blank in the text and free here, so this is the pattern the
+    /// lookup's prepare is admitted in, derived without preparing it.
+    fn exclusion_lookup_mode(&self, declaration: &RankedDeclaration) -> BindingPattern {
+        declaration.exclusion_lookup_mode(self.arguments().count(), |position| {
+            matches!(
+                self.arguments().nth(position),
+                Some(UnitArgument::Placed(_))
+            )
+        })
+    }
+}
+
+/// The contract a rendered unit's stream is held to: its producer's declaration,
+/// with the exclusion basis kept only where the lookup this unit would ask is one
+/// the producer declares a mode for.
+///
+/// A declared basis is admitted at registration against the widest lookup any
+/// text can ask — every position but the depth supplied — because a caller's own
+/// text can fill a position no request facet reaches. A rendered unit cannot: its
+/// lookup ([`RenderedQuery::exclusion_text`]) binds the candidate and the placed
+/// constants and nothing else. So a producer whose only candidate-bound mode also
+/// binds some other position is one this unit's lookup cannot be asked of, and
+/// attaching the basis anyway would hand [`execute`](crate::execute) a lookup that
+/// fails to prepare, failing the whole stratum at search time for evidence the
+/// stratum's ranking read never needed.
+///
+/// The basis is the producer's, attached here without the caller asking for it,
+/// so the unit that cannot use it declares
+/// [`ExclusionBasis::Unavailable`] instead — the stratum still runs and still
+/// ranks, and the fusion reads it as a stream that answers no lookup, which is
+/// exactly true of it. That is visible where every stratum's basis is:
+/// [`StratumUnit::contract`] and the fused trailer's
+/// [`exclusion_bases`](crate::FusionTrailer::exclusion_bases). The question asked is
+/// the one [`lookup_mode_is_declared`] asks of a caller's call: does some declared
+/// mode [subsume](BindingPattern::subsumes) the lookup's pattern.
+fn rendered_contract(
+    declaration: &RankedDeclaration,
+    query: &RenderedQuery,
+    descriptor: &PfDescriptor,
+) -> StreamContract {
+    let mut contract = StreamContract::declared(declaration);
+    if contract.exclusion.is_declared() {
+        let lookup = query.exclusion_lookup_mode(declaration);
+        let served = descriptor
+            .modes
+            .iter()
+            .any(|declared| BindingPattern::from_code(&declared.code).subsumes(lookup));
+        if !served {
+            contract.exclusion = ExclusionBasis::Unavailable;
+        }
+    }
+    contract
 }
 
 /// The row ceiling every exclusion lookup is read under.
@@ -928,8 +987,13 @@ pub struct StratumUnit {
     /// holding the declaration, and carried forward rather than re-fetched.
     ///
     /// A stratum carries exactly one producer, so this is that producer's own
-    /// declaration with nothing derived: there is no second producer's contract
-    /// to reconcile it with, and none to weaken it to. [`execute`](crate::execute)
+    /// declaration: there is no second producer's contract to reconcile it with,
+    /// and none to weaken it to. The one term a compiled unit can hold differently
+    /// is the exclusion basis, and only downwards: a unit [`compile`] rendered
+    /// declares [`ExclusionBasis::Unavailable`](purrdf_sparql_eval::ExclusionBasis)
+    /// where its producer declared a basis but no mode serving the lookup that
+    /// unit's text would ask, because that unit answers no lookup and its stream
+    /// says so rather than failing at search time. [`execute`](crate::execute)
     /// tags each stream with it and the fusion engine reads it before pulling a
     /// row, so the promise a stream is held to is the one the registry the unit
     /// was *compiled against* stated — an identity `execute` re-checks before it
@@ -1288,7 +1352,10 @@ impl StratumUnit {
     /// For a query this layer rendered there is one alternative of one lookup,
     /// rendered from the parts it was assembled from
     /// ([`RenderedQuery::exclusion_text`]), and `ranking` and `registry` decide
-    /// nothing.
+    /// nothing. Its mode was already checked against the producer's declared modes
+    /// when the unit was compiled, and a unit whose lookup no declared mode serves
+    /// was compiled declaring no basis ([`rendered_contract`]), so it reaches here
+    /// only as `None`.
     ///
     /// For a query a caller supplied the lookups are derived from `ranking` — that
     /// query's own text, prepared against `registry` for its ranking read — through
@@ -1721,10 +1788,15 @@ pub fn compile(
             ));
         };
         let query = emit_query(binding, declaration, &admitted.descriptors, invocation)?;
+        let descriptor = admitted
+            .descriptors
+            .get(&binding.producer)
+            .ok_or_else(|| malformed(binding, "has no registry declaration to compile against"))?;
+        let contract = rendered_contract(declaration, &query, descriptor);
         units.push(StratumUnit::emitted(
             stratum.clone(),
             query,
-            StreamContract::declared(declaration),
+            contract,
             *depth,
             bound,
             invocation.mode,
