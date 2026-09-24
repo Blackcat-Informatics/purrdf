@@ -214,6 +214,12 @@ jobs:
           node-version: 24
 
       - name: Run workspace tests (includes doc tests)
+        # A hosted x86_64 runner guarantees only the SSE2 baseline, so that is the one
+        # reassociated path this job requires; the distance, kNN and HNSW tests still
+        # assert they executed every path the runner reports. `avx512-sde` below
+        # requires the rest.
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,sse2
         run: cargo test --workspace --locked
 
   projection-oracles:
@@ -483,16 +489,22 @@ jobs:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Run the distance arithmetic's path and reference-model tests on NEON
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
         run: cargo test --locked -p purrdf-core --lib distance
 
       - name: Run the kNN kernels and their pinned cross-target answers on aarch64
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
         run: |
           cargo test --locked -p purrdf-sparql-eval --lib knn
           cargo test --locked -p purrdf-sparql-eval --test knn_wasm_determinism
           cargo test --locked -p purrdf-sparql-eval --test knn_wasm_reassociated
 
       - name: Compare the HNSW canonical image digests with the pinned goldens on aarch64
-        run: cargo test --locked -p purrdf-hnsw --test determinism --test conformance
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
+        run: cargo test --locked -p purrdf-hnsw --lib --test determinism --test conformance
 
   # The architectures whose float control register this build does not read. On them the
   # float environment is proven by the behavioural probe alone, so a kernel that computes
@@ -545,6 +557,8 @@ jobs:
           done
 
       - name: Run the distance, kNN and HNSW suites on i686
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable
         run: |
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
@@ -554,6 +568,8 @@ jobs:
             --lib --test determinism --test conformance --test float_environment
 
       - name: Run the distance, kNN and HNSW suites on riscv64 under emulation
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable
         run: |
           cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
@@ -561,6 +577,56 @@ jobs:
             --test knn_wasm_determinism --test knn_wasm_reassociated
           cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-hnsw \
             --test determinism --test conformance
+
+  # The x86_64 dispatch paths a hosted runner does not guarantee, EXECUTED. GitHub's
+  # x86_64 runners promise neither AVX2+FMA nor AVX-512F, so without this job the
+  # reassociated avx512f compilation would ship having run only on whichever runner
+  # happened to have it. Intel's Software Development Emulator runs the test binaries
+  # as a Sapphire Rapids processor, which reports AVX2, FMA and AVX-512F, and
+  # PURRDF_REQUIRE_DISPATCH_PATHS makes every x86_64 path a requirement: a path the
+  # emulated processor does not report, or a test that did not execute it, fails the
+  # job. The binaries are built natively first; only running them is emulated. The
+  # HNSW digest suites stay on the native lanes: their worker-count sweep is minutes
+  # natively, and the unit tests already build, search and verify an index on every
+  # path the emulated processor reports.
+  avx512-sde:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      - name: Install Intel SDE
+        # The action verifies the archive against the SHA-256 it pins per SDE version.
+        uses: petarpetrovt/setup-sde@6d2773bc0ef3005fd52e0ae0bb91782321793aec # v6.0
+        with:
+          environmentVariableName: SDE_PATH
+          sdeVersion: 10.13.1
+
+      - name: Build the distance, kNN and HNSW test binaries
+        run: |
+          cargo test --locked --no-run -p purrdf-core --lib
+          cargo test --locked --no-run -p purrdf-sparql-eval --lib \
+            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked --no-run -p purrdf-hnsw --lib
+
+      - name: Run them on an emulated AVX-512F processor, requiring every x86_64 path
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ env.SDE_PATH }}/sde64 -spr --
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,avx2,sse2,avx2+fma,avx512f
+        run: |
+          cargo test --locked -p purrdf-core --lib distance
+          cargo test --locked -p purrdf-sparql-eval --lib knn
+          cargo test --locked -p purrdf-sparql-eval \
+            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked -p purrdf-hnsw --lib
 
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
   # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module

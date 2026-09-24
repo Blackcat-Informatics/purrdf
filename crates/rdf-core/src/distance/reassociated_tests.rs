@@ -11,7 +11,10 @@
 //! contradicts the full one; an overflow is refused; and the exact arithmetic never
 //! runs this code, shown on an input where the two genuinely differ.
 
-use super::tests::{Store, Stream, at_offset, reference_dot, widened};
+use super::tests::{
+    Executed, REQUIRE_PATHS_VAR, Store, Stream, at_offset, exact_compiled, paths_of, reference_dot,
+    required_paths, widened,
+};
 use super::*;
 
 /// Every reassociated path this host can execute, as resolved handles.
@@ -42,6 +45,42 @@ fn host_paths() -> Vec<Resolved<Reassociated>> {
     }
 }
 
+/// The reassociated paths this build holds a compilation of, whether or not the host
+/// runs them.
+fn reassociated_compiled() -> &'static [Path] {
+    #[cfg(target_arch = "x86_64")]
+    {
+        &[Path::Sse2, Path::Avx2Fma, Path::Avx512f]
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        &[Path::Neon]
+    }
+    #[cfg(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_feature = "simd128"
+    ))]
+    {
+        &[Path::WasmSimd128]
+    }
+    #[cfg(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        not(target_feature = "simd128")
+    ))]
+    {
+        &[Path::WasmScalar]
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "wasm64"
+    )))]
+    {
+        &[Path::Portable]
+    }
+}
+
 /// The paths among `paths` whose compilation contracts multiplies into adds.
 fn fma_paths(paths: &[Resolved<Reassociated>]) -> Vec<Resolved<Reassociated>> {
     paths
@@ -49,6 +88,11 @@ fn fma_paths(paths: &[Resolved<Reassociated>]) -> Vec<Resolved<Reassociated>> {
         .copied()
         .filter(|path| matches!(path.path(), Path::Avx2Fma | Path::Avx512f | Path::Neon))
         .collect()
+}
+
+/// Assert `executed` ran every reassociated path the host runs, and every required one.
+fn assert_ran(executed: &Executed, test: &str) {
+    executed.assert_ran(test, reassociated_compiled(), &paths_of(&host_paths()));
 }
 
 fn names(paths: &[Resolved<Reassociated>]) -> String {
@@ -139,6 +183,7 @@ fn error_bound(n: usize, magnitude: f64) -> f64 {
 /// One stored-width pair over every host path, every API, against the reference.
 fn check_bound<Q: Store, T: Store>(
     paths: &[Resolved<Reassociated>],
+    executed: &mut Executed,
     a: &[f64],
     b: &[f64],
     offset: usize,
@@ -154,6 +199,7 @@ fn check_bound<Q: Store, T: Store>(
     let view = RowsRef::new(b_typed, 1, n, &[]).expect("one row");
     let mut compared = 0;
     for &path in paths {
+        executed.ran(path.path());
         let fast_dot = -path
             .distance(Measure::NegativeDot, a_typed, 0.0, b_typed, 0.0)
             .expect("finite");
@@ -185,21 +231,19 @@ fn reassociated_within_error_bound() {
     let mut stream = Stream(0x0FA5_7000_0000_0001);
     let lengths: Vec<usize> = (0..=70).chain([127, 128, 129, 1_024, 4_096]).collect();
     let mut compared = 0;
+    let mut executed = Executed::default();
     for &len in &lengths {
         for offset in 0..4 {
             let a = stream.vector(len);
             let b = stream.vector(len);
-            compared += check_bound::<f64, f64>(&paths, &a, &b, offset);
-            compared += check_bound::<f64, f32>(&paths, &a, &b, offset);
-            compared += check_bound::<f32, f64>(&paths, &a, &b, offset);
-            compared += check_bound::<f32, f32>(&paths, &a, &b, offset);
+            compared += check_bound::<f64, f64>(&paths, &mut executed, &a, &b, offset);
+            compared += check_bound::<f64, f32>(&paths, &mut executed, &a, &b, offset);
+            compared += check_bound::<f32, f64>(&paths, &mut executed, &a, &b, offset);
+            compared += check_bound::<f32, f32>(&paths, &mut executed, &a, &b, offset);
         }
     }
-    println!(
-        "reassociated_within_error_bound executed paths: {} ({compared} comparisons \
-         against the double-double reference)",
-        names(&paths)
-    );
+    println!("{compared} comparisons against the double-double reference");
+    assert_ran(&executed, "reassociated_within_error_bound");
 }
 
 /// Every API's answer for one pair on one path, as bits.
@@ -267,30 +311,31 @@ fn check_deterministic<Q: Store, T: Store>(path: Resolved<Reassociated>, a: &[f6
 fn reassociated_deterministic_per_path() {
     let paths = host_paths();
     let mut stream = Stream(0xDE7E_0000_0000_0002);
+    let mut executed = Executed::default();
     for len in (0..=70).chain([127, 128, 129, 1_024, 4_096]) {
         let a = stream.vector(len);
         let b = stream.vector(len);
         for &path in &paths {
+            executed.ran(path.path());
             check_deterministic::<f64, f64>(path, &a, &b);
             check_deterministic::<f64, f32>(path, &a, &b);
             check_deterministic::<f32, f64>(path, &a, &b);
             check_deterministic::<f32, f32>(path, &a, &b);
         }
     }
-    println!(
-        "reassociated_deterministic_per_path executed paths: {}",
-        names(&paths)
-    );
+    assert_ran(&executed, "reassociated_deterministic_per_path");
 }
 
 #[test]
 fn reassociated_bounded_agrees_with_full() {
     let paths = host_paths();
     let mut stream = Stream(0xB0B0_0000_0000_0003);
+    let mut executed = Executed::default();
     for len in [1_usize, 63, 64, 65, 127, 128, 200, 4_096] {
         let a: Vec<f64> = (0..len).map(|_| stream.signed()).collect();
         let b: Vec<f64> = (0..len).map(|_| stream.signed()).collect();
         for &path in &paths {
+            executed.ran(path.path());
             let full = path
                 .distance(Measure::SquaredEuclidean, &a, 0.0, &b, 0.0)
                 .expect("finite");
@@ -342,19 +387,18 @@ fn reassociated_bounded_agrees_with_full() {
         assert_eq!(bounded(Bound::AtOrAbove(10.0)), Bounded::Beyond);
         assert_eq!(bounded(Bound::AtOrAbove(1e9)), Bounded::NonFinite);
     }
-    println!(
-        "reassociated_bounded_agrees_with_full executed paths: {}",
-        names(&paths)
-    );
+    assert_ran(&executed, "reassociated_bounded_agrees_with_full");
 }
 
 #[test]
 fn reassociated_overflow_is_nonfinite() {
     let paths = host_paths();
+    let mut executed = Executed::default();
     for len in [1_usize, 8, 64, 65, 200] {
         let huge = vec![1e300_f64; len];
         let negative = vec![-1e300_f64; len];
         for &path in &paths {
+            executed.ran(path.path());
             assert_eq!(
                 path.distance(Measure::NegativeDot, &huge, 0.0, &huge, 0.0),
                 None,
@@ -404,10 +448,7 @@ fn reassociated_overflow_is_nonfinite() {
             );
         }
     }
-    println!(
-        "reassociated_overflow_is_nonfinite executed paths: {}",
-        names(&paths)
-    );
+    assert_ran(&executed, "reassociated_overflow_is_nonfinite");
 }
 
 #[test]
@@ -444,7 +485,9 @@ fn no_substitution_exact_never_fast() {
     if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
         assert!(!fused.is_empty(), "an FMA-capable host runs an FMA path");
     }
+    let mut executed = Executed::default();
     for path in &fused {
+        executed.ran(path.path());
         let fast = -path
             .distance(Measure::NegativeDot, &a, 0.0, &b, 0.0)
             .expect("finite");
@@ -464,10 +507,18 @@ fn no_substitution_exact_never_fast() {
         );
     }
     println!(
-        "no_substitution_exact_never_fast executed paths: exact {}; reassociated with \
-         FMA: {}",
-        exact.path(),
-        names(&fused)
+        "no_substitution_exact_never_fast: exact on {}",
+        exact.path()
+    );
+    let fma_compiled: Vec<Path> = reassociated_compiled()
+        .iter()
+        .copied()
+        .filter(|path| matches!(path, Path::Avx2Fma | Path::Avx512f | Path::Neon))
+        .collect();
+    executed.assert_ran(
+        "no_substitution_exact_never_fast",
+        &fma_compiled,
+        &paths_of(&fused),
     );
 }
 
@@ -894,5 +945,136 @@ fn a_recorded_path_whose_feature_is_hidden_is_refused_naming_it() {
     println!(
         "a_recorded_path_whose_feature_is_hidden_is_refused_naming_it host: avx2+fma {avx2_fma}, \
          avx512f {avx512f}"
+    );
+}
+
+/// Every required dispatch path executes on this host, against its oracle.
+///
+/// The paths are every one either arithmetic runs on this host, and every one
+/// [`REQUIRE_PATHS_VAR`] names. Each is reached through the processor's own
+/// report: a reassociated path through [`Arithmetic::resolve_recorded`] on its image
+/// code, then held to the double-double error bound and to the exact arithmetic's
+/// answer within twice that bound; an exact path held to the reference model bit for
+/// bit. A required path this build holds no compilation of, or whose features the
+/// processor does not report, fails by name -- so a job that names a path proves the
+/// path ran, not merely that it was compiled.
+#[test]
+fn every_required_dispatch_path_executes() {
+    let exact_runnable = paths_of(&tests::host_paths());
+    let mut runnable = exact_runnable.clone();
+    for path in paths_of(&host_paths()) {
+        if !runnable.contains(&path) {
+            runnable.push(path);
+        }
+    }
+    let mut all_compiled = exact_compiled().to_vec();
+    for &path in reassociated_compiled() {
+        if !all_compiled.contains(&path) {
+            all_compiled.push(path);
+        }
+    }
+    let mut targets = runnable.clone();
+    for path in required_paths() {
+        if !targets.contains(&path) {
+            targets.push(path);
+        }
+    }
+    let mut stream = Stream(0x5EED_0000_0000_0004);
+    let fixture: Vec<(Vec<f64>, Vec<f64>)> = [0_usize, 1, 15, 16, 17, 63, 64, 65, 200, 4_096]
+        .into_iter()
+        .flat_map(|len| [len; 5])
+        .map(|len| (stream.vector(len), stream.vector(len)))
+        .collect();
+    let exact = Exact::resolve().expect("the default environment is the IEEE one");
+    let mut executed = Executed::default();
+    for path in targets {
+        let mut compiled = false;
+        if reassociated_compiled().contains(&path) {
+            compiled = true;
+            let code = Reassociated::image_code(path).expect("a reassociated path has a code");
+            let handle = Reassociated::resolve_recorded(code).unwrap_or_else(|refusal| {
+                panic!("{path} must execute on this host, but its image code {code} is refused: {refusal}")
+            });
+            assert_eq!(handle.path(), path, "code {code} resolves its own path");
+            for (a, b) in &fixture {
+                let n = a.len();
+                let (dot, dot_magnitude) = dd_dot(a, b);
+                let dot_bound = error_bound(n, dot_magnitude);
+                let fast_dot = -handle
+                    .distance(Measure::NegativeDot, a, 0.0, b, 0.0)
+                    .expect("finite");
+                let exact_dot = -exact
+                    .distance(Measure::NegativeDot, a, 0.0, b, 0.0)
+                    .expect("finite");
+                assert!(
+                    (fast_dot - dot).abs() <= dot_bound,
+                    "dot on {path} at len {n}: {fast_dot} vs reference {dot}"
+                );
+                assert!(
+                    (fast_dot - exact_dot).abs() <= 2.0 * dot_bound,
+                    "dot on {path} at len {n}: {fast_dot} vs the exact arithmetic's {exact_dot}"
+                );
+                let (squares, squares_magnitude) = dd_squared_euclidean(a, b);
+                let squares_bound = error_bound(n, squares_magnitude);
+                let fast_squares = handle
+                    .distance(Measure::SquaredEuclidean, a, 0.0, b, 0.0)
+                    .expect("finite");
+                let exact_squares = exact
+                    .distance(Measure::SquaredEuclidean, a, 0.0, b, 0.0)
+                    .expect("finite");
+                assert!(
+                    (fast_squares - squares).abs() <= squares_bound,
+                    "squared Euclidean on {path} at len {n}: {fast_squares} vs reference \
+                     {squares}"
+                );
+                assert!(
+                    (fast_squares - exact_squares).abs() <= 2.0 * squares_bound,
+                    "squared Euclidean on {path} at len {n}: {fast_squares} vs the exact \
+                     arithmetic's {exact_squares}"
+                );
+            }
+            executed.ran(path);
+        }
+        if exact_compiled().contains(&path) {
+            compiled = true;
+            assert!(
+                exact_runnable.contains(&path),
+                "{REQUIRE_PATHS_VAR} requires the exact {path} path, which this host cannot \
+                 run (it runs: {})",
+                exact_runnable
+                    .iter()
+                    .map(|path| path.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let handle = Resolved::<Exact>::on(path);
+            for (a, b) in &fixture {
+                assert_eq!(
+                    handle
+                        .distance(Measure::NegativeDot, a, 0.0, b, 0.0)
+                        .map(f64::to_bits),
+                    Some((-reference_dot(a, b)).to_bits()),
+                    "exact dot on {path} at len {}",
+                    a.len()
+                );
+            }
+            executed.ran(path);
+        }
+        assert!(
+            compiled,
+            "{REQUIRE_PATHS_VAR} requires {path}, which this {} build holds no compilation \
+             of (its paths: {})",
+            std::env::consts::ARCH,
+            all_compiled
+                .iter()
+                .map(|path| path.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    executed.assert_ran(
+        "every_required_dispatch_path_executes",
+        &all_compiled,
+        &runnable,
     );
 }

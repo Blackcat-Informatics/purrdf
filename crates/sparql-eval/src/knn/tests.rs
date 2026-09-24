@@ -2245,4 +2245,107 @@ fn reassociated_scan_matches_reassociated_kernel_bits() {
             "a fused path keeps the residue the exact relation cancels"
         );
     }
+    assert_required_paths_ran(path);
+}
+
+/// The variable a CI job sets to name the dispatch paths its host must execute, as a
+/// comma-separated list of path names. Read by the test harness only.
+const REQUIRE_PATHS_VAR: &str = "PURRDF_REQUIRE_DISPATCH_PATHS";
+
+/// Every dispatch path, by which a required name is resolved.
+const ALL_PATHS: [purrdf_core::distance::Path; 8] = {
+    use purrdf_core::distance::Path;
+    [
+        Path::Portable,
+        Path::Avx2,
+        Path::Sse2,
+        Path::Avx2Fma,
+        Path::Avx512f,
+        Path::Neon,
+        Path::WasmSimd128,
+        Path::WasmScalar,
+    ]
+};
+
+/// The paths [`REQUIRE_PATHS_VAR`] names, or none when it is unset. A name that is no
+/// path, or a variable that names none, panics: a misspelt requirement must fail rather
+/// than require nothing.
+fn required_paths() -> Vec<purrdf_core::distance::Path> {
+    let Some(value) = std::env::var_os(REQUIRE_PATHS_VAR) else {
+        return Vec::new();
+    };
+    let value = value
+        .into_string()
+        .unwrap_or_else(|raw| panic!("{REQUIRE_PATHS_VAR} is not UTF-8: {raw:?}"));
+    let known = ALL_PATHS.map(purrdf_core::distance::Path::name).join(", ");
+    let mut paths = Vec::new();
+    for name in value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let path = ALL_PATHS
+            .into_iter()
+            .find(|path| path.name() == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{REQUIRE_PATHS_VAR} names `{name}`, which is not a dispatch path; the \
+                     paths are: {known}"
+                )
+            });
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    assert!(
+        !paths.is_empty(),
+        "{REQUIRE_PATHS_VAR} is set but names no path ({value:?}); the paths are: {known}"
+    );
+    paths
+}
+
+/// The reassociated relation runs the widest path the processor reports, `ran`. Every
+/// required reassociated path this build compiles must be one the host runs and none
+/// may be wider than `ran`, so a job that requires the widest path of its architecture
+/// proves the relation executed it. A required exact path is not the relation's: every
+/// exact path computes the same bits and `purrdf-core`'s tests execute each. A required
+/// path neither arithmetic of this build compiles fails by name.
+fn assert_required_paths_ran(ran: purrdf_core::distance::Path) {
+    use purrdf_core::distance::{Path, PathUnavailable, RecordedPathError};
+
+    let widest =
+        Reassociated::resolve().expect("the test thread runs the default float environment");
+    assert_eq!(ran, widest.path(), "the relation runs the widest path");
+    let exact_here =
+        |path: Path| path == Path::Portable || (cfg!(target_arch = "x86_64") && path == Path::Avx2);
+    for path in required_paths() {
+        let refusal = match Reassociated::image_code(path) {
+            Some(code) => match Reassociated::resolve_recorded(code) {
+                Ok(_) => {
+                    assert!(
+                        code <= widest.image_code(),
+                        "{REQUIRE_PATHS_VAR} requires {path}, wider than the {ran} path the \
+                         relation ran"
+                    );
+                    continue;
+                }
+                Err(refusal) => Some(refusal),
+            },
+            None => None,
+        };
+        let not_compiled = matches!(
+            refusal,
+            None | Some(RecordedPathError::Unavailable {
+                reason: PathUnavailable::NotCompiled,
+                ..
+            })
+        );
+        assert!(
+            not_compiled && exact_here(path),
+            "{REQUIRE_PATHS_VAR} requires {path}, which the reassociated relation on this {} \
+             build cannot run{}",
+            std::env::consts::ARCH,
+            refusal.map_or_else(String::new, |refusal| format!(": {refusal}"))
+        );
+    }
 }

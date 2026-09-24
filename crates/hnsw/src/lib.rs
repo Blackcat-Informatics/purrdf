@@ -1393,6 +1393,121 @@ mod tests {
         println!("a_narrower_recorded_path_is_run_not_refused exercised: {exercised:?}");
     }
 
+    /// The variable a CI job sets to name the dispatch paths its host must execute, as a
+    /// comma-separated list of path names. Read by the test harness only.
+    const REQUIRE_PATHS_VAR: &str = "PURRDF_REQUIRE_DISPATCH_PATHS";
+
+    /// The paths [`REQUIRE_PATHS_VAR`] names, or none when it is unset. A name that is no
+    /// path, or a variable that names none, panics: a misspelt requirement must fail
+    /// rather than require nothing.
+    fn required_paths() -> Vec<purrdf_core::distance::Path> {
+        use purrdf_core::distance::Path;
+
+        let Some(value) = std::env::var_os(REQUIRE_PATHS_VAR) else {
+            return Vec::new();
+        };
+        let value = value
+            .into_string()
+            .unwrap_or_else(|raw| panic!("{REQUIRE_PATHS_VAR} is not UTF-8: {raw:?}"));
+        let known = profile::PATHS.map(Path::name).join(", ");
+        let mut paths = Vec::new();
+        for name in value
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let path = profile::PATHS
+                .into_iter()
+                .find(|path| path.name() == name)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{REQUIRE_PATHS_VAR} names `{name}`, which is not a dispatch path; \
+                         the paths are: {known}"
+                    )
+                });
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+        assert!(
+            !paths.is_empty(),
+            "{REQUIRE_PATHS_VAR} is set but names no path ({value:?}); the paths are: {known}"
+        );
+        paths
+    }
+
+    /// An index is built, searched and verified on every reassociated path this host
+    /// runs, each search answering with that path's own kernel bits; and every path
+    /// [`REQUIRE_PATHS_VAR`] names that this build compiles the reassociated arithmetic
+    /// for is among them, so a job that names a path proves the index ran on it.
+    ///
+    /// A required exact path is not this test's: every exact path computes the same bits,
+    /// so the exact index runs the widest and `purrdf-core`'s tests execute each one. A
+    /// required path neither arithmetic of this build compiles fails by name.
+    #[test]
+    fn an_index_runs_on_every_host_path_and_every_required_one() {
+        use purrdf_core::distance::{Path, PathUnavailable};
+
+        let mut executed = Vec::new();
+        for code in host_codes() {
+            let matrix = fixture(48, 70);
+            let built = reassociated_on(matrix.clone(), code);
+            let recorded = built.arithmetic();
+            assert_eq!(recorded.image_code(), code, "built on the path it names");
+            for row in 0..matrix.rows() {
+                for candidate in built.search_rows(row, 4).expect("searches") {
+                    let own = matrix
+                        .distance(recorded, built.kernel(), row, 0.0, candidate.row, 0.0)
+                        .expect("finite");
+                    assert_eq!(
+                        candidate.distance.to_bits(),
+                        own.to_bits(),
+                        "code {code}: search ran another path for ({row}, {})",
+                        candidate.row
+                    );
+                }
+            }
+            assert!(built.verify_rebuild().expect("rebuilds on its own path"));
+            executed.push(recorded.path());
+        }
+        // Every exact path computes the same bits, so an exact path this build compiles is
+        // held by `purrdf-core`'s tests rather than by an index.
+        let exact_here = |path: Path| {
+            path == Path::Portable || (cfg!(target_arch = "x86_64") && path == Path::Avx2)
+        };
+        for path in required_paths() {
+            let refusal = match Reassociated::image_code(path) {
+                Some(code) => match Reassociated::resolve_recorded(code) {
+                    Ok(_) => {
+                        assert!(
+                            executed.contains(&path),
+                            "{REQUIRE_PATHS_VAR} requires {path}, which the host runs but no \
+                             index was built on (executed: {executed:?})"
+                        );
+                        continue;
+                    }
+                    Err(refusal) => Some(refusal),
+                },
+                None => None,
+            };
+            let not_compiled = matches!(
+                refusal,
+                None | Some(RecordedPathError::Unavailable {
+                    reason: PathUnavailable::NotCompiled,
+                    ..
+                })
+            );
+            assert!(
+                not_compiled && exact_here(path),
+                "{REQUIRE_PATHS_VAR} requires {path}, which a reassociated index on this {} \
+                 build cannot run{}",
+                std::env::consts::ARCH,
+                refusal.map_or_else(String::new, |refusal| format!(": {refusal}"))
+            );
+        }
+        println!("an_index_runs_on_every_host_path_and_every_required_one executed: {executed:?}");
+    }
+
     /// An image recorded on a path this build holds no compilation of is refused by its
     /// real resolution, naming the widest path this process runs; the neighbour, the same
     /// image with the code this host built it under, decodes.

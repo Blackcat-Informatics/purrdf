@@ -16,7 +16,7 @@ use super::*;
 ///
 /// A handle is built directly only for a path the processor reports, which is the same
 /// condition `dispatch::exact_path` checks.
-fn host_paths() -> Vec<Resolved<Exact>> {
+pub(super) fn host_paths() -> Vec<Resolved<Exact>> {
     let portable = Resolved::on(Path::Portable);
     #[cfg(target_arch = "x86_64")]
     {
@@ -27,13 +27,148 @@ fn host_paths() -> Vec<Resolved<Exact>> {
     vec![portable]
 }
 
-/// The names of `paths`, for the executed-paths line each test prints.
-fn names(paths: &[Resolved<Exact>]) -> String {
+/// The exact paths this build holds a compilation of, whether or not the host runs them.
+pub(super) fn exact_compiled() -> &'static [Path] {
+    #[cfg(target_arch = "x86_64")]
+    {
+        &[Path::Portable, Path::Avx2]
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        &[Path::Portable]
+    }
+}
+
+// ---- the executed-path requirement -------------------------------------------------
+
+/// The variable a CI job sets to name the dispatch paths its host must execute, as a
+/// comma-separated list of [`Path::name`]s.
+///
+/// Read by the test harness only. Unset, every test still asserts it executed every path
+/// the host runs; set, a listed path the host cannot run, or that a test did not
+/// execute, fails the run -- which is how a job on an emulated or known processor
+/// proves a path ran rather than that it was merely compiled.
+pub(super) const REQUIRE_PATHS_VAR: &str = "PURRDF_REQUIRE_DISPATCH_PATHS";
+
+/// Every dispatch path, by which a required name is resolved.
+const ALL_PATHS: [Path; 8] = [
+    Path::Portable,
+    Path::Avx2,
+    Path::Sse2,
+    Path::Avx2Fma,
+    Path::Avx512f,
+    Path::Neon,
+    Path::WasmSimd128,
+    Path::WasmScalar,
+];
+
+/// The paths [`REQUIRE_PATHS_VAR`] names, in its order, or none when it is unset.
+///
+/// # Panics
+///
+/// When the variable is set but names no path, is not UTF-8, or names something that
+/// is not a path: a misspelt requirement must fail rather than require nothing.
+pub(super) fn required_paths() -> Vec<Path> {
+    let Some(value) = std::env::var_os(REQUIRE_PATHS_VAR) else {
+        return Vec::new();
+    };
+    let value = value
+        .into_string()
+        .unwrap_or_else(|raw| panic!("{REQUIRE_PATHS_VAR} is not UTF-8: {raw:?}"));
+    let known = ALL_PATHS.map(Path::name).join(", ");
+    let mut paths = Vec::new();
+    for name in value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let path = ALL_PATHS
+            .into_iter()
+            .find(|path| path.name() == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{REQUIRE_PATHS_VAR} names `{name}`, which is not a dispatch path; the \
+                     paths are: {known}"
+                )
+            });
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    assert!(
+        !paths.is_empty(),
+        "{REQUIRE_PATHS_VAR} is set but names no path ({value:?}); the paths are: {known}"
+    );
     paths
-        .iter()
-        .map(|path| path.path().name())
-        .collect::<Vec<_>>()
-        .join(", ")
+}
+
+/// The dispatch paths a test actually ran a kernel on, recorded as it runs them.
+#[derive(Default)]
+pub(super) struct Executed(Vec<Path>);
+
+impl Executed {
+    /// Record that a kernel ran along `path`.
+    pub(super) fn ran(&mut self, path: Path) {
+        if !self.0.contains(&path) {
+            self.0.push(path);
+        }
+    }
+
+    /// Assert this test ran exactly the paths `runnable` names -- every path of its
+    /// arithmetic the host runs -- and every required path of that arithmetic this build
+    /// compiles (`compiled`); then print them.
+    ///
+    /// A required path this build holds no compilation of is not this test's to run; the
+    /// dedicated requirement test refuses it by name.
+    pub(super) fn assert_ran(&self, test: &str, compiled: &[Path], runnable: &[Path]) {
+        for path in runnable {
+            assert!(
+                self.0.contains(path),
+                "{test}: the host runs {path}, but the test did not execute it (executed: \
+                 {})",
+                self.names()
+            );
+        }
+        for path in &self.0 {
+            assert!(
+                runnable.contains(path),
+                "{test}: executed {path}, which the host does not report it runs"
+            );
+        }
+        for path in required_paths() {
+            if !compiled.contains(&path) {
+                continue;
+            }
+            assert!(
+                runnable.contains(&path),
+                "{test}: {REQUIRE_PATHS_VAR} requires {path}, which this host cannot run \
+                 (it runs: {})",
+                runnable
+                    .iter()
+                    .map(|path| path.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            assert!(
+                self.0.contains(&path),
+                "{test}: {REQUIRE_PATHS_VAR} requires {path}, which the test did not execute"
+            );
+        }
+        println!("{test} executed paths: {}", self.names());
+    }
+
+    fn names(&self) -> String {
+        self.0
+            .iter()
+            .map(|path| path.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// The paths of `handles`.
+pub(super) fn paths_of<A: Arithmetic>(handles: &[Resolved<A>]) -> Vec<Path> {
+    handles.iter().map(|handle| handle.path()).collect()
 }
 
 // ---- the reference model ---------------------------------------------------
@@ -206,6 +341,7 @@ const MEASURES: [Measure; 3] = [
 /// reference model. Returns how many comparisons were made.
 fn check_group<Q: Store, T: Store>(
     paths: &[Resolved<Exact>],
+    executed: &mut Executed,
     query: &[f64],
     rows: &[Vec<f64>],
     offset: usize,
@@ -244,6 +380,7 @@ fn check_group<Q: Store, T: Store>(
             })
             .collect();
         for &path in paths {
+            executed.ran(path.path());
             let mut out = vec![Some(f64::NAN); rows.len()];
             path.distances(measure, query_typed, query_norm, view, &mut out);
             let got: Vec<Option<u64>> = out.iter().copied().map(bits).collect();
@@ -308,22 +445,24 @@ fn exact_paths_agree_bitwise() {
     let mut stream = Stream(0x5EED_D157_A11C_E000);
     let mut vectors = 0_usize;
     let mut compared = 0_usize;
+    let mut executed = Executed::default();
     for &len in &lengths {
         for offset in 0..4 {
             let query = stream.vector(len);
             let rows: Vec<Vec<f64>> = (0..ROWS).map(|_| stream.vector(len)).collect();
             vectors += 1 + ROWS;
-            compared += check_group::<f64, f64>(&paths, &query, &rows, offset);
-            compared += check_group::<f64, f32>(&paths, &query, &rows, offset);
-            compared += check_group::<f32, f32>(&paths, &query, &rows, offset);
-            compared += check_group::<f32, f64>(&paths, &query, &rows, offset);
+            compared += check_group::<f64, f64>(&paths, &mut executed, &query, &rows, offset);
+            compared += check_group::<f64, f32>(&paths, &mut executed, &query, &rows, offset);
+            compared += check_group::<f32, f32>(&paths, &mut executed, &query, &rows, offset);
+            compared += check_group::<f32, f64>(&paths, &mut executed, &query, &rows, offset);
         }
     }
     assert!(vectors >= 10_000, "the fixture is {vectors} vectors");
-    println!(
-        "exact_paths_agree_bitwise executed paths: {} ({vectors} vectors, {compared} \
-         comparisons against the reference model)",
-        names(&paths)
+    println!("{vectors} vectors, {compared} comparisons against the reference model");
+    executed.assert_ran(
+        "exact_paths_agree_bitwise",
+        exact_compiled(),
+        &paths_of(&paths),
     );
 }
 
@@ -381,7 +520,9 @@ fn order_is_the_lane_tree() {
         "the alternative order must genuinely differ"
     );
 
+    let mut executed = Executed::default();
     for path in &paths {
+        executed.ran(path.path());
         let dot = |a: &[f64], b: &[f64]| {
             -path
                 .distance(Measure::NegativeDot, a, 0.0, b, 0.0)
@@ -402,12 +543,17 @@ fn order_is_the_lane_tree() {
         );
         assert_ne!(dot(&tailed, &ones), tail_into_lane);
     }
-    println!("order_is_the_lane_tree executed paths: {}", names(&paths));
+    executed.assert_ran(
+        "order_is_the_lane_tree",
+        exact_compiled(),
+        &paths_of(&paths),
+    );
 }
 
 #[test]
 fn bounded_matches_full() {
     let paths = host_paths();
+    let mut executed = Executed::default();
     let mut stream = Stream(0xB0B0_0000_0000_0001);
     for len in [1_usize, 63, 64, 65, 127, 128, 200, 4_096] {
         let a: Vec<f64> = (0..len).map(|_| stream.signed()).collect();
@@ -415,6 +561,7 @@ fn bounded_matches_full() {
         let full = reference_squared_euclidean(&a, &b);
         assert!(full > 0.0 && full.is_finite());
         for path in &paths {
+            executed.ran(path.path());
             let bounded =
                 |bound| path.distance_bounded(Measure::SquaredEuclidean, &a, 0.0, &b, 0.0, bound);
             let below = Bounded::Below(full);
@@ -478,12 +625,13 @@ fn bounded_matches_full() {
             path.path()
         );
     }
-    println!("bounded_matches_full executed paths: {}", names(&paths));
+    executed.assert_ran("bounded_matches_full", exact_compiled(), &paths_of(&paths));
 }
 
 #[test]
 fn nonfinite_checked_before_bound() {
     let paths = host_paths();
+    let mut executed = Executed::default();
     for len in [8_usize, 64, 4_096] {
         // One overflowing lane (or tail term), everything else zero.
         let mut huge = vec![0.0_f64; len];
@@ -491,6 +639,7 @@ fn nonfinite_checked_before_bound() {
         huge[len - 1] = -f64::MAX / 2.0;
         let zero = vec![0.0_f64; len];
         for path in &paths {
+            executed.ran(path.path());
             for bound in [
                 Bound::Above(f64::INFINITY),
                 // An infinity meets this bound, so a bound test that ran first would
@@ -534,9 +683,10 @@ fn nonfinite_checked_before_bound() {
             );
         }
     }
-    println!(
-        "nonfinite_checked_before_bound executed paths: {}",
-        names(&paths)
+    executed.assert_ran(
+        "nonfinite_checked_before_bound",
+        exact_compiled(),
+        &paths_of(&paths),
     );
 }
 
