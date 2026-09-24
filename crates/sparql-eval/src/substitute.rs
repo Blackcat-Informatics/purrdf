@@ -29,8 +29,8 @@
 use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::{
     AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm,
-    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, Query, TermPattern,
-    TriplePattern, Variable,
+    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
+    Query, TermPattern, TriplePattern, Variable,
 };
 
 /// The pre-binding list, in whichever of the two shapes the caller has.
@@ -585,7 +585,7 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
         GraphPattern::Lateral { left, right } => {
             push_probes(left, probes, false);
             let mut probed = Vec::new();
-            if let GraphPattern::PropertyFunction(call) = &mut **right {
+            if let Some(call) = lateral_call_mut(right) {
                 for argument in call
                     .subject_args
                     .iter_mut()
@@ -598,6 +598,32 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
             restore_probed_bindings(pattern, &probed, probes, at_core_root);
         }
         _ => {}
+    }
+}
+
+/// The property-function call a `Lateral`'s right operand IS, when it is one — the
+/// one right operand of a `Lateral` the pushdown writes a pre-bound value into.
+///
+/// This is the single definition of that position. [`push_probes`] writes into it,
+/// [`drive_call_arguments`] and the SHACL walk drive into it, the evaluator drives a
+/// call there once per left row with that row in hand, and the prepare-time planner
+/// (`crate::property_fn_plan`'s `collect_chain`) admits a call under the pushdown's
+/// promise exactly when the plan it produces puts the call here. Any other right
+/// operand — a group holding a call beside something else, an `OPTIONAL`, a
+/// sub-`SELECT` — is one the pushdown does not enter, and the planner admits a call
+/// inside it as though the pre-bound variable were free.
+pub(crate) const fn lateral_call(right: &GraphPattern) -> Option<&PropertyFunctionCall> {
+    match right {
+        GraphPattern::PropertyFunction(call) => Some(call),
+        _ => None,
+    }
+}
+
+/// [`lateral_call`], for the rewrite that writes into the call.
+const fn lateral_call_mut(right: &mut GraphPattern) -> Option<&mut PropertyFunctionCall> {
+    match right {
+        GraphPattern::PropertyFunction(call) => Some(call),
+        _ => None,
     }
 }
 
@@ -635,7 +661,7 @@ impl Unwritable {
 /// argument counts too: the drive binds the variable, wherever the argument mentions
 /// it.
 fn driven_arguments(
-    call: &purrdf_sparql_algebra::PropertyFunctionCall,
+    call: &PropertyFunctionCall,
     probes: &[(Variable, GroundTerm)],
     rule: Unwritable,
     already: Option<&GraphPattern>,
@@ -755,7 +781,7 @@ fn drive_call_arguments(
             }
         }
         GraphPattern::Lateral { left, right } => {
-            let GraphPattern::PropertyFunction(call) = &**right else {
+            let Some(call) = lateral_call(right) else {
                 return;
             };
             if let Some(seed) = call_driver(call, probes, rule, Some(left)) {
@@ -771,7 +797,7 @@ fn drive_call_arguments(
 /// of the `Lateral` `call` is the right operand of) drives — or `None` when there is
 /// nothing to drive. See [`drive_call_arguments`].
 fn call_driver(
-    call: &purrdf_sparql_algebra::PropertyFunctionCall,
+    call: &PropertyFunctionCall,
     values: &[(Variable, GroundTerm)],
     rule: Unwritable,
     already: Option<&GraphPattern>,
@@ -797,16 +823,36 @@ fn plant_left_driver(left: &mut GraphPattern, seed: GraphPattern) {
     });
 }
 
-/// Whether the SHACL walk ([`substitute_in_graph_pattern`]) is inside an `EXISTS`
-/// body, which decides where a call's driver may be planted.
+/// Where the SHACL walk ([`substitute_in_graph_pattern`]) is: above the `VALUES` seed,
+/// beneath it, or inside an `EXISTS` body — which decides where a call's driver may be
+/// planted, and whether an expression that reads a value it cannot spell needs one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WalkScope {
-    /// Outside every `EXISTS` body: the driver binds the driven variable where the
-    /// call is, as the `VALUES` seed binds it.
+    /// On the solution-modifier descent to the core `WHERE` pattern — the wrappers
+    /// `Query::map_core_pattern` passes through, which the `VALUES` seed is joined
+    /// beneath. Every row an expression here reads carries every pre-bound value, so
+    /// nothing needs driving. A call is never reached here: the first node that is not
+    /// such a wrapper is the seed's own `Join`, and everything beneath it is
+    /// [`Self::Group`].
+    Descent,
+    /// Beneath the seed and outside every `EXISTS` body: a call's driver binds the
+    /// driven variable where the call is, as the `VALUES` seed binds it.
     Group,
     /// Inside an `EXISTS` or `NOT EXISTS` body, at any depth: the driver is planted in
     /// a scope of its own — see [`plant_scoped_driver`].
     ExistsBody,
+}
+
+impl WalkScope {
+    /// The scope of a child of a node that is not a solution-modifier wrapper: once
+    /// the descent reaches such a node it is the core, and the seed sits above
+    /// everything beneath it.
+    const fn beneath(self) -> Self {
+        match self {
+            Self::Descent => Self::Group,
+            other => other,
+        }
+    }
 }
 
 /// A call inside an `EXISTS` body, driven in a scope of its own:
@@ -851,10 +897,7 @@ fn plant_scoped_driver(call: &mut GraphPattern, seed: GraphPattern, kept: Vec<Va
 /// A `seed` that is not the one-row `VALUES` [`seed_row`] builds drives nothing, so
 /// every variable is kept: the collision check then refuses the rebinding loudly,
 /// rather than a variable the call binds being hidden from the rest of the body.
-fn undriven_variables(
-    call: &purrdf_sparql_algebra::PropertyFunctionCall,
-    seed: &GraphPattern,
-) -> Vec<Variable> {
+fn undriven_variables(call: &PropertyFunctionCall, seed: &GraphPattern) -> Vec<Variable> {
     fn keep(var: &Variable, driven: &[Variable], kept: &mut Vec<Variable>) {
         if !driven.contains(var) && !kept.contains(var) {
             kept.push(var.clone());
@@ -903,7 +946,7 @@ fn undriven_variables(
 /// A value no argument names is neither written nor driven, so a row carrying
 /// unrelated bindings leaves `call` as it was and returns `None`.
 pub(crate) fn bind_call_arguments(
-    call: &mut purrdf_sparql_algebra::PropertyFunctionCall,
+    call: &mut PropertyFunctionCall,
     values: &[(Variable, GroundTerm)],
     already: Option<&GraphPattern>,
 ) -> Option<GraphPattern> {
@@ -1107,9 +1150,11 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
 ///
 /// recursing into nested graph patterns (`EXISTS`, `GRAPH`, sub-queries, etc.).
 /// Blank-node and quoted-triple values are deliberately left unsubstituted in
-/// expression positions; the VALUES-join binds them. In a property-function call's
-/// arguments they are driven in instead, wherever the call is, so the relation is
-/// invoked with them bound — see `drive_call_arguments`.
+/// expression positions: above the core the VALUES-join binds them, and beneath it an
+/// expression that reads one has the value driven into the node that evaluates it —
+/// see `drive_expression_reads`. In a property-function call's arguments they are
+/// driven in too, wherever the call is, so the relation is invoked with them bound —
+/// see `drive_call_arguments`.
 ///
 /// Returns a diagnostic on the same error conditions as [`apply_substitutions`].
 pub(crate) fn apply_shacl_prebinding(
@@ -1150,7 +1195,7 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 
     let mut query = apply_probes(query, probes);
     map_patterns_in_query(&mut query, |pattern| {
-        substitute_in_graph_pattern(pattern, &expr_subs, WalkScope::Group);
+        substitute_in_graph_pattern(pattern, &expr_subs, WalkScope::Descent);
     });
     query
 }
@@ -1249,14 +1294,17 @@ fn map_patterns_in_query(query: &mut Query, f: impl FnOnce(&mut GraphPattern)) {
 
 /// Recursively substitute pre-bound variables into a [`GraphPattern`].
 fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs, scope: WalkScope) {
+    // A node that is not a solution-modifier wrapper hands its children the scope
+    // beneath the seed; a wrapper hands its inner pattern its own.
+    let beneath = scope.beneath();
     // Wildcard-free on purpose: a `GraphPattern` variant added later must fail to
     // compile here rather than silently pass through unsubstituted.
-    match pattern {
+    let reads_expressions = match pattern {
         // A leaf's term positions are matched against the graph, not evaluated, and
         // `apply_substitutions`' pushdown has already written the pre-bound constants
         // into the ones that can carry them. A `Values` block's cells are data for the
         // same reason.
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => false,
         // BOTH arms, unlike the pushdown. Replacing a variable with a constant
         // EXPRESSION removes no column from any schema, so the divergence that stops
         // the pushdown at an `OPTIONAL`'s or a `MINUS`'s right arm does not arise here.
@@ -1264,8 +1312,9 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
         GraphPattern::Join { left, right }
         | GraphPattern::Union { left, right }
         | GraphPattern::Minus { left, right } => {
-            substitute_in_graph_pattern(left, expr_subs, scope);
-            substitute_in_graph_pattern(right, expr_subs, scope);
+            substitute_in_graph_pattern(left, expr_subs, beneath);
+            substitute_in_graph_pattern(right, expr_subs, beneath);
+            false
         }
         // A call that is a `Lateral`'s right operand is substituted in place and never
         // walked as a stand-alone call: that position is what hands it its left rows,
@@ -1277,10 +1326,10 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
         // instead — see [`plant_scoped_driver`] — and stays the `Lateral`'s right
         // operand, now correlated with each left row through the ordinary per-row path.
         GraphPattern::Lateral { left, right } => {
-            substitute_in_graph_pattern(left, expr_subs, scope);
-            if let GraphPattern::PropertyFunction(call) = &mut **right {
-                match scope {
-                    WalkScope::Group => {
+            substitute_in_graph_pattern(left, expr_subs, beneath);
+            if let Some(call) = lateral_call_mut(right) {
+                match beneath {
+                    WalkScope::Descent | WalkScope::Group => {
                         if let Some(seed) = bind_call_arguments(call, &expr_subs.0, Some(left)) {
                             plant_left_driver(left, seed);
                         }
@@ -1293,27 +1342,31 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
                     }
                 }
             } else {
-                substitute_in_graph_pattern(right, expr_subs, scope);
+                substitute_in_graph_pattern(right, expr_subs, beneath);
             }
+            false
         }
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => {
-            substitute_in_graph_pattern(left, expr_subs, scope);
-            substitute_in_graph_pattern(right, expr_subs, scope);
+            substitute_in_graph_pattern(left, expr_subs, beneath);
+            substitute_in_graph_pattern(right, expr_subs, beneath);
             if let Some(expression) = expression {
                 substitute_in_expression(expression, expr_subs);
             }
+            expression.is_some()
         }
         GraphPattern::Filter { expr, inner } => {
             substitute_in_expression(expr, expr_subs);
             substitute_in_graph_pattern(inner, expr_subs, scope);
+            true
         }
         GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
             substitute_in_named_node_pattern(name, expr_subs);
-            substitute_in_graph_pattern(inner, expr_subs, scope);
+            substitute_in_graph_pattern(inner, expr_subs, beneath);
+            false
         }
         // The operand and the expression are substituted; the target bindings
         // (`Extend`'s `variable`, `Unfold`'s `element`/`companion`) are this node's
@@ -1326,12 +1379,14 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
         } => {
             substitute_in_graph_pattern(inner, expr_subs, scope);
             substitute_in_expression(expression, expr_subs);
+            true
         }
         GraphPattern::OrderBy { inner, expression } => {
             substitute_in_graph_pattern(inner, expr_subs, scope);
             for order in expression.iter_mut() {
                 substitute_in_order_expression(order, expr_subs);
             }
+            true
         }
         // No `Project`-boundary narrowing: a SHACL pre-binding must reach an
         // UNPROJECTED scope inside a nested sub-`SELECT`, which is divergence 1 in
@@ -1339,7 +1394,10 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
         GraphPattern::Project { inner, .. }
         | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => substitute_in_graph_pattern(inner, expr_subs, scope),
+        | GraphPattern::Slice { inner, .. } => {
+            substitute_in_graph_pattern(inner, expr_subs, scope);
+            false
+        }
         // A property function's arguments are INVOCATION INPUTS, evaluated per row like
         // a function call's arguments rather than matched against the graph like a BGP
         // term — so they are substituted here, on the same rule and for the same reason
@@ -1354,14 +1412,17 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
         // in a scope of its own, for the reason [`plant_scoped_driver`] gives.
         GraphPattern::PropertyFunction(call) => {
             if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
-                match scope {
-                    WalkScope::Group => plant_stand_alone_driver(pattern, seed),
+                match beneath {
+                    WalkScope::Descent | WalkScope::Group => {
+                        plant_stand_alone_driver(pattern, seed);
+                    }
                     WalkScope::ExistsBody => {
                         let kept = undriven_variables(call, &seed);
                         plant_scoped_driver(pattern, seed, kept);
                     }
                 }
             }
+            false
         }
         GraphPattern::Group {
             inner, aggregates, ..
@@ -1376,6 +1437,184 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs,
                 .into_iter()
                 .map(|(var, agg)| (var, substitute_in_aggregate(agg, expr_subs)))
                 .collect();
+            true
+        }
+    };
+    if reads_expressions && scope != WalkScope::Descent {
+        drive_expression_reads(pattern, expr_subs);
+    }
+}
+
+/// Drive into an expression-bearing node beneath the seed every pre-bound value its
+/// expressions still read — a blank node or a quoted triple, which have no expression
+/// form and so were left in place as the variable — so the expression reads the value
+/// rather than an unbound variable.
+///
+/// # The defect this closes
+///
+/// An IRI or a literal is written into every expression as a constant. A blank node
+/// and a quoted triple are not, on the premise that "the `VALUES` seed binds them" —
+/// which holds only where the seed reaches: on the solution-modifier descent above the
+/// core. Beneath it the seed is a sibling, joined AFTER the node is evaluated, so
+/// `SELECT $this WHERE { BIND($this AS ?x) ?x <rel> ?why }` read `$this` unbound for a
+/// blank or quoted focus node: `?x` was left unbound, the relation was invoked with
+/// its input FREE and answered from its whole extent, and every focus node the
+/// relation held ANY row for was reported — while the same constraint over an IRI
+/// focus node reported only its own verdict.
+///
+/// # The rewrite, and why it changes nothing else
+///
+/// The node's evaluated operand (the inner pattern; an `OPTIONAL`'s left operand,
+/// whose rows its condition reads) is joined with a one-row `VALUES` binding the
+/// value — the same driver a call is given — and the node is wrapped in a projection
+/// onto exactly the columns it exposed before. A value the operand's rows already
+/// carry is not driven: the expression reads that row's binding, which the seed or the
+/// enclosing correlation restricts as before. So the node's schema is unchanged, the
+/// driven variable never escapes it — no `MINUS` sees a new shared variable, no
+/// `EXISTS` body rebinds the row it filters (a projection is a scope boundary for
+/// both) — and the only change is the one intended: the expression reads the value.
+///
+/// An `EXISTS` inside the expression reads the node's rows too, so an expression
+/// holding one is driven with every value that has no expression form, whether or not
+/// the body names it — its body's own reads (a triple pattern naming `$this`, which
+/// cannot carry a blank node either) are correlated through those rows.
+///
+/// A `GROUP BY` hides its operand's columns already, so it is driven without the
+/// projection.
+fn drive_expression_reads(node: &mut GraphPattern, expr_subs: &ExprSubs) {
+    // An IRI or a literal was written into the expression, so a run whose every value
+    // is one — every IRI focus node — has nothing to drive and reads nothing more.
+    if !expr_subs
+        .0
+        .iter()
+        .any(|(_, ground)| Unwritable::InArgument.holds(ground))
+    {
+        return;
+    }
+    let mut read = Vec::new();
+    match &*node {
+        GraphPattern::Extend { expression, .. } | GraphPattern::Unfold { expression, .. } => {
+            unwritten_reads(expression, expr_subs, &mut read);
+        }
+        GraphPattern::Filter { expr, .. } => unwritten_reads(expr, expr_subs, &mut read),
+        GraphPattern::LeftJoin {
+            expression: Some(expression),
+            ..
+        } => unwritten_reads(expression, expr_subs, &mut read),
+        GraphPattern::OrderBy { expression, .. } => {
+            for order in expression {
+                match order {
+                    OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
+                        unwritten_reads(expr, expr_subs, &mut read);
+                    }
+                }
+            }
+        }
+        GraphPattern::Group { aggregates, .. } => {
+            for (_, aggregate) in aggregates {
+                for arg in aggregate.args() {
+                    unwritten_reads(arg, expr_subs, &mut read);
+                }
+                for order in aggregate.order_by() {
+                    match order {
+                        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
+                            unwritten_reads(expr, expr_subs, &mut read);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    if read.is_empty() {
+        return;
+    }
+    let exposed = crate::eval::syntactic_schema(node);
+    read.retain(|&index| !exposed.contains(&expr_subs.0[index].0));
+    if read.is_empty() {
+        return;
+    }
+    let seed = seed_row(&read, &expr_subs.0);
+    let hides_operand = matches!(node, GraphPattern::Group { .. });
+    match node {
+        GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::Filter { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. }
+        | GraphPattern::LeftJoin { left: inner, .. } => plant_left_driver(inner, seed),
+        _ => return,
+    }
+    if !hides_operand {
+        let variables = exposed.vars().to_vec();
+        purrdf_sparql_algebra::substitute::take_and_replace(node, |node| GraphPattern::Project {
+            inner: Box::new(node),
+            variables,
+        });
+    }
+}
+
+/// The indices into `expr_subs` of the pre-bound values `expr` still reads after
+/// [`substitute_in_expression`] — each one a value with no expression form, left in
+/// place as its variable — plus every such value when `expr` holds an `EXISTS`. See
+/// [`drive_expression_reads`].
+fn unwritten_reads(expr: &Expression, expr_subs: &ExprSubs, read: &mut Vec<usize>) {
+    let mut note = |index: usize| {
+        if !read.contains(&index) {
+            read.push(index);
+        }
+    };
+    match expr {
+        Expression::Variable(var) => {
+            if let Some(index) = expr_subs
+                .0
+                .iter()
+                .position(|(candidate, _)| candidate == var)
+            {
+                note(index);
+            }
+        }
+        Expression::Exists(_) => {
+            for (index, (_, ground)) in expr_subs.0.iter().enumerate() {
+                if Unwritable::InArgument.holds(ground) {
+                    note(index);
+                }
+            }
+        }
+        Expression::NamedNode(_) | Expression::Literal(_) | Expression::Bound(_) => {}
+        Expression::Or(left, right)
+        | Expression::And(left, right)
+        | Expression::Equal(left, right)
+        | Expression::SameTerm(left, right)
+        | Expression::Greater(left, right)
+        | Expression::GreaterOrEqual(left, right)
+        | Expression::Less(left, right)
+        | Expression::LessOrEqual(left, right)
+        | Expression::Add(left, right)
+        | Expression::Subtract(left, right)
+        | Expression::Multiply(left, right)
+        | Expression::Divide(left, right) => {
+            unwritten_reads(left, expr_subs, read);
+            unwritten_reads(right, expr_subs, read);
+        }
+        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
+            unwritten_reads(inner, expr_subs, read);
+        }
+        Expression::In(target, list) => {
+            unwritten_reads(target, expr_subs, read);
+            for item in list {
+                unwritten_reads(item, expr_subs, read);
+            }
+        }
+        Expression::If(cond, then_expr, else_expr) => {
+            unwritten_reads(cond, expr_subs, read);
+            unwritten_reads(then_expr, expr_subs, read);
+            unwritten_reads(else_expr, expr_subs, read);
+        }
+        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+            for item in list {
+                unwritten_reads(item, expr_subs, read);
+            }
         }
     }
 }
@@ -1966,7 +2205,7 @@ mod tests {
                 object,
             }))
         };
-        let call = || purrdf_sparql_algebra::PropertyFunctionCall {
+        let call = || PropertyFunctionCall {
             iri: "http://example.org/rel".to_owned(),
             subject_args: vec![quoted(TermPattern::Variable(v.clone()))],
             object_args: vec![TermPattern::Variable(Variable::new("out"))],
@@ -2013,14 +2252,17 @@ mod tests {
     /// `?this` beside the call's own variables; inside it, the same driver sits under a
     /// projection carrying out every variable the call names — a predicate variable
     /// inside a quoted-triple argument included — except `?this`, so the body never
-    /// rebinds the `?this` of the row it filters.
+    /// rebinds the `?this` of the row it filters. The `FILTER` itself sits beneath the
+    /// seed, so the rows it filters are driven with `?this` too, under a projection
+    /// onto the columns the `FILTER` exposed — none — which keeps `?this` from escaping
+    /// it (see [`drive_expression_reads`]).
     #[test]
     fn a_call_inside_an_exists_body_is_driven_in_a_scope_of_its_own() {
         let this = Variable::new("this");
         let p = Variable::new("p");
         let o = Variable::new("o");
         let out = Variable::new("out");
-        let call = GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+        let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
             iri: "http://example.org/rel".to_owned(),
             subject_args: vec![TermPattern::Triple(Box::new(TriplePattern {
                 subject: TermPattern::Variable(this.clone()),
@@ -2052,14 +2294,23 @@ mod tests {
             pattern,
             GraphPattern::Join {
                 left: Box::new(driver()),
-                right: Box::new(GraphPattern::Filter {
-                    expr: Expression::Exists(Box::new(GraphPattern::Project {
-                        inner: Box::new(driver()),
-                        variables: vec![p, o, out],
-                    })),
-                    inner: Box::new(GraphPattern::Bgp {
-                        patterns: Vec::new(),
+                right: Box::new(GraphPattern::Project {
+                    inner: Box::new(GraphPattern::Filter {
+                        expr: Expression::Exists(Box::new(GraphPattern::Project {
+                            inner: Box::new(driver()),
+                            variables: vec![p, o, out],
+                        })),
+                        inner: Box::new(GraphPattern::Join {
+                            left: Box::new(GraphPattern::Values {
+                                variables: vec![this.clone()],
+                                bindings: vec![vec![Some(blank.clone())]],
+                            }),
+                            right: Box::new(GraphPattern::Bgp {
+                                patterns: Vec::new(),
+                            }),
+                        }),
                     }),
+                    variables: Vec::new(),
                 }),
             }
         );

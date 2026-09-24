@@ -131,9 +131,10 @@ fn simple_literal(text: &str) -> TermValue {
 /// One recorded invocation: the access pattern and the term at the input position.
 type Invocation = (String, Option<TermValue>);
 
-/// `?input <table> ?output`, arity `(1, 1)`, serving `bf` only.
+/// `?input <table> ?output`, arity `(1, 1)`, serving `bf` — and, when it declares
+/// `ff` too, answering a free input with every row it holds.
 struct Table {
-    modes: [BindingPattern; 1],
+    modes: Vec<BindingPattern>,
     invocations: Arc<Mutex<Vec<Invocation>>>,
 }
 
@@ -164,17 +165,18 @@ impl PropertyFunction for Table {
             .lock()
             .expect("the fixture recorder is never poisoned")
             .push((args.mode().code(), input.clone()));
-        let Some(input) = input else {
+        if input.is_none() && !self.modes.contains(&BindingPattern::from_code("ff")) {
             return Err(EvalError::function(
                 "the input is free; this relation serves only `bf`".to_owned(),
             ));
-        };
+        }
         let mut rows: Vec<PfRow> = Vec::new();
         for kind in KINDS {
             for name in NAMES {
-                if kind.term(name) == input {
+                let held = kind.term(name);
+                if input.as_ref().is_none_or(|input| *input == held) {
                     for n in 1..=rows_for(name) {
-                        rows.push(vec![input.clone(), kind.output(name, n)]);
+                        rows.push(vec![held.clone(), kind.output(name, n)]);
                     }
                 }
             }
@@ -296,12 +298,20 @@ const DOORS: [Door; 6] = [
 
 /// A registry holding one bound-only [`Table`], and the recorder it writes to.
 fn relations() -> (ExtensionEnv, Arc<Mutex<Vec<Invocation>>>) {
+    relations_declaring(&["bf"])
+}
+
+/// A registry holding one [`Table`] declaring `modes`, and the recorder it writes to.
+fn relations_declaring(modes: &[&str]) -> (ExtensionEnv, Arc<Mutex<Vec<Invocation>>>) {
     let invocations = Arc::new(Mutex::new(Vec::new()));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL.to_owned(),
         Arc::new(Table {
-            modes: [BindingPattern::from_code("bf")],
+            modes: modes
+                .iter()
+                .map(|code| BindingPattern::from_code(code))
+                .collect(),
             invocations: Arc::clone(&invocations),
         }),
     );
@@ -633,5 +643,364 @@ fn a_substitution_that_does_not_reach_the_call_stays_refused() {
                 }
             }
         }
+    }
+}
+
+// ── the positions the rewrite writes a substitution into ────────────────────
+
+/// `?h <holds> ?v`: one row per substitution value of every kind, twelve in all.
+fn holds() -> String {
+    format!("?h <{EX}holds> ?v")
+}
+
+/// How many `?h <holds> ?v` rows [`dataset`] holds.
+const HELD: usize = KINDS.len() * NAMES.len();
+
+/// Run `query` with `?q` bound to `value` under `lane` — as a prepared execution and
+/// through every request door, each on a fresh engine — and hold every run to
+/// `expected` and to a relation invoked bound, with exactly `value`, every time.
+fn admitted_bound_everywhere(
+    env: &ExtensionEnv,
+    invocations: &Mutex<Vec<Invocation>>,
+    lane: ShaclPrebinding,
+    query: &str,
+    value: &TermValue,
+    expected: &[Vec<Option<TermValue>>],
+    context: &str,
+) {
+    let data = dataset();
+    let expected = sorted(expected.to_vec());
+    drain(invocations);
+    let engine = NativeSparqlEngine::new();
+    let reference = prepared(&engine, &data, env, lane, query, value)
+        .unwrap_or_else(|message| panic!("{context}: the prepared execution runs: {message}"));
+    assert_eq!(
+        reference, expected,
+        "{context}: the prepared execution's rows"
+    );
+    let reference_invocations = drain(invocations);
+    assert!(
+        !reference_invocations.is_empty(),
+        "{context}: the relation is invoked"
+    );
+    for invocation in &reference_invocations {
+        assert_eq!(
+            invocation,
+            &("bf".to_owned(), Some(value.clone())),
+            "{context}: every invocation is bound, with the substituted value"
+        );
+    }
+    for door in DOORS {
+        let engine = NativeSparqlEngine::new();
+        let substitutions = [("q".to_owned(), value.clone())];
+        let answer = request(&engine, &data, env, door, lane, query, &substitutions)
+            .unwrap_or_else(|message| {
+                panic!("{context} via {door:?}: the request runs: {message}")
+            });
+        assert_eq!(answer, expected, "{context} via {door:?}: the rows");
+        assert_eq!(
+            drain(invocations),
+            reference_invocations,
+            "{context} via {door:?}: invoked exactly as the prepared execution invokes it"
+        );
+    }
+}
+
+/// Run `query` with `?q` bound to `value` under `lane` against the bound-only relation —
+/// refused at prepare, on every door and as a prepared execution, invoking nothing —
+/// and against the free-capable one, whose invocations must include a FREE one: the
+/// observation that the refusal is right, and not merely strict.
+fn refused_and_free_when_served(
+    lane: ShaclPrebinding,
+    query: &str,
+    value: &TermValue,
+    context: &str,
+) {
+    let data = dataset();
+    let (env, invocations) = relations();
+    let engine = NativeSparqlEngine::new();
+    let refused = prepared(&engine, &data, &env, lane, query, value)
+        .expect_err("the rewrite leaves the call's input free");
+    assert!(
+        refused.contains("reachable only as `ff`"),
+        "{context}: the prepared execution's refusal, got {refused}"
+    );
+    for door in DOORS {
+        let engine = NativeSparqlEngine::new();
+        let substitutions = [("q".to_owned(), value.clone())];
+        let message = request(&engine, &data, &env, door, lane, query, &substitutions)
+            .expect_err("the rewrite leaves the call's input free");
+        assert!(
+            message.contains("no feasible evaluation order")
+                && message.contains("reachable only as `ff`"),
+            "{context} via {door:?}: refused for the free input, got {message}"
+        );
+    }
+    assert_eq!(
+        drain(&invocations),
+        Vec::<Invocation>::new(),
+        "{context}: a refused request invokes nothing"
+    );
+
+    let (env, invocations) = relations_declaring(&["bf", "ff"]);
+    let engine = NativeSparqlEngine::new();
+    let substitutions = [("q".to_owned(), value.clone())];
+    request(
+        &engine,
+        &data,
+        &env,
+        Door::OptionsView,
+        lane,
+        query,
+        &substitutions,
+    )
+    .unwrap_or_else(|message| panic!("{context}: the free-capable relation runs: {message}"));
+    let seen = drain(&invocations);
+    assert!(
+        seen.contains(&("ff".to_owned(), None)),
+        "{context}: the free-capable relation is invoked FREE, which is what the refusal \
+         refuses — {seen:?}"
+    );
+}
+
+/// **A call that is a `LATERAL`'s whole right operand is admitted bound, on every door
+/// and lane, for every term kind.**
+///
+/// `?h <holds> ?v LATERAL { ?q <table> ?out }` is planned as the `LATERAL` over the
+/// call itself — the group's opening empty pattern is the identity — and that is the
+/// one right operand the rewrite writes a substitution into. It used to be refused as
+/// "reachable only as `ff`" while a relation serving both modes was invoked `bf` with
+/// the substituted value on every run. Each of the twelve left rows is answered with
+/// the substituted value's rows, and the same query against the free-capable relation
+/// is invoked bound only.
+#[test]
+fn a_call_a_lateral_drives_is_admitted_bound() {
+    let (env, invocations) = relations();
+    let query = format!(
+        "SELECT ?q ?out WHERE {{ {} LATERAL {{ ?q <{REL}> ?out }} }}",
+        holds()
+    );
+    let twice = format!(
+        "SELECT ?q ?out WHERE {{ {} LATERAL {{ LATERAL {{ ?q <{REL}> ?out }} }} }}",
+        holds()
+    );
+    for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+        for kind in KINDS {
+            for name in NAMES {
+                let value = kind.term(name);
+                let expected: Vec<Vec<Option<TermValue>>> = (0..HELD)
+                    .flat_map(|_| {
+                        (1..=rows_for(name))
+                            .map(|n| vec![Some(value.clone()), Some(kind.output(name, n))])
+                    })
+                    .collect();
+                for text in [&query, &twice] {
+                    let context = format!("{lane:?} {text} ?q = {}:{name}", kind.tag());
+                    admitted_bound_everywhere(
+                        &env,
+                        &invocations,
+                        lane,
+                        text,
+                        &value,
+                        &expected,
+                        &context,
+                    );
+
+                    let (free_env, free_invocations) = relations_declaring(&["bf", "ff"]);
+                    let substitutions = [("q".to_owned(), value.clone())];
+                    let answer = request(
+                        &NativeSparqlEngine::new(),
+                        &dataset(),
+                        &free_env,
+                        Door::OptionsView,
+                        lane,
+                        text,
+                        &substitutions,
+                    )
+                    .unwrap_or_else(|message| panic!("{context}: free-capable: {message}"));
+                    assert_eq!(answer, sorted(expected.clone()), "{context}: free-capable");
+                    let seen = drain(&free_invocations);
+                    assert!(!seen.is_empty(), "{context}: free-capable invoked");
+                    for invocation in seen {
+                        assert_eq!(
+                            invocation,
+                            ("bf".to_owned(), Some(value.clone())),
+                            "{context}: the free-capable relation is invoked bound, with \
+                             the substituted value — the proof the admission is right"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// **A right operand the rewrite does not write into stays refused.** An `OPTIONAL`'s
+/// right arm, a `MINUS`'s right arm, and a `LATERAL` whose right group holds an atom
+/// beside the call: the ordinary rewrite leaves the call's input free in each, so the
+/// bound-only relation is refused, and the free-capable one is observed invoked free.
+#[test]
+fn a_right_operand_the_rewrite_does_not_reach_stays_refused() {
+    let held = holds();
+    let call = format!("?q <{REL}> ?out");
+    let shapes = [
+        format!("SELECT ?q ?out WHERE {{ {held} OPTIONAL {{ {call} }} }}"),
+        format!("SELECT ?q ?out WHERE {{ {held} MINUS {{ {call} }} }}"),
+        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ ?h2 <{EX}holds> ?v2 . {call} }} }}"),
+    ];
+    for query in &shapes {
+        for kind in KINDS {
+            let value = kind.term("alpha");
+            let context = format!("{query} ?q = {}:alpha", kind.tag());
+            refused_and_free_when_served(ShaclPrebinding::None, query, &value, &context);
+        }
+    }
+}
+
+/// **A `BIND` reading a promised parameter binds its target where the rewrite hands
+/// the `BIND` the value.**
+///
+/// Under the SHACL pre-binding rewrite the value reaches every expression — written as
+/// a constant, or, for a blank node or a quoted triple, driven into the `BIND`'s
+/// operand — so `BIND(?q AS ?x) ?x <table> ?out` feeds the call bound and is admitted.
+/// It used to be refused while a free-capable relation was invoked `bf`. Under the
+/// ordinary rewrite the same text is still refused — the `BIND` sits beside the seed,
+/// not above it — and the free-capable relation is observed invoked free there. A
+/// `BIND` ABOVE the core, which the seed is joined beneath, reads the value under the
+/// ordinary rewrite too, and feeds a call in the `EXISTS` filtering its rows.
+#[test]
+fn a_bind_of_a_promised_parameter_feeds_the_call() {
+    let (env, invocations) = relations();
+    let alias = format!("SELECT ?x ?out WHERE {{ BIND(?q AS ?x) ?x <{REL}> ?out }}");
+    let above_core = format!(
+        "SELECT ?x WHERE {{ {} BIND(?q AS ?x) FILTER EXISTS {{ ?x <{REL}> ?out }} }}",
+        holds()
+    );
+    for kind in KINDS {
+        for name in NAMES {
+            let value = kind.term(name);
+            let expected: Vec<Vec<Option<TermValue>>> = (1..=rows_for(name))
+                .map(|n| vec![Some(value.clone()), Some(kind.output(name, n))])
+                .collect();
+            let context = format!("{alias} ?q = {}:{name}", kind.tag());
+            admitted_bound_everywhere(
+                &env,
+                &invocations,
+                ShaclPrebinding::Applied,
+                &alias,
+                &value,
+                &expected,
+                &context,
+            );
+
+            let (free_env, free_invocations) = relations_declaring(&["bf", "ff"]);
+            let substitutions = [("q".to_owned(), value.clone())];
+            let answer = request(
+                &NativeSparqlEngine::new(),
+                &dataset(),
+                &free_env,
+                Door::OptionsView,
+                ShaclPrebinding::Applied,
+                &alias,
+                &substitutions,
+            )
+            .unwrap_or_else(|message| panic!("{context}: free-capable: {message}"));
+            assert_eq!(answer, sorted(expected), "{context}: free-capable");
+            for invocation in drain(&free_invocations) {
+                assert_eq!(
+                    invocation,
+                    ("bf".to_owned(), Some(value.clone())),
+                    "{context}: the free-capable relation is invoked bound"
+                );
+            }
+
+            let passing: Vec<Vec<Option<TermValue>>> = if rows_for(name) == 0 {
+                Vec::new()
+            } else {
+                (0..HELD).map(|_| vec![Some(value.clone())]).collect()
+            };
+            let context = format!("{above_core} ?q = {}:{name}", kind.tag());
+            for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+                admitted_bound_everywhere(
+                    &env,
+                    &invocations,
+                    lane,
+                    &above_core,
+                    &value,
+                    &passing,
+                    &format!("{lane:?} {context}"),
+                );
+            }
+        }
+        let context = format!("ordinary {alias} ?q = {}:alpha", kind.tag());
+        refused_and_free_when_served(ShaclPrebinding::None, &alias, &kind.term("alpha"), &context);
+    }
+}
+
+/// **A `BIND` the promise does not make certain stays refused, and one that errors on
+/// the substituted value is refused per row — never invoked free.**
+///
+/// `BIND(?w AS ?x)` over an `OPTIONAL`'s variable is unbound wherever the `OPTIONAL`
+/// did not match — here, everywhere — so the call's input is free under either rewrite:
+/// refused, with the free-capable relation observed invoked free. `BIND(?q + 1 AS ?x)`
+/// reads only the promised parameter, so it is admitted; the addition errors on every
+/// value of every kind, leaving `?x` unbound in that row, and the evaluator refuses the
+/// row's free invocation with a typed error rather than invoking the bound-only
+/// relation free.
+#[test]
+fn a_bind_the_promise_does_not_make_certain_is_refused() {
+    let optional_only = format!(
+        "SELECT ?x ?out WHERE {{ {} OPTIONAL {{ ?h <{EX}absent> ?w }} BIND(?w AS ?x) \
+         ?x <{REL}> ?out }}",
+        holds()
+    );
+    let erroring = format!("SELECT ?x ?out WHERE {{ BIND(?q + 1 AS ?x) ?x <{REL}> ?out }}");
+    let data = dataset();
+    for kind in KINDS {
+        let value = kind.term("alpha");
+        for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+            let context = format!("{lane:?} {optional_only} ?q = {}:alpha", kind.tag());
+            refused_and_free_when_served(lane, &optional_only, &value, &context);
+        }
+
+        let (env, invocations) = relations();
+        let context = format!("{erroring} ?q = {}:alpha", kind.tag());
+        let engine = NativeSparqlEngine::new();
+        let message = prepared(
+            &engine,
+            &data,
+            &env,
+            ShaclPrebinding::Applied,
+            &erroring,
+            &value,
+        )
+        .expect_err("the row's input is unbound, so its invocation is refused");
+        assert!(
+            message.contains("cannot serve the invocation `ff`"),
+            "{context}: the per-row refusal, got {message}"
+        );
+        for door in DOORS {
+            let engine = NativeSparqlEngine::new();
+            let substitutions = [("q".to_owned(), value.clone())];
+            let message = request(
+                &engine,
+                &data,
+                &env,
+                door,
+                ShaclPrebinding::Applied,
+                &erroring,
+                &substitutions,
+            )
+            .expect_err("the row's input is unbound, so its invocation is refused");
+            assert!(
+                message.contains("cannot serve the invocation `ff`"),
+                "{context} via {door:?}: the per-row refusal, got {message}"
+            );
+        }
+        assert_eq!(
+            drain(&invocations),
+            Vec::<Invocation>::new(),
+            "{context}: the bound-only relation is never invoked free"
+        );
     }
 }

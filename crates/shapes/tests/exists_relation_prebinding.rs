@@ -23,6 +23,12 @@
 //! subject is one of them and none otherwise. It records every invocation with the
 //! exact term it was handed, and a free one as free.
 //!
+//! The same holds for a `BIND` or a `FILTER` that reads `$this` beneath the `VALUES`
+//! seed — `BIND($this AS ?x) ?x <rel> ?why` — which reads a value with no expression
+//! form only once it is driven into the node: without that, a blank or quoted focus
+//! node reached the relation FREE and was reported under every approved node's
+//! verdict, and a bound-only relation was refused at prepare for every kind.
+//!
 //! Every run is then held to the exact report — which focus nodes violate, each by the
 //! dataset's own id for it, so a blank focus node reported under the other blank
 //! node's verdict fails — and to the relation's invocations: bound every time, each
@@ -330,4 +336,53 @@ fn exists_over_a_free_capable_relation() {
 fn not_exists_with_the_call_after_an_atom() {
     check(&not_exists_after_atom(), Reports::Unapproved, &["bf"]);
     check(&not_exists_after_atom(), Reports::Unapproved, &["bf", "ff"]);
+}
+
+/// A `BIND` reading `$this`, feeding the call: the value reaches the call through the
+/// `BIND`, beneath the `VALUES` seed rather than above it.
+fn bind_alias() -> String {
+    format!("SELECT $this WHERE {{ BIND($this AS ?x) ?x <{REL_IRI}> ?why }}")
+}
+
+/// The same `BIND` inside an `EXISTS` body.
+fn exists_bind_alias() -> String {
+    format!("SELECT $this WHERE {{ FILTER EXISTS {{ BIND($this AS ?x) ?x <{REL_IRI}> ?why }} }}")
+}
+
+/// A `FILTER` reading `$this` in a nested group, beneath the seed, selecting the node
+/// that reaches the call.
+fn filter_beneath_the_seed() -> String {
+    format!(
+        "SELECT $this WHERE {{ {{ ?holder <{EX}mark> ?m FILTER(sameTerm(?m, $this)) }} \
+           ?m <{REL_IRI}> ?why }}"
+    )
+}
+
+/// **A `BIND` of `$this` feeds the call bound, for every kind of focus node, over a
+/// bound-only relation.** The planner admits it because the pre-binding rewrite hands
+/// the `BIND` its value — a constant for an IRI or a literal, a driven value for a
+/// blank node or a quoted triple — and every focus node reaches the relation as itself.
+/// It used to be refused at prepare as "reachable only as `ff`".
+#[test]
+fn a_bind_of_this_over_a_bound_only_relation() {
+    check(&bind_alias(), Reports::Approved, &["bf"]);
+    check(&exists_bind_alias(), Reports::Approved, &["bf"]);
+}
+
+/// **The same over a relation that also serves the free mode**: a blank or quoted
+/// focus node the `BIND` read as unbound would invoke the relation free, approving
+/// every node — which is what this used to report for them, while an IRI focus node
+/// reported only its own verdict.
+#[test]
+fn a_bind_of_this_over_a_free_capable_relation() {
+    check(&bind_alias(), Reports::Approved, &["bf", "ff"]);
+    check(&exists_bind_alias(), Reports::Approved, &["bf", "ff"]);
+}
+
+/// **A `FILTER` beneath the seed reads a blank or quoted `$this` as itself**, so it
+/// selects exactly the focus node's own mark, under both relations.
+#[test]
+fn a_filter_of_this_beneath_the_seed() {
+    check(&filter_beneath_the_seed(), Reports::Approved, &["bf"]);
+    check(&filter_beneath_the_seed(), Reports::Approved, &["bf", "ff"]);
 }

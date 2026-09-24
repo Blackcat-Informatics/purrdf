@@ -36,7 +36,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     BindingPattern, EvalError, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, QueryOptions, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, Volatility,
 };
 
 /// The relation IRI every query calls — host configuration, never minted
@@ -217,6 +217,27 @@ fn run_relation(
     invocations: &Mutex<Vec<String>>,
     body: &str,
 ) -> Outcome {
+    run_relation_with(
+        data,
+        iri,
+        relation,
+        invocations,
+        body,
+        &[],
+        ShaclPrebinding::None,
+    )
+}
+
+/// [`run_relation`], with `substitutions` bound under `lane`.
+fn run_relation_with(
+    data: &RdfDataset,
+    iri: &str,
+    relation: Arc<dyn PropertyFunction>,
+    invocations: &Mutex<Vec<String>>,
+    body: &str,
+    substitutions: &[(String, TermValue)],
+    lane: ShaclPrebinding,
+) -> Outcome {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(iri.to_owned(), relation);
     let env = ExtensionEnv::over_relations(registry).expect("the fixture declarations read");
@@ -227,10 +248,11 @@ fn run_relation(
             SparqlRequest {
                 query: &query,
                 base_iri: None,
-                substitutions: &[],
+                substitutions,
             },
             QueryOptions {
                 env: &env,
+                prebinding: lane,
                 ..QueryOptions::EMPTY
             },
         )
@@ -950,6 +972,9 @@ const PAIR_TABLE: &[(&str, &str)] = &[
 /// the rest of the query afterwards — SPARQL's bottom-up answer.
 struct Pairs {
     modes: Vec<BindingPattern>,
+    /// Answer the whole table whatever the input, leaving the engine to join the rows
+    /// with the call's bound arguments afterwards — the bottom-up reference.
+    ignores_input: bool,
     invocations: Arc<Mutex<Vec<String>>>,
 }
 
@@ -995,7 +1020,7 @@ impl PropertyFunction for Pairs {
             ));
         let mut rows: Vec<PfRow> = Vec::new();
         for &(input, output) in PAIR_TABLE {
-            if key.as_deref().is_none_or(|key| key == input) {
+            if self.ignores_input || key.as_deref().is_none_or(|key| key == input) {
                 rows.push(vec![simple_literal(input), simple_literal(output)]);
             }
         }
@@ -1011,6 +1036,7 @@ fn run_pairs(modes: &[&str], body: &str) -> Outcome {
             .iter()
             .map(|code| BindingPattern::from_code(code))
             .collect(),
+        ignores_input: false,
         invocations: Arc::clone(&invocations),
     };
     run_relation(
@@ -1019,6 +1045,35 @@ fn run_pairs(modes: &[&str], body: &str) -> Outcome {
         Arc::new(relation),
         &invocations,
         body,
+    )
+}
+
+/// Run `body` against [`Pairs`] declaring `modes` — or, with `ignores_input`, against
+/// the bottom-up reference — with `substitutions` bound under `lane`.
+fn run_pairs_with(
+    modes: &[&str],
+    ignores_input: bool,
+    body: &str,
+    substitutions: &[(String, TermValue)],
+    lane: ShaclPrebinding,
+) -> Outcome {
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let relation = Pairs {
+        modes: modes
+            .iter()
+            .map(|code| BindingPattern::from_code(code))
+            .collect(),
+        ignores_input,
+        invocations: Arc::clone(&invocations),
+    };
+    run_relation_with(
+        &lateral_dataset(),
+        PAIRS,
+        Arc::new(relation),
+        &invocations,
+        body,
+        substitutions,
+        lane,
     )
 }
 
@@ -1106,6 +1161,242 @@ fn newly_admitted_lateral_shapes_answer_the_bottom_up_join() {
                     .iter()
                     .all(|invocation| invocation.starts_with("bf:")),
                 "{full} declaring {modes:?} invokes the relation bound only: {:?}",
+                outcome.invocations
+            );
+        }
+    }
+}
+
+// ── aggregates ───────────────────────────────────────────────────────────────
+
+/// **`SAMPLE`, `MIN` and `MAX` of a variable every row binds, under a `GROUP BY`, feed
+/// the call.** A group a `GROUP BY` produces holds at least one row, and each of the
+/// three answers a value over a non-empty list — so the output is bound on every group
+/// row, and a bound-only relation fed by it is admitted and invoked bound. It used to
+/// be refused as though every aggregate's output could be unbound. The free-capable
+/// variant answers the same, invoked bound.
+#[test]
+fn an_aggregate_over_a_group_by_feeds_the_call() {
+    let call = format!("?q <{EXPAND}> ?out");
+    for aggregate in ["SAMPLE", "MIN", "MAX"] {
+        let body = format!(
+            "{{ SELECT ?s ({aggregate}(?v) AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
+        );
+        let expected = Outcome {
+            answer: Ok(rows(&[("beta", "beta/1")])),
+            invocations: calls(&["bf:beta"]),
+        };
+        assert_eq!(run(Variant::BoundOnly, &body), expected, "{body}");
+        assert_eq!(run(Variant::FreeCapable, &body), expected, "{body}");
+    }
+    // The shape a correlated per-group lookup takes: a `LATERAL` sub-`SELECT` picks one
+    // value per group, and a second `LATERAL` sub-`SELECT` hands it to the call.
+    let lateral = format!(
+        "?a <{EX}p> ?w LATERAL {{ SELECT ?y (SAMPLE(?nn) AS ?q) WHERE {{ ?y <{EX}p> ?nn }} \
+         GROUP BY ?y }} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} }}"
+    );
+    let expected = Outcome {
+        answer: Ok(rows(&[("beta", "beta/1")])),
+        invocations: calls(&["bf:beta"]),
+    };
+    assert_eq!(run(Variant::BoundOnly, &lateral), expected, "{lateral}");
+    assert_eq!(run(Variant::FreeCapable, &lateral), expected, "{lateral}");
+}
+
+/// **Without a `GROUP BY`, `SAMPLE`, `MIN` and `MAX` are not a source, and `COUNT` is.**
+/// An aggregate with no `GROUP BY` answers one row even over an empty input, where
+/// the first three are unbound: over `?s <nothing> ?v`, which matches nothing, the
+/// free-capable variant is invoked FREE — the observation the refusal rests on. `COUNT`
+/// answers `0` there, bound, so it feeds the call.
+#[test]
+fn an_aggregate_without_group_by_over_a_possibly_empty_input() {
+    let call = format!("?q <{EXPAND}> ?out");
+    for aggregate in ["SAMPLE", "MIN", "MAX"] {
+        let body =
+            format!("{{ SELECT ({aggregate}(?v) AS ?q) WHERE {{ ?s <{EX}nothing> ?v }} }} {call}");
+        assert_refused_at_prepare(&run(Variant::BoundOnly, &body));
+        assert_eq!(
+            run(Variant::FreeCapable, &body),
+            Outcome {
+                answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
+                invocations: calls(&["ff:-"]),
+            },
+            "{body}: the one implicit group's {aggregate} is unbound"
+        );
+    }
+    let body = format!("{{ SELECT (COUNT(?v) AS ?q) WHERE {{ ?s <{EX}nothing> ?v }} }} {call}");
+    let expected = Outcome {
+        answer: Ok(rows(&[("0", "0/1")])),
+        invocations: calls(&["bf:0"]),
+    };
+    assert_eq!(run(Variant::BoundOnly, &body), expected, "{body}");
+    assert_eq!(run(Variant::FreeCapable, &body), expected, "{body}");
+}
+
+/// **An aggregate that can answer unbound over a non-empty group is not a source, and
+/// neither is a grouping key some row leaves unbound.**
+///
+/// `SUM` of a string poisons to unbound; `GROUP_CONCAT` of a blank node does (it has no
+/// lexical form); `GROUP BY ?q` over an `OPTIONAL` that matched nothing forms a group
+/// whose key is unbound. Each is refused for the bound-only relation, and the
+/// free-capable variant is observed invoked free on exactly those rows.
+#[test]
+fn an_aggregate_or_key_that_can_be_unbound_is_not_a_source() {
+    let call = format!("?q <{EXPAND}> ?out");
+    let free = Outcome {
+        answer: Ok(rows(&[(&format!("{EX}{FREE_ROW}"), FREE_ROW)])),
+        invocations: calls(&["ff:-"]),
+    };
+    let sum =
+        format!("{{ SELECT ?s (SUM(?v) AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}");
+    let key = format!(
+        "{{ SELECT ?q WHERE {{ ?s <{EX}p> ?v OPTIONAL {{ ?s <{EX}nothing> ?q }} }} \
+         GROUP BY ?q }} {call}"
+    );
+    for body in [&sum, &key] {
+        assert_refused_at_prepare(&run(Variant::BoundOnly, body));
+        assert_eq!(run(Variant::FreeCapable, body), free, "{body}");
+    }
+
+    let blank_data = {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let b = builder.intern_blank("b0", purrdf_core::BlankScope::DEFAULT);
+        builder.push_quad(s, p, b, None);
+        builder.freeze().expect("the fixture must validate")
+    };
+    let concat = format!(
+        "{{ SELECT ?s (GROUP_CONCAT(?v) AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
+    );
+    assert_refused_at_prepare(&run_over(&blank_data, Variant::BoundOnly, &concat));
+    assert_eq!(
+        run_over(&blank_data, Variant::FreeCapable, &concat),
+        free,
+        "{concat}"
+    );
+}
+
+/// One differential case: the query body, its substitutions, the rewrite they are
+/// bound under, and the exact answer.
+type Shape = (
+    String,
+    Vec<(String, TermValue)>,
+    ShaclPrebinding,
+    Vec<(String, String)>,
+);
+
+/// Every shape this change newly admits answers, with its input bound, exactly what
+/// SPARQL's bottom-up evaluation answers — the relation's whole table joined with the
+/// rest of the query afterwards ([`Pairs`] built to ignore its input) — and exactly the
+/// rows listed, for a relation serving only `bf` and for one serving both, invoked
+/// bound only.
+#[test]
+fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
+    let call = format!("?q <{PAIRS}> ?out");
+    let alpha = || vec![("q".to_owned(), simple_literal("alpha"))];
+    let none = Vec::new;
+    let each_left_row = |out: &[&str]| -> Vec<(String, String)> {
+        let mut expected: Vec<(String, String)> = (0..3)
+            .flat_map(|_| out.iter().map(|&out| ("alpha".to_owned(), out.to_owned())))
+            .collect();
+        expected.sort();
+        expected
+    };
+    let shapes: Vec<Shape> = vec![
+        (
+            format!("?s <{EX}p> ?v LATERAL {{ {call} }}"),
+            alpha(),
+            ShaclPrebinding::None,
+            each_left_row(&["alpha/1", "alpha/2"]),
+        ),
+        (
+            format!("?s <{EX}p> ?v LATERAL {{ {call} }}"),
+            alpha(),
+            ShaclPrebinding::Applied,
+            each_left_row(&["alpha/1", "alpha/2"]),
+        ),
+        (
+            format!("?s <{EX}p> ?v LATERAL {{ LATERAL {{ {call} }} }}"),
+            alpha(),
+            ShaclPrebinding::None,
+            each_left_row(&["alpha/1", "alpha/2"]),
+        ),
+        (
+            format!("BIND(?q AS ?x) ?x <{PAIRS}> ?out"),
+            alpha(),
+            ShaclPrebinding::Applied,
+            rows(&[("alpha", "alpha/1"), ("alpha", "alpha/2")]),
+        ),
+        (
+            format!("?s <{EX}p> ?v BIND(?q AS ?x) FILTER EXISTS {{ ?x <{PAIRS}> ?out }}"),
+            alpha(),
+            ShaclPrebinding::None,
+            each_left_row(&["UNBOUND"]),
+        ),
+        (
+            format!(
+                "{{ SELECT ?s (SAMPLE(?v) AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"
+            ),
+            none(),
+            ShaclPrebinding::None,
+            rows(&[
+                ("alpha", "alpha/1"),
+                ("alpha", "alpha/2"),
+                ("beta", "beta/1"),
+            ]),
+        ),
+        (
+            format!("{{ SELECT (MIN(?v) AS ?q) WHERE {{ ?s <{EX}p> ?v }} GROUP BY ?s }} {call}"),
+            none(),
+            ShaclPrebinding::None,
+            rows(&[
+                ("alpha", "alpha/1"),
+                ("alpha", "alpha/2"),
+                ("beta", "beta/1"),
+            ]),
+        ),
+        (
+            format!(
+                "?a <{EX}p> ?w LATERAL {{ SELECT ?y (MAX(?nn) AS ?q) WHERE {{ ?y <{EX}p> ?nn }} \
+                 GROUP BY ?y }} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} }}"
+            ),
+            none(),
+            ShaclPrebinding::None,
+            rows(&[
+                ("alpha", "alpha/1"),
+                ("alpha", "alpha/1"),
+                ("alpha", "alpha/1"),
+                ("alpha", "alpha/2"),
+                ("alpha", "alpha/2"),
+                ("alpha", "alpha/2"),
+                ("beta", "beta/1"),
+                ("beta", "beta/1"),
+                ("beta", "beta/1"),
+            ]),
+        ),
+    ];
+    for (body, substitutions, lane, expected) in &shapes {
+        let reference = run_pairs_with(&["ff"], true, body, substitutions, *lane);
+        assert_eq!(
+            reference.answer.as_ref(),
+            Ok(expected),
+            "{body} under {lane:?}: the bottom-up reference"
+        );
+        for modes in [&["bf"][..], &["bf", "ff"][..]] {
+            let outcome = run_pairs_with(modes, false, body, substitutions, *lane);
+            assert_eq!(
+                outcome.answer.as_ref(),
+                Ok(expected),
+                "{body} under {lane:?} declaring {modes:?} answers the bottom-up join"
+            );
+            assert!(
+                !outcome.invocations.is_empty()
+                    && outcome
+                        .invocations
+                        .iter()
+                        .all(|invocation| invocation.starts_with("bf:")),
+                "{body} under {lane:?} declaring {modes:?} invokes the relation bound only: {:?}",
                 outcome.invocations
             );
         }
