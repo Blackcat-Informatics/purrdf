@@ -3251,6 +3251,15 @@ pub type ImportList<'a> = [(&'a str, &'a str)];
 /// The list is REQUIRED on every service that takes one, and the empty list is the ordinary
 /// "imports nothing" case — not a default standing in for an argument the caller forgot.
 ///
+/// Beside it, each service takes `premise_iris`: the IRIs the premise DOCUMENT was read from
+/// (its retrieval IRI, or the base it was parsed under), which a host that read it from a
+/// file knows and a host handed bare N-Quads text does not — the empty slice. An
+/// `owl:imports` of one of these names the premise itself, so it is resolved in place
+/// ([`purrdf_entail::ImportMap::declare_loaded`]) rather than refused as missing. So is an
+/// import of an ontology the premise already declares (`<X> a owl:Ontology`, or an
+/// `owl:versionIRI` naming it), with no argument needed:
+/// `purrdf_entail::entails::imports::unresolved_imports` is the one rule.
+///
 /// # Errors
 ///
 /// A document that is not N-Quads; an entry with an empty ontology IRI, which no
@@ -3291,9 +3300,16 @@ fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, String> {
 /// read, has no question to ask yet: which of the caller's DOCUMENTS is also malformed is
 /// not yet a meaningful thing to report. `the_three_services_agree_on_error_precedence`
 /// drives all three with the same doubly-bad input and holds them to it.
-fn configuration(regime: &str, imports: &ImportList<'_>) -> Result<(Regime, ImportMap), String> {
+fn configuration(
+    regime: &str,
+    imports: &ImportList<'_>,
+    premise_iris: &[&str],
+) -> Result<(Regime, ImportMap), String> {
     let parsed = parse_regime(regime)?;
-    let map = build_import_map(imports)?;
+    let mut map = build_import_map(imports)?;
+    for iri in premise_iris {
+        map.declare_loaded(*iri);
+    }
     Ok((parsed, map))
 }
 
@@ -3403,7 +3419,7 @@ fn parse_premise(document: &str) -> Result<std::sync::Arc<purrdf_core::RdfDatase
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
 /// let pattern = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
-/// let answers = certain_answers_to_string("owl-rl", data, pattern, &[]).expect("answers");
+/// let answers = certain_answers_to_string("owl-rl", data, pattern, &[], &[]).expect("answers");
 /// assert!(answers.answer().starts_with("mechanism strict-table\nvar c\n"));
 /// // `?c` ranges over the ENTAILED types, not the asserted one.
 /// assert!(answers.answer().contains("\nrow <http://example.org/Animal>\n"));
@@ -3416,7 +3432,7 @@ fn parse_premise(document: &str) -> Result<std::sync::Arc<purrdf_core::RdfDatase
 /// // The SAME call with nothing to project is an entailment question, and answers as one.
 /// let ground = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .\n";
-/// let asked = certain_answers_to_string("owl-rl", data, ground, &[]).expect("answers");
+/// let asked = certain_answers_to_string("owl-rl", data, ground, &[], &[]).expect("answers");
 /// assert_eq!(asked.answer(), "mechanism strict-table\nrow\n");
 ///
 /// // A premise that IMPORTS its schema answers from the imports closure, with its
@@ -3428,7 +3444,7 @@ fn parse_premise(document: &str) -> Result<std::sync::Arc<purrdf_core::RdfDatase
 /// let schema = "<http://example.org/Cat> \
 ///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
 /// let closed = certain_answers_to_string(
-///     "owl-rl", importing, pattern, &[("http://example.org/schema", schema)],
+///     "owl-rl", importing, pattern, &[("http://example.org/schema", schema)], &[],
 /// ).expect("answers");
 /// assert!(closed.answer().contains("\nrow <http://example.org/Animal>\n"));
 /// ```
@@ -3437,8 +3453,9 @@ pub fn certain_answers_to_string(
     document: &str,
     pattern: &str,
     imports: &ImportList<'_>,
+    premise_iris: &[&str],
 ) -> Result<ReasoningAnswer, String> {
-    let (parsed, map) = configuration(regime, imports)?;
+    let (parsed, map) = configuration(regime, imports, premise_iris)?;
     let bgp = parse_bgp(pattern)?;
     let premise = parse_premise(document)?;
     let answers = purrdf_entail::certain_answers(&premise, &bgp, parsed, &map)
@@ -3524,7 +3541,7 @@ pub fn certain_answers_to_string(
 ///     <http://example.org/x> <http://example.org/p> <http://example.org/y> .\n\
 ///     <http://example.org/y> <http://example.org/p> <http://example.org/z> .\n";
 /// let conclusion = "<http://example.org/x> <http://example.org/p> <http://example.org/z> .\n";
-/// let decided = graph_entails_to_string("owl-rl", premise, conclusion, &[]).expect("decides");
+/// let decided = graph_entails_to_string("owl-rl", premise, conclusion, &[], &[]).expect("decides");
 /// // `prp-trp` derives it, so the rule table itself answers.
 /// assert!(decided.answer().starts_with("mechanism strict-table\nentailment entailed\n"));
 /// assert!(decided.certificate().contains("\nfired prp-trp "));
@@ -3534,8 +3551,9 @@ pub fn graph_entails_to_string(
     premise: &str,
     conclusion: &str,
     imports: &ImportList<'_>,
+    premise_iris: &[&str],
 ) -> Result<ReasoningAnswer, String> {
-    let (parsed, map) = configuration(regime, imports)?;
+    let (parsed, map) = configuration(regime, imports, premise_iris)?;
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
     let parsed_premise = parse_premise(premise)?;
@@ -3622,7 +3640,7 @@ fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
 /// let conclusion = "<http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n";
 /// let checked =
-///     verify_entailment_to_string("owl-rl", premise, conclusion, &[]).expect("decides");
+///     verify_entailment_to_string("owl-rl", premise, conclusion, &[], &[]).expect("decides");
 /// assert!(checked.answer().contains("\nwarrant present\n"));
 /// assert!(checked.answer().ends_with("verified true\n"));
 ///
@@ -3630,7 +3648,7 @@ fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
 /// // reporting a check that failed.
 /// let never = "<http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";
-/// let missing = verify_entailment_to_string("owl-rl", premise, never, &[]).expect("decides");
+/// let missing = verify_entailment_to_string("owl-rl", premise, never, &[], &[]).expect("decides");
 /// assert!(missing.answer().contains("\nwarrant absent\n"));
 /// assert!(missing.answer().ends_with("verified not-applicable\n"));
 /// ```
@@ -3639,8 +3657,9 @@ pub fn verify_entailment_to_string(
     premise: &str,
     conclusion: &str,
     imports: &ImportList<'_>,
+    premise_iris: &[&str],
 ) -> Result<ReasoningAnswer, String> {
-    let (parsed, map) = configuration(regime, imports)?;
+    let (parsed, map) = configuration(regime, imports, premise_iris)?;
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
     let parsed_premise = parse_premise(premise)?;
@@ -6081,7 +6100,8 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     fn a_declined_lane_renders_a_limit_line_naming_itself() {
         let pattern = "?x <http://www.w3.org/2002/07/owl#differentFrom> \
 <http://example.org/Peter> .\n";
-        let answers = certain_answers_to_string("owl-rl", DISJOINT, pattern, &[]).expect("answers");
+        let answers =
+            certain_answers_to_string("owl-rl", DISJOINT, pattern, &[], &[]).expect("answers");
         assert!(
             answers
                 .answer()
@@ -6116,8 +6136,10 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     fn nothing_to_project_answers_as_the_entailment_question_it_is() {
         let ground = "<http://example.org/Stewie> \
 <http://www.w3.org/2002/07/owl#differentFrom> <http://example.org/Peter> .\n";
-        let answers = certain_answers_to_string("owl-rl", DISJOINT, ground, &[]).expect("answers");
-        let decided = graph_entails_to_string("owl-rl", DISJOINT, ground, &[]).expect("decides");
+        let answers =
+            certain_answers_to_string("owl-rl", DISJOINT, ground, &[], &[]).expect("answers");
+        let decided =
+            graph_entails_to_string("owl-rl", DISJOINT, ground, &[], &[]).expect("decides");
         assert_eq!(answers.answer(), "mechanism refutation\nrow\n");
         assert_eq!(
             decided.answer(),
@@ -6130,9 +6152,11 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         // A ground question the table REFUTES is the empty relation, and exhaustively so.
         let never = "<http://example.org/Stewie> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Girl> .\n";
-        let missing = certain_answers_to_string("owl-rl", DISJOINT, never, &[]).expect("answers");
+        let missing =
+            certain_answers_to_string("owl-rl", DISJOINT, never, &[], &[]).expect("answers");
         assert_eq!(missing.answer(), "mechanism strict-table\n");
-        let refuted = graph_entails_to_string("owl-rl", DISJOINT, never, &[]).expect("decides");
+        let refuted =
+            graph_entails_to_string("owl-rl", DISJOINT, never, &[], &[]).expect("decides");
         assert!(refuted.answer().contains("\nentailment not-entailed\n"));
     }
 
@@ -6196,7 +6220,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             ),
         ] {
             let answers =
-                certain_answers_to_string("simple", ONE_TRIPLE, pattern, &[]).expect(pattern);
+                certain_answers_to_string("simple", ONE_TRIPLE, pattern, &[], &[]).expect(pattern);
             assert_eq!(answers.answer(), expected, "{pattern}");
         }
     }
@@ -6214,7 +6238,8 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
 <http://example.org/tom> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
         let pattern = "<http://example.org/tom> ?p <http://example.org/Animal> .\n";
-        let entailed = certain_answers_to_string("rdfs", premise, pattern, &[]).expect("answers");
+        let entailed =
+            certain_answers_to_string("rdfs", premise, pattern, &[], &[]).expect("answers");
         let rows: Vec<&str> = entailed
             .answer()
             .lines()
@@ -6233,7 +6258,8 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             "{}",
             entailed.answer()
         );
-        let asserted = certain_answers_to_string("simple", premise, pattern, &[]).expect("answers");
+        let asserted =
+            certain_answers_to_string("simple", premise, pattern, &[], &[]).expect("answers");
         assert_eq!(
             asserted.answer(),
             "mechanism strict-table\nvar p\n",
@@ -6257,6 +6283,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             premise,
             "<http://example.org/s> <http://example.org/p?zzz=1> ?o .\n",
             &[],
+            &[],
         )
         .expect("answers");
         assert_eq!(
@@ -6271,6 +6298,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             quoted,
             "<http://example.org/s> ?p \"is ?zzz a variable\" .\n",
             &[],
+            &[],
         )
         .expect("answers");
         assert_eq!(
@@ -6283,6 +6311,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             "simple",
             ONE_TRIPLE,
             "# is ?zzz a variable? it is prose.\n<http://example.org/s> ?p <http://example.org/o> .\n",
+            &[],
             &[],
         )
         .expect("answers");
@@ -6304,7 +6333,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         let premise = "<http://example.org/q> <http://example.org/r> \
 <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n";
         let answers =
-            certain_answers_to_string("simple", premise, "?a ?b <<( ?s ?p ?o )>> .\n", &[])
+            certain_answers_to_string("simple", premise, "?a ?b <<( ?s ?p ?o )>> .\n", &[], &[])
                 .expect("answers");
         assert_eq!(
             answers.answer(),
@@ -6335,7 +6364,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         let unsatisfiable = "<http://example.org/a> <http://example.org/p> \
 <<( <http://example.org/b> <http://example.org/q> <http://example.org/r> )>> .\n";
         let answers =
-            certain_answers_to_string("simple", unsatisfiable, pattern, &[]).expect("answers");
+            certain_answers_to_string("simple", unsatisfiable, pattern, &[], &[]).expect("answers");
         assert_eq!(
             answers.answer(),
             "mechanism strict-table\nvar x\n",
@@ -6346,7 +6375,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         let satisfiable = "<http://example.org/a> <http://example.org/p> \
 <<( <http://example.org/a> <http://example.org/q> <http://example.org/r> )>> .\n";
         let answers =
-            certain_answers_to_string("simple", satisfiable, pattern, &[]).expect("answers");
+            certain_answers_to_string("simple", satisfiable, pattern, &[], &[]).expect("answers");
         assert_eq!(
             answers.answer(),
             "mechanism strict-table\nvar x\nrow <http://example.org/a>\n",
@@ -6364,6 +6393,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
 <<( ?x <http://example.org/q> <http://example.org/r> )>> .\n\
 ?x <http://example.org/k> <http://example.org/v> .\n",
             &[],
+            &[],
         )
         .expect("answers");
         assert_eq!(
@@ -6380,6 +6410,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             unsatisfiable,
             "<http://example.org/a> <http://example.org/p> \
 <<( ?y <http://example.org/q> <http://example.org/r> )>> .\n",
+            &[],
             &[],
         )
         .expect("answers");
@@ -6444,7 +6475,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         ] {
             for spelling in spellings.map(stand_in) {
                 let written = pattern.replace("{IRI}", &spelling);
-                let answers = certain_answers_to_string("simple", premise, &written, &[])
+                let answers = certain_answers_to_string("simple", premise, &written, &[], &[])
                     .unwrap_or_else(|refusal| panic!("{written}: {refusal}"));
                 assert_eq!(answers.answer(), expected, "{written}");
             }
@@ -6469,6 +6500,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             premise,
             "<http://example.org/s> <http://example.org/p\\u003Fzzz=1> ?o .\n",
             &[],
+            &[],
         )
         .expect("answers");
         assert_eq!(
@@ -6483,6 +6515,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             quoted,
             "<http://example.org/s> ?p \"is \\u003Fzzz a variable\" .\n",
             &[],
+            &[],
         )
         .expect("answers");
         assert_eq!(
@@ -6496,6 +6529,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             ONE_TRIPLE,
             "# is \\u003Fzzz a variable? it is prose.\n\
 <http://example.org/s> ?p <http://example.org/o> .\n",
+            &[],
             &[],
         )
         .expect("answers");
@@ -6528,12 +6562,13 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         ] {
             for premise in [ONE_TRIPLE, triple_term, DISJOINT] {
                 for regime in ["simple", "rdfs", "owl-rl"] {
-                    let rendered = match certain_answers_to_string(regime, premise, pattern, &[]) {
-                        Ok(answers) => {
-                            format!("{}{}", answers.answer(), answers.certificate())
-                        }
-                        Err(refusal) => refusal,
-                    };
+                    let rendered =
+                        match certain_answers_to_string(regime, premise, pattern, &[], &[]) {
+                            Ok(answers) => {
+                                format!("{}{}", answers.answer(), answers.certificate())
+                            }
+                            Err(refusal) => refusal,
+                        };
                     assert!(
                         !rendered.contains(QUERY_VAR_IRI),
                         "{regime} / {pattern}: {rendered}"
@@ -6580,6 +6615,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             &premise,
             "?s <http://example.org/p> \"5\"^^<http://example.org/dt> .\n",
             &[],
+            &[],
         )
         .expect("answers");
         assert_eq!(
@@ -6591,6 +6627,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             "simple",
             &premise,
             &format!("?s <http://example.org/p> \"5\"^^<{QUERY_VAR_IRI}1> .\n"),
+            &[],
             &[],
         )
         .expect("answers");
@@ -6609,7 +6646,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
 <<( <http://example.org/s> <http://example.org/p> \"5\"^^?d )>> .\n",
         ] {
             for regime in ["simple", "rdfs", "owl-rl"] {
-                let refusal = match certain_answers_to_string(regime, &premise, pattern, &[]) {
+                let refusal = match certain_answers_to_string(regime, &premise, pattern, &[], &[]) {
                     Ok(answers) => panic!(
                         "{regime} / {pattern}: a variable has no datatype-IRI form, so this must \
                          be refused rather than answered: {}",
@@ -6654,9 +6691,14 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
             "<{collision}> <http://example.org/p> <http://example.org/o> .\n\
              <http://example.org/s> <http://example.org/p> <http://example.org/o> .\n"
         );
-        let answers =
-            certain_answers_to_string("simple", &premise, &format!("<{collision}> ?p ?o .\n"), &[])
-                .expect("answers");
+        let answers = certain_answers_to_string(
+            "simple",
+            &premise,
+            &format!("<{collision}> ?p ?o .\n"),
+            &[],
+            &[],
+        )
+        .expect("answers");
         assert_eq!(
             answers.answer(),
             "mechanism strict-table\nvar p\nvar o\n\
@@ -6685,7 +6727,8 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         let transitive = "<http://example.org/p> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
 <http://www.w3.org/2002/07/owl#TransitiveProperty> .\n";
-        let decided = graph_entails_to_string("owl-rl", premise, transitive, &[]).expect("decides");
+        let decided =
+            graph_entails_to_string("owl-rl", premise, transitive, &[], &[]).expect("decides");
         assert!(
             decided
                 .answer()
@@ -6694,8 +6737,8 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             decided.answer()
         );
 
-        let answers =
-            certain_answers_to_string("owl-rl", premise, "?s ?p ?o .\n", &[]).expect("answers");
+        let answers = certain_answers_to_string("owl-rl", premise, "?s ?p ?o .\n", &[], &[])
+            .expect("answers");
         assert!(
             !answers.answer().contains("owl#TransitiveProperty"),
             "the closure does not hold it: {}",
@@ -6721,6 +6764,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             premise,
             "?s <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> ?o .\n",
             &[],
+            &[],
         )
         .expect("answers");
         assert!(!closed.answer().contains("\nlimit "), "{}", closed.answer());
@@ -6734,6 +6778,39 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
 <http://www.w3.org/2002/07/owl#imports> <http://example.org/schema> .\n\
 <http://example.org/socrates> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Man> .\n";
+
+    /// A premise whose `owl:imports` names the premise DOCUMENT itself: refused when the host
+    /// cannot say where the premise came from, answered in place when it can — through all
+    /// three services, with the same verdict an import-free premise reaches.
+    #[test]
+    fn a_premise_that_imports_its_own_iri_resolves_when_the_host_names_it() {
+        const SELF: &str = "file:///premises/self.ttl";
+        let premise = "<file:///premises/self.ttl#p> \
+<http://www.w3.org/2002/07/owl#imports> <file:///premises/self.ttl> .\n\
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
+<http://example.org/B> .\n\
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+<http://example.org/A> .\n";
+        let conclusion = "<http://example.org/x> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n";
+
+        let refused = graph_entails_to_string("owl-rl", premise, conclusion, &[], &[])
+            .expect_err("an import of an unnamed document refuses");
+        assert!(refused.contains(SELF), "{refused}");
+
+        let decided = graph_entails_to_string("owl-rl", premise, conclusion, &[], &[SELF])
+            .expect("the premise's own IRI is loaded");
+        assert!(
+            decided.answer().contains("\nentailment entailed\n"),
+            "{}",
+            decided.answer()
+        );
+        verify_entailment_to_string("owl-rl", premise, conclusion, &[], &[SELF])
+            .expect("the verifier takes the same verdict");
+        let answers = certain_answers_to_string("owl-rl", premise, conclusion, &[], &[SELF])
+            .expect("certain answers take the same verdict");
+        assert!(answers.answer().ends_with("row\n"), "{}", answers.answer());
+    }
 
     /// The document `<http://example.org/schema>` denotes — supplied, never fetched.
     const IMPORTED_SCHEMA: &str = "<http://example.org/Man> \
@@ -6753,22 +6830,37 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     fn every_conclusion_directed_service_resolves_the_callers_imports() {
         let imports = [("http://example.org/schema", IMPORTED_SCHEMA)];
 
-        let answers =
-            certain_answers_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
-                .expect("answers");
+        let answers = certain_answers_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &imports,
+            &[],
+        )
+        .expect("answers");
         assert_eq!(answers.answer(), "mechanism strict-table\nrow\n");
 
-        let decided =
-            graph_entails_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
-                .expect("decides");
+        let decided = graph_entails_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &imports,
+            &[],
+        )
+        .expect("decides");
         assert_eq!(
             decided.answer(),
             "mechanism strict-table\nentailment entailed\n"
         );
 
-        let checked =
-            verify_entailment_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &imports)
-                .expect("decides");
+        let checked = verify_entailment_to_string(
+            "owl-rl",
+            IMPORTING_PREMISE,
+            IMPORTED_CONCLUSION,
+            &imports,
+            &[],
+        )
+        .expect("decides");
         assert!(checked.answer().contains("\nentailment entailed\n"));
         assert!(
             checked
@@ -6779,8 +6871,9 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         // …and the pattern-shaped question projects out of the same closure.
         let pattern = "<http://example.org/socrates> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
-        let projected = certain_answers_to_string("owl-rl", IMPORTING_PREMISE, pattern, &imports)
-            .expect("answers");
+        let projected =
+            certain_answers_to_string("owl-rl", IMPORTING_PREMISE, pattern, &imports, &[])
+                .expect("answers");
         assert!(
             projected
                 .answer()
@@ -6798,11 +6891,11 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     #[test]
     fn an_unsupplied_import_still_refuses_by_name() {
         for refusal in [
-            certain_answers_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+            certain_answers_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[], &[])
                 .expect_err("unresolved"),
-            graph_entails_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+            graph_entails_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[], &[])
                 .expect_err("unresolved"),
-            verify_entailment_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[])
+            verify_entailment_to_string("owl-rl", IMPORTING_PREMISE, IMPORTED_CONCLUSION, &[], &[])
                 .expect_err("unresolved"),
             // …and a list that resolves a DIFFERENT ontology is the same absence.
             graph_entails_to_string(
@@ -6810,6 +6903,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
                 IMPORTING_PREMISE,
                 IMPORTED_CONCLUSION,
                 &[("http://example.org/other", IMPORTED_SCHEMA)],
+                &[],
             )
             .expect_err("unresolved"),
         ] {
@@ -6829,6 +6923,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             IMPORTING_PREMISE,
             IMPORTED_CONCLUSION,
             &[("http://example.org/schema", "this is not n-quads\n")],
+            &[],
         )
         .expect_err("a document that is not N-Quads");
         assert!(
@@ -6844,6 +6939,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
                 ("http://example.org/schema", IMPORTED_SCHEMA),
                 ("http://example.org/schema", ""),
             ],
+            &[],
         )
         .expect_err("one ontology IRI declared twice");
         assert!(
@@ -6856,6 +6952,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             IMPORTING_PREMISE,
             IMPORTED_CONCLUSION,
             &[("", IMPORTED_SCHEMA)],
+            &[],
         )
         .expect_err("the empty ontology IRI");
         assert!(nameless.contains("empty ontology IRI"), "{nameless}");
@@ -6917,11 +7014,11 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         ];
 
         for (regime, premise, second, imports, expected) in cases {
-            let answers = certain_answers_to_string(regime, premise, second, imports)
+            let answers = certain_answers_to_string(regime, premise, second, imports, &[])
                 .expect_err("doubly-bad input");
-            let entails = graph_entails_to_string(regime, premise, second, imports)
+            let entails = graph_entails_to_string(regime, premise, second, imports, &[])
                 .expect_err("doubly-bad input");
-            let verified = verify_entailment_to_string(regime, premise, second, imports)
+            let verified = verify_entailment_to_string(regime, premise, second, imports, &[])
                 .expect_err("doubly-bad input");
             for (service, refusal) in [
                 ("certain_answers_to_string", &answers),
@@ -6954,6 +7051,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
                 ("http://example.org/schema", first),
                 ("http://example.org/upper", upper),
             ],
+            &[],
         )
         .expect("decides");
         assert!(decided.answer().contains("\nentailment entailed\n"));
@@ -6965,6 +7063,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             IMPORTING_PREMISE,
             IMPORTED_CONCLUSION,
             &[("http://example.org/schema", first)],
+            &[],
         )
         .expect_err("the second hop is unresolved");
         assert!(refusal.contains("<http://example.org/upper>"), "{refusal}");
@@ -7131,8 +7230,14 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         // Entailed: a graph entails itself, and saying so requires mapping all 25 000.
         let self_entailment = premise.clone();
         let answer = on_the_smallest_stack(move || {
-            graph_entails_to_string("simple", &self_entailment.clone(), &self_entailment, &[])
-                .map(|decided| decided.answer().to_owned())
+            graph_entails_to_string(
+                "simple",
+                &self_entailment.clone(),
+                &self_entailment,
+                &[],
+                &[],
+            )
+            .map(|decided| decided.answer().to_owned())
         })
         .expect("decides");
         assert_eq!(answer, "mechanism strict-table\nentailment entailed\n");
@@ -7144,7 +7249,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         );
         let (lhs, rhs) = (premise.clone(), with_a_gap);
         let answer = on_the_smallest_stack(move || {
-            graph_entails_to_string("simple", &lhs, &rhs, &[])
+            graph_entails_to_string("simple", &lhs, &rhs, &[], &[])
                 .map(|decided| decided.answer().to_owned())
         })
         .expect("decides");
@@ -7163,7 +7268,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             "_:b <http://example.org/p",
         );
         let answer = on_the_smallest_stack(move || {
-            graph_entails_to_string("simple", &premise, &existential, &[])
+            graph_entails_to_string("simple", &premise, &existential, &[], &[])
                 .map(|decided| decided.answer().to_owned())
         })
         .expect("decides");

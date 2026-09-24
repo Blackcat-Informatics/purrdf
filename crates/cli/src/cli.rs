@@ -608,7 +608,10 @@ pub(crate) enum Command {
         verify: bool,
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`. PurRDF fetches nothing, so an import no pair
-        /// resolves is refused by name rather than treated as an empty document.
+        /// resolves, that does not name the premise document itself (its `file://`
+        /// retrieval IRI or `--base`), and whose ontology the premise does not already
+        /// hold (`<X> a owl:Ontology`, or an `owl:versionIRI` naming it), is refused by name rather
+        /// than treated as an empty document.
         /// The IRI half must be ABSOLUTE — it is matched against the premise's
         /// `owl:imports` objects, which are — and a relative or malformed one is
         /// refused by name here rather than surfacing as an unresolved import
@@ -784,8 +787,9 @@ pub(crate) enum Command {
     ///
     /// Exit codes: **0** whether the data CONFORMS or does not — both are decided verdicts,
     /// exactly as `consistency true|false` and a `false` ASK are, and the report on stdout is
-    /// the answer either way. **1** for a malformed data or shapes document and for an
-    /// unsupported SHACL construct (the engine hard-fails rather than skipping it). **2** for
+    /// the answer either way. **1** for a malformed data or shapes document, for an
+    /// unsupported SHACL construct (the engine hard-fails rather than skipping it), and for
+    /// an `owl:imports` in the shapes graph that is unresolved (see `--import`). **2** for
     /// a usage error. **3** when a `--fuel`/`--deadline`/`--max-*` ceiling stopped the run:
     /// the engine returns no partial report by design (every SHACL constraint is a negative
     /// claim, so a truncated solution bag and a complete empty one read identically), so
@@ -809,8 +813,9 @@ pub(crate) enum Command {
         /// A PREPARED SHACL product `FILE` written by `purrdf shacl pack`, restored instead of
         /// parsing a shapes document. The product carries its own shapes graph, the base it was
         /// parsed under, its prefix map, its `sh:shapesGraph` IRI and its box-role vocabulary, so
-        /// `--shapes-from`, `--shapes-graph`, `--import` and `--box-role-vocab` name a parse
-        /// that does not happen here and are refused by name rather than accepted and ignored.
+        /// `--shapes-from`, `--shapes-graph`, `--shapes-base`, `--import` and
+        /// `--box-role-vocab` name a parse that does not happen here and are refused by name
+        /// rather than accepted and ignored.
         ///
         /// The bytes are UNTRUSTED: the product's stage id, profile and full input binding are
         /// checked before any of it reaches the validator, and a mismatch is refused on a named
@@ -881,15 +886,30 @@ pub(crate) enum Command {
         /// shapes graph has none (stdin, or a container).
         #[arg(long = "shapes-graph", value_name = "IRI")]
         shapes_graph: Option<String>,
+        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+        /// of its `file://` retrieval IRI — the same flag `shacl pack --base` is, for the
+        /// shapes document `validate --shapes` parses. It is also the shapes document's own
+        /// IRI for `owl:imports`: an import of it names the document being read, so it needs
+        /// no `--import` (SHACL's `sh:prefixes/owl:imports*` idiom points at the document
+        /// itself). An `@base` inside the document still wins over it there, as Turtle
+        /// specifies. `--shapes-graph` resolves against it too. Stdin has no retrieval IRI,
+        /// so this is the only base a `--shapes -` document can have.
+        ///
+        /// Refused against `--shapes-product`, which recorded the base it was packed under,
+        /// and against a pack or GTS shapes container, which stores resolved IRIs and has no
+        /// base to set.
+        #[arg(long = "shapes-base", value_name = "IRI", value_parser = parse_base_iri)]
+        shapes_base: Option<String>,
         /// Resolve an `owl:imports` in the shapes graph to a LOCAL document: the ontology
         /// IRI the shapes document imports, then the file that is it. Repeatable, and
         /// followed transitively — an imported document's own `owl:imports` are resolved
         /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
-        /// import is only ever the document the operator named. Naming any pair makes the
-        /// closure MANDATORY: an `owl:imports` no pair resolves is then refused by name
-        /// rather than folded in as an empty graph, and a pair the closure never reaches is
-        /// refused as unused. With no `--import` at all the imports are reported on stderr
-        /// and the shapes graph validates alone, exactly as it did before this flag existed.
+        /// import is only ever the document the operator named. An import of the shapes
+        /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), or of an
+        /// already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
+        /// `owl:versionIRI` is `<X>`), needs no pair. Any other `owl:imports` no pair resolves
+        /// is refused by name (exit 1) rather than validated as if the shapes graph were
+        /// complete, and a pair the closure never reaches is refused as unused (exit 2).
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
         /// The caller-supplied graph-box role vocabulary NAMESPACE — the SAME namespace
@@ -911,7 +931,8 @@ pub(crate) enum Command {
         from: Option<CliRdfFormat>,
         /// Base IRI for resolving relative IRIs while parsing the DATA graph. The shapes
         /// graph is a separate document and resolves against its OWN `file://` retrieval
-        /// IRI (or its own `@base`), so this flag never silently retargets it. A PARSE
+        /// IRI, `--shapes-base`, or its own `@base`, so this flag never silently retargets
+        /// it. A PARSE
         /// base only: the validation report is a graph the engine mints with absolute
         /// terms, and it is serialized with no base rather than under this one.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
@@ -1278,12 +1299,13 @@ pub(crate) enum ShaclCommand {
         /// IRI the shapes document imports, then the file that is it. Repeatable, and
         /// followed transitively — an imported document's own `owl:imports` are resolved
         /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
-        /// import is only ever the document the operator named. Naming any pair makes the
-        /// closure MANDATORY: an `owl:imports` no pair resolves is then refused by name
-        /// rather than folded in as an empty graph, and a pair the closure never reaches is
-        /// refused as unused. With no `--import` at all the imports are reported on stderr
-        /// and the shapes graph packs alone, exactly as `validate --shapes` with no
-        /// `--import` validates it alone.
+        /// import is only ever the document the operator named. An import of the shapes
+        /// document's own IRI (`--base`, its `file://` retrieval IRI, or `@base`), or of an
+        /// ontology already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
+        /// `owl:versionIRI` is `<X>`), needs no pair. Any other `owl:imports` no pair resolves
+        /// is refused by name (exit 1) rather than packed as if the shapes graph were
+        /// complete, exactly as `validate --shapes` refuses it, and a pair the closure never
+        /// reaches is refused as unused (exit 2).
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
         /// RECORD the shapes graph as exposed under this IRI to SHACL-SPARQL paths,

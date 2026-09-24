@@ -439,8 +439,10 @@ triple pattern.
   blank node the data graph carries. Where it stops: a shapes graph's
   `owl:imports` are never fetched — the caller supplies `--import IRI=FILE`,
   the same shape `entails` and `shex` take, and the closure is followed
-  transitively from that table. Naming no pair leaves the imports unresolved
-  and says so on stderr rather than validating against them in silence.
+  transitively from that table. An import of the shapes document's own IRI,
+  or of an ontology already in the shapes graph (`<X> a owl:Ontology`, or an
+  `owl:versionIRI` naming it), needs no pair; any other unresolved import is refused by name rather than
+  validated against a smaller shapes graph.
 - **Schema lanes: SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML /
   TypeScript / GraphQL** (`purrdf-shapes`, **Rust only**) — `compile_schema`
   lowers a shapes graph (ontology-aware on request, with a coverage report)

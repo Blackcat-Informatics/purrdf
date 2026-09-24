@@ -75,13 +75,14 @@ purrdf shacl pack \
   --out shapes.purrshp
 ```
 
-Naming **no** `--import` at all is not a refusal: each unresolved
-`owl:imports` is reported on stderr as a `shacl warning` line and the product
-is packed from the root graph alone — a shapes document may legitimately carry
-an ontology header whose imports are irrelevant to its shapes. Naming **any**
-pair makes the closure mandatory, exactly as it does for `validate --shapes`:
-an `owl:imports` no pair resolves is refused by name, and a pair the closure
-never reaches is refused as unused.
+An import of the shapes document's own IRI (`--base`, its `file://` retrieval
+IRI, or an in-document `@base`), or of an ontology already in the shapes graph
+(`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), needs
+no pair.
+Every other `owl:imports` no pair resolves is refused by name, exactly as it is
+for `validate --shapes`, and a pair the closure never reaches is refused as
+unused. The product is never packed from a smaller shapes graph than the one
+named.
 
 This did not always hold. `shacl pack` used to read the shapes document
 through a route with no import table and no diagnostic channel at all, so an
@@ -93,8 +94,9 @@ byte-identical report, by construction: the two commands read and fold the
 closure through the same function.
 
 The Python, C-ABI and WebAssembly bindings call a lower-level, text-only pack
-entry point that has no `--import` table at all, and refuse rather than fold
-— see [What a product carries, and what it does not](#what-a-product-carries-and-what-it-does-not).
+entry point that has no `--import` table at all. It applies the same rule — an
+import of the document's own IRI (the base the host passes, or an `@base`), or
+of an ontology already in the shapes graph, packs — and refuses any other rather than fold — see [What a product carries, and what it does not](#what-a-product-carries-and-what-it-does-not).
 
 ### `--shapes-graph` is resolved and recorded at pack time, the same way `validate --shapes` resolves it
 
@@ -259,12 +261,15 @@ Two capabilities are refused at pack time rather than lost at restore, both on
   carries those declarations, so one the model never reaches is not in it, and
   a product written from it would resolve that call site to nothing and
   validate green. Call the function from the shapes model and it packs;
-- an `owl:imports` this pack call has no way to resolve — but ONLY through the
+- an `owl:imports` that names neither the shapes document itself (the base
+  passed in, or an `@base`) nor an ontology already in the shapes graph (`<X> a
+  owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), through the
   Python, C-ABI and WebAssembly bindings' lower-level, text-only entry point,
-  which carries no `--import` table and no place to print a warning. The CLI's
-  `purrdf shacl pack --import` is different: it folds the closure or reports
-  each unresolved import on stderr exactly as `validate --shapes` does, and
-  only refuses when an `--import` pair itself is unusable — see
+  which carries no `--import` table to resolve it from. An import whose
+  ontology IS in the graph packs. The CLI's `purrdf shacl pack --import` can
+  also fold the closure from local files; an import neither in the graph nor
+  resolved by a pair is refused there too, exactly as `validate --shapes`
+  refuses it — see
   [`owl:imports` in a shapes graph](shacl.md#owlimports-in-a-shapes-graph).
 
 ## Shipping a product
@@ -739,7 +744,7 @@ is printed; in Python the exception's `.dimension` is `None`; in JavaScript
 
 | Command | Does | Exit `0` | Exit `1` | Exit `2` |
 | --- | --- | --- | --- | --- |
-| `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE] [--box-role-vocab NS]` | parse, prepare, write the product | product written | the shapes did not parse, or the graph declares something a product cannot carry | bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
+| `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE] [--box-role-vocab NS]` | parse, prepare, write the product | product written | the shapes did not parse, the graph declares something a product cannot carry, or an `owl:imports` is unresolved | bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
 | `purrdf shacl verify [IN]` | corroborate the carried dataset against the claimed identity | prints the identity digest | refused, with `shacl dimension <label>` on stderr | bad flags |
 | `purrdf shacl explain [IN]` | print what the product says it was compiled from | prints the `key value` rendering | the bytes are not a well-formed product | bad flags |
 | `purrdf shacl diff A B` | compare two products' declared identities, without admitting either | the two identities are identical | the two identities differ (the `diff` lines are still printed, on stdout) | bad flags, or both `A` and `B` naming standard input |

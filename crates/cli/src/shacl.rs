@@ -119,11 +119,12 @@ use crate::{sink, source};
 /// cannot silently diverge on it the way they used to, when this lane parsed raw text with no
 /// import table at all and dropped an unresolved `owl:imports` with nothing printed.
 ///
-/// A shapes graph naming no `--import` at all is not refused for it: every unresolved
-/// `owl:imports` is reported on stderr as a `shacl warning` line and the product is packed
-/// from the shapes graph alone — see [`crate::shapes_source`]'s module documentation for why
-/// that asymmetry is deliberate. Naming any `--import` pair makes the closure mandatory: an
-/// `owl:imports` no pair resolves, or a pair the closure never reaches, is then a usage error.
+/// An `owl:imports` that names neither the shapes document itself (its `--base`, `file://`
+/// retrieval IRI or `@base`) nor an ontology already in the shapes graph (`<X> a
+/// owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), and that no `--import`
+/// pair resolves, is refused by name, with the pair that resolves it — the product is never
+/// packed from a shapes graph smaller than the one named. See [`crate::shapes_source`]'s
+/// module documentation for the rule. A pair the closure never reaches is a usage error.
 ///
 /// # Errors
 ///
@@ -132,7 +133,7 @@ use crate::{sink, source};
 /// relative `--shapes-graph` has no base to resolve against, or when an `--import` pair is
 /// malformed, resolves nothing the shapes graph imports, or is never reached by the import
 /// closure; [`CliError::Runtime`] when a document cannot be read, is not UTF-8, does not
-/// parse, an `owl:imports` no pair resolves, or the shapes graph declares a capability the
+/// parse, an `owl:imports` is unresolved, or the shapes graph declares a capability the
 /// product format cannot carry.
 pub(crate) fn pack(
     shapes: &str,
@@ -168,7 +169,7 @@ pub(crate) fn pack(
         effective_base.as_deref(),
         "--shapes",
     )?;
-    let folded = crate::shapes_source::fold_shapes_imports(root, imports)?;
+    let folded = crate::shapes_source::fold_shapes_imports(root, imports, "--base")?;
 
     let product = purrdf_validate::pack_shapes_product_from_dataset(
         &folded.dataset,

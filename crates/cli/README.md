@@ -465,8 +465,11 @@ defined by.
 ontology's imports closure to *be* the ontology, so a premise carrying an
 `owl:imports` this command was not handed is a different premise from the one you
 asked about. **PurRDF fetches nothing and mints no vocabulary**, so each pair
-resolves one ontology IRI to one local document; an `owl:imports` no pair resolves
-is refused by name (exit 1) rather than treated as an empty document, and a
+resolves one ontology IRI to one local document; an `owl:imports` no pair resolves,
+that does not name the premise document itself (its `file://` retrieval IRI or
+`--base`), and whose ontology the premise does not already hold (`<X> a
+owl:Ontology`, or an `owl:versionIRI` naming it), is refused by name (exit 1) rather than treated as an
+empty document, and a
 malformed pair (no `=`) is a usage error (exit 2) rather than a skipped import. The
 IRI is everything before the *first* `=`.
 
@@ -591,6 +594,7 @@ purrdf consistency ontology.purrpck
 
 ```text
 purrdf validate --shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
+                [--shapes-base <IRI>] [--import <IRI>=<FILE>]...
                 [--from <F>] [--base <IRI>] [--format <F>]
                 [--fuel <N>] [--deadline <D>] [--max-intermediate-cells <N>]
                 [--max-scratch-bytes <N>] [--max-remote-requests <N>]
@@ -628,8 +632,8 @@ stderr on every run. A shell branches on those without parsing the artifact.
 
 **Exit codes.** `0` whether the data conforms **or not** — both are decided
 verdicts, exactly like `consistency true|false` and a `false` ASK; `1` for a
-malformed document or an unsupported/structurally incomplete SHACL construct
-(hard-failed, never silently skipped); `2` for a usage error; `3` when a
+malformed document, an unsupported/structurally incomplete SHACL construct
+(hard-failed, never silently skipped), or an unresolved `owl:imports`; `2` for a usage error; `3` when a
 governor stopped the run — and then **no report is written at all**, because
 every SHACL constraint is a negative claim and a truncated solution bag cannot
 license a `conforms`.
@@ -642,6 +646,27 @@ environment for SHACL-AF `sh:select`), every other syntax is parsed by the
 native codec. `--shapes-graph <IRI>` exposes the shapes graph to SHACL-SPARQL
 paths as a named graph; there is no default IRI, because PurRDF mints no
 vocabulary.
+
+**Two documents, two bases.** `--base <IRI>` is the DATA graph's parse base
+only. The shapes document parses under its own `file://` retrieval IRI, or
+under `--shapes-base <IRI>` when given — the same flag `shacl pack --base` is,
+so a document validated and a document packed parse identically. An `@base`
+inside the shapes document still wins inside it, as Turtle specifies.
+`--shapes-base` is also the shapes document's own IRI for `owl:imports`, and
+it is refused against `--shapes-product` and against a container.
+
+**`owl:imports` in the shapes graph.** PurRDF fetches nothing: `--import
+<IRI>=<FILE>` (repeatable, followed transitively) resolves one imported
+ontology to one local document. An import needs no pair when it names a
+document already read — the shapes document's own `file://` retrieval IRI,
+`--shapes-base` or `@base` (SHACL's `sh:prefixes/owl:imports*` idiom), or an
+`--import` document — or an ontology already in the shapes graph: `<X> a
+owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`, as when the W3C
+SHACL 1.2 vocabularies are merged into one document. Any other unresolved
+import is refused (exit `1`), naming each IRI, the `--import` pair that
+resolves it, and — for a document that imports its own published IRI — the
+`--shapes-base` that reads it under that IRI; a pair the closure never reaches
+is a usage error (exit `2`).
 
 ```sh
 # The results graph, N-Triples on stdout, verdict on stderr.

@@ -662,7 +662,7 @@ fn certain_answers(
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
     let answer = py
-        .detach(|| certain_answers_to_string(name, data, pattern, &table))
+        .detach(|| certain_answers_to_string(name, data, pattern, &table, &[]))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -706,7 +706,7 @@ fn graph_entails(
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
     let answer = py
-        .detach(|| graph_entails_to_string(name, premise, conclusion, &table))
+        .detach(|| graph_entails_to_string(name, premise, conclusion, &table, &[]))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -742,7 +742,7 @@ fn verify_entailment(
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
     let answer = py
-        .detach(|| verify_entailment_to_string(name, premise, conclusion, &table))
+        .detach(|| verify_entailment_to_string(name, premise, conclusion, &table, &[]))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }

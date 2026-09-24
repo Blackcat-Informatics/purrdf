@@ -1319,8 +1319,9 @@ export function entailExplainConclusion(
  * `importIris[i]` denotes the N-Quads document `importDocuments[i]`. A premise carrying
  * an `owl:imports` states that its axioms are its own PLUS those of the documents it
  * names, so this is where those documents go — and the `owl:imports` triple stays exactly
- * where you wrote it. PurRDF FETCHES NOTHING: an ontology IRI the table does not resolve
- * throws by name, never a network access and never a silently empty import. Two empty
+ * where you wrote it. PurRDF FETCHES NOTHING: an ontology IRI the table does not resolve,
+ * and the premise does not already hold (`<X> a owl:Ontology`, or an `owl:versionIRI`
+ * naming it), throws by name, never a network access and never a silently empty import. Two empty
  * arrays are the ordinary *imports nothing* case; both are required, not defaulted, and
  * resolution is transitive to a fixpoint.
  *
@@ -1331,7 +1332,7 @@ export function entailExplainConclusion(
  * Throws on an unknown regime, on `owl-direct` or `rif`, on a malformed document,
  * pattern or import document, on import arrays of different lengths, on a duplicate or
  * empty import IRI, on a pattern that names a graph, on an `owl:imports` the table does
- * not resolve, and on an inconsistent premise.
+ * not resolve and the premise does not hold, and on an inconsistent premise.
  */
 export function entailCertainAnswers(
   regime: EntailmentRegime | string,

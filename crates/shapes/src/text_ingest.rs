@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
-use ::purrdf::parse_dataset;
+use ::purrdf::{ParseOptions, parse_dataset, parse_dataset_with};
 use purrdf_iri::terminals;
 
 /// Strip the leading run of Turtle `WS` from `text`.
@@ -200,11 +200,37 @@ pub fn parse_turtle_to_dataset(
     ttl: &str,
     base: Option<&str>,
 ) -> Result<Arc<RdfDataset>, Vec<String>> {
+    parse_turtle_document(ttl, base).map(|(dataset, _)| dataset)
+}
+
+/// [`parse_turtle_to_dataset`], also returning the base IRI the document ENDED under.
+///
+/// That is `base` itself unless the document declares its own `@base`, in which case it
+/// is the base the directive established. It is the document's own statement of where it
+/// lives, which is what an `owl:imports` of the document's own IRI names — so the shapes
+/// lanes pass it to `purrdf_entail::entails::imports::unresolved_imports` as a loaded
+/// document IRI. Reading it back costs nothing: the codec tracks its base scope anyway.
+///
+/// # Errors
+///
+/// Exactly [`parse_turtle_to_dataset`]'s.
+pub fn parse_turtle_document(
+    ttl: &str,
+    base: Option<&str>,
+) -> Result<(Arc<RdfDataset>, Option<String>), Vec<String>> {
     if ttl.is_empty() {
-        return Ok(empty_dataset());
+        return Ok((empty_dataset(), base.map(str::to_owned)));
     }
-    match parse_dataset(ttl.as_bytes(), "text/turtle", base) {
-        Ok(dataset) => Ok(dataset),
+    match parse_dataset_with(
+        ttl.as_bytes(),
+        "text/turtle",
+        base,
+        &ParseOptions::default(),
+    ) {
+        Ok(outcome) => {
+            let document_base = outcome.document_base_iri().map(str::to_owned);
+            Ok((outcome.dataset, document_base))
+        }
         Err(_) => Err(turtle_statement_errors(ttl, base)),
     }
 }
