@@ -21,9 +21,10 @@ use serde_json::{Value, json};
 fn compile_pattern(pattern: &str, flags: &str) -> Result<CompiledSchema, SchemaCompileError> {
     let turtle = format!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
+         @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
          @prefix ex: <https://example.org/> .
          ex:Shape a sh:NodeShape ; sh:targetClass ex:Probe ;
-           sh:property [ sh:path ex:code ; sh:maxCount 1 ;
+           sh:property [ sh:path ex:code ; sh:maxCount 1 ; sh:datatype xsd:string ;
              sh:pattern {} ; sh:flags {} ] .",
         serde_json::to_string(pattern).expect("pattern string"),
         serde_json::to_string(flags).expect("flags string"),
@@ -188,20 +189,30 @@ fn emitted_patterns_preserve_their_languages_in_unicode_ecmascript() {
     );
 }
 
+/// A valid pattern whose `i` flag has XPath case-variant semantics, which
+/// simple case folding does not reproduce, has no ECMA-262 source with the same
+/// language: no pattern is emitted, the loss is recorded (the rest of the schema
+/// still compiles), and the flags that do translate emit their pattern with no
+/// loss.
 #[test]
-fn xpath_case_variant_flags_refuse_without_returning_a_partial_schema() {
+fn xpath_case_variant_flags_record_the_loss_instead_of_a_wrong_pattern() {
     for flags in ["i", "iq", "qi", "im", "is", "ix", "imsxq", "qxmisi"] {
         for source in ["^i$", "[I-[\\i-[ı]]]", "literal"] {
-            let error =
-                compile_pattern(source, flags).expect_err("XPath case variants must refuse");
-            assert!(matches!(error, SchemaCompileError::Pattern { .. }));
+            let compiled = compile_pattern(source, flags).expect("the schema still compiles");
+            let schema: Value = serde_json::from_str(&compiled.schema_json).expect("JSON Schema");
+            let code = &schema["$defs"]["Probe"]["properties"]["ex:code"];
+            assert_eq!(code["pattern"], Value::Null, "{source:?} {flags:?}: {code}");
+            let losses = compiled.losses.entries();
+            assert_eq!(losses.len(), 1, "{}", compiled.losses.render_json());
+            assert_eq!(losses[0].code, "sh:pattern");
             assert!(
-                error.to_string().contains("XPath case-variant semantics"),
-                "{error}"
+                losses[0].note.contains("XPath case-variant semantics"),
+                "{}",
+                losses[0].note
             );
         }
     }
     for flags in ["", "m", "s", "x", "q", "smx", "qsmx"] {
-        compile_pattern("literal", flags).expect("non-i neighboring flags translate");
+        emitted("literal", flags);
     }
 }

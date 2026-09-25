@@ -113,12 +113,14 @@ fn sound_green_for_real_compile_output() {
 }
 
 /// The SHACL 1.2 constraints the value-schema projection drops — the list
-/// components, `sh:rootClass`, `sh:singleLine true`, a property-level
-/// `sh:someValue` and a `sh:TripleTerm` node kind — each record their own code,
-/// and every one of those codes is inside the declared profile.
+/// components, `sh:rootClass` and a property-level `sh:someValue` — each record
+/// their own code, and every one of those codes is inside the declared profile;
+/// a `sh:TripleTerm` node kind is projected (the JSON-LD-star embedded node) and
+/// records nothing.
 ///
-/// The neighbours record nothing: `sh:singleLine false` checks nothing, and a
-/// node-level `sh:someValue` is projected as `sh:node` is.
+/// The neighbours record nothing: `sh:singleLine true` is projected as a
+/// negated line-break pattern, `sh:singleLine false` and `sh:uniqueMembers false`
+/// check nothing, and a node-level `sh:someValue` is projected as `sh:node` is.
 #[test]
 fn shacl12_constraints_record_declared_codes() {
     let compiled = compile_ttl(
@@ -141,9 +143,7 @@ fn shacl12_constraints_record_declared_codes() {
             "sh:maxListLength",
             "sh:memberShape",
             "sh:minListLength",
-            "sh:nodeKind",
             "sh:rootClass",
-            "sh:singleLine",
             "sh:someValue",
             "sh:uniqueMembers",
         ]
@@ -155,13 +155,27 @@ fn shacl12_constraints_record_declared_codes() {
         ex:QuietShape a sh:NodeShape ;
             sh:targetClass ex:Quiet ;
             sh:someValue [ sh:property [ sh:path ex:name ; sh:minCount 1 ] ] ;
-            sh:property [ sh:path ex:label ; sh:singleLine false ] .
+            sh:property [ sh:path ex:label ; sh:singleLine true ] ;
+            sh:property [ sh:path ex:note ; sh:singleLine false ] ;
+            sh:property [ sh:path ex:items ; sh:uniqueMembers false ] .
         ",
     );
     assert!(
         neighbours.losses.is_empty(),
         "{:?}",
         recorded_codes(&neighbours)
+    );
+    let schema: serde_json::Value =
+        serde_json::from_str(&neighbours.schema_json).expect("schema JSON");
+    let properties = &schema["$defs"]["Quiet"]["properties"];
+    assert_eq!(
+        properties["ex:label"]["anyOf"][0]["not"]["anyOf"][0],
+        serde_json::json!({ "type": "string", "pattern": "[\\n\\r\\u000B\\u000C]" }),
+        "sh:singleLine true is projected: {properties}"
+    );
+    assert!(
+        !properties["ex:note"].to_string().contains("pattern"),
+        "sh:singleLine false projects nothing: {properties}"
     );
     assert!(
         neighbours.schema_json.contains("\"required\""),
@@ -223,7 +237,7 @@ fn iri_valued_pairs_record_their_declared_codes() {
         ex:PairShape a sh:NodeShape ;
             sh:targetClass ex:Paired ;
             sh:property [ sh:path ex:a ; sh:minCount 1 ; sh:equals ex:b ; sh:disjoint ex:c ] ;
-            sh:property [ sh:path ex:start ; sh:datatype xsd:integer ;
+            sh:property [ sh:path ex:start ; sh:datatype xsd:dateTime ;
                           sh:lessThan ex:end ; sh:lessThanOrEquals ex:stop ] .
         ",
     );
@@ -261,7 +275,7 @@ fn iri_valued_pairs_record_their_declared_codes() {
         ex:PairShape a sh:NodeShape ;
             sh:targetClass ex:Paired ;
             sh:property [ sh:path ex:a ; sh:minCount 1 ] ;
-            sh:property [ sh:path ex:start ; sh:datatype xsd:integer ] .
+            sh:property [ sh:path ex:start ; sh:datatype xsd:dateTime ] .
         ",
     );
     assert!(
@@ -462,7 +476,7 @@ fn category_pattern_translates_without_a_dialect_loss() {
         r#"
         ex:CategoryPatternShape a sh:NodeShape ;
             sh:targetClass ex:CategoryPattern ;
-            sh:property [ sh:path ex:code ; sh:pattern "^\\p{L}+$" ] .
+            sh:property [ sh:path ex:code ; sh:datatype xsd:string ; sh:pattern "^\\p{L}+$" ] .
         "#,
     );
     assert_eq!(recorded_codes(&compiled), [] as [&str; 0]);

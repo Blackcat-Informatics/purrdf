@@ -2555,6 +2555,13 @@
     "note": "A predicate's rdfs:range names a value-vocabulary class that conflicts with (or is shadowed by) an explicit sh:class on the same property; the range-derived enum $ref is suppressed in favor of sh:class, and the conflict is recorded rather than silently dropped."
   },
   {
+    "code": "sh:ConstraintComponent",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A custom SPARQL-based constraint component (named in the note) validates through a SPARQL query, which has no closed-world JSON Schema equivalent, so the constraint is dropped."
+  },
+  {
     "code": "sh:SPARQLTarget",
     "from": "shacl",
     "to": "json-schema",
@@ -2562,11 +2569,39 @@
     "note": "A shape targeted only via SHACL-AF sh:target/sh:SPARQLTarget (an arbitrary SPARQL SELECT, not a class extension) has no closed-world JSON Schema equivalent; the shape is excluded from the compiled $defs."
   },
   {
+    "code": "sh:and",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:and constraint on a property shape judges each value node against shapes; a value is projected as a node reference (its own properties live on its separate @graph node) or a literal, so the value schema has nothing to judge and the constraint is dropped."
+  },
+  {
+    "code": "sh:class",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:class constraint on a node shape (one class or a SHACL list of them) judges the focus node's own class membership through the data graph's rdfs:subClassOf* closure; an object schema describes the node's properties, not its identity, so the constraint is dropped."
+  },
+  {
+    "code": "sh:closed",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:closed true constraint on a property shape limits the properties of each value node, which its node reference does not carry, so the constraint is dropped (on a node shape it is projected as additionalProperties false)."
+  },
+  {
     "code": "sh:closed sh:ByTypes",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A SHACL 1.2 sh:closed sh:ByTypes constraint permits the properties each value node's own rdf:type values collect through the shapes graph; an object schema states one fixed key set for every instance, so the object is left open and the constraint is dropped."
+    "note": "A SHACL 1.2 sh:closed sh:ByTypes constraint permits the properties each value node's own rdf:type values collect through the shapes graph; an object schema states one fixed key set for every instance, so the object is left open and the constraint is dropped (on a property shape, whose value nodes are node references, likewise)."
+  },
+  {
+    "code": "sh:datatype",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:datatype constraint. A numeric literal projects as a bare JSON number without its datatype or lexical form, so a literal of another numeric datatype, or an ill-typed one, is not told apart; rdf:langString and rdf:dirLangString literals both project as {@value, @language} without the base direction; on a node shape (one datatype or a SHACL list of them) it judges the focus node itself as a literal, which an object schema describing the node's properties does not state, so the constraint is dropped."
   },
   {
     "code": "sh:defaultValue",
@@ -2597,6 +2632,27 @@
     "note": "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is dropped."
   },
   {
+    "code": "sh:hasValue",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:hasValue constraint on a node shape judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:in",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:in constraint on a node shape judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:languageIn",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:languageIn constraint on a node shape judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
     "code": "sh:lessThan",
     "from": "shacl",
     "to": "json-schema",
@@ -2611,39 +2667,102 @@
     "note": "A SHACL sh:lessThanOrEquals constraint orders the values at or below every node a property path (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains each property on its own and cannot relate one property's values to another path's, so the constraint is dropped."
   },
   {
+    "code": "sh:maxCount",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:maxCount constraint on a node shape, where it is not well-formed, judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:maxExclusive",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:maxExclusive constraint. A numeric bound is compared with bare JSON numbers only: a typed-literal object (a numeric literal the projection cannot carry as a JSON number) is not compared with it; a bound that is not numeric (a date, say) has no JSON Schema comparison and is dropped; on a node shape it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:maxInclusive",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:maxInclusive constraint. A numeric bound is compared with bare JSON numbers only: a typed-literal object (a numeric literal the projection cannot carry as a JSON number) is not compared with it; a bound that is not numeric (a date, say) has no JSON Schema comparison and is dropped; on a node shape it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:maxLength",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:maxLength constraint. The schema checks the lexical form of a bare string and of a literal object's @value exactly, and rejects a blank node and a triple term; it cannot check an IRI value (projected as a compacted @id, not the IRI string) or a numeric or boolean literal (a JSON scalar without its lexical form), so where the property's other constraints admit either, that part is not checked; on a node shape it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
     "code": "sh:maxListLength",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A SHACL 1.2 sh:maxListLength constraint bounds the member count of a value that is an RDF list; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
+    "note": "A SHACL 1.2 sh:maxListLength constraint bounds the member count of a value node (or focus node) that is an RDF list; the JSON-LD projection keeps an RDF list as a node reference whose members hang off rdf:first/rdf:rest chains in separate @graph nodes, so no JSON array carries the members for minItems, maxItems, uniqueItems or items to judge, and the constraint is dropped."
   },
   {
     "code": "sh:memberShape",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A SHACL 1.2 sh:memberShape constraint judges every member of a value that is an RDF list against a shape; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
+    "note": "A SHACL 1.2 sh:memberShape constraint judges every member of a value node (or focus node) that is an RDF list against a shape; the JSON-LD projection keeps an RDF list as a node reference whose members hang off rdf:first/rdf:rest chains in separate @graph nodes, so no JSON array carries the members for minItems, maxItems, uniqueItems or items to judge, and the constraint is dropped."
+  },
+  {
+    "code": "sh:minCount",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:minCount constraint on a node shape, where it is not well-formed, judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:minExclusive",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:minExclusive constraint. A numeric bound is compared with bare JSON numbers only: a typed-literal object (a numeric literal the projection cannot carry as a JSON number) is not compared with it; a bound that is not numeric (a date, say) has no JSON Schema comparison and is dropped; on a node shape it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:minInclusive",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:minInclusive constraint. A numeric bound is compared with bare JSON numbers only: a typed-literal object (a numeric literal the projection cannot carry as a JSON number) is not compared with it; a bound that is not numeric (a date, say) has no JSON Schema comparison and is dropped; on a node shape it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:minLength",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:minLength constraint. The schema checks the lexical form of a bare string and of a literal object's @value exactly, and rejects a blank node and a triple term; it cannot check an IRI value (projected as a compacted @id, not the IRI string) or a numeric or boolean literal (a JSON scalar without its lexical form), so where the property's other constraints admit either, that part is not checked; on a node shape it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
   },
   {
     "code": "sh:minListLength",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A SHACL 1.2 sh:minListLength constraint bounds the member count of a value that is an RDF list; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
+    "note": "A SHACL 1.2 sh:minListLength constraint bounds the member count of a value node (or focus node) that is an RDF list; the JSON-LD projection keeps an RDF list as a node reference whose members hang off rdf:first/rdf:rest chains in separate @graph nodes, so no JSON array carries the members for minItems, maxItems, uniqueItems or items to judge, and the constraint is dropped."
+  },
+  {
+    "code": "sh:node",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:node constraint on a property shape judges each value node against a shape; a value is projected as a node reference (its own properties live on its separate @graph node) or a literal, so the value schema has nothing to judge and the constraint is dropped."
   },
   {
     "code": "sh:nodeByExpression",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A SHACL 1.2 sh:nodeByExpression constraint computes its node shape from a node expression evaluated against the data graph; a closed-world JSON Schema has no way to express a shape that is not known until validation time, so the constraint is dropped. (This code was recorded by the emitter without being declared here, which made check_ledger_sound reject any ledger containing it; declared now.)"
+    "note": "A SHACL 1.2 sh:nodeByExpression constraint computes its node shape from a node expression evaluated against the data graph; a closed-world JSON Schema has no way to express a shape that is not known until validation time, so the constraint is dropped."
   },
   {
     "code": "sh:nodeKind",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A sh:nodeKind sh:TripleTerm alternative admits an RDF 1.2 triple term, which has no JSON Schema value representation; that alternative is dropped and the remaining node kinds are projected."
+    "note": "A sh:nodeKind constraint on a node shape (one kind or a SHACL list of them) judges the focus node's own kind, which an object schema describing the node's properties does not state, so it is dropped."
   },
   {
     "code": "sh:not",
@@ -2653,18 +2772,67 @@
     "note": "A sh:not negation whose inner shape is not losslessly expressible as a JSON Schema negation (or that appears at property/value position, where negating a base value schema would be vacuous) is dropped rather than emitted unsoundly."
   },
   {
+    "code": "sh:or",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:or constraint on a property shape judges each value node against shapes; a value is projected as a node reference (its own properties live on its separate @graph node) or a literal, so the value schema has nothing to judge and the constraint is dropped."
+  },
+  {
+    "code": "sh:path",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A property shape whose path is not one predicate (an inverse, sequence, alternative or closure path) constrains no outgoing JSON property of the projected node, so the property shape is dropped."
+  },
+  {
+    "code": "sh:pattern",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:pattern constraint. The schema checks the lexical form of a bare string and of a literal object's @value exactly, and rejects a blank node and a triple term; it cannot check an IRI value (projected as a compacted @id, not the IRI string) or a numeric or boolean literal (a JSON scalar without its lexical form), so where the property's other constraints admit either, that part is not checked; a pattern whose language has no ECMA-262 translation (an i flag's XPath case variants) is not emitted at all; on a node shape it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:property",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A property shape nested under a property shape judges each value node's own properties, which the value's node reference does not carry, so the nested shape is dropped."
+  },
+  {
+    "code": "sh:qualifiedValueShape",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:qualifiedValueShape constraint counts the value nodes that conform to a shape, which the value schema cannot judge from a node reference; on a node shape, where it is not well-formed, it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:reificationRequired",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:reificationRequired true constraint requires each value's triple to be reified, which the projected value does not state, so the constraint is dropped."
+  },
+  {
+    "code": "sh:reifierShape",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:reifierShape constraint judges the reifiers of each value's triple, which the projected value does not carry, so the constraint is dropped."
+  },
+  {
     "code": "sh:rootClass",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A SHACL 1.2 sh:rootClass constraint bounds class-valued values by the data graph's rdfs:subClassOf hierarchy; a closed-world JSON Schema cannot consult that hierarchy, so the constraint is dropped."
+    "note": "A SHACL 1.2 sh:rootClass constraint bounds class-valued value nodes (or the focus node) by the data graph's rdfs:subClassOf hierarchy; a closed-world JSON Schema cannot consult that hierarchy, so the constraint is dropped."
   },
   {
-    "code": "sh:singleLine",
+    "code": "sh:severity",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A SHACL 1.2 sh:singleLine true constraint forbids line breaks in the lexical form of literal values; the emitted value schema does not project it, so the constraint is dropped."
+    "note": "A constraint whose validation results carry a severity outside the default conformance-disallow set (sh:Violation, sh:Warning, sh:Info) — sh:Debug, sh:Trace or a custom severity, from the shape or a reifier annotation — never makes a node fail to conform under that set, so the schema, which states conformance under it, does not enforce the constraint."
   },
   {
     "code": "sh:someValue",
@@ -2716,11 +2884,18 @@
     "note": "A shape targeted via sh:targetWhere selects the nodes that conform to another shape, not a class extension; it has no closed-world JSON Schema $def and its constraints are not enforced by the emitted schema."
   },
   {
+    "code": "sh:uniqueLang",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:uniqueLang true constraint forbids two values sharing a language tag, which a schema constraining each value alone cannot state; on a node shape, where it is not well-formed, it judges the focus node itself, which an object schema describing the node's properties does not state, so the constraint is dropped."
+  },
+  {
     "code": "sh:uniqueMembers",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A SHACL 1.2 sh:uniqueMembers constraint forbids a repeated member in a value that is an RDF list; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
+    "note": "A SHACL 1.2 sh:uniqueMembers true constraint forbids a repeated member in a value node (or focus node) that is an RDF list; the JSON-LD projection keeps an RDF list as a node reference whose members hang off rdf:first/rdf:rest chains in separate @graph nodes, so no JSON array carries the members for minItems, maxItems, uniqueItems or items to judge, and the constraint is dropped."
   },
   {
     "code": "sh:uniqueValuesFor",
@@ -2735,6 +2910,13 @@
     "to": "json-schema",
     "intentional": true,
     "note": "A SHACL 1.2 property shape with sh:values takes the output nodes of a node expression evaluated at validation as value nodes, which a JSON document does not carry; projecting its constraints onto the document's own values would require what a computed value supplies, so the property shape is dropped."
+  },
+  {
+    "code": "sh:xone",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:xone constraint on a property shape judges each value node against shapes; a value is projected as a node reference (its own properties live on its separate @graph node) or a literal, so the value schema has nothing to judge and the constraint is dropped."
   },
   {
     "code": "value-vocabulary",

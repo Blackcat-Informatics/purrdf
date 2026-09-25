@@ -61,10 +61,12 @@ const GOLDEN_SHAPES: &str = r#"
         ] ;
         sh:property [
             sh:path ex:code ;
+            sh:datatype xsd:string ;
             sh:pattern "^\\i\\c*$" ;
         ] ;
         sh:property [
             sh:path ex:category ;
+            sh:datatype xsd:string ;
             sh:pattern "^\\p{L}+$" ;
         ] .
 

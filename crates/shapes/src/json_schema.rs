@@ -31,6 +31,62 @@
 //! ledger, and (for node/property-level constraints) annotated with a
 //! `$comment` on the affected schema.
 //!
+//! # Every constraint is projected or recorded
+//!
+//! The per-shape and per-property compilers match every [`Constraint`] kind
+//! explicitly — no catch-all — so a constraint is either projected or dropped
+//! with a loss entry under the SHACL parameter that declares it and a
+//! `$comment` on the affected schema. What is projected:
+//!
+//! * a list value of `sh:class`, `sh:datatype` or `sh:nodeKind` on a property
+//!   shape is one disjunction (SHACL 1.2 Core), emitted as `anyOf` over its
+//!   members' alternatives;
+//! * `sh:singleLine true` on a property shape is exactly the negation of "a
+//!   string, or an object whose `@value` is a string, containing a line break";
+//!   on a node shape it holds of every node the object schema describes (a
+//!   subject is never a literal) and projects nothing;
+//! * `sh:someValue` on a node shape is projected as `sh:node` is.
+//! * Each value-type constraint (`sh:datatype`, `sh:class`, `sh:nodeKind`,
+//!   `sh:languageIn`) is one conjunct: several on a property are `allOf`, never
+//!   merged into one choice.
+//! * `sh:datatype` admits exactly the forms its literals project as: a bare
+//!   string for `xsd:string`, a bare number or boolean (or the typed object) for
+//!   a numeric datatype or `xsd:boolean`, the language-tagged object for
+//!   `rdf:langString`, and otherwise the typed object whose `@type` is the
+//!   datatype. `sh:nodeKind` tells an IRI's `@id` from a blank node's `_:` label,
+//!   and a triple term projects as the JSON-LD-star embedded node.
+//! * `sh:pattern`, `sh:minLength` and `sh:maxLength` judge the lexical form
+//!   wherever the projection carries it — a bare string and a literal object's
+//!   `@value` — and reject a blank node and a triple term, which have none;
+//!   `sh:languageIn` compares tags case-insensitively; a numeric range bound
+//!   rejects every value that is not comparable with a number; and
+//!   `sh:hasValue` is existential (`const` on a lone value, `contains` on an
+//!   array). Each constraint's violating forms are carried under one `not`, less
+//!   the forms no conjunct admits anyway.
+//!
+//! What is not: the SHACL 1.2 list components (`sh:minListLength`,
+//! `sh:maxListLength`, `sh:uniqueMembers true`, `sh:memberShape`). A SHACL list
+//! value node is an RDF list, and the instance projection (see
+//! [`crate::instance`]) keeps an RDF list as a node reference `{"@id": …}` whose
+//! members hang off `rdf:first`/`rdf:rest` chains in separate `@graph` nodes —
+//! never a JSON array. `minItems`, `maxItems`, `uniqueItems` and `items` judge a
+//! JSON array, which here is only ever the set of a multi-valued property's
+//! values, so projecting a list component onto them would judge the wrong thing;
+//! each is recorded as a loss instead.
+//!
+//! Nor is what a projection does not carry: an IRI value's full IRI (the `@id`
+//! is compacted) and a numeric or boolean literal's lexical form and datatype (a
+//! bare JSON scalar), which a lexical-form constraint or a numeric `sh:datatype`
+//! would need; the base direction telling `rdf:dirLangString` from
+//! `rdf:langString`; a typed-literal object's numeric value, for a range bound;
+//! and a pattern whose flags have no ECMA-262 translation. Each is recorded.
+//!
+//! The schema states conformance under the default conformance-disallow set
+//! (`sh:Violation`, `sh:Warning`, `sh:Info`): a constraint whose results carry
+//! any other severity — `sh:Debug`, `sh:Trace` or a custom one, from its shape or
+//! a reifier annotation — is not enforced, and records a `sh:severity` loss.
+//! Deactivated shapes are ignored, as validation ignores them.
+//!
 //! # Value-vocabulary enum projection (opt-in, projection-only)
 //!
 //! [`compile_with_value_vocab`] optionally projects *value vocabularies* — an
@@ -47,6 +103,7 @@
 //! a `$ref` to its enum `$def`, cardinality preserved.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use ::purrdf::RdfDataset;
 use ::purrdf::RdfLocation;
@@ -56,10 +113,14 @@ use serde_json::{Map, Value, json};
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
+use crate::report::{ConformanceDisallows, Severity};
 use crate::schema_surface::{
     OntologyExpression, OntologyPropertyKind, SchemaSurface, SurfaceClass, SurfaceProperty,
 };
-use crate::shapes::{ClosedMode, Constraint, NodeKindValue, Path, Shape, Shapes, Target};
+use crate::shapes::{
+    AnnotatedConstraint, ClosedMode, Constraint, ConstraintAnnotation, NodeKindValue, Path,
+    PropertyShape, Shape, Shapes, Target,
+};
 use crate::term::{NamedNode, Term};
 
 const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -71,6 +132,8 @@ const SH_NS: &str = "http://www.w3.org/ns/shacl#";
 /// per literal — see [`crate::instance`] for the matching projection convention).
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
 /// The W3C builtin prefixes that are ALWAYS available for compaction, whatever
 /// the shapes document declares. A document declaration of the same prefix name
@@ -1521,7 +1584,7 @@ fn named_range_schema(iri: &str, property: &SurfaceProperty, ctx: &Ctx<'_>) -> V
         || property.datatype_iris.contains(iri)
         || iri.starts_with(XSD_NS)
     {
-        return datatype_value_schema(iri);
+        return datatype_value_schema(iri, ctx.ns);
     }
     let key = ctx.ns.def_key(iri);
     if ctx.emitted_defs.contains(&key) {
@@ -2113,7 +2176,7 @@ fn openapi_doc(defs: &Map<String, Value>) -> Value {
 
 /// The shared `$defs/Annotation` object schema: free-form statement metadata.
 ///
-/// Permissive on purpose — future work tightens it. Values may be node refs
+/// Permissive by design: statement metadata may carry any RDF value — node refs
 /// (`{"@id":..}`), scalars, or typed literals (`{"@value":..,"@type":..}`).
 fn annotation_def() -> Value {
     json!({
@@ -2159,6 +2222,13 @@ fn typed_literal_schema() -> Value {
 /// body). Property shapes become `properties`; node-level logical/closed
 /// constraints become `allOf`/`anyOf`/`oneOf`/`not`/`additionalProperties`.
 fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
+    // "Deactivated shapes are ignored during validation": every node conforms to
+    // a deactivated shape nested under `sh:and`/`sh:or`/`sh:xone`/`sh:node`/
+    // `sh:someValue`, which the empty schema states exactly. (A deactivated
+    // top-level shape gets no `$def` at all.)
+    if shape.deactivated {
+        return json!({});
+    }
     let shape_iri = shape.id.to_string();
 
     let mut properties: Map<String, Value> = Map::new();
@@ -2195,17 +2265,39 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     // The raw IRI is retained so the value-vocabulary `rdfs:range` lookup can key
     // by predicate IRI (the compacted key would lose the namespace).
     let mut by_key: BTreeMap<String, (String, Vec<Constraint>)> = BTreeMap::new();
+    // Keys a `sh:closed true` object still permits although no value schema is
+    // emitted for them: SHACL 1.2 Core §7.9.1 collects the permitted properties
+    // from every `sh:property/sh:path` IRI, whatever the property shape's state.
+    let mut permitted_keys: Vec<String> = Vec::new();
     for ps in &shape.property_shapes {
         // Only direct predicate paths shape outgoing JSON properties; inverse
-        // and composite paths (sequence/alternative/closures) are skipped with
-        // a note.
+        // and composite paths (sequence/alternative/closures) are dropped, and
+        // the loss recorded.
         let Path::Predicate(pred) = &ps.path else {
-            comments.push(
-                "a non-predicate-path property shape was skipped (only direct predicate paths constrain outgoing JSON properties)".to_owned(),
-            );
+            if !ps.deactivated {
+                let path_text = crate::path::path_to_sparql(&ps.path);
+                ctx.record(
+                    "sh:path",
+                    &shape_iri,
+                    &format!(
+                        "a property shape on the path {path_text}, which is not one predicate, \
+                         constrains no outgoing JSON property"
+                    ),
+                );
+                comments.push(format!(
+                    "the property shape on the path {path_text} was dropped (only direct \
+                     predicate paths constrain outgoing JSON properties)"
+                ));
+            }
             continue;
         };
         let key = ctx.ns.compact_iri(pred.as_str());
+        // "Deactivated shapes are ignored during validation": nothing to project,
+        // and nothing dropped.
+        if ps.deactivated {
+            permitted_keys.push(key);
+            continue;
+        }
         // SHACL 1.2 Core: the value nodes of a property shape with `sh:values` or
         // `sh:defaultValue` include "the output nodes of evalExpr(e, data graph,
         // focus node, {})" — nodes computed at validation, which a JSON document
@@ -2229,13 +2321,24 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                 "the property shape on {key} was dropped (its value nodes are computed by \
                  sh:values / sh:defaultValue, which a JSON document does not carry)"
             ));
+            permitted_keys.push(key);
             continue;
         }
+        record_property_shape_losses(ps, &shape_iri, &key, &mut comments, ctx);
+        let enforced = enforced_constraints(
+            &ps.constraints,
+            &ps.constraint_annotations,
+            &ps.severity,
+            &shape_iri,
+            Some(&key),
+            &mut comments,
+            ctx,
+        );
         by_key
             .entry(key)
             .or_insert_with(|| (pred.as_str().to_owned(), Vec::new()))
             .1
-            .extend(ps.constraints.iter().cloned());
+            .extend(enforced.into_iter().cloned());
     }
 
     for (key, (pred_iri, constraints)) in &by_key {
@@ -2254,7 +2357,16 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     let mut additional_properties_false = false;
     let mut closed_ignored: Vec<String> = Vec::new();
 
-    for c in &shape.constraints {
+    let node_constraints = enforced_constraints(
+        &shape.constraints,
+        &shape.constraint_annotations,
+        &shape.severity,
+        &shape_iri,
+        None,
+        &mut comments,
+        ctx,
+    );
+    for c in node_constraints {
         match c {
             Constraint::And(members) => {
                 for m in members {
@@ -2323,7 +2435,10 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                 mode: ClosedMode::Declared,
             } => {
                 additional_properties_false = true;
-                for n in ignored {
+                // The projection folds `rdf:type` into the always-declared `@type`
+                // key and never emits it as a property, so ignoring it permits
+                // nothing more; a second key for it would name no instance key.
+                for n in ignored.iter().filter(|n| n.as_str() != rdf::TYPE) {
                     closed_ignored.push(ctx.ns.compact_iri(n.as_str()));
                 }
             }
@@ -2407,16 +2522,89 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                     None,
                 );
             }
-            // Node-level value constraints (sh:class, sh:nodeKind, …) shape the
-            // node identity rather than an object's JSON properties; for the
-            // object-schema projection they are not expressed here.
-            _ => {}
+            // The SHACL 1.2 list components judge the focus node itself as an RDF
+            // list. An object schema describes the node's own properties, and a
+            // list node's members hang off `rdf:first`/`rdf:rest` chains the
+            // projection keeps as separate `@graph` nodes, so none is projected.
+            Constraint::MinListLength(_) => {
+                record_node_list_loss(ctx, &mut comments, "sh:minListLength", &shape_iri);
+            }
+            Constraint::MaxListLength(_) => {
+                record_node_list_loss(ctx, &mut comments, "sh:maxListLength", &shape_iri);
+            }
+            Constraint::UniqueMembers(true) => {
+                record_node_list_loss(ctx, &mut comments, "sh:uniqueMembers", &shape_iri);
+            }
+            Constraint::MemberShape(_) => {
+                record_node_list_loss(ctx, &mut comments, "sh:memberShape", &shape_iri);
+            }
+            Constraint::RootClass(_) => {
+                ctx.record(
+                    "sh:rootClass",
+                    &shape_iri,
+                    "an rdfs:subClassOf* bound on the focus node has no JSON Schema equivalent",
+                );
+                comments.push(
+                    "a node-level sh:rootClass constraint was dropped (no JSON Schema equivalent)"
+                        .to_owned(),
+                );
+            }
+            // An object schema describes a node — an IRI or blank node, never a
+            // literal, since no literal is the subject of a triple — and
+            // `sh:singleLine` judges only literals, so on a node shape it holds of
+            // every focus node the object schema describes: nothing to project and
+            // nothing dropped. `sh:uniqueMembers false` checks nothing.
+            Constraint::SingleLine(_) | Constraint::UniqueMembers(false) => {}
+            // Every other constraint on a node shape judges the focus node itself —
+            // its class membership through the data graph's `rdfs:subClassOf*`,
+            // its datatype or node kind, its lexical form, its value, its language
+            // tag, its own count — which an object schema describing the node's
+            // properties does not state (a list value of `sh:class`, `sh:datatype`
+            // or `sh:nodeKind` is one disjunction, dropped whole). Some are not even
+            // well-formed on a node shape (`sh:minCount`, `sh:uniqueLang`,
+            // `sh:qualifiedValueShape`); the parser keeps them, so they are dropped
+            // with their loss recorded rather than skipped.
+            Constraint::Class(_)
+            | Constraint::Datatype(_)
+            | Constraint::NodeKind(_)
+            | Constraint::MinCount(_)
+            | Constraint::MaxCount(_)
+            | Constraint::In(_)
+            | Constraint::HasValue(_)
+            | Constraint::Pattern { .. }
+            | Constraint::MinLength(_)
+            | Constraint::MaxLength(_)
+            | Constraint::UniqueLang(true)
+            | Constraint::LanguageIn(_)
+            | Constraint::MinInclusive(_)
+            | Constraint::MaxInclusive(_)
+            | Constraint::MinExclusive(_)
+            | Constraint::MaxExclusive(_)
+            | Constraint::QualifiedValueShape { .. }
+            | Constraint::Component { .. } => {
+                let term = constraint_term(c);
+                ctx.record(
+                    term,
+                    &shape_iri,
+                    &constraint_note(
+                        c,
+                        "a constraint on the focus node itself has no projection in an object \
+                         schema describing the node's properties",
+                    ),
+                );
+                comments.push(format!(
+                    "a node-level {term} constraint was dropped (no projection in an object schema)"
+                ));
+            }
+            // `sh:uniqueLang false` checks nothing.
+            Constraint::UniqueLang(false) => {}
         }
     }
 
-    // sh:closed: allow the ignored predicates as declared keys too.
+    // sh:closed: allow the ignored predicates, and the paths of the property
+    // shapes that project no value schema, as declared keys too.
     if additional_properties_false {
-        for k in &closed_ignored {
+        for k in closed_ignored.iter().chain(&permitted_keys) {
             properties
                 .entry(k.clone())
                 .or_insert_with(|| Value::Bool(true));
@@ -2502,6 +2690,20 @@ fn negand_value_constraint_ok(c: &Constraint) -> bool {
     matches!(c, Constraint::MinCount(_))
 }
 
+/// Whether a reifier annotation gives one of a shape's constraints a severity
+/// outside `disallowed`, so that constraint need not decide conformance.
+fn undecisive_annotation(
+    annotations: &[ConstraintAnnotation],
+    disallowed: &ConformanceDisallows,
+) -> bool {
+    annotations.iter().any(|annotation| {
+        annotation
+            .severity
+            .as_ref()
+            .is_some_and(|severity| !disallowed.contains(severity))
+    })
+}
+
 /// Losslessly project the inner shape of a `sh:not` into the list of AND-conjunct
 /// schemas — the parts whose conjunction `A ∧ B ∧ …` IS the inner (a node
 /// conforms to the inner iff it satisfies EVERY part) — or `None` if any part of
@@ -2539,6 +2741,17 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     if inner.constraints.is_empty() && inner.property_shapes.is_empty() {
         return None;
     }
+    // A deactivated inner, or one whose results need not decide conformance (a
+    // severity outside the default conformance-disallow set, on the shape or on
+    // a reifier of one of its constraints), conforms where its constraints fail;
+    // negating the constraints would reject nodes `sh:not` accepts.
+    let disallowed = ConformanceDisallows::default();
+    if inner.deactivated
+        || !disallowed.contains(&inner.severity)
+        || undecisive_annotation(&inner.constraint_annotations, &disallowed)
+    {
+        return None;
+    }
 
     let mut parts: Vec<Value> = Vec::new();
 
@@ -2565,6 +2778,8 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     let inner_iri = inner.id.to_string();
     for ps in &inner.property_shapes {
         if ps.deactivated
+            || !disallowed.contains(&ps.severity)
+            || undecisive_annotation(&ps.constraint_annotations, &disallowed)
             || !ps.property_shapes.is_empty()
             || !ps.reifier_shapes.is_empty()
             || ps.reification_required
@@ -2620,6 +2835,183 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     Some(parts)
 }
 
+/// The SHACL parameter a constraint is declared by — the loss code of a
+/// constraint dropped whole.
+const fn constraint_term(constraint: &Constraint) -> &'static str {
+    match constraint {
+        Constraint::Class(_) => "sh:class",
+        Constraint::Datatype(_) => "sh:datatype",
+        Constraint::NodeKind(_) => "sh:nodeKind",
+        Constraint::MinCount(_) => "sh:minCount",
+        Constraint::MaxCount(_) => "sh:maxCount",
+        Constraint::In(_) => "sh:in",
+        Constraint::HasValue(_) => "sh:hasValue",
+        Constraint::Pattern { .. } => "sh:pattern",
+        Constraint::MinLength(_) => "sh:minLength",
+        Constraint::MaxLength(_) => "sh:maxLength",
+        Constraint::UniqueLang(_) => "sh:uniqueLang",
+        Constraint::LanguageIn(_) => "sh:languageIn",
+        Constraint::Not(_) => "sh:not",
+        Constraint::Closed {
+            mode: ClosedMode::Declared,
+            ..
+        } => "sh:closed",
+        Constraint::Closed {
+            mode: ClosedMode::ByTypes(_),
+            ..
+        } => "sh:closed sh:ByTypes",
+        Constraint::MinInclusive(_) => "sh:minInclusive",
+        Constraint::MaxInclusive(_) => "sh:maxInclusive",
+        Constraint::MinExclusive(_) => "sh:minExclusive",
+        Constraint::MaxExclusive(_) => "sh:maxExclusive",
+        Constraint::And(_) => "sh:and",
+        Constraint::Or(_) => "sh:or",
+        Constraint::Xone(_) => "sh:xone",
+        Constraint::Node(_) => "sh:node",
+        Constraint::Sparql { .. } => "sh:sparql",
+        Constraint::Equals(_) => "sh:equals",
+        Constraint::Disjoint(_) => "sh:disjoint",
+        Constraint::SubsetOf(_) => "sh:subsetOf",
+        Constraint::LessThan(_) => "sh:lessThan",
+        Constraint::LessThanOrEquals(_) => "sh:lessThanOrEquals",
+        Constraint::QualifiedValueShape { .. } => "sh:qualifiedValueShape",
+        Constraint::Expression { .. } => "sh:expression",
+        Constraint::NodeByExpression { .. } => "sh:nodeByExpression",
+        Constraint::MinListLength(_) => "sh:minListLength",
+        Constraint::MaxListLength(_) => "sh:maxListLength",
+        Constraint::UniqueMembers(_) => "sh:uniqueMembers",
+        Constraint::MemberShape(_) => "sh:memberShape",
+        Constraint::SingleLine(_) => "sh:singleLine",
+        Constraint::RootClass(_) => "sh:rootClass",
+        Constraint::SomeValue(_) => "sh:someValue",
+        Constraint::UniqueValuesFor { .. } => "sh:uniqueValuesFor",
+        Constraint::Component { .. } => "sh:ConstraintComponent",
+    }
+}
+
+/// A loss note for a dropped constraint: `reason`, naming the custom component
+/// when the constraint is one (its code alone does not say which).
+fn constraint_note(constraint: &Constraint, reason: &str) -> String {
+    match constraint {
+        Constraint::Component { component, .. } => {
+            format!(
+                "{reason} (custom constraint component <{}>)",
+                component.as_str()
+            )
+        }
+        _ => reason.to_owned(),
+    }
+}
+
+/// The severity a constraint's validation results carry: its reifier
+/// annotation's `sh:severity` when the shapes graph states one, else the shape's.
+fn constraint_severity<'a>(
+    annotations: &'a [ConstraintAnnotation],
+    index: usize,
+    shape_severity: &'a Severity,
+) -> &'a Severity {
+    annotations
+        .iter()
+        .find(|annotation| annotation.constraint == AnnotatedConstraint::Constraint(index))
+        .and_then(|annotation| annotation.severity.as_ref())
+        .unwrap_or(shape_severity)
+}
+
+/// The constraints of a shape whose validation results decide conformance, in
+/// declaration order; every other one is dropped and its loss recorded.
+///
+/// The schema states conformance under the default conformance-disallow set —
+/// `sh:Violation`, `sh:Warning` and `sh:Info` (SHACL 1.2 Core) — for a report
+/// that declares none. A constraint whose results carry any other severity
+/// (`sh:Debug`, `sh:Trace`, a custom severity) never makes a node fail to
+/// conform under that set, so enforcing it would reject conforming data; it is
+/// dropped instead, with its loss recorded, since a caller disallowing that
+/// severity would have it decide conformance.
+fn enforced_constraints<'c>(
+    constraints: &'c [Constraint],
+    annotations: &[ConstraintAnnotation],
+    shape_severity: &Severity,
+    shape_iri: &str,
+    key: Option<&str>,
+    comments: &mut Vec<String>,
+    ctx: &mut Ctx<'_>,
+) -> Vec<&'c Constraint> {
+    let disallowed = ConformanceDisallows::default();
+    let mut enforced = Vec::with_capacity(constraints.len());
+    for (index, constraint) in constraints.iter().enumerate() {
+        let severity = constraint_severity(annotations, index, shape_severity);
+        if disallowed.contains(severity) {
+            enforced.push(constraint);
+            continue;
+        }
+        let term = constraint_term(constraint);
+        let severity = severity.iri();
+        ctx.record(
+            "sh:severity",
+            shape_iri,
+            &format!(
+                "a {term} constraint whose results carry the severity <{severity}>, outside the \
+                 default conformance-disallow set, decides no conformance the schema states"
+            ),
+        );
+        comments.push(match key {
+            Some(key) => format!(
+                "a {term} constraint on property {key} was dropped (its severity <{severity}> \
+                 does not decide conformance)"
+            ),
+            None => format!(
+                "a node-level {term} constraint was dropped (its severity <{severity}> does not \
+                 decide conformance)"
+            ),
+        });
+    }
+    enforced
+}
+
+/// Record what a property shape carries besides its constraints that its value
+/// schema does not project: nested property shapes (`sh:property` on a property
+/// shape, judging each value node's own properties), `sh:reifierShape` and
+/// `sh:reificationRequired` (judging the reifiers of each value's triple, which
+/// the projection does not attach to the value).
+fn record_property_shape_losses(
+    ps: &PropertyShape,
+    shape_iri: &str,
+    key: &str,
+    comments: &mut Vec<String>,
+    ctx: &mut Ctx<'_>,
+) {
+    let active_nested = ps.property_shapes.iter().any(|nested| !nested.deactivated);
+    let active_reifiers = ps.reifier_shapes.iter().any(|reifier| !reifier.deactivated);
+    for (present, term, note) in [
+        (
+            active_nested,
+            "sh:property",
+            "a property shape nested under a property shape judges each value node's own \
+             properties, which the value's node reference does not carry",
+        ),
+        (
+            active_reifiers,
+            "sh:reifierShape",
+            "a reifier shape judges the reifiers of each value's triple, which the projected \
+             value does not carry",
+        ),
+        (
+            ps.reification_required,
+            "sh:reificationRequired",
+            "a requirement that each value's triple be reified has no projection in the value \
+             schema",
+        ),
+    ] {
+        if present {
+            ctx.record(term, shape_iri, note);
+            comments.push(format!(
+                "a {term} constraint on property {key} was dropped (no projection in its value \
+                 schema)"
+            ));
+        }
+    }
+}
+
 /// Record that a SHACL 1.2 list component on property `key` is not projected by
 /// this emitter: a loss-ledger entry and a `$comment`, never a silent drop.
 fn record_list_loss(
@@ -2636,6 +3028,25 @@ fn record_list_loss(
     );
     comments.push(format!(
         "a {term} constraint on property {key} was dropped (no projection in this emitter)"
+    ));
+}
+
+/// Record that a SHACL 1.2 list component on a node shape — judging the focus
+/// node itself as an RDF list — is not projected: a loss-ledger entry and a
+/// `$comment`, never a silent drop.
+fn record_node_list_loss(
+    ctx: &mut Ctx<'_>,
+    comments: &mut Vec<String>,
+    term: &str,
+    shape_iri: &str,
+) {
+    ctx.record(
+        term,
+        shape_iri,
+        "a SHACL list constraint on the focus node has no projection in this emitter",
+    );
+    comments.push(format!(
+        "a node-level {term} constraint was dropped (no projection in this emitter)"
     ));
 }
 
@@ -2726,13 +3137,30 @@ fn compile_property(
 ) -> (Value, bool) {
     // The "scalar" value schema (a single value, pre-cardinality).
     let mut value: Map<String, Value> = Map::new();
-    // anyOf alternatives accumulated across datatype/class/nodekind constraints.
-    let mut alts: Vec<Value> = Vec::new();
-    let mut enum_values: Vec<Value> = Vec::new();
+    // One group of `anyOf` alternatives per value-type constraint
+    // (`sh:datatype`, `sh:class`, `sh:nodeKind`, `sh:languageIn`, a
+    // value-vocabulary range). A list value is a disjunction within its group;
+    // the constraints themselves are conjunctive, so two groups are `allOf`.
+    let mut groups: Vec<Vec<Value>> = Vec::new();
+    // Every `sh:in` list; a value must be a member of each.
+    let mut in_lists: Vec<Vec<Value>> = Vec::new();
+    // The projected forms of a value that violates some constraint — the value
+    // schema carries them under `not`.
+    let mut rejected: Vec<Value> = Vec::new();
+    // Every `sh:hasValue` term, projected: some value must be each one.
+    let mut has_values: Vec<Value> = Vec::new();
+    let mut patterns: Vec<String> = Vec::new();
+    let mut min_length: Option<u64> = None;
+    let mut max_length: Option<u64> = None;
     let mut comments: Vec<String> = Vec::new();
 
+    // Several property shapes on one path are merged, so every cardinality and
+    // bound is the tightest of those declared.
     let mut min_count: Option<u64> = None;
     let mut max_count: Option<u64> = None;
+    let mut single_line = false;
+    let mut numeric_bounds = false;
+    let admits = Admits::of(constraints);
 
     // Value-vocabulary precedence (E4): whether ANY `sh:class` was present, and
     // the enum key emitted by a vocab-resolving `sh:class` (if any). Drives
@@ -2742,17 +3170,22 @@ fn compile_property(
 
     for c in constraints {
         match c {
-            Constraint::MinCount(n) => min_count = Some(*n),
-            Constraint::MaxCount(n) => max_count = Some(*n),
+            Constraint::MinCount(n) => min_count = Some(min_count.map_or(*n, |m| m.max(*n))),
+            Constraint::MaxCount(n) => max_count = Some(max_count.map_or(*n, |m| m.min(*n))),
             // A SHACL list value is a disjunction (SHACL 1.2 Core §4.1.2): every
             // member contributes its alternative, and the alternatives are
             // emitted together as `anyOf`.
             Constraint::Datatype(datatypes) => {
-                for dt in datatypes {
-                    alts.push(datatype_value_schema(dt.as_str()));
-                }
+                groups.push(
+                    datatypes
+                        .iter()
+                        .map(|dt| datatype_value_schema(dt.as_str(), ctx.ns))
+                        .collect(),
+                );
+                record_datatype_losses(datatypes, shape_iri, key, &mut comments, ctx);
             }
             Constraint::Class(classes) => {
+                let mut alts: Vec<Value> = Vec::new();
                 had_any_class = true;
                 for c in classes {
                     // A `sh:class` pointing at a value-vocabulary class resolves to the
@@ -2824,37 +3257,28 @@ fn compile_property(
                         alts.push(node_ref);
                     }
                 }
+                groups.push(alts);
             }
             Constraint::NodeKind(kinds) => {
+                let mut alts: Vec<Value> = Vec::new();
                 for nk in kinds {
                     match nk {
-                        NodeKindValue::Literal => {
-                            alts.push(json!({ "type": "string" }));
-                            alts.push(typed_literal_schema());
+                        NodeKindValue::Literal => alts.extend(literal_schemas()),
+                        NodeKindValue::Iri => alts.push(iri_ref_schema()),
+                        NodeKindValue::BlankNode => alts.push(blank_ref_schema()),
+                        NodeKindValue::BlankNodeOrIri => alts.push(node_ref_schema()),
+                        NodeKindValue::IriOrLiteral => {
+                            alts.push(iri_ref_schema());
+                            alts.extend(literal_schemas());
                         }
-                        NodeKindValue::Iri
-                        | NodeKindValue::BlankNode
-                        | NodeKindValue::BlankNodeOrIri => {
-                            alts.push(node_ref_schema());
+                        NodeKindValue::BlankNodeOrLiteral => {
+                            alts.push(blank_ref_schema());
+                            alts.extend(literal_schemas());
                         }
-                        NodeKindValue::IriOrLiteral | NodeKindValue::BlankNodeOrLiteral => {
-                            alts.push(node_ref_schema());
-                            alts.push(json!({ "type": "string" }));
-                            alts.push(typed_literal_schema());
-                        }
-                        NodeKindValue::TripleTerm => {
-                            ctx.record(
-                                "sh:nodeKind",
-                                shape_iri,
-                                "sh:TripleTerm has no JSON Schema equivalent",
-                            );
-                            comments.push(format!(
-                                "a sh:nodeKind sh:TripleTerm alternative on property {key} was \
-                                 dropped (no JSON Schema equivalent)"
-                            ));
-                        }
+                        NodeKindValue::TripleTerm => alts.push(triple_ref_schema()),
                     }
                 }
+                groups.push(alts);
             }
             Constraint::MinListLength(_) => {
                 record_list_loss(ctx, &mut comments, "sh:minListLength", shape_iri, key);
@@ -2862,25 +3286,18 @@ fn compile_property(
             Constraint::MaxListLength(_) => {
                 record_list_loss(ctx, &mut comments, "sh:maxListLength", shape_iri, key);
             }
-            Constraint::UniqueMembers(_) => {
+            // `sh:uniqueMembers false` checks nothing, so nothing is dropped.
+            Constraint::UniqueMembers(false) => {}
+            Constraint::UniqueMembers(true) => {
                 record_list_loss(ctx, &mut comments, "sh:uniqueMembers", shape_iri, key);
             }
             Constraint::MemberShape(_) => {
                 record_list_loss(ctx, &mut comments, "sh:memberShape", shape_iri, key);
             }
             Constraint::SingleLine(false) => {}
-            Constraint::SingleLine(true) => {
-                ctx.record(
-                    "sh:singleLine",
-                    shape_iri,
-                    "a line-break prohibition over literal lexical forms has no projection in \
-                     this emitter",
-                );
-                comments.push(format!(
-                    "a sh:singleLine constraint on property {key} was dropped (no projection in \
-                     this emitter)"
-                ));
-            }
+            // A line-break prohibition over literal lexical forms is exactly the
+            // negation of `line_break_rejections` (see its documentation).
+            Constraint::SingleLine(true) => single_line = true,
             Constraint::RootClass(_) => {
                 ctx.record(
                     "sh:rootClass",
@@ -2906,18 +3323,31 @@ fn compile_property(
                 ));
             }
             Constraint::In(terms) => {
-                for t in terms {
-                    enum_values.push(json!(term_enum_value(t, ctx.ns)));
-                }
+                in_lists.push(terms.iter().map(|t| term_enum_value(t, ctx.ns)).collect());
             }
-            Constraint::HasValue(v) => {
-                value.insert("const".to_owned(), term_const_value(v, ctx.ns));
-            }
+            Constraint::HasValue(v) => has_values.push(term_enum_value(v, ctx.ns)),
             Constraint::Pattern { regex, flags, .. } => {
                 match purrdf_core::xsd_regex::to_ecma_262(regex, flags.as_deref().unwrap_or("")) {
-                    Ok(pattern) => {
-                        value.insert("pattern".to_owned(), json!(pattern));
+                    Ok(pattern) => patterns.push(pattern),
+                    // The pattern is valid but its language (an `i` flag's XPath
+                    // case variants, a translation past the size bound) has no
+                    // ECMA-262 source: emitting any pattern would judge a
+                    // different language, so none is, and the loss is recorded.
+                    Err(
+                        error @ (purrdf_core::xsd_regex::Ecma262Error::Unsupported(_)
+                        | purrdf_core::xsd_regex::Ecma262Error::TooLarge),
+                    ) => {
+                        ctx.record(
+                            "sh:pattern",
+                            shape_iri,
+                            &format!("the pattern {regex:?} has no ECMA-262 translation ({error})"),
+                        );
+                        comments.push(format!(
+                            "a sh:pattern constraint on property {key} was dropped (no \
+                             ECMA-262 translation: {error})"
+                        ));
                     }
+                    // A pattern outside the XSD/XPath language is a broken shape.
                     Err(error) => {
                         if ctx.pattern_error.is_none() {
                             ctx.pattern_error = Some(SchemaCompileError::Pattern {
@@ -2929,27 +3359,25 @@ fn compile_property(
                     }
                 }
             }
-            Constraint::MinLength(n) => {
-                value.insert("minLength".to_owned(), json!(n));
-            }
-            Constraint::MaxLength(n) => {
-                value.insert("maxLength".to_owned(), json!(n));
-            }
+            Constraint::MinLength(n) => min_length = Some(min_length.map_or(*n, |m| m.max(*n))),
+            Constraint::MaxLength(n) => max_length = Some(max_length.map_or(*n, |m| m.min(*n))),
             Constraint::MinInclusive(t) => {
-                insert_numeric(&mut value, "minimum", t, &mut comments);
+                numeric_bounds |= insert_bound(&mut value, "minimum", t, true);
+                record_bound_loss(c, t, shape_iri, key, &mut comments, ctx);
             }
             Constraint::MaxInclusive(t) => {
-                insert_numeric(&mut value, "maximum", t, &mut comments);
+                numeric_bounds |= insert_bound(&mut value, "maximum", t, false);
+                record_bound_loss(c, t, shape_iri, key, &mut comments, ctx);
             }
             Constraint::MinExclusive(t) => {
-                insert_numeric(&mut value, "exclusiveMinimum", t, &mut comments);
+                numeric_bounds |= insert_bound(&mut value, "exclusiveMinimum", t, true);
+                record_bound_loss(c, t, shape_iri, key, &mut comments, ctx);
             }
             Constraint::MaxExclusive(t) => {
-                insert_numeric(&mut value, "exclusiveMaximum", t, &mut comments);
+                numeric_bounds |= insert_bound(&mut value, "exclusiveMaximum", t, false);
+                record_bound_loss(c, t, shape_iri, key, &mut comments, ctx);
             }
-            Constraint::LanguageIn(tags) => {
-                alts.push(lang_literal_schema(tags));
-            }
+            Constraint::LanguageIn(tags) => groups.push(vec![lang_literal_schema(tags)]),
             Constraint::Sparql { .. } => {
                 ctx.record(
                     "sh:sparql",
@@ -3041,9 +3469,39 @@ fn compile_property(
                     Some(key),
                 );
             }
-            // Counts handled above; node-shape-only constraints (Closed/And/…)
-            // do not appear on a property shape's value schema.
-            _ => {}
+            // `sh:uniqueLang false` checks nothing.
+            Constraint::UniqueLang(false) => {}
+            // A value node is projected as a node reference `{"@id": …}` (its own
+            // properties live on its separate `@graph` node) or a literal, so a
+            // shape-based constraint judging the value node against a shape — or
+            // the value node's own closed property set — has nothing in the value
+            // to judge; `sh:uniqueLang true` compares the language tags of several
+            // values, which a schema constraining each value alone cannot; and a
+            // custom constraint component's validator is a SPARQL query. Each is
+            // dropped, its loss recorded.
+            Constraint::UniqueLang(true)
+            | Constraint::Closed { .. }
+            | Constraint::And(_)
+            | Constraint::Or(_)
+            | Constraint::Xone(_)
+            | Constraint::Node(_)
+            | Constraint::QualifiedValueShape { .. }
+            | Constraint::Component { .. } => {
+                let term = constraint_term(c);
+                ctx.record(
+                    term,
+                    shape_iri,
+                    &constraint_note(
+                        c,
+                        "a constraint on a property's value nodes has no projection in its \
+                         value schema",
+                    ),
+                );
+                comments.push(format!(
+                    "a {term} constraint on property {key} was dropped (no projection in its \
+                     value schema)"
+                ));
+            }
         }
     }
 
@@ -3086,35 +3544,123 @@ fn compile_property(
                     .into_iter()
                     .map(|range_key| json!({ "$ref": format!("#/$defs/{range_key}") }))
                     .collect();
-                alts.push(if refs.len() == 1 {
+                groups.push(vec![if refs.len() == 1 {
                     refs.pop().expect("one range ref")
                 } else {
                     json!({ "allOf": refs })
-                });
+                }]);
             }
         }
     }
 
-    if !enum_values.is_empty() {
-        crate::term::sort_canonical(&mut enum_values);
-        enum_values.dedup();
-        value.insert("enum".to_owned(), Value::Array(enum_values));
-    }
-
-    if !alts.is_empty() {
-        // Stable order, de-duplicated.
-        crate::term::sort_canonical(&mut alts);
-        alts.dedup();
-        if alts.len() == 1 {
-            // Fold the single alternative into the value map.
-            if let Value::Object(only) = alts.remove(0) {
-                for (k, v) in only {
-                    value.entry(k).or_insert(v);
-                }
-            }
+    // `sh:in`: a value is a member of every list.
+    if let Some((first, rest)) = in_lists.split_first() {
+        let mut members: Vec<Value> = first
+            .iter()
+            .filter(|member| rest.iter().all(|list| list.contains(member)))
+            .cloned()
+            .collect();
+        crate::term::sort_canonical(&mut members);
+        members.dedup();
+        if members.is_empty() {
+            // No term is in every list: no value conforms.
+            rejected.push(json!({}));
         } else {
-            value.insert("anyOf".to_owned(), Value::Array(alts));
+            value.insert("enum".to_owned(), Value::Array(members));
         }
+    }
+
+    // A rejected form no group admits needs no rejecting: the groups already
+    // reject it. Dropping those keeps the schema no wider and lets a consumer read
+    // the positive keywords alone (an `xsd:string` value schema needs no rule
+    // for a literal object it never admits).
+    let admitted = groups.iter().filter(|alts| !alts.is_empty()).fold(
+        ProjectedKinds::ALL,
+        |admitted, alts| {
+            admitted.intersect(alts.iter().fold(ProjectedKinds::NONE, |kinds, alt| {
+                kinds.union(ProjectedKinds::of(alt))
+            }))
+        },
+    );
+    let rejection_admissible =
+        move |rejection: &Value| !ProjectedKinds::of(rejection).intersect(admitted).is_empty();
+
+    // Normalize each group to one schema (its only alternative, or their
+    // `anyOf`), in a stable order, de-duplicated.
+    let mut group_schemas: Vec<Value> = groups
+        .into_iter()
+        .filter(|alts| !alts.is_empty())
+        .map(|mut alts| {
+            crate::term::sort_canonical(&mut alts);
+            alts.dedup();
+            if alts.len() == 1 {
+                alts.remove(0)
+            } else {
+                json!({ "anyOf": alts })
+            }
+        })
+        .collect();
+    crate::term::sort_canonical(&mut group_schemas);
+    group_schemas.dedup();
+    if group_schemas.len() == 1 {
+        // Fold the one group into the value map.
+        if let Some(Value::Object(only)) = group_schemas.pop() {
+            for (k, v) in only {
+                value.entry(k).or_insert(v);
+            }
+        }
+    } else if !group_schemas.is_empty() {
+        value.insert("allOf".to_owned(), Value::Array(group_schemas));
+    }
+
+    // The lexical-form constraints (see `lexical_form_rejections`).
+    patterns.sort();
+    patterns.dedup();
+    let lexical = !patterns.is_empty() || min_length.is_some() || max_length.is_some();
+    if let Some((first, rest)) = patterns.split_first() {
+        value.insert("pattern".to_owned(), json!(first));
+        for pattern in rest {
+            rejected.push(json!({ "type": "string", "not": { "pattern": pattern } }));
+        }
+    }
+    for pattern in &patterns {
+        rejected.push(literal_value_rejection(
+            json!({ "not": { "pattern": pattern } }),
+        ));
+    }
+    if let Some(n) = min_length {
+        value.insert("minLength".to_owned(), json!(n));
+        if n > 0 {
+            rejected.push(literal_value_rejection(json!({ "maxLength": n - 1 })));
+        }
+    }
+    if let Some(n) = max_length {
+        value.insert("maxLength".to_owned(), json!(n));
+        rejected.push(literal_value_rejection(json!({ "minLength": n + 1 })));
+    }
+    if lexical {
+        // "a validation result for each value node that is a blank node", and a
+        // triple term has no lexical form (`str` is undefined on it) either.
+        rejected.push(blank_ref_schema());
+        rejected.push(triple_ref_schema());
+        record_lexical_losses(constraints, admits, shape_iri, key, &mut comments, ctx);
+    }
+    if single_line {
+        rejected.extend(line_break_rejections());
+    }
+    if numeric_bounds {
+        rejected.extend(non_numeric_rejections());
+    }
+    rejected.retain(|rejection| rejection_admissible(rejection));
+    if !rejected.is_empty() {
+        crate::term::sort_canonical(&mut rejected);
+        rejected.dedup();
+        let negand = if rejected.len() == 1 {
+            rejected.remove(0)
+        } else {
+            json!({ "anyOf": rejected })
+        };
+        value.insert("not".to_owned(), negand);
     }
 
     if !comments.is_empty() {
@@ -3123,8 +3669,37 @@ fn compile_property(
         value.insert("$comment".to_owned(), json!(comments.join("; ")));
     }
 
+    // `sh:hasValue` is existential — some value is the term — so it constrains
+    // the property's values together, never each one: a lone value must be the
+    // term, and an array of values must contain it.
+    crate::term::sort_canonical(&mut has_values);
+    has_values.dedup();
+    let item = Value::Object(value.clone());
+    match has_values.as_slice() {
+        [] => {}
+        [only] => {
+            value.insert("const".to_owned(), only.clone());
+        }
+        several => {
+            let consts: Vec<Value> = several.iter().map(|v| json!({ "const": v })).collect();
+            value.insert("allOf".to_owned(), {
+                let mut all = value
+                    .get("allOf")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                all.extend(consts);
+                Value::Array(all)
+            });
+        }
+    }
     let single = Value::Object(value);
 
+    // `sh:hasValue` requires a value, so it implies `sh:minCount 1`, stated as
+    // such so that the schema reads back as the constraints it projects.
+    if !has_values.is_empty() {
+        min_count = Some(min_count.map_or(1, |n| n.max(1)));
+    }
     // Required iff minCount >= 1.
     let is_required = min_count.is_some_and(|n| n >= 1);
 
@@ -3140,7 +3715,7 @@ fn compile_property(
     // Soundness: accepting the bare single form is sound iff `minCount <= 1`. The
     // projector only emits the bare form when the data has EXACTLY ONE value;
     // such data conforms to SHACL only when `minCount <= 1` (a `minCount >= 2`
-    // shape rejects single-value data, putting it out of scope). When
+    // shape rejects single-value data, so no conforming document holds it). When
     // `minCount >= 2` we therefore keep the strict array form so the schema does
     // not admit data SHACL rejects.
     let schema = if max_count == Some(1) {
@@ -3148,7 +3723,24 @@ fn compile_property(
     } else {
         let mut arr: Map<String, Value> = Map::new();
         arr.insert("type".to_owned(), json!("array"));
-        arr.insert("items".to_owned(), single.clone());
+        arr.insert("items".to_owned(), item);
+        match has_values.as_slice() {
+            [] => {}
+            [only] => {
+                arr.insert("contains".to_owned(), json!({ "const": only }));
+            }
+            several => {
+                arr.insert(
+                    "allOf".to_owned(),
+                    Value::Array(
+                        several
+                            .iter()
+                            .map(|v| json!({ "contains": { "const": v } }))
+                            .collect(),
+                    ),
+                );
+            }
+        }
         if let Some(n) = min_count
             && n > 0
         {
@@ -3171,75 +3763,555 @@ fn compile_property(
     (schema, is_required)
 }
 
-/// Insert a numeric bound (`minimum`/`maximum`/…) parsed from a term's lexical
-/// form. Non-numeric lexical values are skipped with a `$comment` note.
-fn insert_numeric(
-    value: &mut Map<String, Value>,
+/// The ECMA-262 pattern a lexical form containing a line break matches: one of
+/// the four characters SHACL 1.2 Core §7.4.4 names — line feed, carriage return,
+/// vertical tab and form feed — anywhere in the string.
+const LINE_BREAK_PATTERN: &str = "[\\n\\r\\u000B\\u000C]";
+
+/// Which kinds of projected value (see [`crate::instance`]) a schema can accept —
+/// a bit per kind. Used to drop a rejection no conjunct can reach; it
+/// over-approximates (a schema it cannot read accepts every kind), so a
+/// rejection is never dropped that could apply.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ProjectedKinds(u8);
+
+impl ProjectedKinds {
+    const NONE: Self = Self(0);
+    const STRING: Self = Self(1);
+    const NUMBER: Self = Self(1 << 1);
+    const BOOLEAN: Self = Self(1 << 2);
+    const IRI: Self = Self(1 << 3);
+    const BLANK: Self = Self(1 << 4);
+    const TYPED: Self = Self(1 << 5);
+    const LANGUAGE: Self = Self(1 << 6);
+    const TRIPLE: Self = Self(1 << 7);
+    const ALL: Self = Self(0xff);
+
+    const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    const fn intersect(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The projected-value kinds `schema` can accept.
+    fn of(schema: &Value) -> Self {
+        let Some(object) = schema.as_object() else {
+            return if schema == &Value::Bool(false) {
+                Self::NONE
+            } else {
+                Self::ALL
+            };
+        };
+        if object.contains_key("$ref") {
+            return Self::ALL;
+        }
+        if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+            return branches
+                .iter()
+                .fold(Self::NONE, |kinds, branch| kinds.union(Self::of(branch)));
+        }
+        let required = |key: &str| {
+            object
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|names| names.iter().any(|name| name == key))
+        };
+        match object.get("type").and_then(Value::as_str) {
+            Some("string") => Self::STRING,
+            Some("integer" | "number") => Self::NUMBER,
+            Some("boolean") => Self::BOOLEAN,
+            Some("object") if required("@id") => match schema["properties"]["@id"]["type"].as_str()
+            {
+                Some("object") => Self::TRIPLE,
+                Some("string") => match schema["properties"]["@id"]["pattern"].as_str() {
+                    Some("^_:") => Self::BLANK,
+                    Some(IRI_ID_PATTERN) => Self::IRI,
+                    _ => Self::IRI.union(Self::BLANK),
+                },
+                _ => Self::IRI.union(Self::BLANK).union(Self::TRIPLE),
+            },
+            Some("object") if required("@language") => Self::LANGUAGE,
+            Some("object") if required("@type") => Self::TYPED,
+            Some("object") if required("@value") => Self::TYPED.union(Self::LANGUAGE),
+            Some("object") => Self::IRI
+                .union(Self::BLANK)
+                .union(Self::TRIPLE)
+                .union(Self::TYPED)
+                .union(Self::LANGUAGE),
+            _ => Self::ALL,
+        }
+    }
+}
+
+/// The projected values `sh:singleLine true` rejects; the value schema carries
+/// them under `not`.
+///
+/// SHACL 1.2 Core §7.4.4 judges only literal value nodes, by their lexical form.
+/// In the projection (see [`crate::instance`]) a literal is either a bare JSON
+/// string, whose lexical form is the string itself, or an object carrying its
+/// lexical form in `@value`; a bare number or boolean is the lexical form of a
+/// numeric or boolean literal, which never contains a line break; a node
+/// reference `{"@id": …}` and a triple term's embedded node `{"@id": {…}}` are
+/// not literals and are never judged. So a value violates the
+/// constraint exactly when it is a string, or an object whose `@value` is a
+/// string, that contains a line break — the two alternatives here.
+fn line_break_rejections() -> [Value; 2] {
+    [
+        json!({ "type": "string", "pattern": LINE_BREAK_PATTERN }),
+        literal_value_rejection(json!({ "pattern": LINE_BREAK_PATTERN })),
+    ]
+}
+
+/// The projected literal object — typed or language-tagged — whose `@value`,
+/// its lexical form, is a string matching `lexical`: the object form of a value
+/// a lexical-form constraint rejects.
+fn literal_value_rejection(lexical: Value) -> Value {
+    let mut at_value = Map::new();
+    at_value.insert("type".to_owned(), json!("string"));
+    if let Value::Object(lexical) = lexical {
+        at_value.extend(lexical);
+    }
+    json!({
+        "type": "object",
+        "properties": { "@value": Value::Object(at_value) },
+        "required": ["@value"]
+    })
+}
+
+/// The projected values a numeric range bound rejects: a value is compared with
+/// a numeric bound only when it is a number, and a string, a boolean, a node
+/// reference, a triple term or a language-tagged literal is not comparable with one (SHACL
+/// Core: "values that cannot be compared" violate). A typed-literal object is
+/// not rejected: a numeric literal the projection cannot carry as a JSON number
+/// (an integer beyond 64 bits, say) is one, and its comparison is a recorded
+/// loss (`record_bound_loss`).
+fn non_numeric_rejections() -> [Value; 5] {
+    [
+        json!({ "type": "string" }),
+        json!({ "type": "boolean" }),
+        node_ref_schema(),
+        triple_ref_schema(),
+        json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": { "type": "string" }
+            },
+            "required": ["@value", "@language"]
+        }),
+    ]
+}
+
+/// Which kinds of value node the constraints of a property shape leave
+/// admissible — the kinds whose projection a lexical-form constraint cannot
+/// judge exactly.
+#[derive(Clone, Copy)]
+struct Admits {
+    /// An IRI, projected as a compacted `@id` rather than the IRI string.
+    iri: bool,
+    /// A numeric or boolean literal, projected as a JSON number or boolean that
+    /// carries neither its datatype nor its lexical form.
+    scalar: bool,
+}
+
+impl Admits {
+    /// The value kinds every constraint of `constraints` admits.
+    fn of(constraints: &[Constraint]) -> Self {
+        let mut admits = Self {
+            iri: true,
+            scalar: true,
+        };
+        for constraint in constraints {
+            match constraint {
+                Constraint::Datatype(datatypes) => {
+                    admits.iri = false;
+                    admits.scalar &= datatypes.iter().any(|dt| is_scalar_datatype(dt.as_str()));
+                }
+                Constraint::LanguageIn(_) => {
+                    admits.iri = false;
+                    admits.scalar = false;
+                }
+                Constraint::Class(_) => admits.scalar = false,
+                Constraint::NodeKind(kinds) => {
+                    admits.iri &= kinds.iter().any(|kind| {
+                        matches!(
+                            kind,
+                            NodeKindValue::Iri
+                                | NodeKindValue::BlankNodeOrIri
+                                | NodeKindValue::IriOrLiteral
+                        )
+                    });
+                    admits.scalar &= kinds.iter().any(|kind| {
+                        matches!(
+                            kind,
+                            NodeKindValue::Literal
+                                | NodeKindValue::IriOrLiteral
+                                | NodeKindValue::BlankNodeOrLiteral
+                        )
+                    });
+                }
+                Constraint::In(terms) => {
+                    admits.iri &= terms.iter().any(|t| matches!(t, Term::NamedNode(_)));
+                    admits.scalar &= terms.iter().any(|t| {
+                        matches!(t, Term::Literal(l) if is_scalar_datatype(l.datatype().as_str()))
+                    });
+                }
+                _ => {}
+            }
+        }
+        admits
+    }
+}
+
+/// Whether the projection carries a literal of this datatype as a bare JSON
+/// number or boolean (see [`crate::instance`]).
+fn is_scalar_datatype(dt_iri: &str) -> bool {
+    dt_iri.strip_prefix(XSD_NS).is_some_and(|local| {
+        matches!(
+            local,
+            "boolean"
+                | "integer"
+                | "int"
+                | "long"
+                | "short"
+                | "byte"
+                | "nonNegativeInteger"
+                | "positiveInteger"
+                | "nonPositiveInteger"
+                | "negativeInteger"
+                | "unsignedLong"
+                | "unsignedInt"
+                | "unsignedShort"
+                | "unsignedByte"
+                | "decimal"
+                | "double"
+                | "float"
+        )
+    })
+}
+
+/// Record, per lexical-form constraint (`sh:pattern`, `sh:minLength`,
+/// `sh:maxLength`), the admissible value kinds its projection cannot judge.
+///
+/// SHACL Core judges `str(v)` of every value node that is not a blank node. The
+/// schema judges a bare string and a literal object's `@value` exactly, and
+/// rejects a blank node; it cannot judge an IRI (projected as a compacted
+/// `@id`, not the IRI string) or a numeric or boolean literal (a JSON scalar
+/// without its lexical form), so where the other constraints admit either, the
+/// loss is recorded. (A triple term is recorded once per property instead.)
+fn record_lexical_losses(
+    constraints: &[Constraint],
+    admits: Admits,
+    shape_iri: &str,
     key: &str,
-    term: &Term,
     comments: &mut Vec<String>,
+    ctx: &mut Ctx<'_>,
 ) {
-    let lex = term_lexical(term);
-    if let Ok(n) = lex.parse::<f64>()
-        && let Some(num) = serde_json::Number::from_f64(n)
-    {
-        value.insert(key.to_owned(), Value::Number(num));
+    let mut unjudged: Vec<&str> = Vec::new();
+    if admits.iri {
+        unjudged.push("IRI values (projected as a compacted @id, not the IRI string)");
+    }
+    if admits.scalar {
+        unjudged.push(
+            "numeric and boolean literals (projected as JSON scalars without their lexical form)",
+        );
+    }
+    if unjudged.is_empty() {
         return;
     }
-    comments.push(format!(
-        "{key} bound on non-numeric value {lex:?} was skipped"
-    ));
+    let unjudged = unjudged.join(" or ");
+    let mut terms: Vec<&str> = constraints
+        .iter()
+        .filter_map(|constraint| match constraint {
+            Constraint::Pattern { .. } | Constraint::MinLength(_) | Constraint::MaxLength(_) => {
+                Some(constraint_term(constraint))
+            }
+            _ => None,
+        })
+        .collect();
+    terms.sort_unstable();
+    terms.dedup();
+    for term in terms {
+        ctx.record(
+            term,
+            shape_iri,
+            &format!("the lexical form is not checked on {unjudged}"),
+        );
+        comments.push(format!(
+            "a {term} constraint on property {key} is not checked on {unjudged}"
+        ));
+    }
+}
+
+/// Record the losses of one `sh:datatype` value: a numeric datatype's literals
+/// project as bare JSON numbers that carry neither the datatype nor the lexical
+/// form, so a literal of another numeric datatype, or an ill-typed one, is not
+/// told apart; and `rdf:langString` and `rdf:dirLangString` literals both
+/// project as `{"@value", "@language"}`, without the base direction that tells
+/// them apart.
+fn record_datatype_losses(
+    datatypes: &[NamedNode],
+    shape_iri: &str,
+    key: &str,
+    comments: &mut Vec<String>,
+    ctx: &mut Ctx<'_>,
+) {
+    let numeric = datatypes
+        .iter()
+        .any(|dt| is_scalar_datatype(dt.as_str()) && dt.as_str() != XSD_BOOLEAN);
+    let language = datatypes
+        .iter()
+        .any(|dt| dt.as_str() == RDF_LANG_STRING || dt.as_str() == RDF_DIR_LANG_STRING);
+    for (present, note, comment) in [
+        (
+            numeric,
+            "numeric literals project as bare JSON numbers without their datatype or lexical \
+             form, so a numeric literal of another numeric datatype, or an ill-typed one, is not \
+             told apart",
+            "numeric datatypes are not told apart",
+        ),
+        (
+            language,
+            "language-tagged literals project without their base direction, so rdf:langString \
+             and rdf:dirLangString are not told apart",
+            "rdf:langString and rdf:dirLangString are not told apart",
+        ),
+    ] {
+        if present {
+            ctx.record("sh:datatype", shape_iri, note);
+            comments.push(format!(
+                "a sh:datatype constraint on property {key} is widened ({comment})"
+            ));
+        }
+    }
+}
+
+/// Record what a numeric range bound's projection does not judge: a bound that
+/// is not numeric (a date, say) has no JSON Schema comparison at all, and a
+/// numeric bound is not compared with a typed-literal object (a numeric literal
+/// the projection cannot carry as a JSON number).
+fn record_bound_loss(
+    constraint: &Constraint,
+    bound: &Term,
+    shape_iri: &str,
+    key: &str,
+    comments: &mut Vec<String>,
+    ctx: &mut Ctx<'_>,
+) {
+    let term = constraint_term(constraint);
+    let note = if numeric_bound(bound).is_some() {
+        "a typed-literal object (a numeric literal the projection cannot carry as a JSON \
+         number) is not compared with the bound"
+    } else {
+        "a bound that is not numeric has no JSON Schema comparison, so the constraint is \
+         dropped"
+    };
+    ctx.record(term, shape_iri, note);
+    comments.push(format!("a {term} constraint on property {key}: {note}"));
+}
+
+/// A range bound's numeric value, when it is a finite number.
+fn numeric_bound(term: &Term) -> Option<serde_json::Number> {
+    let Term::Literal(literal) = term else {
+        return None;
+    };
+    if !is_scalar_datatype(literal.datatype().as_str())
+        || literal.datatype().as_str() == XSD_BOOLEAN
+    {
+        return None;
+    }
+    literal
+        .value()
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .and_then(serde_json::Number::from_f64)
+}
+
+/// Insert a numeric range bound, keeping the tightest of several (`lower`: the
+/// larger of two lower bounds, else the smaller of two upper bounds). Returns
+/// whether the bound is numeric.
+fn insert_bound(value: &mut Map<String, Value>, key: &str, term: &Term, lower: bool) -> bool {
+    let Some(bound) = numeric_bound(term) else {
+        return false;
+    };
+    let tighter = match value.get(key).and_then(Value::as_f64) {
+        Some(existing) => {
+            let candidate = bound.as_f64().unwrap_or(existing);
+            if lower {
+                candidate > existing
+            } else {
+                candidate < existing
+            }
+        }
+        None => true,
+    };
+    if tighter {
+        value.insert(key.to_owned(), Value::Number(bound));
+    }
+    true
 }
 
 // ── Datatype → JSON type/format mapping ──────────────────────────────────────
 
-/// Map an xsd datatype IRI to a JSON value schema, accepting BOTH the bare
-/// scalar form and the JSON-LD `{"@value":..,"@type":..}` typed-literal object.
-fn datatype_value_schema(dt_iri: &str) -> Value {
-    let scalar = scalar_schema_for_datatype(dt_iri);
+/// The value schema of a literal of datatype `dt_iri`: exactly the forms the
+/// projection (see [`crate::instance`]) gives such a literal.
+///
+/// * `xsd:string` — a bare JSON string, and only that.
+/// * A numeric datatype or `xsd:boolean` — a bare JSON number or boolean, or,
+///   for a lexical form that is not one (an integer beyond 64 bits, a boolean
+///   with collapsed whitespace), the typed-literal object; a boolean object's
+///   `@value` is held to the boolean lexical space, which is what validation
+///   checks.
+/// * `rdf:langString` / `rdf:dirLangString` — the language-tagged object.
+/// * Every other datatype — the typed-literal object whose `@type` is the
+///   datatype, compacted as the projector compacts it (a bare string is an
+///   `xsd:string` literal, never one of these).
+fn datatype_value_schema(dt_iri: &str, ns: &Namespaces) -> Value {
+    if dt_iri == XSD_STRING {
+        return json!({ "type": "string" });
+    }
+    if dt_iri == RDF_LANG_STRING || dt_iri == RDF_DIR_LANG_STRING {
+        return json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": { "type": "string" }
+            },
+            "required": ["@value", "@language"]
+        });
+    }
+    let mut lexical = json!({ "type": "string" });
+    let scalar = match dt_iri.strip_prefix(XSD_NS) {
+        Some("boolean") => {
+            lexical["pattern"] = json!(BOOLEAN_LEXICAL_PATTERN);
+            Some(json!({ "type": "boolean" }))
+        }
+        Some(
+            "integer" | "int" | "long" | "short" | "byte" | "nonNegativeInteger"
+            | "positiveInteger" | "nonPositiveInteger" | "negativeInteger" | "unsignedLong"
+            | "unsignedInt" | "unsignedShort" | "unsignedByte",
+        ) => Some(json!({ "type": "integer" })),
+        Some("decimal" | "double" | "float") => Some(json!({ "type": "number" })),
+        Some("dateTime" | "dateTimeStamp") => {
+            lexical["format"] = json!("date-time");
+            None
+        }
+        Some("date") => {
+            lexical["format"] = json!("date");
+            None
+        }
+        Some("time") => {
+            lexical["format"] = json!("time");
+            None
+        }
+        Some("anyURI") => {
+            lexical["format"] = json!("uri");
+            None
+        }
+        _ => None,
+    };
+    let typed = json!({
+        "type": "object",
+        "properties": {
+            "@value": lexical,
+            "@type": { "const": ns.compact_iri(dt_iri) }
+        },
+        "required": ["@value", "@type"]
+    });
+    match scalar {
+        Some(scalar) => json!({ "anyOf": [scalar, typed] }),
+        None => typed,
+    }
+}
+
+/// The `xsd:boolean` lexical space after the `collapse` whitespace facet trims
+/// the four code points it names — what validation accepts.
+const BOOLEAN_LEXICAL_PATTERN: &str = "^[\\t\\n\\r ]*(?:true|false|1|0)[\\t\\n\\r ]*$";
+
+/// The projected forms of any literal: a bare string, number or boolean, or a
+/// typed or language-tagged literal object.
+fn literal_schemas() -> [Value; 4] {
+    [
+        json!({ "type": "string" }),
+        json!({ "type": "number" }),
+        json!({ "type": "boolean" }),
+        typed_literal_schema(),
+    ]
+}
+
+/// The `@id` pattern of an IRI's projection: any string but a blank-node label
+/// (`_:…`), stated without lookahead.
+const IRI_ID_PATTERN: &str = "^(?:[^_]|_(?:[^:]|$))";
+
+/// The projected form of an IRI: a node reference whose `@id` is not a
+/// blank-node label (`_:…`, the projection of a blank node).
+fn iri_ref_schema() -> Value {
     json!({
-        "anyOf": [
-            scalar,
-            typed_literal_schema()
-        ]
+        "type": "object",
+        "properties": { "@id": { "type": "string", "pattern": IRI_ID_PATTERN } },
+        "required": ["@id"]
     })
 }
 
-/// The bare-scalar schema for an xsd datatype (no JSON-LD wrapper).
-fn scalar_schema_for_datatype(dt_iri: &str) -> Value {
-    let Some(local) = dt_iri.strip_prefix(XSD_NS) else {
-        // Non-xsd datatype: treat the lexical form as a string.
-        return json!({ "type": "string" });
-    };
-    match local {
-        "string" | "normalizedString" | "token" | "language" | "Name" | "NCName" => {
-            json!({ "type": "string" })
-        }
-        "boolean" => json!({ "type": "boolean" }),
-        "integer" | "int" | "long" | "short" | "byte" | "nonNegativeInteger"
-        | "positiveInteger" | "nonPositiveInteger" | "negativeInteger" | "unsignedLong"
-        | "unsignedInt" | "unsignedShort" | "unsignedByte" => json!({ "type": "integer" }),
-        "decimal" | "double" | "float" => json!({ "type": "number" }),
-        "dateTime" | "dateTimeStamp" => json!({ "type": "string", "format": "date-time" }),
-        "date" => json!({ "type": "string", "format": "date" }),
-        "time" => json!({ "type": "string", "format": "time" }),
-        "anyURI" => json!({ "type": "string", "format": "uri" }),
-        // Unknown xsd:* → string.
-        _ => json!({ "type": "string" }),
-    }
+/// The projected form of an RDF 1.2 triple term: the JSON-LD-star embedded node,
+/// whose `@id` is the object stating the triple.
+fn triple_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "@id": { "type": "object" } },
+        "required": ["@id"]
+    })
+}
+
+/// The projected form of a blank node: a node reference whose `@id` is a
+/// blank-node label.
+fn blank_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "@id": { "type": "string", "pattern": "^_:" } },
+        "required": ["@id"]
+    })
 }
 
 /// The language-tagged-literal value schema for a `sh:languageIn` tag set.
 ///
-/// Tags use RFC4647 basic-filtering semantics: a value tag matches an entry iff
-/// it equals it or is a subtag (`en` matches `en-US`). Expressed as a regex
-/// `pattern` on `@language` like `^(en|fr)(-.*)?$`.
+/// Tags use RFC 4647 basic filtering, compared case-insensitively as
+/// validation compares them: a value tag matches an entry iff it equals it or
+/// extends it at a subtag boundary (`en` matches `EN-us`, not `eng`). Expressed
+/// as a `pattern` on `@language` like `^(?:[eE][nN]|[fF][rR])(?:-.*)?$`, each
+/// letter a two-case class (JSON Schema patterns carry no flags), and any other
+/// character a `\u{…}` escape valid under ECMA-262's `u` flag.
 fn lang_literal_schema(tags: &[String]) -> Value {
-    let mut sorted: Vec<String> = tags.iter().map(|t| regex::escape(t)).collect();
+    let mut sorted: Vec<String> = tags
+        .iter()
+        .map(|tag| {
+            let mut out = String::with_capacity(tag.len() * 4);
+            for c in tag.chars() {
+                if c.is_ascii_alphabetic() {
+                    out.push('[');
+                    out.push(c.to_ascii_lowercase());
+                    out.push(c.to_ascii_uppercase());
+                    out.push(']');
+                } else if c.is_ascii_digit() || c == '-' {
+                    out.push(c);
+                } else {
+                    write!(out, "\\u{{{:X}}}", u32::from(c)).expect("a String accepts every write");
+                }
+            }
+            out
+        })
+        .collect();
     sorted.sort();
     sorted.dedup();
     let alternation = sorted.join("|");
-    let pattern = format!("^({alternation})(-.*)?$");
+    let pattern = format!("^(?:{alternation})(?:-.*)?$");
     json!({
         "type": "object",
         "properties": {
@@ -3252,16 +4324,6 @@ fn lang_literal_schema(tags: &[String]) -> Value {
 
 // ── Term → JSON value helpers (must match instance.rs) ───────────────────────
 
-/// The lexical form of a term (literal value, IRI string, or blank-node id).
-fn term_lexical(term: &Term) -> String {
-    match term {
-        Term::Literal(lit) => lit.value().to_owned(),
-        Term::NamedNode(n) => n.as_str().to_owned(),
-        Term::BlankNode(b) => b.as_str().to_owned(),
-        other @ Term::Triple(_) => other.to_string(),
-    }
-}
-
 /// The `sh:in` enum member value, matching EXACTLY what the projector emits for a
 /// value of the same term.
 ///
@@ -3272,27 +4334,6 @@ fn term_lexical(term: &Term) -> String {
 /// bare-string enum would reject the very data the shape accepts.
 fn term_enum_value(term: &Term, ns: &Namespaces) -> Value {
     crate::instance::project_value(term, ns)
-}
-
-/// The `sh:hasValue` const value (projected form).
-fn term_const_value(term: &Term, ns: &Namespaces) -> Value {
-    match term {
-        Term::NamedNode(n) => json!({ "@id": ns.compact_iri(n.as_str()) }),
-        Term::Literal(lit) => {
-            if let Some(lang) = lit.language() {
-                json!({ "@value": lit.value(), "@language": lang })
-            } else {
-                let dt = lit.datatype();
-                if dt.as_str() == RDF_LANG_STRING || dt.as_str() == XSD_STRING {
-                    Value::String(lit.value().to_owned())
-                } else {
-                    json!({ "@value": lit.value(), "@type": ns.compact_iri(dt.as_str()) })
-                }
-            }
-        }
-        Term::BlankNode(b) => json!({ "@id": format!("_:{}", b.as_str()) }),
-        other @ Term::Triple(_) => Value::String(other.to_string()),
-    }
 }
 
 // ── Serialization ────────────────────────────────────────────────────────────
@@ -3885,9 +4926,18 @@ mod tests {
             &compilation.compiled.schema_json,
             &json!({
                 "@type": "meta:EmailMessage",
-                "meta:resentDate": ["2026-07-17T00:00:00Z"],
+                "meta:resentDate": [{ "@value": "2026-07-17T00:00:00Z", "@type": "xsd:dateTime" }],
                 "meta:resentMessageId": "message-1",
                 "meta:messageCode": "code-1"
+            })
+        ));
+        // An xsd:dateTime literal projects as its typed object; a bare string is
+        // an xsd:string literal, outside the range.
+        assert!(!validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:EmailMessage",
+                "meta:resentDate": ["2026-07-17T00:00:00Z"]
             })
         ));
     }
@@ -4055,14 +5105,20 @@ mod tests {
                 "{property} retains its declared literal carrier"
             );
         }
+        // A literal of a custom datatype projects as the typed object naming it.
         assert!(validates(
             &compilation.compiled.schema_json,
             &json!({
                 "@type": "meta:Holder",
-                "meta:code": "C-1",
-                "meta:token": "T-1",
-                "meta:mixed": "literal branch"
+                "meta:code": { "@value": "C-1", "@type": "meta:Code" },
+                "meta:token": { "@value": "T-1", "@type": "meta:Token" },
+                "meta:mixed": { "@value": "literal branch", "@type": "meta:Code" }
             })
+        ));
+        // A bare string is an xsd:string literal, not one of them.
+        assert!(!validates(
+            &compilation.compiled.schema_json,
+            &json!({ "@type": "meta:Holder", "meta:code": "C-1" })
         ));
         assert!(validates(
             &compilation.compiled.schema_json,
@@ -4230,11 +5286,10 @@ mod tests {
         // projects to a string (a bare-scalar string alternative), and the value
         // schema still accepts a plain string literal.
         let label = &def(&schema, "BasisHolder")["properties"]["meta:label"];
-        assert!(
-            label["anyOf"]
-                .as_array()
-                .is_some_and(|alts| alts.iter().any(|a| a["type"] == json!("string"))),
-            "datatype xsd:string still projects to a string alternative: {label}"
+        assert_eq!(
+            label,
+            &json!({ "type": "string" }),
+            "datatype xsd:string projects to exactly the bare string its literals project as"
         );
         let label_json = serde_json::to_string(label).expect("value schema serializes");
         assert!(
@@ -4292,18 +5347,41 @@ mod tests {
         );
         let schema = schema_of(&c);
         let event = def(&schema, "Event");
-        // dateTime → anyOf containing {type:string, format:date-time}
+        // An xsd:dateTime literal projects as the typed object, never a bare
+        // string (which is an xsd:string literal): `@type` is the datatype and
+        // `@value` carries the format.
         let at = &event["properties"]["meta:at"];
-        let at_alts = at["anyOf"].as_array().expect("anyOf");
-        assert!(
-            at_alts
-                .iter()
-                .any(|alt| alt["format"] == json!("date-time"))
+        assert_eq!(
+            at,
+            &json!({
+                "type": "object",
+                "properties": {
+                    "@value": { "type": "string", "format": "date-time" },
+                    "@type": { "const": "xsd:dateTime" }
+                },
+                "required": ["@value", "@type"]
+            })
         );
-        // integer → anyOf containing {type:integer}
+        assert!(validates(
+            &serde_json::to_string(at).expect("schema"),
+            &json!({ "@value": "2026-01-01T00:00:00Z", "@type": "xsd:dateTime" })
+        ));
+        assert!(!validates(
+            &serde_json::to_string(at).expect("schema"),
+            &json!("2026-01-01T00:00:00Z")
+        ));
+        // integer → the bare JSON integer, or the typed object of xsd:integer.
         let count = &event["properties"]["meta:count"];
         let count_alts = count["anyOf"].as_array().expect("anyOf");
         assert!(count_alts.iter().any(|alt| alt["type"] == json!("integer")));
+        assert!(
+            count_alts
+                .iter()
+                .any(|alt| alt["properties"]["@type"]["const"] == json!("xsd:integer"))
+        );
+        // Numeric literals project as bare JSON numbers without their datatype,
+        // which is recorded.
+        assert!(c.losses.entries().iter().any(|e| e.code == "sh:datatype"));
     }
 
     #[test]
@@ -4401,6 +5479,8 @@ mod tests {
         assert_eq!(sealed["additionalProperties"], json!(false));
         // The single declared property key is present.
         assert!(sealed["properties"]["meta:only"].is_object());
+        // `rdf:type` is projected as `@type`, never as a key of its own.
+        assert!(sealed["properties"].get("rdf:type").is_none());
     }
 
     #[test]
