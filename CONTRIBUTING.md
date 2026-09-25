@@ -127,8 +127,8 @@ local work and CI gates, because nightly clippy and rustdoc carry lints stable
 lacks and its default borrow checker is the stronger one — so a gate finding is a
 real finding, not a channel artifact. It floats rather than naming a date because
 a date would freeze that surface and turn every later sharpening into debt nobody
-sees. The *source* stays
-nightly-free: there are no `#![feature(...)]` attributes anywhere in the workspace
+sees. The *source* uses
+zero nightly (unstable) features: there are no `#![feature(...)]` attributes anywhere in the workspace
 and adding one is rejected, which is exactly what the MSRV job proves on every PR.
 Release artifacts are built on stable. If you have `rustup` installed, the pin
 applies automatically; `scripts/check-toolchain-pin.py` (part of `make check`)

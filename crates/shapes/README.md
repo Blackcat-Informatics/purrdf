@@ -107,7 +107,7 @@ well; `docs/CONFORMANCE.md` has the live numbers.
 ## Build
 
 > **Toolchain:** the MSRV floor is `rust-version` in the workspace `Cargo.toml`
-> (currently 1.98, stable channel), and the source is nightly-free. The repo's
+> (currently 1.98, stable channel), and the source uses zero nightly features. The repo's
 > `rust-toolchain.toml` names a *floating nightly* for development and CI lints;
 > `cargo` and `rustup` pick it up automatically, and building on stable 1.98
 > works exactly as the MSRV job proves.
