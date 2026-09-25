@@ -144,6 +144,16 @@ insta = "1.48"
 # Browser wall clock + entropy for SPARQL NOW()/RAND() on wasm32 (see
 # crates/sparql-eval's target-gated dependency section).
 js-sys = "0.3"
+# Raw `pthread_*` declarations for the workspace's one stack measurement
+# (`crates/stack`, which the SPARQL parser and evaluator refuse against): the
+# thread's stack bounds, read once per thread with `pthread_getattr_np`,
+# `pthread_attr_get_np`, `pthread_stackseg_np` or `pthread_get_stackaddr_np` /
+# `pthread_get_stacksize_np`, per platform. Declarations only, resolved against
+# the target's own libc at link time — no bundled C source and no build-time C
+# toolchain, so cross builds never need one. Unix-only — target-gated in that
+# crate's manifest, because wasm32 measures its shadow stack against the
+# linker's own `__stack_low` instead — so it never reaches the wasm build.
+libc = "0.2"
 md-5 = { version = "0.10", default-features = false }
 # SIMD byte scanning (SWAR fallback, wasm-clean). Used by the purrdf-rdf codec
 # hot paths and the purrdf-sparql-algebra tokenizer.
@@ -196,13 +206,6 @@ sha3 = { version = "0.10", default-features = false }
 # ONLY: `union` (adds unsafe) and `serde` stay OFF; wasm-clean, no runtime deps.
 smallvec = "1"
 structured-zstd = "0.0.49"
-# The current thread's stack limit, as the operating system reports it, for the
-# workspace's one stack measurement (`crates/stack`, which the SPARQL parser and
-# evaluator refuse against): `pthread_getattr_np`, `pthread_get_stackaddr_np` or
-# `GetCurrentThreadStackLimits` per platform, read once per thread. Native-only —
-# target-gated in that crate's manifest, because wasm32 measures its shadow stack
-# against the linker's own `__stack_low` instead — so it never reaches the wasm build.
-stacker = "0.1"
 # pure-Rust PRNG; used ONLY to deterministically seed structured-zstd's ambient
 # FastCOVER reservoir sampling (which has no seed parameter) so pack dictionaries
 # are byte-reproducible. wasm32-unknown-unknown-clean.
@@ -228,6 +231,12 @@ unicode-segmentation = "1"
 # 1.0.0 is the tri-licensed release and a zero-runtime-dependency leaf (its
 # BLAKE3 is in-tree; the blake3 crate remains only as its dev-dependency).
 visual-hashing = "1.0.0"
+# Raw Win32 declarations for `crates/stack`'s Windows stack-bound read
+# (`GetCurrentThreadStackLimits`): `Win32_System_Threading` only. Declarations
+# only, resolved against the platform SDK at link time — no bundled C source
+# and no build-time C toolchain. Windows-only — target-gated in that crate's
+# manifest — so it never reaches a non-Windows or wasm32 build.
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 # EXACT pin: the `wasm-bindgen` CLI that generates the JS bindings must match
 # the library version byte-for-byte or it refuses to run. `make wasm-pkg` and
 # the CI Node lane install `wasm-bindgen-cli@0.2.125` to match this.

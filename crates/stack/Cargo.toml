@@ -29,8 +29,15 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_stack"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# The thread's stack limit, read once per thread from the operating system.
-# Target-gated because wasm32 measures its shadow stack against the linker's
-# `__stack_low` instead, so the wasm build never pulls it.
-stacker = { workspace = true }
+[target.'cfg(unix)'.dependencies]
+# Raw `pthread_*` declarations this crate's `platform` module calls directly to
+# read the thread's stack bounds. Declarations only, resolved against the
+# target's own libc at link time: no bundled C source and no build-time C
+# toolchain, so a cross build never needs `<target>-gcc` on its `PATH`.
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Raw Win32 declarations for `GetCurrentThreadStackLimits`. Declarations only,
+# resolved against the platform SDK at link time: no bundled C source and no
+# build-time C toolchain.
+windows-sys = { workspace = true }

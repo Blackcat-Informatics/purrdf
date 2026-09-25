@@ -25,9 +25,9 @@
 //!   whose default is the low end of the module's own shadow stack. Every `wasm32` target
 //!   rustc ships links with `--stack-first`, which makes the shadow stack the first region
 //!   of linear memory, so that low end is address 0 — running below it wraps the pointer
-//!   and traps. The linker records it as the symbol `__stack_low`; this crate forbids
-//!   `unsafe` code and cannot name a linker symbol, so a host that can (the PurRDF wasm
-//!   package, when its instance starts) installs the symbol's value with
+//!   and traps. The linker records it as the symbol `__stack_low`; this crate has no
+//!   `unsafe` code on `wasm32` and cannot name a linker symbol, so a host that can (the
+//!   PurRDF wasm package, when its instance starts) installs the symbol's value with
 //!   [`replace_floor`], which also covers a module linked with the stack elsewhere.
 //!   Neither `__data_end` nor `__heap_base` says where the stack *ends*, and the first
 //!   pointer observed is the stack's top, not its floor. A host that runs work on a
@@ -35,18 +35,20 @@
 //!   heap-allocated region — installs that stack's floor with [`replace_floor`] whenever
 //!   it switches onto it and puts the previous floor back whenever it switches away.
 //! * **native**: the floor is the current thread's stack limit, as the operating system
-//!   reports it (the `stacker` crate reads `pthread_getattr_np`,
-//!   `pthread_get_stackaddr_np`, or `GetCurrentThreadStackLimits`, per platform). It is
-//!   read once per thread and cached in the same thread-local, so a check costs one
-//!   thread-local load and one comparison. A pointer found *below* the cached floor means
-//!   the thread is running on a different stack than the one the floor was read for (a
-//!   host that grew its stack with `stacker::grow`, say), so the floor is read again
-//!   rather than refusing: a stack switch never turns into a refusal. (A stack a host
-//!   switched to *above* the cached floor is measured against the old floor, which
-//!   overstates what is left: such a host installs its own floor with [`replace_floor`],
-//!   as the wasm asynchronous lane does.) On a platform whose limit cannot be read at all
-//!   the measurement is inactive — there is nothing to measure against — and
-//!   [`remaining`] reports the whole address range below the frame, so nothing refuses.
+//!   reports it — [`platform::stack_floor`] reads `pthread_getattr_np`,
+//!   `pthread_attr_get_np`, `pthread_stackseg_np`, `pthread_get_stackaddr_np` /
+//!   `pthread_get_stacksize_np`, or `GetCurrentThreadStackLimits`, per platform; see that
+//!   module for which targets read which call, and which read nothing. It is read once per
+//!   thread and cached in the same thread-local, so a check costs one thread-local load
+//!   and one comparison. A pointer found *below* the cached floor means the thread is
+//!   running on a different stack than the one the floor was read for (a host that switched
+//!   onto a stack of its own, say), so the floor is read again rather than refusing: a
+//!   stack switch never turns into a refusal. (A stack a host switched to *above* the
+//!   cached floor is measured against the old floor, which overstates what is left: such a
+//!   host installs its own floor with [`replace_floor`], as the wasm asynchronous lane
+//!   does.) On a platform whose limit cannot be read at all the measurement is inactive —
+//!   there is nothing to measure against — and [`remaining`] reports the whole address
+//!   range below the frame, so nothing refuses.
 //!
 //! # The margin
 //!
@@ -55,9 +57,18 @@
 //! non-recursive work that runs after the last one. See [`MARGIN_BYTES`] for the measured
 //! figures, for the evaluator and for the parser.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use core::cell::Cell;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(
+    unsafe_code,
+    reason = "reading the current thread's stack bounds from the operating system; each \
+              block carries its own safety argument, and none of it compiles on wasm32, \
+              where the crate stays unsafe-free"
+)]
+mod platform;
 
 /// The stack a check requires to be left, in bytes: 128 KiB natively.
 ///
@@ -214,10 +225,11 @@ fn is_low_cold(sp: usize) -> bool {
 /// Read the floor of the stack `sp` is on, cache it, and return the bytes left above it.
 #[cfg(not(target_arch = "wasm32"))]
 fn refresh(sp: usize) -> usize {
-    // `remaining_stack` measures from its own frame, a few bytes below `sp`; the floor
-    // derived from it is therefore at most those few bytes too high, which errs toward
-    // refusing a hair early rather than late.
-    let floor = stacker::remaining_stack().map_or(0, |left| sp.saturating_sub(left));
+    // `platform::stack_floor` reads the thread's bounds directly from the operating
+    // system rather than from any particular frame, so — unlike a floor derived from a
+    // "bytes left" figure measured a few frames down — this is the thread's exact floor,
+    // not an approximation of it.
+    let floor = platform::stack_floor().unwrap_or(0);
     FLOOR.with(|cell| cell.set(floor));
     sp.saturating_sub(floor)
 }

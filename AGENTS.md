@@ -57,7 +57,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
-| `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, wasm32 shadow stack against an installable floor) and the margin the SPARQL parser and evaluator refuse at; its one dependency, `stacker`, is native-only |
+| `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL parser and evaluator refuse at |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
 | `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |

@@ -498,9 +498,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the running thread has left. `remaining`, `is_low` and `replace_floor` read that
   measurement, and `MARGIN_BYTES` (128 KiB natively, 64 KiB on `wasm32`) is the
   margin the SPARQL parser and evaluator refuse at. Natively the floor is the
-  operating system's thread limit, read through `stacker`, which is a dependency on
-  native targets only. On `wasm32` it is the shadow stack's low end, which a host
-  can replace. The crate forbids `unsafe` code.
+  operating system's thread limit, read once per thread by a small platform
+  module: `pthread_getattr_np` (Linux, Android, NetBSD), `pthread_attr_get_np`
+  (FreeBSD, DragonFly BSD), `pthread_stackseg_np` (OpenBSD),
+  `pthread_get_stackaddr_np`/`pthread_get_stacksize_np` (macOS, iOS), or
+  `GetCurrentThreadStackLimits` (Windows) — raw `libc`/`windows-sys`
+  declarations resolved against the target's own C library at link time, so
+  nothing here needs a build-time C toolchain and a cross build never fails
+  looking for one. On a target none of those cover the bound cannot be read
+  and the guard stays inactive, as it always has. On `wasm32` the floor is the
+  shadow stack's low end, which a host can replace. The crate denies `unsafe`
+  code everywhere but that platform module, where each block carries its own
+  safety argument.
 
 - **build:** `scripts/check-wasm-jspi-frame.py`, run by `make wasm-pkg` on the
   optimized artifact. Every function that calls the suspending import must restore

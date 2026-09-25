@@ -549,7 +549,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | 驻留 `TermId` 空间中的多重集 SPARQL 求值器，带有以调用方为键的扩展点（标量函数、属性函数——含路径见证与嵌入 k 近邻关系——自定义聚合，以及逐服务的 `ServiceResolver`）与执行 governor。 |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL 结果的 JSON/XML/CSV/TSV，外加一个携带溯源的扩展。 |
 | [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL 复合数据类型（`cdt:List`/`cdt:Map`）：值空间、一个迭代式的有界词法扫描器、规范拼写，以及十五个函数的函数库。建立在 `purrdf-iri` + `purrdf-xsd` 之上的 `no_std` 封闭叶；经由求值器访问，不由门面 crate 重新导出。 |
-| [`purrdf-stack`](./crates/stack/) | 当前线程还剩多少栈空间——原生平台读取操作系统给出的线程栈上限，wasm32 则以宿主可安装的栈底衡量影子栈——以及 SPARQL 解析器与求值器据以拒绝请求（返回带类型的错误）而不致栈溢出的余量。唯一的依赖 `stacker` 仅用于原生平台。 |
+| [`purrdf-stack`](./crates/stack/) | 当前线程还剩多少栈空间——原生平台读取操作系统给出的线程栈上限（通过按目标启用的 `libc`/`windows-sys` 声明，无需构建期 C 工具链），wasm32 则以宿主可安装的栈底衡量影子栈——以及 SPARQL 解析器与求值器据以拒绝请求（返回带类型的错误）而不致栈溢出的余量。 |
 | [`purrdf-shapes`](./crates/shapes/) | SHACL 验证引擎（完整 Core + SHACL-SPARQL + SHACL-AF，含 SHACL Rules）。 |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1：ShExC/ShExJ 模式与验证。 |
 | [`purrdf-entail`](./crates/entail/) | 蕴涵机制：RDF/RDFS/OWL-RL/D chase、OWL-Direct tableau 与 RIF-Core 规则——每次求闭包都返回推理报告。 |
