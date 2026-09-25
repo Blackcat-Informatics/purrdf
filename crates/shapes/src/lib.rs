@@ -59,6 +59,7 @@ pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
 pub mod spec;
+pub(crate) mod target_eval;
 pub mod term;
 pub mod text_ingest;
 pub mod typescript;

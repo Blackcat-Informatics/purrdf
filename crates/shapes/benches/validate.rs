@@ -24,6 +24,12 @@
 //! by value tuple is built once per validation, so the per-focus-node cost is
 //! expected to stay flat across the sweep rather than grow with it.
 //!
+//! `shacl_focus_target_where` is `sh:targetWhere` over a graph holding as many
+//! unrelated nodes as targets, in its two resolutions: `narrowed`, where the where
+//! shape's `sh:class` bounds the candidates to the class's instances, and
+//! `full_scan`, the same condition behind a one-member `sh:or` the narrowing does
+//! not look inside, which checks every node of the graph against the shape.
+//!
 //! `shacl_change_path_contrast` is the conforming-versus-violating pair over ONE
 //! dataset and ONE binding: the change path materializes a focus node only where a
 //! result is built, so a conforming request should cost a constant whatever the
@@ -100,6 +106,7 @@ const CORE_FOCUS_SIZES: &[usize] = &[512, 1_024, 2_048, 3_000, 100_000, 1_000_00
 const CLOSED_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
 const UNIQUE_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const TARGET_WHERE_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const REALTIME_FOCUS_SIZES: &[usize] = &[1, 8, 64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -436,6 +443,57 @@ ex:UniqueNotationShape a sh:NodeShape ;
     }
 }
 
+/// A `sh:targetWhere` fixture: `focus_nodes` concepts, each with a notation, and
+/// as many unrelated nodes beside them, so a where target that scans every node of
+/// the graph has twice the candidates one that narrows to the class does.
+///
+/// `narrowed` selects the where shape: `[ sh:class ex:Concept ]`, whose class
+/// bounds the candidates to its instances, or the same condition wrapped in a
+/// one-member `sh:or`, which means the same thing and which the narrowing does not
+/// look inside — the full scan over every node of the graph.
+fn target_where_focus_fixture(focus_nodes: usize, narrowed: bool) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let concept = builder.intern_iri(&format!("{BENCH_EX}Concept"));
+    let notation_predicate = builder.intern_iri(&format!("{BENCH_EX}notation"));
+    let other_predicate = builder.intern_iri(&format!("{BENCH_EX}other"));
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}where-item{index}"));
+        let notation = builder.intern_literal(RdfLiteral::simple(format!("N-{index}")));
+        builder.push_quad(focus, rdf_type, concept, None);
+        builder.push_quad(focus, notation_predicate, notation, None);
+        let unrelated = builder.intern_iri(&format!("{BENCH_EX}where-other{index}"));
+        builder.push_quad(unrelated, other_predicate, focus, None);
+    }
+    let dataset = builder
+        .freeze()
+        .expect("targetWhere focus fixture must freeze");
+    let condition = if narrowed {
+        "[ sh:class ex:Concept ]"
+    } else {
+        "[ sh:or ( [ sh:class ex:Concept ] ) ]"
+    };
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:ConceptShape a sh:NodeShape ;
+    sh:targetWhere {condition} ;
+    sh:property [ sh:path ex:notation ; sh:minCount 1 ] .
+"
+        ),
+        None,
+    )
+    .expect("targetWhere focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
 fn sparql_focus_fixture(focus_nodes: usize) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
@@ -668,6 +726,31 @@ fn bench_focus_unique_values(c: &mut Criterion) {
                 bencher.iter(|| validate_fixture(black_box(fixture)));
             },
         );
+    }
+    group.finish();
+}
+
+fn bench_focus_target_where(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_target_where");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in TARGET_WHERE_FOCUS_SIZES {
+        for (label, narrowed) in [("narrowed", true), ("full_scan", false)] {
+            let fixture = target_where_focus_fixture(focus_nodes, narrowed);
+            let probe = Once::new();
+            group.throughput(Throughput::Elements(focus_nodes as u64));
+            group.bench_with_input(
+                BenchmarkId::new(label, focus_nodes),
+                &fixture,
+                move |bencher, fixture| {
+                    probe.call_once(|| {
+                        print_validation_probe(&format!("target_where_{label}"), fixture);
+                    });
+                    bencher.iter(|| validate_fixture(black_box(fixture)));
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -1518,6 +1601,7 @@ criterion_group!(
     bench_focus_closed,
     bench_focus_sparql,
     bench_focus_unique_values,
+    bench_focus_target_where,
     bench_focus_realtime,
     bench_change_path_contrast,
     bench_subclass_membership,

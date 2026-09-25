@@ -1106,8 +1106,9 @@ pub fn compile_with_value_vocab(
                     defs.entry(name).or_insert_with(|| body.clone());
                 }
                 Target::ImplicitClass(t) => {
-                    // The shape node IS the class (`<id> a rdfs:Class`, no explicit
-                    // sh:targetClass) — genuinely representable as a `$def` keyed by
+                    // The shape node IS the class (an implicit class target: the
+                    // shape is also an `rdfs:Class`, or a `sh:ShapeClass`, with no
+                    // explicit sh:targetClass) — genuinely representable as a `$def` keyed by
                     // the class itself, exactly like `Target::Class`. Not lossy, so
                     // no loss is recorded for it.
                     let name = ns.def_key(implicit_class_iri(t));
@@ -1166,6 +1167,16 @@ pub fn compile_with_value_vocab(
                          closed-world JSON Schema $def can be keyed and its constraints are \
                          not enforced.",
                     );
+                }
+                Target::NodeExpression(_) => {
+                    // A structured sh:targetNode selects the output of a node
+                    // expression — no class extension, so no `$def` can be keyed.
+                    ctx.record("sh:targetNode", &shape_iri, NODE_EXPRESSION_TARGET_NOTE);
+                }
+                Target::Where(_) => {
+                    // sh:targetWhere selects the nodes that conform to a shape —
+                    // a definition, not a class extension a `$def` could key.
+                    ctx.record("sh:targetWhere", &shape_iri, WHERE_TARGET_NOTE);
                 }
             }
         }
@@ -1287,6 +1298,10 @@ fn compile_with_surface(
                      closed-world JSON Schema $def can be keyed and its constraints are \
                      not enforced.",
                 ),
+                Target::NodeExpression(_) => {
+                    ctx.record("sh:targetNode", &shape_iri, NODE_EXPRESSION_TARGET_NOTE);
+                }
+                Target::Where(_) => ctx.record("sh:targetWhere", &shape_iri, WHERE_TARGET_NOTE),
             }
         }
     }
@@ -1855,11 +1870,24 @@ fn class_def_target_iri(target: &Target) -> Option<&str> {
     match target {
         Target::Class(c) => Some(c.as_str()),
         Target::ImplicitClass(t) => Some(implicit_class_iri(t)),
-        Target::SubjectsOf(_) | Target::ObjectsOf(_) | Target::Node(_) | Target::Sparql { .. } => {
-            None
-        }
+        Target::SubjectsOf(_)
+        | Target::ObjectsOf(_)
+        | Target::Node(_)
+        | Target::Sparql { .. }
+        | Target::NodeExpression(_)
+        | Target::Where(_) => None,
     }
 }
+
+/// The loss note of a structured (node-expression) `sh:targetNode`.
+const NODE_EXPRESSION_TARGET_NOTE: &str = "A shape targeted via a node-expression sh:targetNode \
+     selects the output nodes of that expression, not a class extension; it has no closed-world \
+     JSON Schema $def and its constraints are not enforced by the emitted schema.";
+
+/// The loss note of a `sh:targetWhere`.
+const WHERE_TARGET_NOTE: &str = "A shape targeted via sh:targetWhere selects the nodes that \
+     conform to another shape, not a class extension; it has no closed-world JSON Schema $def and \
+     its constraints are not enforced by the emitted schema.";
 
 /// The purrdf-reserved JSON-Schema `$def` keys: the built-in RDF-1.2 `Annotation`
 /// reification definition and the generic `Node` reference definition. A caller
@@ -5387,10 +5415,11 @@ mod tests {
 
     #[test]
     fn every_target_kind_either_emits_a_def_or_records_a_loss_never_silent() {
-        // Core invariant, enforced directly: a shape targeted by any
-        // ONE of the four non-sh:targetClass/non-sh:target kinds must produce
-        // an observable outcome — either a $def (ImplicitClass) or a loss
-        // (Node, SubjectsOf, ObjectsOf) — never neither.
+        // Core invariant, enforced directly: a shape targeted by any ONE of the
+        // non-sh:targetClass/non-sh:target kinds must produce an observable
+        // outcome — either a $def (ImplicitClass, including sh:ShapeClass) or a
+        // loss (Node, NodeExpression, SubjectsOf, ObjectsOf, Where) — never
+        // neither.
         let c = compile_ttl(
             r"
             meta:Widget a rdfs:Class, sh:NodeShape .
@@ -5400,11 +5429,23 @@ mod tests {
                 sh:targetSubjectsOf meta:wrote .
             meta:BookShape a sh:NodeShape ;
                 sh:targetObjectsOf meta:wrote .
+            meta:QueriedShape a sh:NodeShape ;
+                sh:targetNode [ sh:path meta:pins ] .
+            meta:AdultShape a sh:NodeShape ;
+                sh:targetWhere [ sh:class meta:Person ] .
+            meta:Gadget a sh:ShapeClass .
             ",
         );
         let schema = schema_of(&c);
 
-        // ImplicitClass: a $def, no loss.
+        // ImplicitClass — `rdfs:Class, sh:NodeShape` and `sh:ShapeClass` alike: a
+        // $def, no loss.
+        assert!(schema["$defs"]["Gadget"].is_object());
+        assert!(!has_loss(
+            &c.losses,
+            "sh:targetNode",
+            "<https://example.org/meta/Gadget>"
+        ));
         assert!(schema["$defs"]["Widget"].is_object());
         assert!(!has_loss(
             &c.losses,
@@ -5428,6 +5469,16 @@ mod tests {
                 "BookShape",
                 "sh:targetObjectsOf",
                 "<https://example.org/meta/BookShape>",
+            ),
+            (
+                "QueriedShape",
+                "sh:targetNode",
+                "<https://example.org/meta/QueriedShape>",
+            ),
+            (
+                "AdultShape",
+                "sh:targetWhere",
+                "<https://example.org/meta/AdultShape>",
             ),
         ] {
             assert!(

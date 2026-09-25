@@ -182,7 +182,10 @@ fn census_counts_per_class_are_pinned() {
 /// vocabulary when they became evaluated severities (the spec table's severity
 /// rows), and `sh:conformanceDisallows` to the report vocabulary when the
 /// conformance-disallow set became a validation option the report echoes: 20 + 2,
-/// 20 + 1 and 42 − 3; the 39 that remain are terms of other kinds.
+/// 20 + 1 and 42 − 3. `sh:ShapeClass` moved to the vocabulary, and `sh:targetWhere`
+/// and `sh:shape` to the targets, when implicit class targets, where targets and
+/// explicit shape targets became evaluated: 22 + 1, 7 + 2 and 39 − 3; the 36 that
+/// remain are terms of other kinds.
 const EXPECTED_COUNTS: [(&str, usize); 11] = [
     ("constraint-parameter", 47),
     ("non-validating", 10),
@@ -192,9 +195,9 @@ const EXPECTED_COUNTS: [(&str, usize); 11] = [
     ("structural/node-expression", 47),
     ("structural/report", 21),
     ("structural/shape-path-prefix-graph", 16),
-    ("structural/vocabulary", 22),
-    ("target", 7),
-    ("unimplemented", 39),
+    ("structural/vocabulary", 23),
+    ("target", 9),
+    ("unimplemented", 36),
 ];
 
 /// Where a term may appear is part of its class: a constraint parameter and a

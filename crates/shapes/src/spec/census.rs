@@ -205,23 +205,18 @@ static EXPLICIT: &[CensusRow] = &[
     vocabulary(sh_iri!("Shape")),
     vocabulary(sh::NODE_SHAPE),
     vocabulary(sh::PROPERTY_SHAPE),
-    unimplemented(
-        sh_iri!("ShapeClass"),
-        "sh:ShapeClass implicit class targets are not evaluated",
-    ),
+    // "The class sh:ShapeClass is an rdfs:subClassOf of both sh:NodeShape and
+    // rdfs:Class" — a shape type, whose instances carry an implicit class target.
+    vocabulary(sh::SHAPE_CLASS),
     structural(sh::PATH, Role::ShapeCharacteristic),
     structural(sh::SEVERITY, Role::ShapeCharacteristic),
     structural(sh::MESSAGE, Role::ShapeCharacteristic),
     structural(sh::DEACTIVATED, Role::ShapeCharacteristic),
     structural(sh::PREFIXES, Role::ShapeCharacteristic),
-    unimplemented(
-        sh_iri!("targetWhere"),
-        "sh:targetWhere targets are not evaluated",
-    ),
-    unimplemented(
-        sh_iri!("shape"),
-        "sh:shape target declarations in the data graph are not read",
-    ),
+    // "Furthermore, sh:shape triples can declare targets in the data graph" —
+    // read from the DATA graph for every shape, never a shape's own target
+    // predicate, so it has no row in the table's target list.
+    row(sh::SHAPE, TermClass::Target),
     unimplemented(
         sh::VALUES,
         "sh:values computes a property shape's value nodes (SHACL 1.2 Core §2.3), and this \

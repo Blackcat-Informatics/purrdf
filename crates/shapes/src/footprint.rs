@@ -65,9 +65,12 @@
 //! forward path would make incremental validation pointless while looking
 //! impeccably careful, so TOP is reserved for a NAMED construct: opaque query text
 //! (`sh:sparql`, `sh:select`, a constraint component's `sh:ask`/`sh:select`
-//! validator, a `sh:SPARQLFunction` call), and a node expression whose nodes this
-//! walk cannot tie back to the focus node by a path. Everything else — every core
-//! path form, every core target, every core constraint — stays bounded.
+//! validator, a `sh:SPARQLFunction` call), a node expression whose nodes this
+//! walk cannot tie back to the focus node by a path, and the two targets that are
+//! EVALUATED over the whole data graph — `sh:targetWhere` and a node-expression
+//! `sh:targetNode`. Everything else — every core path form, the class, subjects-of,
+//! objects-of, constant and implicit class targets, the data graph's `sh:shape`
+//! declarations, every core constraint — stays bounded.
 //!
 //! # What is deliberately NOT here
 //!
@@ -99,6 +102,13 @@ pub(crate) const OPAQUE_COMPONENT: &str = "a custom constraint component validat
 /// anywhere in the graph can move its result for EVERY focus node.
 pub(crate) const OPAQUE_GLOBAL_EXPRESSION: &str =
     "a node expression selects nodes graph-wide rather than from the focus node";
+
+/// A where target (`sh:targetWhere`) or a structured node-expression
+/// `sh:targetNode`: the target set is the conformance of EVERY node of the data
+/// graph to a shape, or the output of an expression evaluated from the shape, so
+/// a change anywhere can add a focus node or take one away.
+pub(crate) const OPAQUE_EVALUATED_TARGET: &str = "a sh:targetWhere or node-expression sh:targetNode target is evaluated over the \
+     whole data graph, so a change anywhere can move its target set";
 
 /// A read reached through a node this walk cannot name a path to from the focus
 /// node: a `sh:filterShape` over a computed node set, a reifier shape, a custom
@@ -276,6 +286,10 @@ pub(crate) struct FootprintWalk {
     /// The position of the top-level shape the walk is currently inside, or
     /// `None` outside every top-level shape (a standalone expression or path).
     root: Option<usize>,
+    /// Whether the explicit-shape-target read has been recorded. It is the same
+    /// read for every top-level shape — `(n, sh:shape, ?)` offering `n` itself —
+    /// so it is recorded once per walk, not once per shape.
+    declared_targets: bool,
 }
 
 impl Default for FootprintWalk {
@@ -287,6 +301,7 @@ impl Default for FootprintWalk {
             declaring: Some(Vec::new()),
             broadcasts: Vec::new(),
             root: None,
+            declared_targets: false,
         }
     }
 }
@@ -546,7 +561,28 @@ impl FootprintWalk {
             // decided by its constraints, which record their own reads.
             Target::Node(_) => {}
             Target::Sparql { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
+            Target::Where(_) | Target::NodeExpression(_) => {
+                self.mark_opaque(OPAQUE_EVALUATED_TARGET);
+            }
         }
+    }
+
+    /// Record the read behind the EXPLICIT SHAPE TARGETS of the top-level shape
+    /// being walked: the data graph's `n sh:shape <shape>` triples (SHACL 1.2
+    /// Core, "Explicit shape targets"). A changed `sh:shape` row offers its
+    /// subject, the node it makes (or stops making) a focus node. Every shape can
+    /// be named that way, and the read is the same whichever shape a row names,
+    /// so the first top-level shape records it for all of them.
+    pub(crate) fn record_declared_targets(&mut self) {
+        if std::mem::replace(&mut self.declared_targets, true) {
+            return;
+        }
+        self.emit(
+            Root::Node,
+            &[],
+            Some(NamedNode::new_unchecked(crate::model::sh::SHAPE)),
+            Endpoint::Subject,
+        );
     }
 
     /// Record what ONE constraint reads, at the node the lowering walk currently
@@ -605,6 +641,7 @@ impl FootprintWalk {
             Constraint::UniqueValuesFor {
                 properties,
                 targets,
+                ..
             } => self.record_cross_focus(properties, targets),
             Constraint::Sparql { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
             Constraint::Component { .. } => self.mark_opaque(OPAQUE_COMPONENT),
@@ -651,18 +688,19 @@ impl FootprintWalk {
     /// can add or remove the node another one collides with. Both move verdicts on
     /// focus nodes no path connects, so both broadcast.
     ///
-    /// A declaring shape with no targets has an empty `$targetNodes`: the
-    /// constraint can produce no result, whatever the data says, so it reads
-    /// nothing that could move a verdict and records nothing.
+    /// A declaring shape with no target DECLARATIONS still has a data-dependent
+    /// `$targetNodes`: the data graph's `sh:shape` statements can name it (SHACL
+    /// 1.2 Core, "Explicit shape targets"), so `sh:shape` is broadcast for every
+    /// declaring shape, with or without declarations of its own.
     fn record_cross_focus(&mut self, properties: &[NamedNode], targets: &[Target]) {
-        if targets.is_empty() {
-            return;
-        }
         let (Some(shape), Some(_)) = (self.root, &self.chain) else {
             self.mark_opaque(OPAQUE_CROSS_FOCUS);
             return;
         };
         let mut predicates: Vec<NamedNode> = properties.to_vec();
+        // The data graph's `sh:shape` statements can name the declaring shape
+        // whatever it declares, so the target set always reads them.
+        predicates.push(NamedNode::new_unchecked(crate::model::sh::SHAPE));
         for target in targets {
             match target {
                 Target::Class(_) | Target::ImplicitClass(_) => {
@@ -676,6 +714,10 @@ impl FootprintWalk {
                 Target::Node(_) => {}
                 Target::Sparql { .. } => {
                     self.mark_opaque(OPAQUE_QUERY_TEXT);
+                    return;
+                }
+                Target::Where(_) | Target::NodeExpression(_) => {
+                    self.mark_opaque(OPAQUE_EVALUATED_TARGET);
                     return;
                 }
             }

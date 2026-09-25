@@ -32,7 +32,7 @@ use std::collections::BTreeSet;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::model::{sh, shnex};
 use crate::rules::RuleBody;
-use crate::shapes::{Constraint, PropertyShape, Shape, Shapes};
+use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
 
 /// What a call site binds to. See the [module docs](self).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -147,6 +147,7 @@ impl Walk<'_> {
                 self.shape(condition);
             }
         }
+        self.targets(&shape.targets, &id);
         self.constraints(&shape.constraints, &id);
         for property in &shape.property_shapes {
             self.property(property);
@@ -221,8 +222,28 @@ impl Walk<'_> {
                 | Constraint::UniqueMembers(_)
                 | Constraint::SingleLine(_)
                 | Constraint::RootClass(_)
-                | Constraint::UniqueValuesFor { .. }
                 | Constraint::Component { .. } => {}
+                Constraint::UniqueValuesFor { targets, .. } => self.targets(targets, owner),
+            }
+        }
+    }
+
+    /// The call sites a shape's target declarations carry: a structured
+    /// `sh:targetNode` is a node expression, and a `sh:targetWhere` shape is
+    /// walked as any nested shape is. Wildcard-free, as the constraint walk is.
+    fn targets(&mut self, targets: &[Target], owner: &str) {
+        for target in targets {
+            match target {
+                Target::NodeExpression(expr) => {
+                    self.node_expr(expr, &format!("sh:targetNode on {owner}"));
+                }
+                Target::Where(shape) => self.shape(shape),
+                Target::Class(_)
+                | Target::SubjectsOf(_)
+                | Target::ObjectsOf(_)
+                | Target::Node(_)
+                | Target::ImplicitClass(_)
+                | Target::Sparql { .. } => {}
             }
         }
     }

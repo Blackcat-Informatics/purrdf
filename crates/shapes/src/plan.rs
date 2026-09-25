@@ -1848,9 +1848,11 @@ fn pair<'a, A, B>(
 ///
 /// Core targets are retained as compact membership indexes instead of eagerly
 /// expanding every target node. A bounded request can therefore test only its
-/// supplied candidates. Explicit and SHACL-SPARQL target results are resolved
-/// once at preparation because they cannot be answered through a Core pattern
-/// lookup.
+/// supplied candidates. Explicit, SHACL-SPARQL, where (`sh:targetWhere`),
+/// node-expression (`sh:targetNode [ … ]`) and explicit-shape (`sh:shape` in the
+/// data graph) target results are resolved once at preparation, into
+/// `explicit_ids` / `explicit_foreign`, because none of them can be answered
+/// through a Core pattern lookup.
 #[derive(Debug, Default)]
 pub(crate) struct PreparedTargets {
     pub(crate) explicit_ids: IdSet,
@@ -2079,6 +2081,10 @@ pub(crate) fn lower_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> L
         .enumerate()
         .map(|(position, shape)| {
             walk.footprint.enter_root(position);
+            // Recorded for every top-level shape, deactivated or not, exactly as
+            // its declared targets are: the walk describes the shapes graph, and
+            // validation decides which shapes run.
+            walk.footprint.record_declared_targets();
             lower_shape(shape, &mut walk)
         })
         .collect();
@@ -2222,11 +2228,16 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
             Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
                 walk.classes.insert(class.clone());
             }
+            // A where target and a node-expression target are evaluated with a
+            // lowering of their own (see `crate::target_eval`), once per
+            // validation, so what they name is planned there rather than here.
             Target::SubjectsOf(_)
             | Target::ObjectsOf(_)
             | Target::Node(_)
             | Target::ImplicitClass(_)
-            | Target::Sparql { .. } => {}
+            | Target::Sparql { .. }
+            | Target::Where(_)
+            | Target::NodeExpression(_) => {}
         }
     }
     let lowered = LoweredShape {
@@ -2501,6 +2512,7 @@ fn lower_constraint(
         // shape's are: target resolution asks the catalog for them by IRI.
         Constraint::UniqueValuesFor {
             properties,
+            shape,
             targets,
         } => {
             for target in targets {
@@ -2515,6 +2527,7 @@ fn lower_constraint(
                 .collect();
             let slot = walk.unique_values.len();
             walk.unique_values.push(UniqueSpec {
+                shape: shape.clone(),
                 targets: targets.clone().into_boxed_slice(),
                 properties,
             });

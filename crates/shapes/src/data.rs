@@ -17,7 +17,7 @@
 //! SHACL-SPARQL paths over the combined data(+shapes) dataset.
 
 use crate::data_view::{ShaclDatasetView, ShaclRead};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ::purrdf::{GraphMatch, QuadIds};
 use ::purrdf::{RdfDataset, TermId};
@@ -121,6 +121,9 @@ pub struct ShaclData {
     sparql_view: ClassMembershipView,
     /// The named-graph IRI under which the shapes dataset is exposed, when known.
     shapes_graph_iri: Option<String>,
+    /// The NODES of the Core data graph, derived on first use and shared by every
+    /// `sh:targetWhere` the bound shapes declare (see [`Self::graph_nodes`]).
+    graph_nodes: OnceLock<Box<[TermId]>>,
 }
 
 impl ShaclData {
@@ -161,7 +164,47 @@ impl ShaclData {
             class_membership,
             sparql_view,
             shapes_graph_iri,
+            graph_nodes: OnceLock::new(),
         }
+    }
+
+    /// The NODES of the Core data graph, as RDF 1.2 Concepts defines them: "The
+    /// set of nodes of an RDF graph is the set of subjects and objects of the
+    /// asserted triples of the graph." Across every graph of the dataset, as every
+    /// Core lookup reads, deduplicated and in first-seen order.
+    ///
+    /// A triple term that is the OBJECT of an asserted triple is a node; a term
+    /// that occurs only INSIDE a triple term is not, because the triple term's
+    /// constituents are not subjects or objects of an asserted triple.
+    ///
+    /// Built once per holder, on the first `sh:targetWhere` that has to scan the
+    /// whole graph, and reused by every later one; a shapes graph with none never
+    /// pays for it.
+    pub(crate) fn graph_nodes(&self) -> &[TermId] {
+        self.graph_nodes.get_or_init(|| {
+            let mut seen = ::purrdf::IdSet::default();
+            let mut nodes: Vec<TermId> = Vec::new();
+            for quad in quads_for_pattern_ids(&*self.core, None, None, None, GraphFilter::AnyGraph)
+            {
+                for node in [quad.s, quad.o] {
+                    if seen.insert(node) {
+                        nodes.push(node);
+                    }
+                }
+            }
+            nodes.into_boxed_slice()
+        })
+    }
+
+    /// Whether `node` is a NODE of the Core data graph (see
+    /// [`Self::graph_nodes`]): the subject or the object of an asserted triple.
+    pub(crate) fn is_graph_node(&self, node: TermId) -> bool {
+        quads_for_pattern_ids(&*self.core, Some(node), None, None, GraphFilter::AnyGraph)
+            .next()
+            .is_some()
+            || quads_for_pattern_ids(&*self.core, None, None, Some(node), GraphFilter::AnyGraph)
+                .next()
+                .is_some()
     }
 
     /// Materialize the projected data graph at an explicit compatibility boundary.

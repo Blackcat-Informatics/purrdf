@@ -422,6 +422,7 @@ impl Parser<'_> {
                 out.push(
                     Constraint::UniqueValuesFor {
                         properties,
+                        shape: id.clone(),
                         targets: targets.clone(),
                     },
                     annotated,

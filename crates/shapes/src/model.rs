@@ -76,6 +76,10 @@ pub mod sh {
     /// `sh:PropertyShape` — the class of property shapes.
     pub const PROPERTY_SHAPE: &str = "http://www.w3.org/ns/shacl#PropertyShape";
 
+    /// `sh:ShapeClass` — "an rdfs:subClassOf of both sh:NodeShape and rdfs:Class"
+    /// (SHACL 1.2 Core, "Implicit Class Targets and sh:ShapeClass").
+    pub const SHAPE_CLASS: &str = "http://www.w3.org/ns/shacl#ShapeClass";
+
     // ── Target predicates ──────────────────────────────────────────────────────
 
     /// `sh:targetClass` — targets all SHACL instances of the given class.
@@ -87,8 +91,17 @@ pub mod sh {
     /// `sh:targetObjectsOf` — targets all objects of triples with the given predicate.
     pub const TARGET_OBJECTS_OF: &str = "http://www.w3.org/ns/shacl#targetObjectsOf";
 
-    /// `sh:targetNode` — targets an explicitly named node.
+    /// `sh:targetNode` — targets the output nodes of a node expression: a
+    /// constant (IRI, literal, triple term) targets itself.
     pub const TARGET_NODE: &str = "http://www.w3.org/ns/shacl#targetNode";
+
+    /// `sh:targetWhere` — targets every node of the data graph that conforms to
+    /// the given shape.
+    pub const TARGET_WHERE: &str = "http://www.w3.org/ns/shacl#targetWhere";
+
+    /// `sh:shape` — a DATA-graph statement `n sh:shape s` makes `n` a target of
+    /// the shape `s` (SHACL 1.2 Core, "Explicit shape targets").
+    pub const SHAPE: &str = "http://www.w3.org/ns/shacl#shape";
 
     // ── Property shape plumbing ────────────────────────────────────────────────
 

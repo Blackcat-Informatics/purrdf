@@ -34,12 +34,13 @@
 
 use ::purrdf::FastSet;
 
-use crate::data::{GraphFilter, native_quads};
-use crate::model::{rdf, rdfs, sh, xsd};
+use super::shacl_instance::ShaclInstances;
+use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids};
+use crate::model::{rdf, sh, xsd};
 use crate::shapes::Parser;
 use crate::spec::ValueRule;
 use crate::spec::census::{self, Role, TermClass};
-use crate::term::{NamedNode, Term};
+use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// `rdf:langString`.
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -49,8 +50,6 @@ const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#di
 const RDF_HTML: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#HTML";
 /// `sh:entailment`.
 const ENTAILMENT: &str = "http://www.w3.org/ns/shacl#entailment";
-/// `sh:ShapeClass`.
-const SHAPE_CLASS: &str = "http://www.w3.org/ns/shacl#ShapeClass";
 
 /// The terms a SPARQL-based constraint or target node carries (SHACL 1.2 SPARQL
 /// Extensions §3 and §5): its query and the prefixes, message, severity and
@@ -93,9 +92,11 @@ impl Parser<'_> {
             .into_iter()
             .map(|(_, _, object)| object)
             .collect();
+        let mut instances = ShaclInstances::new(self.data);
         for shape in self.spec_shapes() {
             let is_parameter = parameter_declarations.contains(&shape);
             self.check_shape_node(&shape, is_parameter)?;
+            self.check_implicit_class_shape(&shape, &mut instances)?;
         }
         Ok(())
     }
@@ -103,22 +104,79 @@ impl Parser<'_> {
     /// The shapes of the shapes graph, by SHACL 1.2 Core §2.1's definition, in
     /// canonical term order.
     fn spec_shapes(&self) -> Vec<Term> {
+        self.shapes_of_graph(None)
+    }
+
+    /// The shapes an EXPLICIT SHAPE TARGET can name (SHACL 1.2 Core, "Explicit
+    /// shape targets": "If s is a shape in a shapes graph and n is a node in the
+    /// data graph. If n has value s for sh:shape in the data graph, then n is a
+    /// target for s"), in canonical term order.
+    ///
+    /// The shapes of [`Self::spec_shapes`] minus the PARAMETER DECLARATIONS — the
+    /// objects of `sh:parameter` and the SHACL instances of `sh:Parameter` — and
+    /// minus whatever is a shape only because a parameter declaration says so (the
+    /// vocabulary's `sh:MemberShapeConstraintComponent-memberShape` carries
+    /// `sh:node sh:NodeShape`). A parameter declaration declares a component's
+    /// parameter; it is never validated, so nothing it mentions is a shape anything
+    /// could be targeted at.
+    pub(crate) fn targetable_shapes(&self) -> Vec<Term> {
+        let mut declarations: FastSet<Term> = self
+            .quads_with(None, Some(sh::PARAMETER_PROPERTY), None)
+            .into_iter()
+            .map(|(_, _, object)| object)
+            .collect();
+        let mut instances = ShaclInstances::new(self.data);
+        let parameter_class = self.data.term_id_by_iri(sh::PARAMETER);
+        if let Some(rdf_type) = self.data.term_id_by_iri(rdf::TYPE) {
+            let typed: Vec<::purrdf::TermId> =
+                quads_for_pattern_ids(self.data, None, Some(rdf_type), None, GraphFilter::AnyGraph)
+                    .map(|quad| quad.s)
+                    .collect();
+            for node in typed {
+                if instances.is_instance(node, parameter_class) {
+                    declarations.insert(term_id_to_native(self.data, node));
+                }
+            }
+        }
+        self.shapes_of_graph(Some(&declarations))
+    }
+
+    /// [`Self::spec_shapes`], or — with `declarations` — the same definition read
+    /// over every statement whose subject is not one of `declarations`, and with
+    /// `declarations` themselves left out.
+    fn shapes_of_graph(&self, declarations: Option<&FastSet<Term>>) -> Vec<Term> {
+        let skip = |subject: &Term| declarations.is_some_and(|set| set.contains(subject));
         let mut shapes: FastSet<Term> = FastSet::default();
-        for class in [sh::NODE_SHAPE, sh::PROPERTY_SHAPE, SHAPE_CLASS] {
-            for (subject, _, _) in self.quads_with(None, Some(rdf::TYPE), Some(class)) {
-                shapes.insert(subject);
+        // "s is a SHACL instance of sh:NodeShape or sh:PropertyShape" — through
+        // `rdfs:subClassOf*` and `sh:ShapeClass` (see `shacl_instance`).
+        let mut instances = ShaclInstances::new(self.data);
+        let mut typed = ::purrdf::IdSet::default();
+        if let Some(rdf_type) = self.data.term_id_by_iri(rdf::TYPE) {
+            for quad in
+                quads_for_pattern_ids(self.data, None, Some(rdf_type), None, GraphFilter::AnyGraph)
+            {
+                typed.insert(quad.s);
+            }
+        }
+        for node in typed {
+            if instances.is_node_shape(node) || instances.is_property_shape(node) {
+                let shape = term_id_to_native(self.data, node);
+                if !skip(&shape) {
+                    shapes.insert(shape);
+                }
             }
         }
         // A parameter declaration is an `sh:Parameter`, which SHACL makes a
         // subclass of `sh:PropertyShape`: the objects of `sh:parameter` are
         // property shapes whether or not they carry the type.
-        for (_, _, object) in self.quads_with(None, Some(sh::PARAMETER_PROPERTY), None) {
-            if matches!(object, Term::NamedNode(_) | Term::BlankNode(_)) {
-                shapes.insert(object);
+        if declarations.is_none() {
+            for (_, _, object) in self.quads_with(None, Some(sh::PARAMETER_PROPERTY), None) {
+                if matches!(object, Term::NamedNode(_) | Term::BlankNode(_)) {
+                    shapes.insert(object);
+                }
             }
         }
         let mut subject_predicates: Vec<&str> = crate::spec::target_predicates().collect();
-        subject_predicates.push("http://www.w3.org/ns/shacl#targetWhere");
         for component in crate::spec::implemented().components() {
             for p in component.params() {
                 subject_predicates.push(p.path);
@@ -126,21 +184,34 @@ impl Parser<'_> {
         }
         for predicate in subject_predicates {
             for (subject, _, _) in self.quads_with(None, Some(predicate), None) {
-                shapes.insert(subject);
+                if !skip(&subject) {
+                    shapes.insert(subject);
+                }
+            }
+        }
+        // "Each value of sh:targetWhere in a shape is a well-formed shape."
+        for (subject, _, object) in self.quads_with(None, Some(sh::TARGET_WHERE), None) {
+            if matches!(object, Term::NamedNode(_) | Term::BlankNode(_)) && !skip(&subject) {
+                shapes.insert(object);
             }
         }
         for component in crate::spec::implemented().components() {
             for p in component.params() {
                 match p.value {
                     ValueRule::Shape => {
-                        for (_, _, object) in self.quads_with(None, Some(p.path), None) {
-                            if matches!(object, Term::NamedNode(_) | Term::BlankNode(_)) {
+                        for (subject, _, object) in self.quads_with(None, Some(p.path), None) {
+                            if matches!(object, Term::NamedNode(_) | Term::BlankNode(_))
+                                && !skip(&subject)
+                            {
                                 shapes.insert(object);
                             }
                         }
                     }
                     ValueRule::ShapeList => {
-                        for (_, _, object) in self.quads_with(None, Some(p.path), None) {
+                        for (subject, _, object) in self.quads_with(None, Some(p.path), None) {
+                            if skip(&subject) {
+                                continue;
+                            }
                             // An ill-formed list is refused by the value check on
                             // the shape that carries it; here only its members are
                             // wanted, and a list that cannot be walked has none.
@@ -169,7 +240,7 @@ impl Parser<'_> {
                 }
             }
         }
-        let mut out: Vec<Term> = shapes.into_iter().collect();
+        let mut out: Vec<Term> = shapes.into_iter().filter(|shape| !skip(shape)).collect();
         crate::term::sort_terms_canonical(&mut out);
         out
     }
@@ -345,9 +416,7 @@ impl Parser<'_> {
         self.statement_annotation(shape, p, object).map(|_| ())
     }
 
-    /// A shape's `rdf:type`: an unimplemented SHACL class is refused, and so is a
-    /// blank node that is both an `rdfs:Class` and a shape (an implicit class
-    /// target has to be named by an IRI).
+    /// A shape's `rdf:type`: an unimplemented SHACL class is refused.
     fn check_shape_type(&self, shape: &Term, class: &Term) -> Result<(), String> {
         let Term::NamedNode(class) = class else {
             return Ok(());
@@ -361,14 +430,29 @@ impl Parser<'_> {
                 class.as_str()
             ));
         }
-        if matches!(shape, Term::BlankNode(_))
-            && (class.as_str() == sh::NODE_SHAPE || class.as_str() == sh::PROPERTY_SHAPE)
-            && self.has_type(shape, rdfs::CLASS)
-        {
+        Ok(())
+    }
+
+    /// SHACL 1.2 Core, "Implicit Class Targets and sh:ShapeClass": "If s is a
+    /// SHACL instance of sh:NodeShape or sh:PropertyShape in an RDF graph G and s
+    /// is also a SHACL instance of rdfs:Class in G and s is not an IRI then s is an
+    /// ill-formed shape in G." A SHACL instance of `sh:ShapeClass` is both.
+    fn check_implicit_class_shape(
+        &self,
+        shape: &Term,
+        instances: &mut ShaclInstances<'_>,
+    ) -> Result<(), String> {
+        if !matches!(shape, Term::BlankNode(_)) {
+            return Ok(());
+        }
+        let Some(node) = crate::data::resolve_id(self.data, shape) else {
+            return Ok(());
+        };
+        if instances.has_implicit_class_target(node) {
             return Err(format!(
-                "shape {shape} is a blank node typed both rdfs:Class and <{}>; an implicit class \
-                 target has to be an IRI",
-                class.as_str()
+                "shape {shape} is a blank node that is a SHACL instance of both rdfs:Class and \
+                 sh:NodeShape or sh:PropertyShape (or of sh:ShapeClass); SHACL makes such a \
+                 shape ill-formed, because its implicit class target has to be named by an IRI"
             ));
         }
         Ok(())
@@ -477,20 +561,13 @@ impl Parser<'_> {
             sh::TARGET_CLASS | sh::TARGET_SUBJECTS_OF | sh::TARGET_OBJECTS_OF => {
                 matches!(value, Term::NamedNode(_))
             }
-            // SHACL 1.2 Core §2.1.3.1: "Each value of sh:targetNode in a shape is a
-            // well-formed node expression". The empty expression targets nothing;
-            // a structured one is not evaluated here and is refused.
-            sh::TARGET_NODE => {
-                if matches!(value, Term::BlankNode(_)) && !self.is_empty_expression(value) {
-                    return Err(format!(
-                        "sh:targetNode on shape {shape} is the node expression {value}; a \
-                         structured node-expression sh:targetNode value is not evaluated by this \
-                         engine, so the shape is refused rather than targeting the blank node \
-                         itself"
-                    ));
-                }
-                true
-            }
+            // SHACL 1.2 Core, "Node targets": "Each value of sh:targetNode in a shape
+            // is a well-formed node expression" — every term is one, and a
+            // structured one's well-formedness is its parse.
+            sh::TARGET_NODE => true,
+            // SHACL 1.2 Core, "Explicit shape targets": "Each value of sh:shape is
+            // an IRI."
+            sh::SHAPE => matches!(value, Term::NamedNode(_)),
             _ => matches!(value, Term::NamedNode(_) | Term::BlankNode(_)),
         };
         if ok {

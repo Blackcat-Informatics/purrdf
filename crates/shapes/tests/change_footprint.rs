@@ -79,6 +79,8 @@ const PREFIXES: &str = r"
 const EX: &str = "http://example.org/ns#";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+/// `sh:shape`, whose data-graph statements are explicit shape targets.
+const SH_SHAPE: &str = "http://www.w3.org/ns/shacl#shape";
 /// The RDF 1.2 reifier predicate. A row `(r, rdf:reifies, <<( s p o )>>)` is a
 /// REIFIER DECLARATION, not an ordinary quad: it lands in the statement side-table
 /// and reclassifies the rows about `r` in the graph that declared it.
@@ -529,6 +531,27 @@ ex:EmployerShape a sh:NodeShape ;
     naive_misses: true,
 };
 
+/// An explicit shape target: the change is a DATA-graph `sh:shape` statement, which
+/// makes its subject a focus node of the shape it names (SHACL 1.2 Core, "Explicit
+/// shape targets").
+const EXPLICIT_SHAPE_TARGET: Case = Case {
+    name: "sh:shape in the data graph",
+    shapes: r"
+ex:NamedShape a sh:NodeShape ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/ns/shacl#shape> <http://example.org/ns#NamedShape> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#name> \"Alice\" .\n",
+        "<http://example.org/ns#mallory> <http://example.org/ns#age> \"41\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("mallory", SH_SHAPE, Obj::Ex("NamedShape"))],
+    removals: &[],
+    untouched: "alice",
+    naive_misses: false,
+};
+
 /// `sh:targetClass` reached through the `rdf:type` edge.
 const TARGET_CLASS_TYPE_EDGE: Case = Case {
     name: "sh:targetClass through the rdf:type edge",
@@ -916,6 +939,7 @@ const CASES: &[&Case] = &[
     &TARGET_OBJECTS_OF,
     &TARGET_CLASS_TYPE_EDGE,
     &TARGET_CLASS_SUBCLASS_EDGE,
+    &EXPLICIT_SHAPE_TARGET,
     &NODE_RECURSION,
     &PROPERTY_PAIR_COMPARAND,
     &CLASS_CONSTRAINT,
@@ -1230,6 +1254,49 @@ ex:PersonShape a sh:NodeShape ;
     assert!(
         reason.contains("query text"),
         "the reason must name the construct a caller has to change, got {reason:?}"
+    );
+}
+
+/// A where target and a node-expression `sh:targetNode` select their focus nodes
+/// by evaluating over the whole data graph, so no bounded superset can be derived
+/// from the shapes graph, and that is REPORTED. The control is the same shape with
+/// a class target, which stays bounded.
+#[test]
+fn evaluated_targets_report_an_unbounded_footprint_and_a_class_target_does_not() {
+    for target in [
+        "sh:targetWhere [ sh:class ex:Person ]",
+        "sh:targetNode [ sh:path ex:member ]",
+    ] {
+        let (snapshot, validator) = bound(
+            &format!(
+                "ex:PersonShape a sh:NodeShape ; {target} ;
+                    sh:property [ sh:path ex:name ; sh:minCount 1 ] ."
+            ),
+            TYPED_ALICE,
+            ("mallory", RDF_TYPE, Obj::Ex("Person")),
+        );
+        let expansion = validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("expansion");
+        let reason = expansion
+            .reason()
+            .unwrap_or_else(|| panic!("{target}: an evaluated target must answer TOP"));
+        assert!(
+            reason.contains("sh:targetWhere"),
+            "{target}: the reason must name the construct, got {reason:?}"
+        );
+    }
+    let (snapshot, validator) = bound(
+        "ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;
+            sh:property [ sh:path ex:name ; sh:minCount 1 ] .",
+        TYPED_ALICE,
+        ("mallory", RDF_TYPE, Obj::Ex("Person")),
+    );
+    assert!(
+        !validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("expansion")
+            .is_everything()
     );
 }
 

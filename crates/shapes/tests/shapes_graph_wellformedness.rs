@@ -169,28 +169,73 @@ fn a_parameter_declarations_default_value_loads_and_a_shapes_is_refused() {
     );
 }
 
+/// `sh:targetWhere` (SHACL 1.2 Core, "Where Targets": "the set of nodes in a data
+/// graph DG that conform to w is a target from DG for s in SG") is evaluated: the
+/// shape's own `sh:nodeKind sh:Literal` fails every IRI it targets, so the results
+/// ARE the target set. The control swaps the where target for a class target on a
+/// different class, and its row names a different node.
 #[test]
-fn target_where_is_refused_and_target_class_loads() {
-    refused(
-        "ex:S a sh:NodeShape ; sh:targetWhere [ sh:class ex:C ] ; sh:nodeKind sh:IRI .",
-        "sh:targetWhere",
-    );
-    loads("ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:nodeKind sh:IRI .");
-}
-
-#[test]
-fn shape_class_is_refused_and_an_rdfs_class_node_shape_loads() {
-    refused(
-        "ex:C a sh:ShapeClass ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
-        "sh:ShapeClass",
-    );
-    let report = validate(
-        "ex:C a rdfs:Class, sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
-        "ex:a a ex:C . ex:b a ex:C ; ex:p 1 .",
+fn target_where_selects_the_conforming_nodes_and_target_class_the_instances() {
+    let data = "ex:a a ex:C . ex:b a ex:D .";
+    let by_where = validate(
+        "ex:S a sh:NodeShape ; sh:targetWhere [ sh:class ex:C ] ; sh:nodeKind sh:Literal .",
+        data,
     );
     assert_eq!(
-        results(&report),
+        results(&by_where),
+        vec![(
+            "<http://example.org/ns#a>".to_owned(),
+            "<http://example.org/ns#a>".to_owned()
+        )]
+    );
+    let by_class = validate(
+        "ex:S a sh:NodeShape ; sh:targetClass ex:D ; sh:nodeKind sh:Literal .",
+        data,
+    );
+    assert_eq!(
+        results(&by_class),
+        vec![(
+            "<http://example.org/ns#b>".to_owned(),
+            "<http://example.org/ns#b>".to_owned()
+        )]
+    );
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetWhere \"not a shape\" ; sh:nodeKind sh:Literal .",
+        "shacl#targetWhere> on shape",
+    );
+}
+
+/// `sh:ShapeClass` (SHACL 1.2 Core: "If s is a SHACL instance of sh:ShapeClass in a
+/// shapes graph SG then the set of SHACL instances of s in a data graph DG is a
+/// target from DG for s in SG") targets its instances, exactly as the
+/// `rdfs:Class, sh:NodeShape` spelling does — without the shapes graph merging the
+/// vocabulary that makes `sh:ShapeClass` a subclass of both. A BLANK
+/// `sh:ShapeClass` is refused: "If s is a SHACL instance of sh:NodeShape or
+/// sh:PropertyShape in an RDF graph G and s is also a SHACL instance of rdfs:Class
+/// in G and s is not an IRI then s is an ill-formed shape in G."
+#[test]
+fn shape_class_targets_its_instances_and_a_blank_one_is_refused() {
+    let data = "ex:a a ex:C . ex:b a ex:C ; ex:p 1 .";
+    let shape_class = validate(
+        "ex:C a sh:ShapeClass ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+        data,
+    );
+    let spelled_out = validate(
+        "ex:C a rdfs:Class, sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+        data,
+    );
+    assert_eq!(
+        results(&shape_class),
         vec![("<http://example.org/ns#a>".to_owned(), String::new())]
+    );
+    assert_eq!(results(&shape_class), results(&spelled_out));
+    refused(
+        "[] a sh:ShapeClass ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+        "ill-formed",
+    );
+    refused(
+        "[] a rdfs:Class, sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+        "ill-formed",
     );
 }
 
@@ -561,12 +606,44 @@ fn a_string_rule_deactivation_is_refused_and_boolean_true_deactivates_the_rule()
 
 // ── sh:targetNode as a node expression ───────────────────────────────────────
 
+/// SHACL 1.2 Core, "Node targets": "the output nodes of evalExpr(expr, data graph,
+/// s, {}) are targets" — the expression is evaluated with the SHAPE `s` as its
+/// focus node. `[ sh:path ex:p ]` from `ex:S` is `ex:S`'s `ex:p` values; the same
+/// path from any other node does not count. The IRI `ex:p` given as the value is a
+/// CONSTANT, whose output is itself — never read as the path it names.
 #[test]
-fn a_structured_target_node_is_refused_the_empty_one_targets_nothing_and_an_iri_targets() {
-    refused(
+fn a_structured_target_node_is_evaluated_from_the_shape_and_an_iri_is_a_constant() {
+    let data = "ex:S ex:p ex:a . ex:other ex:p ex:b .";
+    let expression = validate(
         "ex:S a sh:NodeShape ; sh:targetNode [ sh:path ex:p ] ; sh:nodeKind sh:Literal .",
-        "sh:targetNode",
+        data,
     );
+    assert_eq!(
+        results(&expression),
+        vec![(
+            "<http://example.org/ns#a>".to_owned(),
+            "<http://example.org/ns#a>".to_owned()
+        )]
+    );
+    let constant = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:p ; sh:nodeKind sh:Literal .",
+        data,
+    );
+    assert_eq!(
+        results(&constant),
+        vec![(
+            "<http://example.org/ns#p>".to_owned(),
+            "<http://example.org/ns#p>".to_owned()
+        )]
+    );
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode [ sh:pathh ex:p ] ; sh:nodeKind sh:Literal .",
+        "shacl#pathh",
+    );
+}
+
+#[test]
+fn the_empty_target_node_targets_nothing_and_an_iri_targets() {
     // `[]` is the empty node expression: no targets, so nothing is validated.
     let empty = validate(
         "ex:S a sh:NodeShape ; sh:targetNode [] ; sh:nodeKind sh:Literal .",
@@ -1340,4 +1417,29 @@ fn a_malformed_blank_pair_path_is_refused_and_a_well_formed_one_loads() {
         "ex:a ex:p ex:v ; ex:q ex:v ; ex:r ex:w .",
     );
     assert_eq!(component_results(&report, EQUALS), vec![(x("a"), x("w"))]);
+}
+
+/// SHACL 1.2 Core, "Explicit shape targets": "Each value of sh:shape is an IRI."
+/// A shape node that is also a data node of a shared graph may carry `sh:shape`
+/// — it then names the shape it is a target of — but a literal value is refused.
+/// The valid neighbour names a shape by IRI, and the shape node becomes that
+/// shape's focus node.
+#[test]
+fn a_literal_sh_shape_value_is_refused_and_an_iri_one_targets() {
+    refused(
+        "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ; sh:shape \"ex:T\" .",
+        "shacl#shape> on shape",
+    );
+    let shared = "ex:T a sh:NodeShape ; sh:nodeKind sh:Literal .
+                  ex:S a sh:NodeShape ; sh:shape ex:T .";
+    let shapes = loads(shared);
+    let report =
+        validate_dataset_with_shapes_graph(&data(shared), &shapes, None).expect("validation runs");
+    assert_eq!(
+        results(&report),
+        vec![(
+            "<http://example.org/ns#S>".to_owned(),
+            "<http://example.org/ns#S>".to_owned()
+        )]
+    );
 }

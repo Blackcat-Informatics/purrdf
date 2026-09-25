@@ -276,11 +276,7 @@ fn walk_shape(
         return;
     }
 
-    for target in &shape.targets {
-        if let Target::Sparql { select, .. } = target {
-            usage.record(format!("sh:target on {id}"), select, env);
-        }
-    }
+    walk_targets(&shape.targets, &id, usage, env, flight);
     for rule in &shape.rules {
         if let RuleBody::Sparql { construct } = &rule.body {
             usage.record(format!("sh:rule on {id}"), construct, env);
@@ -310,8 +306,47 @@ fn walk_property(
     }
 }
 
-/// Record the SPARQL texts a constraint list carries: `sh:sparql` bodies, and the
-/// `sh:select`/`sh:sparqlExpr` node expressions inside `sh:expression`.
+/// Record the SPARQL texts a shape's target declarations carry: a SHACL-SPARQL
+/// `sh:target`'s query, the `sh:select` inside a node-expression `sh:targetNode`,
+/// and whatever the `sh:targetWhere` shape carries. Wildcard-free, so a target
+/// kind added later is a compile error here rather than a silent gap.
+fn walk_targets(
+    targets: &[Target],
+    owner: &str,
+    usage: &mut ExtensionUsage,
+    env: &ExtensionEnv,
+    flight: &mut InFlight,
+) {
+    for target in targets {
+        match target {
+            Target::Sparql { select, .. } => {
+                usage.record(format!("sh:target on {owner}"), select, env);
+            }
+            Target::NodeExpression(expr) => {
+                walk_node_expr(
+                    expr,
+                    &format!("sh:targetNode on {owner}"),
+                    usage,
+                    env,
+                    flight,
+                );
+            }
+            Target::Where(shape) => walk_shape(shape, usage, env, flight),
+            Target::Class(_)
+            | Target::SubjectsOf(_)
+            | Target::ObjectsOf(_)
+            | Target::Node(_)
+            | Target::ImplicitClass(_) => {}
+        }
+    }
+}
+
+/// Record the SPARQL texts a constraint list carries: `sh:sparql` bodies, the
+/// `sh:select`/`sh:sparqlExpr` node expressions inside `sh:expression` and
+/// `sh:nodeByExpression`, and every shape a constraint nests — an INLINE nested
+/// shape (`sh:node [ … ]`, `sh:or ( [ … ] )`) is anonymous and never appears in
+/// `Shapes::node_shapes`, so nothing else reaches it. Wildcard-free for the reason
+/// [`walk_node_expr`] is.
 fn walk_constraints(
     constraints: &[Constraint],
     owner: &str,
@@ -324,10 +359,73 @@ fn walk_constraints(
             Constraint::Sparql { select, .. } => {
                 usage.record(format!("sh:sparql on {owner}"), select, env);
             }
-            Constraint::Expression { expr, .. } => {
+            Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
                 walk_node_expr(expr, owner, usage, env, flight);
             }
-            _ => {}
+            Constraint::Not(shape)
+            | Constraint::Node(shape)
+            | Constraint::MemberShape(shape)
+            | Constraint::SomeValue(shape) => walk_shape(shape, usage, env, flight),
+            Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
+                for shape in shapes {
+                    walk_shape(shape, usage, env, flight);
+                }
+            }
+            Constraint::QualifiedValueShape {
+                shape, siblings, ..
+            } => {
+                walk_shape(shape, usage, env, flight);
+                for sibling in siblings {
+                    walk_shape(sibling, usage, env, flight);
+                }
+            }
+            Constraint::UniqueValuesFor { targets, .. } => {
+                walk_targets(targets, owner, usage, env, flight);
+            }
+            // A custom constraint component's validator is query text this shapes
+            // graph carries and every validation of the shape executes.
+            Constraint::Component {
+                component,
+                validator,
+                ..
+            } => {
+                let (form, text) = match validator {
+                    crate::shapes::ComponentValidator::Ask { ask } => ("sh:ask", ask),
+                    crate::shapes::ComponentValidator::Select { select } => ("sh:select", select),
+                };
+                usage.record(
+                    format!("{form} validator of <{}> on {owner}", component.as_str()),
+                    text,
+                    env,
+                );
+            }
+            Constraint::Class(_)
+            | Constraint::Datatype(_)
+            | Constraint::NodeKind(_)
+            | Constraint::MinCount(_)
+            | Constraint::MaxCount(_)
+            | Constraint::In(_)
+            | Constraint::HasValue(_)
+            | Constraint::Pattern { .. }
+            | Constraint::MinLength(_)
+            | Constraint::MaxLength(_)
+            | Constraint::UniqueLang(_)
+            | Constraint::LanguageIn(_)
+            | Constraint::Closed { .. }
+            | Constraint::MinInclusive(_)
+            | Constraint::MaxInclusive(_)
+            | Constraint::MinExclusive(_)
+            | Constraint::MaxExclusive(_)
+            | Constraint::Equals(_)
+            | Constraint::Disjoint(_)
+            | Constraint::SubsetOf(_)
+            | Constraint::LessThan(_)
+            | Constraint::LessThanOrEquals(_)
+            | Constraint::MinListLength(_)
+            | Constraint::MaxListLength(_)
+            | Constraint::UniqueMembers(_)
+            | Constraint::SingleLine(_)
+            | Constraint::RootClass(_) => {}
         }
     }
 }

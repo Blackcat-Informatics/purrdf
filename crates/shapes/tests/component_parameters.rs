@@ -365,8 +365,21 @@ fn native_component_declarations_preserve_every_repeatable_constraint_family() {
         );
         let native = shapes(&body).unwrap();
         let imported = shapes(&format!("{body} sh:{component}ConstraintComponent a sh:ConstraintComponent ; sh:parameter [ sh:path sh:{parameter} ] .")).unwrap();
-        let before = &native.node_shapes[0].property_shapes[0].constraints;
-        let after = &imported.node_shapes[0].property_shapes[0].constraints;
+        // `ex:A` / `ex:B`, the values of the shape-expecting parameters, are shapes
+        // of the graph too, and top-level (an explicit shape target can name them),
+        // so the shape under test is found by its node rather than by position.
+        let shape = |shapes: &Shapes| {
+            shapes
+                .node_shapes
+                .iter()
+                .find(|shape| shape.id.to_string() == "<http://example.org/Shape>")
+                .expect("ex:Shape is top-level")
+                .property_shapes[0]
+                .constraints
+                .clone()
+        };
+        let before = &shape(&native);
+        let after = &shape(&imported);
         assert_eq!(after.len(), 2, "sh:{parameter}");
         assert_eq!(
             format!("{before:?}"),

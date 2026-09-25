@@ -1049,6 +1049,9 @@ pub(crate) static TARGETS: &[TargetRow] = &[
         predicate: sh::TARGET_NODE,
     },
     TargetRow {
+        predicate: sh::TARGET_WHERE,
+    },
+    TargetRow {
         predicate: sh::TARGET,
     },
 ];
