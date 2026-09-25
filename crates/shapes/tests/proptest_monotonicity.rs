@@ -25,7 +25,7 @@
 //! data can remove a violation, breaking ⊆): `sh:minCount` (a new value can reach
 //! the minimum) and `sh:class` (a new `rdf:type` triple can make a value an
 //! instance). `sh:not`, `sh:maxCount`-dual and similar non-monotone components are
-//! likewise out of scope.
+//! excluded for the same reason.
 //!
 //! The validation entry point ([`validate_graphs`]) and the canonical result-set
 //! comparator ([`ValidationReport::result_tuples`]) are re-used, not re-minted.

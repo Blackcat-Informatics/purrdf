@@ -77,8 +77,8 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
   （[GeoSPARQL](sparql/geosparql.md)），以及在 PURREMB 嵌入空间上的最近邻搜索
   （[嵌入最近邻](sparql/embedding-knn.md)）——每一个都是扩展点（extension seam）的消费者，在调用方
   提供的 IRI 之下注册。
-- **SHACL 与 ShEx**——两种形状语言的原生验证器；SHACL 引擎覆盖 Core、SHACL-SPARQL 与
-  SHACL-AF，并与 SHACL 1.2 的节点表达式与规则分层草案对齐。参见
+- **SHACL 与 ShEx**——两种形状语言的原生验证器；SHACL 引擎实现了 SHACL 1.2 Core、
+  SPARQL 扩展、节点表达式与推理规则，以及 SPARQL 1.2 RL 规则语言。参见
   [验证](validation/shacl.md)。
 - **蕴涵**——Simple/RDF/RDFS/OWL-RL/D 物化（全部 78 条 OWL 2 RL 规则均已实现——这是
   规则表覆盖率，有别于蕴涵一致性；在这份随库固化（vendored）的 W3C 语料上，OWL 2 RL 蕴涵测试的
@@ -126,7 +126,7 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
 RDF 1.2（以及 SPARQL 1.2）为数据模型加入了一等的陈述级元数据：可以出现在宾语位置的
 **三元组项**、为三元组的某次出现命名的**具体化节点**，以及用于双向文本的**基础方向
 字面量**（`rdf:dirLangString`）。PurRDF 把它们当作核心数据模型而非扩展：它们流经 IR、
-编解码器、SPARQL、SHACL（作为一项有范围限定的 SHACL 1.2 特性）、RDF/JS 接口与 GTS
+编解码器、SPARQL、SHACL 1.2（具体化节点形状与三元组项节点类型）、RDF/JS 接口与 GTS
 传输。参见 [RDF 1.2 特性](concepts/rdf12.md)。
 
 ## PurRDF 的位置

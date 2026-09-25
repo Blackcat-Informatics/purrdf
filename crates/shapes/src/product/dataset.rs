@@ -121,7 +121,7 @@ use super::error::{ProductDimension, ShapesProductError};
 ///   justification because it is the least apt: it is not a statement about a
 ///   candidate product's bytes at all, it says the encoder never got a complete
 ///   reading of its SOURCE, so no product was produced. No dimension names "the
-///   source was unreadable", and inventing one is out of scope for this module.
+///   source was unreadable", and this module adds none for an arm that cannot fire.
 ///   [`Malformed`] is documented as the dimension for a structural failure no
 ///   other dimension names, so it is where this lands. It is also unreachable
 ///   through [`encode_dataset`]: a frozen [`RdfDataset`] is a view whose status is

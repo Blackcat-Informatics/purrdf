@@ -340,17 +340,22 @@ ORDER BY ?rank
   页数与字节数维度只能经由 Rust 中的 `PagedQueryLimits` 触及。规范性的计费表与冻结的
   50 例 governor 语料位于
   [`docs/SPARQL-GOVERNOR-PROFILE.md`](./docs/SPARQL-GOVERNOR-PROFILE.md)。
-- **SHACL 验证**——一个原生验证器，具备完整的 SHACL Core 特性集（全部约束组件、完整
-  属性路径、限定值形状、属性对）、原生引擎上的 SHACL-SPARQL 约束/目标、完整的
-  SHACL-AF 接口（节点表达式、表达式约束、用户定义的 SPARQL 函数与目标类型，以及物化
-  为新数据集的 SHACL Rules），与 SHACL 1.2 节点表达式（`shnex:`）、SPARQL 扩展与
-  SPARQL 1.2 RL 工作草案对齐——节点表达式的 AF 拼写与 1.2 拼写解析为同一种表示，
-  规则按 `sh:order` 分层运行并做 `once`/`general` 划分——外加对具体化节点形状的、有
-  范围限定的 SHACL 1.2 支持。以上均不构成完整 SHACL 1.2 一致性的声称。在随库固化的
-  W3C 测试套件上 **129/129 通过**，台账为空。答案是作为冻结 RDF 数据集的 W3C 验证报告
-  （`ValidationReport::to_dataset()`），因此任何语法——以及 CLI 的 `validate --format`
-  ——都是该数据集的一次序列化而非文本往返，报告所生成的空节点与数据图携带的每个
-  空节点保持区分。
+- **SHACL 验证**——面向 SHACL 1.2 的原生验证器与规则引擎：Core（SHACL 1.2 词汇表声明的
+  每个约束组件、SHACL 1.2 的目标、严重级别与一致性禁止集合）、运行于原生引擎的 SPARQL
+  扩展、按每种表达式所规定的顺序与重数求值的节点表达式、推理规则，以及 SPARQL 1.2 RL
+  规则语言；SHACL 规则与 SPARQL 1.2 RL 都运行在 `purrdf-datalog` 上。SHACL-AF 1.0 的
+  拼写解析为同一种表示；合并了 W3C SHACL 1.2 词汇表的形状图可以加载，其中每个内置项都
+  绑定到原生实现。在随库固化的 W3C SHACL 1.2 测试套件上 **547/547 通过**，在随库固化的
+  W3C SHACL 1.0 测试套件上 **129/129 通过**，两者台账均为空。答案是作为冻结 RDF 数据集
+  的 W3C 验证报告（`ValidationReport::to_dataset()`），因此任何语法——以及 CLI 的
+  `validate --format`——都是该数据集的一次序列化而非文本往返，报告所生成的空节点与
+  数据图携带的每个空节点保持区分。边界所在：形状图用到而引擎不求值的术语，是点名指出
+  它的加载错误（SHACL JavaScript 扩展、已弃用的 `sh:minus`、`sh:describe` 与
+  `sh:update` 可执行体，以及 `sh:resultAnnotation`）。形状图的 `owl:imports` 从不被
+  获取——由调用方提供 `--import IRI=FILE`，与 `entails` 和 `shex` 接受的形式相同，并从
+  该表出发传递地跟随导入闭包。对形状文档自身 IRI 的导入，或对形状图中已有本体
+  （`<X> a owl:Ontology`，或某个 `owl:versionIRI` 指名它）的导入，无需配对；其他任何
+  未解析的导入都会被点名拒绝，而不是针对一个更小的形状图进行验证。
 - **模式通道：SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML / TypeScript / GraphQL**
   （`purrdf-shapes`，**仅限 Rust**）——`compile_schema` 把一个形状图（可按需感知本体，
   并附覆盖率报告）降为一份 JSON Schema draft 2020-12 文档和一份共享其 `$defs` 的
@@ -547,7 +552,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | 驻留 `TermId` 空间中的多重集 SPARQL 求值器，带有以调用方为键的扩展点（标量函数、属性函数——含路径见证与嵌入 k 近邻关系——自定义聚合，以及逐服务的 `ServiceResolver`）与执行 governor。 |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL 结果的 JSON/XML/CSV/TSV，外加一个携带溯源的扩展。 |
 | [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL 复合数据类型（`cdt:List`/`cdt:Map`）：值空间、一个迭代式的有界词法扫描器、规范拼写，以及十五个函数的函数库。建立在 `purrdf-iri` + `purrdf-xsd` 之上的 `no_std` 封闭叶；经由求值器访问，不由门面 crate 重新导出。 |
-| [`purrdf-shapes`](./crates/shapes/) | SHACL 验证引擎（完整 Core + SHACL-SPARQL + SHACL-AF，含 SHACL Rules）。 |
+| [`purrdf-shapes`](./crates/shapes/) | SHACL 1.2 验证与规则引擎（Core、SPARQL 扩展、节点表达式、推理规则、SPARQL 1.2 RL）。 |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1：ShExC/ShExJ 模式与验证。 |
 | [`purrdf-entail`](./crates/entail/) | 蕴涵机制：RDF/RDFS/OWL-RL/D chase、OWL-Direct tableau 与 RIF-Core 规则——每次求闭包都返回推理报告。 |
 | [`purrdf-geo`](./crates/geo/) | GeoSPARQL 1.1：精确、无浮点的 WKT 与 GeoJSON 几何，标量扩展点上的 `geof:` 函数族，以及属性函数扩展点上的要素级查询重写——全部在调用方提供的 IRI 之下。 |
@@ -614,7 +619,8 @@ IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `No
 | ShEx 2.1 验证 | shexTest v2.1.0（`vectors/shexTest/`） | **1,105 / 1,105** 尝试，0 xfail |
 | ShEx 模式 / 负例语法 / 结构 | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
 | SHACL | W3C data-shapes（`vectors/shacl/`） | **129 / 129**，0 例入账 |
-| SHACL（第一方冻结语料） | `crates/shapes/corpus/` | **70 / 70** |
+| SHACL 1.2 | W3C shacl12-test-suite（`vectors/shacl12/`） | **547 / 547**，0 例入账 |
+| SHACL（第一方冻结语料） | `crates/shapes/corpus/` | **73 / 73** |
 | SHACL Rules | DASH + 第一方（`vectors/shacl/af/rules/`） | **19 / 19** |
 | 语法编解码器 | W3C rdf-tests 往返 | **264 / 264** |
 | JSON-LD 1.1 上下文透镜 | W3C JSON-LD 1.1 REC toRDF + 压缩（`crates/rdf/tests/fixtures/jsonld-w3c-rec/`） | **73 / 73** 适用的 toRDF · **13 / 13** 精确压缩 |

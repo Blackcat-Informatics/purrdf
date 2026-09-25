@@ -13,7 +13,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 /// The W3C SHACL 1.2 declaration of `sh:SPARQLExprExpression`, verbatim.
-const ISSUE_SNIPPET: &str = r#"
+const SPARQL_EXPR_DECLARATION: &str = r#"
 sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
   rdfs:label "SPARQL expr expression"@en ;
   rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
@@ -96,12 +96,12 @@ fn write_file(dir: &Path, name: &str, contents: &str) -> String {
     path.to_str().expect("utf-8 temp path").to_owned()
 }
 
-/// The shapes graph: prefixes, the issue's declaration, then `body`.
+/// The shapes graph: prefixes, the `sh:SPARQLExprExpression` declaration, then `body`.
 fn shapes_file(dir: &Path, body: &str) -> String {
     write_file(
         dir,
         "shapes.ttl",
-        &format!("{PREFIXES}{ISSUE_SNIPPET}{body}"),
+        &format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}{body}"),
     )
 }
 
@@ -408,7 +408,7 @@ fn cli_node_expr() {
     assert_eq!(code(&no_equals), 2, "{}", stderr(&no_equals));
 }
 
-/// `shapes lint` certifies the issue's graph clean (exit 0), naming `sh:sparqlExpr`'s
+/// `shapes lint` certifies the declaration-bearing graph clean (exit 0), naming `sh:sparqlExpr`'s
 /// function as bound natively; a malformed neighbour is reported with findings (exit 1,
 /// the report still written); a graph `shacl-shacl.ttl` flags but SHACL 1.2 Core makes
 /// well-formed stays clean.
@@ -441,7 +441,7 @@ fn cli_shapes_lint() {
         dir.path(),
         "malformed.ttl",
         &format!(
-            "{PREFIXES}{ISSUE_SNIPPET}ex:S a sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount \"one\" ] .\n"
+            "{PREFIXES}{SPARQL_EXPR_DECLARATION}ex:S a sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount \"one\" ] .\n"
         ),
     );
     let bad = run(&["shapes", "lint", &malformed]);
@@ -459,7 +459,9 @@ fn cli_shapes_lint() {
     let by_types = write_file(
         dir.path(),
         "by-types.ttl",
-        &format!("{PREFIXES}{ISSUE_SNIPPET}ex:S a sh:NodeShape ; sh:closed sh:ByTypes .\n"),
+        &format!(
+            "{PREFIXES}{SPARQL_EXPR_DECLARATION}ex:S a sh:NodeShape ; sh:closed sh:ByTypes .\n"
+        ),
     );
     let superseded = run(&["shapes", "lint", &by_types]);
     assert_eq!(code(&superseded), 0, "{}", stderr(&superseded));

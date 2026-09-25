@@ -6,47 +6,79 @@ SPDX-License-Identifier: CC-BY-4.0
 # SHACL
 
 [`purrdf-shapes`](https://docs.rs/purrdf-shapes) (re-exported as
-`purrdf::shapes`) is PurRDF's native SHACL validator: the **complete SHACL
-Core feature set** — all constraint components, full property paths,
-qualified value shapes, property pairs — plus **SHACL-SPARQL** constraints
-and targets and the **SHACL-AF** surface, running entirely on PurRDF's own
-interned IR and native SPARQL engine (no oxigraph, no PyO3).
+`purrdf::shapes`) is PurRDF's native SHACL validator and rules engine. It
+implements **SHACL 1.2**: Core, SPARQL Extensions, Node Expressions, Inference
+Rules and the SPARQL 1.2 RL rule language, plus the SHACL-AF 1.0 spellings
+those documents supersede. It runs entirely on PurRDF's own interned IR and
+native SPARQL engine (no oxigraph, no PyO3).
 
 It validates an RDF 1.2 data graph against a SHACL shapes graph with **no
 inference** (parity with pySHACL `inference="none"`); combine with
-[Entailment](../entailment.md) if you want to validate a materialized closure.
+[Entailment](../entailment.md) if you want to validate a materialized closure,
+or declare `sh:entailment sh:RulesEntailment` to run the shapes graph's own
+rules first.
 
 ## What it covers
 
-- **SHACL Core** — every constraint component, full property paths, qualified
-  value shapes, property pairs. The W3C `data-shapes` suite passes clean
-  (129/129, zero ledgered gaps at the time of writing — the live number is in
-  [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)).
-- **SHACL-SPARQL** — SPARQL-based constraints and targets, custom constraint
-  components with pre-binding semantics, user-defined `sh:SPARQLFunction`
-  calls, and `sh:SPARQLTargetType`, evaluated on the native SPARQL engine.
-- **SHACL-AF** — node expressions (including
-  `sh:ExpressionConstraintComponent`) and **SHACL Rules** (`sh:TripleRule` and
-  `sh:SPARQLRule`, with `sh:condition`, `sh:order`, `sh:deactivated`): rules
-  fire in an iterative fixpoint and the derivation is materialized as a new
-  dataset (`base ⊎ derived`), leaving the input graph untouched. The surface is
-  aligned with the SHACL 1.2 Working Drafts: the SHACL 1.2 Node Expressions
-  vocabulary (`shnex:`, `http://www.w3.org/ns/shacl-node-expr#`) and the older
-  SHACL-AF spelling of a node expression parse to one representation and run
-  through one evaluator; `sh:nodeByExpression` is validated; SPARQL-based node
-  expressions and expression-bodied functions ride the native engine; and rules
-  execute as SHACL 1.2 Inference Rules defines — layers (`sh:layer`) in ascending
-  order, each running its run-once rules (`sh:runOnce`) once and then its
-  iterating rules, in `sh:order` groups, until a pass infers nothing — on the one
-  rules engine, `purrdf-datalog`, so swapping two rules' orders can change the
-  inferences. `sh:condition` resolves at
-  shapes-load, so an unresolvable condition is a load error rather than a rule
-  that silently never fires. Every one of those IRIs is defined by a W3C
-  document; PurRDF mints none. Some
-  node-expression conveniences (`sh:if`, aggregations, ordering wrappers) are
-  DASH/TopBraid conventions with no normative RDF definition; PurRDF documents
-  its adopted reading and pins it with a frozen corpus — see the
-  [SHACL-AF section of docs/CONFORMANCE.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md#shacl-af-node-expressions-normative-surface-vs-owned-extensions).
+- **SHACL 1.2 Core** — every constraint component the SHACL 1.2 vocabulary
+  declares is evaluated natively: full property paths, qualified value shapes,
+  the list components (`sh:minListLength`, `sh:maxListLength`,
+  `sh:uniqueMembers`, `sh:memberShape`, with `sh:detail` results), list-valued
+  `sh:class`, `sh:datatype` and `sh:nodeKind` (including `sh:TripleTerm`),
+  `sh:singleLine`, `sh:rootClass`, `sh:someValue`, path-valued property pairs
+  and `sh:subsetOf`, `sh:uniqueValuesFor`, `sh:closed sh:ByTypes`,
+  `sh:reifierShape` and `sh:reificationRequired`, and `sh:uniqueLang` over
+  language tag and base direction. A property shape's `sh:values` and
+  `sh:defaultValue` compute value nodes. The targets include implicit class
+  targets (`sh:ShapeClass` too), `sh:shape` in the data graph, `sh:targetWhere`
+  and node-expression `sh:targetNode`. A reifier of a constraint triple can
+  carry `sh:deactivated`, `sh:severity` or `sh:message` for that one
+  constraint. The severities include `sh:Debug` and `sh:Trace`, and
+  conformance follows the request's `sh:conformanceDisallows` set. Every
+  `sh:message` is reported with its language tag and direction.
+- **SHACL 1.2 SPARQL Extensions** — SPARQL-based constraints and targets,
+  custom constraint components with pre-binding semantics, user-defined
+  `sh:SPARQLFunction` calls, `sh:SPARQLTargetType`, `sh:sparqlExpr`, and
+  `sh:prefixes` resolved as that document specifies (see
+  [below](#prefixes-in-shacl-sparql-queries)), all on the native SPARQL engine.
+- **SHACL 1.2 Node Expressions** — the `shnex:` vocabulary and the older
+  SHACL-AF `sh:` spelling of a node expression parse to one representation and
+  run through one evaluator. Each expression kind keeps the order and
+  multiplicity its evaluation clause defines: an ordered sequence, a multiset
+  or a set. `sh:if` takes `sh:then` only when its condition is the list
+  `( true )`. The `shnex-sparql.ttl` function library is native.
+  `sh:nodeByExpression` and `sh:ExpressionConstraintComponent` are validated.
+- **SHACL 1.2 Inference Rules** — `sh:TripleRule` and `sh:SPARQLRule`, with
+  `sh:condition`, `sh:layer`, `sh:order`, `sh:runOnce`, `sh:deactivated`, rule
+  sets and `sh:RulesGraph`, SPARQL rule templates, temporary triples,
+  `sh:expectedPredicate` and `sh:ruleProcessor`. Layers run in ascending
+  order. In each layer the run-once rules run once, then the iterating rules
+  repeat until an iteration infers nothing. Within an iteration, rules run in
+  ascending `sh:order`, rules of the same order run together, and each group
+  sees the inferences of the groups before it, so swapping two rules' orders
+  can change the inferences. An unresolvable `sh:condition` is a load error,
+  not a rule that silently never fires.
+- **SPARQL 1.2 RL** — the rule language's text syntax is parsed, checked for
+  well-formedness, stratified, imported and evaluated (`purrdf_shapes::srl`).
+  SHACL rules lower to the same rule-set representation, and both run on one
+  rules engine, `purrdf-datalog`.
+
+A shapes graph is either loaded faithfully or refused. An unknown term, an
+ill-typed parameter value, or a construct the engine does not evaluate is a
+load error that names it, never a constraint that silently drops out. Terms
+the SHACL vocabularies define and the engine refuses by name are the SHACL
+JavaScript Extensions (not part of SHACL 1.2), the SHACL-AF `sh:minus` node
+expression (deprecated by SHACL 1.2 in favour of `shnex:remove`), SPARQL
+`sh:describe` and `sh:update` executables, and SHACL-SPARQL result annotations
+(`sh:resultAnnotation`). Every IRI the engine implements is defined by a W3C
+document; PurRDF mints none.
+
+The W3C SHACL 1.0 `data-shapes` suite passes clean (129/129, zero ledgered
+gaps at the time of writing), and so does the W3C SHACL 1.2 suite (547/547);
+the live numbers are in
+[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
+and [SHACL 1.2 conformance](#shacl-12-conformance) below says how to
+reproduce them.
 
 A parsed shapes graph can also be compiled once and written out as a
 deterministic, authenticated byte artifact, so a later process restores a
@@ -136,14 +168,83 @@ never mistaken for a directive. If the document declares a prefix twice, the
 fallback uses the last declaration. A `PREFIX` in a query's own text applies to
 that query only.
 
-## The SHACL 1.2 reifier-shape draft scope
+## Built-in declarations and the W3C vocabularies
 
-The crate implements a **scoped** SHACL 1.2 Working Draft feature:
-`sh:reifierShape` and `sh:reificationRequired` for direct IRI property paths,
-so shapes can constrain the RDF 1.2 reifier metadata attached to statements
-(see [RDF 1.2 Features](../concepts/rdf12.md)). The relevant SHACL 1.2 Core
-draft is dated 2026-06-02. **This is not a claim of full SHACL 1.2
-conformance** — it is one draft feature, explicitly scoped and tested.
+The SHACL 1.2 vocabularies (`shacl.ttl`, `shnex.ttl` and `shnex-sparql.ttl`)
+declare every built-in constraint component and node-expression function, for
+example `sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction`. None
+of those declarations has a body or a validator, because the engine provides
+the implementation. A shapes graph may merge the vocabularies, and loading
+resolves each declaration against the engine's table of what it implements:
+
+- a bare declaration of a built-in binds to the native implementation and adds
+  nothing to the custom-function index or the component registry;
+- a built-in declared again with a body, a validator, `sh:ask` or `sh:select`
+  is a duplicate definition, and one declared under the wrong class or with a
+  contradicting signature is a mismatch; both fail the load;
+- a function the engine does not implement still needs its body, whatever its
+  namespace: a bodiless `ex:f` fails the load, and so does a bodiless
+  `sh:NotABuiltin`;
+- a custom function whose key parameter is a built-in's key parameter fails the
+  load, because the key parameters of all node expression functions must be
+  disjoint.
+
+So merging the W3C vocabularies into a shapes graph is a no-op. A test holds
+this over every shapes graph in three corpora (the first-party corpus, the W3C
+SHACL 1.0 suite and the SHACL 1.2 `sht:Validate` entries): the validation
+report is byte-identical with and without the merge. `purrdf_shapes::spec`
+exposes what the vocabularies declare and what the engine implements, and a
+test pins the difference at zero. `purrdf shapes lint` reports, per function
+call site, whether the call bound natively, to a custom body, to a SPARQL
+registration or to a host extension.
+
+## SHACL 1.2 conformance
+
+The complete W3C `shacl12-test-suite` is vendored byte-exact under
+`vectors/shacl12/` and run through the library API: 547 tests, covering 174
+`sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 203
+SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. All
+547 pass, and the expected-failure ledger is empty. A negative SPARQL 1.2 RL
+test must fail at the stage its test type names, not at an earlier one.
+Reproduce it with:
+
+```bash
+cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
+```
+
+The last line of the scoreboard it prints is
+`W3C12 TOTAL: passed 547, xfailed 0, ledger 0`.
+
+Three approved tests expect a report that the normative SHACL 1.2 Core text
+does not produce. The harness grades each against the expectation with exactly
+one result amended, quotes the clause beside the amendment, and proves that a
+report without the amendment, or with a different one, fails:
+
+- `core/node/xone-003` expects a result from a property shape with no
+  `sh:resultPath`. Section 6.7.2.2 says: "For results produced by a property
+  shape, this SHACL property path is equivalent to the value of sh:path of the
+  shape, unless stated otherwise." The graded result carries the shape's
+  `sh:path`.
+- `core/property/reifierShape-001` expects the value node as `sh:value`.
+  Section 7.8.5 says: "For each reifier t that does not conform to
+  $reifierShape, there is a validation result with t as sh:value." The graded
+  result carries the reifier.
+- `core/property/reifierShape-002` expects the value node as `sh:value` for a
+  missing reification. Section 7.8.5 says: "If $reificationRequired is set to
+  true and there is no reified statement for the triple term t in the data
+  graph, there is a validation result with t as sh:value." The graded result
+  carries the triple term.
+
+Six node-expression tests expect an integer-valued `xsd:decimal` in a lexical
+form that is not canonical, such as `"4.0"` or `"00"`. XSD 1.1 Part 2 (section
+3.3.3.1 and the `decimalCanonicalMap` of E.1) makes the canonical form `"4"`
+and `"0"`. PurRDF emits canonical forms, and each of those tests is graded
+exactly against the canonical form, not by comparing values.
+
+SPARQL 1.2 RL grammar rule [2],
+`RuleOrDataBlock ::= Prologue ( RuleOrData+ ( Prologue1 RuleOrData? )* )?`, is
+implemented as written: once a declaration follows a rule or data block, at
+most one rule or data block may follow it before the next declaration.
 
 ## Ontology-complete developer schemas
 
@@ -541,8 +642,12 @@ serializing.
 
 ## Conformance
 
-The validator is gated by the vendored W3C `data-shapes` suite, a vendored
-DASH SHACL-AF/rules corpus, and a first-party frozen corpus of 73 cases with
-byte-frozen expected reports; SHACL Rules output is compared to expected
-inferred graphs by RDFC-1.0 isomorphism. See
+The validator is gated by the vendored W3C SHACL 1.0 `data-shapes` suite, the
+vendored W3C SHACL 1.2 suite, a vendored DASH SHACL-AF/rules corpus, and a
+first-party frozen corpus of 73 cases with byte-frozen expected reports; SHACL
+Rules output is compared to expected inferred graphs by RDFC-1.0 isomorphism.
+The parser is also held to the SHACL 1.2 specification's own SHACL-for-SHACL
+shapes graph: over every first-party and W3C shapes graph and a set of
+generated mutants, it refuses a graph exactly when `shacl-shacl.ttl` reports a
+violation, apart from named cases. See
 [Conformance & Testing](../project/conformance.md).

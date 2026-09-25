@@ -16,15 +16,13 @@
 
 > **An LLM output is a claim, not a truth.**
 
-`purrdf-shapes` is the native SHACL validator of the PurRDF toolkit — the
-complete SHACL Core feature set, SHACL-SPARQL constraints and targets, and the
-SHACL-AF surface (node expressions, expression constraints, user-defined SPARQL
-functions and target types, and SHACL Rules materialized as a new dataset),
-running entirely on PurRDF's own interned IR and native SPARQL engine. The
-SHACL-AF surface is aligned with the SHACL 1.2 Node Expressions (`shnex:`),
-SPARQL Extensions and SPARQL 1.2 RL Working Drafts: both spellings of a node
-expression parse to one representation, and rules execute on one rules engine —
-SHACL 1.2 Inference Rules' layers, orders and run-once rules on `purrdf-datalog`.
+`purrdf-shapes` is the native SHACL validator and rules engine of the PurRDF
+toolkit. It implements SHACL 1.2 Core, SHACL 1.2 SPARQL Extensions, SHACL 1.2
+Node Expressions, SHACL 1.2 Inference Rules and the SPARQL 1.2 RL rule
+language, running entirely on PurRDF's own interned IR and native SPARQL
+engine. The `shnex:` spelling of a node expression and the older SHACL-AF
+`sh:` spelling parse to one representation, and SHACL rules and SPARQL 1.2 RL
+rule sets lower to one rule-set representation that runs on `purrdf-datalog`.
 Every IRI it implements is defined by a W3C document; it mints none. It
 validates an RDF 1.2 data graph against a SHACL shapes graph without general
 RDFS or OWL entailment. SHACL class membership follows asserted
@@ -36,18 +34,68 @@ TBox/RBox validation surface, and RDF 1.2 reifier metadata is the CBox. The
 crate preserves existing report keys while adding optional box-role metadata for
 callers that want richer diagnostics.
 
-The crate implements a scoped SHACL 1.2 Working Draft feature:
-`sh:reifierShape` and `sh:reificationRequired` for direct IRI property paths.
-The relevant SHACL 1.2 Core draft is dated 2026-06-02. This is not a claim of
-full SHACL 1.2 conformance.
-
 The Python SHACL surface is exposed from `bindings/python` as part of the
 `purrdf_native` extension. The engine core (`engine.rs`, `shapes.rs`,
 `constraints.rs`, `path.rs`, `report.rs`, `model.rs`) is deliberately
 **PyO3-free** — it links as a plain `rlib` into any Rust consumer without
 any Python dependency.
 
-This crate is gated by a SHACL conformance corpus.
+## SHACL 1.2 support
+
+Every constraint component the SHACL 1.2 vocabulary declares is evaluated
+natively, including the list components, `sh:singleLine`, `sh:rootClass`,
+`sh:someValue`, path-valued property pairs and `sh:subsetOf`,
+`sh:uniqueValuesFor`, `sh:closed sh:ByTypes`, `sh:reifierShape` and
+`sh:reificationRequired`. So are the SHACL 1.2 targets (implicit class targets,
+`sh:shape`, `sh:targetWhere`, node-expression `sh:targetNode`), computed values
+(`sh:values`, `sh:defaultValue`), per-constraint reifier annotations, the
+`sh:Debug` and `sh:Trace` severities with the conformance-disallow set, and
+every `sh:message` with its language tag and direction. Node expressions keep
+the order and multiplicity their evaluation clauses define. Rules follow SHACL
+1.2 Inference Rules: layers, orders, run-once rules, rule sets, templates,
+temporary triples and expected predicates. `purrdf_shapes::srl` parses,
+checks, stratifies and evaluates SPARQL 1.2 RL rule sets.
+
+A shapes graph is loaded faithfully or refused. An unknown term, an ill-typed
+parameter value, or a term the engine does not evaluate fails the load with
+its name, rather than dropping the constraint. The terms the SHACL
+vocabularies define and the engine refuses by name are the SHACL JavaScript
+Extensions, the deprecated `sh:minus` node expression, `sh:describe` and
+`sh:update` executables, and `sh:resultAnnotation`.
+
+**Built-in declarations.** The W3C vocabularies `shacl.ttl`, `shnex.ttl` and
+`shnex-sparql.ttl` declare every built-in component and function without a
+body. Loading resolves each declaration against the table of what the engine
+implements (`purrdf_shapes::spec`): a bare declaration of a built-in binds to
+the native implementation and registers nothing, a built-in redefined with a
+body or validator is a duplicate-definition load error, and a declaration
+under the wrong class or with a contradicting signature is a mismatch. A
+bodiless function the engine does not implement is refused in any namespace.
+Merging the W3C vocabularies into a shapes graph is therefore a no-op, and
+`tests/vocabulary_import_invariance.rs` holds every report of three corpora
+byte-identical with and without the merge.
+`FunctionResolution` and `lint::lint` say, per call site, whether a
+node-expression function bound natively, to a custom body, to a SPARQL
+registration or to a host extension.
+
+**Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
+`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL
+tests) passes, 547/547 with an empty expected-failure ledger:
+
+```bash
+cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
+```
+
+Three approved tests contradict normative SHACL 1.2 Core text and are graded
+against the spec-corrected expectation, each amendment quoting its clause:
+`core/node/xone-003` (6.7.2.2: a property shape's result carries its
+`sh:path` as `sh:resultPath`), and `core/property/reifierShape-001` and `-002`
+(7.8.5: `sh:value` is the non-conforming reifier, or the triple term when a
+required reification is missing). Six node-expression tests are graded
+against the XSD 1.1 canonical `xsd:decimal` form, which PurRDF emits. SPARQL
+1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
+`data-shapes` suite and a 73-case first-party frozen corpus gate the crate as
+well; `docs/CONFORMANCE.md` has the live numbers.
 
 ---
 
@@ -752,7 +800,10 @@ print(report["results"])   # list of violation dicts
 ```
 
 Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
-`component`, `source_shape`, and `message`. When the shapes or path terms carry
+`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each a
+dict with `text` and its `language`, `direction` and `datatype` when present).
+`shacl.validate` takes a `conformance_disallows` keyword, the severity IRIs
+that make a report non-conforming. When the shapes or path terms carry
 `purrdf:graphBoxRole`, result dicts may also include `source_box_roles`,
 `path_box_roles`, and `result_box_roles`.
 

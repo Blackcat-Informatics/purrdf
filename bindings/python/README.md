@@ -168,9 +168,15 @@ report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 ```
 
-Complete SHACL Core, SHACL-SPARQL constraints/targets, and SHACL-AF `sh:rule`
+SHACL 1.2 Core, SPARQL Extensions and Node Expressions, and SHACL rules
 entailment via `shapes.entail(...)`. Reusable parsed shapes are available as
-`shapes.Shapes(shapes_ttl).validate_nt(data_nt)`.
+`shapes.Shapes(shapes_ttl).validate_nt(data_nt)`. Each result dict carries
+`messages`: every `sh:resultMessage` as a dict with `text` and, when present,
+`language`, `direction` and `datatype`. `shapes.validate(...,
+conformance_disallows=[...])` sets the severity IRIs that make a report
+non-conforming (by default `sh:Violation`, `sh:Warning` and `sh:Info`), and
+the dict's `conformance_disallows` names the set the report was judged
+against.
 
 Three tools sit beside validation, each the same library call the CLI, WebAssembly
 and C surfaces make:

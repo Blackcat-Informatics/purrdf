@@ -608,9 +608,10 @@ purrdf validate (--shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
                 [IN] [OUT]
 ```
 
-Validate an RDF data graph against a SHACL shapes graph — full SHACL Core plus
-SHACL-SPARQL and SHACL-AF, over the same `purrdf-shapes` engine the Rust,
-Python, WebAssembly and C surfaces reach.
+Validate an RDF data graph against a SHACL shapes graph — SHACL 1.2 Core,
+SPARQL Extensions and Node Expressions, with the SHACL-AF 1.0 spellings, over
+the same `purrdf-shapes` engine the Rust, Python, WebAssembly and C surfaces
+reach.
 
 **The answer is the W3C validation report.** The SHACL specification defines the
 validation process to produce a validation *report* — an RDF graph of
