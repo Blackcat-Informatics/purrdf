@@ -79,9 +79,9 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -91,6 +91,7 @@ _PO_DIR = _BOOK / "po"
 _PO = _PO_DIR / "zh-Hans.po"
 _MAKEFILE = _REPO / "Makefile"
 _DOCS_WORKFLOW = _REPO / ".github" / "workflows" / "docs.yaml"
+_BUILD_SCRATCH = _SCRIPTS / "build-scratch.sh"
 LANGUAGE = "zh-Hans"
 
 # The four prose gates, each with a `--rendered-tree` mode, in the order the
@@ -459,6 +460,29 @@ def self_test(template: list, scratch: Path) -> list[str]:
     return failures
 
 
+class Scratch:
+    """A scratch build directory from ``scripts/build-scratch.sh``, removed on every exit path."""
+
+    def __enter__(self) -> Path:
+        out = subprocess.run(
+            ["bash", "-c", f'source "{_BUILD_SCRATCH}" && build_scratch_dir i18n-render'],
+            capture_output=True, text=True, check=False,
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            raise SystemExit(f"check-i18n-render: build_scratch_dir failed: {out.stderr.strip()}")
+        self.path = Path(out.stdout.strip())
+        self._previous = signal.signal(signal.SIGTERM, self._terminate)
+        return self.path
+
+    @staticmethod
+    def _terminate(_signum, _frame):
+        raise SystemExit(143)
+
+    def __exit__(self, *_exc) -> None:
+        signal.signal(signal.SIGTERM, self._previous)
+        shutil.rmtree(self.path, ignore_errors=True)
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--self-test", action="store_true", help="prove each arm can go red first")
@@ -469,8 +493,7 @@ def main(argv: list[str]) -> int:
     if not _PO.is_file():
         raise SystemExit(f"check-i18n-render: no catalogue at {_PO}")
 
-    with tempfile.TemporaryDirectory(prefix="check-i18n-render-") as tmp:
-        scratch = Path(tmp)
+    with Scratch() as scratch:
         template = extract_template(scratch / "template")
         if args.self_test:
             print("check-i18n-render: proving each arm goes red on a poisoned catalogue —")
