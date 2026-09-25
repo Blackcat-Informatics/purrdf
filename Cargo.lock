@@ -1614,6 +1614,7 @@ dependencies = [
  "proptest",
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-datalog",
  "purrdf-gts",
  "purrdf-iri",
  "purrdf-rdf",

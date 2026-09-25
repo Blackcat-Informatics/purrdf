@@ -124,7 +124,13 @@ const TOTAL_CASES: usize = 376;
 ///
 /// Moved from 362 to 363 when the first-party corpus gained
 /// `73-expr-if-list-true`, whose report is compared too.
-const COMPARED_ON_REPORT: usize = 363;
+///
+/// Moved from 363 to 364 when the rules engine came to support the
+/// `sh:RulesEntailment` regime: `inference-rules/rules-entailment-validation`
+/// declares it and now loads, so its report is compared too. The merged vocabulary
+/// declares `sh:RulesEntailment` and `sh:entailment`, never as a statement about the
+/// case's shapes graph, so the merge changes no rule and no validation result.
+const COMPARED_ON_REPORT: usize = 364;
 
 /// One case, reduced to what both parses need.
 struct Input {

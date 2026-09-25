@@ -730,6 +730,16 @@ pub enum ChaseError {
         /// The negated atom's index in the clause's authored body.
         body_index: usize,
     },
+    /// A clause carries a guard literal or a negated conjunction ([`crate::guard`]).
+    ///
+    /// A restricted chase decides whether an obligation is already witnessed by matching
+    /// the clause text against the model; a guard's truth is caller code that match cannot
+    /// run, and a negated conjunction is negation as failure, which a chase has no meaning
+    /// for (see [`Self::NegatedBodyAtom`]).
+    GuardedClause {
+        /// The clause's index in authored program order.
+        clause: usize,
+    },
     /// A head variable is neither existentially quantified nor bound by the body.
     ///
     /// Grounding the head would mean fabricating a term for it. An existential head variable
@@ -789,6 +799,10 @@ impl fmt::Display for ChaseError {
                 f,
                 "clause {clause} has an empty (false) head: the chase returns a model, not a \
                  consistency verdict"
+            ),
+            Self::GuardedClause { clause } => write!(
+                f,
+                "clause {clause} carries guard literals, which the chase cannot evaluate"
             ),
             Self::NegatedBodyAtom { clause, body_index } => write!(
                 f,
@@ -1087,6 +1101,11 @@ fn plan_firings(program: &[DlClause]) -> Result<Vec<Firing>, ChaseError> {
                     body_index,
                 });
             }
+        }
+        if clause.is_guarded() {
+            return Err(ChaseError::GuardedClause {
+                clause: clause_index,
+            });
         }
 
         let frontier = clause.frontier_variables();

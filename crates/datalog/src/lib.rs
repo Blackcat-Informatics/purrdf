@@ -8,8 +8,8 @@
 //!
 //! This crate is the shared execution substrate beneath PurRDF's rule-driven
 //! engines. A rule set is *data* — a table of clauses over a relation store — so
-//! the RDF, RDFS and OWL 2 RL calculi, RIF-Core rules and SHACL-AF `sh:rule`
-//! entailment become rule tables over one evaluator instead of four hand-written
+//! the RDF, RDFS and OWL 2 RL calculi, RIF-Core rules, SHACL 1.2 Inference Rules and
+//! SPARQL 1.2 RL rule sets become rule tables over one evaluator instead of four hand-written
 //! fixpoints, each with its own indexes, its own termination argument and its own
 //! opportunity to diverge.
 //!
@@ -28,8 +28,21 @@
 //! *reported*, never configured. A caller-supplied ceiling would mean two callers
 //! running the same program over the same input get different answers — the same
 //! semantic optionality that the no-Cargo-features rule exists to prevent, merely
-//! arriving through a parameter instead. **That rule is unchanged, and nothing numeric is
-//! caller-settable anywhere in this crate.**
+//! arriving through a parameter instead. **That rule holds for every ceiling that prices
+//! work — steps, facts, arena bytes — and none of them is caller-settable.**
+//!
+//! ## The one caller-set limit: term-generating rounds
+//!
+//! A guard ([`guard`]) can compute a new term every round, and whether a program that
+//! does so terminates is undecidable, so every FIXED limit on such rounds refuses some
+//! program that terminates. A limit this crate hard-coded would make that refusal a
+//! property of the build instead of the request, so the term-generating round limit is
+//! the caller's, on [`EvalOptions`](seminaive::EvalOptions), with a generous default. It
+//! counts rounds, not work, so it drags no charge schedule behind it; it only ever
+//! REFUSES — a refused run returns no model, as every ceiling's does; it cannot bind a
+//! guard-free program at all; and the limit in force is folded into a guarded program's
+//! contract hash ([`cache::contract_hash_with`]), so two runs under different limits
+//! never claim one calculus.
 //!
 //! ## What the rule is actually about: a charge schedule, not a stop
 //!
@@ -176,6 +189,24 @@
 //!   already-witnessed obligation is skipped, which is what makes the fixpoint converge. A
 //!   disjunctive head, an inconsistency clause and a negated body atom are refused by name.
 //!
+//! # Guards and the ordered schedule
+//!
+//! - [`guard`] — GUARD literals: body literals whose meaning is caller code, supplied at
+//!   evaluation time by a [`GuardEvaluator`](guard::GuardEvaluator). A filter keeps or
+//!   drops a solution, an assignment binds a fresh variable, a producer yields rows; a
+//!   guard that reads the model rather than only its inputs is refused by the stratified
+//!   fixpoint and runs under the ordered schedule. A [`Negation`](guard::Negation) is a
+//!   negated conjunction of atoms and guards. This is the seam a rule language with an
+//!   expression sublanguage needs — SPARQL 1.2 RL's `FILTER` and `SET`, SHACL's node
+//!   expressions and CONSTRUCT queries — without this crate re-implementing SPARQL.
+//! - [`schedule`] — the ORDERED schedule: layers of run-once and iterating groups of
+//!   concurrently evaluated rules, run inflationarily over the same join, guards and
+//!   commit the stratified fixpoint uses, with layer-boundary assumptions and
+//!   retractions; and [`stratify_rules`](schedule::stratify_rules), SPARQL 1.2 RL's
+//!   rule-level stratification into such a schedule, which names the cycle a closed
+//!   dependency lies in when there is none. SHACL rules and SPARQL 1.2 RL rule sets both
+//!   run here, so the workspace has one rule evaluator.
+//!
 //! # Checkable proofs
 //!
 //! - [`proof`] — the hash-consed proof-term arena. A
@@ -245,10 +276,12 @@ pub mod cache;
 pub mod chase;
 pub mod clause;
 pub mod cursor;
+pub mod guard;
 pub mod id;
 pub mod plan;
 pub mod proof;
 pub mod resolve_fol;
+pub mod schedule;
 pub mod seminaive;
 pub mod stop;
 pub mod store;

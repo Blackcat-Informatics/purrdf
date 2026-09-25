@@ -388,7 +388,7 @@ fn a_deleted_derived_triple_takes_its_reifier_with_it() {
     let reifying = format!(
         "{}
          ex:RectangleShape sh:rule ex:reifyArea .
-         ex:reifyArea a sh:SPARQLRule ; sh:expectedPredicate ex:area ;
+         ex:reifyArea a sh:SPARQLRule ; sh:expectedPredicate ex:area ; sh:runOnce true ;
            sh:construct \"\"\"CONSTRUCT {{
                _:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>
                    <<( $this <http://example.org/ns#area> ?a )>> .

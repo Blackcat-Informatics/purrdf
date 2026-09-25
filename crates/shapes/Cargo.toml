@@ -37,6 +37,11 @@ purrdf-sparql-algebra = { workspace = true }
 # frozen IR. Replaces oxigraph's SPARQL 1.1 engine for SHACL-AF sh:sparql /
 # sh:SPARQLTarget evaluation.
 purrdf-sparql-eval = { workspace = true }
+# The one rules engine: SHACL rules and SPARQL 1.2 RL lower to this crate's rule-set
+# IR (`srl::ir`), which lowers onto purrdf-datalog's clause IR and is evaluated by its
+# stratifier and ordered schedule. purrdf-datalog depends only on purrdf-core, so the
+# edge adds no cycle, and it is on the workspace wasm gate.
+purrdf-datalog = { workspace = true }
 # sh:pattern regex constraint.
 regex = { workspace = true }
 # The one shared XSD/XPath `regExp` → `regex`-crate translation

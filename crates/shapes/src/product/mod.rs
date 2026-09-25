@@ -219,8 +219,8 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x62, 0x48, 0x53, 0x5c, 0x93, 0x47, 0x20, 0xf2, 0xc7, 0xd9, 0x2f, 0x22, 0xd4, 0xc1, 0x8f, 0xc7,
-    0x36, 0xe3, 0x7e, 0xa1, 0x01, 0x20, 0xdf, 0x2c, 0x0e, 0x5b, 0x92, 0xff, 0x34, 0x80, 0xb1, 0x87,
+    0xae, 0xb3, 0x00, 0x36, 0xbe, 0xf6, 0xe5, 0xb3, 0x35, 0xd8, 0xb6, 0x5c, 0x34, 0x29, 0xa7, 0x4b,
+    0xf7, 0x1a, 0xb9, 0xab, 0x20, 0x1a, 0x0a, 0x83, 0x0c, 0xca, 0x2f, 0x15, 0x76, 0xc2, 0xb3, 0x4d,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -1287,6 +1287,7 @@ impl<'a> ShapesProductView<'a> {
             BTreeMap::new(),
             &mut functions,
         )?;
+        link::link_global_rules(&parts.rules.global_rules, &parts.shape_index)?;
 
         // The two carriers of the parse configuration must agree. Both are
         // authenticated, so a disagreement is not tampering — it is a product whose
@@ -1309,6 +1310,7 @@ impl<'a> ShapesProductView<'a> {
 
         let shapes = Shapes {
             node_shapes: parts.node_shapes,
+            rules: parts.rules,
             box_role_vocab: parts.box_role_vocab,
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::new()),

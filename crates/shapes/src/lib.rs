@@ -59,6 +59,7 @@ pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
 pub mod spec;
+pub mod srl;
 pub(crate) mod target_eval;
 pub mod term;
 pub mod text_ingest;
@@ -86,11 +87,12 @@ pub use pydantic::{
     PydanticPackage, PydanticPackageTopology, PydanticVersionStamp, emit_pydantic,
     import_pydantic_package,
 };
-pub use rules::{apply_rules, entail_dataset};
+pub use rules::{RuleOptions, RuleProcessor, apply_rules, entail_dataset, infer};
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,
     import_compiled_schema, import_json_schema,
 };
+pub use srl::{Explanation, Inference};
 pub use typescript::{
     TYPESCRIPT_DECLARATION_PATH, TYPESCRIPT_DIALECT, TypeScriptConfig, TypeScriptError,
     TypeScriptPackage, emit_typescript, import_typescript_package,

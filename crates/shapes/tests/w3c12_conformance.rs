@@ -74,25 +74,8 @@ use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_f
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
-const R_RULES_ENTAILMENT: &str = "sh:entailment sh:RulesEntailment is not supported, so the shapes graph is refused \
-     at load, as SHACL requires for an entailment regime a processor does not support";
-
-const R_TRIPLE_RULE_DEFAULT_SUBJECT: &str = "sh:TripleRule without sh:subject is refused; SHACL 1.2 Rules defaults sh:subject to \
-     the focus node";
-
-const R_GLOBAL_RULES: &str = "global rules (sh:SPARQLRule not attached to a shape, of a sh:ShapesGraph / \
-     sh:RulesGraph) are not executed";
-
-const R_LAYER: &str = "sh:layer is not implemented, so layered rules do not run in layer order";
-
-const R_RUN_ONCE: &str = "sh:runOnce / sh:tempTriple are not implemented, so run-once rules and temporary \
-     triples do not behave as specified";
-
-const R_RULE_TEMPLATE: &str = "sh:SPARQLRuleTemplate is not implemented: template instances are not recognised as \
-     rules and a missing template parameter is not refused";
-
-const R_RULE_PROCESSOR: &str = "sh:ruleProcessor is not validated: an unknown processor at rule or rule-set level \
-     runs instead of being refused";
+/// `rdf:reifies`.
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// Entries the engine currently fails, with the reason: `(test id, reason)`,
 /// where the id is the entry's IRI relative to `vectors/shacl12/tests` (see
@@ -102,51 +85,6 @@ const R_RULE_PROCESSOR: &str = "sh:ruleProcessor is not validated: an unknown pr
 /// A ledgered entry MUST fail; when engine work fixes it the harness errors with
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
-    // ── SHACL rules (sht:Infer and the rules entailment regime) ──
-    (
-        "inference-rules/rules-entailment-validation",
-        R_RULES_ENTAILMENT,
-    ),
-    (
-        "inference-rules/TripleRule-example-childCount",
-        R_TRIPLE_RULE_DEFAULT_SUBJECT,
-    ),
-    (
-        "inference-rules/TripleRule-example-squares",
-        R_TRIPLE_RULE_DEFAULT_SUBJECT,
-    ),
-    ("inference-rules/global-symmetric", R_GLOBAL_RULES),
-    ("inference-rules/same-order", R_GLOBAL_RULES),
-    ("inference-rules/rdfs/rdfs-domain-1", R_GLOBAL_RULES),
-    ("inference-rules/rdfs/rdfs-domain-2", R_GLOBAL_RULES),
-    ("inference-rules/rdfs/rdfs-range-1", R_GLOBAL_RULES),
-    ("inference-rules/rdfs/rdfs-range-2", R_GLOBAL_RULES),
-    ("inference-rules/rdfs/rdfs-subclass-1", R_GLOBAL_RULES),
-    ("inference-rules/rdfs/rdfs-subproperty-1", R_GLOBAL_RULES),
-    ("inference-rules/layers-example", R_LAYER),
-    ("inference-rules/run-once-example", R_RUN_ONCE),
-    ("inference-rules/run-once-blank-node-feed", R_RUN_ONCE),
-    ("inference-rules/temp-triples-example", R_RUN_ONCE),
-    (
-        "inference-rules/SPARQLRuleTemplate-example-Multiply",
-        R_RULE_TEMPLATE,
-    ),
-    (
-        "inference-rules/SPARQLRuleTemplate-example-SymmetricProperty",
-        R_RULE_TEMPLATE,
-    ),
-    (
-        "inference-rules/SPARQLRuleTemplate-missing-param",
-        R_RULE_TEMPLATE,
-    ),
-    (
-        "inference-rules/ruleProcessor-unknown-at-rule",
-        R_RULE_PROCESSOR,
-    ),
-    (
-        "inference-rules/ruleProcessor-unknown-at-ruleset",
-        R_RULE_PROCESSOR,
-    ),
     // ── SPARQL 1.2 RL (every srlt: test type) ──
     ("sparql-rl/eval/eval-basic-01", NO_SRL),
     ("sparql-rl/eval/eval-basic-02", NO_SRL),
@@ -815,16 +753,50 @@ fn expected_triples(expected: &InferExpected) -> Result<Arc<RdfDataset>, String>
         InferExpected::Failure => Err("an sht:Failure entry has no expected triples".to_owned()),
         InferExpected::File(path) => parse_turtle_file(path),
         InferExpected::Triples(triples) => {
+            // Each expected triple goes into the layer a parsed graph would put it in:
+            // `r rdf:reifies <<( s p o )>>` declares a reifier, a triple about a reifier
+            // is its annotation, anything else is a quad. Comparing an RDF 1.2 graph
+            // under RDFC-1.0 compares those layers, so building every expected triple
+            // as a quad would compare a graph with its reifications as plain triples
+            // against the same graph parsed.
+            let reifies = |p: &Term, o: &Term| {
+                matches!(p, Term::NamedNode(p) if p.as_str() == RDF_REIFIES)
+                    && matches!(o, Term::Triple(_))
+            };
+            let reifiers: Vec<&Term> = triples
+                .iter()
+                .filter(|[_, p, o]| reifies(p, o))
+                .map(|[r, _, _]| r)
+                .collect();
             let mut builder = RdfDatasetBuilder::new();
             for [s, p, o] in triples {
-                let Term::NamedNode(p) = p else {
+                let Term::NamedNode(predicate) = p else {
                     return Err(format!("expected triple has a non-IRI predicate {p}"));
                 };
-                builder.push_owned_quad(&RdfQuad::new(
-                    s.to_rdf_term(),
-                    p.as_str(),
-                    o.to_rdf_term(),
-                ));
+                if let Term::Triple(statement) = o
+                    && reifies(p, o)
+                {
+                    builder.push_owned_reifier(&purrdf::RdfReifier::new(
+                        s.to_rdf_term(),
+                        purrdf::RdfTriple::new(
+                            statement.subject.to_rdf_term(),
+                            statement.predicate.as_str(),
+                            statement.object.to_rdf_term(),
+                        ),
+                    ));
+                } else if reifiers.contains(&s) {
+                    builder.push_owned_annotation(&purrdf::RdfAnnotation::new(
+                        s.to_rdf_term(),
+                        predicate.as_str(),
+                        o.to_rdf_term(),
+                    ));
+                } else {
+                    builder.push_owned_quad(&RdfQuad::new(
+                        s.to_rdf_term(),
+                        predicate.as_str(),
+                        o.to_rdf_term(),
+                    ));
+                }
             }
             builder.freeze().map_err(|e| e.to_string())
         }

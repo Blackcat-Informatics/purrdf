@@ -1670,6 +1670,11 @@ impl PreparedValidator {
 
     fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, String> {
         let shapes = Arc::clone(&prepared.shapes);
+        // The rules entailment regime applies to every validation this binding answers.
+        let data = match entailed_for_validation(&data, &shapes)? {
+            Some(entailed) => entailed,
+            None => data,
+        };
         let _function_scope = crate::sparql::enter_function_scope(
             crate::sparql::bind_in_current_env(&shapes.functions)?,
         );
@@ -2685,6 +2690,47 @@ fn change_pass(
 ///
 /// Returns `Err(String)` on a hard validation failure (see [`validate_with`]).
 pub fn validate_with_focus_filter<F>(
+    data: &ShaclData,
+    shapes: &Shapes,
+    include_focus: F,
+) -> Result<ValidationReport, String>
+where
+    F: FnMut(&Shape, &Term) -> bool,
+{
+    match entailed_for_validation(data, shapes)? {
+        Some(entailed) => validate_data_with_focus_filter(&entailed, shapes, include_focus),
+        None => validate_data_with_focus_filter(data, shapes, include_focus),
+    }
+}
+
+/// The data graph validation reads under the SHACL rules entailment regime: `data`
+/// with the shapes graph's rules executed over it, or `None` when the shapes graph
+/// does not declare the regime.
+///
+/// SHACL 1.2 Inference Rules, "The sh:RulesEntailment Regime": "the shapes graph
+/// indicates to a SHACL validation engine that the SHACL rules inside of the shapes
+/// graph need to be executed prior to starting the validation. […] Validation engines
+/// that do support the SHACL rules entailment regime execute the rules following the
+/// rules execution instructions prior to performing the actual validation." The
+/// entailed data keeps `data`'s shapes-graph exposure, so a SHACL-SPARQL constraint
+/// sees exactly what it would have seen without the regime.
+///
+/// # Errors
+///
+/// A rules-engine failure: validation of a graph whose rules could not be executed
+/// has no answer.
+fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<ShaclData>, String> {
+    if !shapes.rules.entailment {
+        return Ok(None);
+    }
+    let entailed = crate::rules::apply_rules(data, shapes)
+        .map_err(|e| format!("the sh:RulesEntailment regime could not execute the rules: {e}"))?;
+    build_projected_data(entailed, shapes, data.shapes_graph_iri()).map(Some)
+}
+
+/// [`validate_with_focus_filter`] over data the entailment regime has already been
+/// applied to.
+fn validate_data_with_focus_filter<F>(
     data: &ShaclData,
     shapes: &Shapes,
     mut include_focus: F,

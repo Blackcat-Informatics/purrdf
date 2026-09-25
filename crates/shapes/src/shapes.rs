@@ -30,6 +30,8 @@ use parser::annotations::Annotated;
 
 pub(crate) mod link;
 mod parser;
+
+pub(crate) use parser::node_expr::boolean_value as parser_boolean;
 pub(crate) mod prefixes;
 
 /// Re-derive a shapes graph's `sh:SPARQLFunction` declarations from the shapes
@@ -761,6 +763,10 @@ pub struct Shapes {
     /// targets of its own, so that a data graph's `n sh:shape s` can make `n` its
     /// focus node.
     pub node_shapes: Vec<Shape>,
+    /// The shapes graph's rules that are not attached to a shape — its global rules —
+    /// its rule sets, and whether it declares the rules entailment regime (SHACL 1.2
+    /// Inference Rules). Shape rules live on their shapes ([`Shape::rules`]).
+    pub rules: crate::rules::RuleGraph,
     /// The caller-supplied box-role vocabulary these shapes were parsed with;
     /// carried into validation so data-graph role lookups use the same terms.
     /// `None` = the box-role feature is inactive.
@@ -882,6 +888,7 @@ impl Default for Shapes {
     fn default() -> Self {
         Self {
             node_shapes: Vec::new(),
+            rules: crate::rules::RuleGraph::default(),
             box_role_vocab: None,
             functions: Arc::new(UserFunctionRegistry::new()),
             aggregates: Arc::new(AggregateRegistry::new()),
@@ -1468,6 +1475,11 @@ impl<'s> Parser<'s> {
         // node expression that may call any declared function — itself included —
         // so it can only be parsed once every declaration is interned. They are
         // INSTALLED by the linking pass below, together with the shape index.
+        // The global rules, rule sets and the rules entailment regime (SHACL 1.2
+        // Inference Rules), parsed after every shape so a global rule's conditions and
+        // node expressions resolve exactly as a shape rule's do.
+        let rules = self.parse_rule_graph()?;
+
         let custom_fns = self.custom_fns.clone();
         let bodies = self.parse_custom_function_bodies(&custom_fns)?;
 
@@ -1489,11 +1501,14 @@ impl<'s> Parser<'s> {
             &mut functions,
         )
         .map_err(|error| error.to_string())?;
+        link::link_global_rules(&rules.global_rules, &self.node_shape_index)
+            .map_err(|error| error.to_string())?;
 
         self.check_node_by_expression_constants()?;
 
         let shapes = Shapes {
             node_shapes,
+            rules,
             box_role_vocab: self.box_role_vocab.clone(),
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::new()),

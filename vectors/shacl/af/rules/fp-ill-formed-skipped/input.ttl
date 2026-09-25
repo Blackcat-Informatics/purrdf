@@ -1,0 +1,21 @@
+# First-party SHACL Rules case: an ILL-FORMED triple is skipped, not an error.
+# SHACL 1.2 Inference Rules, "Execution of triple rules": "For each combination of
+# members s of S, p of P and o of O, infer a triple with subject s, predicate p and
+# object o. Skip ill-formed triples, for example when a blank node is used as
+# predicate." The subject expression here yields a literal and an IRI: the literal
+# combination is ill-formed and skipped, the IRI combination is inferred.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Person .
+
+ex:BadRule
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:subject ( "notasubject" ex:alice ) ;
+      sh:predicate ex:p ;
+      sh:object ex:o ] .
