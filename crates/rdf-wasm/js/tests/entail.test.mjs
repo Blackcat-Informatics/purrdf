@@ -859,7 +859,13 @@ test("the three services honour premiseIris", () => {
     [entailVerifyEntailment, conclusion],
     [entailCertainAnswers, pattern],
   ]) {
-    assert.throws(() => service("simple", premise, question, [], [], []), /example\.org\/premise/);
+    const expected =
+      `entailment regime "simple": the premise owl:imports <${iri}>, which the ` +
+      "supplied import map does not resolve and the premise does not contain";
+    assert.throws(
+      () => service("simple", premise, question, [], [], []),
+      (error) => error.message === expected,
+    );
     const answer = service("simple", premise, question, [], [], [iri]);
     assert.ok(answer.answer.startsWith("mechanism strict-table\n"), answer.answer);
     answer.free();
