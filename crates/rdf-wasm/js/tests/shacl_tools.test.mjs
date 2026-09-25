@@ -93,7 +93,13 @@ test("shaclApplyRules writes the inference graph, its proof, and honours the rou
 
   assert.throws(
     () => shaclApplyRules(DATA, SHAPES, undefined, undefined, undefined, false, 3n),
-    /past the limit of 3/,
+    (error) =>
+      error.message ===
+      "SHACL rules did not complete: 4 rounds inferred a term the evaluation graph " +
+        "did not hold, past the limit of 3 such rounds (SHACL 1.2 Inference Rules: " +
+        '"Rule engines MAY also report a failure after a pre-configured maximum ' +
+        'iteration count has been exceeded"); if the rule set terminates, raise the ' +
+        "limit with RuleOptions::with_max_term_generating_rounds",
   );
   const enough = shaclApplyRules(DATA, SHAPES, undefined, undefined, undefined, false, 4n);
   assert.equal(enough.inferred, INFERRED);
@@ -115,7 +121,11 @@ test("shaclApplyRules writes the inference graph, its proof, and honours the rou
   assert.ok(srl.proof.includes("  data-block\n"), srl.proof);
   srl.free();
 
-  assert.throws(() => shaclApplyRules(DATA), /no rule source/);
+  assert.throws(
+    () => shaclApplyRules(DATA),
+    (error) =>
+      error.message === "no rule source: name a SHACL shapes graph or a SPARQL 1.2 RL rule set",
+  );
 });
 
 test("shaclEvalNodeExpr evaluates one expression node, natively and with a scope", () => {
@@ -129,11 +139,19 @@ test("shaclEvalNodeExpr evaluates one expression node, natively and with a scope
   );
   assert.throws(
     () => shaclEvalNodeExpr(SHAPES, DATA, "_:nosuch", "http://example.org/ns#a"),
-    /mentions no blank node _:nosuch/,
+    (error) =>
+      error.message ===
+      "the shapes graph mentions no blank node _:nosuch, so there is no expression to " +
+        "evaluate; name the expression node by the label the shapes document gives it, " +
+        "or by its IRI",
   );
   assert.throws(
     () => shaclEvalNodeExpr(SHAPES, DATA, "_:suffix", "http://example.org/ns#a", ['focusNode="!"']),
-    /can never be read/,
+    (error) =>
+      error.message ===
+      'scope variable "focusNode" can never be read: SHACL 1.2 Node Expressions §4.1.2 ' +
+        'resolves shnex:var "focusNode" to the focus node before the scope is searched. ' +
+        "Pass the node as the focus node instead",
   );
 });
 
