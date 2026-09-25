@@ -19,7 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use purrdf_shapes::spec::census::{Role, TermClass, census, classify};
+use purrdf_shapes::spec::census::{Role, Site, TermClass, census, classify};
 use purrdf_shapes::spec::declared_terms;
 
 /// Every string constant declared in `mod {module}` of `model.rs`, as
@@ -154,6 +154,7 @@ fn census_counts_per_class_are_pinned() {
             }
             TermClass::Structural(Role::NodeExpression) => "structural/node-expression",
             TermClass::Structural(Role::Builtin) => "structural/builtin",
+            TermClass::Structural(Role::ComputedValues) => "structural/computed-values",
             TermClass::Structural(
                 Role::ShapeCharacteristic | Role::Path | Role::Prefixes | Role::Graph,
             ) => "structural/shape-path-prefix-graph",
@@ -184,20 +185,23 @@ fn census_counts_per_class_are_pinned() {
 /// conformance-disallow set became a validation option the report echoes: 20 + 2,
 /// 20 + 1 and 42 − 3. `sh:ShapeClass` moved to the vocabulary, and `sh:targetWhere`
 /// and `sh:shape` to the targets, when implicit class targets, where targets and
-/// explicit shape targets became evaluated: 22 + 1, 7 + 2 and 39 − 3; the 36 that
-/// remain are terms of other kinds.
-const EXPECTED_COUNTS: [(&str, usize); 11] = [
+/// explicit shape targets became evaluated: 22 + 1, 7 + 2 and 39 − 3. `sh:values`
+/// and `sh:defaultValue` became a property shape's computed value nodes, and
+/// `sh:expectedPredicate` a rule term, when the three became evaluated: 0 + 2,
+/// 9 + 1 and 36 − 3; the 33 that remain are terms of other kinds.
+const EXPECTED_COUNTS: [(&str, usize); 12] = [
     ("constraint-parameter", 47),
     ("non-validating", 10),
-    ("rule", 9),
+    ("rule", 10),
     ("structural/builtin", 68),
+    ("structural/computed-values", 2),
     ("structural/declaration", 32),
     ("structural/node-expression", 47),
     ("structural/report", 21),
     ("structural/shape-path-prefix-graph", 16),
     ("structural/vocabulary", 23),
     ("target", 9),
-    ("unimplemented", 36),
+    ("unimplemented", 33),
 ];
 
 /// Where a term may appear is part of its class: a constraint parameter and a
@@ -217,6 +221,27 @@ fn sites_follow_the_class() {
     assert!(message.on_shape() && message.on_node_expression());
     let optional = classify("http://www.w3.org/ns/shacl#optional").expect("classified");
     assert!(!optional.on_shape() && optional.on_parameter_declaration());
+    // `sh:defaultValue` computes value nodes on a property shape and is
+    // documentation on a parameter declaration (SHACL 1.2 SPARQL Extensions: "nor
+    // will the declared sh:defaultValue be used at runtime. These mainly serve
+    // documentation purposes").
     let default_value = classify("http://www.w3.org/ns/shacl#defaultValue").expect("classified");
-    assert!(!default_value.on_shape() && default_value.on_parameter_declaration());
+    assert!(default_value.on_shape() && !default_value.on_node_expression());
+    assert_eq!(
+        default_value.class_at(Site::Shape),
+        TermClass::Structural(Role::ComputedValues)
+    );
+    assert_eq!(
+        default_value.class_at(Site::ParameterDeclaration),
+        TermClass::NonValidating
+    );
+    let values = classify("http://www.w3.org/ns/shacl#values").expect("classified");
+    assert!(values.on_shape() && !values.on_node_expression());
+    assert_eq!(
+        values.class_at(Site::ParameterDeclaration),
+        TermClass::Structural(Role::ComputedValues)
+    );
+    let expected = classify("http://www.w3.org/ns/shacl#expectedPredicate").expect("classified");
+    assert_eq!(expected.class, TermClass::Rule);
+    assert!(!expected.on_shape() && !expected.on_node_expression());
 }

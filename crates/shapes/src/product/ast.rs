@@ -877,6 +877,18 @@ impl AstWriter {
         Ok(())
     }
 
+    /// Write an optional node expression.
+    fn opt_node_expr(&mut self, expr: Option<&NodeExpr>) -> Result<(), ShapesProductError> {
+        match expr {
+            None => self.flag(false),
+            Some(expr) => {
+                self.flag(true);
+                self.node_expr(expr)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Write a sequence of node expressions.
     fn node_exprs(&mut self, exprs: &[NodeExpr]) -> Result<(), ShapesProductError> {
         self.count(exprs.len());
@@ -1328,6 +1340,8 @@ impl AstWriter {
         self.enter()?;
         self.term(&shape.id)?;
         self.path(&shape.path)?;
+        self.opt_node_expr(shape.values.as_ref())?;
+        self.opt_node_expr(shape.default_value.as_ref())?;
         self.count(shape.constraints.len());
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
@@ -1448,6 +1462,10 @@ impl AstWriter {
         }
         self.flag(rule.deactivated);
         self.rule_schedule(rule.schedule);
+        self.count(rule.expected_predicates.len());
+        for predicate in &rule.expected_predicates {
+            self.named_node(predicate);
+        }
         self.leave();
         Ok(())
     }
@@ -1981,6 +1999,15 @@ impl<'a> AstReader<'a> {
         Ok(call)
     }
 
+    /// Read an optional node expression.
+    fn opt_node_expr(&mut self) -> Result<Option<NodeExpr>, ShapesProductError> {
+        if self.flag()? {
+            Ok(Some(self.node_expr()?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Read a node expression.
     fn node_expr(&mut self) -> Result<NodeExpr, ShapesProductError> {
         self.enter()?;
@@ -2195,10 +2222,14 @@ impl<'a> AstReader<'a> {
         self.enter()?;
         let id = self.term()?;
         let path = self.path()?;
+        let values = self.opt_node_expr()?;
+        let default_value = self.opt_node_expr()?;
         let constraints = self.seq(Self::constraint)?;
         let shape = PropertyShape {
             id,
             path,
+            values,
+            default_value,
             property_shapes: self.seq(Self::property_shape)?,
             reifier_shapes: self.seq(Self::shape)?,
             reification_required: self.flag()?,
@@ -2301,6 +2332,7 @@ impl<'a> AstReader<'a> {
             },
             deactivated: self.flag()?,
             schedule: self.rule_schedule()?,
+            expected_predicates: self.seq(Self::named_node)?,
         };
         self.leave();
         Ok(rule)
@@ -2473,6 +2505,9 @@ impl FnTable {
     /// Walk a property shape.
     fn property_shape(&mut self, shape: &PropertyShape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        for expr in shape.values.iter().chain(&shape.default_value) {
+            self.node_expr(expr)?;
+        }
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }

@@ -2206,6 +2206,31 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             continue;
         };
         let key = ctx.ns.compact_iri(pred.as_str());
+        // SHACL 1.2 Core: the value nodes of a property shape with `sh:values` or
+        // `sh:defaultValue` include "the output nodes of evalExpr(e, data graph,
+        // focus node, {})" — nodes computed at validation, which a JSON document
+        // does not carry. Projecting the shape's constraints onto the document's
+        // own values would require (`sh:minCount`, `sh:hasValue`) what a computed
+        // value supplies, so the property shape is dropped, and the loss recorded.
+        if ps.values.is_some() || ps.default_value.is_some() {
+            for (present, term) in [
+                (ps.values.is_some(), "sh:values"),
+                (ps.default_value.is_some(), "sh:defaultValue"),
+            ] {
+                if present {
+                    ctx.record(
+                        term,
+                        &shape_iri,
+                        "a property shape's computed value nodes have no JSON Schema equivalent",
+                    );
+                }
+            }
+            comments.push(format!(
+                "the property shape on {key} was dropped (its value nodes are computed by \
+                 sh:values / sh:defaultValue, which a JSON document does not carry)"
+            ));
+            continue;
+        }
         by_key
             .entry(key)
             .or_insert_with(|| (pred.as_str().to_owned(), Vec::new()))
@@ -2543,6 +2568,8 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
             || !ps.property_shapes.is_empty()
             || !ps.reifier_shapes.is_empty()
             || ps.reification_required
+            || ps.values.is_some()
+            || ps.default_value.is_some()
         {
             return None;
         }

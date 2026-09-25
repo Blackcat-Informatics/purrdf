@@ -2569,6 +2569,13 @@
     "note": "A SHACL 1.2 sh:closed sh:ByTypes constraint permits the properties each value node's own rdf:type values collect through the shapes graph; an object schema states one fixed key set for every instance, so the object is left open and the constraint is dropped."
   },
   {
+    "code": "sh:defaultValue",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 property shape with sh:defaultValue takes the output nodes of a node expression as its value nodes when the property has no other value; a JSON document does not carry them, and projecting the shape's constraints onto the document's own values would require what the default supplies, so the property shape is dropped."
+  },
+  {
     "code": "sh:disjoint",
     "from": "shacl",
     "to": "json-schema",
@@ -2721,6 +2728,13 @@
     "to": "json-schema",
     "intentional": true,
     "note": "A SHACL 1.2 sh:uniqueValuesFor constraint forbids two target nodes of a shape from having exactly the same values for the listed properties; a JSON Schema judges one instance alone (uniqueItems is uniqueness within one array, not across instances), so the constraint is dropped."
+  },
+  {
+    "code": "sh:values",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 property shape with sh:values takes the output nodes of a node expression evaluated at validation as value nodes, which a JSON document does not carry; projecting its constraints onto the document's own values would require what a computed value supplies, so the property shape is dropped."
   },
   {
     "code": "value-vocabulary",

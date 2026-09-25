@@ -998,8 +998,9 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// `sh:memberShape`), `sh:rootClass`, `sh:singleLine true`, property-level
 /// `sh:someValue`, a `sh:TripleTerm` alternative of `sh:nodeKind`, every
 /// property pair (`sh:equals`, `sh:disjoint`, `sh:subsetOf`, `sh:lessThan`,
-/// `sh:lessThanOrEquals`), whatever its path, `sh:uniqueValuesFor` and
-/// `sh:closed sh:ByTypes`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
+/// `sh:lessThanOrEquals`), whatever its path, `sh:uniqueValuesFor`,
+/// `sh:closed sh:ByTypes`, and a property shape whose value nodes `sh:values` or
+/// `sh:defaultValue` compute (dropped whole, one entry per term); `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
 /// `crates/shapes/src/shapes.rs`) have no `$def` equivalent — the emitter has
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
@@ -1173,6 +1174,20 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          having exactly the same values for the listed properties; a JSON Schema judges one \
          instance alone (uniqueItems is uniqueness within one array, not across instances), so \
          the constraint is dropped.",
+    ),
+    (
+        "sh:values",
+        "A SHACL 1.2 property shape with sh:values takes the output nodes of a node expression \
+         evaluated at validation as value nodes, which a JSON document does not carry; \
+         projecting its constraints onto the document's own values would require what a \
+         computed value supplies, so the property shape is dropped.",
+    ),
+    (
+        "sh:defaultValue",
+        "A SHACL 1.2 property shape with sh:defaultValue takes the output nodes of a node \
+         expression as its value nodes when the property has no other value; a JSON document \
+         does not carry them, and projecting the shape's constraints onto the document's own \
+         values would require what the default supplies, so the property shape is dropped.",
     ),
     (
         "value-vocabulary",

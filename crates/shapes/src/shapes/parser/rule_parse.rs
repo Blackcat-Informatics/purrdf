@@ -9,7 +9,7 @@ use crate::model::sh;
 use crate::rules::{
     OrderKey, Rule, RuleBody, RuleSchedule, construct_template_mints_blank, node_expr_mints_blank,
 };
-use crate::term::Term;
+use crate::term::{NamedNode, Term};
 
 use crate::shapes::Parser;
 
@@ -132,6 +132,8 @@ impl Parser<'_> {
             }
         };
 
+        let expected_predicates = self.expected_predicates_of(shape_id, rule_node)?;
+
         Ok(Rule {
             id: rule_node.clone(),
             body,
@@ -139,7 +141,35 @@ impl Parser<'_> {
             order,
             deactivated,
             schedule,
+            expected_predicates,
         })
+    }
+
+    /// The rule's `sh:expectedPredicate` values, sorted and deduplicated.
+    ///
+    /// SHACL 1.2 Inference Rules §3.8: "The expected derived triples of a rule are
+    /// the derived triples for all values of the property sh:expectedPredicate at
+    /// the rule." The vocabulary gives the property the range `rdf:Property`, and a
+    /// derived triple's predicate is that value, so a value that is not an IRI
+    /// names no derived triple at all and is refused rather than ignored.
+    fn expected_predicates_of(
+        &self,
+        shape_id: &Term,
+        rule_node: &Term,
+    ) -> Result<Vec<NamedNode>, String> {
+        let mut predicates: Vec<NamedNode> = Vec::new();
+        for value in self.objects_of(rule_node, sh::EXPECTED_PREDICATE) {
+            let Term::NamedNode(predicate) = value else {
+                return Err(format!(
+                    "sh:expectedPredicate on rule {rule_node} of shape {shape_id} must be an IRI \
+                     (a predicate), got {value}"
+                ));
+            };
+            predicates.push(predicate);
+        }
+        predicates.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        predicates.dedup();
+        Ok(predicates)
     }
 
     /// Resolve every `sh:condition` node of a rule into a parsed [`Shape`].

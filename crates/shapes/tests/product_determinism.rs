@@ -71,7 +71,11 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 /// as a count of literals rather than an optional string left it there: the
 /// fixture declares no message, and an empty set's count is the one byte the
 /// absent string's flag was.
-const GOLDEN_LEN: usize = 4_688;
+///
+/// 4,696 since a property shape carries its `sh:values` and `sh:defaultValue`
+/// expressions: each property shape writes one presence flag for each, and the
+/// fixture's four property shapes declare neither (+8).
+const GOLDEN_LEN: usize = 4_696;
 
 /// The product artifact frozen by the commit that introduced the prepared-product
 /// format, for the forward-compatibility proof. See

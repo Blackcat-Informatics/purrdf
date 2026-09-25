@@ -297,6 +297,18 @@ fn walk_property(
     flight: &mut InFlight,
 ) {
     let id = property.id.to_string();
+    if let Some(expr) = &property.values {
+        walk_node_expr(expr, &format!("sh:values on {id}"), usage, env, flight);
+    }
+    if let Some(expr) = &property.default_value {
+        walk_node_expr(
+            expr,
+            &format!("sh:defaultValue on {id}"),
+            usage,
+            env,
+            flight,
+        );
+    }
     walk_constraints(&property.constraints, &id, usage, env, flight);
     for nested in &property.property_shapes {
         walk_property(nested, usage, env, flight);

@@ -67,7 +67,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        232,
+        234,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -79,16 +79,6 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
         "SHACL 1.2 Core §7.9.4: \"The values of sh:rootClass in a shape are either IRIs or \
          blank nodes that are well-formed SHACL lists where all members are IRIs.\" — \
          shacl-shacl.ttl states no rule for sh:rootClass",
-    ),
-    (
-        "unimplemented-term",
-        "which is not evaluated by this engine",
-        2,
-        "a well-formed use of a SHACL 1.2 term this engine does not evaluate (sh:values) \
-         is refused rather than validated as if it were absent; 6 until sh:Debug and \
-         sh:Trace became evaluated severities, when severity-004 and severity-005 stopped \
-         being refused, and 4 until sh:ShapeClass, sh:targetWhere and a structured \
-         node-expression sh:targetNode became evaluated targets",
     ),
     (
         "unsupported-entailment",
@@ -626,7 +616,15 @@ const BASE_INPUTS: usize = 375;
 /// `targetNode-select-001` loads too, but `shacl-shacl.ttl` flags its structured
 /// `sh:targetNode` (see `node-expression-target-node`), so it is not a base both
 /// sides accept and is not mutated.
-const MUTANT_INPUTS: usize = 712;
+///
+/// Moved from 712 to 717 when `sh:values` and `sh:defaultValue` became
+/// evaluated: `property-select-001` and `property-sparqlExpr-001` now load, so
+/// each is a base both sides accept. The list-for-single-value kind rewrites each
+/// one's `sh:datatype` (+2), the literal-for-IRI kind `property-select-001`'s
+/// `sh:targetClass` (+1), and each property shape gains a misspelled predicate
+/// (+2); `property-sparqlExpr-001` targets by `sh:targetNode`, which no kind
+/// rewrites.
+const MUTANT_INPUTS: usize = 717;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -722,11 +720,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 189),
+        ("literal-where-an-IRI-is-required", 190),
         ("non-integer-count", 101),
-        ("list-where-a-single-value-is-required", 155),
+        ("list-where-a-single-value-is-required", 157),
         ("non-boolean-flag", 35),
-        (UNKNOWN_TERM, 232),
+        (UNKNOWN_TERM, 234),
     ]
     .into_iter()
     .collect();

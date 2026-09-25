@@ -251,6 +251,11 @@ pub mod sh {
     /// parameter declaration's documented default.
     pub const DEFAULT_VALUE: &str = "http://www.w3.org/ns/shacl#defaultValue";
 
+    /// `sh:expectedPredicate` — a predicate whose `sh:values` / `sh:defaultValue`
+    /// derived triples a rule expects to be present while it executes (SHACL 1.2
+    /// Inference Rules §3.8).
+    pub const EXPECTED_PREDICATE: &str = "http://www.w3.org/ns/shacl#expectedPredicate";
+
     // ── SHACL-AF and advanced constraint predicates ────────────────────────────
 
     /// `sh:sparql` — attaches a SPARQL constraint to a shape.

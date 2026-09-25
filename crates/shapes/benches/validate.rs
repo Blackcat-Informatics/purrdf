@@ -30,6 +30,15 @@
 //! `full_scan`, the same condition behind a one-member `sh:or` the narrowing does
 //! not look inside, which checks every node of the graph against the shape.
 //!
+//! `shacl_focus_computed_values` is a property shape's value nodes in the three
+//! forms SHACL 1.2 Core gives them, over one conforming focus population:
+//! `asserted`, reached by the path alone; `values`, the output of a `sh:values`
+//! node expression evaluated at each focus node; and `default`, a
+//! `sh:defaultValue` constant added where the path and `sh:values` produce
+//! nothing. The `asserted` row is the control every shape without either term
+//! pays, and the two computed rows show what an expression evaluation per focus
+//! node costs beside it.
+//!
 //! `shacl_change_path_contrast` is the conforming-versus-violating pair over ONE
 //! dataset and ONE binding: the change path materializes a focus node only where a
 //! result is built, so a conforming request should cost a constant whatever the
@@ -106,6 +115,7 @@ const CORE_FOCUS_SIZES: &[usize] = &[512, 1_024, 2_048, 3_000, 100_000, 1_000_00
 const CLOSED_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
 const UNIQUE_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const COMPUTED_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const TARGET_WHERE_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const REALTIME_FOCUS_SIZES: &[usize] = &[1, 8, 64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -443,6 +453,60 @@ ex:UniqueNotationShape a sh:NodeShape ;
     }
 }
 
+/// A property shape over `focus_nodes` conforming rectangles whose `ex:area`
+/// value nodes come from `form`: `asserted` (each rectangle carries `ex:area`),
+/// `values` (each carries `ex:width`, and `sh:values [ sh:path ex:width ]`
+/// computes the area from it) or `default` (none carries either, and
+/// `sh:defaultValue 1` supplies it). `sh:minCount 1` and `sh:datatype
+/// xsd:integer` hold in every form, so the report is empty and every row does the
+/// same constraint work over one value node per focus node.
+fn computed_values_focus_fixture(focus_nodes: usize, form: &str) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let rectangle = builder.intern_iri(&format!("{BENCH_EX}Rectangle"));
+    let area = builder.intern_iri(&format!("{BENCH_EX}area"));
+    let width = builder.intern_iri(&format!("{BENCH_EX}width"));
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}rectangle{index}"));
+        builder.push_quad(focus, rdf_type, rectangle, None);
+        let value =
+            builder.intern_literal(RdfLiteral::typed((index % 97 + 1).to_string(), XSD_INTEGER));
+        match form {
+            "asserted" => builder.push_quad(focus, area, value, None),
+            "values" => builder.push_quad(focus, width, value, None),
+            _ => {}
+        }
+    }
+    let dataset = builder
+        .freeze()
+        .expect("computed-values focus fixture must freeze");
+    let computed = match form {
+        "asserted" => "",
+        "values" => "sh:values [ sh:path ex:width ] ;",
+        _ => "sh:defaultValue 1 ;",
+    };
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:RectangleShape a sh:NodeShape ;
+    sh:targetClass ex:Rectangle ;
+    sh:property [ sh:path ex:area ; {computed} sh:minCount 1 ; sh:datatype xsd:integer ] .
+"
+        ),
+        None,
+    )
+    .expect("computed-values focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
 /// A `sh:targetWhere` fixture: `focus_nodes` concepts, each with a notation, and
 /// as many unrelated nodes beside them, so a where target that scans every node of
 /// the graph has twice the candidates one that narrows to the class does.
@@ -746,6 +810,31 @@ fn bench_focus_target_where(c: &mut Criterion) {
                 move |bencher, fixture| {
                     probe.call_once(|| {
                         print_validation_probe(&format!("target_where_{label}"), fixture);
+                    });
+                    bencher.iter(|| validate_fixture(black_box(fixture)));
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn bench_focus_computed_values(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_computed_values");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in COMPUTED_VALUES_FOCUS_SIZES {
+        for form in ["asserted", "values", "default"] {
+            let fixture = computed_values_focus_fixture(focus_nodes, form);
+            let probe = Once::new();
+            group.throughput(Throughput::Elements(focus_nodes as u64));
+            group.bench_with_input(
+                BenchmarkId::new(form, focus_nodes),
+                &fixture,
+                move |bencher, fixture| {
+                    probe.call_once(|| {
+                        print_validation_probe(&format!("computed_values_{form}"), fixture);
                     });
                     bencher.iter(|| validate_fixture(black_box(fixture)));
                 },
@@ -1602,6 +1691,7 @@ criterion_group!(
     bench_focus_sparql,
     bench_focus_unique_values,
     bench_focus_target_where,
+    bench_focus_computed_values,
     bench_focus_realtime,
     bench_change_path_contrast,
     bench_subclass_membership,

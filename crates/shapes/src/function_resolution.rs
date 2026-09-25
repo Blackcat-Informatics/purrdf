@@ -156,6 +156,12 @@ impl Walk<'_> {
 
     fn property(&mut self, property: &PropertyShape) {
         let id = property.id.to_string();
+        if let Some(expr) = &property.values {
+            self.node_expr(expr, &format!("sh:values on {id}"));
+        }
+        if let Some(expr) = &property.default_value {
+            self.node_expr(expr, &format!("sh:defaultValue on {id}"));
+        }
         self.constraints(&property.constraints, &id);
         for nested in &property.property_shapes {
             self.property(nested);

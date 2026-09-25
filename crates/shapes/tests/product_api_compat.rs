@@ -98,6 +98,8 @@ fn property_shape_is_still_a_bare_literal() {
     let property_shape = PropertyShape {
         id: iri("https://example.org/nameProp").into_term(),
         path: Path::Predicate(iri("https://example.org/name")),
+        values: None,
+        default_value: None,
         constraints: vec![Constraint::MinCount(1)],
         property_shapes: Vec::new(),
         reifier_shapes: Vec::new(),

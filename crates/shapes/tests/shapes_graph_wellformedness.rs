@@ -141,31 +141,96 @@ fn the_af_minus_expression_is_refused_and_shnex_remove_loads() {
     );
 }
 
+/// SHACL 1.2 Core, "Property Shapes": "A property shape can only have values for
+/// sh:values and/or sh:defaultValue when its value for sh:path is a Predicate
+/// Path." An inverse path is refused; the IRI-path neighbour loads and its
+/// `sh:values` is EVALUATED — the computed `ex:v` satisfies `sh:minCount 1` at
+/// `ex:a`, where the control without `sh:values` reports.
 #[test]
-fn values_is_refused_and_the_same_property_shape_without_it_loads() {
+fn values_on_a_non_iri_path_is_refused_and_on_an_iri_path_it_computes() {
     refused(
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-           sh:property [ sh:path ex:p ; sh:values [ sh:path ex:q ] ; sh:minCount 1 ] .",
-        "sh:values computes",
+           sh:property [ sh:path [ sh:inversePath ex:p ] ; sh:values ex:v ; sh:minCount 1 ] .",
+        "Predicate Path",
     );
-    loads(
-        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+    let with = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:values ex:v ; sh:minCount 1 ] .",
+        "ex:b ex:p 1 .",
+    );
+    let without = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+        "ex:b ex:p 1 .",
+    );
+    assert!(results(&with).is_empty(), "{:?}", results(&with));
+    assert_eq!(
+        results(&without),
+        vec![("<http://example.org/ns#a>".to_owned(), String::new())]
     );
 }
 
+/// A node shape has no path and so no value nodes a computation could add to —
+/// "For node shapes the value nodes are the individual focus nodes" — so
+/// `sh:defaultValue` on one is refused; on the property shape beside it, the
+/// default is evaluated (`ex:a` has no `ex:p`, gets `"none"`, and fails
+/// `sh:datatype xsd:integer`).
 #[test]
-fn a_parameter_declarations_default_value_loads_and_a_shapes_is_refused() {
+fn default_value_on_a_node_shape_is_refused_and_on_a_property_shape_it_computes() {
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:defaultValue \"none\" .",
+        "node shape",
+    );
+    let report = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:datatype xsd:integer ; sh:defaultValue \"none\" ] .",
+        "ex:b ex:p 1 .",
+    );
+    assert_eq!(
+        results(&report),
+        vec![(
+            "<http://example.org/ns#a>".to_owned(),
+            "\"none\"".to_owned()
+        )]
+    );
+}
+
+/// "A property shape has at most one value for the property sh:values": two are
+/// refused, one loads.
+#[test]
+fn two_values_are_refused_and_one_loads() {
     refused(
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-           sh:property [ sh:path ex:p ; sh:defaultValue 1 ] .",
-        "sh:defaultValue computes",
+           sh:property [ sh:path ex:p ; sh:values ex:v, ex:w ] .",
+        "at most one value for the property sh:values",
     );
+    loads(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:values ex:v ] .",
+    );
+}
+
+/// A parameter declaration's `sh:defaultValue` is documentation (SHACL 1.2 SPARQL
+/// Extensions: "nor will the declared sh:defaultValue be used at runtime. These
+/// mainly serve documentation purposes") and loads; `sh:values` on a parameter
+/// declaration would compute value nodes for a declaration that is never
+/// validated, and is refused.
+#[test]
+fn a_parameter_declarations_default_value_loads_and_its_values_is_refused() {
     loads(
         "ex:f a sh:SPARQLFunction ;
            sh:parameter [ sh:path ex:x ; sh:datatype xsd:integer ; sh:optional true ;
                           sh:defaultValue 1 ] ;
            sh:returnType xsd:integer ;
            sh:select \"SELECT ((COALESCE($x, 1) * 2) AS ?result) WHERE {}\" .",
+    );
+    refused(
+        "ex:f a sh:SPARQLFunction ;
+           sh:parameter [ sh:path ex:x ; sh:datatype xsd:integer ; sh:optional true ;
+                          sh:values 1 ] ;
+           sh:returnType xsd:integer ;
+           sh:select \"SELECT ((COALESCE($x, 1) * 2) AS ?result) WHERE {}\" .",
+        "never validated",
     );
 }
 

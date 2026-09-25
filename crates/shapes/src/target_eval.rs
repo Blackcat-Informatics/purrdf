@@ -158,7 +158,8 @@ pub(crate) fn node_expression_targets(
 /// * `sh:hasValue v` at node level — the focus node must be `v`;
 /// * `sh:in (…)` at node level — the focus node must be a member;
 /// * a property shape on a predicate path `p` (or its inverse) with `sh:minCount`
-///   at least 1 — the node must be a subject (object) of `p`;
+///   at least 1 and no computed value nodes (`sh:values`, `sh:defaultValue`) —
+///   the node must be a subject (object) of `p`;
 /// * `sh:and` / `sh:node` — the node must conform to each operand, so any
 ///   operand's narrowing bounds it too.
 ///
@@ -224,9 +225,14 @@ fn property_narrowing(
     property: &PropertyShape,
     disallows: &ConformanceDisallows,
 ) -> Option<Vec<TermId>> {
+    // A computed value node (`sh:values`, `sh:defaultValue`) satisfies
+    // `sh:minCount` at a focus node that is no subject of the predicate at all, so
+    // the predicate's subjects no longer bound the conforming nodes.
     if property.deactivated
         || !disallows.contains(&property.severity)
         || !property.constraint_annotations.is_empty()
+        || property.values.is_some()
+        || property.default_value.is_some()
     {
         return None;
     }

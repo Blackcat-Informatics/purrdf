@@ -587,6 +587,8 @@ impl ImportContext<'_> {
             property_shapes.push(PropertyShape {
                 id: property_shape_id(&id, &property_path),
                 path: Path::Predicate(predicate),
+                values: None,
+                default_value: None,
                 constraints,
                 property_shapes: Vec::new(),
                 reifier_shapes: Vec::new(),
@@ -621,6 +623,8 @@ impl ImportContext<'_> {
             property_shapes.push(PropertyShape {
                 id: property_shape_id(&id, &format!("{path}/properties/{}", pointer_escape(key))),
                 path: Path::Predicate(NamedNode::new_unchecked(predicate_iri)),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: Vec::new(),
                 reifier_shapes: Vec::new(),

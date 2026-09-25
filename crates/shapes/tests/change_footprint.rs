@@ -927,6 +927,32 @@ const UNIQUE_VALUES_FOR_TARGET_SET: Case = Case {
     naive_misses: true,
 };
 
+/// `sh:values` (SHACL 1.2 Core: "add the output nodes of evalExpr(e, data graph,
+/// focus node, {})"): the expression is evaluated at the FOCUS node, so what it
+/// reads is a read of the focus node's verdict. Removing `ex:bob`'s `ex:q` takes
+/// away `ex:alice`'s only computed value, and the naive expansion — `ex:bob`, who
+/// is no person — misses her.
+const COMPUTED_VALUES: Case = Case {
+    name: "sh:values over a sequence path",
+    shapes: r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [ sh:path ex:p ; sh:values [ sh:path ( ex:friend ex:q ) ] ; sh:minCount 1 ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#friend> <http://example.org/ns#bob> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#q> \"x\" .\n",
+        "<http://example.org/ns#zed> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#zed> <http://example.org/ns#p> \"z\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[],
+    removals: &[("bob", "http://example.org/ns#q", Obj::Lit("x"))],
+    untouched: "zed",
+    naive_misses: true,
+};
+
 /// Every case, so one failure names the form it belongs to.
 const CASES: &[&Case] = &[
     &FORWARD_PREDICATE,
@@ -946,6 +972,7 @@ const CASES: &[&Case] = &[
     &CLOSED_SHAPE,
     &UNIQUE_VALUES_FOR_VALUE,
     &UNIQUE_VALUES_FOR_TARGET_SET,
+    &COMPUTED_VALUES,
 ];
 
 #[test]
@@ -1297,6 +1324,45 @@ fn evaluated_targets_report_an_unbounded_footprint_and_a_class_target_does_not()
             .affected_focus_node_ids(&snapshot)
             .expect("expansion")
             .is_everything()
+    );
+}
+
+/// A computed value node is an expression's OUTPUT, not a node a path from the
+/// focus node reaches, so a constraint that READS at the value nodes of a shape
+/// with `sh:values` (`sh:class` reads their types) cannot be bounded, and that is
+/// REPORTED. The two neighbours stay bounded: the same `sh:values` under a
+/// constraint that reads nothing at the value nodes (`sh:minCount`), and the same
+/// `sh:class` without `sh:values`.
+#[test]
+fn computed_value_nodes_bound_what_they_can_and_report_what_they_cannot() {
+    let expansion = |property: &str| {
+        let (snapshot, validator) = bound(
+            &format!(
+                "ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;
+                    sh:property [ sh:path ex:name ; {property} ] ."
+            ),
+            TYPED_ALICE,
+            ("mallory", RDF_TYPE, Obj::Ex("Person")),
+        );
+        validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("expansion")
+    };
+    let unbounded = expansion("sh:values [ sh:path ex:alias ] ; sh:class ex:Name");
+    let reason = unbounded
+        .reason()
+        .expect("a read at a computed value node cannot be bounded");
+    assert!(
+        reason.contains("cannot reach from the focus node"),
+        "the reason must name the construct, got {reason:?}"
+    );
+    assert!(
+        !expansion("sh:values [ sh:path ex:alias ] ; sh:minCount 1").is_everything(),
+        "a computed value set counted at the focus node reads nothing at the value nodes"
+    );
+    assert!(
+        !expansion("sh:class ex:Name").is_everything(),
+        "without sh:values the value nodes are the path's, which the walk can name"
     );
 }
 

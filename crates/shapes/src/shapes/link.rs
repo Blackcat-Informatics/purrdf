@@ -489,6 +489,9 @@ impl ShapeIndexWalk<'_> {
     /// Walk a property shape.
     fn property_shape(&mut self, shape: &PropertyShape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        for expr in shape.values.iter().chain(&shape.default_value) {
+            self.node_expr(expr)?;
+        }
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }
