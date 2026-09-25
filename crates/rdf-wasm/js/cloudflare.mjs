@@ -52,19 +52,30 @@ const HANDLER_KEYS = [
   "cors",
   "yieldEveryPolls",
   "stackBytes",
+  "maxRequestBytes",
 ];
 
 // RFC 9110 §15 reason phrases: an `about:blank` problem's `title` is its status's phrase
-// (RFC 9457 §4.2.1).
+// (RFC 9457 §4.2.1). RFC 9110 renamed 413 from RFC 7231's "Payload Too Large" to "Content
+// Too Large"; this table follows the current RFC.
 const STATUS_TITLES = {
   400: "Bad Request",
   405: "Method Not Allowed",
   406: "Not Acceptable",
+  413: "Content Too Large",
   415: "Unsupported Media Type",
   422: "Unprocessable Content",
   500: "Internal Server Error",
   503: "Service Unavailable",
 };
+
+// A SPARQL query or update's text is a program, not a payload: even a large one — a
+// VALUES clause pasted with thousands of rows — is kilobytes. 1 MiB comfortably covers
+// that while still bounding what an unauthenticated POST can make a Worker buffer before
+// the operation is even parsed; a Worker's own memory ceiling is shared across every
+// request it is concurrently serving, so an unbounded body is a resource an attacker
+// controls for free.
+const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
 
 const encoder = new TextEncoder();
 
@@ -610,6 +621,9 @@ function handlerOptions(options) {
         `indefinitely`,
     );
   }
+  const maxRequestBytes = isPresent(source.maxRequestBytes)
+    ? positiveInteger(source.maxRequestBytes, "maxRequestBytes", caller)
+    : DEFAULT_MAX_REQUEST_BYTES;
   let cors;
   if (isPresent(source.cors)) {
     const given = plainObject(source.cors, `${caller}: cors`);
@@ -635,7 +649,14 @@ function handlerOptions(options) {
   for (const key of ["resolveService", "resolveLoad", "catalog", "localServices", "yieldEveryPolls", "stackBytes"]) {
     if (isPresent(source[key])) host[key] = source[key];
   }
-  return { engine: source.engine, dataset: source.dataset, governors: { ...governors }, cors, host };
+  return {
+    engine: source.engine,
+    dataset: source.dataset,
+    governors: { ...governors },
+    cors,
+    maxRequestBytes,
+    host,
+  };
 }
 
 /** The CORS response headers for a request from `origin`; none without `cors`. */
@@ -730,6 +751,27 @@ function protocolStep(step, headers, cors) {
   }
 }
 
+/**
+ * The response for a twin (`updateGovernedAsync`/`queryGovernedNegotiatedAsync`) that
+ * rejected while running the operation text straight from `operation.text` — the case
+ * with no dataset parameters, where nothing was parsed before the engine's own parse (see
+ * `handleSparqlRequest`). The twin's rejection carries no distinction between a syntax
+ * failure and an evaluation one, so it is reclassified by asking the protocol reading
+ * once, here on the failure path only: a text that fails there is the client's malformed
+ * request — the same `400` this endpoint always gave a malformed operation, just
+ * discovered a step later — and a text that reads fine there failed for a real evaluation
+ * reason, which `failure` answers exactly as it always has. A request that carried dataset
+ * parameters skips the recheck: its text was already parsed and validated by the splice
+ * before the engine ever saw it, so a rejection there is never a syntax failure.
+ */
+function reclassifiedFailure(operation, error, signal, headers, cors) {
+  if (!operation.hasDatasetParameters) {
+    const recheck = protocolStep(() => operation.effectiveText(), headers, cors);
+    if (recheck.response !== undefined) return recheck.response;
+  }
+  return failure(error, signal, headers);
+}
+
 /** The response for a twin that rejected. */
 function failure(error, signal, headers) {
   const timing = serverTiming(error?.evidence?.async);
@@ -752,9 +794,53 @@ function failure(error, signal, headers) {
   );
 }
 
-async function requestBody(request) {
-  if (request.body === null) return new Uint8Array(0);
-  return new Uint8Array(await request.arrayBuffer());
+/** The `413` problem for a request body over `maxRequestBytes`, in the adapter's own shape. */
+function bodyTooLarge(maxRequestBytes, headers) {
+  return problem(
+    413,
+    `the request body exceeds ${maxRequestBytes} bytes`,
+    { code: "ContentTooLarge", limit: exactNumber(maxRequestBytes) },
+    headers,
+  );
+}
+
+/**
+ * `request`'s body, bounded at `maxRequestBytes`. A `Content-Length` above the bound is
+ * refused before anything is read. A missing or understated one — a lying header can
+ * never buy a larger body than an honest one would — is still caught: the body streams in
+ * chunk by chunk with a running byte count, and the stream is cancelled the moment that
+ * count would exceed the bound, before the excess is ever buffered. Either way the
+ * refusal is the same `413` problem.
+ */
+async function boundedRequestBody(request, maxRequestBytes, headers) {
+  const declared = request.headers.get("Content-Length");
+  if (declared !== null) {
+    const length = Number(declared);
+    if (Number.isFinite(length) && length > maxRequestBytes) {
+      return { response: bodyTooLarge(maxRequestBytes, headers) };
+    }
+  }
+  if (request.body === null) return { value: new Uint8Array(0) };
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const step = await reader.read();
+    if (step.done) break;
+    total += step.value.byteLength;
+    if (total > maxRequestBytes) {
+      await reader.cancel(`request body exceeds ${maxRequestBytes} bytes`).catch(() => undefined);
+      return { response: bodyTooLarge(maxRequestBytes, headers) };
+    }
+    chunks.push(step.value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { value: body };
 }
 
 /**
@@ -764,19 +850,29 @@ async function requestBody(request) {
  * query runs through `queryGovernedNegotiatedAsync`, whose document goes straight into
  * the response body; an update through `updateGovernedAsync` (`governors.maxAnswers`
  * bounds query answers and is not applied to an update, which has none). The request's
- * `signal` cancels the job.
+ * `signal` cancels the job. `maxRequestBytes` (1 MiB by default) bounds the request body:
+ * a `Content-Length` above it is refused before anything is read, and a missing or
+ * understated one is still caught while the body streams in, so a body can never be made
+ * to buffer past the bound by lying about its size.
  *
  * Statuses: `200` with the negotiated document; `204` for an applied update; `400` for a
  * malformed request or operation (`405` for a method the protocol does not bind, `415`
  * for a `Content-Type` it does not define); `406` when the `Accept` header allows no
- * format that can carry the result; `422` when a deterministic ceiling (fuel, answers,
- * intermediate cells, scratch bytes, remote requests) stopped it; `503` when the deadline
- * or a cancellation did (with no `Retry-After`: the same request would stop again);
- * `500` when evaluation failed. Never a `200` with a partial body. Every error is an
- * RFC 9457 `application/problem+json` document (`type: "about:blank"`, `title`, `status`,
- * `detail`, and `code` — the refusal's stable name — plus `parameter`, `dimension`,
- * `limit`, `consumed`, `estimate` where they apply). Every evaluated response carries
- * `Server-Timing` from the job's `evidence.async`.
+ * format that can carry the result; `413` when the body exceeds `maxRequestBytes`; `422`
+ * when a deterministic ceiling (fuel, answers, intermediate cells, scratch bytes, remote
+ * requests) stopped it; `503` when the deadline or a cancellation did (with no
+ * `Retry-After`: the same request would stop again); `500` when evaluation failed. Never a
+ * `200` with a partial body. Every error is an RFC 9457 `application/problem+json`
+ * document (`type: "about:blank"`, `title`, `status`, `detail`, and `code` — the refusal's
+ * stable name — plus `parameter`, `dimension`, `limit`, `consumed`, `estimate` where they
+ * apply). Every evaluated response carries `Server-Timing` from the job's `evidence.async`.
+ *
+ * The operation text is parsed exactly once on the success path: without dataset
+ * parameters it goes to the engine exactly as the request carried it (the engine takes
+ * text and parses it once, itself; there is no pre-parsed form to hand it), and with
+ * dataset parameters the `FROM`/`USING` splice — which only the protocol module may
+ * compute — parses it once to rewrite the dataset clause before the engine parses the
+ * rewritten text again.
  *
  * With `cors: { origins: "*" | string[], maxAgeSeconds? }` it answers `OPTIONS`
  * preflights with `204` and adds `Access-Control-Allow-Origin` (`*`, or the request's
@@ -801,7 +897,9 @@ export async function handleSparqlRequest(request, options) {
   }
   const headers = [...cors, ...vary];
   const url = new URL(request.url);
-  const body = await requestBody(request);
+  const bounded = await boundedRequestBody(request, o.maxRequestBytes, headers);
+  if (bounded.response !== undefined) return bounded.response;
+  const body = bounded.value;
   const parsed = protocolStep(
     () =>
       SparqlProtocolRequest.parse(
@@ -816,16 +914,27 @@ export async function handleSparqlRequest(request, options) {
   if (parsed.response !== undefined) return parsed.response;
   const operation = parsed.value;
   try {
-    const text = protocolStep(() => operation.effectiveText(), headers, o.cors);
-    if (text.response !== undefined) return text.response;
+    // Parsed exactly once on the success path (see the docstring above): without dataset
+    // parameters `operation.text` already IS the effective text — Rust never splices when
+    // there is nothing to splice — so it is handed to the engine unparsed by this module,
+    // and the engine's own parse is the only one that ever runs. With dataset parameters
+    // the splice needs its own parse first, to rewrite the `FROM`/`USING` clause.
+    let text;
+    if (operation.hasDatasetParameters) {
+      const spliced = protocolStep(() => operation.effectiveText(), headers, o.cors);
+      if (spliced.response !== undefined) return spliced.response;
+      text = spliced.value;
+    } else {
+      text = operation.text;
+    }
     const host = { ...o.host, signal: request.signal };
     if (operation.kind === "update") {
       const { maxAnswers: _queryOnly, ...governors } = o.governors;
       let outcome;
       try {
-        outcome = await o.engine.updateGovernedAsync(o.dataset, text.value, { ...governors, ...host });
+        outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...host });
       } catch (error) {
-        return failure(error, request.signal, headers);
+        return reclassifiedFailure(operation, error, request.signal, headers, o.cors);
       }
       const timing = serverTiming(outcome.evidence.async);
       if (!outcome.isApplied) return trippedProblem(outcome.tripped, [...timing, ...headers]);
@@ -845,13 +954,13 @@ export async function handleSparqlRequest(request, options) {
     }
     let outcome;
     try {
-      outcome = await o.engine.queryGovernedNegotiatedAsync(o.dataset, text.value, {
+      outcome = await o.engine.queryGovernedNegotiatedAsync(o.dataset, text, {
         ...o.governors,
         ...host,
         accept,
       });
     } catch (error) {
-      return failure(error, request.signal, [["Vary", "Accept"], ...headers]);
+      return reclassifiedFailure(operation, error, request.signal, [["Vary", "Accept"], ...headers], o.cors);
     }
     const timing = serverTiming(outcome.evidence.async);
     if (!outcome.isComplete) {

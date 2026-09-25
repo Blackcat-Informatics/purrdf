@@ -508,13 +508,18 @@ pieces:
   or a `POST` of `application/sparql-query`, `application/sparql-update` or a form) with
   a `Response`. The statuses are `200` with the negotiated document, `204` for an
   applied update, `400`/`405`/`415` for a malformed request, `406` when no acceptable
-  format can carry the result, `422` when a deterministic ceiling stopped the request,
-  `503` when the deadline or a cancellation did, and `500` when evaluation failed.
-  A partial answer is never sent with a `200`. Every error body is
-  `application/problem+json` (RFC 9457) with a stable `code`, and every evaluated
-  response carries `Server-Timing` from the job's evidence. The `cors` option answers
-  preflights and adds `Access-Control-Allow-Origin`; without it no CORS header is sent.
-  `governors.deadlineMs` is required.
+  format can carry the result, `413` when the body exceeds `maxRequestBytes`, `422` when
+  a deterministic ceiling stopped the request, `503` when the deadline or a cancellation
+  did, and `500` when evaluation failed. A partial answer is never sent with a `200`.
+  Every error body is `application/problem+json` (RFC 9457) with a stable `code`, and
+  every evaluated response carries `Server-Timing` from the job's evidence. The `cors`
+  option answers preflights and adds `Access-Control-Allow-Origin`; without it no CORS
+  header is sent. `governors.deadlineMs` is required. `maxRequestBytes` (1 MiB by
+  default: a SPARQL query or update's text is a program, not a payload, and 1 MiB
+  comfortably covers even a large one) bounds the request body — a `Content-Length`
+  above it is refused before anything is read, and a missing or understated one is still
+  caught by counting bytes as the body streams in, so a lying header never buys a larger
+  body than an honest one would.
 
 A complete Worker:
 

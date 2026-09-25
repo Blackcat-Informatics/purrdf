@@ -163,7 +163,7 @@ for (const row of rows) console.log(row.s.value, row.x.value);
 
 ### Cloudflare Workers
 
-`@blackcatinformatics/purrdf/cloudflare` 提供 `createFetchServiceResolver`、`createFetchLoadResolver` 与 `handleSparqlRequest`；后者以一个 `Response` 应答一个 SPARQL 1.1 Protocol 请求：`200` 附带协商出的文档，governor 叫停请求时返回 `422` 或 `503`（绝不会以 `200` 返回部分结果），错误以 `application/problem+json` 给出，`Server-Timing` 取自作业的证据，并在配置后发送 CORS 头。两个处理函数都以 `redirect: "manual"` 发起请求：`SERVICE` 请求绝不跟随重定向（3xx 是一个带类型的传输失败，因此被编目端点的请求头与凭据绝不会到达另一个源），而 `LOAD` 仅在对被重定向的 IRI 重新按目录鉴权之后才会跟随每一跳，跳数上限为 `maxRedirects`（默认 5）。一个完整的 Worker：
+`@blackcatinformatics/purrdf/cloudflare` 提供 `createFetchServiceResolver`、`createFetchLoadResolver` 与 `handleSparqlRequest`；后者以一个 `Response` 应答一个 SPARQL 1.1 Protocol 请求：`200` 附带协商出的文档，请求体超出 `maxRequestBytes`（默认 1 MiB——一个查询或更新的文本是一段程序，不是一份负载）时返回 `413`，governor 叫停请求时返回 `422` 或 `503`（绝不会以 `200` 返回部分结果），错误以 `application/problem+json` 给出，`Server-Timing` 取自作业的证据，并在配置后发送 CORS 头。超出上限的 `Content-Length` 会在任何内容被读取之前就被拒绝；缺失或偏小的 `Content-Length` 同样会被捕获——请求体流入时按字节计数，谎报的请求头绝不会因此换来比诚实请求头更大的请求体。两个处理函数都以 `redirect: "manual"` 发起请求：`SERVICE` 请求绝不跟随重定向（3xx 是一个带类型的传输失败，因此被编目端点的请求头与凭据绝不会到达另一个源），而 `LOAD` 仅在对被重定向的 IRI 重新按目录鉴权之后才会跟随每一跳，跳数上限为 `maxRedirects`（默认 5）。一个完整的 Worker：
 
 ```js worker-recipe
 import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";

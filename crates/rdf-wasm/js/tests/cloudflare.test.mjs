@@ -1390,6 +1390,151 @@ test("dataset parameters are honoured, and without them the query's own dataset 
   assert.deepEqual(rowsOf(unrestricted), [`o=${EX}o1`, `o=${EX}o2`]);
 });
 
+test("the operation text is parsed exactly once on the request path: effectiveText runs only to splice dataset parameters, or to reclassify a failure", async () => {
+  // A spy on the Rust-backed prototype method: it counts every call and still runs the
+  // real implementation, so this observes exactly what handleSparqlRequest invokes without
+  // changing what it computes.
+  const original = SparqlProtocolRequest.prototype.effectiveText;
+  let calls = 0;
+  SparqlProtocolRequest.prototype.effectiveText = function spiedEffectiveText(...args) {
+    calls += 1;
+    return original.apply(this, args);
+  };
+  try {
+    const options = { engine: new QueryEngine(), dataset: dataset(), governors: GOVERNORS };
+
+    // No dataset parameters, well-formed: the text goes to the engine exactly as carried,
+    // and the engine's own parse (which this module cannot observe) is the only one that
+    // runs — effectiveText is never called.
+    calls = 0;
+    const plain = await handleSparqlRequest(httpRequest({ query: q(SELECT_S) }), options);
+    assert.equal(plain.status, 200);
+    assert.equal(calls, 0);
+
+    // Dataset parameters: the FROM splice needs its own parse to rewrite the clause —
+    // exactly one call, and it is still the only parse before the engine's.
+    calls = 0;
+    const withParams = await handleSparqlRequest(
+      httpRequest({ query: `${q(SELECT_S)}&default-graph-uri=${encodeURIComponent(`${EX}g1`)}` }),
+      options,
+    );
+    assert.equal(withParams.status, 200);
+    assert.equal(calls, 1);
+
+    // Malformed, no dataset parameters: negotiate's lightweight token scan sees a valid
+    // query-form keyword and lets it through, so the engine's own parse is attempted first
+    // and fails; effectiveText then runs once, on this failure path only, to reclassify the
+    // rejection as the client's 400 rather than a bare 500 evaluation failure.
+    calls = 0;
+    const malformed = await handleSparqlRequest(httpRequest({ query: q("SELECT WHERE {") }), options);
+    assert.equal(malformed.status, 400);
+    assert.equal((await problemOf(malformed)).code, "MalformedOperation");
+    assert.equal(calls, 1);
+
+    // An update, no dataset parameters, well-formed: zero calls, exactly as the query case.
+    calls = 0;
+    const update = await handleSparqlRequest(
+      httpRequest({
+        method: "POST",
+        contentType: "application/sparql-update",
+        body: `INSERT DATA { <${EX}n> <${EX}p> 1 }`,
+      }),
+      { engine: new QueryEngine(), dataset: new Dataset(), governors: GOVERNORS },
+    );
+    assert.equal(update.status, 204);
+    assert.equal(calls, 0);
+  } finally {
+    SparqlProtocolRequest.prototype.effectiveText = original;
+  }
+});
+
+/** A POST request whose body streams as `chunks` arrive, with an explicit (possibly lying) header. */
+function streamedRequest(chunks, { contentLength, contentType = "application/sparql-query" } = {}) {
+  const headers = { "Content-Type": contentType };
+  if (contentLength !== undefined) headers["Content-Length"] = String(contentLength);
+  const body = new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+  return new Request(BASE_URL, { method: "POST", headers, body, duplex: "half" });
+}
+
+test("refusal pair: maxRequestBytes must be a positive integer when given; without it, 1 MiB is the default", async () => {
+  const base = { engine: new QueryEngine(), dataset: dataset(), governors: GOVERNORS };
+  const request = () => httpRequest({ query: q("ASK {}") });
+  for (const bad of [0, -1, 1.5, "1024"]) {
+    const rejected = await rejection(handleSparqlRequest(request(), { ...base, maxRequestBytes: bad }));
+    assert.ok(rejected instanceof TypeError);
+    assert.match(rejected.message, /maxRequestBytes must be a positive integer/);
+  }
+  // The valid neighbour: a well-formed positive integer is accepted and answers normally.
+  const response = await handleSparqlRequest(request(), { ...base, maxRequestBytes: 1024 });
+  assert.equal(response.status, 200);
+});
+
+test("refusal pair: a body over maxRequestBytes is a 413, by Content-Length, by streaming past it with none, or with a lying smaller one; the valid neighbour answers at exactly the limit", async () => {
+  const options = { engine: new QueryEngine(), dataset: dataset(), governors: GOVERNORS, maxRequestBytes: 32 };
+  const over = "ASK { ?s <http://example.org/way-too-long-a-predicate-for-the-bound> ?o }";
+  assert.ok(encoder.encode(over).length > 32, "the fixture must actually exceed the bound");
+
+  // Content-Length above the bound: refused before a single byte is read. The fixture's
+  // stream never enqueues, closes or errors — reading it would hang forever — so a prompt
+  // answer (raced against a deadline no real read could meet) is proof the body was never
+  // touched, not just that its data went unused.
+  const byLength = new Request(BASE_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/sparql-query", "Content-Length": "9999" },
+    body: new ReadableStream({ pull() {} }),
+    duplex: "half",
+  });
+  const declared = await Promise.race([
+    handleSparqlRequest(byLength, options),
+    new Promise((_resolve, reject) =>
+      setTimeout(
+        () => reject(new Error("Content-Length must refuse the request without ever reading its body")),
+        500,
+      ),
+    ),
+  ]);
+  assert.equal(declared.status, 413);
+  const declaredBody = await problemOf(declared);
+  assert.equal(declaredBody.title, "Content Too Large");
+  assert.equal(declaredBody.code, "ContentTooLarge");
+  assert.equal(declaredBody.limit, 32);
+
+  // No Content-Length at all: the running byte count catches it as the body streams in.
+  const streamed = await handleSparqlRequest(streamedRequest([over]), options);
+  assert.equal(streamed.status, 413);
+  assert.equal((await problemOf(streamed)).code, "ContentTooLarge");
+
+  // A lying, understated Content-Length buys nothing: the same streaming bound still fires.
+  const lied = await handleSparqlRequest(streamedRequest([over], { contentLength: 5 }), options);
+  assert.equal(lied.status, 413);
+  assert.equal((await problemOf(lied)).code, "ContentTooLarge");
+
+  // The valid neighbour: a body of exactly maxRequestBytes bytes still answers, correctly.
+  const filler = "x".repeat(32 - encoder.encode("ASK {} #").length);
+  const askPadded = `ASK {} #${filler}`;
+  assert.equal(encoder.encode(askPadded).length, 32);
+  const atLimit = await handleSparqlRequest(
+    httpRequest({ method: "POST", contentType: "application/sparql-query", body: askPadded }),
+    options,
+  );
+  assert.equal(atLimit.status, 200);
+  assert.deepEqual(await atLimit.json(), { head: {}, boolean: true });
+
+  // And an ordinary request, far under the default bound, still answers normally.
+  const ordinary = await handleSparqlRequest(httpRequest({ query: q(SELECT_S) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+  });
+  assert.equal(ordinary.status, 200);
+  assert.deepEqual(rowsOf(await ordinary.text()), [`s=${EX}a`, `s=${EX}b`]);
+});
+
 test("a deterministic ceiling is a 422 carrying its dimension; the unbounded neighbour is 200", async () => {
   const engine = new QueryEngine();
   const capped = await handleSparqlRequest(httpRequest({ query: q(SELECT_S) }), {

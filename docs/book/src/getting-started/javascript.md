@@ -218,14 +218,19 @@ network error, which the handler above reports as a transport failure. Write
 `@blackcatinformatics/purrdf/cloudflare` provides
 `createFetchServiceResolver`, `createFetchLoadResolver` and
 `handleSparqlRequest`, which answers one SPARQL 1.1 Protocol request with a
-`Response`: `200` with the negotiated document, `422` or `503` when a governor
-stopped it (never a `200` with a partial body), `application/problem+json`
-errors, `Server-Timing` from the job's evidence, and CORS when asked for. Both
-resolvers fetch with `redirect: "manual"`: a `SERVICE` request never follows a
-redirect (a 3xx is a typed transport failure, so a catalogued endpoint's
-headers and credential can never reach a different origin), and a `LOAD`
-follows one only by re-authorizing the redirected IRI against the catalog
-before every hop, up to `maxRedirects` (5 by default). A complete Worker:
+`Response`: `200` with the negotiated document, `413` when the body exceeds
+`maxRequestBytes` (1 MiB by default — a query or update's text is a program,
+not a payload), `422` or `503` when a governor stopped it (never a `200` with
+a partial body), `application/problem+json` errors, `Server-Timing` from the
+job's evidence, and CORS when asked for. A `Content-Length` over the bound is
+refused before anything is read; a missing or understated one is still caught
+by counting bytes as the body streams in, so a lying header never buys a
+larger body than an honest one would. Both resolvers fetch with
+`redirect: "manual"`: a `SERVICE` request never follows a redirect (a 3xx is a
+typed transport failure, so a catalogued endpoint's headers and credential can
+never reach a different origin), and a `LOAD` follows one only by
+re-authorizing the redirected IRI against the catalog before every hop, up to
+`maxRedirects` (5 by default). A complete Worker:
 
 ```js worker-recipe
 import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";

@@ -133,18 +133,28 @@ export interface SparqlEndpointOptions {
   readonly cors?: EndpointCors | null;
   readonly yieldEveryPolls?: number | null;
   readonly stackBytes?: number | null;
+  /**
+   * Bounds the request body, in bytes (a positive integer). A `Content-Length` above it is
+   * refused with a `413` before anything is read; a missing or understated one is still
+   * caught by counting bytes as the body streams in, so a lying header can never buy a
+   * larger body than an honest one would. Defaults to 1 MiB — a SPARQL query or update's
+   * text is a program, not a payload, and 1 MiB comfortably covers even a large one while
+   * bounding what an unauthenticated request can make the host buffer.
+   */
+  readonly maxRequestBytes?: number | null;
 }
 
 /**
  * The `application/problem+json` body of every error response (RFC 9457). `code` is the
  * refusal's stable name: a protocol error's name (`"MissingOperation"`, …), a tripped
- * governor's label (`"fuel-exhausted"`, `"deadline-exceeded"`, …), `"NotAcceptable"`, or
- * the evaluation error's name.
+ * governor's label (`"fuel-exhausted"`, `"deadline-exceeded"`, …), `"NotAcceptable"`,
+ * `"ContentTooLarge"` (the body exceeded `maxRequestBytes`), or the evaluation error's
+ * name.
  */
 export interface SparqlProblem {
   readonly type: "about:blank";
   readonly title: string;
-  readonly status: 400 | 405 | 406 | 415 | 422 | 500 | 503;
+  readonly status: 400 | 405 | 406 | 413 | 415 | 422 | 500 | 503;
   readonly detail: string;
   readonly code: string;
   readonly parameter?: string;
