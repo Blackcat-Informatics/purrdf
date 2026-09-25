@@ -838,6 +838,51 @@ test("maxIntermediateCells bounds the decoded remote answer", async () => {
   assert.equal(complete.result.rowCount, 1000);
 });
 
+test("an unconfigured cell ceiling never reaches the resolver as the metering sentinel", async () => {
+  // `queryAsync` and a `queryGovernedAsync` that sets no `maxIntermediateCells` both run
+  // the query under the engine's internal METERED governor, which engages the
+  // intermediate-cell dimension purely to keep its counter running. That is a bookkeeping
+  // value, not a ceiling any caller asked for, and a host that read it as one (sizing a
+  // remote `LIMIT` from it, say) would size real infrastructure off a number that means
+  // "measure this, bound nothing" — so the resolver must see `undefined`, never a number.
+  const query = `SELECT ?x WHERE { SERVICE <${EX}e> { ?s ?p ?x } }`;
+  const oneRow = async () => srj(["x"], [{ x: "x1" }]);
+
+  const ungoverned = recordingResolver(oneRow);
+  const engine = new QueryEngine();
+  const plain = await engine.queryAsync(local(), query, { resolveService: ungoverned.resolveService });
+  assert.equal(plain.kind, "select");
+  assert.equal(
+    ungoverned.calls[0].ctx.maxIntermediateCells,
+    undefined,
+    "an ungoverned query set no ceiling, so the resolver must see none — not the metering value",
+  );
+
+  const deadlineOnly = recordingResolver(oneRow);
+  const timed = await engine.queryGovernedAsync(local(), query, {
+    deadlineMs: 60_000,
+    resolveService: deadlineOnly.resolveService,
+  });
+  assert.equal(timed.isComplete, true);
+  assert.equal(
+    deadlineOnly.calls[0].ctx.maxIntermediateCells,
+    undefined,
+    "a deadline-only governed query configured no cell ceiling either",
+  );
+
+  // Neighbour, over the same deadline-only shape: a caller who DOES configure a cell
+  // ceiling must still have the resolver see it exactly — the fix must not turn every
+  // ceiling into `undefined`, only the one nobody configured.
+  const withCeiling = recordingResolver(oneRow);
+  const bounded = await engine.queryGovernedAsync(local(), query, {
+    deadlineMs: 60_000,
+    maxIntermediateCells: 7,
+    resolveService: withCeiling.resolveService,
+  });
+  assert.equal(bounded.isComplete, true);
+  assert.equal(withCeiling.calls[0].ctx.maxIntermediateCells, 7n);
+});
+
 // ---------------------------------------------------------------------------
 // LOAD and UPDATE
 // ---------------------------------------------------------------------------

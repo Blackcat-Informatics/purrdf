@@ -1290,7 +1290,11 @@ export interface AsyncResolverContext {
   readonly remainingDeadlineMs: number | undefined;
   /** Whether the clause is `SERVICE SILENT` — for information only: an empty answer is not the host's to invent. */
   readonly silent: boolean;
-  /** The query's inclusive intermediate-cell ceiling, when one is engaged. */
+  /**
+   * The query's inclusive intermediate-cell ceiling, when the caller actually configured
+   * one. `undefined` for an ungoverned query and for a governed one that set no cell
+   * ceiling — never a metering bookkeeping sentinel.
+   */
   readonly maxIntermediateCells: bigint | undefined;
 }
 

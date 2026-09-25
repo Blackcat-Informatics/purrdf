@@ -632,7 +632,10 @@ impl AsyncEffect {
         })
     }
 
-    /// `SERVICE`: the query's inclusive intermediate-cell ceiling, when one is engaged.
+    /// `SERVICE`: the query's inclusive intermediate-cell ceiling, when the caller
+    /// actually configured one. `undefined` on an ungoverned query and on a governed one
+    /// that set no cell ceiling — never the metering bookkeeping sentinel a caller never
+    /// asked for.
     #[wasm_bindgen(getter, js_name = maxIntermediateCells)]
     pub fn max_intermediate_cells(&self) -> Option<u64> {
         self.service()

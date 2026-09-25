@@ -202,8 +202,11 @@ pub struct ServiceRequest<'a> {
     /// The executing query's stop signal, or `None` when the caller set neither a
     /// deadline nor a cancellation. See [`ServiceResolver::resolve`].
     pub stop: Option<&'a Arc<dyn StopSignal>>,
-    /// The executing query's inclusive peak intermediate-cell ceiling, when one is
-    /// engaged. See [`ServiceResolver::resolve`].
+    /// The executing query's inclusive peak intermediate-cell ceiling, when the caller
+    /// actually configured one. `None` both when the dimension is unbounded and when it
+    /// is engaged only by [`QueryGovernors::METERED`]'s bookkeeping sentinel (an
+    /// ungoverned query, or a governed one that set no cell ceiling) — never that
+    /// sentinel value itself. See [`ServiceResolver::resolve`].
     pub max_intermediate_cells: Option<u64>,
 }
 
@@ -981,12 +984,13 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
     // else is in a position to poll.
     let stop = ctx.stop_signal().map(Arc::clone);
-    let max_intermediate_cells = ctx.governor_state().and_then(|state| {
-        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
-        state
-            .is_engaged_in(dimension)
-            .then(|| state.limits().get(dimension))
-    });
+    // `caller_ceiling`, never `is_engaged_in` + `limits().get(..)`: the latter pair
+    // reports `QueryGovernors::METERED`'s bookkeeping sentinel as if it were a ceiling
+    // the caller had set, and a resolver sizing a remote `LIMIT` from that would be
+    // sizing it off a number that means "measure this, bound nothing".
+    let max_intermediate_cells = ctx
+        .governor_state()
+        .and_then(|state| state.caller_ceiling(purrdf_core::ResourceDimension::IntermediateCells));
     let response = source.resolve(
         ServiceRequest::new(&endpoint, &query_text)
             .silent(silent)
@@ -2086,6 +2090,78 @@ mod tests {
             capped.rows,
             N - 1,
             "the admitted prefix is useful, and the limit+1 row is never materialized"
+        );
+    }
+
+    /// A `ServiceResolver` wrapper that records the ceiling each request it was handed
+    /// carried, then delegates. What a test asserts against, never a raw governor limit:
+    /// a resolver only ever sees a [`ServiceRequest`], so that is what must be checked.
+    struct RecordingSource<'a> {
+        inner: &'a (dyn ServiceResolver + Sync),
+        seen: Mutex<Vec<Option<u64>>>,
+    }
+
+    impl<'a> RecordingSource<'a> {
+        fn new(inner: &'a (dyn ServiceResolver + Sync)) -> Self {
+            Self {
+                inner,
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn seen(&self) -> Vec<Option<u64>> {
+            self.seen.lock().expect("uncontended").clone()
+        }
+    }
+
+    impl ServiceResolver for RecordingSource<'_> {
+        fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+            self.seen
+                .lock()
+                .expect("uncontended")
+                .push(request.max_intermediate_cells);
+            self.inner.resolve(request)
+        }
+    }
+
+    #[test]
+    fn resolver_never_sees_the_metering_sentinel_as_a_caller_ceiling() {
+        // Neighbour case one — the one this test exists to catch: `METERED` alone is
+        // exactly what an ungoverned `queryAsync` and a `queryGovernedAsync` that sets
+        // only a deadline both run under (see `GovernorArgs::ceilings` in `purrdf-wasm`).
+        // It engages the intermediate-cell dimension for bookkeeping, but no caller
+        // configured a ceiling, so the resolver must see `None` — never `METERED`'s
+        // `u64::MAX - 1` sentinel handed over as if it were a real bound.
+        let fixture = FixtureSource::new(3);
+        let recording = RecordingSource::new(&fixture);
+        let run = run_governed(
+            &service_pattern(false),
+            &recording,
+            &QueryGovernors::METERED,
+        );
+        assert_eq!(run.tripped, None, "the metering run must complete");
+        assert_eq!(run.rows, 3);
+        assert_eq!(
+            recording.seen(),
+            vec![None],
+            "an unconfigured cell ceiling must never reach a resolver as a value"
+        );
+
+        // Neighbour case two: a caller who DID narrow the ceiling must still see the
+        // exact number they set. Proving case one drops the sentinel is worthless if the
+        // fix also drops every real ceiling — this is the control that shows it did not.
+        let fixture = FixtureSource::new(3);
+        let recording = RecordingSource::new(&fixture);
+        let run = run_governed(
+            &service_pattern(false),
+            &recording,
+            &QueryGovernors::METERED.with_max_intermediate_cells(5000),
+        );
+        assert_eq!(run.tripped, None);
+        assert_eq!(
+            recording.seen(),
+            vec![Some(5000)],
+            "a caller-configured ceiling must reach the resolver exactly"
         );
     }
 
