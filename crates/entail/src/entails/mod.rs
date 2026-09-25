@@ -219,7 +219,7 @@ pub use comprehension::ComprehensionWarrant;
 pub use datarange::{DataRangeWarrant, RangeContainment};
 pub use freeze::{FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization};
 pub use homomorphism::{Binding, MATCH_BUDGET, MissReason};
-pub use imports::ImportMap;
+pub use imports::{ImportMap, rif_resolver};
 pub use negation::NegativeFact;
 pub use pattern::VarKey;
 pub use precondition::UndecidedReason;
