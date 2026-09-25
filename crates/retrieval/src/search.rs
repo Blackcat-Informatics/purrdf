@@ -381,27 +381,69 @@ pub struct SearchResult {
 /// of its own: every refusal is a stage's typed error, carried unchanged, so a
 /// caller can switch on the stage that failed and then on that stage's own exact
 /// dimension without losing information to an aggregate error.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum SearchError {
     /// The planner refused the request.
-    #[error("search planning failed: {0}")]
-    PlanError(#[from] PlanError),
+    PlanError(PlanError),
 
     /// Admission refused the planned request.
-    #[error("search admission failed: {0}")]
-    AdmissionError(#[from] AdmissionError),
+    AdmissionError(AdmissionError),
 
     /// Execution refused to run the compiled units as a whole.
     ///
     /// A per-stratum failure is not this error: it is reported by `execute` as
     /// that stratum's status.
-    #[error("search execution failed: {0}")]
-    ExecutionError(#[from] ExecutionError),
+    ExecutionError(ExecutionError),
 
     /// Fusion refused the surviving streams or the profile.
-    #[error("search fusion failed: {0}")]
-    FusionError(#[from] FusionError),
+    FusionError(FusionError),
+}
+
+impl std::fmt::Display for SearchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PlanError(err) => write!(f, "search planning failed: {err}"),
+            Self::AdmissionError(err) => write!(f, "search admission failed: {err}"),
+            Self::ExecutionError(err) => write!(f, "search execution failed: {err}"),
+            Self::FusionError(err) => write!(f, "search fusion failed: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for SearchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PlanError(err) => Some(err),
+            Self::AdmissionError(err) => Some(err),
+            Self::ExecutionError(err) => Some(err),
+            Self::FusionError(err) => Some(err),
+        }
+    }
+}
+
+impl From<PlanError> for SearchError {
+    fn from(err: PlanError) -> Self {
+        Self::PlanError(err)
+    }
+}
+
+impl From<AdmissionError> for SearchError {
+    fn from(err: AdmissionError) -> Self {
+        Self::AdmissionError(err)
+    }
+}
+
+impl From<ExecutionError> for SearchError {
+    fn from(err: ExecutionError) -> Self {
+        Self::ExecutionError(err)
+    }
+}
+
+impl From<FusionError> for SearchError {
+    fn from(err: FusionError) -> Self {
+        Self::FusionError(err)
+    }
 }
 
 /// Run the whole retrieval ladder for one request and return one fused answer.

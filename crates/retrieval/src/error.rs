@@ -19,14 +19,13 @@
 /// plan built over a fallback.
 ///
 /// [`Plan`]: crate::Plan
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum PlanError {
     /// A plan's canonical encoding carries a version this build does not write.
     ///
     /// This is a refusal, not a warning: a plan whose layout a newer or older
     /// build defined cannot be decoded under this build's field order.
-    #[error("unsupported plan version {found}; this build writes version {expected}")]
     VersionMismatch {
         /// The version found in the encoded plan.
         found: u16,
@@ -39,11 +38,9 @@ pub enum PlanError {
     /// A request that reaches nothing is refused rather than answered by an
     /// empty plan: an empty plan is indistinguishable from a registry that
     /// needs no producers, and the caller asked for an answer.
-    #[error("no registered producer accepts any term of the request")]
     NoApplicableProducers,
 
     /// A request term is malformed and cannot be planned.
-    #[error("invalid request term: {reason}")]
     InvalidRequestTerm {
         /// The offending term, carried whole so the caller can name it. Boxed so
         /// recording it does not inflate every `Result<_, PlanError>`.
@@ -77,13 +74,6 @@ pub enum PlanError {
     /// about a producer's data rather than a request for rows, so it is recorded at
     /// the ceiling and the read's ending reports that the planned depth stopped it
     /// (see [`plan`](crate::plan)).
-    #[error(
-        "the request bounds the answer at {requested} fused rows, and no read can be planned that \
-         deep: where the producers' declarations license it that bound is each stratum's own \
-         depth, a depth is a 32-bit rank, and a read is emitted one row deeper than its depth — so \
-         {ceiling} is the largest bound this layer can plan a read for, and a bound of exactly \
-         that is served"
-    )]
     ReadBoundBeyondDepthRange {
         /// The bound the request stated.
         requested: usize,
@@ -97,21 +87,18 @@ pub enum PlanError {
     /// Every declaration read is panic-contained by the seam, so this reports a
     /// host relation whose own declaration panicked — a loud refusal rather than
     /// a producer silently dropped from the plan.
-    #[error("registry declaration failed while planning: {message}")]
     RegistryDeclaration {
         /// The contained declaration failure, rendered.
         message: String,
     },
 
     /// The canonical encoding ended before a complete value was read.
-    #[error("plan canonical encoding is truncated at byte {offset}")]
     Truncated {
         /// The byte offset at which more data was needed.
         offset: usize,
     },
 
     /// A canonical discriminator byte named no known variant.
-    #[error("plan canonical encoding carries invalid tag {tag} for {what}")]
     InvalidTag {
         /// The field being decoded when the tag was read.
         what: &'static str,
@@ -120,24 +107,20 @@ pub enum PlanError {
     },
 
     /// A canonical variable-length field was not valid UTF-8.
-    #[error("plan canonical encoding carries invalid UTF-8 in {what}")]
     InvalidUtf8 {
         /// The field being decoded.
         what: &'static str,
     },
 
     /// A canonical field did not parse as an IRI.
-    #[error("invalid IRI {text:?}: {source}")]
     InvalidIri {
         /// The offending IRI text.
         text: String,
         /// The kernel parser's refusal.
-        #[source]
         source: purrdf_core::IriError,
     },
 
     /// The canonical encoding held bytes after the last field.
-    #[error("plan canonical encoding has {extra} trailing byte(s)")]
     TrailingBytes {
         /// The number of unconsumed bytes.
         extra: usize,
@@ -205,9 +188,6 @@ pub enum PlanError {
     /// fingerprint asserting it was planned against declarations it was not read
     /// from. One refusal that names the producer is the smaller harm than a plan
     /// that looks complete.
-    #[error(
-        "producer {producer} was placed on stratum {stratum} but declares no row bound at the mode it is invoked under; placement and the row-bound read disagree about one snapshot of the registry's declarations"
-    )]
     UndeclaredRowBound {
         /// The stratum whose declaration went missing.
         stratum: String,
@@ -222,7 +202,6 @@ pub enum PlanError {
     /// saying which was used. Refused rather than resolved, because resolving it
     /// — keeping the first, the last, or the wider — would be inventing a rule
     /// the data does not carry.
-    #[error("statistics snapshot names subject {subject} more than once")]
     DuplicateStatisticsSubject {
         /// The repeated subject, as its recorded text.
         subject: String,
@@ -243,7 +222,6 @@ pub enum PlanError {
     /// provider was *asked about*, a stratum derivation is something a depth was
     /// *computed from*, and a reader repairing a document needs to know which of
     /// the plan's two records of a stratum it is holding.
-    #[error("plan canonical encoding records a derivation for stratum {stratum} more than once")]
     DuplicateStratumDerivation {
         /// The repeated stratum, as its recorded IRI text.
         stratum: String,
@@ -255,7 +233,6 @@ pub enum PlanError {
     /// are two different reads with nothing saying which the plan describes. The
     /// map the decoder fills would keep whichever arrived last — a silent choice
     /// between two claims — so the encoding is refused instead.
-    #[error("plan canonical encoding records a depth for stratum {stratum} more than once")]
     DuplicateStratumDepth {
         /// The repeated stratum, as its recorded IRI text.
         stratum: String,
@@ -286,10 +263,6 @@ pub enum PlanError {
     /// carries its dimension. A *repeated* key is the opposite case — what two
     /// rows for one key mean depends entirely on what the key indexes, so each
     /// section refuses a repeat by its own name.
-    #[error(
-        "plan canonical encoding lists {section} key {key} after {previous}; a canonical encoding \
-         orders them ascending"
-    )]
     NonAscendingCanonicalKeys {
         /// Which keyed section was being decoded.
         section: CanonicalSection,
@@ -314,10 +287,6 @@ pub enum PlanError {
     /// is nested inside a keyed entry: the section alone says which of a plan's
     /// two selectivity records moved, and a plan has one such record per stratum
     /// and per snapshot row.
-    #[error(
-        "plan canonical encoding lists {section} {subject} selectivity term {request_term} after \
-         {previous}; a canonical encoding orders them ascending"
-    )]
     NonAscendingSelectivityTerms {
         /// Which keyed section the run was nested in.
         section: CanonicalSection,
@@ -345,10 +314,6 @@ pub enum PlanError {
     /// thing in each. Both selectivity-term runs index the *same* dimension — the
     /// plan's own request — so a repeat is one fact, and the section and subject
     /// locate the record that carries it.
-    #[error(
-        "plan canonical encoding records {section} {subject} selectivity term {request_term} \
-         twice; the aggregate is a sum over distinct terms"
-    )]
     DuplicateSelectivityTerm {
         /// Which keyed section the run was nested in.
         section: CanonicalSection,
@@ -366,9 +331,6 @@ pub enum PlanError {
     /// forged, or written by a build whose arithmetic differed, and in all three
     /// cases the depth beside the inputs describes a read the inputs do not
     /// license.
-    #[error(
-        "stratum {stratum} records depth {recorded}, but its recorded inputs derive depth {derived}"
-    )]
     DepthNotDerivable {
         /// The stratum whose depth does not follow from its inputs.
         stratum: String,
@@ -382,7 +344,6 @@ pub enum PlanError {
     ///
     /// An unrecorded input cannot be checked, so a depth without its inputs is
     /// exactly the unverifiable claim the derivation record exists to abolish.
-    #[error("stratum {stratum} records a depth with no recorded derivation")]
     DepthWithoutDerivation {
         /// The stratum whose derivation is missing.
         stratum: String,
@@ -393,7 +354,6 @@ pub enum PlanError {
     /// The mirror of [`DepthWithoutDerivation`](Self::DepthWithoutDerivation),
     /// and refused separately because it is a different edit: inputs for a
     /// stratum the plan does not read at all.
-    #[error("stratum {stratum} records a derivation with no recorded depth")]
     DerivationWithoutDepth {
         /// The stratum whose depth is missing.
         stratum: String,
@@ -407,7 +367,6 @@ pub enum PlanError {
     /// for a depth it recorded — so the omission is refused rather than repaired
     /// from the derivation, which would let the plan's two records drift apart
     /// silently in exactly the direction this check exists to catch.
-    #[error("stratum {stratum} records a derivation with no statistics snapshot entry")]
     DerivationWithoutStatisticsEntry {
         /// The stratum the snapshot does not name.
         stratum: String,
@@ -421,9 +380,6 @@ pub enum PlanError {
     /// was edited or forged, and the two readings license different depths with
     /// nothing saying which is the measurement — so it is refused, naming the
     /// dimension that disagreed and both of its values.
-    #[error(
-        "stratum {stratum} records {dimension} {snapshot} in its statistics snapshot and {derivation} in its derivation"
-    )]
     StatisticsEntryContradictsDerivation {
         /// The stratum whose two records disagree.
         stratum: String,
@@ -454,10 +410,6 @@ pub enum PlanError {
     /// — so this is a property of the value alone, like every other question
     /// `certify` answers, and it holds for a plan reached by any path in rather
     /// than only for one being admitted against a registry.
-    #[error(
-        "subject {subject} records selectivity term {request_term}, but the plan carries \
-         {request_terms} request term(s)"
-    )]
     SelectivityTermOutOfRange {
         /// The stratum or snapshot subject whose run it is, as its recorded text.
         subject: String,
@@ -486,14 +438,146 @@ pub enum PlanError {
     /// asked about in order to *report*. Both are read off the plan itself, so
     /// this is a property of the value alone, like every other question `certify`
     /// answers.
-    #[error(
-        "the statistics snapshot names subject {subject}, which is neither a stratum this plan \
-         derives a depth for nor a predicate of any of its request terms"
-    )]
     UnconsultedStatisticsSubject {
         /// The subject nothing consulted, as its recorded text.
         subject: String,
     },
+}
+
+impl std::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::VersionMismatch { found, expected } => write!(
+                f,
+                "unsupported plan version {found}; this build writes version {expected}"
+            ),
+            Self::NoApplicableProducers => {
+                write!(f, "no registered producer accepts any term of the request")
+            }
+            Self::InvalidRequestTerm { reason, .. } => write!(f, "invalid request term: {reason}"),
+            Self::ReadBoundBeyondDepthRange { requested, ceiling } => write!(
+                f,
+                "the request bounds the answer at {requested} fused rows, and no read can be planned that \
+         deep: where the producers' declarations license it that bound is each stratum's own \
+         depth, a depth is a 32-bit rank, and a read is emitted one row deeper than its depth — so \
+         {ceiling} is the largest bound this layer can plan a read for, and a bound of exactly \
+         that is served"
+            ),
+            Self::RegistryDeclaration { message } => {
+                write!(f, "registry declaration failed while planning: {message}")
+            }
+            Self::Truncated { offset } => {
+                write!(f, "plan canonical encoding is truncated at byte {offset}")
+            }
+            Self::InvalidTag { what, tag } => write!(
+                f,
+                "plan canonical encoding carries invalid tag {tag} for {what}"
+            ),
+            Self::InvalidUtf8 { what } => {
+                write!(f, "plan canonical encoding carries invalid UTF-8 in {what}")
+            }
+            Self::InvalidIri { text, source } => write!(f, "invalid IRI {text:?}: {source}"),
+            Self::TrailingBytes { extra } => {
+                write!(f, "plan canonical encoding has {extra} trailing byte(s)")
+            }
+            Self::UndeclaredRowBound { stratum, producer } => write!(
+                f,
+                "producer {producer} was placed on stratum {stratum} but declares no row bound at the mode it is invoked under; placement and the row-bound read disagree about one snapshot of the registry's declarations"
+            ),
+            Self::DuplicateStatisticsSubject { subject } => write!(
+                f,
+                "statistics snapshot names subject {subject} more than once"
+            ),
+            Self::DuplicateStratumDerivation { stratum } => write!(
+                f,
+                "plan canonical encoding records a derivation for stratum {stratum} more than once"
+            ),
+            Self::DuplicateStratumDepth { stratum } => write!(
+                f,
+                "plan canonical encoding records a depth for stratum {stratum} more than once"
+            ),
+            Self::NonAscendingCanonicalKeys {
+                section,
+                previous,
+                key,
+            } => write!(
+                f,
+                "plan canonical encoding lists {section} key {key} after {previous}; a canonical encoding \
+         orders them ascending"
+            ),
+            Self::NonAscendingSelectivityTerms {
+                section,
+                subject,
+                previous,
+                request_term,
+            } => write!(
+                f,
+                "plan canonical encoding lists {section} {subject} selectivity term {request_term} after \
+         {previous}; a canonical encoding orders them ascending"
+            ),
+            Self::DuplicateSelectivityTerm {
+                section,
+                subject,
+                request_term,
+            } => write!(
+                f,
+                "plan canonical encoding records {section} {subject} selectivity term {request_term} \
+         twice; the aggregate is a sum over distinct terms"
+            ),
+            Self::DepthNotDerivable {
+                stratum,
+                recorded,
+                derived,
+            } => write!(
+                f,
+                "stratum {stratum} records depth {recorded}, but its recorded inputs derive depth {derived}"
+            ),
+            Self::DepthWithoutDerivation { stratum } => write!(
+                f,
+                "stratum {stratum} records a depth with no recorded derivation"
+            ),
+            Self::DerivationWithoutDepth { stratum } => write!(
+                f,
+                "stratum {stratum} records a derivation with no recorded depth"
+            ),
+            Self::DerivationWithoutStatisticsEntry { stratum } => write!(
+                f,
+                "stratum {stratum} records a derivation with no statistics snapshot entry"
+            ),
+            Self::StatisticsEntryContradictsDerivation {
+                stratum,
+                dimension,
+                snapshot,
+                derivation,
+            } => write!(
+                f,
+                "stratum {stratum} records {dimension} {snapshot} in its statistics snapshot and {derivation} in its derivation"
+            ),
+            Self::SelectivityTermOutOfRange {
+                subject,
+                request_term,
+                request_terms,
+            } => write!(
+                f,
+                "subject {subject} records selectivity term {request_term}, but the plan carries \
+         {request_terms} request term(s)"
+            ),
+            Self::UnconsultedStatisticsSubject { subject } => write!(
+                f,
+                "the statistics snapshot names subject {subject}, which is neither a stratum this plan \
+         derives a depth for nor a predicate of any of its request terms"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PlanError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidIri { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 impl PlanError {
@@ -623,7 +707,7 @@ impl core::fmt::Display for StatisticsDimension {
 /// profile is rejected where it is supplied, a malformed stream is returned to
 /// its producer, and an arithmetic intermediate that does not fit is reported
 /// rather than wrapped.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum FusionError {
     /// A checked arithmetic step left the range it is computed in: a
@@ -631,16 +715,13 @@ pub enum FusionError {
     /// (`max_weight × stratum count`), or a stratum count too large for the
     /// `u32` the canonical profile encoding writes. A wrapped value would be a
     /// wrong order presented as a right one, so it is refused.
-    #[error("fusion overflowed the fixed-point range")]
     Overflow,
 
     /// A ranked stream violated the input protocol.
-    #[error("ranked-stream protocol violation: {0}")]
     Protocol(Box<crate::ranked_stream::ProtocolError>),
 
     /// The reciprocal-rank smoothing constant `K` was zero. `K >= 1` keeps a
     /// rank-one item's contribution finite and below one.
-    #[error("fusion profile K must be at least 1, got {k}")]
     InvalidK {
         /// The rejected value.
         k: u32,
@@ -654,7 +735,6 @@ pub enum FusionError {
     /// because they are the same fact about the same 1-based axis; a depth-zero
     /// request is rejected rather than answered vacuously, which is what
     /// returning the lightest weight there is would be.
-    #[error("rank must be at least 1, got {rank}")]
     InvalidRank {
         /// The rejected rank, or the rejected depth expressed as the rank it
         /// would have to reach.
@@ -676,20 +756,15 @@ pub enum FusionError {
     /// is a width measured *across* that axis rather than a position on it, and
     /// reporting a rejected tolerance as a rejected rank would send a caller to
     /// inspect an argument that was never at fault.
-    #[error(
-        "class-width tolerance must be at least 1, got {max_width}; a tolerance of zero is not a tolerance, because a class always contains its own rank"
-    )]
     InvalidWidth {
         /// The rejected tolerance.
         max_width: u64,
     },
 
     /// A fusion profile carried no stratum weights.
-    #[error("fusion profile must declare at least one stratum weight")]
     EmptyWeights,
 
     /// A stratum weight was not strictly positive.
-    #[error("stratum {stratum} has non-positive weight {weight:?}")]
     NonPositiveWeight {
         /// The stratum whose weight was rejected, as its canonical IRI text.
         stratum: String,
@@ -710,23 +785,18 @@ pub enum FusionError {
     /// rank only while every weight is positive, and a bisection over a
     /// non-monotone predicate returns an arbitrary rank rather than a slightly
     /// wrong one.
-    #[error(
-        "the threshold-crossing derivation was handed the non-positive weight {weight:?}; its search rests on a non-increasing threshold, which a non-positive weight does not give"
-    )]
     NonPositiveCrossingWeight {
         /// The rejected weight.
         weight: purrdf_text::Fixed,
     },
 
     /// A stream emitted under a stratum the profile declares no weight for.
-    #[error("fusion profile declares no weight for stratum {stratum}")]
     UnknownStratum {
         /// The undeclared stratum, as its canonical IRI text.
         stratum: String,
     },
 
     /// Two streams were tagged with the same stratum.
-    #[error("two streams are tagged with stratum {stratum}")]
     DuplicateStratum {
         /// The repeated stratum, as its canonical IRI text.
         stratum: String,
@@ -740,7 +810,6 @@ pub enum FusionError {
     /// refusal is narrow on purpose — streams that all name the same plan fuse,
     /// and streams that name no plan at all fuse too, producing an answer that
     /// simply names no plan. Only a disagreement is refused.
-    #[error("fused streams descend from different pinned plans: expected {expected}, got {got:?}")]
     PlanIdMismatch {
         /// The plan the fusion's other streams name.
         expected: crate::id::PlanId,
@@ -776,9 +845,6 @@ pub enum FusionError {
     /// resolution it reports and the identity it carries would all describe a
     /// different request. One rule, in both directions, keeps the bound the plan
     /// recorded and the bound the answer was assembled under the same number.
-    #[error(
-        "streams were planned for a bound of {planned} fused rows and the fusion was run at {requested}; a depth derived for one bound does not serve another"
-    )]
     ReadBoundMismatch {
         /// The bound the streams' plan was built for.
         planned: crate::fuse::TopK,
@@ -787,7 +853,6 @@ pub enum FusionError {
     },
 
     /// A fusion profile's canonical bytes could not be decoded.
-    #[error("malformed fusion profile: {0}")]
     MalformedProfile(String),
 
     /// A candidate received more contributions than there are strata.
@@ -812,9 +877,6 @@ pub enum FusionError {
     /// recorded, so `count` is exactly `max + 1`, never a later, larger tally,
     /// and the offending candidate is named because "some candidate" is not a
     /// report anybody can act on.
-    #[error(
-        "candidate {item} received {count} contributions across {max} strata; a candidate may surface at most once per stratum"
-    )]
     MaxContributionsExceeded {
         /// The candidate that exceeded the bound, as its canonical term text.
         item: String,
@@ -859,9 +921,6 @@ pub enum FusionError {
     /// depth that no *plan* can carry is a different fact and carries a
     /// different variant ([`DepthBeyondPlanRange`](Self::DepthBeyondPlanRange)),
     /// because nothing about the rule's arithmetic failed there.
-    #[error(
-        "no weight separates ranks to depth {depth} under this decay rule; it separates to depth {saturates_at} and no further"
-    )]
     DepthUnreachable {
         /// The depth that was asked for.
         depth: u64,
@@ -885,9 +944,6 @@ pub enum FusionError {
     /// weight, and a weight quoted for such a depth would buy a depth no plan
     /// could ever ask for. It is therefore refused as a range, never reported as
     /// the rule saturating ([`DepthUnreachable`](Self::DepthUnreachable)).
-    #[error(
-        "depth {depth} is deeper than a plan can record; a plan carries a per-stratum depth as a 32-bit rank, so {limit} is the deepest expressible depth"
-    )]
     DepthBeyondPlanRange {
         /// The depth that was asked for.
         depth: u64,
@@ -895,6 +951,63 @@ pub enum FusionError {
         limit: u64,
     },
 }
+
+impl std::fmt::Display for FusionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Overflow => write!(f, "fusion overflowed the fixed-point range"),
+            Self::Protocol(err) => write!(f, "ranked-stream protocol violation: {err}"),
+            Self::InvalidK { k } => write!(f, "fusion profile K must be at least 1, got {k}"),
+            Self::InvalidRank { rank } => write!(f, "rank must be at least 1, got {rank}"),
+            Self::InvalidWidth { max_width } => write!(
+                f,
+                "class-width tolerance must be at least 1, got {max_width}; a tolerance of zero is not a tolerance, because a class always contains its own rank"
+            ),
+            Self::EmptyWeights => {
+                write!(f, "fusion profile must declare at least one stratum weight")
+            }
+            Self::NonPositiveWeight { stratum, weight } => {
+                write!(f, "stratum {stratum} has non-positive weight {weight:?}")
+            }
+            Self::NonPositiveCrossingWeight { weight } => write!(
+                f,
+                "the threshold-crossing derivation was handed the non-positive weight {weight:?}; its search rests on a non-increasing threshold, which a non-positive weight does not give"
+            ),
+            Self::UnknownStratum { stratum } => {
+                write!(f, "fusion profile declares no weight for stratum {stratum}")
+            }
+            Self::DuplicateStratum { stratum } => {
+                write!(f, "two streams are tagged with stratum {stratum}")
+            }
+            Self::PlanIdMismatch { expected, got } => write!(
+                f,
+                "fused streams descend from different pinned plans: expected {expected}, got {got:?}"
+            ),
+            Self::ReadBoundMismatch { planned, requested } => write!(
+                f,
+                "streams were planned for a bound of {planned} fused rows and the fusion was run at {requested}; a depth derived for one bound does not serve another"
+            ),
+            Self::MalformedProfile(err) => write!(f, "malformed fusion profile: {err}"),
+            Self::MaxContributionsExceeded { item, count, max } => write!(
+                f,
+                "candidate {item} received {count} contributions across {max} strata; a candidate may surface at most once per stratum"
+            ),
+            Self::DepthUnreachable {
+                depth,
+                saturates_at,
+            } => write!(
+                f,
+                "no weight separates ranks to depth {depth} under this decay rule; it separates to depth {saturates_at} and no further"
+            ),
+            Self::DepthBeyondPlanRange { depth, limit } => write!(
+                f,
+                "depth {depth} is deeper than a plan can record; a plan carries a per-stratum depth as a 32-bit rank, so {limit} is the deepest expressible depth"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FusionError {}
 
 impl From<crate::ranked_stream::ProtocolError> for FusionError {
     /// Wrap a producer's protocol violation without growing `FusionError` to the

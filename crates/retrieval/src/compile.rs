@@ -801,22 +801,14 @@ pub enum ReadSchedule {
 /// wrapping bound cannot be written over a prologue without knowing where that
 /// prologue ends — so the refusal costs nothing and arrives where the caller can still
 /// act on it.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnitError {
     /// The unit records a depth of zero, which reads nothing and proves nothing.
-    #[error(
-        "a stratum unit cannot record a depth of zero: a read of no rows proves nothing about the producer behind it"
-    )]
     ZeroDepth,
 
     /// The unit records a depth so deep that the emitted bound cannot carry the
     /// probe row one past it, so how the read ended could not be observed.
-    #[error(
-        "a stratum unit cannot record depth {depth}: a read is emitted one row deeper than its \
-         depth, so {ceiling} is the deepest depth whose ending can be observed and anything past \
-         it would be reported exhausted without being read to its end"
-    )]
     DepthWithoutProbe {
         /// The depth the unit recorded.
         depth: u32,
@@ -832,11 +824,6 @@ pub enum UnitError {
     /// serve, and the rows it does return would then be certified as the whole of a
     /// deeper read. A declared zero is read as the floor of one, exactly as the
     /// planner and the waist read it.
-    #[error(
-        "a stratum unit records depth {depth} over a producer the registry bounds at {declared} \
-         row(s) per invocation: the read it describes cannot be taken, and the rows it returns are \
-         not the depth's"
-    )]
     DepthBeyondDeclaration {
         /// The depth the unit recorded.
         depth: u32,
@@ -877,12 +864,6 @@ pub enum UnitError {
     /// complaint. A caller whose text draws its candidates from no call declares
     /// [`ExclusionBasis::Unavailable`](purrdf_sparql_eval::ExclusionBasis),
     /// which is exactly true of a stream nothing can be looked up in.
-    #[error(
-        "a stratum unit running a caller-supplied query can declare an exclusion basis of \
-         {basis} only when every value its ?candidate column takes was emitted by a \
-         property-function call, because the exclusion lookup is such a call asked with the \
-         candidate bound; this query's is not: {reason}"
-    )]
     ExclusionNotRenderable {
         /// The basis the unit's contract declared.
         basis: &'static str,
@@ -907,7 +888,6 @@ pub enum UnitError {
     /// pattern to it, and the registry-aware parse the executor runs is the authority
     /// on everything about the seam. This refusal is therefore exactly "not a query",
     /// and never "not a query this registry likes".
-    #[error("a stratum unit's supplied text is not a SPARQL query: {reason}")]
     NotAQuery {
         /// The parser's own diagnostic, carried rather than summarized.
         reason: String,
@@ -924,16 +904,53 @@ pub enum UnitError {
     /// is a row carrying a candidate and a rank. So there is no `ASK`, `CONSTRUCT` or
     /// `DESCRIBE` text that could ever run through this seam, and refusing it by its
     /// form name at the constructor costs no valid text anything.
-    #[error(
-        "a stratum unit's supplied text is a {form} query, and only a SELECT can be read as \
-         ranked rows: the layer's bound wraps the text as a sub-SELECT, which the grammar admits \
-         only for SELECT, and a {form} answers with no solution rows to rank"
-    )]
     NotASelect {
         /// The query form the text was written in: `ASK`, `CONSTRUCT` or `DESCRIBE`.
         form: &'static str,
     },
 }
+
+impl std::fmt::Display for UnitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroDepth => write!(
+                f,
+                "a stratum unit cannot record a depth of zero: a read of no rows proves nothing about the producer behind it"
+            ),
+            Self::DepthWithoutProbe { depth, ceiling } => write!(
+                f,
+                "a stratum unit cannot record depth {depth}: a read is emitted one row deeper than its \
+         depth, so {ceiling} is the deepest depth whose ending can be observed and anything past \
+         it would be reported exhausted without being read to its end"
+            ),
+            Self::DepthBeyondDeclaration { depth, declared } => write!(
+                f,
+                "a stratum unit records depth {depth} over a producer the registry bounds at {declared} \
+         row(s) per invocation: the read it describes cannot be taken, and the rows it returns are \
+         not the depth's"
+            ),
+            Self::ExclusionNotRenderable { basis, reason } => write!(
+                f,
+                "a stratum unit running a caller-supplied query can declare an exclusion basis of \
+         {basis} only when every value its ?candidate column takes was emitted by a \
+         property-function call, because the exclusion lookup is such a call asked with the \
+         candidate bound; this query's is not: {reason}"
+            ),
+            Self::NotAQuery { reason } => write!(
+                f,
+                "a stratum unit's supplied text is not a SPARQL query: {reason}"
+            ),
+            Self::NotASelect { form } => write!(
+                f,
+                "a stratum unit's supplied text is a {form} query, and only a SELECT can be read as \
+         ranked rows: the layer's bound wraps the text as a sub-SELECT, which the grammar admits \
+         only for SELECT, and a {form} answers with no solution rows to rank"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for UnitError {}
 
 /// One stratum's independently executable query, and the contract the rows it
 /// returns will arrive under.
