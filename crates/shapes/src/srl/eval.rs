@@ -32,7 +32,7 @@ use purrdf_datalog::schedule::{self, Layer, LayerHooks, Schedule};
 use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions};
 use purrdf_datalog::store::{Fact, RelationStore};
 
-use super::ir::{IrRule, IrRuleBody, RuleSet, Scheduling};
+use super::ir::{IrRuleBody, RuleSet, Scheduling};
 use super::lower::{self, BASE_GRAPH, GuardImpl, LoweredPosition, LoweredTriple};
 use crate::data::ShaclData;
 use crate::model::{rdf, sh};
@@ -144,10 +144,7 @@ pub fn evaluate(
     let lowered = lower::lower(set, now.as_ref());
     let schedule = match set.scheduling {
         Scheduling::Declared => declared_schedule(set),
-        Scheduling::Stratified => {
-            let run_once: Vec<bool> = set.rules.iter().map(IrRule::is_run_once).collect();
-            schedule::stratify_rules(&lowered.clauses, &run_once).map_err(|e| describe(&e, set))?
-        }
+        Scheduling::Stratified => super::depend::stratify(set).map_err(|e| describe(&e, set))?,
     };
     let expectations: Vec<Vec<String>> = schedule
         .layers()
@@ -170,6 +167,16 @@ pub fn evaluate(
         schedule::compile_scheduled(lowered.clauses, schedule).map_err(|e| describe(&e, set))?;
 
     let base = data.core_arc();
+    let base_triples = rules::base_triples(&base);
+    // Every label this evaluation mints — a head blank node, a blank node an assignment
+    // computes, a data block's blank node standardized apart from the base graph ("rdf
+    // merge") — starts with a prefix no base-graph or data-block label starts with.
+    let mint_prefix = unused_label_prefix(
+        base_triples
+            .iter()
+            .chain(&set.data)
+            .flat_map(|triple| triple.iter()),
+    );
     let shapes_graph_iri = data
         .shapes_graph_iri()
         .map(ToOwned::to_owned)
@@ -186,6 +193,7 @@ pub fn evaluate(
         view: RefCell::new(None),
         generation: Cell::new(0),
         mints: Cell::new(0),
+        mint_prefix,
         expectations,
     };
     // Every constant a clause mentions enters the store through its head or a probe, so
@@ -196,7 +204,7 @@ pub fn evaluate(
         }
     }
     let mut edb = RelationStore::new();
-    for triple in rules::base_triples(&base) {
+    for triple in base_triples {
         let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
         edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH);
         if lowered.uses_base {
@@ -205,6 +213,9 @@ pub fn evaluate(
         engine.originals.insert(triple);
     }
     for triple in &set.data {
+        let triple = triple
+            .each_ref()
+            .map(|term| data_block_term(term, &engine.mint_prefix));
         let [s, p, o] = triple.each_ref().map(|t| engine.codec.surface(t));
         edb.insert(&s, &p, &o, RelationStore::DEFAULT_GRAPH);
     }
@@ -243,6 +254,24 @@ pub fn evaluate(
             rule: set.rules[derivation.rule()].id.clone(),
             premises,
         });
+    }
+
+    // SPARQL 1.2 RL: "An inference graph is an RDF Graph". A head instantiated with a
+    // literal subject or a non-IRI predicate, or a data-block triple spelled that way
+    // (the data-block grammar admits "symmetric" literal subjects), is not an RDF triple,
+    // and is refused by name rather than dropped from the graph.
+    for triple in &inferred {
+        if let Err(why) = rdf_triple_check(triple) {
+            let source = explanations.get(triple).map_or_else(
+                || "a data block".to_owned(),
+                |explanation| format!("rule {}", explanation.rule),
+            );
+            let [s, p, o] = triple;
+            return Err(format!(
+                "{source} put `{s} {p} {o}` in the inference graph, which is not an RDF \
+                 triple: {why}"
+            ));
+        }
     }
 
     let mut all: Vec<&[Term; 3]> = facts.iter().collect();
@@ -500,6 +529,9 @@ struct Engine<'r, 'a> {
     generation: Cell<u64>,
     /// Executions numbered so far, for blank-node minting.
     mints: Cell<u64>,
+    /// The label prefix of every blank node an element rule mints (see
+    /// [`unused_label_prefix`]).
+    mint_prefix: String,
     /// The expected predicates of each layer.
     expectations: Vec<Vec<String>>,
 }
@@ -638,16 +670,28 @@ impl GuardEvaluator for Engine<'_, '_> {
             }
             GuardImpl::Assign { query, variables } => {
                 let args = self.arguments(variables, call.inputs)?;
-                let value =
-                    crate::sparql::eval_scalar_query_view(self.empty.sparql_view(), query, &args)?;
+                // A blank node the expression computes (`BNODE()`) is fresh per
+                // evaluation: each call mints under its own prefix.
+                let prefix = format!("{}a{}_", self.mint_prefix, self.mint());
+                let value = crate::sparql::eval_scalar_query_view_minting(
+                    self.empty.sparql_view(),
+                    query,
+                    &args,
+                    &prefix,
+                )?;
                 // "If evaluating the expression in an assignment causes an error, then the
                 // current solution mapping is rejected by the assignment."
                 Ok(value.map_or_else(Vec::new, |term| vec![vec![self.codec.surface(&term)]]))
             }
             GuardImpl::FreshBlank => {
-                let blank = Term::blank(format!("r-x{}_bnode", self.mint()));
+                let blank = Term::blank(format!("{}h{}", self.mint_prefix, self.mint()));
                 Ok(vec![vec![self.codec.surface(&blank)]])
             }
+            GuardImpl::SameTerm => Ok(if call.inputs[0] == call.inputs[1] {
+                vec![Vec::new()]
+            } else {
+                Vec::new()
+            }),
             GuardImpl::MatchTriple {
                 pattern,
                 inputs,
@@ -673,8 +717,8 @@ impl GuardEvaluator for Engine<'_, '_> {
                 for (name, surface) in inputs.iter().zip(call.inputs) {
                     known.insert(name.as_str(), self.codec.term(surface)?);
                 }
-                Ok(build_triple(template, &known)
-                    .map_or_else(Vec::new, |term| vec![vec![self.codec.surface(&term)]]))
+                let term = build_triple(template, &known)?;
+                Ok(vec![vec![self.codec.surface(&term)]])
             }
         }
     }
@@ -726,28 +770,107 @@ fn match_triple<'n>(
         })
 }
 
-/// Build the triple term `template` denotes under `known`; `None` when it would be
-/// ill-formed (a non-IRI predicate, a literal subject).
-fn build_triple(template: &LoweredTriple, known: &BTreeMap<&str, Term>) -> Option<Term> {
-    let value = |position: &LoweredPosition| -> Option<Term> {
+/// Build the triple term `template` denotes under `known`.
+///
+/// # Errors
+///
+/// The instantiation is not an RDF 1.2 triple term — a subject that is not an IRI or a
+/// blank node, or a predicate that is not an IRI: RDF 1.2 Concepts §3.1 "A triple term
+/// is an RDF term with the same components as an RDF triple".
+fn build_triple(template: &LoweredTriple, known: &BTreeMap<&str, Term>) -> Result<Term, String> {
+    let value = |position: &LoweredPosition| -> Result<Term, String> {
         match position {
-            LoweredPosition::Constant(term) => Some(term.clone()),
-            LoweredPosition::Variable(name) => known.get(name.as_str()).cloned(),
+            LoweredPosition::Constant(term) => Ok(term.clone()),
+            LoweredPosition::Variable(name) => known.get(name.as_str()).cloned().ok_or_else(|| {
+                format!("internal error: triple-term template variable {name} is unbound")
+            }),
             LoweredPosition::Triple(inner) => build_triple(inner, known),
         }
     };
     let subject = value(&template.0[0])?;
-    let Term::NamedNode(predicate) = value(&template.0[1])? else {
-        return None;
+    let predicate = value(&template.0[1])?;
+    let object = value(&template.0[2])?;
+    let triple = [subject, predicate, object];
+    rdf_triple_check(&triple).map_err(|why| {
+        let [s, p, o] = &triple;
+        format!("the head builds the triple term <<( {s} {p} {o} )>>, which is not one: {why}")
+    })?;
+    let [subject, predicate, object] = triple;
+    let Term::NamedNode(predicate) = predicate else {
+        unreachable!("rdf_triple_check admits only an IRI predicate")
     };
-    if matches!(subject, Term::Literal(_)) {
-        return None;
-    }
-    Some(Term::Triple(Box::new(Triple {
+    Ok(Term::Triple(Box::new(Triple {
         subject,
         predicate,
-        object: value(&template.0[2])?,
+        object,
     })))
+}
+
+/// Whether `triple` is an RDF 1.2 triple: RDF 1.2 Concepts §3.1, "the subject, which is
+/// an IRI or a blank node", "the predicate, which is an IRI", "the object, which is an
+/// IRI, a literal, a blank node or a triple term" — and a triple term object is itself
+/// such a triple.
+fn rdf_triple_check(triple: &[Term; 3]) -> Result<(), String> {
+    let [subject, predicate, object] = triple;
+    if !matches!(subject, Term::NamedNode(_) | Term::BlankNode(_)) {
+        return Err(format!(
+            "its subject {subject} is not an IRI or a blank node (RDF 1.2 Concepts §3.1: \
+             \"the subject, which is an IRI or a blank node\")"
+        ));
+    }
+    if !matches!(predicate, Term::NamedNode(_)) {
+        return Err(format!(
+            "its predicate {predicate} is not an IRI (RDF 1.2 Concepts §3.1: \"the \
+             predicate, which is an IRI\")"
+        ));
+    }
+    if let Term::Triple(inner) = object {
+        rdf_triple_check(&[
+            inner.subject.clone(),
+            Term::NamedNode(inner.predicate.clone()),
+            inner.object.clone(),
+        ])?;
+    }
+    Ok(())
+}
+
+/// A blank-node label prefix no label among `terms` (nested triple terms included)
+/// starts with: `srl-` lengthened with `x` until none does.
+fn unused_label_prefix<'t>(terms: impl Iterator<Item = &'t Term>) -> String {
+    fn labels<'t>(term: &'t Term, out: &mut Vec<&'t str>) {
+        match term {
+            Term::BlankNode(label) => out.push(label),
+            Term::Triple(inner) => {
+                labels(&inner.subject, out);
+                labels(&inner.object, out);
+            }
+            Term::NamedNode(_) | Term::Literal(_) => {}
+        }
+    }
+    let mut all = Vec::new();
+    for term in terms {
+        labels(term, &mut all);
+    }
+    let mut prefix = String::from("srl-");
+    while all.iter().any(|label| label.starts_with(prefix.as_str())) {
+        prefix.insert(0, 'x');
+    }
+    prefix
+}
+
+/// A data-block term with its blank nodes standardized apart from the base graph's: the
+/// rule set's data blocks and the base graph are separate RDF graphs, and their union is
+/// an RDF merge, so a data-block `_:b` is never the base graph's `_:b`.
+fn data_block_term(term: &Term, prefix: &str) -> Term {
+    match term {
+        Term::BlankNode(label) => Term::blank(format!("{prefix}d-{label}")),
+        Term::Triple(inner) => Term::Triple(Box::new(Triple {
+            subject: data_block_term(&inner.subject, prefix),
+            predicate: inner.predicate.clone(),
+            object: data_block_term(&inner.object, prefix),
+        })),
+        Term::NamedNode(_) | Term::Literal(_) => term.clone(),
+    }
 }
 
 /// The SHACL layer-boundary actions.

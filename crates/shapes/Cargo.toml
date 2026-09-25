@@ -196,3 +196,10 @@ harness = false
 # only — excluded from `make check`.
 name = "shacl_product_alloc"
 harness = false
+
+[[bench]]
+# SPARQL 1.2 RL transitive closure through the public text API: the parse-and-check of
+# the closure program, and `srl::infer` over chains of increasing length. Report-only;
+# `make bench` lane only — excluded from `make check`.
+name = "srl_closure"
+harness = false

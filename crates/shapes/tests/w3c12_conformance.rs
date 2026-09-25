@@ -60,19 +60,18 @@ use purrdf_shapes::data::{GraphFilter, ShaclData, native_quads};
 use purrdf_shapes::expression::{
     Binding, NodeExpr, RecursionGuard, Scope, eval_node_expr_in_scope,
 };
+use purrdf_shapes::srl::{self, SrlError};
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::{apply_rules, engine, shapes, sparql, text_ingest};
 
 use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
 use shacl_corpora::shacl12::{
-    Body, Case12, InferCase, InferExpected, NodeExprCase, SrlCase, W3C12_TOTAL_CASES, shacl12_cases,
+    Body, Case12, InferCase, InferExpected, NodeExprCase, SrlCase, SrlKind, W3C12_TOTAL_CASES,
+    shacl12_cases,
 };
 use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_file};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
-
-/// Why every SPARQL 1.2 RL entry fails today.
-const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
 /// `rdf:reifies`.
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -84,212 +83,7 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 ///
 /// A ledgered entry MUST fail; when engine work fixes it the harness errors with
 /// `XPASS` and the entry must be removed.
-const XFAIL: &[(&str, &str)] = &[
-    // ── SPARQL 1.2 RL (every srlt: test type) ──
-    ("sparql-rl/eval/eval-basic-01", NO_SRL),
-    ("sparql-rl/eval/eval-basic-02", NO_SRL),
-    ("sparql-rl/eval/eval-basic-bnodes-pattern-1", NO_SRL),
-    ("sparql-rl/eval/eval-basic-bnodes-pattern-2", NO_SRL),
-    ("sparql-rl/eval/eval-basic-bnodes-pattern-3", NO_SRL),
-    ("sparql-rl/eval/eval-basic-bnodes-pattern-4", NO_SRL),
-    ("sparql-rl/eval/eval-data-01", NO_SRL),
-    ("sparql-rl/eval/eval-data-02", NO_SRL),
-    ("sparql-rl/eval/eval-bnodes-01", NO_SRL),
-    ("sparql-rl/eval/eval-bnodes-02", NO_SRL),
-    ("sparql-rl/eval/eval-bnodes-03", NO_SRL),
-    ("sparql-rl/eval/eval-neg-01", NO_SRL),
-    ("sparql-rl/eval/eval-rdfs-subclass-1", NO_SRL),
-    ("sparql-rl/eval/eval-rdfs-subproperty-1", NO_SRL),
-    ("sparql-rl/eval/eval-rdfs-domain-1", NO_SRL),
-    ("sparql-rl/eval/eval-rdfs-domain-2", NO_SRL),
-    ("sparql-rl/eval/eval-rdfs-range-1", NO_SRL),
-    ("sparql-rl/eval/eval-rdfs-range-2", NO_SRL),
-    ("sparql-rl/eval/eval-filter-01", NO_SRL),
-    ("sparql-rl/eval/eval-filter-error-1", NO_SRL),
-    ("sparql-rl/eval/eval-neg-02a", NO_SRL),
-    ("sparql-rl/eval/eval-neg-02b", NO_SRL),
-    ("sparql-rl/eval/eval-assign-01", NO_SRL),
-    ("sparql-rl/eval/eval-assign-02", NO_SRL),
-    ("sparql-rl/eval/eval-assign-03", NO_SRL),
-    ("sparql-rl/eval/eval-assign-error-1", NO_SRL),
-    ("sparql-rl/eval/eval-neg-data-01", NO_SRL),
-    ("sparql-rl/eval/eval-neg-data-02", NO_SRL),
-    ("sparql-rl/eval/eval-neg-data-03", NO_SRL),
-    ("sparql-rl/eval/eval-neg-data-04", NO_SRL),
-    ("sparql-rl/eval/eval-neg-data-05", NO_SRL),
-    ("sparql-rl/eval/eval-neg-data-06", NO_SRL),
-    ("sparql-rl/eval/eval-where-data-01", NO_SRL),
-    ("sparql-rl/eval/eval-where-data-02", NO_SRL),
-    ("sparql-rl/eval/eval-where-data-03", NO_SRL),
-    ("sparql-rl/eval2/link-path-1", NO_SRL),
-    ("sparql-rl/eval2/link-path-2", NO_SRL),
-    ("sparql-rl/eval2/eval-dft-value-neg-01", NO_SRL),
-    ("sparql-rl/eval2/eval-dft-value-neg-02", NO_SRL),
-    ("sparql-rl/eval2/eval-dft-value-where-01", NO_SRL),
-    ("sparql-rl/eval2/eval-dft-value-where-02", NO_SRL),
-    ("sparql-rl/examples/example-1", NO_SRL),
-    ("sparql-rl/examples/example-2", NO_SRL),
-    ("sparql-rl/examples/example-3", NO_SRL),
-    ("sparql-rl/examples/example-4", NO_SRL),
-    ("sparql-rl/examples/example-5", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_1", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_2", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_3", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_4", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_5", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_6", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_7", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_8", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_9", NO_SRL),
-    ("sparql-rl/stratification/manifest#test_10", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_1", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_2", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_3", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_4", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_5", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_6", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_7", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_8", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_9", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_10", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_11", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_12", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_13", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_14", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_15", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_16", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_17", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_18", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_19", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_20", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_21", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_22", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_23", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_24", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_25", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_26", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_27", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_28", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_29", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_30", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_31", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_32", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_33", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_34", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_35", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_36", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_37", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_38", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_39", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_40", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_41", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_42", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_43", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_44", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_45", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_46", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_47", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_48", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_49", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_50", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_51", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_52", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_53", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_54", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_55", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_56", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_57", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_58", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_59", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_60", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_61", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_62", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_63", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_64", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_65", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_66", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_67", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_68", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_69", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_70", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_71", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_72", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_73", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_74", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_75", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_76", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_77", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_78", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_79", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_80", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_81", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_82", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_83", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_84", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_85", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_86", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_87", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_88", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_89", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_90", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_91", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_92", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_93", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_94", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_95", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_96", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_97", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_98", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_99", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_100", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_101", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_102", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_103", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_104", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_105", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_106", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_107", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_108", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_109", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_110", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_111", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_112", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_113", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_114", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_115", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_116", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_117", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_118", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_119", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_120", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_121", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_122", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_123", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_124", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_125", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_126", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_127", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_128", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_129", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_130", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_131", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_132", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_133", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_134", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_135", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_136", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_137", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_138", NO_SRL),
-    ("sparql-rl/syntax/manifest#test_139", NO_SRL),
-    ("sparql-rl/wellformed/manifest#test_1", NO_SRL),
-    ("sparql-rl/wellformed/manifest#test_2", NO_SRL),
-    ("sparql-rl/wellformed/manifest#test_3", NO_SRL),
-    ("sparql-rl/wellformed/manifest#test_4", NO_SRL),
-    ("sparql-rl/wellformed/manifest#test_5", NO_SRL),
-    ("sparql-rl/wellformed/manifest#test_6", NO_SRL),
-    ("sparql-rl/wellformed/manifest#test_7", NO_SRL),
-    ("sparql-rl/wellformed/manifest#test_8", NO_SRL),
-];
+const XFAIL: &[(&str, &str)] = &[];
 
 // ── Canonical-form expectations ───────────────────────────────────────────────
 
@@ -839,27 +633,98 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
 
 // ── srlt:* ────────────────────────────────────────────────────────────────────
 
-/// Grade one SPARQL 1.2 RL entry.
+/// Grade one SPARQL 1.2 RL entry, requiring every negative entry to fail at the stage
+/// its type names — a negative syntax test in the parser, a negative well-formedness
+/// test in the §4.2 check of a document that parses, a negative stratification test in
+/// the §4.4 stratifier of a well-formed rule set — so a test cannot pass by failing for
+/// some other reason. The suite README: "All the test are syntactically legal, i.e.
+/// conform to the SPARQL-RL Rules grammar" (well-formedness), "All the test are
+/// syntactically legal and well-formed" (stratification); and a positive syntax test is
+/// "regardless of well-formedness and stratification".
 ///
-/// PurRDF has no SPARQL 1.2 RL implementation, so there is no parser to accept
-/// or reject a rule set and no evaluator to infer a graph: every entry — the
-/// NEGATIVE syntax, well-formedness and stratification tests included — is a
-/// failure. A negative test must not pass merely because nothing accepted its
-/// input; it passes when an implementation REJECTS it.
+/// An evaluation entry parses and checks the rule set, runs SPARQL 1.2 RL's infer
+/// operation over `srlt:data`, and compares the INFERENCE graph — "The result of an
+/// evaluation test is the inference graph" — with `mf:result` under RDF isomorphism
+/// (RDFC-1.0 canonical N-Quads).
 fn run_srl(tc: &SrlCase) -> Result<(), String> {
-    let ruleset = fs::read_to_string(&tc.ruleset)
+    let text = fs::read_to_string(&tc.ruleset)
         .map_err(|e| format!("cannot read {}: {e}", tc.ruleset.display()))?;
-    Err(format!(
-        "{NO_SRL}: the {}-byte rule set {} ({}) is not {}",
-        ruleset.len(),
-        tc.ruleset.display(),
-        tc.kind.local_name(),
-        if tc.data.is_some() || tc.result.is_some() {
-            "evaluated"
-        } else {
-            "parsed"
+    let base = file_iri(&tc.ruleset);
+    let parsed = srl::parse(&text, Some(&base));
+    let expect_stage = |outcome: Result<(), SrlError>, stage: &str| -> Result<(), String> {
+        match outcome {
+            Err(error) => {
+                let actual = srl_stage(&error);
+                if actual == stage {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "expected a {stage} failure, but the {actual} stage refused: {error}"
+                    ))
+                }
+            }
+            Ok(()) => Err(format!(
+                "expected a {stage} failure, but every stage accepted it"
+            )),
         }
-    ))
+    };
+    match tc.kind {
+        SrlKind::PositiveSyntax => parsed.map(drop).map_err(|e| e.to_string()),
+        SrlKind::NegativeSyntax => expect_stage(parsed.map(drop), "syntax"),
+        SrlKind::PositiveWellFormedness => parsed
+            .and_then(|document| document.check_well_formed())
+            .map_err(|e| e.to_string()),
+        SrlKind::NegativeWellFormedness => {
+            let document = parsed.map_err(|e| format!("the document must parse: {e}"))?;
+            expect_stage(document.check_well_formed(), "well-formedness")
+        }
+        SrlKind::PositiveStratification => {
+            let document = parsed.map_err(|e| e.to_string())?;
+            document.check_well_formed().map_err(|e| e.to_string())?;
+            document.stratify().map(drop).map_err(|e| e.to_string())
+        }
+        SrlKind::NegativeStratification => {
+            let document = parsed.map_err(|e| format!("the document must parse: {e}"))?;
+            document
+                .check_well_formed()
+                .map_err(|e| format!("the rule set must be well formed: {e}"))?;
+            expect_stage(document.stratify().map(drop), "stratification")
+        }
+        SrlKind::Eval => {
+            let document = srl::parse_and_check(&text, Some(&base)).map_err(|e| e.to_string())?;
+            let (Some(data), Some(result)) = (&tc.data, &tc.result) else {
+                return Err("an evaluation entry has srlt:data and mf:result".to_owned());
+            };
+            let data = parse_turtle_file(data)?;
+            let inference = no_panic(|| {
+                srl::infer(&document, &data, &srl::InferOptions::default())
+                    .map_err(|e| e.to_string())
+            })?;
+            let produced =
+                expected_triples(&InferExpected::Triples(inference.inferred().to_vec()))?;
+            let expected = parse_turtle_file(result)?;
+            let produced = canonicalize(produced.as_ref()).nquads;
+            let expected = canonicalize(expected.as_ref()).nquads;
+            if produced == expected {
+                return Ok(());
+            }
+            Err(format!(
+                "inference graph differs from mf:result (RDFC-1.0):\n  produced:\n{produced}\n  \
+                 expected:\n{expected}"
+            ))
+        }
+    }
+}
+
+/// The preparation stage an SRL error comes from.
+fn srl_stage(error: &SrlError) -> &'static str {
+    match error {
+        SrlError::Syntax { .. } => "syntax",
+        SrlError::WellFormedness { .. } => "well-formedness",
+        SrlError::Stratification { .. } => "stratification",
+        SrlError::Import { .. } => "import",
+        _ => "evaluation",
+    }
 }
 
 // ── The harness ───────────────────────────────────────────────────────────────

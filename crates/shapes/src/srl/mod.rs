@@ -13,12 +13,25 @@
 //! SPARQL CONSTRUCT means (the guard evaluator), and the SHACL layer-boundary actions
 //! (expected derived triples, their reifiers, temporary triples).
 //!
+//! SPARQL 1.2 RL text (W3C Working Draft 19 September 2026,
+//! <https://www.w3.org/TR/2026/WD-sparql12-rl-20260919/>) enters through [`parse`] /
+//! [`parse_and_check`] — the §7 grammar, then §4.2 well-formedness and §4.4
+//! stratification, each refusal typed by its stage ([`SrlError`]) — and is evaluated by
+//! [`infer`], SPARQL 1.2 RL's "infer" operation.
+//!
 //! There is no second fixpoint anywhere in this crate: [`crate::rules`] holds the SHACL
 //! rule model and the producers that execute one SHACL rule once, and nothing else.
 
 pub mod ir;
 
+mod depend;
+mod document;
 mod eval;
 mod lower;
+mod syntax;
 
+pub use document::{
+    ImportResolver, InferOptions, RuleSetDocument, SrlError, SrlRule, Stratum, infer, parse,
+    parse_and_check,
+};
 pub use eval::{Explanation, Inference, evaluate};
