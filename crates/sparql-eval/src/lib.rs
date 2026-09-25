@@ -121,6 +121,9 @@ pub mod property_fn;
 mod property_fn_eval;
 mod property_fn_plan;
 mod registry_id;
+// The SPARQL 1.1 Protocol request surface: HTTP request → operation, dataset
+// parameters applied as text, and response-format negotiation. No I/O.
+pub mod protocol;
 pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.

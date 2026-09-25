@@ -212,6 +212,85 @@ pub struct QuerySplit {
     pub dataset_at: Option<Range<usize>>,
 }
 
+/// One parse of a query, with the position its **dataset clause** occupies — or,
+/// for a query that writes none, the position where one would be written.
+///
+/// This is what a layer needs to *replace* a query's dataset as text: the SPARQL 1.1
+/// Protocol's `default-graph-uri`/`named-graph-uri` parameters override every
+/// `FROM`/`FROM NAMED` the query itself declares (Protocol §2.1.4), and applying them
+/// without re-serializing the caller's text means cutting the query's own run out and
+/// writing the parameters' clauses in the same place. [`QuerySplit::dataset_at`] cannot
+/// serve that caller on its own: it is `None` for a query with no clause, and that is
+/// exactly the query whose insertion point is still needed.
+///
+/// Positional only, like [`QuerySplit`], and deliberately not `#[non_exhaustive]` for
+/// the same reason: a position a splicing caller fails to read is a clause its splice
+/// gets wrong.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueryDatasetSlot {
+    /// The algebra, exactly as [`SparqlParser::parse_query_with`] returns it.
+    pub query: Query,
+    /// The byte range of the query form's `DatasetClause*` run.
+    ///
+    /// For a query that writes one, exactly [`QuerySplit::dataset_at`]: from the first
+    /// `FROM` to the start of the token after the last clause. For a query that writes
+    /// none, the EMPTY range at the start of the token a dataset clause would precede
+    /// (`WHERE`, or the `{` of a `WHERE`-less group), so text inserted there becomes the
+    /// query's dataset clause. Always the whole query's own clause — never a
+    /// sub-`SELECT`'s position, which has no dataset clause to hold.
+    pub dataset_at: Range<usize>,
+}
+
+/// One parse of an update request, with the per-operation positions a layer needs in
+/// order to give each operation's `WHERE` a dataset as **text**.
+///
+/// The SPARQL 1.1 Protocol's `using-graph-uri`/`using-named-graph-uri` parameters mean
+/// what `USING`/`USING NAMED` clauses mean, applied to every operation that has a
+/// `WHERE` (Protocol §2.2.3). Writing them into the request without re-serializing it
+/// needs, per operation, where its `USING` run is (or would go), and whether it already
+/// has a `WITH` or `USING` a parameter would conflict with.
+///
+/// Positional only, like [`QuerySplit`], and deliberately not `#[non_exhaustive]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateSplit {
+    /// The algebra, exactly as [`SparqlParser::parse_update_with`] returns it.
+    pub update: Update,
+    /// One entry per operation, index-aligned with `update.operations`.
+    pub operations: Vec<UpdateDatasetSlot>,
+}
+
+/// Where one update operation's dataset clause is written, by the production the
+/// operation was read under (SPARQL 1.1 Update §3.1.3 and the §19 grammar).
+///
+/// Deliberately not `#[non_exhaustive]`: see [`UpdateSplit`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateDatasetSlot {
+    /// An operation with no `WHERE` clause (`INSERT DATA`, `DELETE DATA`, `LOAD`,
+    /// `CLEAR`, `DROP`, `CREATE`, `ADD`, `MOVE`, `COPY`): there is no pattern for a
+    /// dataset to scope.
+    NoWhereClause,
+    /// `[WITH <iri>] ( DELETE {…} [INSERT {…}] | INSERT {…} ) UsingClause* WHERE {…}`.
+    Modify {
+        /// The byte range of the `WITH <iri>` clause, from `WITH` to the start of the
+        /// token after the IRI; `None` when the operation writes no `WITH`.
+        with_at: Option<Range<usize>>,
+        /// The byte range of the `UsingClause*` run, from the first `USING` to the start
+        /// of the token after the last clause. EMPTY, at the start of the `WHERE`
+        /// keyword, when the operation writes no `USING`.
+        using_at: Range<usize>,
+    },
+    /// `DELETE WHERE QuadPattern` — the shorthand whose grammar has no `UsingClause`,
+    /// defined (§3.1.3.3) as `DELETE QuadPattern WHERE QuadPattern` with the same
+    /// pattern in both places. A dataset is given to it by writing that long form.
+    DeleteWhere {
+        /// The byte offset of the `WHERE` keyword.
+        where_at: usize,
+        /// The byte range of the braced `QuadPattern`, from its `{` to just past its
+        /// matching `}` — the text the long form repeats as the `DELETE` template.
+        pattern_at: Range<usize>,
+    },
+}
+
 /// A reusable SPARQL query parser.
 ///
 /// Mirrors the prior oxigraph-family `SparqlParser` surface the existing
@@ -328,6 +407,34 @@ impl SparqlParser {
         })
     }
 
+    /// [`Self::parse_query_with`], also reporting the position of the query's dataset
+    /// clause, or of where one would be written: see [`QueryDatasetSlot`].
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::parse_query_with`]'s.
+    pub fn parse_query_dataset_slot(
+        &self,
+        query: &str,
+        options: &ParserOptions,
+    ) -> Result<QueryDatasetSlot> {
+        let mut p = self.parser_for(query, options)?;
+        p.parse_prologue()?;
+        let q = p.parse_query_form()?;
+        p.expect_eof()?;
+        // Every query form reads its `DatasetClause*` run through
+        // `parse_dataset_clauses`, so a parsed query always has a slot. A form that
+        // somehow did not would have nowhere for a dataset to go; that is reported as
+        // the parse error it is rather than guessed at.
+        let dataset_at = p.dataset_slot.ok_or_else(|| {
+            ParseError::syntax("the query form carries no dataset-clause position", 0)
+        })?;
+        Ok(QueryDatasetSlot {
+            query: q,
+            dataset_at,
+        })
+    }
+
     /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra, under
     /// [`ParserOptions::default`].
     ///
@@ -354,10 +461,24 @@ impl SparqlParser {
     /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra with explicit
     /// [`ParserOptions`].
     pub fn parse_update_with(&self, update: &str, options: &ParserOptions) -> Result<Update> {
+        self.parse_update_split(update, options)
+            .map(|split| split.update)
+    }
+
+    /// [`Self::parse_update_with`], also reporting where each operation's dataset
+    /// clause is (or would be) written: see [`UpdateSplit`].
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::parse_update_with`]'s.
+    pub fn parse_update_split(&self, update: &str, options: &ParserOptions) -> Result<UpdateSplit> {
         let mut p = self.parser_for(update, options)?;
         let u = p.parse_update()?;
         p.expect_eof()?;
-        Ok(u)
+        Ok(UpdateSplit {
+            update: u,
+            operations: p.update_slots,
+        })
     }
 
     /// Tokenize `text` and assemble the internal recursive-descent parser state.
@@ -385,6 +506,9 @@ impl SparqlParser {
             pattern_node_budget: 0,
             exists_scope_stack: Vec::new(),
             dataset_at: None,
+            dataset_slot: None,
+            update_slots: Vec::new(),
+            op_slot: UpdateDatasetSlot::NoWhereClause,
             projection_scope_pending: false,
             in_aggregate_argument: false,
             projection_seen_targets: Vec::new(),
@@ -534,6 +658,21 @@ struct Parser<'a, 'o> {
     /// may have been recorded a moment earlier, and is never observed: the error
     /// propagates to the public entry point and this `Parser` is not consulted again.
     dataset_at: Option<Range<usize>>,
+    /// Where the WHOLE query's `DatasetClause*` run sits, empty or not, for
+    /// [`SparqlParser::parse_query_dataset_slot`] to report.
+    ///
+    /// Written by [`Parser::parse_dataset_clauses`] on every call; the one caller
+    /// that reads a run which is not the whole query's — the sub-`SELECT` site in
+    /// [`Parser::parse_select`] — restores the value it found, so a sub-select read
+    /// before the query's own clause (inside an `EXISTS` in the projection) or after
+    /// it (inside the `WHERE`) never displaces it.
+    dataset_slot: Option<Range<usize>>,
+    /// One [`UpdateDatasetSlot`] per update operation parsed so far, pushed by
+    /// [`Parser::parse_update`] for [`SparqlParser::parse_update_split`].
+    update_slots: Vec<UpdateDatasetSlot>,
+    /// The slot of the update operation being parsed, written by the operation's own
+    /// production and taken by [`Parser::parse_update`] once it returns.
+    op_slot: UpdateDatasetSlot,
     /// The basic graph pattern each author-written blank node label was first
     /// seen in, keyed by label — the state behind the rule that a label is
     /// scoped to ONE basic graph pattern (see [`Parser::scoped_blank_label`]).
@@ -650,6 +789,9 @@ impl<'a> Parser<'a, '_> {
             // contain a dataset clause: the fork records none, and the position the
             // outer parse recorded stays the outer parse's, on the outer parser.
             dataset_at: None,
+            dataset_slot: None,
+            update_slots: Vec::new(),
+            op_slot: UpdateDatasetSlot::NoWhereClause,
             // A fork reads a template or quad-pattern block, which is not a basic
             // graph pattern of the query: nothing it reads is scoped to one, so it
             // starts with no scope and records nothing.
@@ -1257,7 +1399,12 @@ impl<'a> Parser<'a, '_> {
         // the refusal below points at the caller's own `FROM` keyword rather than at
         // wherever the parse happened to stop afterwards.
         let dataset_at = self.span();
+        let enclosing_slot = self.dataset_slot.clone();
         let dataset = self.parse_dataset_clauses()?;
+        if position == SelectPosition::SubSelect {
+            // A sub-select's (necessarily empty) run is not the whole query's slot.
+            self.dataset_slot = enclosing_slot;
+        }
         // §18 `SubSelect ::= SelectClause WhereClause SolutionModifier ValuesClause`
         // — there is no `DatasetClause` in it, and a dataset clause scopes a whole
         // query rather than one group of one. Reading the run here and then dropping
@@ -1812,9 +1959,11 @@ impl<'a> Parser<'a, '_> {
                 default.push(self.expect_iri_node()?);
             }
         }
+        let end = self.span();
         if !(default.is_empty() && named.is_empty()) {
-            self.dataset_at = Some(at..self.span());
+            self.dataset_at = Some(at..end);
         }
+        self.dataset_slot = Some(at..end);
         Ok(QueryDataset { default, named })
     }
 
@@ -1962,7 +2111,12 @@ impl<'a> Parser<'a, '_> {
             // Each operation's `WHERE` is a pattern of its own, so the labels its
             // basic graph patterns claim are its own too.
             self.blank_label_bgps.clear();
+            self.op_slot = UpdateDatasetSlot::NoWhereClause;
             let op = self.parse_update_operation()?;
+            self.update_slots.push(std::mem::replace(
+                &mut self.op_slot,
+                UpdateDatasetSlot::NoWhereClause,
+            ));
             this_op_labels.clear();
             if let GraphUpdateOperation::InsertData { data } = &op {
                 collect_quad_bnode_labels(data, &mut this_op_labels);
@@ -2032,7 +2186,7 @@ impl<'a> Parser<'a, '_> {
         }
         // INSERT { template } [USING ...] WHERE { ... } — an insert-only modify.
         let insert = self.parse_quad_pattern_block(false)?;
-        let using = self.parse_using_clauses()?;
+        let using = self.parse_using_clauses_at(None)?;
         self.expect_kw("WHERE")?;
         let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
@@ -2054,6 +2208,7 @@ impl<'a> Parser<'a, '_> {
             self.enforce_data_invariants(&data, true)?;
             return Ok(GraphUpdateOperation::DeleteData { data });
         }
+        let where_at = self.span();
         if self.eat_kw("WHERE") {
             // DELETE WHERE { QuadPattern } — the template IS the where pattern.
             // `fork_block` bounds the clone to this operation's braced block, so a
@@ -2061,6 +2216,17 @@ impl<'a> Parser<'a, '_> {
             // request being O(n²) in the number of `DELETE WHERE` operations.
             let (delete, counters) = {
                 let mut delete_parser = self.fork_block();
+                // The fork holds exactly the braced block, so its last token is the
+                // matching `}` and its end is the end of the pattern's text.
+                let pattern_end = delete_parser
+                    .tokens
+                    .last()
+                    .and_then(Option::as_ref)
+                    .map_or(self.end, |closing| closing.end);
+                self.op_slot = UpdateDatasetSlot::DeleteWhere {
+                    where_at,
+                    pattern_at: self.span()..pattern_end,
+                };
                 let delete = delete_parser.parse_quad_pattern_block(true)?;
                 let counters = (
                     delete_parser.agg_counter,
@@ -2087,7 +2253,7 @@ impl<'a> Parser<'a, '_> {
         } else {
             Vec::new()
         };
-        let using = self.parse_using_clauses()?;
+        let using = self.parse_using_clauses_at(None)?;
         self.expect_kw("WHERE")?;
         let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
@@ -2101,8 +2267,10 @@ impl<'a> Parser<'a, '_> {
 
     /// `WITH <iri> (DELETE { ... } | INSERT { ... }) [INSERT { ... }] WHERE { ... }`.
     fn parse_with_modify(&mut self) -> Result<GraphUpdateOperation> {
+        let with_start = self.span();
         self.expect_kw("WITH")?;
         let with = Some(self.expect_iri_node()?);
+        let with_at = with_start..self.span();
         let mut delete = Vec::new();
         let mut insert = Vec::new();
         if self.eat_kw("DELETE") {
@@ -2118,7 +2286,7 @@ impl<'a> Parser<'a, '_> {
                 self.span(),
             ));
         }
-        let using = self.parse_using_clauses()?;
+        let using = self.parse_using_clauses_at(Some(with_at))?;
         self.expect_kw("WHERE")?;
         let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
@@ -2133,6 +2301,24 @@ impl<'a> Parser<'a, '_> {
     /// Zero or more `USING [NAMED] <iri>` clauses (§3.1.3). The `NAMED` modifier is
     /// preserved: `USING <iri>` folds into the active default graph, `USING NAMED
     /// <iri>` becomes an addressable named graph for the `WHERE`.
+    ///
+    /// Also records the operation's [`UpdateDatasetSlot::Modify`] slot: the run's range
+    /// (empty, at the token after it, when there is none) beside the `WITH` range the
+    /// caller read, if any.
+    fn parse_using_clauses_at(
+        &mut self,
+        with_at: Option<Range<usize>>,
+    ) -> Result<Vec<UsingClause>> {
+        let at = self.span();
+        let using = self.parse_using_clauses()?;
+        self.op_slot = UpdateDatasetSlot::Modify {
+            with_at,
+            using_at: at..self.span(),
+        };
+        Ok(using)
+    }
+
+    /// The `UsingClause*` run itself.
     fn parse_using_clauses(&mut self) -> Result<Vec<UsingClause>> {
         let mut using = Vec::new();
         while self.eat_kw("USING") {
@@ -7421,6 +7607,164 @@ mod tests {
                 "for `{form}`"
             );
         }
+    }
+
+    /// **A query's dataset slot is its clause when it writes one, and the empty range a
+    /// clause would occupy when it does not — never a sub-`SELECT`'s position.**
+    ///
+    /// Inserting a clause at the empty slot is executed, and the algebra read back from
+    /// the spliced text is asserted to carry it, for every query form (both `CONSTRUCT`
+    /// forms, and a `WHERE`-less group).
+    #[test]
+    fn the_dataset_slot_is_reported_for_every_query_with_or_without_a_clause() {
+        let options = ParserOptions::default();
+        let parser = SparqlParser::new();
+
+        let written = "SELECT ?s FROM <http://example.org/g> WHERE { ?s ?p ?o }";
+        let slot = parser
+            .parse_query_dataset_slot(written, &options)
+            .expect("parses");
+        assert_eq!(&written[slot.dataset_at], "FROM <http://example.org/g> ");
+
+        for (form, before) in [
+            ("SELECT ?s WHERE { ?s ?p ?o }", "WHERE"),
+            ("SELECT ?s{ ?s ?p ?o }", "{"),
+            ("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }", "WHERE"),
+            ("CONSTRUCT WHERE { ?s ?p ?o }", "WHERE"),
+            ("ASK { ?s ?p ?o }", "{"),
+            ("DESCRIBE ?s WHERE { ?s ?p ?o }", "WHERE"),
+            // A sub-select inside the WHERE is read after the query's own slot, and one
+            // inside a projected EXISTS is read before it; neither displaces it.
+            (
+                "SELECT ?s WHERE { { SELECT ?s WHERE { ?s ?p ?o } } }",
+                "WHERE { {",
+            ),
+            (
+                "SELECT (EXISTS { { SELECT ?s WHERE { ?s ?p ?o } } } AS ?e) WHERE { ?s ?p ?o }",
+                "WHERE { ?s ?p ?o }",
+            ),
+        ] {
+            let slot = parser
+                .parse_query_dataset_slot(form, &options)
+                .unwrap_or_else(|err| panic!("`{form}` parses, got {err:?}"));
+            assert!(
+                slot.dataset_at.is_empty(),
+                "no clause is written in `{form}`"
+            );
+            assert!(
+                form[slot.dataset_at.start..].starts_with(before),
+                "`{form}`: the slot sits before `{before}`, got {:?}",
+                &form[slot.dataset_at.start..]
+            );
+            let spliced = format!(
+                "{} FROM <http://example.org/g> {}",
+                &form[..slot.dataset_at.start],
+                &form[slot.dataset_at.start..]
+            );
+            let query = parser
+                .parse_query_with(&spliced, &options)
+                .unwrap_or_else(|err| panic!("`{spliced}` parses, got {err:?}"));
+            let dataset = match query {
+                Query::Select { dataset, .. }
+                | Query::Construct { dataset, .. }
+                | Query::Ask { dataset, .. }
+                | Query::Describe { dataset, .. } => dataset,
+            };
+            assert_eq!(
+                dataset.default.len(),
+                1,
+                "`{spliced}` carries the inserted FROM"
+            );
+        }
+    }
+
+    /// **Each update operation reports where its dataset clause is or would go, by the
+    /// production it was read under.**
+    #[test]
+    fn the_update_split_reports_each_operations_dataset_slot() {
+        let options = ParserOptions::default();
+        let parser = SparqlParser::new();
+        let text = "PREFIX ex: <http://example.org/>\n\
+                    INSERT DATA { ex:a ex:p ex:b } ;\n\
+                    INSERT { ?s ex:q ?o } WHERE { ?s ex:p ?o } ;\n\
+                    DELETE { ?s ex:q ?o } INSERT { ?s ex:r ?o } USING ex:g USING NAMED ex:n WHERE { ?s ex:q ?o } ;\n\
+                    WITH ex:g DELETE { ?s ex:r ?o } WHERE { ?s ex:r ?o } ;\n\
+                    DELETE WHERE { ?s ex:p ?o } ;\n\
+                    CLEAR ALL";
+        let split = parser
+            .parse_update_split(text, &options)
+            .expect("the request parses");
+        assert_eq!(split.operations.len(), split.update.operations.len());
+        assert_eq!(split.operations.len(), 6);
+        assert_eq!(split.operations[0], UpdateDatasetSlot::NoWhereClause);
+        let UpdateDatasetSlot::Modify { with_at, using_at } = &split.operations[1] else {
+            panic!("INSERT … WHERE is a modify: {:?}", split.operations[1]);
+        };
+        assert_eq!(*with_at, None);
+        assert!(using_at.is_empty());
+        assert!(text[using_at.start..].starts_with("WHERE { ?s ex:p ?o } ;"));
+        let UpdateDatasetSlot::Modify { with_at, using_at } = &split.operations[2] else {
+            panic!(
+                "DELETE … INSERT … WHERE is a modify: {:?}",
+                split.operations[2]
+            );
+        };
+        assert_eq!(*with_at, None);
+        assert_eq!(&text[using_at.clone()], "USING ex:g USING NAMED ex:n ");
+        let UpdateDatasetSlot::Modify { with_at, using_at } = &split.operations[3] else {
+            panic!("WITH … is a modify: {:?}", split.operations[3]);
+        };
+        assert_eq!(&text[with_at.clone().expect("WITH")], "WITH ex:g ");
+        assert!(using_at.is_empty());
+        let UpdateDatasetSlot::DeleteWhere {
+            where_at,
+            pattern_at,
+        } = &split.operations[4]
+        else {
+            panic!(
+                "DELETE WHERE is its own shorthand: {:?}",
+                split.operations[4]
+            );
+        };
+        assert!(text[*where_at..].starts_with("WHERE { ?s ex:p ?o }"));
+        assert_eq!(&text[pattern_at.clone()], "{ ?s ex:p ?o }");
+        assert_eq!(split.operations[5], UpdateDatasetSlot::NoWhereClause);
+
+        // The long form the shorthand is defined as, written at the reported positions,
+        // parses to the same operation with a USING clause added.
+        let one = "DELETE WHERE { ?s <http://example.org/p> ?o }";
+        let split = parser.parse_update_split(one, &options).expect("parses");
+        let UpdateDatasetSlot::DeleteWhere {
+            where_at,
+            pattern_at,
+        } = split.operations[0].clone()
+        else {
+            panic!("DELETE WHERE: {:?}", split.operations[0]);
+        };
+        let long = format!(
+            "{}{}\nUSING <http://example.org/g> {}",
+            &one[..where_at],
+            &one[pattern_at],
+            &one[where_at..]
+        );
+        let update = parser
+            .parse_update_with(&long, &options)
+            .expect("long form parses");
+        let GraphUpdateOperation::DeleteInsert { delete, using, .. } = &update.operations[0] else {
+            panic!("a modify: {:?}", update.operations[0]);
+        };
+        let GraphUpdateOperation::DeleteInsert {
+            delete: short_delete,
+            ..
+        } = &split.update.operations[0]
+        else {
+            panic!("a modify: {:?}", split.update.operations[0]);
+        };
+        assert_eq!(
+            delete, short_delete,
+            "the template is the shorthand's pattern"
+        );
+        assert_eq!(using.len(), 1);
     }
 
     #[test]

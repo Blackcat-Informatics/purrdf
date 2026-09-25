@@ -97,7 +97,7 @@ pub use ast::{
 };
 pub use error::{ParseError, Result};
 pub use parser::{
-    MAX_GRAPH_PATTERN_DEPTH, MAX_GRAPH_PATTERN_NODES, ParserOptions, QuerySplit, SparqlParser,
-    builtin_function_keyword,
+    MAX_GRAPH_PATTERN_DEPTH, MAX_GRAPH_PATTERN_NODES, ParserOptions, QueryDatasetSlot, QuerySplit,
+    SparqlParser, UpdateDatasetSlot, UpdateSplit, builtin_function_keyword,
 };
 pub use serialize::pattern_to_select_query;
