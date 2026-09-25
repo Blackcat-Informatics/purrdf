@@ -1025,8 +1025,12 @@ impl EffectiveF32Row<'_> {
             Self::Normalized(values) => {
                 let start = out.len();
                 let decoded = values.raw.decode_into(out);
+                // One correctly rounded binary64 quotient per value on every target, the
+                // x87 included, exactly as `next` computes it.
+                let precision = Precision::enter();
+                let ops = precision.binary64();
                 for value in &mut out[start..] {
-                    *value = (f64::from(*value) / values.norm) as f32;
+                    *value = ops.div(f64::from(*value), values.norm) as f32;
                 }
                 decoded
             }
@@ -5340,6 +5344,63 @@ mod tests {
             assert_eq!(
                 out[1..].iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
                 expected
+            );
+        }
+    }
+
+    /// Both reads of a normalized row are one binary64 quotient per value, correctly
+    /// rounded, then narrowed to binary32 -- the integer reference's result. The rows are
+    /// witnesses: each holds a value whose correctly rounded binary64 quotient is exactly
+    /// a binary32 midpoint (a tie, to even) while the exact quotient is not, so a read that
+    /// divides with the bare operator on the x87 -- rounding the quotient to the register's
+    /// 64 bits and narrowing that straight to binary32 -- gives the other neighbour. They
+    /// were found by searching two-component rows `[b, c]` for such a quotient.
+    #[test]
+    fn both_normalized_f32_reads_divide_as_the_software_reference() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        for (row, witness) in [
+            ([0x3fb7_c000_u32, 0x3f34_c8d7], 0_usize),
+            ([0x3fb8_4000, 0x3f19_1dab], 1),
+        ] {
+            let values = row.map(f32::from_bits);
+            let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let normalized = L2F32Scalars::new(&bytes, 0, 2, exact()).expect("nonzero");
+            let norm = normalized.norm;
+            // PURREMB's fold over `[b, c]`, `b > c`, in the reference's arithmetic.
+            let (b, c) = (f64::from(values[0]), f64::from(values[1]));
+            let ratio = soft::div(c, b);
+            let reference_norm = soft::mul(b, soft::sqrt(soft::add(1.0, soft::mul(ratio, ratio))));
+            assert_eq!(
+                norm.to_bits(),
+                reference_norm.to_bits(),
+                "{row:08x?}: the norm"
+            );
+            let expected: Vec<u32> = values
+                .iter()
+                .map(|&value| {
+                    soft::div64_to32_via(f64::from(value), norm, soft::BINARY64).to_bits()
+                })
+                .collect();
+            // The observing oracle: narrowed from 64 bits, the witness value differs.
+            let value = f64::from(values[witness]);
+            assert_ne!(
+                soft::div64_to32_via(value, norm, soft::X87_EXTENDED).to_bits(),
+                expected[witness],
+                "{row:08x?}: a witness"
+            );
+            let effective = EffectiveF32Row::Normalized(normalized);
+            let mut out = Vec::new();
+            effective.clone().decode_into(&mut out).expect("finite");
+            assert_eq!(
+                out.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected,
+                "{row:08x?}: decode_into"
+            );
+            assert_eq!(
+                drain_f32(effective),
+                (expected, Ok(())),
+                "{row:08x?}: the iterator"
             );
         }
     }

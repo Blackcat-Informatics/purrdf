@@ -13,12 +13,21 @@
 //! they answer. The register is per-thread, so no other test observes it.
 //!
 //! On `x86_64` the refusal names the MXCSR, which is read before anything else. On 32-bit
-//! x86 no register is read, so the same flushed thread is refused on the behavioural
-//! probe's evidence alone, and the default environment still answers: that is the
-//! target class the probe exists for. The refusal itself is unit-tested for `aarch64`'s
-//! FPCR and RISC-V's `frm` in `purrdf_core::distance`, and wasm has no such register.
+//! x86 with SSE2 no register is read, so the same flushed thread is refused on the
+//! behavioural probe's evidence alone, and the default environment still answers: that is
+//! the target class the probe exists for. The refusal itself is unit-tested for
+//! `aarch64`'s FPCR and RISC-V's `frm` in `purrdf_core::distance`, and wasm has no such
+//! register.
+//!
+//! Only where MXCSR governs binary64: `x86_64`, and 32-bit `x86` with SSE2. Without SSE2
+//! binary64 runs on the x87, which has no flush-to-zero mode for FTZ to stand in for; its
+//! own departure, a directed rounding control, is refused by name at the same entry
+//! points in `float_environment_x87` and `float_environment_x87_rayon`.
 
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 
 #[path = "support/purremb.rs"]
 mod purremb;

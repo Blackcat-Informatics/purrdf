@@ -1398,6 +1398,7 @@ dependencies = [
  "purrdf-cdt",
  "purrdf-events",
  "purrdf-iri",
+ "purrdf-xsd",
  "regex",
  "regex-syntax",
  "sha2",

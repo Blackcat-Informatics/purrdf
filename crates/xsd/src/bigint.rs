@@ -192,11 +192,16 @@ impl BigInt {
             BinaryTop::Scaled { top, shift } => {
                 // `top`'s bit 63 is set, so `top as f64` lies in `[2^63, 2^64]`
                 // and `× 2^shift` is exact unless it overflows — and an overflow
-                // there is exactly IEEE's round-to-nearest overflow to `∞`.
+                // there is exactly IEEE's round-to-nearest overflow to `∞`. The
+                // product goes through `ieee::f64_mul` so that both the rounded
+                // `top` and the product are binary64 values on every target: on the
+                // x87 the bare expression keeps `top` unrounded and the product at
+                // the register's exponent range, so a tie that overflows to `∞`
+                // stays finite.
                 if shift > 1024 - 64 {
                     f64::INFINITY
                 } else {
-                    (top as f64) * pow2_f64(shift)
+                    crate::ieee::f64_mul(top as f64, pow2_f64(shift))
                 }
             }
         };
@@ -216,7 +221,7 @@ impl BigInt {
                 if shift > 128 - 64 {
                     f32::INFINITY
                 } else {
-                    (top as f32) * pow2_f32(shift)
+                    crate::ieee::f32_mul(top as f32, pow2_f32(shift))
                 }
             }
         };

@@ -1266,9 +1266,11 @@ fn shift_decimal_left(value: &str, places: usize) -> Result<String, String> {
         let parsed = value
             .parse::<f64>()
             .map_err(|_| "invalid CSVW percentage number".to_owned())?;
+        // `10^places` is exact (places is 2 or 3), and the quotient is correctly rounded
+        // on every target, the x87 included, so the lexical is the same everywhere.
         return Ok(format!(
             "{}",
-            parsed / 10_f64.powi(i32::try_from(places).unwrap_or(0))
+            purrdf_xsd::ieee::f64_div(parsed, 10_f64.powi(i32::try_from(places).unwrap_or(0)))
         ));
     }
     let (sign, value) = value.strip_prefix('-').map_or_else(

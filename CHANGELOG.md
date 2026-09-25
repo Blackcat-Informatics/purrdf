@@ -78,6 +78,27 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     subnormal result is rounded once. `Exact` returns the same bits there as on
     every other target, proven against an integer software reference, and a
     thread where the guard does not take hold is refused as `DoubleRounding`.
+    The layer is the workspace's, not the distance module's: `purrdf_xsd::ieee`
+    holds the one implementation -- `Binary64Scope`/`Binary32Scope` (precision
+    control at 53 or 24 bits), their `Binary64`/`Binary32` operation tokens, and
+    the one-off `f64_add` ... `f32_sqrt` functions -- with the binary32
+    subnormal range scaled by 2⁻¹⁶²⁵⁶ (the distance between the x87's and
+    binary32's smallest normal exponents). `+`, `−`, `×`, `÷` and `√` are
+    correctly rounded at both widths on every target; everywhere but the x87
+    each is the bare operator, inlined. Every binary operation whose bits reach
+    a result runs through it, so on the x87 the SPARQL `xsd:double` and
+    `xsd:float` operators (and with them `SUM`, `AVG` and `VARIANCE`), `STDDEV`,
+    `fn:round`, the decimal and big-integer conversions to `xsd:double` and
+    `xsd:float`, the join planner's cost model (which orders an unordered
+    query's rows and decides a governed refusal), the bulk read of a normalized
+    binary32 projection row and the CSVW percentage scaling now return the bits
+    every other target does; before, each rounded through the register's 64
+    bits, and `1 + (2⁻⁵³ + 2⁻⁷⁸)` as `xsd:double` literals answered `1.0E0`.
+    A big integer whose conversion to `xsd:double` ties to infinity also stayed
+    finite there. On an x87 build a thread that loads a directed rounding
+    control is refused by name at every HNSW and kNN entry point, rayon workers
+    included, and the flush-to-zero suites run only where the MXCSR governs
+    binary64.
 
 - **sparql-eval:** `Kernel::distance_reassociated` and
   `Kernel::distance_bounded_reassociated` are named entry points for the

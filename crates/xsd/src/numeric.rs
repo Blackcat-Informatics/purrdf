@@ -8,6 +8,7 @@
 use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
+use crate::ieee;
 use crate::value::{XsdError, XsdValue};
 
 /// An exact decimal: `value = mantissa × 10^(-scale)`. Mirrors `oxsdatatypes`'
@@ -832,7 +833,9 @@ pub(crate) fn integer_to_decimal(value: i128) -> Decimal {
 /// `op:numeric-add` — the numeric-TIER `+` operator only. Follows the numeric
 /// promotion tower: `integer ⊂ decimal ⊂ float ⊂ double`. Integer addition is
 /// exact (`i128`); decimal addition is exact within the representable range;
-/// float/double are IEEE.
+/// float/double are IEEE: the sum correctly rounded once into binary32/binary64 on
+/// every target, the x87 included ([`crate::ieee`]). `numeric_sub`, `numeric_mul`
+/// and `numeric_div` hold the same law.
 ///
 /// This is a narrower contract than [`crate::ops::value_add`], the SPARQL-
 /// facing `+`: every call site over an `XsdValue` of unknown family should go
@@ -872,7 +875,7 @@ pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f64(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in add",
             })?;
-            Ok(Double(x + y))
+            Ok(Double(ieee::f64_add(x, y)))
         }
         // Either float (no double) → f32
         (Float(_), _) | (_, Float(_)) => {
@@ -882,7 +885,7 @@ pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f32(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in add",
             })?;
-            Ok(Float(x + y))
+            Ok(Float(ieee::f32_add(x, y)))
         }
         // Either decimal (no float/double) → exact decimal
         (Dec(x), Dec(y)) => decimal_add(x, y),
@@ -926,7 +929,7 @@ pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f64(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in sub",
             })?;
-            Ok(Double(x - y))
+            Ok(Double(ieee::f64_sub(x, y)))
         }
         (Float(_), _) | (_, Float(_)) => {
             let x = num_f32(a).ok_or(XsdError::TypeMismatch {
@@ -935,7 +938,7 @@ pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f32(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in sub",
             })?;
-            Ok(Float(x - y))
+            Ok(Float(ieee::f32_sub(x, y)))
         }
         (Dec(x), Dec(y)) => decimal_sub(x, y),
         (Integer { value: x, .. }, Dec(y)) => decimal_sub(&integer_to_decimal(*x), y),
@@ -982,7 +985,7 @@ pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f64(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in mul",
             })?;
-            Ok(Double(x * y))
+            Ok(Double(ieee::f64_mul(x, y)))
         }
         (Float(_), _) | (_, Float(_)) => {
             let x = num_f32(a).ok_or(XsdError::TypeMismatch {
@@ -991,7 +994,7 @@ pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f32(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in mul",
             })?;
-            Ok(Float(x * y))
+            Ok(Float(ieee::f32_mul(x, y)))
         }
         (Dec(x), Dec(y)) => decimal_mul(x, y),
         (Integer { value: x, .. }, Dec(y)) => decimal_mul(&integer_to_decimal(*x), y),
@@ -1080,7 +1083,7 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f64(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in div",
             })?;
-            Ok(Double(x / y))
+            Ok(Double(ieee::f64_div(x, y)))
         }
         (Float(_), _) | (_, Float(_)) => {
             let x = num_f32(a).ok_or(XsdError::TypeMismatch {
@@ -1089,7 +1092,7 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
             let y = num_f32(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in div",
             })?;
-            Ok(Float(x / y))
+            Ok(Float(ieee::f32_div(x, y)))
         }
         // Integer ÷ Integer → Decimal (XPath op:numeric-divide spec rule)
         (Integer { value: x, .. }, Integer { value: y, .. }) => {
@@ -1516,7 +1519,7 @@ pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
             // round-half-toward-+infinity. For positive they agree. For negative halves
             // they differ: f32::round(-2.5) = -3 but fn:round(-2.5) = -2.
             // Correction: for negative values at the half-point, add 1.0.
-            let r = if *f == f.floor() + 0.5 && *f < 0.0 {
+            let r = if *f == ieee::f32_add(f.floor(), 0.5) && *f < 0.0 {
                 f.ceil()
             } else {
                 f.round()
@@ -1525,7 +1528,7 @@ pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
         }
         XsdValue::Double(d) => {
             // Same correction as float.
-            let r = if *d == d.floor() + 0.5 && *d < 0.0 {
+            let r = if *d == ieee::f64_add(d.floor(), 0.5) && *d < 0.0 {
                 d.ceil()
             } else {
                 d.round()
@@ -2710,5 +2713,186 @@ mod tests {
             numeric_unary_plus(&string),
             Err(XsdError::TypeMismatch { .. })
         ));
+    }
+
+    /// `xsd:double` and `xsd:float` arithmetic is the IEEE result on every target, the x87
+    /// included: each operand pair below is a double-rounding witness -- the reference
+    /// shows the result rounded through the x87's register format differs -- and the
+    /// numeric operators return the correctly rounded bits.
+    #[test]
+    fn binary_arithmetic_rounds_once_on_double_rounding_witnesses() {
+        use crate::ieee::reference as soft;
+
+        let one = 1.0_f64;
+        let little = f64::from_bits(0x3ca0_0000_0800_0000); // 2^-53 + 2^-78
+        // The observing oracle: through the register's 64 bits the sum is 1.
+        assert_eq!(soft::add_via(one, little, soft::X87_EXTENDED), 1.0);
+        let succ = 1.0 + f64::EPSILON;
+        // Through the lexical space, as a query writes them.
+        let lexical = canonical_double(little);
+        let parsed = parse_double(&lexical).expect("round-trips");
+        assert_eq!(parsed.to_bits(), little.to_bits(), "{lexical}");
+        let sum = numeric_add(&double_val(one), &double_val(parsed)).unwrap();
+        assert_eq!(as_double(&sum).to_bits(), succ.to_bits());
+        assert_eq!(sum.canonical_lexical(), "1.0000000000000002E0");
+        // Promotion from an integer operand does not change the law.
+        let sum = numeric_add(&int_val(1), &double_val(little)).unwrap();
+        assert_eq!(as_double(&sum).to_bits(), succ.to_bits());
+        // `(1 + ulp) − (−(2^-53 − 2^-78))` is the same witness as a difference.
+        let less = f64::from_bits(0x3c9f_ffff_f000_0000);
+        let difference = numeric_sub(&double_val(succ), &double_val(-less)).unwrap();
+        assert_eq!(as_double(&difference).to_bits(), succ.to_bits());
+        assert_eq!(
+            soft::add_via(succ, less, soft::X87_EXTENDED),
+            f64::from_bits(0x3ff0_0000_0000_0002)
+        );
+
+        // Subnormal products and quotients: rounded at 53 bits and again when stored
+        // without the scaling.
+        let half_min_plus_one = f64::from_bits(0x0008_0000_0000_0001);
+        let (a, b) = (
+            f64::from_bits(((1023 - 512) << 52) + 4),
+            f64::from_bits(((1023 - 511) << 52) - 2),
+        );
+        assert_ne!(soft::mul_via(a, b, soft::X87_DOUBLE), half_min_plus_one);
+        let product = numeric_mul(&double_val(a), &double_val(b)).unwrap();
+        assert_eq!(as_double(&product).to_bits(), half_min_plus_one.to_bits());
+        let (a, b) = (
+            f64::from_bits((1023 - 512) << 52),
+            f64::from_bits(((1023 + 511) << 52) - 2),
+        );
+        assert_ne!(soft::div_via(a, b, soft::X87_DOUBLE), half_min_plus_one);
+        let quotient = numeric_div(&double_val(a), &double_val(b)).unwrap();
+        assert_eq!(as_double(&quotient).to_bits(), half_min_plus_one.to_bits());
+
+        // xsd:float: the binary32 subnormal witnesses, rounded at 24 bits and again when
+        // stored without the scaling.
+        let f32_half_min_plus_one = f32::from_bits(0x0040_0001);
+        let (a, b) = (
+            f32::from_bits(((127 - 64) << 23) + 4),
+            f32::from_bits(((127 - 63) << 23) - 2),
+        );
+        assert_ne!(
+            soft::mul32_via(a, b, soft::X87_SINGLE),
+            f32_half_min_plus_one
+        );
+        let product = numeric_mul(&float_val(a), &float_val(b)).unwrap();
+        assert_eq!(
+            as_float(&product).to_bits(),
+            f32_half_min_plus_one.to_bits()
+        );
+        let (a, b) = (
+            f32::from_bits((127 - 64) << 23),
+            f32::from_bits(((127 + 63) << 23) - 2),
+        );
+        assert_ne!(
+            soft::div32_via(a, b, soft::X87_SINGLE),
+            f32_half_min_plus_one
+        );
+        let quotient = numeric_div(&float_val(a), &float_val(b)).unwrap();
+        assert_eq!(
+            as_float(&quotient).to_bits(),
+            f32_half_min_plus_one.to_bits()
+        );
+    }
+
+    /// Random `xsd:double`/`xsd:float` operands through all four operators, held to the
+    /// integer reference bit for bit.
+    #[test]
+    fn binary_arithmetic_equals_the_software_reference() {
+        use crate::ieee::reference as soft;
+
+        let mut state = 0x0b1a_4e57_u64;
+        let mut next = || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        for index in 0..20_000_u32 {
+            // Near one (dense ties) or anywhere in the finite range.
+            let draw = |bits: u64| {
+                if index % 2 == 0 {
+                    f64::from_bits((bits & 0x800f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000)
+                } else {
+                    f64::from_bits(bits & 0xffef_ffff_ffff_ffff)
+                }
+            };
+            let (x, y) = (draw(next()), draw(next()));
+            let d = |v: &XsdValue| as_double(v).to_bits();
+            assert_eq!(
+                d(&numeric_add(&double_val(x), &double_val(y)).unwrap()),
+                soft::add(x, y).to_bits()
+            );
+            assert_eq!(
+                d(&numeric_sub(&double_val(x), &double_val(y)).unwrap()),
+                soft::sub(x, y).to_bits()
+            );
+            assert_eq!(
+                d(&numeric_mul(&double_val(x), &double_val(y)).unwrap()),
+                soft::mul(x, y).to_bits()
+            );
+            assert_eq!(
+                d(&numeric_div(&double_val(x), &double_val(y)).unwrap()),
+                soft::div(x, y).to_bits()
+            );
+            let (p, q) = (x as f32, y as f32);
+            if p.is_finite() && q.is_finite() {
+                let f = |v: &XsdValue| as_float(v).to_bits();
+                assert_eq!(
+                    f(&numeric_add(&float_val(p), &float_val(q)).unwrap()),
+                    soft::add32(p, q).to_bits()
+                );
+                assert_eq!(
+                    f(&numeric_sub(&float_val(p), &float_val(q)).unwrap()),
+                    soft::sub32(p, q).to_bits()
+                );
+                assert_eq!(
+                    f(&numeric_mul(&float_val(p), &float_val(q)).unwrap()),
+                    soft::mul32(p, q).to_bits()
+                );
+                if q != 0.0 {
+                    assert_eq!(
+                        f(&numeric_div(&float_val(p), &float_val(q)).unwrap()),
+                        soft::div32(p, q).to_bits()
+                    );
+                }
+            }
+        }
+    }
+
+    /// The decimal-to-double conversion's exact fast path divides once: a decimal whose
+    /// quotient `mantissa / 10^scale` rounds differently through the x87's 64-bit register
+    /// converts to the correctly rounded double, and so compares and promotes by it.
+    #[test]
+    fn decimal_to_double_fast_path_rounds_once_on_a_double_rounding_witness() {
+        use crate::ieee::reference as soft;
+
+        // The first scale, and the first mantissa from 2^52 upward at it, whose quotient
+        // is a witness. (No quotient by 10 is one: the binary expansion of a tenth
+        // repeats `0011`, which never rounds onto a midpoint at 64 bits.)
+        let (scale, witness) = (1_u8..=22)
+            .find_map(|scale| {
+                let power = 10_f64.powi(i32::from(scale));
+                (1_i128 << 52..(1 << 52) + 5_000)
+                    .find(|&m| {
+                        let a = m as f64;
+                        soft::div_via(a, power, soft::X87_EXTENDED).to_bits()
+                            != soft::div(a, power).to_bits()
+                    })
+                    .map(|m| (scale, m))
+            })
+            .expect("a double-rounding witness at some scale");
+        let expected = soft::div(witness as f64, 10_f64.powi(i32::from(scale)));
+        let decimal = Decimal::from_parts(witness, scale);
+        assert_eq!(
+            decimal.to_f64().to_bits(),
+            expected.to_bits(),
+            "{witness} / 10^{scale}"
+        );
+        // The same bits through promotion into double arithmetic.
+        let sum = numeric_add(&XsdValue::Decimal(decimal), &double_val(0.0)).unwrap();
+        assert_eq!(as_double(&sum).to_bits(), expected.to_bits());
     }
 }

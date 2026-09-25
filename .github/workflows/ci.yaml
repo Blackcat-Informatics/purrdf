@@ -565,22 +565,33 @@ jobs:
             --test knn_wasm_determinism --test knn_wasm_reassociated
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hnsw \
             --lib --test determinism --test conformance --test float_environment \
-            --test wasm_reassociated
+            --test float_environment_rayon --test wasm_reassociated
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
+            --test binary_arithmetic
 
-      # i586 has no SSE2, so every binary64 operation runs on the x87, which rounds to
-      # its register precision and again on every store. The distance kernels compute
-      # under a guard that sets binary64 precision and scale the subnormal range of
-      # products and quotients; these suites prove the results equal the integer
-      # software reference bit for bit, and that the probe refuses a thread where the
-      # guard did not take hold. The i586 target links against the same 32-bit C
-      # library as i686.
-      - name: Run the distance, kNN and HNSW suites on i586 (x87 binary64)
+      # i586 has no SSE2, so every binary64 and binary32 operation runs on the x87,
+      # which rounds to its register precision and again on every store. Every
+      # result-affecting operation in the workspace computes through `purrdf_xsd::ieee`,
+      # under a guard that sets the format's precision and with the subnormal range of
+      # products and quotients scaled; these suites prove the operations, the SPARQL
+      # `xsd:double`/`xsd:float` arithmetic and aggregates, and the distance kernels
+      # equal the integer software reference bit for bit, that the probe refuses a
+      # thread where the guard did not take hold, and that a thread (or rayon worker)
+      # with a directed rounding control is refused by name. The i586 target links
+      # against the same 32-bit C library as i686.
+      - name: Run the arithmetic, distance, kNN and HNSW suites on i586 (x87)
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable
         run: |
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --lib
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib distance
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib ir::embedding
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
-          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval --lib bgp::tests
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval \
+            --test binary_arithmetic
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib \
+            --test float_environment_x87 --test float_environment_x87_rayon
 
   # riscv64 runs apart from i686 because the distribution's multilib and riscv64
   # cross compilers cannot be installed together. Its HNSW worker-count digest under

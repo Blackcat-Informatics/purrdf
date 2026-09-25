@@ -20,8 +20,15 @@
 //! the environment of the workers, so the refusal can only have come from the workers'
 //! own resolve. The global pool is process-wide, which is why this is its own test
 //! binary with a single test.
+//!
+//! Only where MXCSR governs binary64: `x86_64`, and 32-bit `x86` with SSE2. The x87's
+//! counterpart, workers that load a directed rounding control, is
+//! `float_environment_x87_rayon`.
 
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
@@ -75,7 +82,8 @@ fn matrix(rows: usize, dims: usize) -> VectorMatrix {
 }
 
 /// Whether `error` is the flush-to-zero refusal this target reports: the MXCSR by name
-/// on `x86_64`, where it is read, and the probe's flushed-result row on 32-bit x86.
+/// on `x86_64`, where it is read, and the probe's flushed-result row on 32-bit x86 with
+/// SSE2.
 fn is_ftz(error: &HnswError) -> bool {
     let HnswError::FloatEnvironment(FloatEnvironmentError::FlushToZero { evidence }) = error else {
         return false;

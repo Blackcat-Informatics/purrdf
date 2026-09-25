@@ -316,28 +316,42 @@ built without SSE2), each result is rounded to the register's 64-bit significand
 again when it is stored, and a value kept in a register has a 15-bit exponent, so it
 neither overflows nor becomes subnormal where binary64 would.
 
-The x87 is made correct, not refused. Every operation of both arithmetics, the PURREMB
-norm and the probe is a `Binary64` method, available only inside a `Precision` scope
-(`distance::binary64`). On every other target the methods are the language's operators
-(and the `algebraic_*` operations for the reassociated body) and the scope is empty. On
-the x87 the scope saves the control word and sets its precision-control field to 53
-bits, restoring the caller's word on exit, unwinding included; each operation is one
-`asm!` block that loads binary64 operands, performs one instruction and stores a
-binary64 result, so no value outlives its operation at the register's range. That
-makes `+`, `−` and `√` correctly rounded: a normal result already has 53 bits, an
-overflow is stored as the infinity IEEE gives, and a sum or difference in the
-subnormal range is exact. It does not make `×` and `÷` correct in the subnormal range,
-where a 53-bit result is rounded again by the store (Monniaux, *The pitfalls of
-verifying floating-point computations*, 2008). The technique `HotSpot` used for Java's
-`strictfp` closes that: one operand is scaled by 2⁻¹⁵³⁶⁰, the distance between the
-x87's smallest normal exponent and binary64's, so the x87 denormalizes the result onto
-binary64's subnormal grid (scaled) and rounds once; scaling back by 2¹⁵³⁶⁰ and storing
-are exact. On the x87 the reassociated body runs these same operations in written
-order: the licence permits reassociation and requires none, and every value the fold
-holds is then binary64, as its evidence claims. An integer software reference that
-rounds without any floating-point unit is the oracle: the operations, the probe
-constants, the exact kernels and the norm equal it bit for bit on every target, and
-the CI runs the distance, kNN and HNSW suites on `i586`.
+The x87 is made correct, not refused -- and not only here. Every binary floating-point
+operation in the workspace whose bits reach a result runs through one layer,
+`purrdf_xsd::ieee`, the lowest crate every consumer depends on: both distance
+arithmetics, the PURREMB norm and the probe (as `Binary64` methods inside a `Precision`
+scope, `distance::binary64`, a thin wrapper over `ieee::Binary64Scope`), and beyond the
+distance module the `xsd:double` and `xsd:float` operators (`numeric_add`, `_sub`, `_mul`,
+`_div`, so SPARQL `+ − × ÷`, `SUM`, `AVG`, `VARIANCE`), `fn:round`, the decimal and
+big-integer conversions' exact paths, `STDDEV`'s square root, the join planner's cost
+model (whose estimate orders an unordered query's rows and decides a governed refusal),
+the normalized-projection reads, and the CSVW percentage scaling. `+`, `−`, `×`, `÷` and
+`√` at both widths are correctly rounded; the transcendentals are not required to be by
+IEEE-754, and no result is computed with one. On every other target each operation is
+the language's operator, `#[inline(always)]`, and each scope is empty (the reassociated
+body keeps its `algebraic_*` operations there). On the x87 a `Binary64Scope` saves the
+control word and sets its precision-control field to 53 bits (a `Binary32Scope` to 24),
+restoring the caller's word on exit, unwinding included; each operation is one `asm!`
+block that loads its operands, performs one instruction and stores a result of the
+operation's width, so no value outlives its operation at the register's precision or
+range. That makes `+`, `−` and `√` correctly rounded: a normal result already has the
+format's width, an overflow is stored as the infinity IEEE gives, and a sum or
+difference in the subnormal range is exact. It does not make `×` and `÷` correct in the
+subnormal range, where the result is rounded again by the store (Monniaux, *The pitfalls
+of verifying floating-point computations*, 2008). The technique `HotSpot` used for Java's
+`strictfp` closes that: one operand is scaled by the distance between the x87's smallest
+normal exponent (−16382) and the format's -- 2⁻¹⁵³⁶⁰ for binary64 (−1022), 2⁻¹⁶²⁵⁶ for
+binary32 (−126) -- so the x87 denormalizes the result onto the format's subnormal grid
+(scaled) and rounds once; scaling back and storing are exact. On the x87 the reassociated
+body runs these same operations in written order: the licence permits reassociation and
+requires none, and every value the fold holds is then binary64, as its evidence claims.
+An integer software reference that rounds without any floating-point unit
+(`ieee::reference`) is the oracle: the operations at both widths, the probe constants,
+the exact kernels, the norm, and the SPARQL operators and aggregates on double-rounding
+witnesses equal it bit for bit on every target, and the CI runs the `purrdf-xsd` unit
+tests, the SPARQL arithmetic tests and the distance, kNN and HNSW suites on `i586`. A
+thread that loaded a directed rounding control into its x87 control word is refused by
+name at every distance entry point, on the thread that computes, rayon workers included.
 
 The law is behavioural, and it holds on every target. Resolving an arithmetic runs a
 probe of thirteen binary64 operations whose correctly rounded results under the

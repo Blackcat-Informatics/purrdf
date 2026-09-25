@@ -4,13 +4,15 @@
 //! The binary64 operations every arithmetic computes with, held to a software reference
 //! that uses no floating-point unit at all.
 //!
-//! [`soft`] computes each operation's exact result in integers and rounds it once, to
-//! nearest-even, into binary64's format, subnormals included; the same code rounds into
-//! any other format, so it also models what the x87 does when it rounds twice. The
-//! [`Binary64`](super::binary64::Binary64) operations, the probe rows' constants, and the
-//! exact kernels are all compared with it bit for bit. On a target whose unit is IEEE
-//! binary64 the comparison shows the reference is right; on the x87 it shows the guard
-//! and the scaling make the unit right.
+//! [`soft`] -- `purrdf_xsd::ieee::reference` -- computes each operation's exact result in
+//! integers and rounds it once, to nearest-even, into binary64's format, subnormals
+//! included; the same code rounds into any other format, so it also models what the x87
+//! does when it rounds twice. The [`Binary64`](super::binary64::Binary64) operations as
+//! the kernels reach them, the probe rows' constants, and the exact kernels are all
+//! compared with it bit for bit. On a target whose unit is IEEE binary64 the comparison
+//! shows the reference is right; on the x87 it shows the guard and the scaling make the
+//! unit right. The operations themselves, at both widths, and the unscaled x87 sequences
+//! that show the scaling is needed, are tested where they live, in `purrdf-xsd`.
 
 use core::hint::black_box;
 
@@ -18,303 +20,9 @@ use super::binary64::Precision;
 use super::tests::{Stream, reference_distance};
 use super::*;
 
-/// Binary64 arithmetic in integers: an exact result, rounded once.
-pub(super) mod soft {
-    /// An exact finite value, `(−1)^neg · sig · 2^exp`.
-    #[derive(Debug, Clone, Copy)]
-    struct Exact {
-        neg: bool,
-        sig: u128,
-        exp: i32,
-    }
-
-    /// A binary floating-point format with round-to-nearest-even: its significand width
-    /// and the exponent of its smallest normal (the lowest exponent a leading bit keeps
-    /// full precision at). Its exponent range is unbounded above; overflow is decided when
-    /// the value is converted to binary64.
-    #[derive(Debug, Clone, Copy)]
-    pub(in super::super) struct Format {
-        precision: u32,
-        emin: i32,
-    }
-
-    /// IEEE-754 binary64.
-    pub(in super::super) const BINARY64: Format = Format {
-        precision: 53,
-        emin: -1022,
-    };
-    /// The x87's register format at its power-on precision: a 64-bit significand, a
-    /// 15-bit exponent.
-    pub(in super::super) const X87_EXTENDED: Format = Format {
-        precision: 64,
-        emin: -16382,
-    };
-    /// The x87's register format with precision control at 53 bits: binary64's
-    /// significand over the 15-bit exponent.
-    pub(in super::super) const X87_DOUBLE: Format = Format {
-        precision: 53,
-        emin: -16382,
-    };
-
-    /// `x`, finite, with a normalized 53-bit significand when it is not zero.
-    fn decompose(x: f64) -> Exact {
-        let bits = x.to_bits();
-        let neg = bits >> 63 == 1;
-        let biased = i32::try_from((bits >> 52) & 0x7ff).expect("eleven bits");
-        let fraction = u128::from(bits & ((1 << 52) - 1));
-        let (mut sig, mut exp) = if biased == 0 {
-            (fraction, -1074)
-        } else {
-            (fraction | (1 << 52), biased - 1075)
-        };
-        if sig != 0 {
-            while sig < 1 << 52 {
-                sig <<= 1;
-                exp -= 1;
-            }
-        }
-        Exact { neg, sig, exp }
-    }
-
-    fn bit_length(sig: u128) -> i32 {
-        i32::try_from(128 - sig.leading_zeros()).expect("at most 128")
-    }
-
-    /// `value` rounded once, to nearest-even, into `format`.
-    fn round(value: Exact, format: Format) -> Exact {
-        if value.sig == 0 {
-            return value;
-        }
-        let leading = value.exp + bit_length(value.sig) - 1;
-        let precision = i32::try_from(format.precision).expect("small");
-        let lsb = leading.max(format.emin) - (precision - 1);
-        if lsb <= value.exp {
-            return value;
-        }
-        let shift = u32::try_from(lsb - value.exp).expect("positive");
-        let kept = match shift.cmp(&128) {
-            core::cmp::Ordering::Greater => 0,
-            // The half-unit is 2^127; only a significand above it rounds up to one unit.
-            core::cmp::Ordering::Equal => u128::from(value.sig > 1 << 127),
-            core::cmp::Ordering::Less => {
-                let kept = value.sig >> shift;
-                let rest = value.sig & ((1 << shift) - 1);
-                let half = 1 << (shift - 1);
-                if rest > half || (rest == half && kept & 1 == 1) {
-                    kept + 1
-                } else {
-                    kept
-                }
-            }
-        };
-        Exact {
-            neg: value.neg,
-            sig: kept,
-            exp: lsb,
-        }
-    }
-
-    /// A value already on binary64's grid, as binary64 (an infinity past its range).
-    fn to_f64(value: Exact) -> f64 {
-        let sign = u64::from(value.neg) << 63;
-        if value.sig == 0 {
-            return f64::from_bits(sign);
-        }
-        let leading = value.exp + bit_length(value.sig) - 1;
-        if leading > 1023 {
-            return f64::from_bits(sign | f64::INFINITY.to_bits());
-        }
-        let (unit, biased) = if leading >= -1022 {
-            (
-                leading - 52,
-                u64::try_from(leading + 1023).expect("positive"),
-            )
-        } else {
-            (-1074, 0)
-        };
-        let shift = value.exp - unit;
-        let sig = if shift >= 0 {
-            value.sig << shift
-        } else {
-            let right = shift.unsigned_abs();
-            assert_eq!(value.sig & ((1 << right) - 1), 0, "a value on the grid");
-            value.sig >> right
-        };
-        let sig = u64::try_from(sig).expect("at most 53 bits");
-        let fraction = if biased == 0 { sig } else { sig - (1 << 52) };
-        f64::from_bits(sign | (biased << 52) | fraction)
-    }
-
-    /// The exact sum of two finite values, with the sticky bit of anything lost far
-    /// below every rounding position this module uses.
-    fn exact_sum(a: f64, b: f64) -> Exact {
-        let (x, y) = (decompose(a), decompose(b));
-        if x.sig == 0 && y.sig == 0 {
-            return Exact {
-                neg: x.neg && y.neg,
-                sig: 0,
-                exp: 0,
-            };
-        }
-        if x.sig == 0 {
-            return y;
-        }
-        if y.sig == 0 {
-            return x;
-        }
-        let (high, low) = if x.exp >= y.exp { (x, y) } else { (y, x) };
-        let gap = high.exp - low.exp;
-        // 74 bits of headroom keeps a 53-bit significand within 127 bits.
-        let (high_sig, low_sig, exp) = if gap <= 74 {
-            (high.sig << gap, low.sig, low.exp)
-        } else {
-            let right = gap - 74;
-            let low_sig = if right >= 128 {
-                1
-            } else {
-                let right = right.unsigned_abs();
-                (low.sig >> right) | u128::from(low.sig & ((1 << right) - 1) != 0)
-            };
-            (high.sig << 74, low_sig, high.exp - 74)
-        };
-        if high.neg == low.neg {
-            return Exact {
-                neg: high.neg,
-                sig: high_sig + low_sig,
-                exp,
-            };
-        }
-        match high_sig.cmp(&low_sig) {
-            core::cmp::Ordering::Equal => Exact {
-                neg: false,
-                sig: 0,
-                exp,
-            },
-            core::cmp::Ordering::Greater => Exact {
-                neg: high.neg,
-                sig: high_sig - low_sig,
-                exp,
-            },
-            core::cmp::Ordering::Less => Exact {
-                neg: low.neg,
-                sig: low_sig - high_sig,
-                exp,
-            },
-        }
-    }
-
-    fn exact_product(a: f64, b: f64) -> Exact {
-        let (x, y) = (decompose(a), decompose(b));
-        Exact {
-            neg: x.neg != y.neg,
-            sig: x.sig * y.sig,
-            exp: x.exp + y.exp,
-        }
-    }
-
-    /// The quotient to 73 bits or more, with a sticky bit for a remainder.
-    fn exact_quotient(a: f64, b: f64) -> Exact {
-        let (x, y) = (decompose(a), decompose(b));
-        let neg = x.neg != y.neg;
-        if x.sig == 0 {
-            return Exact {
-                neg,
-                sig: 0,
-                exp: 0,
-            };
-        }
-        let dividend = x.sig << 74;
-        let quotient = dividend / y.sig;
-        let sticky = u128::from(dividend % y.sig != 0);
-        Exact {
-            neg,
-            sig: (quotient << 1) | sticky,
-            exp: x.exp - 74 - y.exp - 1,
-        }
-    }
-
-    /// The square root of a positive value to 62 bits, with a sticky bit.
-    fn exact_root(a: f64) -> Exact {
-        let x = decompose(a);
-        let (mut sig, mut exp) = (x.sig, x.exp);
-        if exp % 2 != 0 {
-            sig <<= 1;
-            exp -= 1;
-        }
-        let radicand = sig << 70;
-        let root = radicand.isqrt();
-        let sticky = u128::from(root * root != radicand);
-        Exact {
-            neg: false,
-            sig: (root << 1) | sticky,
-            exp: (exp - 70) / 2 - 1,
-        }
-    }
-
-    /// Whether the IEEE result is fixed without rounding: an operand is a NaN or an
-    /// infinity, for which every unit computes the same special value.
-    fn special(a: f64, b: f64) -> bool {
-        !a.is_finite() || !b.is_finite()
-    }
-
-    /// `exact` rounded into `first`, then into binary64: one rounding when `first` is
-    /// binary64, and the x87's two when it is one of the register formats.
-    fn through(exact: Exact, first: Format) -> f64 {
-        to_f64(round(round(exact, first), BINARY64))
-    }
-
-    /// `a + b` rounded into `first`, then binary64.
-    pub(in super::super) fn add_via(a: f64, b: f64, first: Format) -> f64 {
-        if special(a, b) {
-            return a + b;
-        }
-        through(exact_sum(a, b), first)
-    }
-
-    /// `a × b` rounded into `first`, then binary64.
-    pub(in super::super) fn mul_via(a: f64, b: f64, first: Format) -> f64 {
-        if special(a, b) {
-            return a * b;
-        }
-        through(exact_product(a, b), first)
-    }
-
-    /// `a ÷ b` rounded into `first`, then binary64.
-    pub(in super::super) fn div_via(a: f64, b: f64, first: Format) -> f64 {
-        if special(a, b) || b == 0.0 {
-            return a / b;
-        }
-        through(exact_quotient(a, b), first)
-    }
-
-    /// `a + b`, correctly rounded.
-    pub(in super::super) fn add(a: f64, b: f64) -> f64 {
-        add_via(a, b, BINARY64)
-    }
-
-    /// `a − b`, correctly rounded.
-    pub(in super::super) fn sub(a: f64, b: f64) -> f64 {
-        add_via(a, -b, BINARY64)
-    }
-
-    /// `a × b`, correctly rounded.
-    pub(in super::super) fn mul(a: f64, b: f64) -> f64 {
-        mul_via(a, b, BINARY64)
-    }
-
-    /// `a ÷ b`, correctly rounded.
-    pub(in super::super) fn div(a: f64, b: f64) -> f64 {
-        div_via(a, b, BINARY64)
-    }
-
-    /// `√a`, correctly rounded.
-    pub(in super::super) fn sqrt(a: f64) -> f64 {
-        if !a.is_finite() || a <= 0.0 {
-            return a.sqrt();
-        }
-        through(exact_root(a), BINARY64)
-    }
-}
+/// The integer software reference: [`purrdf_xsd::ieee`]'s oracle, which every correctly
+/// rounded operation in the workspace is held to.
+pub(super) use purrdf_xsd::ieee::reference as soft;
 
 // ---- the operand fixture -------------------------------------------------------------
 
@@ -649,14 +357,17 @@ mod x87 {
     impl Loaded {
         fn load(word: u16) -> Self {
             let saved = x87::control_word();
-            x87::load_control_word(word);
+            // SAFETY: only the precision or rounding field differs from this thread's
+            // word, and `Drop` restores it.
+            unsafe { x87::load_control_word(word) };
             Self(saved)
         }
     }
 
     impl Drop for Loaded {
         fn drop(&mut self) {
-            x87::load_control_word(self.0);
+            // SAFETY: restores the word this thread had.
+            unsafe { x87::load_control_word(self.0) };
         }
     }
 
@@ -756,31 +467,6 @@ mod x87 {
         assert_eq!(env::probe(), Ok(()));
         assert!(Exact::resolve().is_ok());
         assert!(Reassociated::resolve().is_ok());
-    }
-
-    #[test]
-    fn without_the_scaling_the_subnormal_rows_round_twice() {
-        // Precision control at 53 bits closes the normal-range rows and leaves the
-        // subnormal ones: the unscaled product and quotient round twice, and the probe
-        // row observes it; the scaled operations do not.
-        let precision = Precision::enter();
-        let ops = precision.binary64();
-        for (row, unscaled) in [
-            (11, x87::mul_unscaled as fn(f64, f64) -> f64),
-            (12, x87::div_unscaled),
-        ] {
-            let probe = env::PROBES[row];
-            let (a, b) = probe.operands();
-            let twice = unscaled(a, b);
-            assert_ne!(twice.to_bits(), probe.expected, "{}", probe.operation);
-            let modelled = if probe.symbol() == '*' {
-                soft::mul_via(a, b, soft::X87_DOUBLE)
-            } else {
-                soft::div_via(a, b, soft::X87_DOUBLE)
-            };
-            assert_eq!(twice.to_bits(), modelled.to_bits(), "{}", probe.operation);
-            assert_eq!(probe.observe(ops), probe.expected, "{}", probe.operation);
-        }
     }
 
     #[test]
