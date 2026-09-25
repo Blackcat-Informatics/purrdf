@@ -369,16 +369,11 @@ const SEAM_FOCUS_NODES: usize = 4_096;
 /// of randomness or the scheduler. A host-sensitive figure would have no business
 /// being asserted; this one has no business being merely logged.
 ///
-/// # Why it moved from 59
-///
-/// `sh:class` now resolves at bind to an identity SET rather than a single slot,
-/// because a SHACL 1.2 `sh:class` value may be a list of classes (a disjunction)
-/// and the evaluator asks whether a value node is an instance of ANY of them. The
-/// seam shapes graph carries one `sh:class` and, before it, no set-valued
-/// constraint at all, so binding now builds the set table it used to skip (+1) and
-/// the one set in it (+1). Both are per shapes graph, not per quad: the figure is
-/// still identical for twice the instance data, which is the assertion beside it.
-const BIND_ALLOC_CONST: u64 = 61;
+/// A SHACL 1.2 `sh:class` value may be a list of classes (a disjunction), but only
+/// a list of two or more lowers to an identity set at bind; a single class stays
+/// the plain slot it always was. The seam shapes graph carries one `sh:class`, so
+/// binding it builds no set table and the figure is unchanged by the list form.
+const BIND_ALLOC_CONST: u64 = 59;
 
 /// How many allocations one prepared-product `admit` costs.
 ///

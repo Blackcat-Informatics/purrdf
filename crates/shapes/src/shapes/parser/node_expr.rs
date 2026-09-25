@@ -1352,7 +1352,7 @@ impl Parser<'_> {
                  rather than silently ignoring it"
             )),
             Some(row) => match row.class {
-                crate::spec::census::TermClass::Unimplemented(why) => Err(format!(
+                crate::spec::census::TermClass::Refused(why) => Err(format!(
                     "node expression on {node} uses <{p}>, which is not evaluated by this engine: \
                      {why}"
                 )),

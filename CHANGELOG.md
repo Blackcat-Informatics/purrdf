@@ -1417,11 +1417,11 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   loader reads, with that reason, and a resource that is only such an executable
   loads.
 
-- **python:** the type stub declared `MutableDataset.__init__` as returning the
-  prefix list that only `load` and `bulk_load` return; it returns `None`. The
-  `shapes.entail` documentation, in the stub and the binding, said rules run "to a
-  fixpoint"; it now describes the layered SHACL 1.2 Inference Rules execution the
-  engine performs.
+- **python:** the `.pyi` type declarations gave `MutableDataset.__init__` as
+  returning the prefix list that only `load` and `bulk_load` return; it returns
+  `None`. The `shapes.entail` documentation, in the `.pyi` file and the binding,
+  said rules run "to a fixpoint"; it now describes the layered SHACL 1.2
+  Inference Rules execution the engine performs.
 
 - **shapes:** a custom component parameter whose local name is a SPARQL variable
   name outside ASCII (`ex:größe`) or starting with a digit (`ex:2d`) was refused as

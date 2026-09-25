@@ -131,7 +131,7 @@ fn the_census_classifies_nothing_outside_the_two_universes_but_shacl_js() {
         assert!(
             matches!(
                 classify(iri).map(|row| row.class),
-                Some(TermClass::Unimplemented(_))
+                Some(TermClass::Refused(_))
             ),
             "{iri} must be refused"
         );
@@ -160,7 +160,7 @@ fn census_counts_per_class_are_pinned() {
             ) => "structural/shape-path-prefix-graph",
             TermClass::Target => "target",
             TermClass::Rule => "rule",
-            TermClass::Unimplemented(_) => "unimplemented",
+            TermClass::Refused(_) => "refused",
         };
         *counts.entry(class).or_insert(0) += 1;
     }
@@ -174,10 +174,10 @@ fn census_counts_per_class_are_pinned() {
 ///
 /// `sh:singleLine`, `sh:rootClass` and `sh:someValue` are constraint parameters
 /// of components the engine evaluates, so they count there and not among the
-/// unimplemented terms: 42 + 3 and 48 − 3. `sh:subsetOf` followed when its
+/// refused terms: 42 + 3 and 48 − 3. `sh:subsetOf` followed when its
 /// component became evaluated: 45 + 1 and 45 − 1, and `sh:uniqueValuesFor` —
 /// the last declared component — when its did: 46 + 1 and 44 − 1. No
-/// component parameter is unimplemented any more. `sh:ByTypes`, the IRI value of
+/// component parameter is refused any more. `sh:ByTypes`, the IRI value of
 /// `sh:closed`, moved to the vocabulary when `sh:closed sh:ByTypes` became
 /// evaluated: 19 + 1 and 43 − 1. `sh:Debug` and `sh:Trace` moved to the
 /// vocabulary when they became evaluated severities (the spec table's severity
@@ -212,7 +212,7 @@ const EXPECTED_COUNTS: [(&str, usize); 12] = [
     ("structural/shape-path-prefix-graph", 17),
     ("structural/vocabulary", 25),
     ("target", 9),
-    ("unimplemented", 13),
+    ("refused", 13),
 ];
 
 /// Where a term may appear is part of its class: a constraint parameter and a

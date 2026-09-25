@@ -29,7 +29,7 @@
 //! for every `sh:` / `shnex:` predicate:
 //!
 //! * a term the census does not know is a load error naming the term and node;
-//! * a [`TermClass::Unimplemented`] term is a load error saying what is not
+//! * a [`TermClass::Refused`] term is a load error saying what is not
 //!   evaluated, instead of silently validating as if it were absent;
 //! * a term that is known but does not belong on that kind of node (a rule's
 //!   `sh:subject` on a shape, a path form's `sh:inversePath` on a shape) is a load
@@ -79,9 +79,10 @@ pub enum TermClass {
     Target,
     /// Rule vocabulary (SHACL Advanced Features / SHACL 1.2 Rules).
     Rule,
-    /// A term the engine does not evaluate. Using it where the loader looks is a
-    /// load error carrying this reason, never a silent no-op.
-    Unimplemented(&'static str),
+    /// A term the engine deliberately refuses to evaluate (the SHACL JavaScript
+    /// Extensions). Using it where the loader looks is a load error carrying
+    /// this reason, never a silent no-op.
+    Refused(&'static str),
 }
 
 /// The kind of structure a [`TermClass::Structural`] term belongs to.
@@ -149,7 +150,7 @@ impl CensusRow {
             TermClass::Structural(role) => {
                 role == Role::ShapeCharacteristic || role == Role::ComputedValues
             }
-            TermClass::Unimplemented(_) => false,
+            TermClass::Refused(_) => false,
         }
     }
 
@@ -189,7 +190,7 @@ impl CensusRow {
             | TermClass::Structural(_)
             | TermClass::Target
             | TermClass::Rule
-            | TermClass::Unimplemented(_) => false,
+            | TermClass::Refused(_) => false,
         }
     }
 
@@ -220,8 +221,8 @@ const fn vocabulary(iri: &'static str) -> CensusRow {
     structural(iri, Role::Vocabulary)
 }
 
-const fn unimplemented(iri: &'static str, why: &'static str) -> CensusRow {
-    row(iri, TermClass::Unimplemented(why))
+const fn refused(iri: &'static str, why: &'static str) -> CensusRow {
+    row(iri, TermClass::Refused(why))
 }
 
 const fn non_validating(iri: &'static str) -> CensusRow {
@@ -425,19 +426,19 @@ static EXPLICIT: &[CensusRow] = &[
     structural(sh::SPARQL_FUNCTION, Role::Declaration),
     structural(sh::RETURN_TYPE, Role::Declaration),
     // ── SHACL JavaScript Extensions (not SHACL 1.2) ──
-    unimplemented(sh_iri!("js"), JS),
-    unimplemented(sh_iri!("jsFunctionName"), JS),
-    unimplemented(sh_iri!("jsLibrary"), JS),
-    unimplemented(sh_iri!("jsLibraryURL"), JS),
-    unimplemented(sh_iri!("JSConstraint"), JS),
-    unimplemented(sh_iri!("JSConstraintComponent"), JS),
-    unimplemented(sh_iri!("JSExecutable"), JS),
-    unimplemented(sh_iri!("JSFunction"), JS),
-    unimplemented(sh_iri!("JSLibrary"), JS),
-    unimplemented(sh_iri!("JSRule"), JS),
-    unimplemented(sh_iri!("JSTarget"), JS),
-    unimplemented(sh_iri!("JSTargetType"), JS),
-    unimplemented(sh_iri!("JSValidator"), JS),
+    refused(sh_iri!("js"), JS),
+    refused(sh_iri!("jsFunctionName"), JS),
+    refused(sh_iri!("jsLibrary"), JS),
+    refused(sh_iri!("jsLibraryURL"), JS),
+    refused(sh_iri!("JSConstraint"), JS),
+    refused(sh_iri!("JSConstraintComponent"), JS),
+    refused(sh_iri!("JSExecutable"), JS),
+    refused(sh_iri!("JSFunction"), JS),
+    refused(sh_iri!("JSLibrary"), JS),
+    refused(sh_iri!("JSRule"), JS),
+    refused(sh_iri!("JSTarget"), JS),
+    refused(sh_iri!("JSTargetType"), JS),
+    refused(sh_iri!("JSValidator"), JS),
 ];
 
 // ── The census ────────────────────────────────────────────────────────────────

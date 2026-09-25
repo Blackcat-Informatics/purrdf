@@ -48,7 +48,7 @@ use purrdf_shapes::text_ingest::{
 
 use shacl_corpora::shacl12::{Body, shacl12_cases};
 use shacl_corpora::{
-    file_iri, first_party_box_role_vocab, first_party_cases, parse_turtle_file, w3c_cases,
+    Expected, file_iri, first_party_box_role_vocab, first_party_cases, parse_turtle_file, w3c_cases,
 };
 
 /// The three vocabulary files, as vendored.
@@ -72,9 +72,9 @@ const TOTAL_CASES: usize = 376;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
-/// the three corpora except the 12 declared `sht:Failure` inputs and the SHACL 1.2
-/// entries this engine refuses at load (the same partition the product
-/// equivalence harness pins).
+/// the three corpora except the 12 declared `sht:Failure` inputs. No SHACL 1.2
+/// entry is refused at load any more: the harness asserts that every case not
+/// compared on a report is a declared `sht:Failure` input.
 ///
 /// Moved from 335 to 338 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
 /// became evaluated: `singleLine-001`, `rootClass-001` and `someValue-001` now
@@ -132,6 +132,11 @@ const TOTAL_CASES: usize = 376;
 /// case's shapes graph, so the merge changes no rule and no validation result.
 const COMPARED_ON_REPORT: usize = 364;
 
+/// The declared `sht:Failure` inputs among [`TOTAL_CASES`]; with
+/// [`COMPARED_ON_REPORT`] they account for every case, so the refused-at-load
+/// gap is 0.
+const DECLARED_FAILURE_CASES: usize = 12;
+
 /// One case, reduced to what both parses need.
 struct Input {
     id: String,
@@ -139,6 +144,9 @@ struct Input {
     base: Option<String>,
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
+    /// The manifest expects `sht:Failure`: the one reason a case may be compared
+    /// on an identical load error rather than on a report.
+    declared_failure: bool,
     /// The data graph, parsed once and shared by both runs.
     data: Result<Arc<RdfDataset>, String>,
 }
@@ -182,6 +190,7 @@ fn inputs() -> Vec<Input> {
             base: None,
             box_role_vocab: Some(first_party_box_role_vocab()),
             shapes_graph: None,
+            declared_failure: false,
             data: parse_ntriples_to_dataset(&data_nt).map_err(|errors| errors.join("; ")),
         });
     }
@@ -205,6 +214,7 @@ fn inputs() -> Vec<Input> {
             base: Some(file_iri(&case.shapes_path)),
             box_role_vocab: None,
             shapes_graph: case.shapes_graph_iri.clone(),
+            declared_failure: matches!(case.expected, Expected::Failure),
             data,
         });
     }
@@ -343,11 +353,13 @@ fn merging_the_vocabulary_changes_no_answer() {
     let mut failures: Vec<String> = Vec::new();
     let mut excepted = 0usize;
     let mut compared_on_report = 0usize;
+    let mut not_on_report: Vec<&Input> = Vec::new();
     for input in &inputs {
         let outcome = check(input, &vocabulary);
         let exception = INVARIANCE_EXCEPTIONS.iter().find(|(id, _)| *id == input.id);
         match (outcome, exception) {
-            (Ok(on_report), None) => compared_on_report += usize::from(on_report),
+            (Ok(true), None) => compared_on_report += 1,
+            (Ok(false), None) => not_on_report.push(input),
             (Err(_), Some(_)) => excepted += 1,
             (Ok(_), Some((_, reason))) => failures.push(format!(
                 "[{}] is ledgered in INVARIANCE_EXCEPTIONS ({reason}) but is invariant; remove it",
@@ -370,6 +382,22 @@ fn merging_the_vocabulary_changes_no_answer() {
     println!(
         "VOCABULARY-INVARIANCE: {compared_on_report} compared on a report of {}",
         inputs.len()
+    );
+    // The ratchet gap: a case compared only on an identical load error is a
+    // declared `sht:Failure` input, never an entry the engine refuses at load.
+    let refused_at_load: Vec<&str> = not_on_report
+        .iter()
+        .filter(|input| !input.declared_failure)
+        .map(|input| input.id.as_str())
+        .collect();
+    assert!(
+        refused_at_load.is_empty(),
+        "entries the engine refuses at load (the gap must be exactly empty): {refused_at_load:?}"
+    );
+    assert_eq!(
+        not_on_report.len(),
+        DECLARED_FAILURE_CASES,
+        "the declared sht:Failure inputs compared on an identical error"
     );
     assert_eq!(
         compared_on_report, COMPARED_ON_REPORT,

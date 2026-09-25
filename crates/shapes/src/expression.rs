@@ -1957,7 +1957,7 @@ fn eval_node_expr_at_depth(
             }
             let query = lowered.scalar_query()?;
             // Only the arguments that produced a node are PARAMETERS of the run; the
-            // placeholder of one that produced none stays a free variable of
+            // variable standing for one that produced none stays free in
             // `SELECT (EXPR AS ?result) WHERE {}`, which is SPARQL's own unbound.
             // The prepared-handle cache is keyed by the parameter list, so each
             // bound/unbound shape of a call gets, and reuses, its own handle.

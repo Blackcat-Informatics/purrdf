@@ -831,6 +831,207 @@ fn w3c_shacl12_conformance() {
     );
 }
 
+// ── The completion gate ───────────────────────────────────────────────────────
+
+/// The xfail ledger is empty: every discovered SHACL 1.2 entry passes. An entry
+/// the engine cannot pass is a defect to fix, never a row to add here.
+#[test]
+fn xfail_ledger_is_empty() {
+    assert!(
+        XFAIL.is_empty(),
+        "the SHACL 1.2 xfail ledger must be empty, but it names {} entr(y/ies): {:?}",
+        XFAIL.len(),
+        XFAIL.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+    );
+}
+
+/// Every entry the engine was measured failing before the SHACL 1.2 work, by
+/// its discovered id. Each must be discovered under exactly this id (a name that
+/// is not discovered fails, so a typo cannot hide an entry) and must pass under
+/// the harness's grading — which applies [`EXPECTATION_DEFECTS`] and
+/// [`NON_CANONICAL_EXPECTATIONS`], so an entry graded through either table still
+/// counts, as it does in [`w3c_shacl12_conformance`].
+const INVENTORY: &[&str] = &[
+    // Core list components.
+    "core/node/minListLength-001",
+    "core/node/maxListLength-001",
+    "core/property/minListLength-001",
+    "core/property/maxListLength-001",
+    "core/node/in-003",
+    "core/node/xone-003",
+    "core/node/uniqueMembers-001",
+    "core/property/uniqueMembers-001",
+    "core/node/memberShape-001",
+    "core/property/memberShape-001",
+    // Other new core components.
+    "core/node/uniqueValuesFor-001",
+    "core/node/uniqueValuesFor-002",
+    "core/node/uniqueValuesFor-003",
+    "core/node/uniqueValuesFor-005",
+    "core/property/subsetOf-001",
+    "core/property/subsetOf-002",
+    "core/property/someValue-001",
+    "core/property/rootClass-001",
+    "core/property/singleLine-001",
+    // List-valued parameters.
+    "core/node/datatype-003",
+    "core/property/datatype-004",
+    "core/property/class-002",
+    "core/node/nodeKind-002",
+    // Closed shapes.
+    "core/node/closed-003",
+    "core/node/closed-004",
+    // Path-valued property pairs.
+    "core/property/equals-002",
+    "core/property/disjoint-002",
+    "core/property/lessThan-003",
+    "core/property/lessThanOrEquals-002",
+    // Reifier annotations, Debug and Trace severities.
+    "core/misc/deactivated-003",
+    "core/misc/severity-003",
+    "core/misc/severity-004",
+    "core/misc/severity-005",
+    // Report details.
+    "core/validation-reports/conformance-disallows-001",
+    "core/property/reifierShape-001",
+    "core/property/reifierShape-002",
+    "core/property/uniqueLang-003",
+    // Targets.
+    "core/targets/shape-001",
+    "core/targets/targetClassImplicit-002",
+    "core/targets/targetWhere-001",
+    "sparql/targets/targetNode-select-001",
+    // SPARQL surface.
+    "sparql/property/property-select-001",
+    "sparql/property/property-sparqlExpr-001",
+    "sparql/node/prefixes-002",
+    "sparql/functions/instanceCount-example",
+    // Inference rules, validated.
+    "inference-rules/rules-entailment-validation",
+    // Node expressions.
+    "node-expr/shnex-sparql/plus-example",
+    "node-expr/shnex-sparql/encode-example",
+    "node-expr/shnex-sparql/bound-example",
+    "node-expr/shnex-sparql/coalesce-example",
+    "node-expr/shnex/filterShape-integers",
+    "node-expr/shnex/filterShape-unconstrained",
+    "node-expr/shnex/distinct-list",
+    "node-expr/shnex/distinct-termEquality",
+    "node-expr/shnex/findFirst-empty",
+    "node-expr/shnex/matchAll-empty",
+    "node-expr/shnex/orderBy-height",
+    "node-expr/shnex/var-bound",
+    "node-expr/shnex-sparql/ceil-example",
+    "node-expr/shnex-sparql/floor-example",
+    "node-expr/shnex-sparql/round-example",
+    "node-expr/shnex-sparql/divide-example",
+    "node-expr/shnex-sparql/seconds-example",
+    "node-expr/shnex/sum-totalRevenue",
+];
+
+/// Every `sht:Infer` entry, by name. [`every_planned_inventory_id_passes`] also
+/// proves this is exactly the discovered set of `sht:Infer` entries.
+const INFER_INVENTORY: &[&str] = &[
+    "inference-rules/SPARQLRuleTemplate-example-Multiply",
+    "inference-rules/SPARQLRuleTemplate-example-SymmetricProperty",
+    "inference-rules/SPARQLRuleTemplate-missing-param",
+    "inference-rules/TripleRule-example-childCount",
+    "inference-rules/TripleRule-example-squares",
+    "inference-rules/expectedPredicate-example",
+    "inference-rules/global-symmetric",
+    "inference-rules/layers-example",
+    "inference-rules/rdfs/rdfs-domain-1",
+    "inference-rules/rdfs/rdfs-domain-2",
+    "inference-rules/rdfs/rdfs-range-1",
+    "inference-rules/rdfs/rdfs-range-2",
+    "inference-rules/rdfs/rdfs-subclass-1",
+    "inference-rules/rdfs/rdfs-subproperty-1",
+    "inference-rules/rdfs/rectangle-condition",
+    "inference-rules/rectangle-condition",
+    "inference-rules/rectangle-deactivated",
+    "inference-rules/rectangle-order",
+    "inference-rules/rectangle-prefixes",
+    "inference-rules/rectangle-simple",
+    "inference-rules/ruleProcessor-unknown-at-rule",
+    "inference-rules/ruleProcessor-unknown-at-ruleset",
+    "inference-rules/run-once-blank-node-feed",
+    "inference-rules/run-once-example",
+    "inference-rules/same-order",
+    "inference-rules/temp-triples-example",
+    "inference-rules/unknown-rule-type",
+];
+
+/// The number of discovered SPARQL 1.2 RL (`srlt:*`) entries, every one of which
+/// must pass. Pinned so a walk that stops reaching some of them cannot pass by
+/// grading fewer.
+const SRL_TOTAL: usize = 203;
+
+/// Every id in the measured failure inventory is discovered and passes, every
+/// `sht:Infer` entry passes by name, and every SPARQL 1.2 RL entry passes.
+#[test]
+fn every_planned_inventory_id_passes() {
+    let cases = shacl12_cases();
+    let by_id: BTreeMap<&str, &Case12> = cases.iter().map(|c| (c.id.as_str(), c)).collect();
+
+    let named: Vec<&str> = INVENTORY.iter().chain(INFER_INVENTORY).copied().collect();
+    let unique: std::collections::BTreeSet<&str> = named.iter().copied().collect();
+    assert_eq!(unique.len(), named.len(), "an inventory id is listed twice");
+
+    let discovered_infer: std::collections::BTreeSet<&str> = cases
+        .iter()
+        .filter(|c| matches!(c.body, Body::Infer(_)))
+        .map(|c| c.id.as_str())
+        .collect();
+    let listed_infer: std::collections::BTreeSet<&str> = INFER_INVENTORY.iter().copied().collect();
+    assert_eq!(
+        listed_infer, discovered_infer,
+        "INFER_INVENTORY must name exactly the discovered sht:Infer entries"
+    );
+    assert!(
+        INFER_INVENTORY
+            .iter()
+            .all(|id| { by_id.get(id).is_some_and(|c| c.type_label() == "sht:Infer") }),
+        "every INFER_INVENTORY entry is an sht:Infer test"
+    );
+
+    let srl: Vec<&Case12> = cases
+        .iter()
+        .filter(|c| matches!(c.body, Body::Srl(_)))
+        .collect();
+    assert_eq!(srl.len(), SRL_TOTAL, "discovered SPARQL 1.2 RL entry count");
+    assert!(
+        srl.iter().all(|c| c.id.starts_with("sparql-rl/")),
+        "every SPARQL 1.2 RL entry lives under sparql-rl/"
+    );
+
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut errors: Vec<String> = Vec::new();
+    for id in &named {
+        match by_id.get(id) {
+            None => errors.push(format!("NOT DISCOVERED [{id}]: no entry has this id")),
+            Some(case) => {
+                if let Err(e) = run(case) {
+                    errors.push(format!("FAIL [{id}]: {e}"));
+                }
+            }
+        }
+    }
+    for case in &srl {
+        if let Err(e) = run(case) {
+            errors.push(format!("FAIL [{id}]: {e}", id = case.id));
+        }
+    }
+    std::panic::set_hook(default_hook);
+
+    assert!(
+        errors.is_empty(),
+        "every_planned_inventory_id_passes: {} error(s):\n{}",
+        errors.len(),
+        errors.join("\n\n")
+    );
+}
+
 // ── The canonical-form table ──────────────────────────────────────────────────
 
 /// Both directions of [`NON_CANONICAL_EXPECTATIONS`], plus its count pin.

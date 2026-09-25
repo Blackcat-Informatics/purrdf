@@ -923,8 +923,8 @@ fn string_consts_in_module(source: &syn::File, module: &str) -> BTreeMap<String,
 ///
 /// * the spec symbol table (`purrdf_shapes::spec`), one line per fact in its own
 ///   canonical rendering — which spec terms bind natively, with which signature,
-///   under which alias, and which declared components the engine refuses as
-///   unimplemented.
+///   under which alias, and which parsed-model carrier evaluates each declared
+///   component.
 ///
 /// Any of the three moving changes what a shapes graph parses INTO, so a prepared
 /// product minted before the move describes a model that no longer exists.
