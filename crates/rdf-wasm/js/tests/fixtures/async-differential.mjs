@@ -16,11 +16,11 @@ export const DATASETS = {
   people: {
     syntax: "trig",
     text: `
-@prefix ex: <https://e/> .
+@prefix ex: <https://people.example.org/> .
 ex:a ex:knows ex:b .
 ex:a ex:name "Ann" .
 ex:b ex:name "Bob" .
-graph <https://e/g> { ex:c ex:knows ex:a . }
+graph <https://people.example.org/g> { ex:c ex:knows ex:a . }
 `,
   },
   // `governors.test.mjs`: the governed lane's two names.
@@ -60,8 +60,8 @@ ex:claim2 rdf:reifies <<( ex:e ex:says "hello"@en--ltr )>> .
   graphStar: {
     syntax: "trig",
     text: `
-@prefix ex: <https://e/> .
-graph <https://e/g> { ex:s ex:p ex:o ~ex:r {| ex:note "n" |} . }
+@prefix ex: <https://people.example.org/> .
+graph <https://people.example.org/g> { ex:s ex:p ex:o ~ex:r {| ex:note "n" |} . }
 `,
   },
   // `aggregates.test.mjs`: numeric values and weighted animals.
@@ -98,7 +98,7 @@ ex:red ex:label "Red" . ex:blue ex:label "Blue" . ex:green ex:label "Green" .
 };
 
 const EXO = "PREFIX ex: <https://example.org/> ";
-const EXE = "PREFIX ex: <https://e/> ";
+const EXE = "PREFIX ex: <https://people.example.org/> ";
 const RDF = "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ";
 
 /**
@@ -115,7 +115,7 @@ export const QUERIES = [
   { name: "construct-label", data: "people", query: `${EXE}CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }` },
   { name: "construct-graph-template", data: "people", query: `${EXE}CONSTRUCT { GRAPH ex:out { ?s ex:knows ?o } } WHERE { ?s ex:knows ?o }` },
   { name: "construct-plain", data: "people", query: `${EXE}CONSTRUCT { ?s ex:knows ?o } WHERE { ?s ex:knows ?o }` },
-  { name: "describe-graph-star", data: "graphStar", query: "DESCRIBE <https://e/s>" },
+  { name: "describe-graph-star", data: "graphStar", query: "DESCRIBE <https://people.example.org/s>" },
   { name: "select-named-graph", data: "people", query: `${EXE}SELECT ?g ?s ?o WHERE { GRAPH ?g { ?s ex:knows ?o } }` },
   { name: "select-union-graphs", data: "people", query: `${EXE}SELECT ?s ?o WHERE { { ?s ex:knows ?o } UNION { GRAPH ?g { ?s ex:knows ?o } } }` },
 

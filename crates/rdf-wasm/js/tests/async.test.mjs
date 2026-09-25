@@ -417,30 +417,32 @@ test("queryAsync without resolveService fails like the sync path", async () => {
 
 test("synchronous query methods are unchanged", () => {
   const TRIG = `
-@prefix ex: <https://e/> .
+@prefix ex: <https://example.org/> .
 ex:a ex:knows ex:b .
 ex:a ex:name "Ann" .
 ex:b ex:name "Bob" .
-graph <https://e/g> { ex:c ex:knows ex:a . }
+graph <https://example.org/g> { ex:c ex:knows ex:a . }
 `;
   // A SERVICE clause hard-fails offline.
   assert.throws(() =>
     Dataset.parse(TRIG, "trig").query(
-      "PREFIX ex: <https://e/> SELECT ?o WHERE { SERVICE <https://remote/sparql> { ?s ex:knows ?o } }",
+      "PREFIX ex: <https://example.org/> SELECT ?o WHERE { SERVICE <https://remote.example.org/sparql> { ?s ex:knows ?o } }",
     ),
   );
 
   // SERVICE SILENT and LOAD SILENT succeed with nothing fetched.
-  const ds = Dataset.parse("@prefix ex: <https://e/> . ex:a ex:p ex:b .", "turtle");
-  assert.throws(() => ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://e/endpoint> { ?a ?b ?c } }"));
-  const json = JSON.parse(ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://e/endpoint> { ?a ?b ?c } }"));
+  const ds = Dataset.parse("@prefix ex: <https://example.org/> . ex:a ex:p ex:b .", "turtle");
+  assert.throws(() => ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://example.org/endpoint> { ?a ?b ?c } }"));
+  const json = JSON.parse(
+    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }"),
+  );
   assert.equal(json.results.bindings.length, 1);
   assert.equal("a" in json.results.bindings[0], false, "nothing remote may be bound");
-  assert.equal(json.results.bindings[0].s.value, "https://e/a");
+  assert.equal(json.results.bindings[0].s.value, "https://example.org/a");
   const engine = new QueryEngine();
   const before = ds.canonicalize();
-  assert.throws(() => engine.update(ds, "LOAD <https://e/doc>"));
-  engine.update(ds, "LOAD SILENT <https://e/doc>");
+  assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>"));
+  engine.update(ds, "LOAD SILENT <https://example.org/doc>");
   assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
 
   // A genuine query error still throws on the governed lane.

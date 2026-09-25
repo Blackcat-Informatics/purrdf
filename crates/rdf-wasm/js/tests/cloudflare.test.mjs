@@ -1833,62 +1833,62 @@ test("a federated query runs end to end through a service binding", async () => 
 
 test("CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS without", async () => {
   const base = { engine: new QueryEngine(), dataset: dataset(), governors: GOVERNORS };
-  const cors = { origins: ["https://app.example"], maxAgeSeconds: 600 };
+  const cors = { origins: ["https://app.example.org"], maxAgeSeconds: 600 };
   const preflight = await handleSparqlRequest(
-    httpRequest({ method: "OPTIONS", origin: "https://app.example" }),
+    httpRequest({ method: "OPTIONS", origin: "https://app.example.org" }),
     { ...base, cors },
   );
   assert.equal(preflight.status, 204);
-  assert.equal(preflight.headers.get("Access-Control-Allow-Origin"), "https://app.example");
+  assert.equal(preflight.headers.get("Access-Control-Allow-Origin"), "https://app.example.org");
   assert.equal(preflight.headers.get("Access-Control-Allow-Methods"), "GET, POST, OPTIONS");
   assert.equal(preflight.headers.get("Access-Control-Allow-Headers"), "Content-Type, Accept");
   assert.equal(preflight.headers.get("Access-Control-Max-Age"), "600");
   assert.equal(preflight.headers.get("Vary"), "Origin");
 
   const unlisted = await handleSparqlRequest(
-    httpRequest({ method: "OPTIONS", origin: "https://evil.example" }),
+    httpRequest({ method: "OPTIONS", origin: "https://evil.example.org" }),
     { ...base, cors },
   );
   assert.equal(unlisted.status, 204);
   assert.equal(unlisted.headers.get("Access-Control-Allow-Origin"), null);
 
   const echoed = await handleSparqlRequest(
-    httpRequest({ query: q(SELECT_S), origin: "https://app.example" }),
+    httpRequest({ query: q(SELECT_S), origin: "https://app.example.org" }),
     { ...base, cors },
   );
   assert.equal(echoed.status, 200);
-  assert.equal(echoed.headers.get("Access-Control-Allow-Origin"), "https://app.example");
+  assert.equal(echoed.headers.get("Access-Control-Allow-Origin"), "https://app.example.org");
   assert.equal(echoed.headers.get("Vary"), "Accept, Origin");
 
   const star = await handleSparqlRequest(
-    httpRequest({ query: q(SELECT_S), origin: "https://any.example" }),
+    httpRequest({ query: q(SELECT_S), origin: "https://any.example.org" }),
     { ...base, cors: { origins: "*" } },
   );
   assert.equal(star.headers.get("Access-Control-Allow-Origin"), "*");
 
   const problemWithCors = await handleSparqlRequest(
-    httpRequest({ query: "x=1", origin: "https://app.example" }),
+    httpRequest({ query: "x=1", origin: "https://app.example.org" }),
     { ...base, cors },
   );
   assert.equal(problemWithCors.status, 400);
-  assert.equal(problemWithCors.headers.get("Access-Control-Allow-Origin"), "https://app.example");
+  assert.equal(problemWithCors.headers.get("Access-Control-Allow-Origin"), "https://app.example.org");
 
   const plain = await handleSparqlRequest(
-    httpRequest({ query: q(SELECT_S), origin: "https://app.example" }),
+    httpRequest({ query: q(SELECT_S), origin: "https://app.example.org" }),
     base,
   );
   assert.equal(plain.status, 200);
   for (const [name] of plain.headers) assert.ok(!name.startsWith("access-control-"), name);
   assert.equal(plain.headers.get("Vary"), "Accept");
   const options = await handleSparqlRequest(
-    httpRequest({ method: "OPTIONS", origin: "https://app.example" }),
+    httpRequest({ method: "OPTIONS", origin: "https://app.example.org" }),
     base,
   );
   assert.equal(options.status, 405);
   assert.equal(options.headers.get("Allow"), "GET, POST");
 
   const badCors = await rejection(
-    handleSparqlRequest(httpRequest({ query: q(SELECT_S) }), { ...base, cors: { origins: "https://app.example" } }),
+    handleSparqlRequest(httpRequest({ query: q(SELECT_S) }), { ...base, cors: { origins: "https://app.example.org" } }),
   );
   assert.match(badCors.message, /cors.origins must be "\*" or an array/);
 });
