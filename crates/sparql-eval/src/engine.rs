@@ -1086,6 +1086,18 @@ impl NativeSparqlEngine {
         options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        self.query_governed_view(&**dataset, request, options, governors)
+    }
+
+    /// [`Self::query_governed`] over any [`DatasetView`] backend: the per-call governed
+    /// body both it and [`Self::query_governed_with_source_view`] run.
+    fn query_governed_view<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        request: SparqlRequest<'_>,
+        options: QueryOptions<'d>,
+        governors: &QueryGovernors,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
         let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
         let prepared = self.prepare_request(
             request.query,
@@ -1094,9 +1106,7 @@ impl NativeSparqlEngine {
             &admitted.parameters,
         )?;
         let state = Arc::new(GovernorState::new(governors));
-        self.query_governed_prepared_in_state(
-            &**dataset, &prepared, &admitted, options, None, &state,
-        )
+        self.query_governed_prepared_in_state(dataset, &prepared, &admitted, options, &state)
     }
 
     /// [`Self::query_governed`] over any operationally infallible [`DatasetView`] backend,
@@ -1130,7 +1140,6 @@ impl NativeSparqlEngine {
             prepared,
             &AdmittedSubstitutions::prepared(substitutions),
             options,
-            None,
             &state,
         )
     }
@@ -1200,8 +1209,9 @@ impl NativeSparqlEngine {
             })
     }
 
-    /// The context every governed lane evaluates in: governors attached, a federated
-    /// source injected where the entry has one, `options` applied, and witnessing armed.
+    /// The context every governed lane evaluates in: governors attached, `options`
+    /// applied (a federated source among them, when the request carries one), and
+    /// witnessing armed.
     ///
     /// One builder for both governed egresses — the owned [`GovernedOutcome`] below and
     /// the borrowed [`Self::query_governed_interned_in_operation`] — because what
@@ -1215,14 +1225,10 @@ impl NativeSparqlEngine {
     fn governed_ctx<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
-        source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         state: &Arc<GovernorState>,
         options: QueryOptions<'d>,
     ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
-        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
-        if let Some(source) = source {
-            ctx = ctx.with_remote(source);
-        }
+        let ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
         let mut ctx = apply_query_options(ctx, options)?;
         ctx.witnessing = true;
         Ok(ctx)
@@ -1236,9 +1242,9 @@ impl NativeSparqlEngine {
     /// operation-scoped, local or federated, over an infallible or a fallible view —
     /// reaches evaluation through here, so the charge points, the admission estimate,
     /// and the options application are wired once. The two axes the entries differ on
-    /// are parameters: `source` (a federated entry injects one) and who owns `state` (a
-    /// per-call entry built it; an operation entry was handed the one its whole
-    /// operation charges). The one governed entry that does not answer with an owned
+    /// are parameters: `options.remote` (a federated entry carries one) and who owns
+    /// `state` (a per-call entry built it; an operation entry was handed the one its
+    /// whole operation charges). The one governed entry that does not answer with an owned
     /// outcome, [`Self::query_governed_interned_in_operation`], shares this body's
     /// context builder ([`Self::governed_ctx`]) and its verdict ([`resolve_governed`])
     /// and differs only in the egress, which borrows the outcome instead of owning it.
@@ -1248,7 +1254,6 @@ impl NativeSparqlEngine {
         prepared: &PreparedQuery,
         substitutions: &AdmittedSubstitutions<'_>,
         options: QueryOptions<'d>,
-        source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         substitutions.parameters.check(prepared, options)?;
@@ -1265,7 +1270,7 @@ impl NativeSparqlEngine {
         ) {
             return refused.map(GovernedOutcome::BudgetExhausted);
         }
-        let mut ctx = self.governed_ctx(dataset, source, state, options)?;
+        let mut ctx = self.governed_ctx(dataset, state, options)?;
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
                 prepared,
@@ -1292,6 +1297,10 @@ impl NativeSparqlEngine {
     /// a deadline can *prevent* a remote request rather than only be noticed once one has
     /// returned.
     ///
+    /// This is exactly [`Self::query_governed`] with [`QueryOptions::remote`] set to
+    /// `source` — the explicit `source` replaces whatever `options.remote` held — so the
+    /// two spellings of a governed federated query cannot answer differently.
+    ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped governor
@@ -1304,11 +1313,20 @@ impl NativeSparqlEngine {
         options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        self.query_governed_with_source_view(&**dataset, request, source, options, governors)
+        self.query_governed(
+            dataset,
+            request,
+            QueryOptions {
+                remote: Some(source),
+                ..options
+            },
+            governors,
+        )
     }
 
     /// [`Self::query_governed_with_source`] over any [`DatasetView`] backend whose id type
-    /// is the production [`TermId`](purrdf_core::TermId).
+    /// is the production [`TermId`](purrdf_core::TermId): the per-call governed body with
+    /// [`QueryOptions::remote`] set to `source`.
     ///
     /// # Errors
     ///
@@ -1322,21 +1340,14 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
-        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
-        let prepared = self.prepare_request(
-            request.query,
-            request.base_iri,
-            options.env,
-            &admitted.parameters,
-        )?;
-        let state = Arc::new(GovernorState::new(governors));
-        self.query_governed_prepared_in_state(
+        self.query_governed_view(
             dataset,
-            &prepared,
-            &admitted,
-            options,
-            Some(source),
-            &state,
+            request,
+            QueryOptions {
+                remote: Some(source),
+                ..options
+            },
+            governors,
         )
     }
 
@@ -1386,7 +1397,7 @@ impl NativeSparqlEngine {
             options.env,
             &admitted.parameters,
         )?;
-        self.query_governed_prepared_in_state(dataset, &prepared, &admitted, options, None, state)
+        self.query_governed_prepared_in_state(dataset, &prepared, &admitted, options, state)
     }
 
     /// Execute a prepared plan under a caller-owned multi-query operation budget.
@@ -1413,7 +1424,6 @@ impl NativeSparqlEngine {
             prepared,
             &AdmittedSubstitutions::prepared(substitutions),
             options,
-            None,
             state,
         )
     }
@@ -1456,55 +1466,6 @@ impl NativeSparqlEngine {
     where
         D: FallibleDatasetView + Sync,
     {
-        self.query_governed_fallible_view_inner(dataset, request, None, options, governors)
-    }
-
-    /// [`Self::query_governed_fallible_view`] with a federation source injected.
-    ///
-    /// This is the composed carrier boundary for a lazy local view plus remote
-    /// `SERVICE` calls: the returned [`GovernedEvidence`] contains the local view's
-    /// page/byte receipt and the evaluator's remote-request, fuel, row, and cell receipt
-    /// from the same operation. Operational failure keeps its usual precedence over an
-    /// evaluator diagnostic or governor trip.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same typed outcomes as [`Self::query_governed_fallible_view`]. A
-    /// federation failure while the view remains ready is a query diagnostic; a local
-    /// view failure remains [`FallibleSparqlError::Operational`].
-    #[allow(
-        clippy::result_large_err,
-        reason = "the Err side carries both operation receipts and certified partial answers"
-    )]
-    pub fn query_governed_fallible_with_source_view<'d, D>(
-        &'d self,
-        dataset: &'d D,
-        request: SparqlRequest<'_>,
-        source: &'d (dyn crate::remote::ServiceResolver + Sync),
-        options: QueryOptions<'d>,
-        governors: &QueryGovernors,
-    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
-    where
-        D: FallibleDatasetView + Sync,
-    {
-        self.query_governed_fallible_view_inner(dataset, request, Some(source), options, governors)
-    }
-
-    #[allow(
-        clippy::result_large_err,
-        reason = "the Err side carries both operation receipts and certified partial answers"
-    )]
-    fn query_governed_fallible_view_inner<'d, D>(
-        &'d self,
-        dataset: &'d D,
-        request: SparqlRequest<'_>,
-        source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
-        options: QueryOptions<'d>,
-        governors: &QueryGovernors,
-    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
-    where
-        D: FallibleDatasetView + Sync,
-    {
         // Built before the preflight so that a view that failed on the way in still
         // reports a (zeroed, honest) governor receipt beside its root cause.
         let state = Arc::new(GovernorState::new(governors));
@@ -1528,11 +1489,51 @@ impl NativeSparqlEngine {
         };
         let evaluation = {
             let _sequential = crate::parallel::force_sequential_operation();
-            self.query_governed_prepared_in_state(
-                dataset, &prepared, &admitted, options, source, &state,
-            )
+            self.query_governed_prepared_in_state(dataset, &prepared, &admitted, options, &state)
         };
         finish_governed_fallible_query(dataset, &state, evaluation)
+    }
+
+    /// [`Self::query_governed_fallible_view`] with a federation source injected.
+    ///
+    /// This is the composed carrier boundary for a lazy local view plus remote
+    /// `SERVICE` calls: the returned [`GovernedEvidence`] contains the local view's
+    /// page/byte receipt and the evaluator's remote-request, fuel, row, and cell receipt
+    /// from the same operation. Operational failure keeps its usual precedence over an
+    /// evaluator diagnostic or governor trip.
+    ///
+    /// Exactly [`Self::query_governed_fallible_view`] with [`QueryOptions::remote`] set to
+    /// `source`; the explicit `source` replaces whatever `options.remote` held.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed outcomes as [`Self::query_governed_fallible_view`]. A
+    /// federation failure while the view remains ready is a query diagnostic; a local
+    /// view failure remains [`FallibleSparqlError::Operational`].
+    #[allow(
+        clippy::result_large_err,
+        reason = "the Err side carries both operation receipts and certified partial answers"
+    )]
+    pub fn query_governed_fallible_with_source_view<'d, D>(
+        &'d self,
+        dataset: &'d D,
+        request: SparqlRequest<'_>,
+        source: &'d (dyn crate::remote::ServiceResolver + Sync),
+        options: QueryOptions<'d>,
+        governors: &QueryGovernors,
+    ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        self.query_governed_fallible_view(
+            dataset,
+            request,
+            QueryOptions {
+                remote: Some(source),
+                ..options
+            },
+            governors,
+        )
     }
 
     /// Parse and execute one SPARQL **UPDATE** request under caller-supplied execution
@@ -1608,7 +1609,7 @@ impl NativeSparqlEngine {
             governors: Some(&state),
             options,
         };
-        let tripped = match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
+        let tripped = match eval_update(&update, &mut m, self.load_resolver(options), &cfg) {
             // A request that ran to the end still does not publish while a trip is latched
             // on the state. The two are normally the same fact — every site that observes a
             // governor also aborts the request — but "normally" is the wrong strength for
@@ -1710,7 +1711,7 @@ impl NativeSparqlEngine {
             governors: None,
             options,
         };
-        match eval_update(&update, &mut m, self.resolver.as_deref(), &cfg) {
+        match eval_update(&update, &mut m, self.load_resolver(options), &cfg) {
             Ok(()) => {}
             Err(UpdateAbort::Failed(diagnostic)) => return Err(diagnostic),
             // Unreachable by construction: a trip can only originate from the
@@ -1727,13 +1728,25 @@ impl NativeSparqlEngine {
         Ok(())
     }
 
+    /// The `LOAD` source one UPDATE request runs under: the request's own
+    /// ([`QueryOptions::load`]) when it names one, otherwise the engine's
+    /// ([`Self::with_resolver`]). Both UPDATE seams read it here so the precedence is
+    /// stated once.
+    fn load_resolver<'r>(&'r self, options: QueryOptions<'r>) -> Option<&'r dyn GraphResolver> {
+        match options.load {
+            Some(load) => Some(load),
+            None => self.resolver.as_deref(),
+        }
+    }
+
     /// A fresh engine with an empty plan cache and no `LOAD` resolver.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Install a host `GraphResolver` so SPARQL `LOAD <iri>` can fetch its source.
-    /// Without one, LOAD hard-fails (`native-sparql-load-no-resolver`) unless SILENT.
+    /// A request that names its own ([`QueryOptions::load`]) uses that one instead.
+    /// Without either, LOAD hard-fails (`native-sparql-load-no-resolver`) unless SILENT.
     #[must_use]
     pub fn with_resolver(mut self, resolver: Arc<dyn GraphResolver>) -> Self {
         self.resolver = Some(resolver);
@@ -1997,7 +2010,9 @@ impl NativeSparqlEngine {
     /// `options.prebinding` and `options.bnode_mint_prefix` are accepted for shape
     /// parity with [`QueryOptions`] but have no observable effect here: EXPLAIN neither
     /// applies a SHACL pre-binding substitution nor mints blank nodes into a caller-
-    /// visible result the receipt reports on.
+    /// visible result the receipt reports on. `options.remote` IS honoured: EXPLAIN
+    /// evaluates the query to measure it, so a `SERVICE` clause is forwarded to the
+    /// request's source exactly as the evaluation it explains would forward it.
     ///
     /// # Errors
     ///
@@ -2033,6 +2048,7 @@ impl NativeSparqlEngine {
             base_iri,
             options.functions,
             options.env,
+            options.remote,
         )
     }
 
@@ -2048,6 +2064,10 @@ impl NativeSparqlEngine {
     /// registered/native user function actually resolve rather than exploding at
     /// `AGG(<iri>, …)`/`<iri>(…)`), and into the receipt (which names the registered
     /// IRIs of the relation and aggregate registries).
+    ///
+    /// `remote` is the request's `SERVICE` source: the explanation is priced from a real
+    /// evaluation, so a federated query is explained by evaluating it against the source
+    /// its evaluation would use, not refused for lacking one.
     fn explain_for<D: DatasetView + Sync>(
         &self,
         dataset: &D,
@@ -2055,6 +2075,7 @@ impl NativeSparqlEngine {
         base_iri: Option<&str>,
         functions: &crate::user_fn::BoundFunctionRegistry,
         env: &crate::extension_env::ExtensionEnv,
+        remote: Option<&(dyn crate::remote::ServiceResolver + Sync)>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
         let relations = env.relations();
         let aggregates = env.aggregates();
@@ -2075,6 +2096,9 @@ impl NativeSparqlEngine {
             .with_user_functions(functions)
             .with_property_functions(relations)
             .with_aggregates(aggregates);
+        if let Some(source) = remote {
+            ctx = ctx.with_remote(source);
+        }
         evaluate_query_evaluated(&prepared.query, &mut ctx)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
         // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
@@ -2594,7 +2618,7 @@ impl NativeSparqlEngine {
         ) {
             return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
         }
-        let mut ctx = self.governed_ctx(dataset, None, state, options)?;
+        let mut ctx = self.governed_ctx(dataset, state, options)?;
         // The retained workspace, exactly as on the ungoverned twin — and taken
         // here rather than inside `governed_ctx` so both lanes spell it at the same
         // level, beside the `substituted` call whose borrow it has to sit outside.
@@ -2724,7 +2748,7 @@ impl NativeSparqlEngine {
         ) {
             return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
         }
-        let mut ctx = self.governed_ctx(dataset, None, state, options)?;
+        let mut ctx = self.governed_ctx(dataset, state, options)?;
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
                 &prepared,
@@ -2791,6 +2815,11 @@ impl NativeSparqlEngine {
     /// [`Self::query_with_source`] over any [`DatasetView`] backend whose id type is
     /// the production [`TermId`](purrdf_core::TermId).
     ///
+    /// Exactly [`Self::query_with_options_view`] with [`QueryOptions::remote`] set to
+    /// `source` — the explicit `source` replaces whatever `options.remote` held — so a
+    /// federated query answers the same whichever of the two spellings carried its
+    /// source.
+    ///
     /// # Errors
     ///
     /// Propagates parse and evaluation errors as an [`RdfDiagnostic`].
@@ -2801,28 +2830,14 @@ impl NativeSparqlEngine {
         source: &'d (dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
-        let admitted = AdmittedSubstitutions::requested(request.substitutions, options.prebinding);
-        let prepared = self.prepare_request(
-            request.query,
-            request.base_iri,
-            options.env,
-            &admitted.parameters,
-        )?;
-        let ctx = self.eval_ctx(dataset).with_remote(source);
-        let mut ctx = apply_query_options(ctx, options)?;
-        let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
-                &prepared,
-                Prebindings::Owned(request.substitutions),
-                &mut ctx,
-            )?,
-            ShaclPrebinding::None => evaluate_with_substitutions(
-                &prepared,
-                Prebindings::Owned(request.substitutions),
-                &mut ctx,
-            )?,
-        };
-        Ok(materialize(outcome, &ctx))
+        self.query_with_options_view(
+            dataset,
+            request,
+            QueryOptions {
+                remote: Some(source),
+                ..options
+            },
+        )
     }
 }
 
@@ -2994,11 +3009,13 @@ pub enum ShaclPrebinding {
 /// The per-call configuration every options-carrying query entry takes — governed
 /// and ungoverned, SHACL-facing and not.
 ///
-/// Bundles the four independently optional pieces a query evaluation selects from:
-/// which substitution rewrite to apply, whether a SHACL-AF function registry is in
-/// scope, whether a **property-function registry** is in scope, and whether minted
-/// blank-node labels carry a deterministic caller-supplied prefix (see
-/// [`EvalCtx::with_bnode_mint_prefix`](crate::eval::EvalCtx::with_bnode_mint_prefix)).
+/// Bundles the independently optional pieces a query evaluation selects from: which
+/// substitution rewrite to apply, whether a SHACL-AF function registry is in scope,
+/// which extension environment (and so which **property-function registry**) the text
+/// is read under, whether minted blank-node labels carry a deterministic
+/// caller-supplied prefix (see
+/// [`EvalCtx::with_bnode_mint_prefix`](crate::eval::EvalCtx::with_bnode_mint_prefix)),
+/// and which host sources answer `SERVICE` and `LOAD` for this request.
 ///
 /// # Why one struct on every entry rather than a registry-free sibling per lane
 ///
@@ -3015,8 +3032,8 @@ pub enum ShaclPrebinding {
 /// entries had before the seam existed.
 ///
 /// Construct with struct-update syntax over the empty value, e.g.
-/// `QueryOptions { property_functions: &registry, ..QueryOptions::EMPTY }`.
-#[derive(Debug, Clone, Copy)]
+/// `QueryOptions { env: &env, ..QueryOptions::EMPTY }`.
+#[derive(Clone, Copy)]
 pub struct QueryOptions<'a> {
     /// Which substitution rewrite to apply (see [`ShaclPrebinding`]).
     pub prebinding: ShaclPrebinding,
@@ -3070,7 +3087,62 @@ pub struct QueryOptions<'a> {
     /// [`ExprFnCall::depth`](crate::ExprFnCall::depth) here, so a recursion that
     /// leaves the evaluator and re-enters it through a fresh query is still bounded.
     pub call_depth: u32,
+    /// The source this request's `SERVICE` clauses resolve through — in a query, and
+    /// in an UPDATE's `WHERE` alike.
+    ///
+    /// `None` — the default — is the engine with no federation: a `SERVICE` fails
+    /// with "no remote query source configured" and `SERVICE SILENT` contributes the
+    /// join identity.
+    ///
+    /// Carried per request rather than installed on the engine because a source is
+    /// the caller's relationship with the outside world for this one evaluation — its
+    /// credentials, its routing, the host callbacks that answer it — and an engine is
+    /// shared across requests that need not agree on any of that. Carried HERE rather
+    /// than as a sibling `*_with_source` entry per lane because a lane without that
+    /// sibling (an UPDATE, a prepared execution, a CONSTRUCT built into a view) would
+    /// otherwise be a lane on which federation simply cannot be spelled. The
+    /// `*_with_source` entries are this field set on the source-less entry, so the
+    /// two spellings cannot answer differently.
+    pub remote: Option<&'a (dyn crate::remote::ServiceResolver + Sync)>,
+    /// The source this request's `LOAD` operations fetch through.
+    ///
+    /// `None` — the default — falls back to the engine's own resolver
+    /// ([`NativeSparqlEngine::with_resolver`]), which is what every UPDATE did before
+    /// this field existed; with neither, a non-`SILENT` `LOAD` hard-fails
+    /// (`native-sparql-load-no-resolver`). When set it wins over the engine's
+    /// resolver for this request alone: the per-request source is the more specific
+    /// statement of where this caller's documents come from, and a caller that went
+    /// to the trouble of naming one did not mean "unless the engine already had one".
+    ///
+    /// `Sync` for the same reason [`Self::remote`] is: the options value is shared
+    /// with whatever the evaluation fans out to, and a field that made it `!Sync`
+    /// would silently narrow every entry that takes one.
+    pub load: Option<&'a (dyn GraphResolver + Sync)>,
 }
+
+// The trait-object fields are not `Debug`, so derive cannot apply; they are reported by
+// presence, the way `NativeSparqlEngine` reports its `LOAD` resolver.
+impl std::fmt::Debug for QueryOptions<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryOptions")
+            .field("prebinding", &self.prebinding)
+            .field("functions", &self.functions)
+            .field("env", &self.env)
+            .field("bnode_mint_prefix", &self.bnode_mint_prefix)
+            .field("focus_graph", &self.focus_graph)
+            .field("call_depth", &self.call_depth)
+            .field("remote", &self.remote.is_some())
+            .field("load", &self.load.is_some())
+            .finish()
+    }
+}
+
+// An options value is handed to evaluations that fan out across workers, so it must stay
+// shareable; a field that quietly made it `!Send`/`!Sync` is refused here, at the type.
+const _: fn() = || {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<QueryOptions<'static>>();
+};
 
 impl<'a> QueryOptions<'a> {
     /// The property-function registry a lowered call resolves against — this
@@ -3090,7 +3162,8 @@ impl<'a> QueryOptions<'a> {
 impl QueryOptions<'_> {
     /// Configure nothing: the ordinary substitution rewrite, every registry the
     /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
-    /// depth. What every entry did before it took options.
+    /// depth, no `SERVICE` source, and the engine's own `LOAD` resolver. What every
+    /// entry did before it took options.
     pub const EMPTY: Self = Self {
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::BoundFunctionRegistry::EMPTY,
@@ -3098,6 +3171,8 @@ impl QueryOptions<'_> {
         bnode_mint_prefix: None,
         focus_graph: None,
         call_depth: 0,
+        remote: None,
+        load: None,
     };
 }
 
@@ -3481,16 +3556,19 @@ fn relation_identity(
 /// Apply the [`QueryOptions`] pieces to a freshly built evaluation context: the
 /// SHACL-AF function registry ([`EvalCtx::with_user_functions`]), the
 /// property-function registry ([`EvalCtx::with_property_functions`]), the
-/// custom-aggregate registry ([`EvalCtx::with_aggregates`]), and the deterministic
-/// blank-mint prefix ([`EvalCtx::with_bnode_mint_prefix`]) — the first three
-/// unconditionally (each is always a valid registry reference now, `EMPTY` standing
-/// in for "none" rather than an `Option` this function would need to branch on).
+/// custom-aggregate registry ([`EvalCtx::with_aggregates`]), the `SERVICE` source
+/// ([`EvalCtx::with_remote`]), and the deterministic blank-mint prefix
+/// ([`EvalCtx::with_bnode_mint_prefix`]) — the three registries unconditionally (each
+/// is always a valid registry reference now, `EMPTY` standing in for "none" rather
+/// than an `Option` this function would need to branch on).
 ///
 /// The ONE application seam — every options-carrying entry, governed and ungoverned,
 /// routes through here, so a future [`QueryOptions`] field is wired once instead of
 /// at each call site. [`QueryOptions::prebinding`] is deliberately not applied here:
 /// it selects an *evaluator entry point* rather than a context field, so it is read
-/// at the two evaluation sites instead.
+/// at the two evaluation sites instead. [`QueryOptions::load`] is not a context field
+/// either — `LOAD` is an UPDATE operation, not a pattern — so the two UPDATE seams read
+/// it where they hand `eval_update` its resolver.
 ///
 /// # Errors
 ///
@@ -3507,6 +3585,9 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
         .with_call_depth(options.call_depth);
     if let Some(graph) = options.focus_graph {
         ctx = ctx.with_focus_graph(graph);
+    }
+    if let Some(source) = options.remote {
+        ctx = ctx.with_remote(source);
     }
     if let Some(prefix) = options.bnode_mint_prefix {
         ctx = ctx

@@ -36,8 +36,9 @@
 //!   operation is a distinct blank from the same label in another operation
 //!   (SPARQL 1.1 Update §4.1.1 / §19.6).
 //! - **`LOAD` host seam.** The core is network-free. `LOAD <iri>` needs a host
-//!   [`GraphResolver`] to fetch + parse the source into a frozen dataset; with no
-//!   resolver, `LOAD` hard-fails unless `SILENT`.
+//!   [`GraphResolver`] to fetch + parse the source into a frozen dataset — the
+//!   request's own ([`QueryOptions::load`]) when it names one, otherwise the engine's;
+//!   with no resolver, `LOAD` hard-fails unless `SILENT`.
 //!
 //! # Governors: what an UPDATE is charged for, and why a trip applies nothing
 //!
@@ -163,7 +164,9 @@ pub(crate) struct UpdateEvalConfig<'e> {
     /// The registries this request's `WHERE` clauses run under: the property-function
     /// registry (read at admission and applied to the `WHERE` [`EvalCtx`] through the
     /// same seam a governed query applies it — see [`apply_query_options`]), the
-    /// SHACL-AF function registry, and the blank-mint prefix. An UPDATE `WHERE` is a
+    /// SHACL-AF function registry, the blank-mint prefix, and the `SERVICE` source a
+    /// federated `WHERE` resolves through ([`QueryOptions::remote`]; `None` leaves a
+    /// `SERVICE` with no source, exactly as before the field existed). An UPDATE `WHERE` is a
     /// triple-pattern context exactly like a query's, so it takes the identical
     /// [`QueryOptions`] a query takes — [`QueryOptions::EMPTY`] is "configure nothing",
     /// what every UPDATE ran under before this seam existed.
@@ -523,12 +526,14 @@ fn delete_insert(
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
     let ctx = EvalCtx::new(&snap).with_bounded_order_cache(cfg.order_cache);
-    // The property-function registry, the SHACL-AF function registry and the
-    // blank-mint prefix, applied through the SAME seam a governed/ungoverned query
-    // applies them — see `crate::engine::apply_query_options`. This is what lets a
-    // call node reach evaluation at all: without it `ctx` carries no registry and
-    // every call in this `WHERE` hard-errors "no property function is registered",
-    // regardless of whether one was configured for the request.
+    // The property-function registry, the SHACL-AF function registry, the
+    // blank-mint prefix and the `SERVICE` source, applied through the SAME seam a
+    // governed/ungoverned query applies them — see `crate::engine::apply_query_options`.
+    // This is what lets a call node reach evaluation at all: without it `ctx` carries no
+    // registry and every call in this `WHERE` hard-errors "no property function is
+    // registered", regardless of whether one was configured for the request. The same
+    // holds for a `SERVICE` in this `WHERE`: it federates through the request's source
+    // or, with none, fails exactly as a source-less query's does.
     let mut ctx = apply_query_options(ctx, cfg.options)?;
     // The request's governors, so the `WHERE` charges and stops exactly as the same
     // pattern would inside a governed `SELECT`. Without this the ceilings a caller set

@@ -913,6 +913,10 @@ impl AmbientScopes {
                 .then(|| dataset.focus_graph())
                 .flatten(),
             call_depth: self.call_depth,
+            // A shapes graph's SPARQL runs over the data graph under validation; no
+            // `SERVICE` or `LOAD` source is configured for it.
+            remote: None,
+            load: None,
         }
     }
 
@@ -1083,6 +1087,8 @@ impl ShaclExecution {
             bnode_mint_prefix: None,
             focus_graph: None,
             call_depth: 0,
+            remote: None,
+            load: None,
         };
         let execution = SPARQL_ENGINE
             .with(|engine| engine.prepare_execution(query, None, parameters, options))
