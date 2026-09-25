@@ -86,16 +86,19 @@
 //! # A path is not the whole of a compilation: the build shape
 //!
 //! Each reassociated compilation is built with the consumer build's own
-//! `-C target-cpu`/`-C target-feature` as well as the path's `#[target_feature]`, so one
-//! path compiles to different instructions in different builds -- the baseline `x86_64`
-//! path contracts to FMA in a build compiled with `fma`, and the NEON path becomes SVE under
-//! a Neoverse target. [`Arithmetic::build_shape`] names the part of that the compiler
-//! exposes: the target architecture and the target features relevant to the body's vector
-//! and FMA code generation ([`BuildShape`]). A consumer that records a reassociated result
-//! records the shape beside the path, and refuses a result whose shape is not its own.
-//! Equal shape is necessary, not sufficient: CPU tuning and the compiler version are not
-//! visible to the source, so a reassociated result is reproducible only by the same
-//! compiled artifact. [`Exact`] has no shape; its bits are the same in every build.
+//! `-C target-cpu`/`-C target-feature` as well as the path's `#[target_feature]`, and by
+//! the consumer's compiler at the consumer's optimisation level, so one path compiles to
+//! different instructions in different builds -- the baseline `x86_64` path contracts to
+//! FMA in a build compiled with `fma`, the NEON path becomes SVE under a Neoverse target,
+//! and a CPU's tuning or a new compiler release may vectorize the body differently.
+//! [`Arithmetic::build_shape`] names all of that ([`BuildShape`]): the target architecture
+//! and the target features relevant to the body's vector and FMA code generation, which
+//! the source can see, and the [`BuildIdentity`] -- compiler release and LLVM version,
+//! resolved target CPU, optimisation level, debug assertions and codegen flags -- which the
+//! crate's build script reads. A consumer that records a reassociated result records the
+//! shape beside the path, and refuses a result whose shape is not its own; in a build of
+//! the recorded shape, on the recorded path, a recomputation that differs means the inputs
+//! differ. [`Exact`] has no shape; its bits are the same in every build.
 //!
 //! A result recorded on one path is recomputed on that path, not on the widest:
 //! [`Arithmetic::resolve_recorded`] resolves the path an image code names whenever this
@@ -114,10 +117,14 @@
 //! subnormals preserved. A thread that has set flush-to-zero or denormals-are-zero, or
 //! another rounding direction, would compute different bits from the same code.
 //! [`Arithmetic::resolve`] proves the environment by behaviour, on every target: it runs
-//! eight binary64 operations whose IEEE-754 results are known constants, each chosen so
-//! that flushing a subnormal or rounding by any other rule changes the bits. Where the
-//! control register can be read (MXCSR on `x86_64`, FPCR on `aarch64`) it is read first,
-//! so the refusal can name it. A departure is refused with a named
+//! thirteen binary64 operations whose IEEE-754 results are known constants, each chosen
+//! so that flushing a subnormal, rounding by any other rule, or rounding twice through a
+//! wider format changes the bits. Where the control register can be read (MXCSR on
+//! `x86_64`, FPCR on `aarch64`, the x87 control word where the x87 is the binary64 unit)
+//! it is read first, so the refusal can name it. On the x87, which rounds each result to
+//! its register precision and again when storing it, every kernel and the probe compute
+//! under a guard that sets the precision to binary64's, with each result stored as
+//! binary64, so the arithmetics are correctly rounded there too rather than refused. A departure is refused with a named
 //! [`FloatEnvironmentError`] whose [`FloatEnvironmentEvidence`] says what was observed.
 //!
 //! The check cannot be skipped, because nothing public computes a distance without the
@@ -138,12 +145,16 @@
 //! to a worker, is the [`Selected`] path, which computes nothing until the receiving
 //! thread calls [`Selected::resolve`] and passes the same check.
 
+pub(crate) mod binary64;
+mod build_identity;
 mod dispatch;
 mod env;
 mod exact;
 mod reassociated;
 mod shape;
 
+#[cfg(test)]
+mod binary64_tests;
 #[cfg(test)]
 mod reassociated_tests;
 #[cfg(test)]
@@ -152,8 +163,9 @@ mod tests;
 use core::fmt;
 use core::marker::PhantomData;
 
+pub use build_identity::BuildInputs;
 pub use env::{FloatEnvironmentError, FloatEnvironmentEvidence};
-pub use shape::BuildShape;
+pub use shape::{BuildIdentity, BuildShape};
 
 /// The number of independent accumulators in the [`Exact`] law.
 pub const EXACT_LANES: usize = exact::LANES;
@@ -531,9 +543,9 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
     /// arithmetic whose bits are the same in every build.
     ///
     /// For an arithmetic whose bits depend on the compilation, a recorded result is
-    /// reproducible only by a build of the same shape (and, beyond what the shape can
-    /// see, only by the same compiled artifact), so a consumer records it beside the image
-    /// code and refuses a mismatch. See [`BuildShape`].
+    /// reproducible only by a build of the same shape -- target architecture, target
+    /// features and [`BuildIdentity`] -- so a consumer records it beside the image code
+    /// and refuses a mismatch. See [`BuildShape`].
     fn build_shape() -> Option<BuildShape>;
 
     /// Check the float environment and select this process's dispatch path.
@@ -864,7 +876,7 @@ impl<A: Arithmetic> Selected<A> {
     /// selection's dispatch path, for this thread only.
     ///
     /// The per-thread half of [`Arithmetic::resolve`]: the control-register read and the
-    /// eight-operation probe, with no path selection, since the path was selected when the
+    /// thirteen-operation probe, with no path selection, since the path was selected when the
     /// selection was made and processor features belong to the process. Cheap enough to
     /// call once per search, per worker or per chunk; never needed per pair.
     ///
@@ -1047,8 +1059,8 @@ impl Arithmetic for Exact {
 /// multiplies into adds; block sums are combined with plain `+` in ascending order.
 ///
 /// Its bits depend on the target, the build and the dispatch path; they are a function
-/// of the inputs only within one compiled build on one path. [`BuildShape`] names the
-/// part of the build that decides them which the source can see. See the
+/// of the inputs only within one build shape on one path. [`BuildShape`] names the
+/// build that decides them: its target, target features and [`BuildIdentity`]. See the
 /// [module documentation](self) and [`Arithmetic::evidence`] for what it gives up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Reassociated;
@@ -1146,10 +1158,12 @@ impl Arithmetic for Reassociated {
 /// The PURREMB §13.2 fold itself, for the crate's own callers, each of which holds a
 /// [`Resolved`] handle proving the float environment before it reaches here.
 pub(crate) fn l2_norm<T: Scalar>(vector: &[T]) -> f64 {
+    let precision = binary64::Precision::enter();
+    let ops = precision.binary64();
     let mut scale = 0.0_f64;
     let mut sum_of_squares = 1.0_f64;
     for value in vector {
-        crate::ir::embedding::norm_fold(value.widen().abs(), &mut scale, &mut sum_of_squares);
+        crate::ir::embedding::norm_fold(ops, value.widen().abs(), &mut scale, &mut sum_of_squares);
     }
-    scale * sum_of_squares.sqrt()
+    ops.mul(scale, ops.sqrt(sum_of_squares))
 }

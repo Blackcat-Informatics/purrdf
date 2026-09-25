@@ -202,9 +202,11 @@ header:
                        (binary64-lane16-tree-v1); 2..=8 = Reassociated
                        (binary64-reassociated-v1) on the dispatch path the
                        build ran; 0 is refused
-  shape      u64       Reassociated codes only: the BuildShape of the build
-                       that computed the distances (§3.1); absent from an
-                       Exact image
+  shape      u64       Reassociated codes only: the BuildShape bits of the
+                       build that computed the distances (§3.1); absent
+                       from an Exact image
+  identity   u64       Reassociated codes only: that build's BuildIdentity
+                       digest (§3.1); absent from an Exact image
   entry      u64       row, or u64::MAX for an empty graph
 node records, in ascending row order:
   row        u64       must equal the record's position
@@ -237,10 +239,10 @@ as tampering. A header whose arithmetic field is not `1` is refused by the exact
 instead (§3.1). The exact canonical image is byte-identical across worker counts,
 across the exact arithmetic's dispatch paths (portable and AVX2 on x86-64), and across
 `wasm32-unknown-unknown` with and without `+simd128`; `make hnsw-determinism` executes
-all three wasm-side and native digests against the one golden; the `shape` field is
-never written into an exact image, so its bytes are the ones version 2 always had. A
-reassociated image is byte-identical across worker counts and bound to its compiled build
-and dispatch path.
+all three wasm-side and native digests against the one golden; the `shape` and
+`identity` fields are never written into an exact image, so its bytes are the ones
+version 2 always had. A reassociated image is byte-identical across worker counts and
+bound to its build shape and dispatch path.
 
 Every build, rebuild, decode and search resolves the exact arithmetic on its own thread
 first, which refuses a flush-to-zero or re-rounding float environment with
@@ -282,9 +284,10 @@ coordinate.
 given parameters?* It recomputes the graph and compares. The canonical image is
 the same bytes the determinism digest folds, so rebuildability and determinism
 are one claim rather than two. For an exact payload a `false` is evidence of a stale
-or altered payload. A reassociated payload is reproducible only by the compiled build
-that made it, so a rebuild that differs under its recorded path and build shape is the
-named `HnswError::ArithmeticRebuildDiverged` instead (§3.1).
+or altered payload. A reassociated payload is reproducible only by a build of the shape
+that made it, so another build's shape is the named `HnswError::ArithmeticBuildMismatch`;
+under its recorded path and build shape the rebuild compiles to the code that built it,
+and a `false` there is the same evidence (§3.1).
 
 ---
 
@@ -338,10 +341,10 @@ index's pinned recall on every regime.
 | record | exact index | reassociated index |
 |---|---|---|
 | image header `arithmetic` field | `1` | the code of the dispatch path the build resolved: `2` sse2, `3` avx2+fma, `4` avx512f, `5` neon, `6` wasm-simd128, `7` wasm-scalar, `8` portable (every target other than x86-64, aarch64 and wasm) |
-| image header `shape` field | absent | the build's `BuildShape`: target architecture and the target features that decide the reassociated body's code |
+| image header `shape` and `identity` fields | absent | the build's `BuildShape`: target architecture and the target features that decide the reassociated body's code, then its `BuildIdentity` digest (compiler, target CPU, optimisation level, debug assertions, codegen flags) |
 | implementation identifier | `hnsw-v2` | `hnsw-reassociated-v2` |
-| evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by the compiled build that made it, running the same dispatch path: the image records that build's target architecture and features, and CPU tuning and the compiler version, which it cannot record, may change its bits too." (`profile::loss_evidence_reassociated`) |
-| profile declaration | `arithmetic=binary64-lane16-tree-v1` | `arithmetic=binary64-reassociated-v1`, the path's revision, and `build-shape=<bits>` |
+| evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by a build of the shape that made it, running the same dispatch path: the image records that build's target architecture and features and the identity of its compiler, target CPU, optimisation level and codegen flags, and a build of another shape refuses it." (`profile::loss_evidence_reassociated`) |
+| profile declaration | `arithmetic=binary64-lane16-tree-v1` | `arithmetic=binary64-reassociated-v1`, the path's revision, `build-shape=<bits>` and `build-identity=<digest>` |
 | `IndexLossContract` | `transforms_vectors: false` | `transforms_vectors: false` |
 | ranked declaration | `RankArithmetic::float_distance::<Exact>()` | `RankArithmetic::float_distance::<Reassociated>()` |
 | relation fidelity | `Lossy` with `LOSS_EVIDENCE`; order faithful | `Lossy` with the reassociated revision; order `Perturbed` with the arithmetic's evidence |
@@ -376,22 +379,30 @@ that does: the AVX-512F path is `zmm` FMA under generic tuning and `ymm` under
 x86-64-v4, the SSE2 path is FMA code in any build compiled with `fma` (so in every
 `target-cpu=native` build on an FMA processor), and the NEON path is SVE under a
 neoverse-v1 target. Two builds recording one path can compute different bits. So the
-header also records the build's `purrdf_core::distance::BuildShape` -- a versioned `u64`
+header also records the build's `purrdf_core::distance::BuildShape`: a versioned `u64`
 naming the target architecture and the `cfg(target_feature)` set that decides the
-reassociated body's vector and FMA code -- and `decode_reassociated`,
+reassociated body's vector and FMA code, then a `u64` `BuildIdentity` digest for what no
+`cfg` exposes. `rustc` has no `cfg` for `-C target-cpu`, CPU tuning is not a target
+feature, and neither the compiler release nor the optimisation level is a `cfg`, so
+`purrdf-core`'s build script records them: the compiler's release, commit hash and LLVM
+version (`rustc -vV` on `RUSTC`, never through a wrapper), the resolved target CPU,
+every `-C target-feature` (tuning features included), any `-C llvm-args`,
+`codegen-units`, `lto` or `overflow-checks` in the rustflags, and the optimisation level,
+with the crate's own `cfg(debug_assertions)` appended. `decode_reassociated`,
 `guard::load_reassociated`, `verify_rebuild` and `guard::verify_rebuild` refuse another
-build's shape with `HnswError::ArithmeticBuildMismatch { recorded, here }`, whose
-message lists both feature sets. The path is checked first, so an image of another
-target reads as the unavailable path it is.
+build's shape, bits or identity, with `HnswError::ArithmeticBuildMismatch { recorded,
+here }`, whose message lists both feature sets and both identities and says which half
+differs. The path is checked first, so an image of another target reads as the
+unavailable path it is.
 
-Equal path and shape are necessary, not sufficient. `rustc` exposes no `cfg` for
-`-C target-cpu`, CPU tuning is not a target feature, and the compiler version is
-invisible to the source, so a reassociated image is reproducible only by the compiled
-artifact that built it. A rebuild on the recorded path, under the recorded shape, that
-produces another image is `HnswError::ArithmeticRebuildDiverged { recorded, shape }`,
-from `HnswIndex::verify_rebuild` and `guard::verify_rebuild` alike: it cannot be told
-apart from a payload that differs, and answering `false` would report a real index as
-tampered. `false` stays the exact index's answer, where it is evidence.
+Under an equal path and shape the rebuild compiles the reassociated body to the code
+that computed the image, so a rebuild that produces another image answers `false` from
+`HnswIndex::verify_rebuild` and `guard::verify_rebuild` alike (`None` from
+`verify_bytes_against`): the same tamper evidence as an exact index's. What no build
+script can see is named on `BuildIdentity`: a `[profile]` table's own `lto`,
+`codegen-units` and `overflow-checks`, flags a `cargo rustc --` invocation appends, and a
+compiler whose `rustc -vV` does not tell it apart from another. Builds that differ only
+there share an identity.
 
 **Compiled in this crate.** The search traversal and the graph build are held by the
 index as walks its non-generic constructors instantiate, so both are compiled in

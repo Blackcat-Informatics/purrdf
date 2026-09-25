@@ -40,7 +40,19 @@
 //!
 //! The `#[target_feature]` compilations are only ever *called*, from the ordinary
 //! wrapper impls below, never turned into function pointers.
+//!
+//! # Binary64 on every target
+//!
+//! Every operation, licensed or plain, is a [`Binary64`] method, and each entry point
+//! enters a [`Precision`] scope first, as the exact law's do. On every target but the
+//! x87 the licensed methods are the `algebraic_*` operations and the plain ones the
+//! language operators, unchanged. On the x87 both are the correctly rounded binary64
+//! sequences `binary64` describes, in written order: the licence permits reassociation
+//! and contraction and requires neither, so that is one of the results it admits, and
+//! it keeps the evidence's claim of binary64 arithmetic true there too -- every value the
+//! fold holds is a binary64 value, rounded once, rather than an 80-bit register's.
 
+use super::binary64::{Binary64, Precision};
 use super::exact::{cosine, finite};
 use super::sealed::{Stored, Width};
 use super::{Bound, Bounded, Measure, Path, PathUnavailable, RowsRef, Scalar};
@@ -271,7 +283,7 @@ pub(crate) fn recorded(path: Path) -> Result<Path, PathUnavailable> {
 
 /// The one body every compilation inlines.
 mod body {
-    use super::{BLOCK, Bound, Bounded, Scalar};
+    use super::{BLOCK, Binary64, Bound, Bounded, Scalar};
 
     /// `sum(a[i] · b[i])` over one block, under the reassociation licence.
     #[allow(
@@ -280,10 +292,10 @@ mod body {
                   under its own target features"
     )]
     #[inline(always)]
-    fn block_dot<A: Scalar, B: Scalar>(a: &[A], b: &[B]) -> f64 {
+    fn block_dot<A: Scalar, B: Scalar>(ops: Binary64<'_>, a: &[A], b: &[B]) -> f64 {
         let mut sum = 0.0_f64;
         for (x, y) in a.iter().zip(b) {
-            sum = sum.algebraic_add(x.widen().algebraic_mul(y.widen()));
+            sum = ops.algebraic_add(sum, ops.algebraic_mul(x.widen(), y.widen()));
         }
         sum
     }
@@ -295,11 +307,11 @@ mod body {
                   under its own target features"
     )]
     #[inline(always)]
-    fn block_squares<A: Scalar, B: Scalar>(a: &[A], b: &[B]) -> f64 {
+    fn block_squares<A: Scalar, B: Scalar>(ops: Binary64<'_>, a: &[A], b: &[B]) -> f64 {
         let mut sum = 0.0_f64;
         for (x, y) in a.iter().zip(b) {
-            let delta = x.widen().algebraic_sub(y.widen());
-            sum = sum.algebraic_add(delta.algebraic_mul(delta));
+            let delta = ops.algebraic_sub(x.widen(), y.widen());
+            sum = ops.algebraic_add(sum, ops.algebraic_mul(delta, delta));
         }
         sum
     }
@@ -311,18 +323,18 @@ mod body {
                   under its own target features"
     )]
     #[inline(always)]
-    pub(crate) fn dot<A: Scalar, B: Scalar>(a: &[A], b: &[B]) -> f64 {
+    pub(crate) fn dot<A: Scalar, B: Scalar>(ops: Binary64<'_>, a: &[A], b: &[B]) -> f64 {
         let len = a.len().min(b.len());
         let (blocks_a, tail_a) = a[..len].as_chunks::<BLOCK>();
         let (blocks_b, tail_b) = b[..len].as_chunks::<BLOCK>();
         let mut total = 0.0_f64;
         for (x, y) in blocks_a.iter().zip(blocks_b) {
-            let block = block_dot(x, y);
-            total += block;
+            let block = block_dot(ops, x, y);
+            total = ops.add(total, block);
         }
         if !tail_a.is_empty() {
-            let block = block_dot(tail_a, tail_b);
-            total += block;
+            let block = block_dot(ops, tail_a, tail_b);
+            total = ops.add(total, block);
         }
         total
     }
@@ -336,6 +348,7 @@ mod body {
     )]
     #[inline(always)]
     pub(crate) fn squared_euclidean_bounded<A: Scalar, B: Scalar>(
+        ops: Binary64<'_>,
         a: &[A],
         b: &[B],
         bound: Bound,
@@ -345,8 +358,8 @@ mod body {
         let (blocks_b, tail_b) = b[..len].as_chunks::<BLOCK>();
         let mut total = 0.0_f64;
         for (x, y) in blocks_a.iter().zip(blocks_b) {
-            let block = block_squares(x, y);
-            total += block;
+            let block = block_squares(ops, x, y);
+            total = ops.add(total, block);
             if !total.is_finite() {
                 return Bounded::NonFinite;
             }
@@ -355,8 +368,8 @@ mod body {
             }
         }
         if !tail_a.is_empty() {
-            let block = block_squares(tail_a, tail_b);
-            total += block;
+            let block = block_squares(ops, tail_a, tail_b);
+            total = ops.add(total, block);
         }
         if !total.is_finite() {
             return Bounded::NonFinite;
@@ -380,24 +393,25 @@ macro_rules! compilation {
     (@pair $name:ident, $query:ty, $row:ty $(, #[$feature:meta])?) => {
         /// The compilation for one pair of stored widths: query first, then row.
         pub(crate) mod $name {
-            use super::super::{Bound, Bounded, body};
+            use super::super::{Binary64, Bound, Bounded, body};
 
             /// The reassociated dot product.
             $(#[$feature])?
             #[inline(never)]
-            pub(crate) fn dot(a: &[$query], b: &[$row]) -> f64 {
-                body::dot(a, b)
+            pub(crate) fn dot(ops: Binary64<'_>, a: &[$query], b: &[$row]) -> f64 {
+                body::dot(ops, a, b)
             }
 
             /// The reassociated squared Euclidean distance, bounded.
             $(#[$feature])?
             #[inline(never)]
             pub(crate) fn squared_euclidean_bounded(
+                ops: Binary64<'_>,
                 a: &[$query],
                 b: &[$row],
                 bound: Bound,
             ) -> Bounded {
-                body::squared_euclidean_bounded(a, b, bound)
+                body::squared_euclidean_bounded(ops, a, b, bound)
             }
         }
     };
@@ -432,12 +446,12 @@ pub(crate) mod avx512f {
 
 /// Route a generic operand pair to its concrete compilation in `$module`.
 macro_rules! by_width {
-    ($module:ident :: $op:ident ($a:expr, $b:expr $(, $extra:expr)*)) => {
+    ($module:ident :: $op:ident ($ops:expr, $a:expr, $b:expr $(, $extra:expr)*)) => {
         match (Stored::width($a), Stored::width($b)) {
-            (Width::F64(a), Width::F64(b)) => $module::f64_f64::$op(a, b $(, $extra)*),
-            (Width::F64(a), Width::F32(b)) => $module::f64_f32::$op(a, b $(, $extra)*),
-            (Width::F32(a), Width::F64(b)) => $module::f32_f64::$op(a, b $(, $extra)*),
-            (Width::F32(a), Width::F32(b)) => $module::f32_f32::$op(a, b $(, $extra)*),
+            (Width::F64(a), Width::F64(b)) => $module::f64_f64::$op($ops, a, b $(, $extra)*),
+            (Width::F64(a), Width::F32(b)) => $module::f64_f32::$op($ops, a, b $(, $extra)*),
+            (Width::F32(a), Width::F64(b)) => $module::f32_f64::$op($ops, a, b $(, $extra)*),
+            (Width::F32(a), Width::F32(b)) => $module::f32_f32::$op($ops, a, b $(, $extra)*),
         }
     };
 }
@@ -445,15 +459,20 @@ macro_rules! by_width {
 /// One compilation of the body, as the batch and pair kernels call it.
 trait Compiled {
     /// The reassociated dot product.
-    fn dot<Q: Scalar, T: Scalar>(a: &[Q], b: &[T]) -> f64;
+    fn dot<Q: Scalar, T: Scalar>(ops: Binary64<'_>, a: &[Q], b: &[T]) -> f64;
 
     /// The reassociated squared Euclidean distance, bounded.
-    fn squared_euclidean_bounded<Q: Scalar, T: Scalar>(a: &[Q], b: &[T], bound: Bound) -> Bounded;
+    fn squared_euclidean_bounded<Q: Scalar, T: Scalar>(
+        ops: Binary64<'_>,
+        a: &[Q],
+        b: &[T],
+        bound: Bound,
+    ) -> Bounded;
 
     /// The reassociated squared Euclidean distance; an overflow is an infinity.
     #[inline]
-    fn squared_euclidean<Q: Scalar, T: Scalar>(a: &[Q], b: &[T]) -> f64 {
-        match Self::squared_euclidean_bounded(a, b, Bound::Above(f64::INFINITY)) {
+    fn squared_euclidean<Q: Scalar, T: Scalar>(ops: Binary64<'_>, a: &[Q], b: &[T]) -> f64 {
+        match Self::squared_euclidean_bounded(ops, a, b, Bound::Above(f64::INFINITY)) {
             Bounded::Below(sum) => sum,
             Bounded::NonFinite | Bounded::Beyond => f64::INFINITY,
         }
@@ -465,13 +484,18 @@ struct Baseline;
 
 impl Compiled for Baseline {
     #[inline]
-    fn dot<Q: Scalar, T: Scalar>(a: &[Q], b: &[T]) -> f64 {
-        by_width!(baseline::dot(a, b))
+    fn dot<Q: Scalar, T: Scalar>(ops: Binary64<'_>, a: &[Q], b: &[T]) -> f64 {
+        by_width!(baseline::dot(ops, a, b))
     }
 
     #[inline]
-    fn squared_euclidean_bounded<Q: Scalar, T: Scalar>(a: &[Q], b: &[T], bound: Bound) -> Bounded {
-        by_width!(baseline::squared_euclidean_bounded(a, b, bound))
+    fn squared_euclidean_bounded<Q: Scalar, T: Scalar>(
+        ops: Binary64<'_>,
+        a: &[Q],
+        b: &[T],
+        bound: Bound,
+    ) -> Bounded {
+        by_width!(baseline::squared_euclidean_bounded(ops, a, b, bound))
     }
 }
 
@@ -482,20 +506,25 @@ struct Avx2Fma;
 #[cfg(target_arch = "x86_64")]
 impl Compiled for Avx2Fma {
     #[inline]
-    fn dot<Q: Scalar, T: Scalar>(a: &[Q], b: &[T]) -> f64 {
+    fn dot<Q: Scalar, T: Scalar>(ops: Binary64<'_>, a: &[Q], b: &[T]) -> f64 {
         // SAFETY: `Avx2Fma` is named only by `on_path!` for a `Path::Avx2Fma`, which
         // reaches it only inside a `Resolved<Reassociated>`; that handle's only producers
         // for this path are `path` (through `Reassociated::resolve`) and `recorded`
         // (through `Reassociated::resolve_recorded`), each of which returns it only after
         // `is_x86_feature_detected!` reported both AVX2 and FMA on this processor.
-        unsafe { by_width!(avx2fma::dot(a, b)) }
+        unsafe { by_width!(avx2fma::dot(ops, a, b)) }
     }
 
     #[inline]
-    fn squared_euclidean_bounded<Q: Scalar, T: Scalar>(a: &[Q], b: &[T], bound: Bound) -> Bounded {
+    fn squared_euclidean_bounded<Q: Scalar, T: Scalar>(
+        ops: Binary64<'_>,
+        a: &[Q],
+        b: &[T],
+        bound: Bound,
+    ) -> Bounded {
         // SAFETY: as in `dot`; a `Path::Avx2Fma` exists only after AVX2 and FMA were
         // detected.
-        unsafe { by_width!(avx2fma::squared_euclidean_bounded(a, b, bound)) }
+        unsafe { by_width!(avx2fma::squared_euclidean_bounded(ops, a, b, bound)) }
     }
 }
 
@@ -506,19 +535,24 @@ struct Avx512f;
 #[cfg(target_arch = "x86_64")]
 impl Compiled for Avx512f {
     #[inline]
-    fn dot<Q: Scalar, T: Scalar>(a: &[Q], b: &[T]) -> f64 {
+    fn dot<Q: Scalar, T: Scalar>(ops: Binary64<'_>, a: &[Q], b: &[T]) -> f64 {
         // SAFETY: `Avx512f` is named only by `on_path!` for a `Path::Avx512f`, which
         // reaches it only inside a `Resolved<Reassociated>`; that handle's only producers
         // for this path are `path` (through `Reassociated::resolve`) and `recorded`
         // (through `Reassociated::resolve_recorded`), each of which returns it only after
         // `is_x86_feature_detected!` reported AVX-512F, AVX2 and FMA on this processor.
-        unsafe { by_width!(avx512f::dot(a, b)) }
+        unsafe { by_width!(avx512f::dot(ops, a, b)) }
     }
 
     #[inline]
-    fn squared_euclidean_bounded<Q: Scalar, T: Scalar>(a: &[Q], b: &[T], bound: Bound) -> Bounded {
+    fn squared_euclidean_bounded<Q: Scalar, T: Scalar>(
+        ops: Binary64<'_>,
+        a: &[Q],
+        b: &[T],
+        bound: Bound,
+    ) -> Bounded {
         // SAFETY: as in `dot`; a `Path::Avx512f` exists only after AVX-512F was detected.
-        unsafe { by_width!(avx512f::squared_euclidean_bounded(a, b, bound)) }
+        unsafe { by_width!(avx512f::squared_euclidean_bounded(ops, a, b, bound)) }
     }
 }
 
@@ -559,6 +593,7 @@ macro_rules! on_path {
 
 /// Every row of `rows` against `query` under compilation `K`, in row order.
 fn batch<K: Compiled, Q: Scalar, T: Scalar>(
+    ops: Binary64<'_>,
     measure: Measure,
     query: &[Q],
     query_norm: f64,
@@ -582,17 +617,22 @@ fn batch<K: Compiled, Q: Scalar, T: Scalar>(
     match measure {
         Measure::SquaredEuclidean => {
             for (row, slot) in out.iter_mut().enumerate() {
-                *slot = finite(K::squared_euclidean(query, rows.row(row)));
+                *slot = finite(K::squared_euclidean(ops, query, rows.row(row)));
             }
         }
         Measure::NegativeDot => {
             for (row, slot) in out.iter_mut().enumerate() {
-                *slot = finite(-K::dot(query, rows.row(row)));
+                *slot = finite(-K::dot(ops, query, rows.row(row)));
             }
         }
         Measure::Cosine => {
             for (row, slot) in out.iter_mut().enumerate() {
-                let value = cosine(K::dot(query, rows.row(row)), query_norm, rows.norm(row));
+                let value = cosine(
+                    ops,
+                    K::dot(ops, query, rows.row(row)),
+                    query_norm,
+                    rows.norm(row),
+                );
                 *slot = finite(value);
             }
         }
@@ -601,6 +641,7 @@ fn batch<K: Compiled, Q: Scalar, T: Scalar>(
 
 /// The rows named by `ids` against `query` under compilation `K`, in `ids` order.
 fn batch_indexed<K: Compiled, Q: Scalar, T: Scalar>(
+    ops: Binary64<'_>,
     measure: Measure,
     query: &[Q],
     query_norm: f64,
@@ -625,17 +666,22 @@ fn batch_indexed<K: Compiled, Q: Scalar, T: Scalar>(
     match measure {
         Measure::SquaredEuclidean => {
             for (&row, slot) in ids.iter().zip(out.iter_mut()) {
-                *slot = finite(K::squared_euclidean(query, rows.row(row)));
+                *slot = finite(K::squared_euclidean(ops, query, rows.row(row)));
             }
         }
         Measure::NegativeDot => {
             for (&row, slot) in ids.iter().zip(out.iter_mut()) {
-                *slot = finite(-K::dot(query, rows.row(row)));
+                *slot = finite(-K::dot(ops, query, rows.row(row)));
             }
         }
         Measure::Cosine => {
             for (&row, slot) in ids.iter().zip(out.iter_mut()) {
-                let value = cosine(K::dot(query, rows.row(row)), query_norm, rows.norm(row));
+                let value = cosine(
+                    ops,
+                    K::dot(ops, query, rows.row(row)),
+                    query_norm,
+                    rows.norm(row),
+                );
                 *slot = finite(value);
             }
         }
@@ -644,6 +690,7 @@ fn batch_indexed<K: Compiled, Q: Scalar, T: Scalar>(
 
 /// One pair under compilation `K`.
 fn pair<K: Compiled, Q: Scalar, T: Scalar>(
+    ops: Binary64<'_>,
     measure: Measure,
     a: &[Q],
     a_norm: f64,
@@ -651,15 +698,16 @@ fn pair<K: Compiled, Q: Scalar, T: Scalar>(
     b_norm: f64,
 ) -> Option<f64> {
     let value = match measure {
-        Measure::SquaredEuclidean => K::squared_euclidean(a, b),
-        Measure::NegativeDot => -K::dot(a, b),
-        Measure::Cosine => cosine(K::dot(a, b), a_norm, b_norm),
+        Measure::SquaredEuclidean => K::squared_euclidean(ops, a, b),
+        Measure::NegativeDot => -K::dot(ops, a, b),
+        Measure::Cosine => cosine(ops, K::dot(ops, a, b), a_norm, b_norm),
     };
     finite(value)
 }
 
 /// One pair under compilation `K`, permitted to stop once it cannot clear `bound`.
 fn pair_bounded<K: Compiled, Q: Scalar, T: Scalar>(
+    ops: Binary64<'_>,
     measure: Measure,
     a: &[Q],
     a_norm: f64,
@@ -668,9 +716,9 @@ fn pair_bounded<K: Compiled, Q: Scalar, T: Scalar>(
     bound: Bound,
 ) -> Bounded {
     if measure == Measure::SquaredEuclidean {
-        return K::squared_euclidean_bounded(a, b, bound);
+        return K::squared_euclidean_bounded(ops, a, b, bound);
     }
-    match pair::<K, Q, T>(measure, a, a_norm, b, b_norm) {
+    match pair::<K, Q, T>(ops, measure, a, a_norm, b, b_norm) {
         None => Bounded::NonFinite,
         Some(value) if bound.is_met_by(value) => Bounded::Beyond,
         Some(value) => Bounded::Below(value),
@@ -686,7 +734,9 @@ pub(crate) fn distances<Q: Scalar, T: Scalar>(
     rows: RowsRef<'_, T>,
     out: &mut [Option<f64>],
 ) {
-    on_path!(path, K => batch::<K, Q, T>(measure, query, query_norm, rows, out));
+    let precision = Precision::enter();
+    let ops = precision.binary64();
+    on_path!(path, K => batch::<K, Q, T>(ops, measure, query, query_norm, rows, out));
 }
 
 /// The rows named by `ids` against `query` along `path`.
@@ -699,7 +749,9 @@ pub(crate) fn distances_indexed<Q: Scalar, T: Scalar>(
     ids: &[usize],
     out: &mut [Option<f64>],
 ) {
-    on_path!(path, K => batch_indexed::<K, Q, T>(measure, query, query_norm, rows, ids, out));
+    let precision = Precision::enter();
+    let ops = precision.binary64();
+    on_path!(path, K => batch_indexed::<K, Q, T>(ops, measure, query, query_norm, rows, ids, out));
 }
 
 /// One pair along `path`.
@@ -711,7 +763,9 @@ pub(crate) fn distance<Q: Scalar, T: Scalar>(
     b: &[T],
     b_norm: f64,
 ) -> Option<f64> {
-    on_path!(path, K => pair::<K, Q, T>(measure, a, a_norm, b, b_norm))
+    let precision = Precision::enter();
+    let ops = precision.binary64();
+    on_path!(path, K => pair::<K, Q, T>(ops, measure, a, a_norm, b, b_norm))
 }
 
 /// One pair along `path`, permitted to stop once it cannot clear `bound`.
@@ -724,5 +778,7 @@ pub(crate) fn distance_bounded<Q: Scalar, T: Scalar>(
     b_norm: f64,
     bound: Bound,
 ) -> Bounded {
-    on_path!(path, K => pair_bounded::<K, Q, T>(measure, a, a_norm, b, b_norm, bound))
+    let precision = Precision::enter();
+    let ops = precision.binary64();
+    on_path!(path, K => pair_bounded::<K, Q, T>(ops, measure, a, a_norm, b, b_norm, bound))
 }

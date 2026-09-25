@@ -14,15 +14,22 @@
 //! (bits 22–23) do the same; other architectures have their own controls (the RISC-V
 //! `frm` field, the 32-bit Arm FPSCR, the POWER FPSCR). A shared library loaded with
 //! fast-math startup code sets them for the thread that loads it and every thread it
-//! spawns afterwards.
+//! spawns afterwards. And one unit does not round binary64 once at all: the x87, which
+//! runs `f64` arithmetic in a 32-bit `x86` build without SSE2, rounds each result to the
+//! width its precision-control field selects and again when it is stored, which the
+//! arithmetics close by computing through [`Binary64`] under a [`Precision`] guard
+//! (see [`super::binary64`]).
 //!
 //! Under such an environment the same source computes different bits, and nothing in the
-//! result says so. So the environment is established by what it DOES: a probe of eight
-//! binary64 operations whose correctly rounded results under the assumed environment are
-//! known constants, each chosen so that one departure from it changes the bits. Operands
-//! pass through [`core::hint::black_box`], so the compiler cannot fold an operation into
-//! the constant it would give under its own (default) environment; the multiply and add
-//! run on the thread's floating-point unit, under whatever that thread has set.
+//! result says so. So the environment is established by what it DOES: a probe of
+//! thirteen binary64 operations whose correctly rounded results under the assumed
+//! environment are known constants, each chosen so that one departure from it changes
+//! the bits. The probe computes through the same [`Binary64`] operations, under the same
+//! [`Precision`] guard, as every kernel, so it proves the arithmetic the kernels run
+//! rather than some other. Operands pass through [`core::hint::black_box`], so the
+//! compiler cannot fold an operation into the constant it would give under its own
+//! (default) environment; each operation runs on the thread's floating-point unit, under
+//! whatever that thread has set.
 //!
 //! | operation (`ulp` = 2⁻⁵², the spacing above 1) | assumed result | departure it exposes |
 //! |---|---|---|
@@ -34,26 +41,45 @@
 //! | `−1 − 0.25 ulp` | `−1` | rounding downward |
 //! | `1 + 0.5 ulp` | `1` | a tie rounded away from zero, or upward |
 //! | `(1 + ulp) + 0.5 ulp` | `1 + 2 ulp` | a tie rounded toward zero, or downward |
+//! | `1 + (2⁻⁵³ + 2⁻⁷⁸)` | `1 + ulp` | a sum rounded twice, landing on a tie |
+//! | `(1 + ulp) + (2⁻⁵³ − 2⁻⁷⁸)` | `1 + ulp` | a sum rounded twice, landing on a tie |
+//! | `(1 − 0.5 ulp) × (1 + 2 ulp)` | `1 + ulp` | a product rounded twice, landing on a tie |
+//! | `2⁻⁵¹²(1 + 4 ulp) × 2⁻⁵¹¹(1 − ulp)` | the subnormal `2⁻¹⁰²³ + 2⁻¹⁰⁷⁴` | a subnormal product rounded twice |
+//! | `2⁻⁵¹² ÷ 2⁵¹¹(1 − ulp)` | the subnormal `2⁻¹⁰²³ + 2⁻¹⁰⁷⁴` | a subnormal quotient rounded twice |
 //!
 //! Every directed mode fails at least one row of each sign, and a nearest mode that
-//! breaks ties other than to even fails one of the last two, so the table distinguishes
-//! round-to-nearest-even from every other rounding rule. The probe runs in binary64
+//! breaks ties other than to even fails one of the two tie rows, so the table
+//! distinguishes round-to-nearest-even from every other rounding rule.
+//!
+//! The last five rows are double-rounding witnesses. The exact result of each lies
+//! within a 64-bit rounding of a binary64 midpoint without being one: rounded once, to
+//! 53 bits, it goes to the nearer neighbour; rounded first to the x87's 64 bits it
+//! lands on the midpoint, and the tie then goes to the even neighbour, which is the other
+//! one. The first three are in binary64's normal range, where precision control at 53
+//! bits closes the gap; the last two are in its subnormal range, where only the scaling
+//! [`Binary64`] performs on the x87 closes it, since a 53-bit result is rounded again by
+//! the store. Every other unit rounds once and passes all five. The probe runs in binary64
 //! because that is the only precision the arithmetics execute in: every operand is
 //! widened to binary64 per component ([`Scalar`](super::Scalar)) before any operation,
 //! so no binary32 operation is ever performed and none needs probing. On 32-bit Arm this
 //! also settles which unit is proven: NEON has no binary64 lanes, so binary64 runs on the
 //! VFP, which honours the FPSCR the probe exercises.
 //!
-//! Where the control register CAN be read — `x86_64` and `aarch64` — it is read first,
-//! so a refusal names the register and its value, and the probe then runs as well: a
-//! register read proves only the bits this build knows the meaning of, and the probe
-//! proves the environment itself. On WebAssembly the numeric instructions are specified
+//! Where the control register CAN be read — `x86_64`, `aarch64`, and the x87 control
+//! word where the x87 is the binary64 unit — it is read first, so a refusal names the
+//! register and its value, and the probe then runs as well: a register read proves only
+//! the bits this build knows the meaning of, and the probe proves the environment
+//! itself. The x87 control word is refused for its rounding-control field only; its
+//! precision-control field is the [`Precision`] guard's to set, and the probe's
+//! double-rounding rows prove that it did. On WebAssembly the numeric instructions are specified
 //! to round to nearest-even and preserve subnormals, and there is no register to set
-//! otherwise; the probe runs there too, because it costs eight operations and an engine
+//! otherwise; the probe runs there too, because it costs thirteen operations and an engine
 //! that departed from the specification would be refused by name rather than trusted.
 
 use core::fmt;
 use core::hint::black_box;
+
+use super::binary64::{Binary64, Precision};
 
 /// What a refusal of the floating-point environment observed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +87,7 @@ use core::hint::black_box;
 pub enum FloatEnvironmentEvidence {
     /// The thread's floating-point control register, read directly.
     Register {
-        /// The register read: `"MXCSR"` or `"FPCR"`.
+        /// The register read: `"MXCSR"`, `"FPCR"` or `"x87 control word"`.
         name: &'static str,
         /// The register's full value, as read.
         bits: u64,
@@ -109,6 +135,13 @@ pub enum FloatEnvironmentError {
         /// What showed it.
         evidence: FloatEnvironmentEvidence,
     },
+    /// The thread rounds a binary64 result twice, first to a wider format and then to
+    /// binary64: the x87's register precision, where the guard that sets it to binary64's
+    /// did not take hold.
+    DoubleRounding {
+        /// What showed it.
+        evidence: FloatEnvironmentEvidence,
+    },
 }
 
 impl fmt::Display for FloatEnvironmentError {
@@ -126,6 +159,12 @@ impl fmt::Display for FloatEnvironmentError {
                  distances computed under it differ from the IEEE-754 results the arithmetic \
                  defines, so they are refused rather than ranked"
             ),
+            Self::DoubleRounding { evidence } => write!(
+                f,
+                "the thread rounds binary64 results twice, through a wider format \
+                 ({evidence}); binary64 distances computed under it differ from the IEEE-754 \
+                 results the arithmetic defines, so they are refused rather than ranked"
+            ),
         }
     }
 }
@@ -139,6 +178,8 @@ pub(crate) enum Departure {
     Flush,
     /// A rounding rule other than round-to-nearest-even.
     Rounding,
+    /// A result rounded twice, through a wider format.
+    DoubleRounding,
 }
 
 /// The binary64 operation a probe row performs.
@@ -146,6 +187,7 @@ pub(crate) enum Departure {
 enum Op {
     Add,
     Mul,
+    Div,
 }
 
 /// One probe row: an operation on two operands and the bits IEEE-754 defines for it.
@@ -163,25 +205,43 @@ pub(crate) struct Probe {
 }
 
 impl Probe {
-    /// Perform the operation on this thread's floating-point unit and return its bits.
+    /// Perform the operation on this thread's floating-point unit, through the kernels'
+    /// own `ops`, and return its bits.
     ///
     /// Both operands pass through [`black_box`], so the operation is executed at run time
     /// under the thread's environment rather than folded at compile time under the
     /// compiler's.
     #[inline]
-    pub(crate) fn observe(&self) -> u64 {
+    pub(crate) fn observe(&self, ops: Binary64<'_>) -> u64 {
         let lhs = black_box(f64::from_bits(self.lhs));
         let rhs = black_box(f64::from_bits(self.rhs));
         let result = match self.op {
-            Op::Add => lhs + rhs,
-            Op::Mul => lhs * rhs,
+            Op::Add => ops.add(lhs, rhs),
+            Op::Mul => ops.mul(lhs, rhs),
+            Op::Div => ops.div(lhs, rhs),
         };
         black_box(result).to_bits()
     }
 
+    /// The operands, as binary64 values.
+    #[cfg(test)]
+    pub(crate) const fn operands(&self) -> (f64, f64) {
+        (f64::from_bits(self.lhs), f64::from_bits(self.rhs))
+    }
+
+    /// The operation's symbol, `'+'`, `'*'` or `'/'`.
+    #[cfg(test)]
+    pub(crate) const fn symbol(&self) -> char {
+        match self.op {
+            Op::Add => '+',
+            Op::Mul => '*',
+            Op::Div => '/',
+        }
+    }
+
     /// This row's refusal, if the thread's result differs from the defined one.
-    fn refusal(&self) -> Option<FloatEnvironmentError> {
-        let observed = self.observe();
+    fn refusal(&self, ops: Binary64<'_>) -> Option<FloatEnvironmentError> {
+        let observed = self.observe(ops);
         if observed == self.expected {
             return None;
         }
@@ -193,6 +253,7 @@ impl Probe {
         Some(match self.departure {
             Departure::Flush => FloatEnvironmentError::FlushToZero { evidence },
             Departure::Rounding => FloatEnvironmentError::RoundingMode { evidence },
+            Departure::DoubleRounding => FloatEnvironmentError::DoubleRounding { evidence },
         })
     }
 }
@@ -223,6 +284,25 @@ const MIN_SUBNORMAL: u64 = 0x0000_0000_0000_0001;
 const MAX_POWER_OF_TWO: u64 = 0x7fe0_0000_0000_0000;
 /// 2⁻⁵¹ = 2⁻¹⁰⁷⁴ · 2¹⁰²³: a normal.
 const TWO_POW_MINUS_51: u64 = 0x3cc0_0000_0000_0000;
+/// 2⁻⁷⁸ = 2⁻²⁶ ulp: far below a 64-bit significand's spacing above 1 (2⁻⁶³).
+const TWO_POW_MINUS_78: u64 = (1023 - 78) << 52;
+/// `2⁻⁵³ + 2⁻⁷⁸`: half an ulp and a little more.
+const HALF_ULP_AND_A_LITTLE: u64 = 0x3ca0_0000_0800_0000;
+/// `2⁻⁵³ − 2⁻⁷⁸`: half an ulp and a little less.
+const HALF_ULP_LESS_A_LITTLE: u64 = 0x3c9f_ffff_f000_0000;
+/// `1 − 0.5 ulp` = 1 − 2⁻⁵³: the predecessor of 1.
+const ONE_LESS_HALF_ULP: u64 = ONE - 1;
+/// 2⁻⁵¹²(1 + 4 ulp).
+const SUBNORMAL_PRODUCT_LHS: u64 = ((1023 - 512) << 52) + 4;
+/// 2⁻⁵¹¹(1 − ulp) = 2⁻⁵¹²(2 − 2 ulp): the largest binary64 below 2⁻⁵¹¹.
+const SUBNORMAL_PRODUCT_RHS: u64 = ((1023 - 511) << 52) - 2;
+/// 2⁻⁵¹².
+const TWO_POW_MINUS_512: u64 = (1023 - 512) << 52;
+/// 2⁵¹¹(1 − ulp) = 2⁵¹⁰(2 − 2 ulp).
+const SUBNORMAL_QUOTIENT_DIVISOR: u64 = ((1023 + 511) << 52) - 2;
+/// 2⁻¹⁰²³ + 2⁻¹⁰⁷⁴: the subnormal just above half the smallest normal, whose last
+/// significand bit is odd.
+const HALF_MIN_NORMAL_PLUS_ONE: u64 = HALF_MIN_NORMAL + 1;
 
 // Each constant is the value its name says, checked at compile time against the
 // definition written as arithmetic. Constant evaluation is IEEE round-to-nearest-even
@@ -244,10 +324,60 @@ const _: () = {
     assert!(TWO_POW_MINUS_51 == (1023 - 51) << 52);
     assert!(f64::from_bits(TWO_POW_MINUS_51) == 2.0 * f64::EPSILON);
     assert!(f64::from_bits(TWO_POW_MINUS_51).is_normal());
+    // The double-rounding operands, each the arithmetic its name says (every operation
+    // below is exact).
+    assert!(f64::from_bits(TWO_POW_MINUS_78) == f64::EPSILON / (1_u64 << 26) as f64);
+    assert!(
+        f64::from_bits(HALF_ULP_AND_A_LITTLE)
+            == f64::from_bits(HALF_ULP) + f64::from_bits(TWO_POW_MINUS_78)
+    );
+    assert!(
+        f64::from_bits(HALF_ULP_LESS_A_LITTLE)
+            == f64::from_bits(HALF_ULP) - f64::from_bits(TWO_POW_MINUS_78)
+    );
+    assert!(f64::from_bits(ONE_LESS_HALF_ULP) == 1.0 - f64::EPSILON / 2.0);
+    assert!(
+        f64::from_bits(SUBNORMAL_PRODUCT_LHS)
+            == (1.0 + 4.0 * f64::EPSILON) * f64::from_bits(TWO_POW_MINUS_512)
+    );
+    assert!(
+        f64::from_bits(SUBNORMAL_PRODUCT_RHS)
+            == (1.0 - f64::EPSILON) * (2.0 * f64::from_bits(TWO_POW_MINUS_512))
+    );
+    assert!(
+        f64::from_bits(SUBNORMAL_QUOTIENT_DIVISOR)
+            == (1.0 - f64::EPSILON) * f64::from_bits((1023 + 511) << 52)
+    );
+    assert!(
+        f64::from_bits(HALF_MIN_NORMAL_PLUS_ONE)
+            == f64::MIN_POSITIVE / 2.0 + f64::from_bits(MIN_SUBNORMAL)
+    );
+    assert!(!f64::from_bits(HALF_MIN_NORMAL_PLUS_ONE).is_normal());
+    // Their correctly rounded results: constant evaluation rounds once, to nearest-even,
+    // with subnormals preserved, which is the result each row expects.
+    assert!(
+        f64::from_bits(ONE) + f64::from_bits(HALF_ULP_AND_A_LITTLE) == f64::from_bits(ONE_PLUS_ULP)
+    );
+    assert!(
+        f64::from_bits(ONE_PLUS_ULP) + f64::from_bits(HALF_ULP_LESS_A_LITTLE)
+            == f64::from_bits(ONE_PLUS_ULP)
+    );
+    assert!(
+        f64::from_bits(ONE_LESS_HALF_ULP) * f64::from_bits(ONE_PLUS_TWO_ULP)
+            == f64::from_bits(ONE_PLUS_ULP)
+    );
+    assert!(
+        f64::from_bits(SUBNORMAL_PRODUCT_LHS) * f64::from_bits(SUBNORMAL_PRODUCT_RHS)
+            == f64::from_bits(HALF_MIN_NORMAL_PLUS_ONE)
+    );
+    assert!(
+        f64::from_bits(TWO_POW_MINUS_512) / f64::from_bits(SUBNORMAL_QUOTIENT_DIVISOR)
+            == f64::from_bits(HALF_MIN_NORMAL_PLUS_ONE)
+    );
 };
 
-/// The probe, in the order it is run: flushing first, then rounding.
-pub(crate) const PROBES: [Probe; 8] = [
+/// The probe, in the order it is run: flushing first, then rounding, then double rounding.
+pub(crate) const PROBES: [Probe; 13] = [
     Probe {
         operation: "f64::MIN_POSITIVE * 0.5",
         departure: Departure::Flush,
@@ -312,12 +442,60 @@ pub(crate) const PROBES: [Probe; 8] = [
         rhs: HALF_ULP,
         expected: ONE_PLUS_TWO_ULP,
     },
+    Probe {
+        operation: "1 + (2^-53 + 2^-78)",
+        departure: Departure::DoubleRounding,
+        op: Op::Add,
+        lhs: ONE,
+        rhs: HALF_ULP_AND_A_LITTLE,
+        expected: ONE_PLUS_ULP,
+    },
+    Probe {
+        operation: "(1 + ulp) + (2^-53 - 2^-78)",
+        departure: Departure::DoubleRounding,
+        op: Op::Add,
+        lhs: ONE_PLUS_ULP,
+        rhs: HALF_ULP_LESS_A_LITTLE,
+        expected: ONE_PLUS_ULP,
+    },
+    Probe {
+        operation: "(1 - 0.5 ulp) * (1 + 2 ulp)",
+        departure: Departure::DoubleRounding,
+        op: Op::Mul,
+        lhs: ONE_LESS_HALF_ULP,
+        rhs: ONE_PLUS_TWO_ULP,
+        expected: ONE_PLUS_ULP,
+    },
+    Probe {
+        operation: "2^-512 (1 + 4 ulp) * 2^-511 (1 - ulp)",
+        departure: Departure::DoubleRounding,
+        op: Op::Mul,
+        lhs: SUBNORMAL_PRODUCT_LHS,
+        rhs: SUBNORMAL_PRODUCT_RHS,
+        expected: HALF_MIN_NORMAL_PLUS_ONE,
+    },
+    Probe {
+        operation: "2^-512 / (2^511 (1 - ulp))",
+        departure: Departure::DoubleRounding,
+        op: Op::Div,
+        lhs: TWO_POW_MINUS_512,
+        rhs: SUBNORMAL_QUOTIENT_DIVISOR,
+        expected: HALF_MIN_NORMAL_PLUS_ONE,
+    },
 ];
 
 /// Refuse a thread whose binary64 operations do not return the IEEE-754 results: the
 /// first probe row whose bits differ names the departure and what it saw.
+///
+/// The rows run inside a [`Precision`] guard, through its [`Binary64`] operations, exactly
+/// as every kernel does.
 pub(crate) fn probe() -> Result<(), FloatEnvironmentError> {
-    PROBES.iter().find_map(Probe::refusal).map_or(Ok(()), Err)
+    let precision = Precision::enter();
+    let ops = precision.binary64();
+    PROBES
+        .iter()
+        .find_map(|row| row.refusal(ops))
+        .map_or(Ok(()), Err)
 }
 
 /// MXCSR flush-to-zero.
@@ -404,8 +582,33 @@ fn register() -> Result<(), FloatEnvironmentError> {
     Ok(())
 }
 
+/// Refuse an x87 control word whose rounding-control field is set, naming the register.
+///
+/// Only where the x87 is this build's binary64 unit. Its precision-control field is not
+/// refused: the [`Precision`] guard sets it for every operation, and the probe's
+/// double-rounding rows prove the guard took hold.
+#[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
+fn register() -> Result<(), FloatEnvironmentError> {
+    use super::binary64::x87;
+
+    let bits = x87::control_word();
+    if bits & x87::ROUNDING_CONTROL != 0 {
+        return Err(FloatEnvironmentError::RoundingMode {
+            evidence: FloatEnvironmentEvidence::Register {
+                name: "x87 control word",
+                bits: u64::from(bits),
+            },
+        });
+    }
+    Ok(())
+}
+
 /// A target with no control register this build reads: the probe alone decides.
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    all(target_arch = "x86", not(target_feature = "sse2"))
+)))]
 #[allow(
     clippy::unnecessary_wraps,
     reason = "one signature across targets, so `check` is written once"

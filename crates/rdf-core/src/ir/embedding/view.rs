@@ -6,6 +6,7 @@
 use core::mem::size_of;
 
 use crate::ContentDigest;
+use crate::distance::binary64::{Binary64, Precision};
 use crate::distance::{Exact, Resolved};
 
 use super::contract::{
@@ -1088,9 +1089,14 @@ impl Iterator for L2F32Scalars<'_> {
     type Item = Result<f32, EmbeddingError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.raw
-            .next()
-            .map(|value| value.map(|value| (f64::from(value) / self.norm) as f32))
+        self.raw.next().map(|value| {
+            value.map(|value| {
+                // One correctly rounded binary64 quotient on every target, the x87
+                // included, then one rounding to binary32.
+                let precision = Precision::enter();
+                (precision.binary64().div(f64::from(value), self.norm)) as f32
+            })
+        })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1126,9 +1132,14 @@ impl Iterator for L2F64Scalars<'_> {
     type Item = Result<f64, EmbeddingError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.raw
-            .next()
-            .map(|value| value.map(|value| value / self.norm))
+        self.raw.next().map(|value| {
+            value.map(|value| {
+                // One correctly rounded binary64 quotient on every target, the x87
+                // included.
+                let precision = Precision::enter();
+                precision.binary64().div(value, self.norm)
+            })
+        })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -4564,6 +4575,8 @@ fn deterministic_norm_f32(
     dimension: u32,
     _arithmetic: Resolved<Exact>,
 ) -> Result<f64, EmbeddingError> {
+    let precision = Precision::enter();
+    let ops = precision.binary64();
     let mut scale = 0.0f64;
     let mut ssq = 1.0f64;
     let (chunks, _rest) = bytes.as_chunks::<4>();
@@ -4575,9 +4588,9 @@ fn deterministic_norm_f32(
                 column: u32::try_from(column).unwrap_or(u32::MAX),
             });
         }
-        norm_fold(f64::from(value).abs(), &mut scale, &mut ssq);
+        norm_fold(ops, f64::from(value).abs(), &mut scale, &mut ssq);
     }
-    finish_norm(scale, ssq, row, dimension)
+    finish_norm(ops, scale, ssq, row, dimension)
 }
 
 // `_arithmetic` is the proof, not an input: holding it means this thread's float
@@ -4588,6 +4601,8 @@ fn deterministic_norm_f64(
     dimension: u32,
     _arithmetic: Resolved<Exact>,
 ) -> Result<f64, EmbeddingError> {
+    let precision = Precision::enter();
+    let ops = precision.binary64();
     let mut scale = 0.0f64;
     let mut ssq = 1.0f64;
     let (chunks, _rest) = bytes.as_chunks::<8>();
@@ -4599,9 +4614,9 @@ fn deterministic_norm_f64(
                 column: u32::try_from(column).unwrap_or(u32::MAX),
             });
         }
-        norm_fold(value.abs(), &mut scale, &mut ssq);
+        norm_fold(ops, value.abs(), &mut scale, &mut ssq);
     }
-    finish_norm(scale, ssq, row, dimension)
+    finish_norm(ops, scale, ssq, row, dimension)
 }
 
 /// One step of PURREMB's normative scaled L2 fold (§13.2): fold the magnitude `value`
@@ -4610,30 +4625,37 @@ fn deterministic_norm_f64(
 /// The single copy of that order in the workspace. `Resolved::<Exact>::norm` folds a
 /// whole vector through it, and the artifact writer normalizes through that, so the kNN
 /// and HNSW norms, the writer's and this reader's cannot drift apart.
-// PURREMB v1 prescribes separate rounded multiply and add operations; fusing
-// them would change portable projection bytes.
-#[allow(clippy::suboptimal_flops)]
-pub(crate) fn norm_fold(value: f64, scale: &mut f64, ssq: &mut f64) {
+///
+/// PURREMB v1 prescribes separate rounded multiply and add operations; fusing them would
+/// change portable projection bytes. Each is a [`Binary64`] operation, so it is the one
+/// correctly rounded binary64 operation on every target, the x87 included.
+pub(crate) fn norm_fold(ops: Binary64<'_>, value: f64, scale: &mut f64, ssq: &mut f64) {
     if value == 0.0 {
         return;
     }
     if *scale < value {
-        let ratio = *scale / value;
-        let square = ratio * ratio;
-        *ssq = 1.0 + *ssq * square;
+        let ratio = ops.div(*scale, value);
+        let square = ops.mul(ratio, ratio);
+        *ssq = ops.add(1.0, ops.mul(*ssq, square));
         *scale = value;
     } else {
-        let ratio = value / *scale;
-        let square = ratio * ratio;
-        *ssq += square;
+        let ratio = ops.div(value, *scale);
+        let square = ops.mul(ratio, ratio);
+        *ssq = ops.add(*ssq, square);
     }
 }
 
-fn finish_norm(scale: f64, ssq: f64, row: u64, dimension: u32) -> Result<f64, EmbeddingError> {
+fn finish_norm(
+    ops: Binary64<'_>,
+    scale: f64,
+    ssq: f64,
+    row: u64,
+    dimension: u32,
+) -> Result<f64, EmbeddingError> {
     if scale == 0.0 {
         return Err(EmbeddingError::ZeroNorm { row, dimension });
     }
-    let norm = scale * ssq.sqrt();
+    let norm = ops.mul(scale, ops.sqrt(ssq));
     if !norm.is_finite() || norm == 0.0 {
         return Err(EmbeddingError::ContentMismatch(
             "invalid deterministic L2 norm",

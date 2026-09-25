@@ -32,7 +32,9 @@
 
 use std::collections::BTreeSet;
 
-use purrdf_core::distance::{Arithmetic, BuildShape, Exact, Resolved, RowsRef, Selected};
+use purrdf_core::distance::{
+    Arithmetic, BuildIdentity, BuildShape, Exact, Resolved, RowsRef, Selected,
+};
 
 use crate::error::{HnswError, Result};
 use crate::params::Params;
@@ -47,7 +49,7 @@ pub(crate) const IMAGE_MAGIC: [u8; 8] = *b"PURHNSW1";
 /// first whose header records that arithmetic's image code (in the `u32` that version 1
 /// reserved as zero): `1` for the sixteen-lane exact arithmetic, and for the
 /// reassociated one the code of the dispatch path the build ran, followed by the build's
-/// [`BuildShape`]. A version-1 image's distances were folded sequentially, so its recorded
+/// [`BuildShape`]: its bits, then its identity's digest. A version-1 image's distances were folded sequentially, so its recorded
 /// bits are not the ones this build computes; it is refused with
 /// [`HnswError::VersionMismatch`] rather than decoded.
 pub(crate) const IMAGE_VERSION: u32 = 2;
@@ -716,6 +718,7 @@ impl Graph {
         push_u32(&mut out, arithmetic.code);
         if let Some(shape) = arithmetic.shape {
             push_u64(&mut out, shape.bits());
+            push_u64(&mut out, shape.identity().digest());
         }
         push_u64(&mut out, self.entry.map_or(u64::MAX, as_u64));
 
@@ -892,9 +895,15 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
             actual: code,
         });
     }
-    // The code is one of `A`'s, so the field follows exactly when `A` has a shape.
+    // The code is one of `A`'s, so the fields follow exactly when `A` has a shape.
     let shape = match A::build_shape() {
-        Some(_) => Some(BuildShape::from_bits(cursor.u64()?)),
+        Some(_) => {
+            let bits = cursor.u64()?;
+            Some(BuildShape::from_parts(
+                bits,
+                BuildIdentity::from_digest(cursor.u64()?),
+            ))
+        }
         None => None,
     };
     let arithmetic = Recorded { code, shape };
@@ -1307,19 +1316,23 @@ mod tests {
         let graph = sample_graph();
         let params = params();
         let exact_image = graph.canonical_image(Kernel::SquaredEuclidean, &params, exact());
-        let shape = BuildShape::from_bits(0x0123_4567_89ab_cdef);
+        let shape = BuildShape::from_parts(
+            0x0123_4567_89ab_cdef,
+            BuildIdentity::from_digest(0xfedc_ba98_7654_3210),
+        );
         let reassociated = Recorded {
             code: 3,
             shape: Some(shape),
         };
         let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, reassociated);
-        // The shape is the eight bytes after the arithmetic code; everything else is the
-        // exact image's, shifted by them.
-        assert_eq!(image.len(), exact_image.len() + 8);
+        // The shape is the sixteen bytes after the arithmetic code, its bits then its
+        // identity's digest; everything else is the exact image's, shifted by them.
+        assert_eq!(image.len(), exact_image.len() + 16);
         assert_eq!(image[..60], exact_image[..60]);
         assert_eq!(image[60..64], 3_u32.to_le_bytes());
         assert_eq!(image[64..72], shape.bits().to_le_bytes());
-        assert_eq!(image[72..], exact_image[64..]);
+        assert_eq!(image[72..80], shape.identity().digest().to_le_bytes());
+        assert_eq!(image[80..], exact_image[64..]);
         // The decoder reads the shape back verbatim, whatever build it names; holding it
         // against this build is the caller's refusal, not the decoder's.
         let decoded = decode_image::<Reassociated>(&image).expect("decodes");

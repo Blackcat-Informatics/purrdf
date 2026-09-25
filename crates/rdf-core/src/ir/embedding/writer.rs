@@ -13,6 +13,7 @@ use std::io::{Seek, SeekFrom, Write};
 use sha2::{Digest as _, Sha256};
 
 use crate::ContentDigest;
+use crate::distance::binary64::Precision;
 use crate::distance::{Arithmetic as _, Exact, Resolved, Scalar};
 
 use super::contract::{PrefixPostprocessing, VectorDtype};
@@ -1462,8 +1463,12 @@ fn update_projection_hashers<T: MatrixScalar>(
             Some(arithmetic) => {
                 let norm =
                     deterministic_l2_norm(arithmetic, prefix, row, state.spec.effective_dimension)?;
+                // Each quotient is the one correctly rounded binary64 division on every
+                // target, the x87 included, as the norm it divides by is.
+                let precision = Precision::enter();
+                let ops = precision.binary64();
                 for &value in prefix {
-                    let bytes = T::rounded_bytes(value.to_f64() / norm);
+                    let bytes = T::rounded_bytes(ops.div(value.to_f64(), norm));
                     state.hasher.update(bytes.as_slice());
                 }
             }

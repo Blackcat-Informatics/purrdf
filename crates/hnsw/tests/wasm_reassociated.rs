@@ -21,9 +21,10 @@
 //!   an off-matrix vector -- returns exactly the brute-force top-`k` of the reassociated
 //!   kNN kernel (`Kernel::distance_reassociated`), rows and distance bits, which is an
 //!   oracle computed without the graph;
-//! * a rebuild verification over an image one distance bit away is refused by name with
-//!   [`HnswError::ArithmeticRebuildDiverged`], not answered `true` (the control that shows
-//!   the verification observes the payload); and
+//! * a rebuild verification over an image one distance bit away -- under the recorded
+//!   path and this build's shape, so the rebuild compiles to the code that built it -- is
+//!   answered `false`, the tamper answer, not `true` (the control that shows the
+//!   verification observes the payload); and
 //! * an image recorded on the OTHER wasm path is refused by name with
 //!   [`HnswError::ArithmeticPathUnavailable`], while the unaltered image beside it decodes.
 //!
@@ -38,7 +39,7 @@
 #![allow(clippy::doc_markdown, reason = "prose names targets, not items")]
 
 use purrdf_core::DistanceMetric;
-use purrdf_core::distance::{Arithmetic, BuildShape, Path, Reassociated, Resolved};
+use purrdf_core::distance::{Arithmetic, BuildIdentity, BuildShape, Path, Reassociated, Resolved};
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Params, Ranked, VectorMatrix};
 
@@ -55,13 +56,14 @@ const K: usize = 7;
 
 /// Byte offset of the arithmetic's image code in a canonical image header.
 const CODE_AT: usize = 60;
-/// Byte offset of the build shape, which follows the code in a reassociated header.
+/// Byte offset of the build shape, which follows the code in a reassociated header: its
+/// bits, then its identity's digest.
 const SHAPE_AT: usize = 64;
 /// Byte offset of the first recorded distance: row 0, layer 0, first neighbour.
 ///
-/// The header (80 bytes with a shape), then row 0's record (row, level, pad), its layer-0
+/// The header (88 bytes with a shape), then row 0's record (row, level, pad), its layer-0
 /// record (layer, pad, count), then the first neighbour's row.
-const FIRST_DISTANCE_AT: usize = 80 + 8 + 4 + 4 + 4 + 4 + 8 + 8;
+const FIRST_DISTANCE_AT: usize = 88 + 8 + 4 + 4 + 4 + 4 + 8 + 8;
 
 /// A seeded splitmix64 stream of `len` values in `[-1, 1)`.
 fn stream(len: usize, seed: u64) -> Vec<f64> {
@@ -155,11 +157,11 @@ fn recorded_code(image: &[u8]) -> u32 {
 
 /// The recorded build shape of a reassociated `image`.
 fn recorded_shape(image: &[u8]) -> BuildShape {
-    BuildShape::from_bits(u64::from_le_bytes(
-        image[SHAPE_AT..SHAPE_AT + 8]
-            .try_into()
-            .expect("eight bytes"),
-    ))
+    let word = |at: usize| u64::from_le_bytes(image[at..at + 8].try_into().expect("eight bytes"));
+    BuildShape::from_parts(
+        word(SHAPE_AT),
+        BuildIdentity::from_digest(word(SHAPE_AT + 8)),
+    )
 }
 
 /// The brute-force top-`K` of `query` over every row of `matrix`, under the reassociated
@@ -256,7 +258,8 @@ fn the_image_records_the_path_and_shape_this_build_was_made_for() {
                 &["simd128"]
             } else {
                 &[]
-            }
+            },
+            BuildIdentity::here()
         ),
         "the shape records simd128 exactly as the build enabled it: {here}"
     );
@@ -318,16 +321,20 @@ fn a_payload_one_distance_bit_away_does_not_verify() {
     let tampered = HnswIndex::decode_reassociated(matrix(), &image)
         .expect("a finite distance one bit away still decodes");
     assert_ne!(tampered.canonical_image(), index.canonical_image());
-    // A reassociated payload that is not its rebuild is refused by name, never answered
-    // `false`: no image records everything that decides its bits.
+    // The perturbed payload records this build's path and shape, so its rebuild compiles to
+    // the code that built the original: a payload that is not its rebuild is `false`.
+    assert_eq!(recorded_code(&image), code_of(resolved().path()));
+    assert_eq!(recorded_shape(&image), BuildShape::here());
     let verdict = tampered.verify_rebuild();
     assert!(
-        matches!(
-            verdict,
-            Err(HnswError::ArithmeticRebuildDiverged { recorded, shape })
-                if recorded == code_of(resolved().path()) && shape == BuildShape::here()
-        ),
-        "a payload that is not the rebuild is never verified: {verdict:?}"
+        matches!(verdict, Ok(false)),
+        "a payload that is not the rebuild is the tamper answer: {verdict:?}"
+    );
+    // The control: the unperturbed payload is its rebuild.
+    assert!(
+        index
+            .verify_rebuild()
+            .expect("the untouched image rebuilds")
     );
 }
 

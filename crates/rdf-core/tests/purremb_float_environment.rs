@@ -16,8 +16,16 @@
 //! the named refusal; the raw neighbour is built and verified under the same flushed
 //! register, and the normalized artifact is built, verified and read once it is restored.
 //! The register is per-thread, so no other test observes it.
+//!
+//! Only where MXCSR governs binary64: `x86_64`, and 32-bit `x86` with SSE2. Without SSE2
+//! binary64 runs on the x87, which has no flush-to-zero mode for FTZ to stand in for; its
+//! own departures (a directed rounding control, a guard that did not take hold) are
+//! exercised in `distance::binary64_tests`.
 
-#![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 
 use purrdf_core::distance::{Arithmetic as _, Exact, FloatEnvironmentError};
 use purrdf_core::{

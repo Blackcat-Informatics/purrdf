@@ -121,33 +121,19 @@ pub enum HnswError {
     /// build's.
     ///
     /// A reassociated arithmetic's bits depend on what its dispatch path compiled to, and
-    /// that depends on the build's target architecture and target features as well as
-    /// the path: the same path contracts to fused multiply-add in one build and not in
-    /// another. So the image records the shape of the build that computed it, and a build
-    /// of another shape refuses it by name rather than searching it, or rebuilding it and
-    /// answering `false`, with bits another compilation would produce.
+    /// that depends on the build as well as the path: its target architecture and target
+    /// features, and its [`BuildIdentity`](purrdf_core::distance::BuildIdentity) --
+    /// compiler release and LLVM version, target CPU, optimisation level, debug assertions
+    /// and codegen flags. The same path contracts to fused multiply-add in one build and not
+    /// in another. So the image records the shape of the build that computed it, and a
+    /// build of another shape refuses it by name rather than searching it, or rebuilding it
+    /// and answering `false`, with bits another compilation would produce. Within a build
+    /// of the recorded shape a rebuild that differs is the honest `false`.
     ArithmeticBuildMismatch {
         /// The shape the payload records.
         recorded: purrdf_core::distance::BuildShape,
         /// This build's shape.
         here: purrdf_core::distance::BuildShape,
-    },
-
-    /// A rebuild of a payload whose arithmetic depends on its compilation produced another
-    /// image, on the dispatch path the payload records and under the build shape it
-    /// records.
-    ///
-    /// The build shape holds only what the compiler exposes to the source. CPU tuning
-    /// (`-C target-cpu`) and the compiler version also decide what a reassociated path
-    /// compiles to, so an image of this arithmetic is reproducible only by the same
-    /// compiled artifact, and a divergence here cannot be told apart from a payload that
-    /// differs. It is refused by name instead of answered `false`, which for an arithmetic
-    /// whose bits are the same in every build is evidence that the payload was altered.
-    ArithmeticRebuildDiverged {
-        /// The image code of the path the payload records, which the rebuild ran.
-        recorded: u32,
-        /// The build shape the payload records, which is this build's.
-        shape: purrdf_core::distance::BuildShape,
     },
 
     /// The calling thread's floating-point environment is not the IEEE-754 one the
@@ -272,20 +258,17 @@ impl fmt::Display for HnswError {
             ),
             Self::ArithmeticBuildMismatch { recorded, here } => write!(
                 f,
-                "the payload's distances were computed by a build of another shape ({recorded}) \
-                 than this one ({here}); what a dispatch path compiles to depends on the \
-                 build's target architecture and features, so the image is reproducible only \
-                 by a build of its own shape"
-            ),
-            Self::ArithmeticRebuildDiverged { recorded, shape } => write!(
-                f,
-                "rebuilding the payload on the dispatch path it records (arithmetic code \
-                 {recorded}, {}) under the build shape it records ({shape}) produced another \
-                 image; CPU tuning and the compiler version also decide what that path \
-                 compiles to and no build shape records them, so the image is reproducible \
-                 only by the compiled artifact that built it, and this divergence cannot be \
-                 told apart from a payload that differs",
-                crate::profile::path_label(*recorded)
+                "the payload's distances were computed by another build ({recorded}) than this \
+                 one ({here}): {}; what a dispatch path compiles to depends on the build's \
+                 target architecture and features, compiler, target CPU, optimisation level and \
+                 codegen flags, so the image is reproducible only by a build of its own shape",
+                if recorded.bits() == here.bits() {
+                    "the target and features agree and the build identity differs"
+                } else if recorded.identity() == here.identity() {
+                    "the build identity agrees and the target or features differ"
+                } else {
+                    "the target or features and the build identity differ"
+                }
             ),
             Self::FloatEnvironment(error) => write!(
                 f,
@@ -352,6 +335,12 @@ impl From<purrdf_core::EmbeddingError> for HnswError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::distance::{BuildIdentity, BuildShape};
+
+    /// An `x86_64` shape with `features`, under `identity`.
+    fn shape(features: &[&str], identity: BuildIdentity) -> BuildShape {
+        BuildShape::encode("x86_64", features, identity)
+    }
 
     #[test]
     fn every_variant_renders_without_its_debug_representation() {
@@ -390,12 +379,16 @@ mod tests {
                 available: 3,
             },
             HnswError::ArithmeticBuildMismatch {
-                recorded: purrdf_core::distance::BuildShape::encode("x86_64", &["sse2"]),
-                here: purrdf_core::distance::BuildShape::encode("x86_64", &["sse2", "fma"]),
+                recorded: shape(&["sse2"], BuildIdentity::here()),
+                here: shape(&["sse2", "fma"], BuildIdentity::here()),
             },
-            HnswError::ArithmeticRebuildDiverged {
-                recorded: 3,
-                shape: purrdf_core::distance::BuildShape::encode("x86_64", &["sse2", "fma"]),
+            HnswError::ArithmeticBuildMismatch {
+                recorded: shape(&["sse2"], BuildIdentity::from_digest(7)),
+                here: shape(&["sse2"], BuildIdentity::here()),
+            },
+            HnswError::ArithmeticBuildMismatch {
+                recorded: shape(&["sse2"], BuildIdentity::from_digest(7)),
+                here: shape(&["sse2", "fma"], BuildIdentity::here()),
             },
             HnswError::FloatEnvironment(
                 purrdf_core::distance::FloatEnvironmentError::FlushToZero {
@@ -427,15 +420,34 @@ mod tests {
                 description: "structure refused".to_owned(),
             },
         ];
-        // The build refusal names both shapes as feature lists, not only as bits.
-        let mismatch = cases
+        // The build refusal names both shapes as feature lists and both identities, and
+        // says which of the two parts differs.
+        let mismatches: Vec<String> = cases
             .iter()
-            .find(|case| matches!(case, HnswError::ArithmeticBuildMismatch { .. }))
-            .expect("listed")
-            .to_string();
+            .filter(|case| matches!(case, HnswError::ArithmeticBuildMismatch { .. }))
+            .map(ToString::to_string)
+            .collect();
+        let here = BuildIdentity::here().to_string();
+        let foreign = BuildIdentity::from_digest(7).to_string();
         assert!(
-            mismatch.contains("x86_64 with sse2)") && mismatch.contains("x86_64 with sse2, fma"),
-            "{mismatch}"
+            mismatches[0].contains("x86_64 with sse2, under")
+                && mismatches[0].contains("x86_64 with sse2, fma, under")
+                && mismatches[0].contains(&here)
+                && mismatches[0].contains("the build identity agrees and the target"),
+            "{}",
+            mismatches[0]
+        );
+        assert!(
+            mismatches[1].contains(&foreign)
+                && mismatches[1].contains(&here)
+                && mismatches[1].contains("the target and features agree and the build identity"),
+            "{}",
+            mismatches[1]
+        );
+        assert!(
+            mismatches[2].contains("the target or features and the build identity differ"),
+            "{}",
+            mismatches[2]
         );
         let mut seen = std::collections::HashSet::new();
         for error in cases {

@@ -27,7 +27,7 @@
 //! 3. the canonical image decodes over the matrix under the arithmetic the guard names
 //!    ([`load`] for the exact index, [`load_reassociated`] for the reassociated one), its
 //!    header records a code that implementation publishes -- and for the reassociated one,
-//!    this build's shape -- and its embedded parameters agree with the guard's parameter
+//!    this build's shape, identity included -- and its embedded parameters agree with the guard's parameter
 //!    block.
 //!
 //! # Rebuildability, made checkable
@@ -37,9 +37,10 @@
 //! It recomputes the graph and compares. A `true` means the payload is a pure function of
 //! the source data and the declared identity; a `false` means it is not — a stale or
 //! tampered payload, or one built under different parameters. A reassociated payload is a
-//! function of them only in the compiled build that made it, so its rebuild inequality is
-//! refused by name ([`HnswError::ArithmeticRebuildDiverged`]) rather than answered
-//! `false`.
+//! function of them only in a build of the shape that made it, so a build of another shape
+//! refuses it by name ([`HnswError::ArithmeticBuildMismatch`]) rather than answering
+//! `false`; in a build of its own shape its `false` is the same evidence as an exact
+//! payload's.
 
 use purrdf_core::{
     ContentDigest, DerivedIndex, EffectiveMatrixView, EmbeddingView, IndexBuildDeterminism,
@@ -694,11 +695,10 @@ fn check_row_width(row: usize, decoded: usize, dimension: usize) -> Result<()> {
 /// cannot be read or decoded is `Ok(false)`, since it cannot be the rebuild either.
 ///
 /// A reassociated payload whose rebuild, on its recorded path in a build of its recorded
-/// shape, produces another image is [`HnswError::ArithmeticRebuildDiverged`], never
-/// `Ok(false)`: CPU tuning and the compiler version also decide its bits and no image
-/// records them, so the payload is reproducible only by the compiled build that made it,
-/// and a divergence cannot be told apart from a payload that differs. For an exact payload
-/// `Ok(false)` is that answer, and it is evidence of a stale or altered payload.
+/// shape -- target, features and build identity -- produces another image is
+/// `Ok(false)`: that build compiles the arithmetic to the code that computed the payload,
+/// so the difference is in the payload. As for an exact payload, `Ok(false)` is evidence
+/// of a stale or altered payload.
 ///
 /// The arithmetic the rebuild runs is the one the guard's implementation identifier names:
 /// the reassociated implementation is rebuilt under [`Reassociated`], and anything else

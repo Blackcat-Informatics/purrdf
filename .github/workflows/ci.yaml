@@ -522,7 +522,7 @@ jobs:
   # that decode and refuse an image recorded on that path.
   cross-arch:
     runs-on: ubuntu-latest
-    # Six cold check graphs and the i686 test build.
+    # Six cold check graphs, the i686 test build and the i586 (x87) test build.
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -534,7 +534,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
-          targets: i686-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu
+          targets: i686-unknown-linux-gnu, i586-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu
 
       - name: Install the i686 C library
         run: |
@@ -566,6 +566,21 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hnsw \
             --lib --test determinism --test conformance --test float_environment \
             --test wasm_reassociated
+
+      # i586 has no SSE2, so every binary64 operation runs on the x87, which rounds to
+      # its register precision and again on every store. The distance kernels compute
+      # under a guard that sets binary64 precision and scale the subnormal range of
+      # products and quotients; these suites prove the results equal the integer
+      # software reference bit for bit, and that the probe refuses a thread where the
+      # guard did not take hold. The i586 target links against the same 32-bit C
+      # library as i686.
+      - name: Run the distance, kNN and HNSW suites on i586 (x87 binary64)
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable
+        run: |
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib distance
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib
 
   # riscv64 runs apart from i686 because the distribution's multilib and riscv64
   # cross compilers cannot be installed together. Its HNSW worker-count digest under

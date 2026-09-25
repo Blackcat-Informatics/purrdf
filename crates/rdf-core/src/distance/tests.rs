@@ -8,8 +8,13 @@
 //! cannot show the order the kernel adds in. That is proven here, and only here: a plain
 //! nested-loop emulation of the lanes, the tree and the tail is the reference, every
 //! path is compared with it bit for bit, and a neighbour oracle shows the reference can
-//! tell the lane-tree order apart from every other plausible one.
+//! tell the lane-tree order apart from every other plausible one. The reference rounds
+//! every operation with the integer binary64 of `binary64_tests::soft`, not with the
+//! floating-point unit, so it is the IEEE-754 result on every target -- the x87, which
+//! rounds twice without the kernels' guard, included.
 
+use super::binary64::Precision;
+use super::binary64_tests::soft;
 use super::*;
 
 /// Every path this host can execute, as resolved handles.
@@ -180,28 +185,28 @@ fn reference_fold(terms: &[f64]) -> f64 {
     let mut lanes = [0.0_f64; 16];
     for chunk in 0..chunks {
         for (lane, slot) in lanes.iter_mut().enumerate() {
-            *slot += terms[chunk * 16 + lane];
+            *slot = soft::add(*slot, terms[chunk * 16 + lane]);
         }
     }
     let mut s8 = [0.0_f64; 8];
     for l in 0..8 {
-        s8[l] = lanes[l] + lanes[l + 8];
+        s8[l] = soft::add(lanes[l], lanes[l + 8]);
     }
     let mut s4 = [0.0_f64; 4];
     for l in 0..4 {
-        s4[l] = s8[l] + s8[l + 4];
+        s4[l] = soft::add(s8[l], s8[l + 4]);
     }
-    let s2 = [s4[0] + s4[2], s4[1] + s4[3]];
-    let mut sum = s2[0] + s2[1];
+    let s2 = [soft::add(s4[0], s4[2]), soft::add(s4[1], s4[3])];
+    let mut sum = soft::add(s2[0], s2[1]);
     for &term in &terms[chunks * 16..] {
-        sum += term;
+        sum = soft::add(sum, term);
     }
     sum
 }
 
 /// The reference dot product: each product rounded once, then the reference fold.
 pub(super) fn reference_dot(a: &[f64], b: &[f64]) -> f64 {
-    let terms: Vec<f64> = a.iter().zip(b).map(|(x, y)| x * y).collect();
+    let terms: Vec<f64> = a.iter().zip(b).map(|(&x, &y)| soft::mul(x, y)).collect();
     reference_fold(&terms)
 }
 
@@ -210,16 +215,16 @@ fn reference_squared_euclidean(a: &[f64], b: &[f64]) -> f64 {
     let terms: Vec<f64> = a
         .iter()
         .zip(b)
-        .map(|(x, y)| {
-            let delta = x - y;
-            delta * delta
+        .map(|(&x, &y)| {
+            let delta = soft::sub(x, y);
+            soft::mul(delta, delta)
         })
         .collect();
     reference_fold(&terms)
 }
 
 /// The reference finished distance, or `None` when it is not finite.
-fn reference_distance(
+pub(super) fn reference_distance(
     measure: Measure,
     a: &[f64],
     a_norm: f64,
@@ -230,9 +235,9 @@ fn reference_distance(
         Measure::SquaredEuclidean => reference_squared_euclidean(a, b),
         Measure::NegativeDot => -reference_dot(a, b),
         Measure::Cosine => {
-            let denominator = a_norm * b_norm;
-            let quotient = reference_dot(a, b) / denominator;
-            1.0 - quotient
+            let denominator = soft::mul(a_norm, b_norm);
+            let quotient = soft::div(reference_dot(a, b), denominator);
+            soft::sub(1.0, quotient)
         }
     };
     value.is_finite().then_some(value)
@@ -476,21 +481,27 @@ fn order_is_the_lane_tree() {
     // 1 survives.
     assert_eq!(reference_dot(&chunk, &ones[..16]), 1.0);
     // Three other orders a kernel could plausibly have, each computed here, each 0:
-    // ascending sequential, lanes combined in ascending order, adjacent-pair tree.
+    // ascending sequential, lanes combined in ascending order, adjacent-pair tree. Each
+    // rounds through the reference's binary64, so the x87's wider registers cannot keep
+    // the 1 a binary64 sum drops.
     let mut sequential = 0.0_f64;
-    for (x, y) in chunk.iter().zip(&ones) {
-        let product = x * y;
-        sequential += product;
+    for (&x, &y) in chunk.iter().zip(&ones) {
+        let product = soft::mul(x, y);
+        sequential = soft::add(sequential, product);
     }
     let mut lane_order = 0.0_f64;
     for value in chunk {
-        lane_order += value;
+        lane_order = soft::add(lane_order, value);
     }
     let adjacent = {
-        let s8: Vec<f64> = chunk.chunks(2).map(|pair| pair[0] + pair[1]).collect();
-        let s4: Vec<f64> = s8.chunks(2).map(|pair| pair[0] + pair[1]).collect();
-        let s2: Vec<f64> = s4.chunks(2).map(|pair| pair[0] + pair[1]).collect();
-        s2[0] + s2[1]
+        let pairwise = |values: &[f64]| -> Vec<f64> {
+            values
+                .chunks(2)
+                .map(|pair| soft::add(pair[0], pair[1]))
+                .collect()
+        };
+        let s2 = pairwise(&pairwise(&pairwise(&chunk)));
+        soft::add(s2[0], s2[1])
     };
     assert_eq!(sequential, 0.0);
     assert_eq!(lane_order, 0.0);
@@ -507,7 +518,7 @@ fn order_is_the_lane_tree() {
     let tail_into_lane = {
         let mut lanes = [0.0_f64; 16];
         for (index, value) in tailed.iter().enumerate() {
-            lanes[index % 16] += value;
+            lanes[index % 16] = soft::add(lanes[index % 16], *value);
         }
         reference_fold(&lanes)
     };
@@ -835,9 +846,11 @@ fn default_float_environment_resolves() {
 /// Every row is observed, not only the first failure, so a test can hold the whole
 /// pattern a departure produces against the one the probe's table claims for it.
 fn failing_rows() -> [bool; env::PROBES.len()] {
+    let precision = Precision::enter();
+    let ops = precision.binary64();
     let mut failing = [false; env::PROBES.len()];
     for (slot, probe) in failing.iter_mut().zip(&env::PROBES) {
-        *slot = probe.observe() != probe.expected;
+        *slot = probe.observe(ops) != probe.expected;
     }
     failing
 }
@@ -861,6 +874,7 @@ fn probe_refusal(row: usize, observed: f64) -> FloatEnvironmentError {
     match probe.departure {
         env::Departure::Flush => FloatEnvironmentError::FlushToZero { evidence },
         env::Departure::Rounding => FloatEnvironmentError::RoundingMode { evidence },
+        env::Departure::DoubleRounding => FloatEnvironmentError::DoubleRounding { evidence },
     }
 }
 
@@ -875,8 +889,14 @@ fn the_default_environment_passes_every_probe_row() {
     assert_eq!(indices(failing_rows()), Vec::<usize>::new());
     assert_eq!(env::probe(), Ok(()));
     assert_eq!(env::check(), Ok(()));
+    let precision = Precision::enter();
     for probe in &env::PROBES {
-        assert_eq!(probe.observe(), probe.expected, "{}", probe.operation);
+        assert_eq!(
+            probe.observe(precision.binary64()),
+            probe.expected,
+            "{}",
+            probe.operation
+        );
     }
     // The table's constants, recomputed from their definitions on this thread.
     assert_eq!(env::PROBES[0].expected, (f64::MIN_POSITIVE / 2.0).to_bits());
@@ -886,6 +906,22 @@ fn the_default_environment_passes_every_probe_row() {
     assert_eq!(
         env::PROBES[7].expected,
         (ONE_PLUS_ULP + f64::EPSILON).to_bits()
+    );
+    // The double-rounding rows' constants, recomputed by the software reference, which
+    // rounds in integers and so gives the IEEE-754 result on every unit.
+    for probe in &env::PROBES[8..] {
+        let (a, b) = probe.operands();
+        let once = match probe.symbol() {
+            '+' => soft::add(a, b),
+            '*' => soft::mul(a, b),
+            _ => soft::div(a, b),
+        };
+        assert_eq!(once.to_bits(), probe.expected, "{}", probe.operation);
+    }
+    assert_eq!(env::PROBES[8].expected, ONE_PLUS_ULP.to_bits());
+    assert_eq!(
+        env::PROBES[11].expected,
+        (f64::MIN_POSITIVE / 2.0 + f64::from_bits(1)).to_bits()
     );
 }
 
@@ -906,12 +942,24 @@ fn every_probe_row_is_distinct_and_names_its_departure() {
         flush, 2,
         "one row for flushed results, one for flushed operands"
     );
+    let double = env::PROBES
+        .iter()
+        .filter(|probe| probe.departure == env::Departure::DoubleRounding)
+        .count();
+    assert_eq!(
+        double, 5,
+        "two sums and a product in the normal range, a product and a quotient in the \
+         subnormal range"
+    );
 }
 
 // ---- x86: MXCSR on both widths --------------------------------------------------
 
 /// The current thread's MXCSR.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 fn read_mxcsr() -> u32 {
     let mut value: u32 = 0;
     // SAFETY: `stmxcsr` stores the 32-bit MXCSR, and nothing else, to a live, aligned,
@@ -927,7 +975,10 @@ fn read_mxcsr() -> u32 {
 }
 
 /// Load `value` into the current thread's MXCSR.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 fn write_mxcsr(value: u32) {
     // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. Every value loaded here
     // differs from the saved register only in the FTZ, DAZ and rounding-control fields,
@@ -944,10 +995,16 @@ fn write_mxcsr(value: u32) {
 
 /// MXCSR loaded with a value for as long as the guard lives; the saved value is restored
 /// when it drops, including by unwinding.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 struct Mxcsr(u32);
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 impl Mxcsr {
     fn load(value: u32) -> Self {
         let saved = read_mxcsr();
@@ -956,7 +1013,10 @@ impl Mxcsr {
     }
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 impl Drop for Mxcsr {
     fn drop(&mut self) {
         write_mxcsr(self.0);
@@ -964,42 +1024,68 @@ impl Drop for Mxcsr {
 }
 
 /// MXCSR flush-to-zero.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 const MXCSR_FTZ: u32 = 1 << 15;
 /// MXCSR denormals-are-zero.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 const MXCSR_DAZ: u32 = 1 << 6;
 /// MXCSR rounding control: down, up and toward zero.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 const MXCSR_DOWN: u32 = 1 << 13;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 const MXCSR_UP: u32 = 2 << 13;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 const MXCSR_TOWARD_ZERO: u32 = 3 << 13;
 
 /// Every MXCSR departure, the probe rows it must fail, and the refusal the probe returns.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 fn mxcsr_departures() -> [(&'static str, u32, Vec<usize>, FloatEnvironmentError); 5] {
     [
-        ("FTZ", MXCSR_FTZ, vec![0], probe_refusal(0, 0.0)),
+        ("FTZ", MXCSR_FTZ, vec![0, 11, 12], probe_refusal(0, 0.0)),
         ("DAZ", MXCSR_DAZ, vec![1], probe_refusal(1, 0.0)),
-        ("down", MXCSR_DOWN, vec![2, 5, 7], probe_refusal(2, 1.0)),
+        (
+            "down",
+            MXCSR_DOWN,
+            vec![2, 5, 7, 8, 12],
+            probe_refusal(2, 1.0),
+        ),
         (
             "up",
             MXCSR_UP,
-            vec![3, 4, 6],
+            vec![3, 4, 6, 9, 10, 11],
             probe_refusal(3, ONE_PLUS_ULP),
         ),
         (
             "toward zero",
             MXCSR_TOWARD_ZERO,
-            vec![2, 4, 7],
+            vec![2, 4, 7, 8, 12],
             probe_refusal(2, 1.0),
         ),
     ]
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 #[test]
 fn the_probe_alone_refuses_every_mxcsr_departure() {
     // The probe, not the register read: this is the refusal every target without a
@@ -1024,7 +1110,10 @@ fn the_probe_alone_refuses_every_mxcsr_departure() {
 }
 
 /// Resolve under MXCSR `value`, restoring the saved register before returning.
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 fn resolve_under_mxcsr(value: u32) -> Result<Resolved<Exact>, FloatEnvironmentError> {
     let saved = read_mxcsr();
     let outcome = {
@@ -1035,7 +1124,10 @@ fn resolve_under_mxcsr(value: u32) -> Result<Resolved<Exact>, FloatEnvironmentEr
     outcome
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
 #[test]
 fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
     let saved = read_mxcsr();
@@ -1111,10 +1203,15 @@ impl Drop for Fpcr {
 #[cfg(target_arch = "aarch64")]
 fn fpcr_departures() -> [(&'static str, u64, Vec<usize>, FloatEnvironmentError); 4] {
     [
-        ("FZ", 1 << 24, vec![0, 1], probe_refusal(0, 0.0)),
-        ("RP", 1 << 22, vec![3, 4, 6], probe_refusal(3, ONE_PLUS_ULP)),
-        ("RM", 2 << 22, vec![2, 5, 7], probe_refusal(2, 1.0)),
-        ("RZ", 3 << 22, vec![2, 4, 7], probe_refusal(2, 1.0)),
+        ("FZ", 1 << 24, vec![0, 1, 11, 12], probe_refusal(0, 0.0)),
+        (
+            "RP",
+            1 << 22,
+            vec![3, 4, 6, 9, 10, 11],
+            probe_refusal(3, ONE_PLUS_ULP),
+        ),
+        ("RM", 2 << 22, vec![2, 5, 7, 8, 12], probe_refusal(2, 1.0)),
+        ("RZ", 3 << 22, vec![2, 4, 7, 8, 12], probe_refusal(2, 1.0)),
     ]
 }
 
@@ -1222,9 +1319,14 @@ fn the_probe_refuses_every_riscv_rounding_mode_through_resolve() {
     let saved = read_frm();
     assert_eq!(saved, 0, "the default dynamic rounding mode is RNE");
     let departures = [
-        ("RTZ", 1, vec![2, 4, 7], probe_refusal(2, 1.0)),
-        ("RDN", 2, vec![2, 5, 7], probe_refusal(2, 1.0)),
-        ("RUP", 3, vec![3, 4, 6], probe_refusal(3, ONE_PLUS_ULP)),
+        ("RTZ", 1, vec![2, 4, 7, 8, 12], probe_refusal(2, 1.0)),
+        ("RDN", 2, vec![2, 5, 7, 8, 12], probe_refusal(2, 1.0)),
+        (
+            "RUP",
+            3,
+            vec![3, 4, 6, 9, 10, 11],
+            probe_refusal(3, ONE_PLUS_ULP),
+        ),
         ("RMM", 4, vec![6], probe_refusal(6, ONE_PLUS_ULP)),
     ];
     for (name, mode, rows, refusal) in departures {
@@ -1259,6 +1361,7 @@ fn every_refusal_renders_a_distinct_sentence() {
         FloatEnvironmentError::RoundingMode { evidence: register },
         probe_refusal(0, 0.0),
         probe_refusal(2, 1.0),
+        probe_refusal(8, 1.0),
     ];
     let messages: Vec<String> = cases.iter().map(ToString::to_string).collect();
     for (index, message) in messages.iter().enumerate() {
@@ -1274,4 +1377,12 @@ fn every_refusal_renders_a_distinct_sentence() {
         messages[2]
     );
     assert!(messages[3].contains("1 + 0.75 ulp"), "{}", messages[3]);
+    assert!(
+        messages[4].contains("rounds binary64 results twice")
+            && messages[4].contains("1 + (2^-53 + 2^-78)")
+            && messages[4].contains("0x3ff0000000000001")
+            && messages[4].contains("0x3ff0000000000000"),
+        "{}",
+        messages[4]
+    );
 }
