@@ -2543,9 +2543,7 @@ fn eval_constraint<'a, S: ResultSink>(
             let compile_error = compiled.as_ref().err().map(|error| {
                 format!(
                     "invalid sh:pattern {regex:?}{}: {error}",
-                    flags
-                        .map(|f| format!(" with sh:flags {f:?}"))
-                        .unwrap_or_default()
+                    flags.map_or_default(|f| format!(" with sh:flags {f:?}"))
                 )
             });
             // Every declared message is kept, each marked with the compile error

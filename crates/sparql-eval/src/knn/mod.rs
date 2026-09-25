@@ -95,13 +95,25 @@
 //!
 //! # Determinism
 //!
-//! Every distance is computed by a [`Kernel`]: binary64, one correctly-rounded IEEE
-//! operation at a time, in a pinned accumulation order, with no fused multiply-add and no
-//! transcendental. Ranking breaks equal distances by ascending row number, and a
-//! PURREMB target set numbers its rows by sorted `TargetId` — a digest of canonical
-//! content — so the tie-break is a function of the data rather than of the order anything
-//! was built in. Two independently produced artifacts over the same targets rank
-//! identically, on every target this workspace builds for.
+//! Every distance is computed by a [`Kernel`] under [`purrdf_core::distance::Exact`]:
+//! binary64, one correctly-rounded IEEE operation at a time, in the pinned sixteen-lane
+//! tree order, with no fused multiply-add and no transcendental. The exact scan scores
+//! every row through the batch kernel, whose dispatch path is resolved once per search and
+//! whose every path returns the same bits; resolving it also refuses a thread whose
+//! floating-point environment flushes subnormals or rounds other than to nearest, with
+//! [`EvalError::FloatEnvironment`]. Ranking breaks equal distances by ascending row
+//! number, and a PURREMB target set numbers its rows by sorted `TargetId` — a digest of
+//! canonical content — so the tie-break is a function of the data rather than of the
+//! order anything was built in. Two independently produced artifacts over the same
+//! targets rank identically, on every target this workspace builds for.
+//!
+//! That is the relation [`EmbeddingKnnRelation::new`] builds. A host that prefers the
+//! reassociated arithmetic's freedom to the exact one's cross-target bits builds
+//! [`EmbeddingKnnRelation::new_reassociated`] instead: the same exhaustive scan under
+//! `Reassociated`, whose last bits depend on the target, the build and the dispatch path
+//! it selected at construction. It is a different type, and its ranked declaration says
+//! so — it names the law and declares a perturbed order carrying the arithmetic's own
+//! evidence — so the difference reaches every plan and every fused answer that uses it.
 
 mod metric;
 
@@ -109,6 +121,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_core::distance::RowsRef;
 use purrdf_core::{
     ContentDigest, DistanceMetric, EmbeddingView, FamilyContractDigest, Iri,
     ProjectionContentDigest, TargetId, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
@@ -117,14 +130,18 @@ use purrdf_core::{
 
 use crate::error::EvalError;
 use crate::property_fn::{
-    AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, IndexGeneration, PfArgs,
-    PfArity, PfCursor, PfRow, PropertyFunction, RankFidelity, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement,
+    AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, IndexGeneration,
+    OrderFidelity, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankArithmetic,
+    RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    composed_order_fidelity,
 };
 use crate::user_fn::Volatility;
 
 use crate::property_fn::ExclusionBasis;
-pub use metric::{Bound, Bounded, Kernel, Ranked, Scalar, best, norm};
+pub use metric::{
+    Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, Selected,
+    best,
+};
 
 /// The `?neighbour` position: the retrieved term.
 const KNN_NEIGHBOUR: usize = 0;
@@ -332,6 +349,10 @@ impl EmbeddingSpace {
     /// unreadable row, a zero-norm vector under a norm-dividing metric, or a derived-index
     /// guard naming this space but binding a different matrix.
     ///
+    /// [`EvalError::FloatEnvironment`] when the calling thread's floating-point
+    /// environment is not the IEEE one the exact arithmetic defines its results under;
+    /// the norms computed here would already differ.
+    ///
     /// # A row without a term is a refusal, not a skipped row
     ///
     /// Dropping an uncovered row would make the search quietly range over fewer
@@ -345,6 +366,9 @@ impl EmbeddingSpace {
         bindings: Vec<(TargetId, TermValue)>,
         guard: KnnGuard,
     ) -> Result<Self, EvalError> {
+        // The float environment first: every number this constructor computes (the norms
+        // a cosine space divides by) is already arithmetic under it.
+        let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
         let mut view = EmbeddingView::from_bytes(artifact)
             .map_err(|e| EvalError::data(format!("the PURREMB artifact is unreadable: {e}")))?;
         verify_embedding(&mut view)
@@ -397,8 +421,8 @@ impl EmbeddingSpace {
 
         let dimension = space.dimension() as usize;
         let terms = bind_terms(&set, bindings)?;
-        let vectors = read_vectors(&effective, row_count, dimension)?;
-        let norms = read_norms(kernel, &vectors, dimension, row_count)?;
+        let vectors = read_vectors(&effective, row_count, dimension, exact)?;
+        let norms = read_norms(exact, kernel, &vectors, dimension, row_count)?;
         check_index_guards(&view, target_set, vector_space, &effective)?;
 
         let mut rows_by_term: Vec<usize> = (0..row_count).collect();
@@ -461,12 +485,19 @@ impl EmbeddingSpace {
     ///
     /// [`EvalError::Data`] for a zero-norm vector under a norm-dividing metric, the
     /// classification [`Self::from_artifact`] gives the same defect.
+    ///
+    /// [`EvalError::FloatEnvironment`] when the calling thread's floating-point
+    /// environment is not the IEEE one the norms are computed under, as
+    /// [`Self::from_artifact`] refuses it.
     pub fn from_vectors(
         metric: &DistanceMetric,
         dimension: usize,
         rows: Vec<(TermValue, Vec<f64>)>,
         guard: KnnGuard,
     ) -> Result<Self, EvalError> {
+        // The float environment first, as `from_artifact` checks it: the norms a cosine
+        // space divides by are already arithmetic under it.
+        let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
         let kernel = Kernel::of(metric).ok_or_else(|| {
             EvalError::config(format!(
                 "the caller-defined distance metric {metric:?} carries parameters as opaque \
@@ -525,7 +556,7 @@ impl EmbeddingSpace {
             )));
         }
 
-        let norms = read_norms(kernel, &vectors, dimension, row_count)?;
+        let norms = read_norms(exact, kernel, &vectors, dimension, row_count)?;
         let generation = vectors_generation(metric, dimension, &vectors, &terms);
         Ok(Self {
             kernel,
@@ -613,34 +644,62 @@ impl EmbeddingSpace {
         self.norms.get(row).copied().unwrap_or(0.0)
     }
 
-    /// The exact distance between two rows of this space, computed without ranking
-    /// anything.
+    /// The distance between two rows of this space under arithmetic `A`, computed
+    /// without ranking anything.
     ///
-    /// The one arithmetic path: the same [`Kernel`], over the same stored components
-    /// and the same precomputed norms [`Self::search`] uses, so the value is
-    /// bit-identical to the one a scan would have produced for this pair. There is
-    /// no second distance formula in this crate and this does not add one.
+    /// The one arithmetic path: the same batch kernel of `A`, on the same dispatch path
+    /// (`declared` when the relation selected one, else this thread's), over the same
+    /// stored components and the same precomputed norms [`Self::search`] uses, so the
+    /// value is bit-identical to the one a scan would have produced for this pair.
+    /// There is no second distance formula in this crate and this does not add one.
     ///
     /// # Errors
     ///
     /// [`EvalError::Data`], as [`Self::search`] raises it, when the distance leaves
     /// the finite binary64 range. Reporting an infinity as a distance would put a
-    /// number that overflowed into an answer.
-    fn row_distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError> {
-        self.kernel
-            .distance(
-                self.vector(query_row),
-                self.norm_of(query_row),
-                self.vector(row),
-                self.norm_of(row),
-            )
-            .ok_or_else(|| {
-                EvalError::data(format!(
-                    "the distance from row {query_row} to row {row} left the finite range \
-                     under {:?}; the artifact's magnitudes cannot be ranked under this metric",
-                    self.metric
+    /// number that overflowed into an answer. [`EvalError::FloatEnvironment`], as
+    /// [`Self::search`] raises it, when the calling thread's floating-point environment
+    /// is not the IEEE one the arithmetic defines.
+    fn row_distance<A: Arithmetic>(
+        &self,
+        declared: Option<Selected<A>>,
+        query_row: usize,
+        row: usize,
+    ) -> Result<f64, EvalError> {
+        let arithmetic = resolve_here(declared)?;
+        let rows = self.rows()?;
+        let mut distance = [None];
+        arithmetic.distances_indexed(
+            self.kernel.measure(),
+            self.vector(query_row),
+            self.norm_of(query_row),
+            rows,
+            &[row],
+            &mut distance,
+        );
+        distance[0].ok_or_else(|| {
+            EvalError::data(format!(
+                "the distance from row {query_row} to row {row} left the finite range \
+                 under {:?}; the artifact's magnitudes cannot be ranked under this metric",
+                self.metric
+            ))
+        })
+    }
+
+    /// Every row of this space as the batch kernels read it.
+    fn rows(&self) -> Result<RowsRef<'_, f64>, EvalError> {
+        RowsRef::new(&self.vectors, self.row_count(), self.dimension, &self.norms).ok_or_else(
+            || {
+                EvalError::internal(format!(
+                    "the space's {} value(s) and {} norm(s) do not describe {} row(s) of {} \
+                     component(s)",
+                    self.vectors.len(),
+                    self.norms.len(),
+                    self.row_count(),
+                    self.dimension
                 ))
-            })
+            },
+        )
     }
 
     /// The `k` rows nearest `query_row`, in rank order.
@@ -649,36 +708,78 @@ impl EmbeddingSpace {
     /// is the work unit this surface reports to the governor: one distance computation per
     /// candidate, every candidate scored exactly once.
     ///
+    /// Every row is scored by one call to arithmetic `A`'s batch kernel over the flat
+    /// matrix, on one dispatch path for the whole scan. The float environment is checked
+    /// here, on every search, rather than once at construction, because it is a property
+    /// of the calling thread and an invocation may run on a different thread from the one
+    /// that built the space.
+    ///
+    /// `declared` is the path a relation selected at construction and named in its
+    /// declaration, when it did; the scan runs that path, which is the processor's and so
+    /// the same on every thread, resolved here, on the calling thread, which is what
+    /// checks that thread's environment. Without one the path this thread resolves is
+    /// used, which for [`Exact`] is any of its paths, since they all return the same bits.
+    ///
     /// # Errors
     ///
     /// [`EvalError::Data`] if a distance leaves the finite binary64 range. Ranking by an
     /// infinity would sort — last, confidently — from a number that overflowed.
-    fn search(&self, query_row: usize, k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {
+    /// [`EvalError::FloatEnvironment`] if the calling thread's floating-point environment
+    /// is not the IEEE one the arithmetic defines.
+    fn search<A: Arithmetic>(
+        &self,
+        declared: Option<Selected<A>>,
+        query_row: usize,
+        k: usize,
+    ) -> Result<(Vec<Ranked>, u64), EvalError> {
         if k == 0 {
             // No neighbours were asked for, so no candidate is examined and no work is
             // reported. A zero request is a well-formed question with an empty answer.
             return Ok((Vec::new(), 0));
         }
-        let query = self.vector(query_row);
-        let query_norm = self.norm_of(query_row);
+        let arithmetic = resolve_here(declared)?;
+        let rows = self.rows()?;
+        let mut distances: Vec<Option<f64>> = vec![None; self.row_count()];
+        arithmetic.distances(
+            self.kernel.measure(),
+            self.vector(query_row),
+            self.norm_of(query_row),
+            rows,
+            &mut distances,
+        );
         let mut scored: Vec<Ranked> = Vec::with_capacity(self.row_count());
-        for row in 0..self.row_count() {
-            let distance = self
-                .kernel
-                .distance(query, query_norm, self.vector(row), self.norm_of(row))
-                .ok_or_else(|| {
-                    EvalError::data(format!(
-                        "the distance from row {query_row} to row {row} left the finite range \
-                         under {:?}; the artifact's magnitudes cannot be ranked under this \
-                         metric",
-                        self.metric
-                    ))
-                })?;
+        for (row, distance) in distances.into_iter().enumerate() {
+            let distance = distance.ok_or_else(|| {
+                EvalError::data(format!(
+                    "the distance from row {query_row} to row {row} left the finite range \
+                     under {:?}; the artifact's magnitudes cannot be ranked under this \
+                     metric",
+                    self.metric
+                ))
+            })?;
             scored.push(Ranked { distance, row });
         }
         let examined = scored.len() as u64;
         Ok((best(k, scored), examined))
     }
+}
+
+/// Arithmetic `A` resolved on the calling thread: on `declared`'s path when the relation
+/// selected one, else on the path this thread's resolve selects.
+///
+/// The one place a kNN computation obtains its handle, and it runs on the thread that
+/// computes: a relation stores only the thread-free [`Selected`] path, because the float
+/// environment the handle proves is the calling thread's, and a relation is invoked on
+/// whatever thread the engine runs it.
+///
+/// # Errors
+///
+/// [`EvalError::FloatEnvironment`] when the calling thread's float environment is not the
+/// IEEE one the arithmetic defines.
+fn resolve_here<A: Arithmetic>(declared: Option<Selected<A>>) -> Result<Resolved<A>, EvalError> {
+    declared
+        .map_or_else(A::resolve, Selected::resolve)
+        .map_err(EvalError::FloatEnvironment)
 }
 
 /// Place each binding at its target's row, proving the cover is exact.
@@ -862,10 +963,13 @@ fn vectors_generation(
 }
 
 /// Read every row of `effective` into one row-major `f64` buffer.
+///
+/// `exact` is the handle a normalized projection's rows are computed under.
 fn read_vectors(
     effective: &purrdf_core::EffectiveMatrixView<'_>,
     row_count: usize,
     dimension: usize,
+    exact: Resolved<Exact>,
 ) -> Result<Vec<f64>, EvalError> {
     let dtype = effective
         .matrix()
@@ -877,7 +981,7 @@ fn read_vectors(
         let before = out.len();
         match dtype {
             VectorDtype::F32 => {
-                let values = effective.f32_row(index).map_err(|e| {
+                let values = effective.f32_row(index, exact).map_err(|e| {
                     EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
                 })?;
                 for value in values {
@@ -889,7 +993,7 @@ fn read_vectors(
                 }
             }
             VectorDtype::F64 => {
-                let values = effective.f64_row(index).map_err(|e| {
+                let values = effective.f64_row(index, exact).map_err(|e| {
                     EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
                 })?;
                 for value in values {
@@ -911,6 +1015,7 @@ fn read_vectors(
 
 /// Every row's L2 norm, for a kernel that divides by one; empty otherwise.
 fn read_norms(
+    exact: Resolved<Exact>,
     kernel: Kernel,
     vectors: &[f64],
     dimension: usize,
@@ -922,7 +1027,7 @@ fn read_norms(
     let mut norms = Vec::with_capacity(row_count);
     for row in 0..row_count {
         let start = row * dimension;
-        let value = norm(&vectors[start..start + dimension]);
+        let value = exact.norm(&vectors[start..start + dimension]);
         // PURREMB v1: "Cosine distance is undefined for a zero-norm operand and hard-fails
         // rather than inventing a score." Caught here rather than per invocation, so a
         // space that verifies can never fail a query this way.
@@ -998,17 +1103,51 @@ fn check_index_guards(
 /// One relation per space; see the [module docs](self) for the call shape, and why the
 /// space is the registration rather than an argument.
 ///
+/// # The arithmetic is a type parameter, and the default is the exact one
+///
+/// `A` is the [`Arithmetic`] every distance of every search is computed under.
+/// [`EmbeddingKnnRelation::new`] builds the [`Exact`] relation, whose distances are the
+/// same bits on every target; [`EmbeddingKnnRelation::new_reassociated`] builds the
+/// [`Reassociated`] one, which may reassociate its sums and contract them to fused
+/// multiply-add along the dispatch path this process resolved, so near-ties may order
+/// differently from the exact relation and between targets. They are two types, not one
+/// relation with a mode: neither ever computes a distance under the other's law.
+///
+/// The law is not a private detail of the kernel.
+/// [`EmbeddingKnnRelation::ranked_declaration`] names it in
+/// [`RankedDeclaration::arithmetic`], so it reaches the registry's content fingerprint
+/// and two registries differing only in it plan differently, and a reassociated
+/// relation declares its order [`OrderFidelity::Perturbed`] with the arithmetic's own
+/// evidence, which a fused answer carries to its reader.
+///
 /// [`Volatility::Stable`]: the space is frozen and every distance is a pure function of
-/// two of its rows computed by a [`Kernel`]'s pinned-order binary64 arithmetic, so an
-/// invocation's rows are the same on the main thread, on a fork-join worker, and on
-/// `wasm32-unknown-unknown`.
+/// two of its rows under the relation's arithmetic. Under [`Exact`] an invocation's rows
+/// are the same on the main thread, on a fork-join worker, and on
+/// `wasm32-unknown-unknown`; under [`Reassociated`] they are the same wherever this
+/// process runs the dispatch path the relation selected, which is every thread of it
+/// whose float environment its per-search resolve accepts.
 #[derive(Debug, Clone)]
-pub struct EmbeddingKnnRelation {
+pub struct EmbeddingKnnRelation<A: Arithmetic = Exact> {
     /// The space every invocation searches.
     space: Arc<EmbeddingSpace>,
     /// The declared modes, materialized once so [`PropertyFunction::modes`] can
     /// hand out a slice.
     modes: [BindingPattern; 2],
+    /// The dispatch path selected at construction, whose evidence the declaration
+    /// names and whose compilation every search runs; `None` for a relation built by
+    /// [`EmbeddingKnnRelation::new`], which selects per search. [`Exact`] names no
+    /// evidence and returns the same bits on every path, so it has nothing to fix at
+    /// construction, and `new` stays infallible.
+    ///
+    /// A [`Selected`] path, never a [`Resolved`] handle: the relation is shared across
+    /// the engine's threads, and the float environment a handle proves is one thread's.
+    /// Every search resolves it again on the thread that runs it.
+    declared: Option<Selected<A>>,
+    /// The search every invocation runs, fixed by the constructor that named the law.
+    scan: Scan<A>,
+    /// The membership lookup's one pairwise distance, fixed alongside [`Self::scan`]
+    /// for the same reason; see [`Lookup`].
+    lookup: Lookup<A>,
     /// What this relation's invocations actually did, counted rather than inferred.
     /// Shared with every clone, so a host that cloned the relation into a registry
     /// still reads the counts of the invocations that registry served.
@@ -1093,8 +1232,25 @@ impl KnnObservations {
     }
 }
 
+/// One search of a space under arithmetic `A`: [`EmbeddingSpace::search`] at a concrete
+/// law.
+///
+/// A relation carries it rather than calling `search::<A>` from its generic cursor so the
+/// scan is instantiated where its law is concrete — in [`EmbeddingKnnRelation::new`] and
+/// [`EmbeddingKnnRelation::new_reassociated`], in this crate — rather than wherever a
+/// caller first turns the relation into a trait object. The scan, and the batch kernel
+/// and every dispatch path it calls, is then compiled once, here, and the asm evidence
+/// gate measures the copy every registered relation runs.
+type Scan<A> =
+    fn(&EmbeddingSpace, Option<Selected<A>>, usize, usize) -> Result<(Vec<Ranked>, u64), EvalError>;
+
+/// One membership distance under arithmetic `A`: [`EmbeddingSpace::row_distance`] at a
+/// concrete law, instantiated in the constructors for the reason [`Scan`] is, so the
+/// pairwise evaluation a candidate-bound call runs is the copy this crate compiled.
+type Lookup<A> = fn(&EmbeddingSpace, Option<Selected<A>>, usize, usize) -> Result<f64, EvalError>;
+
 impl EmbeddingKnnRelation {
-    /// A nearest-neighbour relation over `space`.
+    /// A nearest-neighbour relation over `space`, ranking under the [`Exact`] arithmetic.
     #[must_use]
     pub fn new(space: Arc<EmbeddingSpace>) -> Self {
         Self {
@@ -1103,10 +1259,59 @@ impl EmbeddingKnnRelation {
                 BindingPattern::from_code(KNN_MODE),
                 BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
             ],
+            declared: None,
+            scan: EmbeddingSpace::search::<Exact>,
+            lookup: EmbeddingSpace::row_distance::<Exact>,
             observations: Arc::new(KnnObservations::default()),
         }
     }
 
+    /// The flattened argument position of `?neighbour`, the retrieved term.
+    ///
+    /// The positions belong to the call shape, which is the same under every
+    /// arithmetic; they are named on the default type so a caller spells them without
+    /// naming a law.
+    pub const NEIGHBOUR: usize = KNN_NEIGHBOUR;
+    /// The flattened argument position of `?query`, the seed term. Always an input.
+    pub const QUERY: usize = KNN_QUERY;
+    /// The flattened argument position of `k`, the neighbour count. Always an input.
+    pub const COUNT: usize = KNN_COUNT;
+    /// The flattened argument position of `?distance`.
+    pub const DISTANCE: usize = KNN_DISTANCE;
+}
+
+impl EmbeddingKnnRelation<Reassociated> {
+    /// A nearest-neighbour relation over `space`, ranking under the [`Reassociated`]
+    /// arithmetic.
+    ///
+    /// The dispatch path is selected here, once, and every search runs it; the
+    /// declaration names its evidence. The float environment is checked here and again
+    /// on every search, on the thread that runs it, since it belongs to the calling
+    /// thread: the relation keeps the [`Selected`] path, never the handle.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::FloatEnvironment`] when the calling thread's floating-point
+    /// environment flushes subnormals or rounds other than to nearest, ties to even. The
+    /// reassociated arithmetic has a compilation for every target, so nothing else
+    /// refuses it.
+    pub fn new_reassociated(space: Arc<EmbeddingSpace>) -> Result<Self, EvalError> {
+        let resolved = Reassociated::resolve().map_err(EvalError::FloatEnvironment)?;
+        Ok(Self {
+            space,
+            modes: [
+                BindingPattern::from_code(KNN_MODE),
+                BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
+            ],
+            declared: Some(resolved.selected()),
+            scan: EmbeddingSpace::search::<Reassociated>,
+            lookup: EmbeddingSpace::row_distance::<Reassociated>,
+            observations: Arc::new(KnnObservations::default()),
+        })
+    }
+}
+
+impl<A: Arithmetic> EmbeddingKnnRelation<A> {
     /// The space this relation searches.
     #[must_use]
     pub fn space(&self) -> &EmbeddingSpace {
@@ -1125,24 +1330,40 @@ impl EmbeddingKnnRelation {
         Arc::clone(&self.observations)
     }
 
-    /// The flattened argument position of `?neighbour`, the retrieved term.
-    pub const NEIGHBOUR: usize = KNN_NEIGHBOUR;
-    /// The flattened argument position of `?query`, the seed term. Always an input.
-    pub const QUERY: usize = KNN_QUERY;
-    /// The flattened argument position of `k`, the neighbour count. Always an input.
-    pub const COUNT: usize = KNN_COUNT;
-    /// The flattened argument position of `?distance`.
-    pub const DISTANCE: usize = KNN_DISTANCE;
+    /// The dispatch path this relation selected at construction, or `None` for an
+    /// [`Exact`] relation, which selects per search and whose every path returns the
+    /// same bits.
+    ///
+    /// A thread-free [`Selected`] path: a caller that computes with it calls
+    /// [`Selected::resolve`] on the thread that computes, as every search does.
+    #[must_use]
+    pub const fn selected(&self) -> Option<Selected<A>> {
+        self.declared
+    }
+
+    /// The order fidelity this relation's own arithmetic can promise: faithful under an
+    /// arithmetic whose bits are the same on every path, and perturbed, carrying that
+    /// arithmetic's evidence along the resolved path, under one whose bits are not.
+    fn arithmetic_order(&self) -> OrderFidelity {
+        match self.declared.and_then(Selected::evidence) {
+            Some(evidence) => OrderFidelity::Perturbed {
+                evidence: Arc::from(evidence),
+            },
+            None => OrderFidelity::Faithful,
+        }
+    }
 
     /// The ranked-retrieval declaration this relation can make, for a
     /// **caller-supplied** stratum.
     ///
     /// A [`RankedDeclaration`] is configuration a host supplies at
     /// [`register_ranked`](crate::PropertyFunctionRegistry::register_ranked), not
-    /// a property of this type. What this method adds is only that a host does
-    /// not have to hand-write the argument indices: they come from
-    /// [`Self::NEIGHBOUR`], [`Self::QUERY`] and [`Self::COUNT`], which are this
-    /// relation's own. Every field of the result is public, so a host that wants
+    /// a property of this type. What this method adds is two things. A host
+    /// does not have to hand-write the argument indices: they come from
+    /// [`EmbeddingKnnRelation::NEIGHBOUR`], [`EmbeddingKnnRelation::QUERY`] and
+    /// [`EmbeddingKnnRelation::COUNT`], which are this relation's own. And the
+    /// relation states the one fact about its rows that is its own rather than
+    /// the host's, its arithmetic (see below). Every field of the result is public, so a host that wants
     /// a `mandatory` producer or a second accepted alternative edits it before
     /// registering.
     ///
@@ -1173,8 +1394,8 @@ impl EmbeddingKnnRelation {
     ///
     /// # `k` is the per-stratum depth, and it is required
     ///
-    /// `k` is an input at [`Self::COUNT`] in the relation's only access pattern
-    /// (`fbbf`): a call that leaves it free is refused, because an unbounded
+    /// `k` is an input at [`EmbeddingKnnRelation::COUNT`] in the relation's only
+    /// access pattern (`fbbf`): a call that leaves it free is refused, because an unbounded
     /// generator cannot be admitted against a row ceiling. So the declaration
     /// carries a [`DepthPlacement`] there, which is how the consumer's
     /// per-stratum depth becomes this relation's `k`. `depth_datatype` is the
@@ -1197,8 +1418,8 @@ impl EmbeddingKnnRelation {
     /// This relation is the **exact oracle**: it scans every row of its space,
     /// compares exact distances, prunes nothing and exits early nowhere, so
     /// over the vectors it holds it names every neighbour that was due and
-    /// orders them truly. [`RankFidelity::EXACT`] is therefore a true statement
-    /// about its *search*.
+    /// orders them truly. Under the [`Exact`] arithmetic
+    /// [`RankFidelity::EXACT`] is therefore a true statement about its *search*.
     ///
     /// What it is not is a statement about the *corpus*. Whether the vectors
     /// this space holds are the whole of what the host means is not a fact this
@@ -1216,6 +1437,33 @@ impl EmbeddingKnnRelation {
     /// reason, and it is deliberately not defaulted: see
     /// [`RankFidelity::EXACT`] for why the top of the lattice is the one
     /// direction a default must never go.
+    ///
+    /// # What the relation adds: its arithmetic
+    ///
+    /// The one fact about the rows that is the relation's own rather than the
+    /// host's is the arithmetic its distances are computed under, and it is added
+    /// here rather than asked for.
+    ///
+    /// * [`RankedDeclaration::arithmetic`] names the law,
+    ///   [`Arithmetic::ID`] of `A`, so it reaches
+    ///   [`RankedDeclaration::canonical_description`] and the registry's content
+    ///   fingerprint: an exact and a reassociated producer over one space are two
+    ///   different plans.
+    /// * Under an arithmetic whose bits depend on the dispatch path —
+    ///   [`Reassociated`] — the order axis is composed with
+    ///   [`OrderFidelity::Perturbed`] carrying that arithmetic's evidence along the
+    ///   path selected at construction, verbatim, by [`composed_order_fidelity`].
+    ///   The composition only degrades: a host passing
+    ///   [`OrderFidelity::Faithful`] says it did nothing to the vectors, and cannot
+    ///   talk a reassociated sum back into a faithful order. Two near-tied rows may
+    ///   swap under it, so a row can be emitted at a better rank than the exact
+    ///   ranking gives it, which is precisely the case in which a consumer must be
+    ///   told that no finite score bound exists. A host that declared its own
+    ///   perturbation keeps its words on the axis; the law is still named in the
+    ///   declaration.
+    ///
+    /// The completeness axis is the host's, unchanged: a reassociated scan still
+    /// scores every row of the space, so it omits nothing the exact one would name.
     ///
     /// # `domains` comes from the host, and cannot come from anywhere else
     ///
@@ -1249,15 +1497,15 @@ impl EmbeddingKnnRelation {
                 pattern: TermPattern::of_kind(seed),
                 placements: vec![TermPlacement {
                     facet: RequestFacet::Value,
-                    position: Self::QUERY,
+                    position: KNN_QUERY,
                     datatype: None,
                 }],
             }],
             depth_placement: Some(DepthPlacement {
-                position: Self::COUNT,
+                position: KNN_COUNT,
                 datatype: depth_datatype,
             }),
-            candidate_position: Self::NEIGHBOUR,
+            candidate_position: KNN_NEIGHBOUR,
             duplicates: DuplicatePolicy::Unique,
             // Passed through, never asserted here, for the reason `domains` is.
             // This relation scans every row of its space and compares exact
@@ -1269,7 +1517,15 @@ impl EmbeddingKnnRelation {
             // Whether the vectors it searched are the whole of the host's
             // corpus is a different question and not one this relation can
             // answer, so the host answers it. See the doc comment above.
-            fidelity,
+            //
+            // The order axis is where the relation's own arithmetic enters: a
+            // law whose bits depend on the dispatch path perturbs the order, and
+            // the composition only ever degrades the host's word.
+            fidelity: RankFidelity {
+                completeness: fidelity.completeness,
+                order: composed_order_fidelity(self.arithmetic_order(), fidelity.order),
+            },
+            arithmetic: RankArithmetic::float_distance::<A>(),
             domains,
             // This relation projects a neighbour and a distance; it knows
             // nothing of a host's partition, so it has no position to read a
@@ -1313,7 +1569,7 @@ impl EmbeddingKnnRelation {
     }
 }
 
-impl PropertyFunction for EmbeddingKnnRelation {
+impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
     fn volatility(&self) -> Volatility {
         Volatility::Stable
     }
@@ -1522,6 +1778,9 @@ impl PropertyFunction for EmbeddingKnnRelation {
 
         Ok(Box::new(KnnCursor {
             space: Arc::clone(&self.space),
+            declared: self.declared,
+            scan: self.scan,
+            lookup: self.lookup,
             observations: Arc::clone(&self.observations),
             answer,
             query_term: query.clone(),
@@ -1631,9 +1890,16 @@ enum Answer {
 /// * It decrements the licence only on rows it actually **emits**. A skipped row disagrees
 ///   with a bound position and the engine would have dropped it anyway.
 #[derive(Debug)]
-struct KnnCursor {
+struct KnnCursor<A: Arithmetic> {
     /// The space being searched.
     space: Arc<EmbeddingSpace>,
+    /// The relation's dispatch path, when it selected one at construction; see
+    /// [`EmbeddingSpace::search`].
+    declared: Option<Selected<A>>,
+    /// The relation's search; see [`Scan`].
+    scan: Scan<A>,
+    /// The relation's membership distance; see [`Lookup`].
+    lookup: Lookup<A>,
     /// The relation's counters, so the work this cursor does is observable from the
     /// relation a host still holds after moving it into a registry.
     observations: Arc<KnnObservations>,
@@ -1655,7 +1921,7 @@ struct KnnCursor {
     unreported_work: u64,
 }
 
-impl KnnCursor {
+impl<A: Arithmetic> KnnCursor<A> {
     /// Produce this invocation's rows if they have not been produced yet, recording the
     /// candidates examined.
     ///
@@ -1673,7 +1939,7 @@ impl KnnCursor {
                 select_k,
             } => {
                 self.observations.scans.fetch_add(1, Ordering::Relaxed);
-                let (ranked, examined) = self.space.search(row, select_k)?;
+                let (ranked, examined) = (self.scan)(&self.space, self.declared, row, select_k)?;
                 self.observations
                     .scanned_candidates
                     .fetch_add(examined, Ordering::Relaxed);
@@ -1689,7 +1955,7 @@ impl KnnCursor {
                 self.observations
                     .membership_distances
                     .fetch_add(1, Ordering::Relaxed);
-                let distance = self.space.row_distance(query_row, row)?;
+                let distance = (self.lookup)(&self.space, self.declared, query_row, row)?;
                 (vec![Ranked { distance, row }], 1)
             }
         };
@@ -1718,7 +1984,7 @@ impl KnnCursor {
     }
 }
 
-impl PfCursor for KnnCursor {
+impl<A: Arithmetic> PfCursor for KnnCursor<A> {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         if self.remaining == Some(0) {
             return Ok(None);

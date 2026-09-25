@@ -46,8 +46,8 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis, IndexGeneration,
-    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankFidelity, RankedDeclaration,
-    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankArithmetic, RankFidelity,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -976,6 +976,10 @@ impl TextSearchRelation {
             // claim in the lattice into the mouth of the one party that never
             // spoke.
             fidelity,
+            // BM25F here is fixed-point integer arithmetic: no floating-point
+            // operation decides this relation's order, so it declares itself
+            // float-free rather than naming a distance law it does not run.
+            arithmetic: RankArithmetic::FloatFree,
             domains,
             // A text index answers with documents, a score and the matched
             // terms; it holds no notion of a host's partition, so there is no

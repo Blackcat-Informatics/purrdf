@@ -1178,13 +1178,8 @@ fn finish_report(
             result
                 .result_path
                 .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            result
-                .value
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
+                .map_or_default(ToString::to_string),
+            result.value.as_ref().map_or_default(ToString::to_string),
             crate::report::messages_sort_key(&result.messages),
             result.severity.clone(),
         )

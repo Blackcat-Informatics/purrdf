@@ -34,8 +34,8 @@ use purrdf_retrieval::{
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, ExclusionBasis, ExtensionEnv,
     NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, QueryGovernors, QueryOptions, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PropertyFunctionRegistry, QueryGovernors, QueryOptions, RankArithmetic, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const K: u32 = 60;
@@ -328,6 +328,7 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
         // promise is the honest one on both terms; each is exercised where it is
         // the subject, in `fusion.rs`.
         fidelity: RankFidelity::EXACT,
+        arithmetic: RankArithmetic::FloatFree,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         exclusion: ExclusionBasis::Unavailable,

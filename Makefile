@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -123,6 +123,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-entailment-surface.py
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
+	python3 scripts/check-simd-asm.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
 	python3 scripts/benchmark-acquire.py --self-test
@@ -552,6 +553,22 @@ geo-determinism: ## Prove purrdf-geo's native and wasm32 answers are byte-identi
 hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are identical (own gate, NOT part of `check`).
 	bash scripts/check-hnsw-determinism.sh
 
+# The SIMD asm evidence gate: seven release builds (x86_64 baseline, x86-64-v3,
+# x86-64-v4, aarch64, aarch64 neoverse-v1, wasm32, wasm32 +simd128) with
+# `--emit=asm`, then every site in scripts/simd-asm-manifest.toml is counted in the
+# emitted functions. It needs the aarch64 and wasm32 standard libraries, and clang +
+# llvm-ar for the C that build scripts compile for the cross targets; any of them
+# missing is a failure here, never a skip. Too slow for `check`, which runs only its
+# `--self-test`.
+#
+# `--doc` adds the audit document's checks: every manifest site is a row of
+# docs/design/purrdf-simd.md and every function row has a manifest site, its
+# generated count cells equal this measurement, and every workspace member and bench
+# file is covered. `--doc` hard-fails when the document is missing; it never skips.
+# `python3 scripts/check-simd-asm.py --write-doc` regenerates the count cells.
+simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
+	python3 scripts/check-simd-asm.py --doc
+
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they
 	@# ANSWER the same way there, and for the three ranking surfaces that is the claim
@@ -576,6 +593,26 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@#
 	@# wasm-bindgen-test-runner ships in the same pinned wasm-bindgen-cli archive the
 	@# wasm lane already installs, so there is no second version to keep in step.
+	@#
+	@# The kNN file runs twice: on the baseline build, and on a +simd128 build, where
+	@# LLVM packs the exact fold's sixteen lanes into f64x2 operations. Both assert the
+	@# same pinned lexicals, so the vectorized wasm compilation is held to the scalar
+	@# one's bits. The reassociated kNN file runs on the same two builds: its bits are
+	@# not pinned, so it asserts instead that each build resolves its own path
+	@# (wasm-scalar, wasm-simd128) and stays within the error bound of the exact
+	@# answer. The reassociated HNSW file runs on the same two builds too: it builds,
+	@# records, decodes, verifies and searches a reassociated index there, asserts the
+	@# image records that build's path (code 7 wasm-scalar, code 6 wasm-simd128) and
+	@# shape, ranks bit for bit as the reassociated kernel's brute force does, and
+	@# refuses an image recorded on the other wasm path. +simd128 travels in
+	@# CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS, which Cargo ignores whenever
+	@# RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS is set, so a caller's RUSTFLAGS is folded
+	@# into it and RUSTFLAGS unset for that one run, and CARGO_ENCODED_RUSTFLAGS is
+	@# refused. A target-scoped value also REPLACES build.rustflags, so the
+	@# workspace's -D warnings bar is restated in it.
+	@if [ -n "$${CARGO_ENCODED_RUSTFLAGS:-}" ]; then \
+		echo "FAIL: CARGO_ENCODED_RUSTFLAGS is set; Cargo would ignore the +simd128 run's target-scoped flags and run the baseline build twice"; exit 1; \
+	fi
 	@if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		if [ -n "$${CI:-}" ]; then echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; fi; \
 		if ! command -v rustup >/dev/null 2>&1; then \
@@ -592,7 +629,20 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	else \
 		CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-sparql-eval --test knn_wasm_determinism \
+			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hnsw --test wasm_reassociated \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hnsw --test wasm_reassociated \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-text --test wasm_determinism \
@@ -610,7 +660,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
 	@# +simd128 is a PLATFORM target feature (not a Cargo feature): it turns on
 	@# the wasm SIMD instruction set so memchr's byte scan (the parser hot path)
-	@# and blake3's simd128 backend run vectorized instead of scalar/SWAR. It is
+	@# runs vectorized instead of SWAR. BLAKE3 does not change: blake3 compiles
+	@# its own simd128 backend only under its `wasm32_simd` Cargo feature, which
+	@# this workspace does not enable, so it stays on its portable code here --
+	@# `make simd-asm` measures both, on this build and the baseline one. It is
 	@# scoped to this npm-artifact build only, so `make wasm` stays baseline-clean.
 	@# This raises the artifact's browser baseline to engines with wasm SIMD
 	@# (all major browsers since ~2021; Node >= 18, the package's engine floor).

@@ -24,10 +24,12 @@
 //! the answer for every hex-shaped need in the workspace. These kinds of call
 //! site correctly do something else:
 //!
-//! * **Hot paths** that render inside a fixpoint's inner loop, where per-byte
-//!   [`write!`] formatting is measurable. `purrdf_datalog::chase`'s Skolem
-//!   witness-label renderer keeps its own lookup table for this reason; that is
-//!   a performance decision backed by its own rationale, not a stray copy.
+//! * **Hot paths** that render inside a fixpoint's inner loop into a label
+//!   buffer that already holds its prefix. `purrdf_datalog::chase`'s Skolem
+//!   witness-label renderer keeps its own lookup table for this reason, and it
+//!   cannot reach this crate's formatting-free [`lower`] without a temporary
+//!   `String` per witness; that is a performance decision backed by its own
+//!   rationale, not a stray copy.
 //! * **Allocation-free renderers** that write into a fixed inline buffer or a
 //!   caller-supplied byte sink rather than a heap [`String`] — `crate::ir::canon`'s
 //!   `HashHex`, and the LPG projection's block renderer. They render the same
@@ -59,13 +61,29 @@
 //! carried a count of the copies it had folded that was stale one commit later.
 //! A tally in prose has no gate behind it.
 
-use core::fmt::Write as _;
+/// The lowercase hex digit of nibble `n` (`0..16`), as comparisons only.
+///
+/// `n + b'0'` is the digit for `n <= 9`; the letters start 39 bytes after
+/// `b'9' + 1`, so a nibble above 9 adds 39 more. The comparison yields a
+/// `0x00`/`0xFF` byte and the addend is selected by masking, with no branch, so
+/// a loop over a buffer of nibbles lowers to packed byte compares and adds.
+#[inline]
+const fn nibble_digit(n: u8) -> u8 {
+    let letter = ((n > 9) as u8).wrapping_neg();
+    n + b'0' + (letter & (b'a' - b'9' - 1))
+}
 
 /// Render `bytes` as lowercase hexadecimal, two characters per byte.
 ///
 /// Leading zero bytes are preserved: each byte is rendered independently and
 /// zero-padded to width two, so the output length is always exactly
 /// `2 * bytes.len()`. An empty slice renders as an empty string.
+///
+/// The digits are written into a buffer sized up front, two per input byte,
+/// each nibble mapped to its digit by comparisons only — `n + b'0'` is the
+/// digit for `n <= 9`; the letters start 39 bytes after `b'9' + 1`, so a
+/// nibble above 9 adds 39 more, with the addend selected by masking and no
+/// branch — so the loop has no formatting call and no branch per byte.
 ///
 /// ```
 /// use purrdf_core::hex;
@@ -75,17 +93,45 @@ use core::fmt::Write as _;
 /// ```
 #[must_use]
 pub fn lower(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        // Infallible: `String`'s `fmt::Write` never returns an error.
-        let _ = write!(out, "{byte:02x}");
+    let mut out = vec![0_u8; bytes.len() * 2];
+    let (pairs, _) = out.as_chunks_mut::<2>();
+    for (pair, &byte) in pairs.iter_mut().zip(bytes) {
+        *pair = [nibble_digit(byte >> 4), nibble_digit(byte & 0x0F)];
     }
-    out
+    // Every byte written is an ASCII hex digit, so the buffer is UTF-8.
+    String::from_utf8(out).expect("hex digits are ASCII")
 }
 
 #[cfg(test)]
 mod tests {
     use super::lower;
+    use core::fmt::Write as _;
+
+    /// The per-byte `write!` rendering [`lower`] replaced: its oracle.
+    fn lower_formatted(bytes: &[u8]) -> String {
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            // Infallible: `String`'s `fmt::Write` never returns an error.
+            let _ = write!(out, "{byte:02x}");
+        }
+        out
+    }
+
+    /// Every byte value, alone and in a run of every length up to 70 (so any
+    /// chunked body and its tail are both exercised), renders exactly as the
+    /// formatted loop did.
+    #[test]
+    fn matches_the_formatted_rendering() {
+        for byte in 0..=u8::MAX {
+            assert_eq!(lower(&[byte]), lower_formatted(&[byte]), "byte {byte:#04x}");
+        }
+        let all: Vec<u8> = (0..=u8::MAX).rev().chain(0..=u8::MAX).collect();
+        assert_eq!(lower(&all), lower_formatted(&all));
+        for len in 0..=70 {
+            let run = &all[100..100 + len];
+            assert_eq!(lower(run), lower_formatted(run), "length {len}");
+        }
+    }
 
     #[test]
     fn empty_input_renders_empty() {

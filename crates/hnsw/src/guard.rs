@@ -18,13 +18,17 @@
 //!
 //! [`load`] is the strict entry point. In order:
 //!
-//! 1. the guard declares this crate's implementation, parameter encoding, media type and
-//!    evidence revision ([`validate_guard`]);
+//! 1. the guard declares one of this crate's implementations, with the evidence revision
+//!    that implementation publishes, and this profile's parameter encoding and media type
+//!    ([`validate_guard`]);
 //! 2. the inline payload's length and SHA-256 match what the guard committed
 //!    ([`verify_payload_commitment`]) — a substituted payload is rejected even when the
 //!    container's own verification was never asked to run;
-//! 3. the canonical image decodes over the matrix, and its embedded parameters agree with
-//!    the guard's parameter block.
+//! 3. the canonical image decodes over the matrix under the arithmetic the guard names
+//!    ([`load`] for the exact index, [`load_reassociated`] for the reassociated one), its
+//!    header records a code that implementation publishes -- and for the reassociated one,
+//!    this build's shape, identity included -- and its embedded parameters agree with the guard's parameter
+//!    block.
 //!
 //! # Rebuildability, made checkable
 //!
@@ -32,7 +36,11 @@
 //! payload the canonical image of building the given matrix under the given parameters?*
 //! It recomputes the graph and compares. A `true` means the payload is a pure function of
 //! the source data and the declared identity; a `false` means it is not — a stale or
-//! tampered payload, or one built under different parameters.
+//! tampered payload, or one built under different parameters. A reassociated payload is a
+//! function of them only in a build of the shape that made it, so a build of another shape
+//! refuses it by name ([`HnswError::ArithmeticBuildMismatch`]) rather than answering
+//! `false`; in a build of its own shape its `false` is the same evidence as an exact
+//! payload's.
 
 use purrdf_core::{
     ContentDigest, DerivedIndex, EffectiveMatrixView, EmbeddingView, IndexBuildDeterminism,
@@ -40,9 +48,14 @@ use purrdf_core::{
     IndexUseRole, TargetSetId, TlvEntryRef, TlvWireType, VectorDtype, VectorSpaceId, canonical_tlv,
 };
 
+use purrdf_core::distance::{Arithmetic, Exact, Reassociated, Resolved};
+
 use crate::error::{HnswError, Result};
 use crate::graph::VectorMatrix;
-use crate::{HnswIndex, IMPLEMENTATION_ID, INDEX_MEDIA_TYPE, Params, profile};
+use crate::profile::Published;
+use crate::{
+    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params, profile,
+};
 
 // ---------------------------------------------------------------------------
 // The guard contract
@@ -74,14 +87,38 @@ pub fn use_role(effective: &EffectiveMatrixView<'_>) -> IndexUseRole {
     }
 }
 
-/// The guard contract this crate emits for `params` under `role`.
+/// The guard contract this crate emits for an exact index under `params` and `role`.
 ///
 /// The certified-metadata binding is absent: this profile names no RDF metadata document,
 /// and a default is exactly what the workspace forbids.
 #[must_use]
 pub fn guard_contract(params: Params, role: IndexUseRole) -> IndexGuardContract {
+    contract(profile::implementation(), params, role)
+}
+
+/// The guard contract this crate emits for `index` under `role`: the implementation of its
+/// arithmetic on the dispatch path its image records, and the same loss contract,
+/// parameter encoding and payload media type under either arithmetic.
+#[must_use]
+pub fn guard_contract_for<A: Arithmetic>(
+    index: &HnswIndex<A>,
+    role: IndexUseRole,
+) -> IndexGuardContract {
+    contract(
+        profile::implementation_for::<A>(index.arithmetic().path()),
+        index.params(),
+        role,
+    )
+}
+
+/// The guard contract around `implementation`.
+fn contract(
+    implementation: purrdf_core::ArtifactIdentity,
+    params: Params,
+    role: IndexUseRole,
+) -> IndexGuardContract {
     IndexGuardContract {
-        implementation: profile::implementation(),
+        implementation,
         parameter_encoding: profile::PARAMETER_ENCODING.to_owned(),
         parameters: profile::parameters(params),
         loss: profile::loss_contract(),
@@ -95,18 +132,20 @@ pub fn guard_contract(params: Params, role: IndexUseRole) -> IndexGuardContract 
 ///
 /// `coordinates` must name the exact matrix this index was built over; rdf-core rejects a
 /// derived index whose coordinates do not describe a matrix the artifact holds, so that
-/// obligation is checked at the container boundary as well as here by construction.
+/// obligation is checked at the container boundary as well as here by construction. The
+/// guard is [`guard_contract_for`] the index, so a reassociated index publishes its own
+/// implementation and the evidence of the path it was built on.
 ///
 /// # Errors
 ///
 /// [`HnswError`] wrapping any [`purrdf_core::EmbeddingError`] — an empty payload, a
 /// non-deterministic inline payload, or a guard whose contract is malformed.
-pub fn derived_index(
+pub fn derived_index<A: Arithmetic>(
     coordinates: IndexCoordinates,
-    index: &HnswIndex,
+    index: &HnswIndex<A>,
     role: IndexUseRole,
 ) -> Result<DerivedIndex> {
-    let guard = guard_contract(index.params(), role);
+    let guard = guard_contract_for(index, role);
     Ok(DerivedIndex::new(
         coordinates,
         IndexPayloadStorage::Inline(index.canonical_image()),
@@ -122,7 +161,8 @@ pub fn derived_index(
 /// Whether `guard` names this crate's profile, without trusting anything inside it.
 ///
 /// The test is deliberately narrow: parse the guard's canonical block, read the
-/// implementation identity's stable identifier, and compare. A guard that cannot be parsed
+/// implementation identity's stable identifier, and compare it with the identifiers this
+/// profile publishes ([`IMPLEMENTATION_ID`] and [`IMPLEMENTATION_ID_REASSOCIATED`]). A guard that cannot be parsed
 /// at all does not name this profile. Everything else — parameters, media type, evidence —
 /// is checked strictly by [`validate_guard`] once a single candidate is selected, so a
 /// malformed guard that *does* claim the identifier is a loud error rather than a silently
@@ -133,7 +173,14 @@ pub fn names_hnsw(guard: &IndexGuardView<'_>) -> bool {
         .ok()
         .and_then(|entries| find(&entries, 1))
         .and_then(|identity| identity_block_identifier(identity.value).ok())
-        .is_some_and(|identifier| identifier == IMPLEMENTATION_ID)
+        .is_some_and(|identifier| is_published_identifier(&identifier))
+}
+
+/// Whether `identifier` is one of the implementations this profile publishes.
+fn is_published_identifier(identifier: &str) -> bool {
+    profile::published()
+        .iter()
+        .any(|row| row.implementation == identifier)
 }
 
 /// Select the single HNSW guard from a verified artifact.
@@ -157,9 +204,11 @@ pub fn select<'a>(view: &EmbeddingView<'a>) -> Result<IndexGuardView<'a>> {
     }
     match count {
         0 => Err(HnswError::MissingIndexGuard {
-            description: "the artifact holds no derived index whose implementation is \
-                          `hnsw-v1`; register one with `guard::derived_index`"
-                .to_owned(),
+            description: format!(
+                "the artifact holds no derived index whose implementation is \
+                 `{IMPLEMENTATION_ID}` or `{IMPLEMENTATION_ID_REASSOCIATED}`; register one \
+                 with `guard::derived_index`"
+            ),
         }),
         1 => Ok(selected.expect("count one implies a selected guard")),
         count => Err(HnswError::AmbiguousIndexGuard { count }),
@@ -172,13 +221,28 @@ pub fn select<'a>(view: &EmbeddingView<'a>) -> Result<IndexGuardView<'a>> {
 
 /// Strictly validate a selected guard against the HNSW profile.
 ///
+/// # The legal pairings
+///
+/// The implementation identifier, the evidence revision and the image codes a payload may
+/// record are one row of [`profile`]'s published table, derived from the [`Exact`] and
+/// [`Reassociated`] arithmetics' own constants. An identifier must carry a revision its
+/// own row publishes: the exact implementation with a reassociated revision, or the
+/// reassociated implementation with the exact revision, is a cross pairing and a profile
+/// failure, never a guard that validates as whichever half a reader looked at.
+///
 /// # Errors
 ///
-/// [`HnswError::GuardProfile`] if the implementation identifier, media type or evidence
-/// revision differs from the profile, the parameter encoding names something else, the
-/// loss contract is not the non-transforming approximate one, or the parameter block is
-/// not exactly four canonical `u64` fields readable by [`Params::new`].
+/// [`HnswError::GuardProfile`] if the implementation identifier is not one this profile
+/// publishes, its media type differs, its evidence revision is not one that identifier
+/// publishes, the parameter encoding names something else, the loss contract is not the
+/// non-transforming approximate one, or the parameter block is not exactly four canonical
+/// `u64` fields readable by [`Params::new`].
 pub fn validate_guard(guard: &IndexGuardView<'_>) -> Result<Params> {
+    validate_profile(guard).map(|(params, _)| params)
+}
+
+/// [`validate_guard`], also returning the published row the guard's identity is.
+pub(crate) fn validate_profile(guard: &IndexGuardView<'_>) -> Result<(Params, Published)> {
     let entries = guard_entries(guard)?;
     let identity = required(&entries, 1, "the implementation identity")?;
     if identity.wire_type != TlvWireType::Block {
@@ -187,9 +251,11 @@ pub fn validate_guard(guard: &IndexGuardView<'_>) -> Result<Params> {
         ));
     }
     let (identifier, media_type, revision) = identity_block_fields(identity.value)?;
-    if identifier != IMPLEMENTATION_ID {
+    let published = profile::published();
+    if !published.iter().any(|row| row.implementation == identifier) {
         return Err(profile_failure(format!(
-            "the implementation identifier is `{identifier}`, not `{IMPLEMENTATION_ID}`"
+            "the implementation identifier is `{identifier}`, not `{IMPLEMENTATION_ID}` or \
+             `{IMPLEMENTATION_ID_REASSOCIATED}`"
         )));
     }
     if media_type != profile::IMPLEMENTATION_MEDIA_TYPE {
@@ -199,12 +265,12 @@ pub fn validate_guard(guard: &IndexGuardView<'_>) -> Result<Params> {
             profile::IMPLEMENTATION_MEDIA_TYPE
         )));
     }
-    if revision.as_deref() != Some(profile::LOSS_EVIDENCE.as_bytes()) {
-        return Err(profile_failure(
-            "the implementation evidence revision is not the profile's approximation \
-             statement; an HNSW guard must publish what it does not promise",
-        ));
-    }
+    let matching = published.into_iter().find(|row| {
+        row.implementation == identifier && revision.as_deref() == Some(row.revision.as_bytes())
+    });
+    let Some(row) = matching else {
+        return Err(foreign_revision(&identifier, revision.as_deref()));
+    };
 
     let encoding = required_utf8(&entries, 2, "the parameter encoding")?;
     if encoding != profile::PARAMETER_ENCODING {
@@ -241,7 +307,29 @@ pub fn validate_guard(guard: &IndexGuardView<'_>) -> Result<Params> {
         return Err(profile_failure(format!("unknown index use role {role}")));
     }
 
-    Ok(params)
+    Ok((params, row))
+}
+
+/// The refusal of an evidence revision `identifier` does not publish.
+///
+/// A revision that another published implementation carries is named as the cross pairing
+/// it is; anything else is the profile's own approximation statement missing.
+fn foreign_revision(identifier: &str, revision: Option<&[u8]>) -> HnswError {
+    let other = profile::published()
+        .into_iter()
+        .find(|row| row.implementation != identifier && revision == Some(row.revision.as_bytes()));
+    match other {
+        Some(row) => profile_failure(format!(
+            "the implementation `{identifier}` carries the evidence revision `{}` publishes \
+             for the {} arithmetic; an implementation must publish its own arithmetic's \
+             evidence, so the pairing is refused",
+            row.implementation, row.arithmetic
+        )),
+        None => profile_failure(
+            "the implementation evidence revision is not the profile's approximation \
+             statement; an HNSW guard must publish what it does not promise",
+        ),
+    }
 }
 
 /// Validate the loss block: approximate, and no vector transform.
@@ -435,7 +523,8 @@ pub fn verify_payload_commitment(guard: &IndexGuardView<'_>, bytes: &[u8]) -> Re
     Ok(())
 }
 
-/// Verify the guard profile, the payload commitment, and decode the index over `matrix`.
+/// Verify the guard profile, the payload commitment, and decode the exact index over
+/// `matrix`.
 ///
 /// The decoded graph must have one node per matrix row, and its embedded identity
 /// (kernel and parameters) must agree with the guard's parameter block. Everything a
@@ -443,14 +532,59 @@ pub fn verify_payload_commitment(guard: &IndexGuardView<'_>, bytes: &[u8]) -> Re
 ///
 /// # Errors
 ///
-/// [`HnswError::GuardProfile`], [`HnswError::PayloadUnavailable`],
-/// [`HnswError::PayloadCommitment`], or any decoder error from
-/// [`HnswIndex::decode`].
+/// [`HnswError::GuardProfile`] (a guard naming the reassociated implementation among
+/// them: load it with [`load_reassociated`]), [`HnswError::PayloadUnavailable`],
+/// [`HnswError::PayloadCommitment`], or any decoder error from [`HnswIndex::decode`].
 pub fn load(guard: &IndexGuardView<'_>, matrix: VectorMatrix) -> Result<HnswIndex> {
-    let params = validate_guard(guard)?;
+    load_as(guard, matrix, HnswIndex::decode)
+}
+
+/// [`load`] for a guard naming the reassociated implementation, decoding the index with
+/// [`HnswIndex::decode_reassociated`].
+///
+/// # Errors
+///
+/// As [`load`], with [`HnswError::GuardProfile`] for a guard naming the exact
+/// implementation or one whose revision names another dispatch path than the payload
+/// records, [`HnswError::ArithmeticPathUnavailable`] for a payload recorded on a path
+/// this process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for one recorded by
+/// a build of another shape.
+pub fn load_reassociated(
+    guard: &IndexGuardView<'_>,
+    matrix: VectorMatrix,
+) -> Result<HnswIndex<Reassociated>> {
+    load_as(guard, matrix, HnswIndex::decode_reassociated)
+}
+
+/// [`load`] under arithmetic `A`, decoding with `decode`.
+fn load_as<A: Arithmetic>(
+    guard: &IndexGuardView<'_>,
+    matrix: VectorMatrix,
+    decode: fn(VectorMatrix, &[u8]) -> Result<HnswIndex<A>>,
+) -> Result<HnswIndex<A>> {
+    let (params, row) = validate_profile(guard)?;
+    if row.arithmetic != A::ID {
+        return Err(profile_failure(format!(
+            "the guard names the `{}` implementation, whose distances are computed under the \
+             {} arithmetic, and it is being loaded as an index computed under {}",
+            row.implementation,
+            row.arithmetic,
+            A::ID
+        )));
+    }
     let bytes = payload_bytes(guard)?;
     verify_payload_commitment(guard, bytes)?;
-    let index = HnswIndex::decode(matrix, bytes)?;
+    let index = decode(matrix, bytes)?;
+    let recorded = index.arithmetic().image_code();
+    if !row.codes.contains(&recorded) {
+        return Err(profile_failure(format!(
+            "the guard's evidence revision names the dispatch path of arithmetic code(s) \
+             {:?}, and the payload records code {recorded} ({}); the guard and the payload \
+             describe two different compilations",
+            row.codes,
+            profile::path_label(recorded)
+        )));
+    }
     if index.params() != params {
         return Err(profile_failure(
             "the guard's parameter block and the payload's embedded parameters disagree",
@@ -466,11 +600,19 @@ pub fn load(guard: &IndexGuardView<'_>, matrix: VectorMatrix) -> Result<HnswInde
 /// and the relation's row-to-term mapping rely on. Casting every stored scalar to `f64` is
 /// exact for an `f32` and identity for an `f64`, so there is one arithmetic path.
 ///
+/// A projection with deterministic L2 postprocessing is normalized as it is read, by
+/// PURREMB's norm fold and a binary64 division; `arithmetic` is the exact handle that
+/// arithmetic runs under (see [`EffectiveMatrixView::f32_row`]), resolved once by the
+/// caller for the whole matrix.
+///
 /// # Errors
 ///
 /// [`HnswError::Embedding`] for an unreadable scalar type or row, and
 /// [`HnswError::ParameterValidation`] if the shape is unusable.
-pub fn read_effective_matrix(effective: &EffectiveMatrixView<'_>) -> Result<VectorMatrix> {
+pub fn read_effective_matrix(
+    effective: &EffectiveMatrixView<'_>,
+    arithmetic: Resolved<Exact>,
+) -> Result<VectorMatrix> {
     let dtype = effective.matrix().dtype()?;
     let row_count =
         usize::try_from(effective.matrix().row_count()).map_err(|_| HnswError::Embedding {
@@ -497,7 +639,7 @@ pub fn read_effective_matrix(effective: &EffectiveMatrixView<'_>) -> Result<Vect
             let mut data: Vec<f32> = Vec::with_capacity(expected);
             for row in 0..row_count {
                 let before = data.len();
-                for value in effective.f32_row(row as u64)? {
+                for value in effective.f32_row(row as u64, arithmetic)? {
                     data.push(value?);
                 }
                 check_row_width(row, data.len() - before, dimension)?;
@@ -508,7 +650,7 @@ pub fn read_effective_matrix(effective: &EffectiveMatrixView<'_>) -> Result<Vect
             let mut data: Vec<f64> = Vec::with_capacity(expected);
             for row in 0..row_count {
                 let before = data.len();
-                for value in effective.f64_row(row as u64)? {
+                for value in effective.f64_row(row as u64, arithmetic)? {
                     data.push(value?);
                 }
                 check_row_width(row, data.len() - before, dimension)?;
@@ -541,9 +683,26 @@ fn check_row_width(row: usize, decoded: usize, dimension: usize) -> Result<()> {
 ///
 /// # Errors
 ///
-/// [`HnswError`] only from the rebuild itself (for example a kernel result that leaves the
-/// finite range on the supplied matrix); a payload that cannot be read or decoded is
-/// `Ok(false)`, since it cannot be the rebuild either.
+/// [`HnswError`] from the rebuild itself (for example a kernel result that leaves the
+/// finite range on the supplied matrix, or [`HnswError::FloatEnvironment`] for a thread
+/// whose float environment the arithmetic refuses), and
+/// [`HnswError::VersionMismatch`] / [`HnswError::ArithmeticMismatch`] for a payload of
+/// another image version or arithmetic: a version-1 image is an index folded under a
+/// different law, not a tampered one, and answering `false` would say otherwise.
+/// [`HnswError::ArithmeticPathUnavailable`] for a reassociated payload recorded on a
+/// dispatch path this process cannot run, and [`HnswError::ArithmeticBuildMismatch`] for
+/// one recorded by a build of another shape, for the same reason. Any other payload that
+/// cannot be read or decoded is `Ok(false)`, since it cannot be the rebuild either.
+///
+/// A reassociated payload whose rebuild, on its recorded path in a build of its recorded
+/// shape -- target, features and build identity -- produces another image is
+/// `Ok(false)`: that build compiles the arithmetic to the code that computed the payload,
+/// so the difference is in the payload. As for an exact payload, `Ok(false)` is evidence
+/// of a stale or altered payload.
+///
+/// The arithmetic the rebuild runs is the one the guard's implementation identifier names:
+/// the reassociated implementation is rebuilt under [`Reassociated`], and anything else
+/// under [`Exact`], whose decoder refuses a header that names another law.
 pub fn verify_rebuild(
     guard: &IndexGuardView<'_>,
     source_matrix: &VectorMatrix,
@@ -560,7 +719,17 @@ pub fn verify_rebuild(
     // Decoded and rebuilt against a BORROW of the source vectors. Taking ownership meant
     // cloning the matrix to decode and cloning it again to rebuild, so this path used to
     // cost twice the matrix in transient memory to answer a yes/no question.
-    match HnswIndex::verify_bytes_against(source_matrix, bytes)? {
+    let reassociated = guard_entries(guard)
+        .ok()
+        .and_then(|entries| find(&entries, 1))
+        .and_then(|identity| identity_block_identifier(identity.value).ok())
+        .is_some_and(|identifier| identifier == profile::implementation_id_for::<Reassociated>());
+    let verdict = if reassociated {
+        HnswIndex::verify_bytes_against_reassociated(source_matrix, bytes)?
+    } else {
+        HnswIndex::<Exact>::verify_bytes_against(source_matrix, bytes)?
+    };
+    match verdict {
         Some(declared) => Ok(declared == *params),
         None => Ok(false),
     }

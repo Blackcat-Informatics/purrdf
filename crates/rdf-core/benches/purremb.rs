@@ -14,6 +14,7 @@ use std::io::Cursor;
 use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use purrdf_core::distance::{Arithmetic as _, Exact};
 use purrdf_core::{
     EmbeddingStreamWriter, EmbeddingView, ResidentEmbeddingCertificate, reopen_prevalidated,
     verify_embedding,
@@ -80,12 +81,14 @@ fn bench_f32(c: &mut Criterion, fixture: &F32Fixture) {
         .effective_matrix(fixture.target_set.id, fixture.full_space)
         .expect("full lookup")
         .expect("full matrix");
-    let query_coarse = effective_row(coarse, 0);
-    let query_full = effective_row(full, 0);
+    // Resolved once, as a scan does; every normalized row below is computed under it.
+    let exact = Exact::resolve().expect("the bench thread runs the default float environment");
+    let query_coarse = effective_row(exact, coarse, 0);
+    let query_full = effective_row(exact, full, 0);
 
-    let full_truth = top_k(full, &query_full, RECALL_K, 0);
-    let coarse_candidates = top_k(coarse, &query_coarse, RERANK_CANDIDATES, 0);
-    let reranked = rerank(full, &query_full, &coarse_candidates, RECALL_K);
+    let full_truth = top_k(exact, full, &query_full, RECALL_K, 0);
+    let coarse_candidates = top_k(exact, coarse, &query_coarse, RERANK_CANDIDATES, 0);
+    let reranked = rerank(exact, full, &query_full, &coarse_candidates, RECALL_K);
     assert_eq!(
         full_truth.len(),
         RECALL_K,
@@ -132,7 +135,7 @@ fn bench_f32(c: &mut Criterion, fixture: &F32Fixture) {
             let mut row = 0u64;
             benchmark.iter(|| {
                 let sum = coarse
-                    .f32_row(row)
+                    .f32_row(row, exact)
                     .expect("coarse row")
                     .map(|value| value.expect("finite coordinate"))
                     .sum::<f32>();
@@ -161,13 +164,13 @@ fn bench_f32(c: &mut Criterion, fixture: &F32Fixture) {
         ));
         search.bench_function("exact_full_prefix_scan", |benchmark| {
             benchmark.iter(|| {
-                std::hint::black_box(top_k(full, &query_full, RECALL_K, 0));
+                std::hint::black_box(top_k(exact, full, &query_full, RECALL_K, 0));
             });
         });
         search.bench_function("coarse_prefix_then_full_rerank", |benchmark| {
             benchmark.iter(|| {
-                let candidates = top_k(coarse, &query_coarse, RERANK_CANDIDATES, 0);
-                std::hint::black_box(rerank(full, &query_full, &candidates, RECALL_K));
+                let candidates = top_k(exact, coarse, &query_coarse, RERANK_CANDIDATES, 0);
+                std::hint::black_box(rerank(exact, full, &query_full, &candidates, RECALL_K));
             });
         });
         search.finish();

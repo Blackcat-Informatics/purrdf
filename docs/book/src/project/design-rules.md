@@ -98,7 +98,7 @@ on their expected-failure ledgers. See
 - **One version, lockstep releases** — crates.io, PyPI, and npm ship one
   workspace version ([Versioning & Releases](releases.md)).
 - **Nightly-free source, stable MSRV** — there are no `#![feature(...)]`
-  attributes anywhere in the workspace and the MSRV floor (currently 1.96, on
+  attributes anywhere in the workspace and the MSRV floor (currently 1.98, on
   the stable channel) is enforced by a dedicated CI job that builds on exactly
   that compiler. Contributors and the CI gates run a *floating* nightly named in
   `rust-toolchain.toml` for its sharper clippy and rustdoc lints and its stronger

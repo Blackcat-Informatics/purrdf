@@ -27,7 +27,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   <a href="https://www.npmjs.com/package/@blackcatinformatics/purrdf"><img src="https://img.shields.io/npm/v/%40blackcatinformatics%2Fpurrdf.svg?label=npm" alt="npm"></a>
   <a href="https://doi.org/10.67342/pkg8gpp4no/v1"><img src="https://img.shields.io/badge/DOI-10.67342%2Fpkg8gpp4no%2Fv1-blue" alt="DOI: 10.67342/pkg8gpp4no/v1"></a>
   <a href="./LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg" alt="License: MIT OR Apache-2.0 OR MulanPSL-2.0"></a>
-  <img src="https://img.shields.io/badge/MSRV-1.96-orange.svg" alt="MSRV 1.96">
+  <img src="https://img.shields.io/badge/MSRV-1.98-orange.svg" alt="MSRV 1.98">
 </p>
 
 <p align="center">
@@ -127,7 +127,9 @@ PurRDF 是 [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology) 技�
 **确定，因而可移植。**Postgres 技术栈每个构建给出一种答案：`ts_rank` 与 pgvector 的
 距离是浮点数，PostGIS 谓词运行在 GEOS 的浮点几何上。PurRDF 的三个接口在每个目标上
 都是其输入的纯函数——BM25 用 `i128` 定点数配合固定迭代次数的整数对数，几何用精确
-有理数配合整数 DE-9IM 判定，k 近邻用 binary64 配合单一的顺序累加——并且每一种排序
+有理数配合整数 DE-9IM 判定，k 近邻的精确运算（默认选项）用 binary64 配合单一固定
+的累加顺序，这一点在每个目标上都成立；可选的重结合运算（reassociated arithmetic）
+以此保证换取速度，其最后几位可能随目标与构建而不同——并且每一种排序
 都是规范的：文档 id 在按 `(graph, subject, language)` 排序后分配，空间行按
 `TermValue` 的全序排序，k 近邻的并列按内容派生的 `TargetId` 打破。这一声称是被执行
 而非被论证的：文本与 k 近邻的确定性测试是同时带有 `#[test]` 与
@@ -582,7 +584,10 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 - **设计笔记**——`purrdf-core` 之外的兄弟引擎为何在每个目标上给出相同答案：
   [全文评分](./docs/design/purrdf-text-scoring.md)、
   [GeoSPARQL 精确性](./docs/design/purrdf-geo-exactness.md)、
-  [嵌入 k 近邻](./docs/design/purrdf-embedding-knn.md)。
+  [嵌入 k 近邻](./docs/design/purrdf-embedding-knn.md)、
+  [检索阶梯](./docs/design/purrdf-retrieval-ladder.md)；以及热路径如何在不放弃这一点的
+  前提下实现向量化，逐处说明，并在每个目标上度量实际生成的指令：
+  [SIMD 与算术契约](./docs/design/purrdf-simd.md)。
 
 ## 快，靠测量而非断言
 
@@ -659,13 +664,13 @@ SBOM——见 [`docs/RELEASE.md`](./docs/RELEASE.md)。
 读回。它与工作区分开编号，并保持 `0.x`：它并未冻结，工作区的 1.0.0 对它不作任何承诺。
 
 **MSRV 政策。**支持的最低 Rust 版本是根 `Cargo.toml` 中的 `rust-version`（当前为
-**1.96**），位于 **stable** 通道，由专门的 CI MSRV 作业强制执行，发布工件也在 stable
+**1.98**），位于 **stable** 通道，由专门的 CI MSRV 作业强制执行，发布工件也在 stable
 上构建。提高 MSRV 是一项记入变更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。
 README 中的 MSRV 徽章由人工维护，必须与 `rust-version` 一同更新。
 
 贡献者使用浮动的 nightly（`rust-toolchain.toml`）以获得更锐利的 clippy 与 rustdoc
 lint 覆盖面，以及更强的默认借用检查器，但工作区**不含任何 nightly 独有特性**——MSRV 作业正是在每次变更上
-证明这一点的手段。构建 PurRDF 只需要 stable 1.96，不需要其他任何东西。
+证明这一点的手段。构建 PurRDF 只需要 stable 1.98，不需要其他任何东西。
 
 ## GMEOW 家族
 

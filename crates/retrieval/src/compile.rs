@@ -2945,8 +2945,8 @@ mod tests {
     use purrdf_sparql_eval::{
         AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DuplicatePolicy, EvalError,
         ExclusionBasis, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor,
-        PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankFidelity, RankedDeclaration,
-        RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+        PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankArithmetic, RankFidelity,
+        RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
     };
 
     use super::{
@@ -3034,6 +3034,7 @@ mod tests {
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
+                arithmetic: RankArithmetic::FloatFree,
                 domains: CandidateDomains::Unrestricted,
                 block_position: None,
                 exclusion,

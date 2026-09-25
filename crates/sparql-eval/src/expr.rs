@@ -1917,6 +1917,12 @@ impl SubstitutionRow {
 /// joined `VALUES` row cannot satisfy: an IRI or a literal as the constant it is,
 /// a blank node or a quoted triple through a one-row `VALUES` driving the call
 /// (see [`bind_row_into_call`]), so every term kind reaches the relation bound.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 pub(crate) fn substitute_pattern(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
@@ -2047,6 +2053,12 @@ struct SubstitutionTracking<'a> {
 /// site, BEFORE this call's own map is pushed — or `None` when `pattern` is not itself
 /// inside an already-substituted subtree. See [`SubstitutionSource`]'s doc for why a
 /// nested `LATERAL` needs it.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 pub(crate) fn substitute_pattern_tracked(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
@@ -2074,6 +2086,12 @@ pub(crate) fn substitute_pattern_tracked(
 /// mapped to the identical source its wrapped child already resolves to — see
 /// [`SubstitutionSourceMap`]'s doc for why that, not leaving the wrapper unmapped, is the
 /// correct choice.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn substitute_pattern_impl(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
@@ -2649,6 +2667,12 @@ fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, addres
 /// leaf that needs it — see [`SubstitutionRow`]'s doc: that per-leaf fan-out is `Arc`
 /// refcount traffic (both types store their text behind `Arc<str>`), not the per-term
 /// `String` allocation AGENTS.md's hot-path rule forbids.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn join_leaf_with_values(
     leaf: Box<GraphPattern>,
     leaf_vars: &DetHashSet<Variable>,
@@ -2726,6 +2750,12 @@ fn join_leaf_with_values(
 /// expression-bearing node that needs a term-only var, and the `(Variable, GroundTerm)`
 /// clone at each such site is `Arc` refcount traffic (see [`SubstitutionRow`]'s doc), not
 /// a `String` allocation.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn wrap_with_expr_term_only_values(
     node: Box<GraphPattern>,
     expr_free_vars: &DetHashSet<Variable>,
@@ -2787,6 +2817,12 @@ fn wrap_with_expr_term_only_values(
 /// is then a `Lateral`'s direct right operand, the position the evaluator drives per
 /// left row with that row's terms in hand. The call keeps its variable, so its column
 /// survives beside the driven value.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the result is stored as a `Box<GraphPattern>` child field, and the lint's size \
+              threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
+              targets such as wasm32, where the same box is still the field's type"
+)]
 fn bind_row_into_call(
     call: &purrdf_sparql_algebra::PropertyFunctionCall,
     row: &SubstitutionRow,
@@ -2812,6 +2848,12 @@ fn bind_row_into_call(
 /// [`join_leaf_with_values`] maps its wrapper: `seed` is scaffolding, and the new
 /// node, not `node`, becomes `source`'s row-counting entry, because its output (not
 /// `node`'s, which lacks the driven column) is `source`'s true output for this row.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the result is stored as a `Box<GraphPattern>` child field, and the lint's size \
+              threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
+              targets such as wasm32, where the same box is still the field's type"
+)]
 fn plant_mapped_driver(
     node: Box<GraphPattern>,
     seed: GraphPattern,
@@ -3637,7 +3679,8 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
 /// effective boolean value uses for numerics ([`effective_boolean_value`]).
 fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
     use purrdf_xsd::parse as xsd_parse;
-    // The source's exact numeric value, as the widest faithful form available.
+    // The source's value as a correctly rounded `f64` — exact for booleans, floats
+    // and doubles, one rounding for an integer or decimal.
     let as_f64 = match source {
         XsdValue::Integer { value, .. } => *value as f64,
         XsdValue::Decimal(d) => d.to_f64(),
@@ -3648,7 +3691,15 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
     };
     match target {
         XsdDatatype::Double => Some(XsdValue::Double(as_f64)),
-        XsdDatatype::Float => Some(XsdValue::Float(as_f64 as f32)),
+        // An exact source (integer, decimal) is rounded ONCE, straight to single
+        // precision: narrowing `as_f64` would round twice and can land one ulp off
+        // the correctly rounded `xs:float` XPath casting requires. A double source
+        // is narrowed by its own single rounding; float and boolean are exact.
+        XsdDatatype::Float => Some(XsdValue::Float(match source {
+            XsdValue::Integer { value, .. } => *value as f32,
+            XsdValue::Decimal(d) => d.to_f32(),
+            _ => as_f64 as f32,
+        })),
         // Zero or NaN is false; every other numeric value (including negatives and
         // subnormals) is true — XPath's numeric-to-boolean casting rule.
         XsdDatatype::Boolean => Some(XsdValue::Boolean(as_f64 != 0.0 && !as_f64.is_nan())),
@@ -3676,13 +3727,23 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
         | XsdDatatype::PositiveInteger
         | XsdDatatype::NonPositiveInteger
         | XsdDatatype::NegativeInteger => {
-            let truncated = as_f64.trunc();
-            if !truncated.is_finite() {
-                return None;
-            }
+            // An exact source truncates exactly: routing a decimal through `f64`
+            // first would round its integer part whenever it exceeds 2^53
+            // (`12345678901234567.5` would become `12345678901234568`).
+            let integral = match source {
+                XsdValue::Integer { value, .. } => value.to_string(),
+                XsdValue::Decimal(d) => d.whole_part().to_string(),
+                _ => {
+                    let truncated = as_f64.trunc();
+                    if !truncated.is_finite() {
+                        return None;
+                    }
+                    format!("{truncated:.0}")
+                }
+            };
             // Re-parse the integral lexical against the exact integer target so its
             // range constraints (e.g. `nonNegativeInteger >= 0`) are enforced.
-            xsd_parse(&format!("{truncated:.0}"), target).ok()
+            xsd_parse(&integral, target).ok()
         }
         _ => None,
     }
@@ -3883,7 +3944,7 @@ fn eval_regex_expr<D: DatasetView + Sync>(
     let (Some((text, _)), Some((pattern, _))) = (text, pattern) else {
         return Ok(None);
     };
-    let flags = flags.map(|(f, _)| f).unwrap_or_default();
+    let flags = flags.map_or_default(|(f, _)| f);
     match cached_regex(ctx, &pattern, &flags) {
         Some(re) => Ok(Some(bool_term(ctx, re.as_regex().is_match(&text)))),
         None => Ok(None),
@@ -3982,11 +4043,9 @@ fn eval_lang_lexical_expr<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<String>, EvalError> {
     match expr {
-        Expression::Literal(lit) => Ok(Some(
-            lit.language()
-                .map(str::to_ascii_lowercase)
-                .unwrap_or_default(),
-        )),
+        Expression::Literal(lit) => {
+            Ok(Some(lit.language().map_or_default(str::to_ascii_lowercase)))
+        }
         _ => {
             let Some(term) = eval_expr(expr, row, schema, ctx)? else {
                 return Ok(None);
@@ -4315,7 +4374,7 @@ fn eval_replace<D: DatasetView + Sync>(
     else {
         return Ok(None);
     };
-    let flags = string_arg(vals, 3).map(|(f, _)| f).unwrap_or_default();
+    let flags = string_arg(vals, 3).map_or_default(|(f, _)| f);
     let Some(compiled) = cached_regex(ctx, &pattern, &flags) else {
         return Ok(None);
     };
@@ -6844,6 +6903,72 @@ mod tests {
             vec![typed_lit("+INF", dbl)],
         );
         assert_eq!(lex(&ds, &expr).as_deref(), Some("INF"));
+    }
+
+    #[test]
+    fn integer_cast_of_a_decimal_truncates_exactly_past_2_pow_53() {
+        // `12345678901234567.5` is not an integer lexical, so the cast goes by
+        // value. Through `f64` its integer part rounded to `…568`; the exact
+        // truncation keeps `…567`. The small neighbours, a negative truncation,
+        // and a derived target's range check (a valid and a refused value) pin the
+        // rest of the by-value integer cast.
+        let ds = empty_ds();
+        let dec = "http://www.w3.org/2001/XMLSchema#decimal";
+        let cast = |target: &str, lexical: &str| {
+            let expr = Expression::FunctionCall(
+                Function::Custom(NamedNode::new_unchecked(target)),
+                vec![typed_lit(lexical, dec)],
+            );
+            lex(&ds, &expr)
+        };
+        let integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let byte = "http://www.w3.org/2001/XMLSchema#byte";
+        assert_eq!(
+            cast(integer, "12345678901234567.5").as_deref(),
+            Some("12345678901234567")
+        );
+        assert_eq!(
+            cast(integer, "-12345678901234567.9").as_deref(),
+            Some("-12345678901234567")
+        );
+        assert_eq!(cast(integer, "2.5").as_deref(), Some("2"));
+        assert_eq!(cast(integer, "-7.9").as_deref(), Some("-7"));
+        assert_eq!(cast(integer, "-0.5").as_deref(), Some("0"));
+        assert_eq!(cast(byte, "127.9").as_deref(), Some("127"));
+        assert_eq!(cast(byte, "128.5"), None, "out of xsd:byte's range");
+    }
+
+    #[test]
+    fn float_cast_of_an_exact_value_rounds_once() {
+        // `(2^24 + 1) × 2^40 + 1` sits just above an `f32` halfway point, so the
+        // correctly rounded float is `(2^24 + 2) × 2^40`; through `f64` the `+ 1`
+        // is lost and the remaining tie rounds to the even `2^64`.
+        let correct = f32::from_bits(((127 + 64) << 23) | 1);
+        let digits = "18446745173221179393";
+        let decimal = purrdf_xsd::parse(&format!("{digits}.0"), XsdDatatype::Decimal)
+            .expect("decimal parses");
+        let integer = purrdf_xsd::parse(digits, XsdDatatype::Integer).expect("integer parses");
+        for source in [decimal, integer] {
+            let Some(XsdValue::Float(cast)) = cast_numeric_value(&source, XsdDatatype::Float)
+            else {
+                panic!("float cast of {source:?}");
+            };
+            assert_eq!(cast.to_bits(), correct.to_bits(), "{source:?}");
+            assert_ne!(
+                (digits.parse::<f64>().expect("parses") as f32).to_bits(),
+                correct.to_bits(),
+                "the f64 detour rounds twice"
+            );
+            // The double cast of the same value is its own correctly rounded f64.
+            let Some(XsdValue::Double(double)) = cast_numeric_value(&source, XsdDatatype::Double)
+            else {
+                panic!("double cast of {source:?}");
+            };
+            assert_eq!(
+                double.to_bits(),
+                digits.parse::<f64>().expect("parses").to_bits()
+            );
+        }
     }
 
     // ---- RAND() deterministic with fixed seed ------------------------------

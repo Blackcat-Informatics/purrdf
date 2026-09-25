@@ -226,13 +226,11 @@ pub(super) fn parse_strict_json(
         depth: 0,
         max_depth: config.policy().max_json_depth(),
     };
-    let value = seed.deserialize(&mut deserializer).map_err(|error| {
-        ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path)
-    })?;
-    deserializer.end().map_err(|error| {
-        ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path)
-    })?;
-    Ok(value)
+    crate::json_number::read_json(|| {
+        let value = seed.deserialize(&mut deserializer)?;
+        deserializer.end().map(|()| value)
+    })
+    .map_err(|error| ProjectionError::syntax(format!("parse {description}: {error}")).at_path(path))
 }
 
 #[derive(Clone, Copy)]
@@ -515,6 +513,55 @@ mod tests {
             parse(br#"{"a":[1,true]}"#, 10, 4).expect("value")["a"][0],
             1
         );
+    }
+
+    /// The strict reader gives every JSON number the value its decimal spells: the
+    /// witnesses are numbers a reader that is not correctly rounded (or the x87's
+    /// double-rounded fast path) reads as a neighbour.
+    #[test]
+    fn strict_json_numbers_are_correctly_rounded() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        use crate::projections::{
+            ProjectionLimits, RESEARCH_ROLES, ResearchObjectIdentity, ResearchObjectPolicy,
+            ResearchObjectRoles,
+        };
+
+        let roles = RESEARCH_ROLES
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, role)| (role, format!("https://example.org/roles/{index}")))
+            .collect();
+        let config = ResearchObjectConfig::new(
+            ResearchObjectRoles::new(roles).expect("roles"),
+            ResearchObjectIdentity::new(
+                "https://example.org/dataset",
+                "https://example.org/entities/",
+            )
+            .expect("identity"),
+            ResearchObjectPolicy::new(
+                ProjectionLimits::new(32, 1_000_000, 4_000_000, 5_000_000, 16).expect("limits"),
+                1_000,
+                500,
+                1_000,
+                16,
+            )
+            .expect("policy"),
+        );
+        let mut lexicals = soft::misread_decimals(40);
+        lexicals.extend(soft::x87_fast_path_decimals(40));
+        let document = format!("{{\"n\":[{}]}}", lexicals.join(","));
+        let value =
+            parse_strict_json(document.as_bytes(), &config, "numbers", "/").expect("strict JSON");
+        for (read, lexical) in value["n"].as_array().expect("array").iter().zip(&lexicals) {
+            let correct: f64 = lexical.parse().expect("decimal");
+            assert_eq!(
+                read.as_f64().map(f64::to_bits),
+                Some(correct.to_bits()),
+                "{lexical}"
+            );
+        }
     }
 
     #[test]

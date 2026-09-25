@@ -48,7 +48,7 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     BindingPattern, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, RankedDeclaration,
+    PropertyFunctionRegistry, RankArithmetic, RankedDeclaration,
 };
 
 fn ex(suffix: &str) -> String {
@@ -195,6 +195,7 @@ fn register(
                 completeness,
                 order: OrderFidelity::Faithful,
             },
+            arithmetic: RankArithmetic::FloatFree,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             exclusion: basis,

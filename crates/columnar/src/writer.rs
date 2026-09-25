@@ -9,6 +9,7 @@ use purrdf_core::{
     ContentStore, DatasetView, LossLedger, QuadIds, RdfTextDirection, TermRef, TermValue,
 };
 
+use crate::column::Int64Column;
 use crate::error::ColumnarError;
 use crate::files::ParquetFiles;
 use crate::parquet::{ColumnValues, Compression, TableData, write_table};
@@ -287,17 +288,17 @@ impl Dictionary {
 
 fn build_terms_table(dictionary: &Dictionary) -> Result<TableData, ColumnarError> {
     let capacity = dictionary.terms.len();
-    let mut ids = Vec::with_capacity(capacity);
-    let mut kinds = Vec::with_capacity(capacity);
+    let mut ids = Int64Column::with_capacity(capacity);
+    let mut kinds = Int64Column::with_capacity(capacity);
     let mut lex = Vec::with_capacity(capacity);
-    let mut datatypes = Vec::with_capacity(capacity);
+    let mut datatypes = Int64Column::with_capacity(capacity);
     let mut languages = Vec::with_capacity(capacity);
-    let mut directions = Vec::with_capacity(capacity);
-    let mut scopes = Vec::with_capacity(capacity);
-    let mut triple_subjects = Vec::with_capacity(capacity);
-    let mut triple_predicates = Vec::with_capacity(capacity);
-    let mut triple_objects = Vec::with_capacity(capacity);
-    let mut named_graphs = Vec::with_capacity(capacity);
+    let mut directions = Int64Column::with_capacity(capacity);
+    let mut scopes = Int64Column::with_capacity(capacity);
+    let mut triple_subjects = Int64Column::with_capacity(capacity);
+    let mut triple_predicates = Int64Column::with_capacity(capacity);
+    let mut triple_objects = Int64Column::with_capacity(capacity);
+    let mut named_graphs = Int64Column::with_capacity(capacity);
 
     for (index, term) in dictionary.terms.iter().enumerate() {
         ids.push(Some(index as i64));
@@ -339,15 +340,15 @@ fn build_terms_table(dictionary: &Dictionary) -> Result<TableData, ColumnarError
 fn append_term_columns(
     dictionary: &Dictionary,
     term: &TermValue,
-    kinds: &mut Vec<Option<i64>>,
+    kinds: &mut Int64Column,
     lex: &mut Vec<Option<Vec<u8>>>,
-    datatypes: &mut Vec<Option<i64>>,
+    datatypes: &mut Int64Column,
     languages: &mut Vec<Option<Vec<u8>>>,
-    directions: &mut Vec<Option<i64>>,
-    scopes: &mut Vec<Option<i64>>,
-    triple_subjects: &mut Vec<Option<i64>>,
-    triple_predicates: &mut Vec<Option<i64>>,
-    triple_objects: &mut Vec<Option<i64>>,
+    directions: &mut Int64Column,
+    scopes: &mut Int64Column,
+    triple_subjects: &mut Int64Column,
+    triple_predicates: &mut Int64Column,
+    triple_objects: &mut Int64Column,
 ) -> Result<(), ColumnarError> {
     let mut row = TermColumns::default();
     match term {
@@ -476,10 +477,10 @@ fn build_annotations_table<D: DatasetView>(
 }
 
 fn table_from_quad_rows(table: Table, rows: BTreeSet<QuadRow>) -> Result<TableData, ColumnarError> {
-    let mut first = Vec::with_capacity(rows.len());
-    let mut second = Vec::with_capacity(rows.len());
-    let mut third = Vec::with_capacity(rows.len());
-    let mut graphs = Vec::with_capacity(rows.len());
+    let mut first = Int64Column::with_capacity(rows.len());
+    let mut second = Int64Column::with_capacity(rows.len());
+    let mut third = Int64Column::with_capacity(rows.len());
+    let mut graphs = Int64Column::with_capacity(rows.len());
     for (a, b, c, graph) in rows {
         first.push(Some(a));
         second.push(Some(b));
@@ -498,11 +499,11 @@ fn table_from_quad_rows(table: Table, rows: BTreeSet<QuadRow>) -> Result<TableDa
 }
 
 fn table_from_reifier_rows(rows: BTreeSet<ReifierRow>) -> Result<TableData, ColumnarError> {
-    let mut reifiers = Vec::with_capacity(rows.len());
-    let mut subjects = Vec::with_capacity(rows.len());
-    let mut predicates = Vec::with_capacity(rows.len());
-    let mut objects = Vec::with_capacity(rows.len());
-    let mut graphs = Vec::with_capacity(rows.len());
+    let mut reifiers = Int64Column::with_capacity(rows.len());
+    let mut subjects = Int64Column::with_capacity(rows.len());
+    let mut predicates = Int64Column::with_capacity(rows.len());
+    let mut objects = Int64Column::with_capacity(rows.len());
+    let mut graphs = Int64Column::with_capacity(rows.len());
     for (reifier, subject, predicate, object, graph) in rows {
         reifiers.push(Some(reifier));
         subjects.push(Some(subject));
@@ -599,8 +600,8 @@ mod tests {
         };
         assert_eq!(
             named_graphs
-                .iter()
-                .filter(|value| **value == Some(1))
+                .rows()
+                .filter(|value| *value == Some(1))
                 .count(),
             2
         );

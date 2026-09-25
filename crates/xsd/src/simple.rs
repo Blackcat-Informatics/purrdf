@@ -32,13 +32,21 @@ pub fn parse_boolean(s: &str) -> Result<bool, XsdError> {
 /// The result has the same number of characters as the input.
 #[must_use]
 pub fn normalize_whitespace_replace(s: &str) -> String {
-    // Byte scan, whole clean runs copied with one `push_str` each: the three
-    // trigger bytes are ASCII and every UTF-8 lead/continuation byte is >= 0x80,
-    // so slicing at a trigger index is always a char boundary and the output is
-    // byte-identical to the per-char map (no per-char push, exact-fit buffer).
+    // Chunked precheck: find the first trigger byte sixteen bytes at a time. With
+    // none, the value is already its own normal form and is returned unchanged —
+    // the common case, and one copy with no per-byte loop.
+    let Some(first) = find_first_replaced(s.as_bytes()) else {
+        return s.to_owned();
+    };
+    // Byte scan from the first trigger, whole clean runs copied with one
+    // `push_str` each: the three trigger bytes are ASCII and every UTF-8
+    // lead/continuation byte is >= 0x80, so slicing at a trigger index is always
+    // a char boundary and the output is byte-identical to the per-char map (no
+    // per-char push, exact-fit buffer).
     let mut out = String::with_capacity(s.len());
-    let mut run_start = 0;
-    for (i, b) in s.bytes().enumerate() {
+    out.push_str(&s[..first]);
+    let mut run_start = first;
+    for (i, b) in s.bytes().enumerate().skip(first) {
         if matches!(b, b'\t' | b'\n' | b'\r') {
             out.push_str(&s[run_start..i]);
             out.push(' ');
@@ -58,6 +66,13 @@ pub fn normalize_whitespace_replace(s: &str) -> String {
 /// verbatim (it is not part of the XSD `whiteSpace` facet).
 #[must_use]
 pub fn normalize_whitespace_collapse(s: &str) -> String {
+    // Chunked precheck: a value with no tab, line feed or carriage return, no
+    // leading or trailing space and no two adjacent spaces is already collapsed,
+    // and is returned unchanged — the common case, and one copy with no per-byte
+    // loop.
+    if is_collapsed(s.as_bytes()) {
+        return s.to_owned();
+    }
     // Byte scan copying each non-whitespace run with one `push_str`: the four
     // XSD whitespace bytes are ASCII (never inside a multi-byte sequence), so run
     // boundaries are char boundaries and the output matches the per-char loop.
@@ -82,6 +97,134 @@ pub fn normalize_whitespace_collapse(s: &str) -> String {
         out.push_str(&s[start..]);
     }
     out
+}
+
+/// Bytes per precheck chunk: one 128-bit vector of bytes.
+const CHUNK: usize = 16;
+
+/// The bytes the `replace` facet rewrites, `#x9`, `#xA` and `#xD`, as inclusive
+/// byte runs.
+const REPLACED_RUNS: [(u8, u8); 2] = [(b'\t', b'\n'), (b'\r', b'\r')];
+/// The byte the `collapse` facet additionally folds, `#x20`, as a byte run.
+const SPACE_RUNS: [(u8, u8); 1] = [(b' ', b' ')];
+
+/// Whether `b` falls in one of `runs`: one wrapping subtraction and one unsigned
+/// comparison per run, OR-ed with no early exit.
+#[allow(
+    clippy::inline_always,
+    reason = "the lane helpers must be inlined into the chunk loop so the class's runs fold \
+              in as constants and the lane compares vectorize"
+)]
+#[inline(always)]
+fn in_runs(b: u8, runs: &[(u8, u8)]) -> bool {
+    let mut hit = false;
+    for &(lo, hi) in runs {
+        hit |= b.wrapping_sub(lo) <= hi - lo;
+    }
+    hit
+}
+
+/// The lanes of one chunk for one class: lane `i` is `0xFF` iff `chunk[i]` is in
+/// `runs`, else `0x00`.
+///
+/// Independent byte comparisons with no cross-lane dependence, stored as
+/// `0x00`/`0xFF` bytes: the shape the compiler lowers to packed byte compares
+/// on every target that has them. Every facet byte is ASCII, so a lane can never
+/// match a byte of a multi-byte UTF-8 sequence.
+#[allow(
+    clippy::inline_always,
+    reason = "the lane helpers must be inlined into the chunk loop so the class's runs fold \
+              in as constants and the lane compares vectorize"
+)]
+#[inline(always)]
+fn class_lanes(chunk: &[u8; CHUNK], runs: &[(u8, u8)]) -> [u8; CHUNK] {
+    let mut lanes = [0_u8; CHUNK];
+    for (lane, &b) in lanes.iter_mut().zip(chunk) {
+        *lane = u8::from(in_runs(b, runs)).wrapping_neg();
+    }
+    lanes
+}
+
+/// Whether any lane of `lanes` is set: a branch-free OR over the chunk.
+#[allow(
+    clippy::inline_always,
+    reason = "the lane helpers must be inlined into the chunk loop so the class's runs fold \
+              in as constants and the lane compares vectorize"
+)]
+#[inline(always)]
+fn any_lane(lanes: &[u8; CHUNK]) -> bool {
+    lanes.iter().fold(0, |any, &lane| any | lane) != 0
+}
+
+/// The offset of the first `#x9` / `#xA` / `#xD` byte, or `None`.
+///
+/// Sixteen-byte chunks are tested whole — a branch-free OR of the lanes is the
+/// clean-chunk test — and the one chunk holding a hit is handed to
+/// [`first_replaced_lane`]. The bytes after the last whole chunk are tested one at
+/// a time.
+fn find_first_replaced(bytes: &[u8]) -> Option<usize> {
+    let (chunks, tail) = bytes.as_chunks::<CHUNK>();
+    for (k, chunk) in chunks.iter().enumerate() {
+        if any_lane(&class_lanes(chunk, &REPLACED_RUNS)) {
+            return Some(k * CHUNK + first_replaced_lane(chunk));
+        }
+    }
+    tail.iter()
+        .position(|&b| in_runs(b, &REPLACED_RUNS))
+        .map(|i| chunks.len() * CHUNK + i)
+}
+
+/// The lane of the first `#x9` / `#xA` / `#xD` byte in a chunk known to hold one:
+/// the chunk's lanes read as a little-endian `u128`, whose trailing-zero count over
+/// 8 is that lane.
+///
+/// Out of line and cold on purpose, and measured: a value that needs rewriting is
+/// the uncommon case, and when this extraction shared a body with the clean-chunk
+/// test, the wasm `simd128` build kept the lane compares scalar to avoid extracting
+/// the lanes twice. Separate, the clean-chunk loop is compares and a reduction only.
+#[cold]
+#[inline(never)]
+fn first_replaced_lane(chunk: &[u8; CHUNK]) -> usize {
+    let lanes = class_lanes(chunk, &REPLACED_RUNS);
+    (u128::from_le_bytes(lanes).trailing_zeros() / u8::BITS) as usize
+}
+
+/// Whether `bytes` is already in `collapse` normal form: no `#x9` / `#xA` /
+/// `#xD`, no leading or trailing `#x20`, and no two adjacent `#x20`.
+///
+/// Per sixteen-byte chunk, a space at lane `i` whose predecessor is also a space
+/// is found by comparing the space lanes with themselves shifted by one lane; the
+/// predecessor of lane 0 is the last lane of the previous chunk, carried across.
+/// Every test is a branch-free OR folded over the chunk.
+fn is_collapsed(bytes: &[u8]) -> bool {
+    if bytes.first() == Some(&b' ') || bytes.last() == Some(&b' ') {
+        return false;
+    }
+    let (chunks, tail) = bytes.as_chunks::<CHUNK>();
+    let mut previous_space = false;
+    for chunk in chunks {
+        if any_lane(&class_lanes(chunk, &REPLACED_RUNS)) {
+            return false;
+        }
+        let space = class_lanes(chunk, &SPACE_RUNS);
+        let space_bits = u128::from_le_bytes(space);
+        // Lane `i` of the shifted value is lane `i - 1` of `space`, and lane 0 is
+        // the carried last lane of the previous chunk.
+        let preceded =
+            (space_bits << u8::BITS) | u128::from(u8::from(previous_space).wrapping_neg());
+        let adjacent = space_bits & preceded;
+        if adjacent != 0 {
+            return false;
+        }
+        previous_space = space[CHUNK - 1] != 0;
+    }
+    for &b in tail {
+        if in_runs(b, &REPLACED_RUNS) || (b == b' ' && previous_space) {
+            return false;
+        }
+        previous_space = b == b' ';
+    }
+    true
 }
 
 #[cfg(test)]
@@ -114,6 +257,156 @@ mod tests {
             }
         }
         out
+    }
+
+    /// `normalize_whitespace_replace` as it was before the chunked precheck.
+    fn replace_byte_scan_reference(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut run_start = 0;
+        for (i, b) in s.bytes().enumerate() {
+            if matches!(b, b'\t' | b'\n' | b'\r') {
+                out.push_str(&s[run_start..i]);
+                out.push(' ');
+                run_start = i + 1;
+            }
+        }
+        out.push_str(&s[run_start..]);
+        out
+    }
+
+    /// `normalize_whitespace_collapse` as it was before the chunked precheck.
+    fn collapse_byte_scan_reference(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut pending_space = false;
+        let mut run_start: Option<usize> = None;
+        for (i, b) in s.bytes().enumerate() {
+            if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+                if let Some(start) = run_start.take() {
+                    out.push_str(&s[start..i]);
+                }
+                pending_space = !out.is_empty();
+            } else if run_start.is_none() {
+                if pending_space {
+                    out.push(' ');
+                    pending_space = false;
+                }
+                run_start = Some(i);
+            }
+        }
+        if let Some(start) = run_start {
+            out.push_str(&s[start..]);
+        }
+        out
+    }
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            usize::try_from((z ^ (z >> 31)) % 1_000_003).expect("small") % n
+        }
+    }
+
+    /// Every byte on either side of the facet's classes (`#x9-#xA`, `#xD`,
+    /// `#x20`), and non-ASCII scalars of every UTF-8 length including the Unicode
+    /// whitespace the facet must leave alone.
+    const FACET_SCALARS: &[char] = &[
+        '\u{8}',
+        '\t',
+        '\n',
+        '\u{b}',
+        '\u{c}',
+        '\r',
+        '\u{e}',
+        '\u{1f}',
+        ' ',
+        '!',
+        'a',
+        '\u{7f}',
+        '\u{85}',
+        '\u{a0}',
+        '\u{e9}',
+        '\u{2028}',
+        '\u{3000}',
+        '\u{feff}',
+        '\u{1f600}',
+    ];
+
+    /// Fixed-seed random values at lengths 0..=70 and beyond, mostly clean so the
+    /// precheck's clean path, and hits at every chunk offset, are both reached.
+    fn facet_corpus() -> Vec<String> {
+        let mut rng = SplitMix(0x05DF_ACE7_5EED);
+        let mut out = Vec::new();
+        for len in (0..=70).chain([127, 128, 129, 1000]) {
+            for density in [0, 1, 4] {
+                for _ in 0..12 {
+                    let value: String = (0..len)
+                        .map(|_| {
+                            if density != 0 && rng.below(16) < density {
+                                FACET_SCALARS[rng.below(FACET_SCALARS.len())]
+                            } else if rng.below(6) == 0 {
+                                // Single spaces keep collapse's clean path reachable.
+                                ' '
+                            } else {
+                                'x'
+                            }
+                        })
+                        .collect();
+                    out.push(value);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn chunked_replace_matches_the_byte_scan_and_char_references() {
+        let mut clean = 0_usize;
+        for value in facet_corpus() {
+            let got = normalize_whitespace_replace(&value);
+            assert_eq!(got, replace_byte_scan_reference(&value), "{value:?}");
+            assert_eq!(got, replace_char_reference(&value), "{value:?}");
+            clean += usize::from(find_first_replaced(value.as_bytes()).is_none());
+        }
+        assert!(clean > 0, "the corpus reaches the clean path");
+    }
+
+    #[test]
+    fn chunked_collapse_matches_the_byte_scan_and_char_references() {
+        let mut clean = [0_usize; 2];
+        for value in facet_corpus() {
+            let got = normalize_whitespace_collapse(&value);
+            assert_eq!(got, collapse_byte_scan_reference(&value), "{value:?}");
+            assert_eq!(got, collapse_char_reference(&value), "{value:?}");
+            // The precheck says "already collapsed" exactly when collapsing is the
+            // identity: never a false "clean", never a missed one.
+            let collapsed = is_collapsed(value.as_bytes());
+            assert_eq!(collapsed, got == value, "{value:?}");
+            clean[usize::from(collapsed)] += 1;
+        }
+        assert!(clean.iter().all(|&n| n > 0), "{clean:?}");
+    }
+
+    /// Adjacent spaces are caught at every position, including across the seam
+    /// between two chunks, and a single space at the same place is not.
+    #[test]
+    fn collapse_precheck_sees_adjacent_spaces_across_chunk_seams() {
+        for at in 1..40 {
+            let mut double = "x".repeat(41).into_bytes();
+            double[at] = b' ';
+            double[at + 1] = b' ';
+            let double = String::from_utf8(double).expect("ascii");
+            assert!(!is_collapsed(double.as_bytes()), "double space at {at}");
+            let mut single = "x".repeat(41).into_bytes();
+            single[at] = b' ';
+            let single = String::from_utf8(single).expect("ascii");
+            assert!(is_collapsed(single.as_bytes()), "single space at {at}");
+        }
     }
 
     const WHITESPACE_FACET_CORPUS: &[&str] = &[

@@ -461,26 +461,8 @@ impl ShaclDatasetView {
     ) -> impl Iterator<Item = QuadIds> + '_ {
         match &self.source {
             Source::Native(source) => Either::Left(overlay_probe(source.as_ref(), s, p, o, g)),
-            Source::Composite(dense) => Either::Right(boxed(
-                overlay_probe(
-                    dense.source.as_ref(),
-                    s.map(|id| dense.source_id(id)),
-                    p.map(|id| dense.source_id(id)),
-                    o.map(|id| dense.source_id(id)),
-                    dense.graph(g),
-                )
-                .map(|q| dense.quad(q)),
-            )),
-            Source::Delta(dense) => Either::Right(boxed(
-                overlay_probe(
-                    dense.source.as_ref(),
-                    s.map(|id| dense.source_id(id)),
-                    p.map(|id| dense.source_id(id)),
-                    o.map(|id| dense.source_id(id)),
-                    dense.graph(g),
-                )
-                .map(|q| dense.quad(q)),
-            )),
+            Source::Composite(dense) => Either::Right(dense_overlay_probe(dense, s, p, o, g)),
+            Source::Delta(dense) => Either::Right(dense_overlay_probe(dense, s, p, o, g)),
         }
     }
     fn raw_reifiers(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -602,6 +584,33 @@ fn overlay_probe<D: DatasetView>(
 // Composite and delta iterators contain several indexed source alternatives.
 // Erasing just those branches bounds callers' stack frames while native probes
 // keep their allocation-free iterator representation.
+/// The RDF 1.2 overlay probe of a dense (composite or delta) carrier, boxed.
+///
+/// Out of line, one instance per carrier type, so each carrier's overlay
+/// iterator is built in its own stack frame. Built inline in
+/// `raw_overlay_probe`, both carriers' iterators, each a deep nest of
+/// chained and flattened pattern scans, occupied that one frame together,
+/// although a call only ever builds one of them.
+#[inline(never)]
+fn dense_overlay_probe<D: DatasetView>(
+    dense: &Dense<D>,
+    s: Option<TermId>,
+    p: Option<TermId>,
+    o: Option<TermId>,
+    g: GraphMatch,
+) -> Box<dyn Iterator<Item = QuadIds> + '_> {
+    boxed(
+        overlay_probe(
+            dense.source.as_ref(),
+            s.map(|id| dense.source_id(id)),
+            p.map(|id| dense.source_id(id)),
+            o.map(|id| dense.source_id(id)),
+            dense.graph(g),
+        )
+        .map(|q| dense.quad(q)),
+    )
+}
+
 fn boxed<'a, T>(iter: impl Iterator<Item = T> + 'a) -> Box<dyn Iterator<Item = T> + 'a> {
     Box::new(iter)
 }

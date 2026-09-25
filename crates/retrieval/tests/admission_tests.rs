@@ -25,7 +25,7 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis,
-    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic,
     RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
@@ -87,6 +87,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,
+        arithmetic: RankArithmetic::FloatFree,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         exclusion: ExclusionBasis::Unavailable,
@@ -2403,6 +2404,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,
+        arithmetic: RankArithmetic::FloatFree,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         exclusion: ExclusionBasis::Unavailable,

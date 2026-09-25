@@ -6,15 +6,16 @@
 //! Graph, tabular, and research-object carrier benchmarks over deterministic fixed datasets.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_rdf::{
-    CsvwConfig, CsvwContext, CsvwDatatype, CsvwMode, CsvwTermsCardinality, CsvwTermsColumn,
-    CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn, CsvwTermsLimits,
-    CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary, DcatRdfConfig,
-    DcatRdfMappingConfig, DcatRdfSource, LiftProfile, LpgConfig, LpgExecutionLimits,
+    CsvwAction, CsvwConfig, CsvwContext, CsvwDatatype, CsvwInput, CsvwMode, CsvwTermsCardinality,
+    CsvwTermsColumn, CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn,
+    CsvwTermsLimits, CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary,
+    DcatRdfConfig, DcatRdfMappingConfig, DcatRdfSource, LiftProfile, LpgConfig, LpgExecutionLimits,
     LpgIriSelection, LpgNamedGraphSelection, LpgPackageProjection, LpgProgress, LpgScope,
     LpgStreamProjection, NativeRdfFormat, OboGraphsConfig, OboGraphsVocabulary, OboMetadataRoles,
     OboOwlRoles, OboRdfRoles, ProjectionArtifactSink, ProjectionConfig, ProjectionError,
@@ -25,9 +26,9 @@ use purrdf_rdf::{
     project_csvw_terms, project_lpg, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
     project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
     project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs, project_okf_terms,
-    project_research_object, project_skos, read_csvw_exact, read_lpg_csv, read_lpg_cypher,
-    read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher, write_lpg_graphml,
-    write_neo4j_csv,
+    project_research_object, project_skos, read_csvw, read_csvw_exact, read_lpg_csv,
+    read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher,
+    write_lpg_graphml, write_neo4j_csv,
 };
 
 #[global_allocator]
@@ -373,6 +374,59 @@ fn csvw_config() -> CsvwConfig {
         100_000,
     )
     .expect("CSVW config")
+}
+
+/// Rows of the URI-template read: every row expands three templates.
+const TEMPLATE_ROWS: usize = 2_000;
+
+/// A CSVW package whose schema expands every row's cells through URI templates:
+/// `aboutUrl` by simple expansion of an ASCII id, `valueUrl` by reserved
+/// expansion (`{+path}`) of a long path holding one space, and a second
+/// `valueUrl` by simple expansion of a label holding a space and a non-ASCII
+/// scalar. Most bytes of every value are copied as they are; a few are
+/// percent-encoded.
+fn csvw_template_package() -> (CsvwConfig, CsvwInput) {
+    let config = CsvwConfig::new(
+        format!("{EX}csvw-metadata"),
+        CsvwContext::new("http://www.w3.org/ns/csvw", BTreeMap::default()).expect("context"),
+        format!("{EX}csvw-group"),
+        CsvwVocabulary::new("http://www.w3.org/ns/csvw#", RDF, RDFS, XSD).expect("CSVW vocabulary"),
+        CsvwMode::Standard,
+        limits(),
+        100_000,
+    )
+    .expect("CSVW config");
+    let metadata_iri = format!("{EX}items.csv-metadata.json");
+    let table_iri = format!("{EX}items.csv");
+    let metadata = format!(
+        r#"{{"@context":"http://www.w3.org/ns/csvw","url":"{table_iri}",
+            "tableSchema":{{"aboutUrl":"{EX}item/{{id}}","columns":[
+                {{"name":"id","titles":"id"}},
+                {{"name":"path","titles":"path","valueUrl":"{EX}{{+path}}"}},
+                {{"name":"label","titles":"label","valueUrl":"{EX}label/{{label}}"}}
+            ]}}}}"#
+    );
+    let mut table = String::from("id,path,label\n");
+    for row in 0..TEMPLATE_ROWS {
+        let _ = writeln!(
+            table,
+            "item-{row},docs/section-{}/chapter-{row}/page {row}.html#part-{},Label {row} na\u{ef}ve",
+            row % 97,
+            row % 7
+        );
+    }
+    let input = CsvwInput::new(
+        CsvwAction::Metadata {
+            metadata_iri: metadata_iri.clone(),
+        },
+        BTreeMap::from([
+            (metadata_iri, metadata.into_bytes()),
+            (table_iri, table.into_bytes()),
+        ]),
+        config.limits(),
+    )
+    .expect("CSVW input");
+    (config, input)
 }
 
 fn csvw_datatype(base: impl Into<String>) -> CsvwDatatype {
@@ -1032,6 +1086,28 @@ fn benchmark(c: &mut Criterion) {
             });
         });
         exact.finish();
+    }
+
+    {
+        let (template_config, template_input) = csvw_template_package();
+        let outcome = read_csvw(&template_input, &template_config).expect("templated CSVW");
+        assert!(outcome.is_valid(), "{:#?}", outcome.warnings);
+        assert_eq!(outcome.group.tables[0].rows.len(), TEMPLATE_ROWS);
+        for iri in [
+            format!("{EX}item/item-1999"),
+            format!("{EX}docs/section-59/chapter-1999/page%201999.html#part-4"),
+            format!("{EX}label/Label%201999%20na%C3%AFve"),
+        ] {
+            assert!(outcome.dataset.term_id_by_iri(&iri).is_some(), "{iri}");
+        }
+        let mut templates = c.benchmark_group("csvw_url_templates");
+        templates.throughput(Throughput::Elements(TEMPLATE_ROWS as u64));
+        templates.bench_function("read_2000_rows", |bencher| {
+            bencher.iter(|| {
+                black_box(read_csvw(black_box(&template_input), &template_config).expect("read"));
+            });
+        });
+        templates.finish();
     }
 
     {

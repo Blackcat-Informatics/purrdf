@@ -162,24 +162,57 @@ fn truncated_overlong_and_mis_versioned_payloads_are_typed_errors() {
         &bad_magic
     )));
 
+    // A version-1 image (its header's arithmetic field was reserved and zero) and a
+    // version from the future are both refused by name.
+    let mut version_one = image.clone();
+    write_u32(&mut version_one, 8, 1);
+    write_u32(&mut version_one, 60, 0);
+    assert_eq!(
+        assert_rejected(matrix.clone(), &version_one),
+        HnswError::VersionMismatch {
+            expected: 2,
+            actual: 1
+        }
+    );
     let mut bad_version = image;
-    write_u32(&mut bad_version, 8, 2);
-    assert!(matches!(
+    write_u32(&mut bad_version, 8, 3);
+    assert_eq!(
         assert_rejected(matrix, &bad_version),
-        HnswError::VersionMismatch { .. }
-    ));
+        HnswError::VersionMismatch {
+            expected: 2,
+            actual: 3
+        }
+    );
+}
+
+#[test]
+fn a_header_naming_another_arithmetic_is_refused_by_name() {
+    let (matrix, image) = baseline();
+    // The field version 1 reserved as zero records the arithmetic now: 1 is the exact one.
+    assert_eq!(
+        read_u32(&image, 60),
+        1,
+        "the baseline records the exact arithmetic"
+    );
+    for code in [0_u32, 2, u32::MAX] {
+        let mut other = image.clone();
+        write_u32(&mut other, 60, code);
+        assert_eq!(
+            assert_rejected(matrix.clone(), &other),
+            HnswError::ArithmeticMismatch {
+                arithmetic: "binary64-lane16-tree-v1",
+                actual: code
+            },
+            "arithmetic code {code}"
+        );
+    }
+    // The valid neighbour: the baseline itself, carrying code 1, decodes.
+    assert!(HnswIndex::decode(matrix, &image).is_ok());
 }
 
 #[test]
 fn non_zero_reserved_fields_are_refused() {
     let (matrix, image) = baseline();
-
-    let mut reserved = image.clone();
-    write_u32(&mut reserved, 60, 1);
-    assert!(is_invalid_payload(&assert_rejected(
-        matrix.clone(),
-        &reserved
-    )));
 
     let mut node_reserved = image.clone();
     write_u32(&mut node_reserved, 84, 1);

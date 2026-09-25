@@ -19,7 +19,7 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis,
-    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic,
     RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
@@ -113,6 +113,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,
+        arithmetic: RankArithmetic::FloatFree,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         exclusion: ExclusionBasis::Unavailable,
@@ -172,6 +173,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
+            arithmetic: RankArithmetic::FloatFree,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             exclusion: ExclusionBasis::Unavailable,
@@ -722,6 +724,7 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
+            arithmetic: RankArithmetic::FloatFree,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             exclusion: ExclusionBasis::Unavailable,
@@ -847,6 +850,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
+            arithmetic: RankArithmetic::FloatFree,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             exclusion: ExclusionBasis::Unavailable,
@@ -1085,6 +1089,7 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
+            arithmetic: RankArithmetic::FloatFree,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             exclusion: ExclusionBasis::Unavailable,

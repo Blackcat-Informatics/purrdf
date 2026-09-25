@@ -11,7 +11,6 @@ repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-core"
 rust-version.workspace = true
-readme = "README.md"
 keywords = ["rdf", "rdf-12", "ir", "diagnostics", "linked-data"]
 categories = ["parser-implementations", "encoding", "data-structures"]
 
@@ -40,6 +39,12 @@ purrdf-iri = { workspace = true }
 # `crate::cdt_blank`). The crate is a closed leaf over `purrdf-iri`/`purrdf-xsd`
 # with no edge back to the core, and stays wasm-clean.
 purrdf-cdt = { workspace = true }
+# The correctly rounded binary64 operation layer (`purrdf_xsd::ieee`): the distance
+# kernels, the PURREMB norm and the float-environment probe compute through it, so the
+# workspace has one implementation of binary floating-point arithmetic, the x87's
+# precision guard and subnormal scaling included. A zero-dependency leaf already in this
+# crate's graph through `purrdf-cdt`, and wasm-clean.
+purrdf-xsd = { workspace = true }
 # Strict BCP 47 validation for canonical RDF language-tag target identities.
 # The permissive RDF 1.2 ingestion protocol: this crate provides
 # the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
@@ -204,4 +209,13 @@ harness = false
 # block, class subtraction, `x`/`q`). Report-only; `make bench` lane only —
 # excluded from `make check`.
 name = "xsd_regex"
+harness = false
+
+[[bench]]
+# The `purrdf_core::distance` kernels -- batch (`distances`), indexed
+# (`distances_indexed`), pair (`distance`) and bounded (`distance_bounded`) -- under
+# `Exact` and `Reassociated`, over f64xf64 / f64xf32 / f32xf32 width pairs at 384, 768
+# and 1536 dimensions. Report-only -- no timing/speedup assertions; the two arithmetics
+# are reported side by side. `make bench` lane only -- excluded from `make check`.
+name = "distance"
 harness = false
