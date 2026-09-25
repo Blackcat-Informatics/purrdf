@@ -439,10 +439,14 @@ triple pattern.
   (`ValidationReport::to_dataset()`), so any syntax — and the CLI's
   `validate --format` — is a serialization of that dataset rather than a text
   round-trip, with the report's minted blank nodes kept distinct from every
-  blank node the data graph carries. Where it stops: a term the shapes graph
-  uses and the engine does not evaluate is a load error naming it (the SHACL
-  JavaScript Extensions, the deprecated `sh:minus`, `sh:describe` and
-  `sh:update` executables, and `sh:resultAnnotation`). A shapes graph's
+  blank node the data graph carries. SHACL-SPARQL result annotations
+  (`sh:resultAnnotation`) are copied into every result their query produces,
+  and the SHACL-AF 1.1 `sh:minus` node expression evaluates as `shnex:remove`.
+  Where it stops: a term the shapes graph uses and the engine does not
+  evaluate is a load error naming it. Those terms are the SHACL JavaScript
+  Extensions, which are not part of SHACL 1.2, and `sh:describe` and
+  `sh:update` on a shape, node expression, constraint, validator or rule,
+  where no SHACL 1.2 specification gives them a meaning. A shapes graph's
   `owl:imports` are never fetched — the caller supplies `--import IRI=FILE`,
   the same shape `entails` and `shex` take, and the closure is followed
   transitively from that table. An import of the shapes document's own IRI,

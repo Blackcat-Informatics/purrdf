@@ -1268,3 +1268,42 @@ fn engine_emits_the_canonical_decimal_lexical_form() {
     .expect("evaluates");
     assert_eq!(out, [typed("4", "decimal")]);
 }
+
+/// The shared grader grades SHACL-SPARQL result annotations: a first-party case in
+/// the suite's own form whose expected result carries `ex:label "urgent"` passes as
+/// written, and fails once the expected annotation value is altered —
+/// so an engine that dropped or corrupted annotations could not pass a suite case
+/// that states one.
+#[test]
+fn the_grader_grades_result_annotations_both_ways() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/result-annotation-grading.ttl");
+    let root = fixture
+        .parent()
+        .expect("the fixture has a directory")
+        .to_path_buf();
+    let mut cases: Vec<W3cCase> = Vec::new();
+    shacl_corpora::walk_manifest(&fixture, &mut |g, entry, manifest_path| {
+        cases.extend(shacl_corpora::parse_entry(g, entry, manifest_path, &root));
+    });
+    let [case] = cases.as_mut_slice() else {
+        panic!("the fixture holds exactly one sht:Validate case");
+    };
+    assert_eq!(
+        case.expected_annotations.len(),
+        1,
+        "the harness reads the expected result's annotation"
+    );
+    shacl_corpora::report_grading::run_validate_case(case)
+        .expect("the engine carries the expected annotation");
+
+    let (_, pairs) = &mut case.expected_annotations[0];
+    *pairs = std::collections::BTreeSet::from([(
+        "<http://example.org/ns#label>".to_owned(),
+        "\"routine\"".to_owned(),
+    )]);
+    assert!(
+        shacl_corpora::report_grading::run_validate_case(case).is_err(),
+        "a wrong expected annotation value must fail the case"
+    );
+}

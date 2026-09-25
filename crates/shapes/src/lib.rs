@@ -53,6 +53,7 @@ pub mod product;
 pub mod provenance;
 pub mod pydantic;
 pub mod report;
+pub(crate) mod result_annotations;
 pub mod rules;
 mod schema_catalog;
 pub mod schema_import;

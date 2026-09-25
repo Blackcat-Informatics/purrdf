@@ -538,8 +538,22 @@ fn parameter_names_shacl_pre_binds_are_refused_at_load_and_near_misses_are_not()
     }
 
     // The near misses: same prefix, same suffix, different name. Every one must load.
-    for allowed in ["thisOne", "pathValue", "valued", "myValue", "currentShape"] {
+    //
+    // `VARNAME` is the SPARQL grammar's production, so a parameter named with a
+    // non-ASCII letter or a leading digit binds `?größe` / `?2d` and loads; a name
+    // SPARQL cannot bind (`a-b` lexes as three tokens) is still refused.
+    for allowed in [
+        "thisOne",
+        "pathValue",
+        "valued",
+        "myValue",
+        "currentShape",
+        "größe",
+        "2d",
+    ] {
         load(allowed)
             .unwrap_or_else(|e| panic!("a parameter named {allowed:?} must still load: {e}"));
     }
+    let error = load("a-b").expect_err("a name SPARQL cannot bind is refused");
+    assert!(error.contains("invalid SPARQL variable name"), "{error}");
 }

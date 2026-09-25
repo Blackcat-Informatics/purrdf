@@ -645,6 +645,24 @@ impl AstWriter {
         }
     }
 
+    /// Write a SPARQL executable's result annotations, in the canonical order the
+    /// parser keeps them: each one's property, variable and default values.
+    fn result_annotations(
+        &mut self,
+        annotations: &[crate::shapes::ResultAnnotation],
+    ) -> Result<(), ShapesProductError> {
+        self.count(annotations.len());
+        for annotation in annotations {
+            self.named_node(&annotation.property);
+            self.opt_text(annotation.variable.as_deref());
+            self.count(annotation.default_values.len());
+            for value in &annotation.default_values {
+                self.term(value)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Write a shape's per-constraint reifier annotations, in the canonical order
     /// the parser keeps them (by constraint).
     fn constraint_annotations(&mut self, annotations: &[ConstraintAnnotation]) {
@@ -1201,11 +1219,13 @@ impl AstWriter {
                 select,
                 messages,
                 severity,
+                annotations,
             } => {
                 self.tag(22);
                 self.text(select);
                 self.messages(messages);
                 self.opt_severity(severity.as_ref());
+                self.result_annotations(annotations)?;
             }
             Constraint::Equals(path) => {
                 self.tag(23);
@@ -1266,6 +1286,7 @@ impl AstWriter {
                 validator,
                 messages,
                 severity,
+                annotations,
             } => {
                 self.tag(30);
                 self.named_node(component);
@@ -1278,6 +1299,7 @@ impl AstWriter {
                 self.component_validator(validator);
                 self.messages(messages);
                 self.opt_severity(severity.as_ref());
+                self.result_annotations(annotations)?;
             }
             Constraint::MinListLength(length) => {
                 self.tag(31);
@@ -1853,6 +1875,43 @@ impl<'a> AstReader<'a> {
         Ok(messages)
     }
 
+    /// Read a SPARQL executable's result annotations, refusing a list the parser
+    /// could not have produced: out of canonical order or repeated, a variable
+    /// that is not a SPARQL variable name, or default values out of canonical
+    /// order or repeated.
+    fn result_annotations(
+        &mut self,
+    ) -> Result<Vec<crate::shapes::ResultAnnotation>, ShapesProductError> {
+        let annotations = self.seq(|reader| {
+            Ok(crate::shapes::ResultAnnotation {
+                property: reader.named_node()?,
+                variable: reader.opt_text()?,
+                default_values: reader.seq(Self::term)?,
+            })
+        })?;
+        let values_canonical = annotations.iter().all(|annotation| {
+            annotation.default_values.windows(2).all(|pair| {
+                crate::term::canonical_cmp(&pair[0], &pair[1]) == std::cmp::Ordering::Less
+            })
+        });
+        let variables_legal = annotations.iter().all(|annotation| {
+            annotation
+                .variable
+                .as_deref()
+                .is_none_or(purrdf_sparql_algebra::lexer::is_varname)
+        });
+        let mut canonical = annotations.clone();
+        crate::result_annotations::sort(&mut canonical);
+        if canonical != annotations || !values_canonical || !variables_legal {
+            return Err(malformed(
+                "this product carries a result-annotation list the shapes parser could not have \
+                 written (out of canonical order, repeated, or naming no SPARQL variable); \
+                 re-prepare the product from its shapes graph",
+            ));
+        }
+        Ok(annotations)
+    }
+
     /// Read a shape's per-constraint reifier annotations, refusing a list the
     /// parser could not have produced: out of canonical order, naming a
     /// constraint past the `constraints` the shape holds, naming the reifier
@@ -2203,6 +2262,7 @@ impl<'a> AstReader<'a> {
                 select: self.text()?,
                 messages: self.messages()?,
                 severity: self.opt_severity()?,
+                annotations: self.result_annotations()?,
             },
             23 => Constraint::Equals(self.path()?),
             24 => Constraint::Disjoint(self.path()?),
@@ -2237,6 +2297,7 @@ impl<'a> AstReader<'a> {
                 validator: self.component_validator()?,
                 messages: self.messages()?,
                 severity: self.opt_severity()?,
+                annotations: self.result_annotations()?,
             },
             31 => Constraint::MinListLength(self.uint()?),
             32 => Constraint::MaxListLength(self.uint()?),

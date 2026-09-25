@@ -1221,7 +1221,13 @@ fn unexpected_character(c: char) -> String {
 ///
 /// Note that neither half admits `'-'`, which `PN_CHARS` does — `?a-b` is three
 /// tokens, not one variable.
-pub(crate) fn is_varname(name: &str) -> bool {
+///
+/// Public because a variable name also arrives from outside query text — a SHACL
+/// parameter's local name, a SHACL-SPARQL `sh:annotationVarName` — and a caller
+/// deciding whether such a name can ever be bound needs the grammar's answer, not
+/// an approximation of it.
+#[must_use]
+pub fn is_varname(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;

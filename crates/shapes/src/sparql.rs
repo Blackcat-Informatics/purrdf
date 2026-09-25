@@ -131,6 +131,7 @@ pub fn eval_sparql_constraint(
     source_shape: &Term,
     severity: &Severity,
     messages: &[Literal],
+    annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -145,6 +146,7 @@ pub fn eval_sparql_constraint(
         source_shape,
         severity,
         messages,
+        annotations,
         shapes_graph_iri,
         current_shape,
     )
@@ -164,6 +166,7 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     source_shape: &Term,
     severity: &Severity,
     messages: &[Literal],
+    annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -192,6 +195,10 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     let project = |solutions: &InternedSolutions<'_, '_, D>| {
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
+        // The column of each result annotation's variable, resolved once per
+        // solution set; empty (and allocation-free) for the common constraint that
+        // declares none.
+        let annotation_columns = annotation_columns(annotations, |name| solutions.column(name));
 
         // Message templating (§5.3.3) needs the solution's own bindings, so the
         // buffer is built once and refilled per row — and only when there is a
@@ -242,6 +249,20 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
                 }
                 crate::components::render_message_templates(messages, &template_bindings)
             };
+            // SHACL 1.2 SPARQL Extensions, "Annotation Properties": the solution's
+            // binding of each annotation's variable, or its defaults when unbound.
+            // `$this` is pre-bound whether or not the query projects it, so an
+            // annotation reading `this` sees the focus node exactly as a message
+            // template does.
+            let annotations = crate::result_annotations::annotate(annotations, |name| {
+                annotation_columns
+                    .iter()
+                    .find(|(variable, _)| *variable == name)
+                    .and_then(|(_, column)| column.and_then(|i| solutions.cell(row, i)))
+                    .as_ref()
+                    .map(term_value_to_native)
+                    .or_else(|| (name == "this").then(|| focus.clone()))
+            });
             out.push(ValidationResult {
                 focus_node: focus.clone(),
                 result_path,
@@ -256,12 +277,26 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
                 result_box_roles: vec![],
                 attributions: vec![],
                 details: vec![],
+                annotations,
             });
         }
         Ok(out)
     };
     run_cached_select_with_shacl_prebinding_view(dataset, select, parameters, bind, project)
         .map_err(|e| format!("SPARQLConstraint {e}"))
+}
+
+/// The solution-set column of every result annotation's variable, looked up with
+/// `column`. Empty, and allocation-free, when there are no annotations.
+pub(crate) fn annotation_columns(
+    annotations: &[crate::shapes::ResultAnnotation],
+    column: impl Fn(&str) -> Option<usize>,
+) -> Vec<(&str, Option<usize>)> {
+    annotations
+        .iter()
+        .filter_map(|annotation| annotation.variable.as_deref())
+        .map(|variable| (variable, column(variable)))
+        .collect()
 }
 
 /// Evaluate a single SPARQL scalar expression against `dataset`, with `args`
@@ -2316,6 +2351,7 @@ mod tests {
             &dummy_shape(),
             &Severity::Violation,
             &[],
+            &[],
             None,
             None,
         )
@@ -2337,6 +2373,7 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
+            &[],
             &[],
             None,
             None,
@@ -2385,6 +2422,7 @@ mod tests {
             &dummy_shape(),
             &Severity::Violation,
             &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
@@ -2423,6 +2461,7 @@ mod tests {
             &dummy_shape(),
             &Severity::Violation,
             &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
@@ -2449,6 +2488,7 @@ mod tests {
             &dummy_shape(),
             &Severity::Violation,
             &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
@@ -2480,6 +2520,7 @@ mod tests {
             &dummy_shape(),
             &Severity::Violation,
             &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
@@ -2514,6 +2555,7 @@ mod tests {
             &dummy_shape(),
             &Severity::Violation,
             &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )
@@ -2553,6 +2595,7 @@ mod tests {
             &dummy_shape(),
             &Severity::Violation,
             &[Literal::new_simple_literal(message.as_str())],
+            &[],
             None,
             None,
         )

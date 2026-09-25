@@ -53,6 +53,14 @@ pub const PROP_SHACL_SEVERITY: &str = "shaclSeverity";
 /// has no message or exactly one untagged `xsd:string` message.
 pub const PROP_SHACL_MESSAGES: &str = "shaclMessages";
 
+/// A result property carrying the SHACL result's SHACL-SPARQL result annotations
+/// (`sh:resultAnnotation`, SHACL 1.2 SPARQL Extensions, "Annotation
+/// Properties"): an array of `{"property": IRI, "value": term}` objects in the
+/// report's canonical order, each `value` the RDF term in N-Triples syntax so an
+/// IRI, a blank node, a literal's datatype and language, and a triple term all
+/// survive. Present only when the result carries at least one annotation.
+pub const PROP_SHACL_RESULT_ANNOTATIONS: &str = "shaclResultAnnotations";
+
 /// The run-level property carrying the SHACL report's `sh:conforms`.
 ///
 /// A SARIF log alone cannot say whether the data conforms: `sh:Debug` and
@@ -328,6 +336,23 @@ fn result_to_sarif(
     };
     if !text_carries_all {
         properties.insert(PROP_SHACL_MESSAGES, shacl_messages(&result.messages));
+    }
+    if !result.annotations.is_empty() {
+        properties.insert(
+            PROP_SHACL_RESULT_ANNOTATIONS,
+            serde_json::Value::Array(
+                result
+                    .annotations
+                    .iter()
+                    .map(|(property, value)| {
+                        let mut entry = serde_json::Map::new();
+                        entry.insert("property".to_owned(), property.as_str().into());
+                        entry.insert("value".to_owned(), value.to_string().into());
+                        serde_json::Value::Object(entry)
+                    })
+                    .collect(),
+            ),
+        );
     }
 
     // Primary location: the focus node, with a physical span when the source is
@@ -718,6 +743,7 @@ mod tests {
             result_box_roles: vec![],
             attributions: vec![],
             details: vec![],
+            annotations: vec![],
         }
     }
 
@@ -891,6 +917,58 @@ mod tests {
                 .collect();
             assert!(languages.contains(&Some("en")) && languages.contains(&Some("de")));
         }
+    }
+
+    /// A result's SHACL-SPARQL result annotations reach the SARIF property bag,
+    /// each property with its value in N-Triples syntax; a result without any
+    /// carries no such property.
+    #[test]
+    fn sarif_carries_result_annotations() {
+        let mut annotated = result(
+            "http://www.w3.org/ns/shacl#SPARQLConstraintComponent",
+            Severity::Violation,
+            None,
+        );
+        annotated.annotations = vec![
+            (
+                NamedNode::from("http://example.org/ns#label"),
+                purrdf_shapes::term::Term::Literal(Literal::new_language_tagged_literal_unchecked(
+                    "dringend", "de",
+                )),
+            ),
+            (
+                NamedNode::from("http://example.org/ns#seen"),
+                purrdf_shapes::term::Term::NamedNode(NamedNode::from("http://example.org/ns#M")),
+            ),
+        ];
+        let plain = result(
+            "http://www.w3.org/ns/shacl#SPARQLConstraintComponent",
+            Severity::Violation,
+            None,
+        );
+        let report = ValidationReport::from_results(
+            vec![annotated, plain],
+            purrdf_shapes::report::ConformanceDisallows::default(),
+        );
+        let log = build_report_sarif(&report, &SarifOptions::default());
+        let bags: Vec<Option<&serde_json::Value>> = log.runs[0]
+            .results
+            .iter()
+            .map(|r| r.properties.0.get(PROP_SHACL_RESULT_ANNOTATIONS))
+            .collect();
+        assert_eq!(bags.iter().filter(|bag| bag.is_none()).count(), 1);
+        let carried = bags
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("the annotated result carries its annotations");
+        assert_eq!(
+            carried,
+            &serde_json::json!([
+                {"property": "http://example.org/ns#label", "value": "\"dringend\"@de"},
+                {"property": "http://example.org/ns#seen", "value": "<http://example.org/ns#M>"},
+            ])
+        );
     }
 
     #[test]

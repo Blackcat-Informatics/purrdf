@@ -36,7 +36,10 @@ use crate::py_store::PyStore;
 /// - `"results"` — list of dicts, each with keys:
 ///   `"focus"`, `"path"`, `"value"`, `"severity"`, `"component"`,
 ///   `"source_shape"`, `"messages"` (every `sh:resultMessage`, each a dict with
-///   `"text"` and its `"language"` / `"direction"` / `"datatype"` when present).
+///   `"text"` and its `"language"` / `"direction"` / `"datatype"` when present),
+///   and, when the result carries SHACL-SPARQL result annotations
+///   (`sh:resultAnnotation`), `"annotations"`: a list of `(property IRI, value)`
+///   tuples, each value the RDF term in N-Triples syntax.
 ///
 /// `shapes_base` is the base IRI the SHAPES document's relative IRI references resolve
 /// against. This binding is handed a string and so has no retrieval IRI of its own;
@@ -90,6 +93,9 @@ fn validate(
         d.set_item("component", r.source_constraint_component.as_str())?;
         d.set_item("source_shape", r.source_shape.to_string())?;
         d.set_item("messages", messages_list(py, &r.messages)?)?;
+        if !r.annotations.is_empty() {
+            d.set_item("annotations", annotations_list(&r.annotations))?;
+        }
         if !r.source_box_roles.is_empty() {
             let roles: Vec<&str> = r
                 .source_box_roles
@@ -119,6 +125,17 @@ fn validate(
     out.set_item("results", results)?;
 
     Ok(out.into_any().unbind())
+}
+
+/// A result's SHACL-SPARQL result annotations as `(property IRI, value)` pairs,
+/// each value the RDF term in N-Triples syntax, in the report's canonical order.
+fn annotations_list(
+    annotations: &[(purrdf_shapes::term::NamedNode, purrdf_shapes::term::Term)],
+) -> Vec<(String, String)> {
+    annotations
+        .iter()
+        .map(|(property, value)| (property.as_str().to_owned(), value.to_string()))
+        .collect()
 }
 
 /// A result's messages as Python: one dict per `sh:resultMessage` literal, in the
@@ -159,13 +176,17 @@ fn messages_list<'py>(
 /// Entail a data graph (N-Triples) under a shapes graph (Turtle), returning the
 /// materialized dataset as a canonical N-Triples string.
 ///
-/// The entailment twin of [`validate`]: it applies every active SHACL-AF
-/// `sh:rule` (`sh:TripleRule` / `sh:SPARQLRule`) to a fixpoint and returns the
-/// base graph plus every inferred triple, serialized as deterministic N-Triples.
+/// The entailment twin of [`validate`]: it runs the shapes graph's default rule
+/// set (`sh:TripleRule` / `sh:SPARQLRule`) as SHACL 1.2 Inference Rules executes
+/// it — layer by layer in `sh:layer` order, each layer's `sh:runOnce` rules once
+/// and its iterating rules while an iteration infers a new triple, in `sh:order`
+/// groups — and returns the base graph plus every inferred triple, serialized as
+/// deterministic N-Triples.
 ///
 /// Raises `ValueError` if either graph fails to parse or if rule application
-/// fails (an illegal head term, an unresolvable `sh:condition`, or a rule set that
-/// does not reach a fixpoint).
+/// fails (an illegal head term, an unresolvable `sh:condition`, an unregistered
+/// `sh:ruleProcessor`, or a rule set that passes the engine's term-generating
+/// round limit or another fixed ceiling).
 ///
 /// # One boundary, three bindings
 ///
@@ -573,6 +594,9 @@ impl PyValidationReport {
             d.set_item("component", r.source_constraint_component.as_str())?;
             d.set_item("source_shape", r.source_shape.to_string())?;
             d.set_item("messages", messages_list(py, &r.messages)?)?;
+            if !r.annotations.is_empty() {
+                d.set_item("annotations", annotations_list(&r.annotations))?;
+            }
             if !r.source_box_roles.is_empty() {
                 let roles: Vec<&str> = r
                     .source_box_roles

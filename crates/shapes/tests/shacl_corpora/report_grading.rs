@@ -32,7 +32,12 @@
 //!   graph", W3C `core/misc/message-001`). The comparison is EXACT: the produced
 //!   result's message set — each literal with its language tag, direction and
 //!   datatype — must equal the expected set. A result the expected report states
-//!   no message for is not graded on messages.
+//!   no message for is not graded on messages; and
+//! * every SHACL-SPARQL result annotation it mentions — a predicate of an
+//!   expected result outside `rdf:type` and the SHACL namespaces — must be
+//!   carried the same way: the produced result with the same tuple has EXACTLY
+//!   the expected `(property, value)` set (SHACL 1.2 SPARQL Extensions,
+//!   "Annotation Properties").
 //!
 //! Every function here returns a verdict; none asserts one. The harness decides
 //! what a verdict means against its ledger.
@@ -141,6 +146,32 @@ fn grade_report_details(tc: &W3cCase, report: &ValidationReport) -> Result<(), S
             return Err(format!(
                 "no produced result {tuple:?} carries exactly the expected sh:resultMessage \
                  set {messages:?}; the results with that tuple carry {produced:?}"
+            ));
+        };
+        unclaimed.swap_remove(position);
+    }
+    // The same claim for result annotations.
+    let mut unclaimed: Vec<(Tuple, BTreeSet<(String, String)>)> = report
+        .results
+        .iter()
+        .map(|r| {
+            (
+                result_tuple(r),
+                r.annotations
+                    .iter()
+                    .map(|(property, value)| (format!("<{}>", property.as_str()), norm(value)))
+                    .collect(),
+            )
+        })
+        .collect();
+    for (tuple, annotations) in &tc.expected_annotations {
+        let Some(position) = unclaimed
+            .iter()
+            .position(|(produced, carried)| produced == tuple && carried == annotations)
+        else {
+            return Err(format!(
+                "no produced result {tuple:?} carries exactly the expected result annotations \
+                 {annotations:?}"
             ));
         };
         unclaimed.swap_remove(position);

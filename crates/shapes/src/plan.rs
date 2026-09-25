@@ -1344,6 +1344,8 @@ pub(crate) enum PlannedConstraint<'a> {
         messages: &'a [crate::term::Literal],
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
+        /// The result annotations the constraint declares.
+        annotations: &'a [crate::shapes::ResultAnnotation],
     },
     /// `sh:equals` — the compared path.
     Equals(PairPath<'a>),
@@ -1432,6 +1434,8 @@ pub(crate) enum PlannedConstraint<'a> {
         messages: &'a [crate::term::Literal],
         /// The severity override.
         severity: &'a Option<crate::report::Severity>,
+        /// The result annotations the selected validator declares.
+        annotations: &'a [crate::shapes::ResultAnnotation],
     },
 }
 
@@ -1594,12 +1598,14 @@ impl<'a> ShapePlan<'a> {
                     select,
                     messages,
                     severity,
+                    annotations,
                 },
                 LoweredConstraint::Sparql,
             ) => PlannedConstraint::Sparql {
                 select,
                 messages,
                 severity,
+                annotations,
             },
             (Constraint::Equals(_), LoweredConstraint::Equals(path)) => {
                 PlannedConstraint::Equals(self.pair_path(path)?)
@@ -1675,6 +1681,7 @@ impl<'a> ShapePlan<'a> {
                     validator,
                     messages,
                     severity,
+                    annotations,
                 },
                 LoweredConstraint::Component,
             ) => PlannedConstraint::Component {
@@ -1684,6 +1691,7 @@ impl<'a> ShapePlan<'a> {
                 validator,
                 messages,
                 severity,
+                annotations,
             },
             (constraint, lowered) => {
                 return Err(lowering_defect(constraint_kind(constraint), lowered));

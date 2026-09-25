@@ -65,13 +65,45 @@ rules first.
 
 A shapes graph is either loaded faithfully or refused. An unknown term, an
 ill-typed parameter value, or a construct the engine does not evaluate is a
-load error that names it, never a constraint that silently drops out. Terms
-the SHACL vocabularies define and the engine refuses by name are the SHACL
-JavaScript Extensions (not part of SHACL 1.2), the SHACL-AF `sh:minus` node
-expression (deprecated by SHACL 1.2 in favour of `shnex:remove`), SPARQL
-`sh:describe` and `sh:update` executables, and SHACL-SPARQL result annotations
-(`sh:resultAnnotation`). Every IRI the engine implements is defined by a W3C
-document; PurRDF mints none.
+load error that names it, never a constraint that silently drops out. The
+same check covers the nodes of SHACL-SPARQL: a SPARQL-based constraint, a
+validator and a `sh:SPARQLTarget` may carry only the terms their
+specification gives them, so an `sh:ask` beside a constraint's `sh:select`,
+or a misspelled `sh:mesage`, is refused rather than ignored.
+
+The terms the SHACL vocabularies define and the engine refuses by name are:
+
+- the SHACL JavaScript Extensions (`sh:js`, `sh:JSConstraint` and the rest),
+  which are not part of SHACL 1.2; this engine has no JavaScript engine to
+  evaluate them;
+- `sh:describe` and `sh:update` on a shape, a node expression, a SPARQL-based
+  constraint, a validator or a rule. The SHACL 1.2 vocabulary declares them as
+  the queries of `sh:SPARQLDescribeExecutable` and `sh:SPARQLUpdateExecutable`,
+  but no SHACL specification executes either class, so in those positions they
+  would otherwise be silently ignored. A resource that is only such an executable, and
+  that no shape reads, loads.
+
+Two terms the engine used to refuse are now evaluated:
+
+- **SHACL-SPARQL result annotations.** A `sh:resultAnnotation` on a
+  SPARQL-based constraint or on a validator of a SPARQL-based constraint
+  component adds its `sh:annotationProperty` to every result the query
+  produces. The value is the solution's binding of `sh:annotationVarName`, or
+  of the property's local name when no name is given. When that variable is
+  unbound, the `sh:annotationValue` defaults are used. An ASK validator's
+  annotations read `this`, `value` and the component's parameters. The
+  annotations appear on `ValidationResult::annotations`, in the report graph,
+  in the SARIF property `shaclResultAnnotations`, in prepared products and in
+  the Python result dicts. A variable name that no SPARQL query could bind is
+  refused at load. So is a SHACL report property such as `sh:focusNode` used
+  as the annotation property.
+- **`sh:minus`.** The SHACL Advanced Features 1.1 minus expression,
+  `[ sh:nodes N ; sh:minus M ]`, evaluates exactly as SHACL 1.2's
+  `[ shnex:nodes N ; shnex:remove M ]`: the nodes of N not in M, in N's order.
+  Its `sh:nodes` is required.
+
+Every IRI the engine implements is defined by a W3C document; PurRDF mints
+none.
 
 The W3C SHACL 1.0 `data-shapes` suite passes clean (129/129, zero ledgered
 gaps at the time of writing), and so does the W3C SHACL 1.2 suite (547/547);
@@ -594,6 +626,8 @@ print(report["results"])   # list of violation dicts
 Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
 `component`, `source_shape`, and `messages` (every `sh:resultMessage`, each a
 dict with `text` and its `language` / `direction` / `datatype` when present).
+A result that carries SHACL-SPARQL result annotations also has `annotations`, a
+list of tuples, each a property IRI and a value in N-Triples syntax.
 
 ## The report is a dataset
 

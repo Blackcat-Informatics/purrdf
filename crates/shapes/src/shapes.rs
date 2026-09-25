@@ -221,6 +221,33 @@ pub enum ComponentValidator {
     },
 }
 
+/// A SHACL-SPARQL result annotation (`sh:ResultAnnotation`): a property the
+/// validation results of a SPARQL-based constraint or validator carry beyond the
+/// report vocabulary.
+///
+/// SHACL 1.2 SPARQL Extensions, "Annotation Properties": "Any such annotation
+/// property needs to be declared via a value of sh:resultAnnotation at the subject
+/// of the sh:select or sh:ask triple." For each solution, "Use the value of the
+/// property sh:annotationVarName. If no such value exists, use the local name of
+/// the value of sh:annotationProperty as the variable name. If a variable name
+/// could be determined, then the SHACL processor copies the binding for the given
+/// variable as a value for the property specified using sh:annotationProperty into
+/// the validation result that is being produced for the current solution. If the
+/// variable has no binding in the result set solution, then the values of
+/// sh:annotationValue are used, if present."
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultAnnotation {
+    /// The annotation property (`sh:annotationProperty`, exactly one IRI).
+    pub property: NamedNode,
+    /// The SPARQL variable the value is copied from: `sh:annotationVarName`, or
+    /// else the local name of [`Self::property`]; `None` when neither names a
+    /// SPARQL variable, so only [`Self::default_values`] apply.
+    pub variable: Option<String>,
+    /// The `sh:annotationValue` values, used when the variable is unbound in a
+    /// solution, in canonical term order.
+    pub default_values: Vec<Term>,
+}
+
 /// How `sh:closed` decides the properties a value node may carry (SHACL 1.2
 /// Core §7.9.1).
 #[derive(Debug, Clone)]
@@ -456,6 +483,9 @@ pub enum Constraint {
         /// Optional per-constraint severity override (from `sh:severity` on the
         /// constraint blank node).
         severity: Option<Severity>,
+        /// The result annotations the constraint node declares
+        /// (`sh:resultAnnotation`), in canonical order; empty for none.
+        annotations: Vec<ResultAnnotation>,
     },
     /// `sh:equals <path>` (SHACL 1.2 Core §7.6.1) — the value node set must equal
     /// the set of nodes reachable from the same focus node along the path. An IRI
@@ -594,6 +624,9 @@ pub enum Constraint {
         messages: Vec<Literal>,
         /// Optional severity override (shape → validator → component).
         severity: Option<Severity>,
+        /// The result annotations the selected validator declares
+        /// (`sh:resultAnnotation`), in canonical order; empty for none.
+        annotations: Vec<ResultAnnotation>,
     },
 }
 

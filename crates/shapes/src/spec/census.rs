@@ -229,8 +229,8 @@ const fn non_validating(iri: &'static str) -> CensusRow {
 }
 
 /// Why a SHACL JavaScript Extensions term is refused.
-const JS: &str = "SHACL JavaScript Extensions are not part of SHACL 1.2 and are not evaluated by \
-     this engine";
+const JS: &str = "SHACL JavaScript Extensions are not part of SHACL 1.2, and this engine has no \
+     JavaScript engine to evaluate them";
 
 /// Every term the spec symbol table has no row for, classified by hand. Each is
 /// a term SHACL 1.2 Core, Node Expressions, SPARQL Extensions or Rules, SHACL
@@ -339,51 +339,46 @@ static EXPLICIT: &[CensusRow] = &[
     structural(sh::LIST_PARAMETER_EXPRESSION, Role::Declaration),
     structural(sh::BODY_EXPRESSION, Role::Declaration),
     structural(sh::THIS, Role::NodeExpression),
-    unimplemented(
-        sh_iri!("minus"),
-        "the SHACL Advanced Features sh:minus node expression is not evaluated; SHACL 1.2 \
-         Node Expressions replaces it by shnex:remove",
-    ),
     // ── SPARQL executables (SHACL 1.2 SPARQL Extensions) ──
     structural(sh_iri!("SPARQLExecutable"), Role::Declaration),
     structural(sh_iri!("SPARQLAskExecutable"), Role::Declaration),
     structural(sh::ASK, Role::Declaration),
     structural(sh_iri!("SPARQLConstructExecutable"), Role::Declaration),
+    // `sh:describe` and `sh:update` are declared vocabulary with no processing
+    // semantics anywhere in SHACL 1.2. `shacl.ttl` declares "sh:describe … rdfs:comment
+    // 'The SPARQL DESCRIBE to execute.' ; rdfs:domain sh:SPARQLDescribeExecutable"
+    // and "sh:update … rdfs:comment 'The SPARQL UPDATE to execute.' ; rdfs:domain
+    // sh:SPARQLUpdateExecutable", each executable class only "a rdfs:Class …
+    // rdfs:subClassOf sh:SPARQLExecutable"; and no SHACL 1.2 specification — Core,
+    // SPARQL Extensions, Node Expressions, Inference Rules, UI, Profiling, Compact
+    // Syntax, nor the SPARQL 1.2 RL rule language — names either term or class in its
+    // text (nor do SHACL 1.0, SHACL Advanced Features 1.0 and the 1.1 draft, or the
+    // SHACL JavaScript Extensions), so no validator, constraint, target, function or
+    // rule executes one. They
+    // are therefore declaration vocabulary like the executable classes: a
+    // `sh:SPARQLUpdateExecutable` resource the loader never reads loads, and on a
+    // shape, a node expression, a SPARQL-based constraint, a validator or a rule —
+    // every node the loader reads — the term is refused by position, because it
+    // would be silently ignored there.
     structural(sh_iri!("SPARQLDescribeExecutable"), Role::Declaration),
-    unimplemented(
-        sh_iri!("describe"),
-        "SPARQL DESCRIBE executables are not evaluated",
-    ),
+    structural(sh::DESCRIBE, Role::Declaration),
     structural(sh_iri!("SPARQLSelectExecutable"), Role::Declaration),
     structural(sh_iri!("SPARQLUpdateExecutable"), Role::Declaration),
-    unimplemented(
-        sh_iri!("update"),
-        "SPARQL UPDATE executables are not evaluated",
-    ),
+    structural(sh::UPDATE, Role::Declaration),
     structural(sh_iri!("PrefixDeclaration"), Role::Prefixes),
     structural(sh::DECLARE, Role::Prefixes),
     structural(sh::PREFIX, Role::Prefixes),
     structural(sh::NAMESPACE, Role::Prefixes),
-    unimplemented(
-        sh_iri!("resultAnnotation"),
-        "SHACL-SPARQL result annotations are not produced",
-    ),
-    unimplemented(
-        sh_iri!("ResultAnnotation"),
-        "SHACL-SPARQL result annotations are not produced",
-    ),
-    unimplemented(
-        sh_iri!("annotationProperty"),
-        "SHACL-SPARQL result annotations are not produced",
-    ),
-    unimplemented(
-        sh_iri!("annotationValue"),
-        "SHACL-SPARQL result annotations are not produced",
-    ),
-    unimplemented(
-        sh_iri!("annotationVarName"),
-        "SHACL-SPARQL result annotations are not produced",
-    ),
+    // SHACL 1.2 SPARQL Extensions, "Annotation Properties": "Any such annotation
+    // property needs to be declared via a value of sh:resultAnnotation at the subject
+    // of the sh:select or sh:ask triple." Read on SPARQL-based constraints and
+    // validators (`crate::result_annotations`), and copied into every result their
+    // query produces.
+    structural(sh::RESULT_ANNOTATION, Role::Declaration),
+    structural(sh::RESULT_ANNOTATION_CLASS, Role::Declaration),
+    structural(sh::ANNOTATION_PROPERTY, Role::Declaration),
+    structural(sh::ANNOTATION_VALUE, Role::Declaration),
+    structural(sh::ANNOTATION_VAR_NAME, Role::Declaration),
     // ── Non-validating shape characteristics (Core §5.7) ──
     non_validating(sh_iri!("agentInstruction")),
     non_validating(sh_iri!("codeIdentifier")),
@@ -498,6 +493,21 @@ fn build() -> Vec<CensusRow> {
         push(vocabulary(severity));
     }
     rows
+}
+
+/// The clause a refusal of `iri` appends when `iri` is one of the declared terms
+/// no SHACL specification gives processing semantics (`sh:describe`,
+/// `sh:update`), so the author is told why the term has no place anywhere the
+/// loader reads; empty for every other term.
+#[must_use]
+pub fn no_processing_note(iri: &str) -> &'static str {
+    match iri {
+        sh::DESCRIBE | sh::UPDATE => {
+            " (the SHACL 1.2 vocabulary declares it only as the query of a SPARQL executable \
+             class, and no SHACL specification executes that class anywhere)"
+        }
+        _ => "",
+    }
 }
 
 /// Every classified term, one row per IRI.

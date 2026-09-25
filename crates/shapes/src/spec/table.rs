@@ -982,6 +982,25 @@ pub(crate) static KEY_ALIASES: &[KeyAlias] = &[
     af(sh::MAX, AliasRole::Primary(ExprKind::Max)),
     af(sh::SUM, AliasRole::Primary(ExprKind::Sum)),
     af(sh::EXISTS, AliasRole::Primary(ExprKind::Exists)),
+    // SHACL Advanced Features 1.1 (Community Group draft), "Minus Expressions": "A
+    // minus expression is a blank node with exactly one value for the property
+    // sh:minus which is a well-formed node expression and exactly one value for the
+    // property sh:nodes which is a well-formed node expression." Its summary row
+    // reads "Blank node with sh:minus and sh:nodes: The input nodes except those
+    // that are in another 'minus' list", and its example — `sh:nodes [ sh:path
+    // ex:children ] ; sh:minus [ sh:path ex:sons ]`, "returns all values of the
+    // property ex:children except those that are also values of ex:sons", the
+    // SPARQL `$this ex:children ?result . MINUS { $this ex:sons ?result . }` — fixes
+    // the direction: the output is the `sh:nodes` nodes minus the `sh:minus` nodes.
+    // (The draft's evaluation sentence names N the `sh:minus` value and M the
+    // `sh:nodes` value and then says "in Eval(N, $this) but not in Eval(M, $this)",
+    // the reverse of its own summary, example and SPARQL; the three agree and are
+    // what is implemented.) That is SHACL 1.2 Node Expressions' remove expression
+    // exactly: "The output nodes of the remove expression are the nodes in N except
+    // those that are also in M, preserving the order of N", N from `shnex:nodes`
+    // and M from `shnex:remove` — so `sh:minus` is the `shnex:remove` key and
+    // `sh:nodes` its required input operand.
+    af(sh::MINUS, AliasRole::Primary(ExprKind::Remove)),
     af(sh::NODES, AliasRole::Operand),
     af(sh::THEN, AliasRole::Operand),
     af(sh::ELSE, AliasRole::Operand),

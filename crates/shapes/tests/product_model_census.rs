@@ -90,7 +90,7 @@ const CENSUS_ROOT: &str = "Shapes";
 /// Checked for equality against the closure in [`census_closure_is_complete`], so
 /// this list cannot go stale in either direction — a reachable type missing from it
 /// fails, and a row here that the model no longer reaches fails too.
-const CENSUS_TYPES: [&str; 32] = [
+const CENSUS_TYPES: [&str; 33] = [
     "AnnotatedConstraint",
     "ArgKey",
     "BoxRoleVocab",
@@ -109,6 +109,7 @@ const CENSUS_TYPES: [&str; 32] = [
     "OrderKey",
     "Path",
     "PropertyShape",
+    "ResultAnnotation",
     "Rule",
     "RuleBody",
     "RuleGraph",
