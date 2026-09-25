@@ -389,6 +389,17 @@ pub enum Constraint {
     /// `sh:memberShape <shape>` (SHACL 1.2 Core §4.9.1): every value node is a
     /// SHACL list whose every member conforms to the shape.
     MemberShape(Box<Shape>),
+    /// `sh:singleLine true` (SHACL 1.2 Core §7.4.4): no literal value node has a
+    /// lexical form containing a line break (form feed, carriage return, line
+    /// feed or vertical tab). `false` checks nothing.
+    SingleLine(bool),
+    /// One `sh:rootClass` value (SHACL 1.2 Core §7.9.4): a root class IRI (one
+    /// member) or a SHACL list of them. Every value node is an IRI that is one of
+    /// the roots or reaches one through `rdfs:subClassOf*` in the data graph.
+    RootClass(Vec<NamedNode>),
+    /// `sh:someValue <shape>` (SHACL 1.2 Core §7.8.3): at least one value node
+    /// conforms to the shape.
+    SomeValue(Box<Shape>),
     /// A SHACL-SPARQL custom constraint component usage.
     ///
     /// Emitted when a shape node carries values for all required parameters of a

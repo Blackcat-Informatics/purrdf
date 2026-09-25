@@ -328,6 +328,39 @@ impl Parser<'_> {
             constraints.push(Constraint::MemberShape(Box::new(inner)));
         }
 
+        // sh:singleLine — SHACL 1.2 Core §7.4.4: "The values of sh:singleLine in a
+        // shape are literals with datatype xsd:boolean. A shape has at most one
+        // value for sh:singleLine" (the cardinality check has enforced the second).
+        for t in self.objects_of(id, sh::SINGLE_LINE) {
+            let flag = boolean_value(&t).ok_or_else(|| {
+                format!("sh:singleLine on shape {id} must be an xsd:boolean literal, got {t}")
+            })?;
+            constraints.push(Constraint::SingleLine(flag));
+        }
+
+        // sh:rootClass — SHACL 1.2 Core §7.9.4: "The values of sh:rootClass in a
+        // shape are either IRIs or blank nodes that are well-formed SHACL lists
+        // where all members are IRIs." Each value is one constraint, sorted for
+        // determinism.
+        let mut root_classes: Vec<Vec<NamedNode>> = Vec::new();
+        for value in self.objects_of(id, sh::ROOT_CLASS) {
+            root_classes.push(self.iri_or_iri_list(&value, id, sh::ROOT_CLASS)?);
+        }
+        root_classes.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
+        for roots in root_classes {
+            constraints.push(Constraint::RootClass(roots));
+        }
+
+        // sh:someValue — SHACL 1.2 Core §7.8.3: "The values of sh:someValue in a
+        // shape must be well-formed shapes." Parsed as `sh:node` is: an argument
+        // carrying `sh:path` is an inline property shape.
+        let mut some_value_refs: Vec<Term> = self.objects_of(id, sh::SOME_VALUE);
+        crate::term::sort_terms_canonical(&mut some_value_refs);
+        for some_value_ref in some_value_refs {
+            let inner = self.parse_inline_shape(some_value_ref)?;
+            constraints.push(Constraint::SomeValue(Box::new(inner)));
+        }
+
         // sh:and / sh:or / sh:xone — each is an RDF list of shape nodes
         let mut and_lists: Vec<Term> = self.objects_of(id, sh::AND);
         crate::term::sort_terms_canonical(&mut and_lists);
@@ -1844,9 +1877,10 @@ fn iri_list_key(members: &[NamedNode]) -> Vec<&str> {
 }
 
 impl Parser<'_> {
-    /// One `sh:class` / `sh:datatype` value: an IRI (a one-member set), or a blank
-    /// node that is a well-formed SHACL list whose members are all IRIs (SHACL 1.2
-    /// Core §4.1.1 / §4.1.2). Anything else is refused, naming the value.
+    /// One `sh:class` / `sh:datatype` / `sh:rootClass` value: an IRI (a one-member
+    /// set), or a blank node that is a well-formed SHACL list whose members are all
+    /// IRIs (SHACL 1.2 Core §4.1.1 / §4.1.2 / §7.9.4). Anything else is refused,
+    /// naming the value.
     fn iri_or_iri_list(
         &self,
         value: &Term,

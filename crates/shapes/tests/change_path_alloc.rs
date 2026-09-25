@@ -596,6 +596,12 @@ impl Emit<'_> {
         self.prop(predicate, next);
     }
 
+    /// Declare `subject rdfs:subClassOf class`.
+    fn subclass(&mut self, subject: TermId, class: TermId) {
+        let predicate = self.builder.intern_iri(RDFS_SUBCLASS_OF);
+        self.builder.push_quad(subject, predicate, class, None);
+    }
+
     /// Attach a per-focus-node target node typed `ex:Target`, returning it.
     fn target(&mut self, predicate: &str) -> TermId {
         let target = self.scoped("target");
@@ -1201,6 +1207,50 @@ const CASES: &[ConstraintCase] = &[
                 emit.scoped("b")
             };
             emit.list("items", &[a, b]);
+        },
+    },
+    ConstraintCase {
+        name: "single_line",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:label ; sh:singleLine true ] .",
+        emit: |emit, violating| {
+            if violating {
+                emit.text("label", "two\nlines");
+            } else {
+                emit.text("label", "one line");
+            }
+        },
+    },
+    ConstraintCase {
+        name: "root_class",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:kind ; sh:rootClass ex:Root ] .",
+        emit: |emit, violating| {
+            // A two-step chain per focus node, so the conforming branch walks
+            // `rdfs:subClassOf` transitively rather than matching the root.
+            let kind = emit.scoped("kind");
+            let middle = emit.scoped("middle");
+            emit.subclass(kind, middle);
+            let top = if violating {
+                emit.scoped("elsewhere")
+            } else {
+                emit.iri("Root")
+            };
+            emit.subclass(middle, top);
+            emit.prop("kind", kind);
+        },
+    },
+    ConstraintCase {
+        name: "some_value",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:ref ; sh:someValue [ sh:class ex:Target ] ] .",
+        emit: |emit, violating| {
+            let stray = emit.scoped("stray");
+            emit.classify(stray, "Other");
+            emit.prop("ref", stray);
+            if !violating {
+                emit.target("ref");
+            }
         },
     },
 ];

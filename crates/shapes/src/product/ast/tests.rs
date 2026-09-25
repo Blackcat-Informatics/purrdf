@@ -416,6 +416,9 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         Constraint::MaxListLength(4),
         Constraint::UniqueMembers(true),
         Constraint::MemberShape(Box::new(leaf_shape("MemberShape"))),
+        Constraint::SingleLine(true),
+        Constraint::RootClass(vec![ex("RootA"), ex("RootB")]),
+        Constraint::SomeValue(Box::new(leaf_shape("SomeValue"))),
     ]
 }
 

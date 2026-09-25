@@ -13,8 +13,9 @@
 //!
 //! Also here: SHACL Advanced Features 1.0 graphs (`sh:SPARQLFunction`, `sh:rule`,
 //! the AF node-expression spellings) and every non-validating shape property still
-//! load, and the SHACL 1.2 list-valued `sh:class` / `sh:datatype` / `sh:nodeKind`
-//! and list components answer as the specification says.
+//! load, and the SHACL 1.2 list-valued `sh:class` / `sh:datatype` / `sh:nodeKind`,
+//! the list components, `sh:singleLine`, `sh:rootClass` and `sh:someValue` answer
+//! as the specification says.
 
 use std::sync::Arc;
 
@@ -695,6 +696,281 @@ fn unique_members_and_member_shape_report_their_details() {
         report_text.contains("<http://www.w3.org/ns/shacl#detail>"),
         "{report_text}"
     );
+}
+
+// ── SHACL 1.2 sh:singleLine, sh:rootClass and sh:someValue ───────────────────
+
+/// `(focus node, value)` of every result of `component`, sorted.
+fn component_results(report: &ValidationReport, component: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = report
+        .results
+        .iter()
+        .filter(|r| r.source_constraint_component.as_str() == component)
+        .map(|r| {
+            (
+                r.focus_node.to_string(),
+                r.value
+                    .as_ref()
+                    .map_or_else(String::new, ToString::to_string),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+const SINGLE_LINE: &str = "http://www.w3.org/ns/shacl#SingleLineConstraintComponent";
+const ROOT_CLASS: &str = "http://www.w3.org/ns/shacl#RootClassConstraintComponent";
+const SOME_VALUE: &str = "http://www.w3.org/ns/shacl#SomeValueConstraintComponent";
+
+/// `sh:singleLine true` reports each literal whose lexical form holds a line
+/// feed, carriage return, form feed or vertical tab, with the literal as
+/// `sh:value`; a literal without one conforms, and an IRI is never judged.
+#[test]
+fn single_line_true_reports_each_literal_with_a_line_break() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:x ;
+           sh:property [ sh:path ex:label ; sh:singleLine true ] .";
+    let report = validate(
+        shapes,
+        "ex:x ex:label \"one line\", \"two\\nlines\", \"vertical\\u000Btab\", ex:anIri .",
+    );
+    assert_eq!(
+        component_results(&report, SINGLE_LINE),
+        vec![
+            (
+                "<http://example.org/ns#x>".to_owned(),
+                "\"two\\nlines\"".to_owned()
+            ),
+            (
+                "<http://example.org/ns#x>".to_owned(),
+                "\"vertical\\u000Btab\"".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(report.results.len(), 2);
+    // Neighbour: a literal with no line break conforms.
+    let single = validate(shapes, "ex:x ex:label \"one line\", \"tab\\tis fine\" .");
+    assert!(single.conforms, "{:?}", single.results);
+}
+
+/// `sh:singleLine false` checks nothing: the treatment row that `true` reports
+/// conforms under `false`.
+#[test]
+fn single_line_false_admits_a_line_break() {
+    let data_ttl = "ex:x ex:label \"two\\nlines\" .";
+    let off = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:x ;
+           sh:property [ sh:path ex:label ; sh:singleLine false ] .",
+        data_ttl,
+    );
+    assert!(off.conforms, "{:?}", off.results);
+    let on = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:x ;
+           sh:property [ sh:path ex:label ; sh:singleLine true ] .",
+        data_ttl,
+    );
+    assert_eq!(component_results(&on, SINGLE_LINE).len(), 1);
+}
+
+/// A non-boolean `sh:singleLine` is refused at load; the boolean neighbour loads
+/// and is honoured.
+#[test]
+fn a_non_boolean_single_line_is_refused_and_a_boolean_loads() {
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:x ;
+           sh:property [ sh:path ex:label ; sh:singleLine \"true\" ] .",
+        "singleLine",
+    );
+    let report = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:x ;
+           sh:property [ sh:path ex:label ; sh:singleLine true ] .",
+        "ex:x ex:label \"a\\nb\" .",
+    );
+    assert_eq!(component_results(&report, SINGLE_LINE).len(), 1);
+}
+
+const HIERARCHY: &str = "
+    ex:Animal a rdfs:Class .
+    ex:Mammal rdfs:subClassOf ex:Animal .
+    ex:Dog rdfs:subClassOf ex:Mammal .
+    ex:Plant rdfs:subClassOf ex:Organism .
+    ex:Loop1 rdfs:subClassOf ex:Loop2 .
+    ex:Loop2 rdfs:subClassOf ex:Loop1 .
+";
+
+/// `sh:rootClass` admits the root itself (the reflexive `*`) and every transitive
+/// subclass, and reports each other value node with it as `sh:value`: an IRI
+/// outside the hierarchy (including one on a subclass cycle), a literal and a
+/// blank node.
+#[test]
+fn root_class_admits_the_root_and_its_subclasses_only() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
+           sh:property [ sh:path ex:holds ; sh:rootClass ex:Animal ] .";
+    let conforming = validate(
+        shapes,
+        &format!("{HIERARCHY} ex:zoo ex:holds ex:Animal, ex:Mammal, ex:Dog ."),
+    );
+    assert!(conforming.conforms, "{:?}", conforming.results);
+    let report = validate(
+        shapes,
+        &format!("{HIERARCHY} ex:zoo ex:holds ex:Dog, ex:Plant, ex:Loop1, \"ex:Animal\", [] ."),
+    );
+    let zoo = "<http://example.org/ns#zoo>".to_owned();
+    let mut values: Vec<String> = component_results(&report, ROOT_CLASS)
+        .into_iter()
+        .map(|(focus, value)| {
+            assert_eq!(focus, zoo);
+            value
+        })
+        .collect();
+    values.sort();
+    assert_eq!(values.len(), 4, "{values:?}");
+    assert!(values.iter().any(|v| v.starts_with("_:")), "{values:?}");
+    assert!(values.contains(&"\"ex:Animal\"".to_owned()), "{values:?}");
+    assert!(
+        values.contains(&"<http://example.org/ns#Plant>".to_owned()),
+        "{values:?}"
+    );
+    assert!(
+        values.contains(&"<http://example.org/ns#Loop1>".to_owned()),
+        "{values:?}"
+    );
+    assert_eq!(report.results.len(), 4);
+}
+
+/// A root the data graph never mentions but a value node names is still that
+/// root: the reflexive half needs no `rdfs:subClassOf` edge.
+#[test]
+fn root_class_is_reflexive_without_any_hierarchy() {
+    let report = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
+           sh:property [ sh:path ex:holds ; sh:rootClass ex:Standalone ] .",
+        "ex:zoo ex:holds ex:Standalone .",
+    );
+    assert!(report.conforms, "{:?}", report.results);
+    let control = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
+           sh:property [ sh:path ex:holds ; sh:rootClass ex:Standalone ] .",
+        "ex:zoo ex:holds ex:Other .",
+    );
+    assert_eq!(component_results(&control, ROOT_CLASS).len(), 1);
+}
+
+/// A list value is a set of roots: a value node under ANY of them conforms.
+#[test]
+fn root_class_list_admits_any_root() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
+           sh:property [ sh:path ex:holds ; sh:rootClass ( ex:Animal ex:Organism ) ] .";
+    let report = validate(
+        shapes,
+        &format!("{HIERARCHY} ex:zoo ex:holds ex:Dog, ex:Plant, ex:Loop1 ."),
+    );
+    assert_eq!(
+        component_results(&report, ROOT_CLASS),
+        vec![(
+            "<http://example.org/ns#zoo>".to_owned(),
+            "<http://example.org/ns#Loop1>".to_owned()
+        )]
+    );
+}
+
+/// A literal `sh:rootClass`, or a list holding one, is refused at load; the IRI
+/// and IRI-list neighbours load and are honoured (see the tests above).
+#[test]
+fn an_ill_typed_root_class_is_refused_and_iris_load() {
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
+           sh:property [ sh:path ex:holds ; sh:rootClass \"ex:Animal\" ] .",
+        "rootClass",
+    );
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
+           sh:property [ sh:path ex:holds ; sh:rootClass ( ex:Animal \"ex:Plant\" ) ] .",
+        "rootClass",
+    );
+    loads(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:zoo ;
+           sh:property [ sh:path ex:holds ; sh:rootClass ( ex:Animal ex:Plant ) ] .",
+    );
+}
+
+const DUCKS: &str = "
+    ex:donald a ex:Duck .
+    ex:daisy a ex:Duck .
+    ex:eliza a ex:Cow .
+";
+
+/// `sh:someValue`: one conforming value node among several conforms; a focus
+/// node with none — including one with no value node at all — gets exactly one
+/// result, naming no `sh:value`.
+#[test]
+fn some_value_needs_one_conforming_value_and_reports_once_without_a_value() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:alice, ex:bob, ex:carol ;
+           sh:property [ sh:path ex:tends ; sh:someValue [ sh:class ex:Duck ] ] .";
+    let report = validate(
+        shapes,
+        &format!(
+            "{DUCKS} ex:alice ex:tends ex:eliza, ex:carrot .
+                     ex:bob ex:tends ex:eliza, ex:donald, ex:daisy ."
+        ),
+    );
+    assert_eq!(
+        component_results(&report, SOME_VALUE),
+        vec![
+            ("<http://example.org/ns#alice>".to_owned(), String::new()),
+            ("<http://example.org/ns#carol>".to_owned(), String::new()),
+        ]
+    );
+    assert_eq!(report.results.len(), 2);
+    assert!(report.results.iter().all(|r| r.value.is_none()));
+}
+
+/// On a node shape the one value node is the focus node, so `sh:someValue` asks
+/// what `sh:node` asks.
+#[test]
+fn some_value_on_a_node_shape_judges_the_focus_node() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:donald, ex:eliza ;
+           sh:someValue [ sh:class ex:Duck ] .";
+    let report = validate(shapes, DUCKS);
+    assert_eq!(
+        component_results(&report, SOME_VALUE),
+        vec![("<http://example.org/ns#eliza>".to_owned(), String::new())]
+    );
+}
+
+/// A failure while checking a value node against `sh:someValue` is produced when
+/// no value node conforms, and discarded when one does.
+///
+/// The `sh:someValue` shape is a disjunction whose first member admits a duck
+/// and whose second member calls a function that recurses without bound, so
+/// checking a non-duck FAILS. The focus node tending only a cow therefore makes
+/// validation fail; the focus node tending the cow AND a duck conforms, because
+/// a conforming value node overrides the failure whichever order the two are
+/// checked in.
+#[test]
+fn a_failure_inside_some_value_propagates_unless_a_value_conforms() {
+    let shapes = |targets: &str| {
+        format!(
+            "ex:loop a sh:ListParameterExpressionFunction ;
+               sh:bodyExpression [ ex:loop ( [ shnex:arg 0 ] ) ] ;
+               sh:parameter [ sh:path shnex:arg0 ] .
+             ex:S a sh:NodeShape ; sh:targetNode {targets} ;
+               sh:property [ sh:path ex:tends ; sh:someValue [
+                 sh:or ( [ sh:class ex:Duck ] [ sh:expression [ ex:loop ( sh:this ) ] ] )
+               ] ] ."
+        )
+    };
+    let data_ttl =
+        format!("{DUCKS} ex:alice ex:tends ex:eliza . ex:bob ex:tends ex:eliza, ex:donald .");
+    let error =
+        validate_dataset_with_shapes_graph(&data(&data_ttl), &loads(&shapes("ex:alice")), None)
+            .expect_err("a failure with no conforming value node is produced");
+    assert!(
+        error.contains("64"),
+        "the failure is the recursion bound: {error}"
+    );
+    let report = validate(&shapes("ex:bob"), &data_ttl);
+    assert!(report.conforms, "{:?}", report.results);
 }
 
 // ── SHACL Advanced Features 1.0 and non-validating properties still load ─────

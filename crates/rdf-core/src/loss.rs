@@ -993,7 +993,10 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// all recorded via the shared runtime [`LossLedger`]. `sh:sparql` /
 /// `sh:expression` (SHACL-AF constraints), property-level `sh:not`, and a
 /// `rdfs:range` clash with a value-vocabulary projection are recorded via
-/// `Ctx::record`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
+/// `Ctx::record`, as are the property-level SHACL 1.2 list components
+/// (`sh:minListLength`, `sh:maxListLength`, `sh:uniqueMembers`,
+/// `sh:memberShape`), `sh:rootClass`, `sh:singleLine true`, property-level
+/// `sh:someValue` and a `sh:TripleTerm` alternative of `sh:nodeKind`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
 /// `crates/shapes/src/shapes.rs`) have no `$def` equivalent — the emitter has
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
@@ -1029,6 +1032,30 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          dropped.",
     ),
     (
+        "sh:maxListLength",
+        "A SHACL 1.2 sh:maxListLength constraint bounds the member count of a value that is an \
+         RDF list; the emitted value schema has no projection of an RDF list's members, so the \
+         constraint is dropped.",
+    ),
+    (
+        "sh:memberShape",
+        "A SHACL 1.2 sh:memberShape constraint judges every member of a value that is an RDF \
+         list against a shape; the emitted value schema has no projection of an RDF list's \
+         members, so the constraint is dropped.",
+    ),
+    (
+        "sh:minListLength",
+        "A SHACL 1.2 sh:minListLength constraint bounds the member count of a value that is an \
+         RDF list; the emitted value schema has no projection of an RDF list's members, so the \
+         constraint is dropped.",
+    ),
+    (
+        "sh:nodeKind",
+        "A sh:nodeKind sh:TripleTerm alternative admits an RDF 1.2 triple term, which has no \
+         JSON Schema value representation; that alternative is dropped and the remaining \
+         node kinds are projected.",
+    ),
+    (
         "sh:not",
         "A sh:not negation whose inner shape is not losslessly expressible as a JSON Schema \
          negation (or that appears at property/value position, where negating a base value \
@@ -1041,6 +1068,24 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          express a shape that is not known until validation time, so the constraint is dropped. \
          (This code was recorded by the emitter without being declared here, which made \
          check_ledger_sound reject any ledger containing it; declared now.)",
+    ),
+    (
+        "sh:rootClass",
+        "A SHACL 1.2 sh:rootClass constraint bounds class-valued values by the data graph's \
+         rdfs:subClassOf hierarchy; a closed-world JSON Schema cannot consult that hierarchy, so \
+         the constraint is dropped.",
+    ),
+    (
+        "sh:singleLine",
+        "A SHACL 1.2 sh:singleLine true constraint forbids line breaks in the lexical form of \
+         literal values; the emitted value schema does not project it, so the constraint is \
+         dropped.",
+    ),
+    (
+        "sh:someValue",
+        "A SHACL 1.2 sh:someValue constraint on a property shape requires at least one of the \
+         property's values to conform to a shape; the emitted value schema constrains each value \
+         alone, so the constraint is dropped (on a node shape it is projected as sh:node is).",
     ),
     (
         "sh:sparql",
@@ -1064,6 +1109,12 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
         "A shape targeted only via sh:targetSubjectsOf selects focus nodes by a predicate's \
          subject position, not a class extension; no closed-world JSON Schema $def can be keyed \
          and its constraints are not enforced.",
+    ),
+    (
+        "sh:uniqueMembers",
+        "A SHACL 1.2 sh:uniqueMembers constraint forbids a repeated member in a value that is \
+         an RDF list; the emitted value schema has no projection of an RDF list's members, so \
+         the constraint is dropped.",
     ),
     (
         "value-vocabulary",

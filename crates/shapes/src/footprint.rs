@@ -543,6 +543,15 @@ impl FootprintWalk {
             | Constraint::MaxListLength(_)
             | Constraint::UniqueMembers(_)
             | Constraint::MemberShape(_) => self.record_path_steps(&list_member_path(), &[]),
+            // SHACL 1.2 Core §7.9.4: `sh:rootClass` asks whether the value node
+            // reaches a root through `rdfs:subClassOf*`, reading `rdfs:subClassOf`
+            // on the value node and on every class that chain reaches.
+            Constraint::RootClass(_) => self.record_path_steps(
+                &Path::ZeroOrMore(Box::new(Path::Predicate(NamedNode::new_unchecked(
+                    rdfs::SUB_CLASS_OF,
+                )))),
+                &[],
+            ),
             Constraint::Sparql { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
             Constraint::Component { .. } => self.mark_opaque(OPAQUE_COMPONENT),
             // Value-local: each of these judges a value node's own identity —
@@ -563,7 +572,8 @@ impl FootprintWalk {
             | Constraint::MinInclusive(_)
             | Constraint::MaxInclusive(_)
             | Constraint::MinExclusive(_)
-            | Constraint::MaxExclusive(_) => {}
+            | Constraint::MaxExclusive(_)
+            | Constraint::SingleLine(_) => {}
             // Structural: the reads belong to what these REACH, and the lowering
             // walk reaches it.
             Constraint::Not(_)
@@ -571,6 +581,7 @@ impl FootprintWalk {
             | Constraint::Or(_)
             | Constraint::Xone(_)
             | Constraint::Node(_)
+            | Constraint::SomeValue(_)
             | Constraint::QualifiedValueShape { .. }
             | Constraint::Expression { .. }
             | Constraint::NodeByExpression { .. } => {}

@@ -72,10 +72,15 @@ const TOTAL_CASES: usize = 375;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
-/// the three corpora except the 12 declared `sht:Failure` inputs and the 28 SHACL
+/// the three corpora except the 12 declared `sht:Failure` inputs and the 25 SHACL
 /// 1.2 entries this engine refuses at load (the same partition the product
 /// equivalence harness pins).
-const COMPARED_ON_REPORT: usize = 335;
+///
+/// Moved from 335 to 338 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
+/// became evaluated: `singleLine-001`, `rootClass-001` and `someValue-001` now
+/// load, so their reports are compared too, and the refused-at-load entries went
+/// from 28 to 25.
+const COMPARED_ON_REPORT: usize = 338;
 
 /// One case, reduced to what both parses need.
 struct Input {

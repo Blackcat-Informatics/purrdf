@@ -67,7 +67,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        225,
+        228,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -75,10 +75,18 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unimplemented-component",
         "which is a SHACL 1.2 Core component this engine does not implement",
-        10,
+        7,
         "a well-formed use of a declared SHACL 1.2 Core component this engine does not \
-         evaluate (sh:uniqueValuesFor, sh:rootClass, sh:singleLine, sh:someValue, \
-         sh:subsetOf) is refused rather than silently conforming",
+         evaluate (sh:uniqueValuesFor, sh:subsetOf) is refused rather than silently \
+         conforming",
+    ),
+    (
+        "root-class-value",
+        "rootClass> on shape",
+        1,
+        "SHACL 1.2 Core §7.9.4: \"The values of sh:rootClass in a shape are either IRIs or \
+         blank nodes that are well-formed SHACL lists where all members are IRIs.\" — \
+         shacl-shacl.ttl states no rule for sh:rootClass",
     ),
     (
         "unimplemented-term",
@@ -357,6 +365,7 @@ const MUTATIONS: &[Mutation] = &[
             "lessThan",
             "lessThanOrEquals",
             "severity",
+            "rootClass",
         ],
         rewrite: |_| ("\"not an IRI\"".to_owned(), Vec::new()),
     },
@@ -382,6 +391,7 @@ const MUTATIONS: &[Mutation] = &[
             "pattern",
             "flags",
             "datatype",
+            "singleLine",
         ],
         rewrite: |_| {
             (
@@ -402,6 +412,7 @@ const MUTATIONS: &[Mutation] = &[
             "qualifiedValueShapesDisjoint",
             "reificationRequired",
             "uniqueMembers",
+            "singleLine",
         ],
         rewrite: |_| ("\"yes\"".to_owned(), Vec::new()),
     },
@@ -525,7 +536,16 @@ const BASE_INPUTS: usize = 375;
 /// mutation kind that finds a statement to rewrite): 178 literal-for-IRI, 99
 /// non-integer counts, 148 lists-for-single-values, 33 non-boolean flags and 225
 /// misspelled predicates.
-const MUTANT_INPUTS: usize = 683;
+///
+/// Moved from 683 to 690 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
+/// became evaluated: `singleLine-001`, `rootClass-001` and `someValue-001` now
+/// load, so each is a base both sides accept and is mutated. All three gain a
+/// misspelled predicate (+3). The literal-for-IRI kind, which now also rewrites
+/// `sh:rootClass`, rewrites `rootClass-001`'s root class and the `sh:class` inside
+/// `someValue-001`'s `sh:someValue` shape (+2). The list-for-single-value kind
+/// rewrites `singleLine-001`'s `sh:datatype` (+1), and the non-boolean-flag kind,
+/// which now also rewrites `sh:singleLine`, rewrites its `sh:singleLine` (+1).
+const MUTANT_INPUTS: usize = 690;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -621,11 +641,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 178),
+        ("literal-where-an-IRI-is-required", 180),
         ("non-integer-count", 99),
-        ("list-where-a-single-value-is-required", 148),
-        ("non-boolean-flag", 33),
-        (UNKNOWN_TERM, 225),
+        ("list-where-a-single-value-is-required", 149),
+        ("non-boolean-flag", 34),
+        (UNKNOWN_TERM, 228),
     ]
     .into_iter()
     .collect();

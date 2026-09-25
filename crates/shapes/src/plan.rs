@@ -545,6 +545,18 @@ pub(crate) enum LoweredConstraint {
     UniqueMembers,
     /// `sh:memberShape` — the lowering of the shape every list member must meet.
     MemberShape(Box<LoweredShape>),
+    /// `sh:singleLine` — a scan of the value node's lexical form.
+    SingleLine,
+    /// `sh:rootClass` — the slot holding the dataset identities of the roots (one
+    /// for an IRI value, one per member for a SHACL list value).
+    ///
+    /// A root this data graph does not intern is absent from the resolved set,
+    /// and that is not a loss for the `rdfs:subClassOf+` half of the test: an IRI
+    /// with no dataset identity is the object of no `rdfs:subClassOf` edge. The
+    /// reflexive half compares against the declared IRIs themselves.
+    RootClass(SetSlot),
+    /// `sh:someValue` — the lowering of the shape one value node must meet.
+    SomeValue(Box<LoweredShape>),
     /// A SHACL-SPARQL custom constraint component — the validator is a query.
     Component,
 }
@@ -1128,6 +1140,19 @@ pub(crate) enum PlannedConstraint<'a> {
     UniqueMembers(bool),
     /// `sh:memberShape` — the plan of the shape every list member must meet.
     MemberShape(ShapePlan<'a>),
+    /// `sh:singleLine` — whether literal value nodes must hold no line break.
+    SingleLine(bool),
+    /// `sh:rootClass` — the declared roots and their dataset identities,
+    /// resolved at bind; a value node conforms when it is an IRI that is a root
+    /// or reaches one through `rdfs:subClassOf+`.
+    RootClass {
+        /// The declared root class IRIs (the reflexive half of `rdfs:subClassOf*`).
+        roots: &'a [NamedNode],
+        /// The roots this data graph interns.
+        ids: &'a FastSet<TermId>,
+    },
+    /// `sh:someValue` — the plan of the shape at least one value node must meet.
+    SomeValue(ShapePlan<'a>),
     /// A SHACL-SPARQL custom constraint component usage.
     Component {
         /// The component IRI.
@@ -1188,6 +1213,18 @@ impl<'a> ShapePlan<'a> {
             }
             (Constraint::MemberShape(shape), LoweredConstraint::MemberShape(lowered)) => {
                 PlannedConstraint::MemberShape(self.nested(shape, lowered))
+            }
+            (Constraint::SingleLine(flag), LoweredConstraint::SingleLine) => {
+                PlannedConstraint::SingleLine(*flag)
+            }
+            (Constraint::RootClass(roots), LoweredConstraint::RootClass(slot)) => {
+                PlannedConstraint::RootClass {
+                    roots,
+                    ids: self.binding.set(*slot)?,
+                }
+            }
+            (Constraint::SomeValue(shape), LoweredConstraint::SomeValue(lowered)) => {
+                PlannedConstraint::SomeValue(self.nested(shape, lowered))
             }
             (Constraint::MinCount(n), LoweredConstraint::MinCount) => {
                 PlannedConstraint::MinCount(*n)
@@ -1430,6 +1467,9 @@ fn constraint_kind(constraint: &Constraint) -> &'static str {
         Constraint::MaxListLength(_) => "sh:maxListLength",
         Constraint::UniqueMembers(_) => "sh:uniqueMembers",
         Constraint::MemberShape(_) => "sh:memberShape",
+        Constraint::SingleLine(_) => "sh:singleLine",
+        Constraint::RootClass(_) => "sh:rootClass",
+        Constraint::SomeValue(_) => "sh:someValue",
         Constraint::Component { .. } => "a SHACL-SPARQL constraint component",
     }
 }
@@ -2138,6 +2178,17 @@ fn lower_constraint(
             walk.footprint.leave(saved);
             LoweredConstraint::MemberShape(Box::new(lowered))
         }
+        Constraint::SingleLine(_) => LoweredConstraint::SingleLine,
+        // A plain id set, NOT `class_set_slot`: a root class is compared along
+        // `rdfs:subClassOf`, never used as an `rdf:type` object, so it is no
+        // planned class for target resolution or the class-membership catalog.
+        Constraint::RootClass(roots) => LoweredConstraint::RootClass(
+            walk.set_slot(roots.iter().map(|root| Term::NamedNode(root.clone()))),
+        ),
+        // The shape judges each value node itself, as `sh:node`'s does.
+        Constraint::SomeValue(shape) => {
+            LoweredConstraint::SomeValue(Box::new(lower_shape(shape, walk)))
+        }
         Constraint::Component { .. } => LoweredConstraint::Component,
     }
 }
@@ -2668,7 +2719,8 @@ ex:FlagShape a sh:NodeShape ;
             }
             LoweredConstraint::Not(shape)
             | LoweredConstraint::Node(shape)
-            | LoweredConstraint::MemberShape(shape) => {
+            | LoweredConstraint::MemberShape(shape)
+            | LoweredConstraint::SomeValue(shape) => {
                 collect_shape_class_slots(lowered, shape, out);
             }
             LoweredConstraint::And(shapes)
@@ -2690,6 +2742,8 @@ ex:FlagShape a sh:NodeShape ;
             | LoweredConstraint::MinListLength
             | LoweredConstraint::MaxListLength
             | LoweredConstraint::UniqueMembers
+            | LoweredConstraint::SingleLine
+            | LoweredConstraint::RootClass(_)
             | LoweredConstraint::MinCount
             | LoweredConstraint::MaxCount
             | LoweredConstraint::In(_)
@@ -3046,6 +3100,9 @@ ex:Inner a sh:NodeShape ;
         PlannedConstraint::MaxListLength(_) => "max_list_length",
         PlannedConstraint::UniqueMembers(_) => "unique_members",
         PlannedConstraint::MemberShape(_) => "member_shape",
+        PlannedConstraint::SingleLine(_) => "single_line",
+        PlannedConstraint::RootClass { .. } => "root_class",
+        PlannedConstraint::SomeValue(_) => "some_value",
         PlannedConstraint::Component { .. } => "component",
     }
 
@@ -3091,6 +3148,9 @@ ex:Inner a sh:NodeShape ;
         "or",
         "pattern",
         "qualified_value_shape",
+        "root_class",
+        "single_line",
+        "some_value",
         "sparql",
         "unique_lang",
         "unique_members",

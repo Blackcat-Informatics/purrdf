@@ -51,10 +51,7 @@ const VOCABULARY_FILES: [&str; 3] = [
 /// The SHACL 1.2 Core components the vocabulary declares and this engine does not
 /// evaluate — the declared-vs-implemented gap, pinned by name. A shape using one
 /// of their parameters is a load error, never a silent conformance.
-const UNIMPLEMENTED_DECLARED_COMPONENTS: [&str; 5] = [
-    "http://www.w3.org/ns/shacl#RootClassConstraintComponent",
-    "http://www.w3.org/ns/shacl#SingleLineConstraintComponent",
-    "http://www.w3.org/ns/shacl#SomeValueConstraintComponent",
+const UNIMPLEMENTED_DECLARED_COMPONENTS: [&str; 2] = [
     "http://www.w3.org/ns/shacl#SubsetOfConstraintComponent",
     "http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent",
 ];
@@ -594,27 +591,27 @@ fn a_builtin_redefined_as_a_sparql_function_is_a_duplicate_definition() {
 
 // ── Declared-but-unimplemented components ────────────────────────────────────
 
-const SINGLE_LINE_DECLARATION: &str = r"
-sh:SingleLineConstraintComponent a sh:ConstraintComponent ;
-  sh:parameter sh:SingleLineConstraintComponent-singleLine .
-sh:SingleLineConstraintComponent-singleLine a sh:Parameter ;
-  sh:path sh:singleLine ; sh:datatype xsd:boolean ; sh:maxCount 1 .
+const SUBSET_OF_DECLARATION: &str = r"
+sh:SubsetOfConstraintComponent a sh:ConstraintComponent ;
+  sh:parameter sh:SubsetOfConstraintComponent-subsetOf .
+sh:SubsetOfConstraintComponent-subsetOf a sh:Parameter ;
+  sh:path sh:subsetOf ; sh:nodeKind sh:BlankNodeOrIRI .
 ";
 
-const SINGLE_LINE_SHAPE: &str = r"
+const SUBSET_OF_SHAPE: &str = r"
 ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-  sh:property [ sh:path ex:text ; sh:singleLine true ] .
+  sh:property [ sh:path ex:text ; sh:subsetOf ex:allowed ] .
 ";
 
 #[test]
 fn a_shape_using_an_unimplemented_component_is_refused() {
     for shapes in [
-        SINGLE_LINE_SHAPE.to_owned(),
-        format!("{SINGLE_LINE_DECLARATION}{SINGLE_LINE_SHAPE}"),
+        SUBSET_OF_SHAPE.to_owned(),
+        format!("{SUBSET_OF_DECLARATION}{SUBSET_OF_SHAPE}"),
     ] {
         let error = load_error(&shapes);
         assert!(
-            error.contains("SingleLineConstraintComponent") && error.contains("does not implement"),
+            error.contains("SubsetOfConstraintComponent") && error.contains("does not implement"),
             "{error}"
         );
     }
@@ -626,7 +623,7 @@ fn a_shape_using_an_unimplemented_component_is_refused() {
 fn a_bare_unimplemented_component_declaration_loads() {
     let report = validate(
         &format!(
-            "{SINGLE_LINE_DECLARATION}
+            "{SUBSET_OF_DECLARATION}
              ex:S a sh:NodeShape ; sh:targetNode ex:a ;
                sh:property [ sh:path ex:text ; sh:minCount 1 ] ."
         ),
@@ -637,7 +634,7 @@ fn a_bare_unimplemented_component_declaration_loads() {
         vec!["<http://example.org/ns#a>".to_owned()]
     );
     assert_eq!(
-        linked(SINGLE_LINE_DECLARATION).registered_components,
+        linked(SUBSET_OF_DECLARATION).registered_components,
         Vec::<String>::new()
     );
 }
@@ -648,24 +645,58 @@ fn a_bare_unimplemented_component_declaration_loads() {
 #[test]
 fn a_user_implemented_unimplemented_component_is_evaluated() {
     let shapes = format!(
+        r#"{SUBSET_OF_DECLARATION}
+        sh:SubsetOfConstraintComponent sh:validator [
+          a sh:SPARQLAskValidator ;
+          sh:ask """ASK {{ $this $subsetOf $value }}"""
+        ] .
+        {SUBSET_OF_SHAPE}"#
+    );
+    let outside = validate(&shapes, "ex:a ex:text \"two\" ; ex:allowed \"one\" .");
+    let inside = validate(&shapes, "ex:a ex:text \"one\" ; ex:allowed \"one\" .");
+    assert_eq!(
+        focus_nodes(&outside),
+        vec!["<http://example.org/ns#a>".to_owned()]
+    );
+    assert!(inside.conforms, "a value in the subset conforms");
+    assert_eq!(
+        linked(&shapes).registered_components,
+        vec!["http://www.w3.org/ns/shacl#SubsetOfConstraintComponent".to_owned()]
+    );
+}
+
+/// A component this engine now evaluates natively is a native IRI: its bare
+/// W3C declaration binds, and a shapes graph that also supplies a validator for
+/// it is refused as a duplicate definition — the native `sh:singleLine` is the
+/// implementation, and a second one would silently compete with it.
+#[test]
+fn a_validator_on_a_native_component_is_a_duplicate_definition() {
+    const SINGLE_LINE_DECLARATION: &str = r"
+sh:SingleLineConstraintComponent a sh:ConstraintComponent ;
+  sh:parameter sh:SingleLineConstraintComponent-singleLine .
+sh:SingleLineConstraintComponent-singleLine a sh:Parameter ;
+  sh:path sh:singleLine ; sh:datatype xsd:boolean ; sh:maxCount 1 .
+";
+    const SINGLE_LINE_SHAPE: &str = r"
+ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+  sh:property [ sh:path ex:text ; sh:singleLine true ] .
+";
+    let error = load_error(&format!(
         r#"{SINGLE_LINE_DECLARATION}
         sh:SingleLineConstraintComponent sh:validator [
           a sh:SPARQLAskValidator ;
-          sh:ask """ASK {{ FILTER (!$singleLine || !CONTAINS(STR($value), "\\n")) }}"""
+          sh:ask """ASK {{ FILTER (true) }}"""
         ] .
         {SINGLE_LINE_SHAPE}"#
-    );
-    let multi = validate(&shapes, "ex:a ex:text \"one\\ntwo\" .");
-    let single = validate(&shapes, "ex:a ex:text \"one two\" .");
+    ));
+    assert!(error.contains("SingleLineConstraintComponent"), "{error}");
+    let shapes = format!("{SINGLE_LINE_DECLARATION}{SINGLE_LINE_SHAPE}");
     assert_eq!(
-        focus_nodes(&multi),
+        focus_nodes(&validate(&shapes, "ex:a ex:text \"one\\ntwo\" .")),
         vec!["<http://example.org/ns#a>".to_owned()]
     );
-    assert!(single.conforms, "a single-line value conforms");
-    assert_eq!(
-        linked(&shapes).registered_components,
-        vec!["http://www.w3.org/ns/shacl#SingleLineConstraintComponent".to_owned()]
-    );
+    assert!(validate(&shapes, "ex:a ex:text \"one two\" .").conforms);
+    assert_eq!(linked(&shapes).registered_components, Vec::<String>::new());
 }
 
 // ── 5. The index stays empty ─────────────────────────────────────────────────

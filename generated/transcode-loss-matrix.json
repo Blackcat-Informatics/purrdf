@@ -2569,6 +2569,27 @@
     "note": "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is dropped."
   },
   {
+    "code": "sh:maxListLength",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:maxListLength constraint bounds the member count of a value that is an RDF list; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
+  },
+  {
+    "code": "sh:memberShape",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:memberShape constraint judges every member of a value that is an RDF list against a shape; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
+  },
+  {
+    "code": "sh:minListLength",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:minListLength constraint bounds the member count of a value that is an RDF list; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
+  },
+  {
     "code": "sh:nodeByExpression",
     "from": "shacl",
     "to": "json-schema",
@@ -2576,11 +2597,39 @@
     "note": "A SHACL 1.2 sh:nodeByExpression constraint computes its node shape from a node expression evaluated against the data graph; a closed-world JSON Schema has no way to express a shape that is not known until validation time, so the constraint is dropped. (This code was recorded by the emitter without being declared here, which made check_ledger_sound reject any ledger containing it; declared now.)"
   },
   {
+    "code": "sh:nodeKind",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:nodeKind sh:TripleTerm alternative admits an RDF 1.2 triple term, which has no JSON Schema value representation; that alternative is dropped and the remaining node kinds are projected."
+  },
+  {
     "code": "sh:not",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
     "note": "A sh:not negation whose inner shape is not losslessly expressible as a JSON Schema negation (or that appears at property/value position, where negating a base value schema would be vacuous) is dropped rather than emitted unsoundly."
+  },
+  {
+    "code": "sh:rootClass",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:rootClass constraint bounds class-valued values by the data graph's rdfs:subClassOf hierarchy; a closed-world JSON Schema cannot consult that hierarchy, so the constraint is dropped."
+  },
+  {
+    "code": "sh:singleLine",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:singleLine true constraint forbids line breaks in the lexical form of literal values; the emitted value schema does not project it, so the constraint is dropped."
+  },
+  {
+    "code": "sh:someValue",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:someValue constraint on a property shape requires at least one of the property's values to conform to a shape; the emitted value schema constrains each value alone, so the constraint is dropped (on a node shape it is projected as sh:node is)."
   },
   {
     "code": "sh:sparql",
@@ -2609,6 +2658,13 @@
     "to": "json-schema",
     "intentional": true,
     "note": "A shape targeted only via sh:targetSubjectsOf selects focus nodes by a predicate's subject position, not a class extension; no closed-world JSON Schema $def can be keyed and its constraints are not enforced."
+  },
+  {
+    "code": "sh:uniqueMembers",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:uniqueMembers constraint forbids a repeated member in a value that is an RDF list; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
   },
   {
     "code": "value-vocabulary",

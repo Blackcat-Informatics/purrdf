@@ -1945,6 +1945,108 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
+        // ── SingleLine (SHACL 1.2 Core §7.4.4; per value node) ────────────────
+        //
+        // "If $singleLine is true, then, for each value node that is a literal
+        // where the lexical form matches the regular expression (as defined by the
+        // SPARQL REGEX function) [\f\r\n\v], there is a validation result."
+        //
+        // The class names four characters — form feed, carriage return, line feed
+        // and vertical tab — and a lexical form matches it exactly when it contains
+        // one of them, so the test is that membership scan rather than a compiled
+        // regex. IRIs, blank nodes and triple terms are not literals and are never
+        // judged. The result carries the value node as `sh:value`, which §6.7.2.3
+        // permits ("at most one RDF term that has caused the result").
+        PlannedConstraint::SingleLine(false) => Flow::Continue,
+        PlannedConstraint::SingleLine(true) => {
+            for value in value_nodes {
+                let breaks = value.literal_view(ds).is_some_and(|literal| {
+                    literal
+                        .lexical
+                        .contains(['\u{000C}', '\r', '\n', '\u{000B}'])
+                });
+                if breaks {
+                    emit!(result!(
+                        sh::SINGLE_LINE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── RootClass (SHACL 1.2 Core §7.9.4; per value node) ─────────────────
+        //
+        // "For each value node that is either not an IRI, or an IRI for which there
+        // exists no class in classes such that the data graph entails valueNode
+        // rdfs:subClassOf* class, there is a validation result with the value node
+        // as sh:value."
+        //
+        // `*` is reflexive, so a value node that IS a root conforms whether or not
+        // the data graph mentions it; that half compares IRIs. The transitive half
+        // walks the asserted default-graph `rdfs:subClassOf` edges — the same
+        // relation `sh:class` reads its subclass closure from — and needs an
+        // interned value node, since an IRI the data graph does not intern is the
+        // subject of no edge.
+        PlannedConstraint::RootClass { roots, ids } => {
+            for value in value_nodes {
+                let conforms = match value.kind(ds) {
+                    ValueKind::Iri => match value.as_id(ds) {
+                        Some(id) => {
+                            ids.contains(&id) || store.class_view().reaches_by_subclass(id, ids)
+                        }
+                        None => value
+                            .lexical(ds)
+                            .is_some_and(|iri| roots.iter().any(|root| root.as_str() == iri)),
+                    },
+                    ValueKind::Blank | ValueKind::Literal | ValueKind::Triple => false,
+                };
+                if !conforms {
+                    emit!(result!(
+                        sh::ROOT_CLASS_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── SomeValue (SHACL 1.2 Core §7.8.3; over the value-node SET) ────────
+        //
+        // "A failure MUST be produced if the conformance checking of any value node
+        // against $someValue produces a failure, unless at least one of the value
+        // nodes conforms to $someValue. Otherwise, if none of the value nodes
+        // conforms to $someValue, there is a validation result."
+        //
+        // The value nodes are asked in order and the first conforming one ends the
+        // check. A failure met on the way is held, not returned: a later value node
+        // that conforms discards it, and only when every value node was asked
+        // without one conforming is it produced. The result names no `sh:value` —
+        // no single value node caused it.
+        PlannedConstraint::SomeValue(some_value) => {
+            let mut failure: Option<String> = None;
+            let mut any_conforms = false;
+            for value in value_nodes {
+                match conforms_memoized(context, some_value, &value.as_focus(ds)) {
+                    Ok(true) => {
+                        any_conforms = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        failure.get_or_insert(error);
+                    }
+                }
+            }
+            if !any_conforms {
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                emit!(result!(sh::SOME_VALUE_CONSTRAINT_COMPONENT, None));
+            }
+            Flow::Continue
+        }
+
         // ── In (per value node) ────────────────────────────────────────────────
         //
         // The CONSTANT-FOLDED branch: `sh:in ()` permits nothing, so every value

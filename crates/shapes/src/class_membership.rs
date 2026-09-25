@@ -169,6 +169,63 @@ impl ClassMembershipView {
         self.has_derived_membership(subject, class)
     }
 
+    /// Whether one or more asserted default-graph `rdfs:subClassOf` edges lead
+    /// from `class` to any member of `ancestors` — the `rdfs:subClassOf+` half of
+    /// `sh:rootClass`, over the same edge set this view derives memberships from.
+    ///
+    /// A fresh walk from `class` rather than a lookup in the frozen index: the
+    /// index keeps ancestry only for classes something is TYPED with, and a
+    /// `sh:rootClass` value node is a class that need have no instance at all.
+    /// The frontier and the visited set live inline for the shallow hierarchies
+    /// class trees usually are, so a conforming value node allocates nothing; a
+    /// walk that outgrows the inline visited set moves it to a hash set, so a
+    /// deep or wide hierarchy costs linear rather than quadratic time.
+    pub(crate) fn reaches_by_subclass(&self, class: TermId, ancestors: &FastSet<TermId>) -> bool {
+        const INLINE_VISITED: usize = 32;
+        let Some(subclass_of) = self.subclass_of else {
+            return false;
+        };
+        if ancestors.is_empty() {
+            return false;
+        }
+        let mut frontier: SmallVec<[TermId; 8]> = SmallVec::new();
+        frontier.push(class);
+        let mut visited_inline: SmallVec<[TermId; INLINE_VISITED]> = SmallVec::new();
+        visited_inline.push(class);
+        let mut visited_spilled: Option<FastSet<TermId>> = None;
+        while let Some(current) = frontier.pop() {
+            for quad in self.base.quads_for_pattern(
+                Some(current),
+                Some(subclass_of),
+                None,
+                GraphMatch::Default,
+            ) {
+                let parent = quad.o;
+                if ancestors.contains(&parent) {
+                    return true;
+                }
+                let fresh = match &mut visited_spilled {
+                    Some(visited) => visited.insert(parent),
+                    None if visited_inline.contains(&parent) => false,
+                    None if visited_inline.len() < INLINE_VISITED => {
+                        visited_inline.push(parent);
+                        true
+                    }
+                    None => {
+                        let mut visited: FastSet<TermId> = visited_inline.iter().copied().collect();
+                        visited.insert(parent);
+                        visited_spilled = Some(visited);
+                        true
+                    }
+                };
+                if fresh {
+                    frontier.push(parent);
+                }
+            }
+        }
+        false
+    }
+
     /// Every class `subject` is a direct or transitive asserted SHACL instance
     /// of, in unspecified order.
     ///
