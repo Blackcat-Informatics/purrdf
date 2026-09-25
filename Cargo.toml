@@ -168,7 +168,17 @@ roxmltree = "0.20"
 # published or wasm crate.
 rustix = { version = "1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: a JSON number that becomes an `f64` becomes the binary64
+# nearest its decimal value. Without it `serde_json` scales a `u64` significand
+# by a binary64 power of ten, rounding at each step and dropping every digit past
+# the nineteenth, so a JSON-LD, CSVW, OKF or ShExJ number could land on the
+# neighbour of the value it spells (`122.416294033786585` read as
+# `122.4162940337866`). The feature's reader is exact: a fast path only where
+# the significand and the power are exact binary64 values, an 80-bit estimate
+# only where its error bound cannot straddle a midpoint, and otherwise a
+# big-integer comparison against the midpoint over up to 768 digits and a sticky
+# digit. It is one feature for the whole graph, which is the point.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # Maintained continuation of the archived serde_yaml 0.9 (same API; the
 # `serde_yaml` name is kept at use sites via this package rename).
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }

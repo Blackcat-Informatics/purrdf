@@ -724,3 +724,123 @@ mod x87 {
         }
     }
 }
+
+// ---- decimal to binary64 -------------------------------------------------------------------
+
+/// The significand-times-power reader the JSON readers are tested against reproduces
+/// what `serde_json` without `float_roundtrip` was published returning, and each of those
+/// is a neighbour of the correctly rounded value.
+#[test]
+fn the_significand_power_model_reproduces_the_published_misreadings() {
+    for (lexical, published) in [
+        // serde-rs/json#707.
+        ("122.416294033786585", 122.416_294_033_786_6),
+        // A 17-significant-digit shortest form from a JavaScript producer.
+        ("51.708947112827516", 51.708_947_112_827_52),
+    ] {
+        let model = soft::significand_power_decimal(lexical).expect("in range");
+        assert_eq!(model.to_bits(), f64::to_bits(published), "{lexical}");
+        let correct: f64 = lexical.parse().expect("decimal");
+        assert_eq!(
+            model.to_bits().abs_diff(correct.to_bits()),
+            1,
+            "{lexical}: one unit in the last place off"
+        );
+    }
+    assert_eq!(soft::significand_power_decimal("0.5"), Some(0.5));
+    assert_eq!(soft::significand_power_decimal("-2e3"), Some(-2000.0));
+    assert_eq!(soft::significand_power_decimal("1e400"), None);
+    assert_eq!(soft::significand_power_decimal("1e-400"), Some(0.0));
+    for malformed in ["", "-", "01", "1.", ".5", "1e", "1e+", "1x", "+1"] {
+        assert_eq!(
+            soft::significand_power_decimal(malformed),
+            None,
+            "{malformed}"
+        );
+    }
+}
+
+/// Each midpoint expansion is exact: the tie reads as the even neighbour, a digit more
+/// reads as the successor, and one less as `x` itself.
+#[test]
+fn every_successor_midpoint_is_exact() {
+    assert_eq!(
+        soft::successor_midpoint_decimal(1.0),
+        "1.00000000000000011102230246251565404236316680908203125"
+    );
+    assert_eq!(
+        soft::successor_midpoint_decimal(9_007_199_254_740_992.0),
+        "9007199254740993"
+    );
+    let mut stream = Stream(0x6d69_6470_6f69_6e74);
+    let mut xs = vec![f64::MIN_POSITIVE, 5e-324, f64::MAX / 2.0, 0.1, 1e23];
+    for _ in 0..200 {
+        let bits = stream.next_u64() & 0x7fef_ffff_ffff_ffff;
+        xs.push(f64::from_bits(bits.max(1)));
+    }
+    for x in xs {
+        let successor = f64::from_bits(x.to_bits() + 1);
+        let midpoint = soft::successor_midpoint_decimal(x);
+        let even = if x.to_bits() % 2 == 0 { x } else { successor };
+        assert_eq!(midpoint.parse::<f64>(), Ok(even), "tie {x:e}");
+        let above = if midpoint.contains('.') {
+            format!("{midpoint}0000000001")
+        } else {
+            format!("{midpoint}.0000000001")
+        };
+        assert_eq!(above.parse::<f64>(), Ok(successor), "above {x:e}");
+        if midpoint.contains('.') {
+            // A fractional midpoint ends in 5; the same digits ending 4999… are below it.
+            let below = format!("{}4999", &midpoint[..midpoint.len() - 1]);
+            assert_eq!(below.parse::<f64>(), Ok(x), "below {x:e}");
+        }
+    }
+}
+
+/// The generated witnesses are what they claim: misread by the significand-times-power
+/// reader, and (the fast-path ones) double rounded through the x87's register.
+#[test]
+fn the_decimal_witness_generators_find_what_they_claim() {
+    for (value, lexical) in soft::misread_spellings(40, |value| Some(format!("{value:e}"))) {
+        assert_ne!(
+            soft::significand_power_decimal(&lexical),
+            Some(value),
+            "{lexical}"
+        );
+    }
+    for lexical in soft::misread_decimals(40) {
+        let correct: f64 = lexical.parse().expect("decimal");
+        assert_ne!(
+            soft::significand_power_decimal(&lexical),
+            Some(correct),
+            "{lexical}"
+        );
+    }
+    for lexical in soft::x87_fast_path_decimals(40) {
+        assert!(soft::x87_fast_path_misreads(&lexical), "{lexical}");
+    }
+    for (value, lexical) in soft::x87_misread_spellings(20, |value| Some(value.to_string())) {
+        assert!(soft::x87_fast_path_misreads(&lexical), "{lexical}");
+        assert_eq!(lexical.parse::<f64>(), Ok(value));
+    }
+    // Pinned: `serde_json`'s exact fast path read this as its successor on the x87.
+    let pinned = 864_759_627_780_072.0_f64;
+    assert!(soft::x87_fast_path_misreads("8.64759627780072e32"));
+    assert_ne!(
+        soft::mul_via(pinned, 1e18, soft::X87_EXTENDED).to_bits(),
+        soft::mul(pinned, 1e18).to_bits()
+    );
+    assert_eq!(
+        soft::mul(pinned, 1e18),
+        "8.64759627780072e32".parse::<f64>().unwrap()
+    );
+    // Neighbours the fast path does not serve, or serves exactly.
+    for served_exactly in ["8.5e32", "864759627780072", "1e23", "0.5", "1e-5"] {
+        assert!(
+            !soft::x87_fast_path_misreads(served_exactly),
+            "{served_exactly}"
+        );
+    }
+    // Twenty digits truncate the significand: the fast path is never tried.
+    assert!(!soft::x87_fast_path_misreads("86475962778007200000.1e13"));
+}

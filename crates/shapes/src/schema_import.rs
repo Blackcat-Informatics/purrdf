@@ -17,6 +17,7 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
+use purrdf_xsd::ieee::Binary64Scope;
 use serde_json::{Map, Number, Value};
 
 use crate::json_schema::{CompiledSchema, Namespaces};
@@ -237,8 +238,14 @@ pub(crate) fn import_json_schema_from(
             "schema input exceeds the {MAX_SCHEMA_BYTES}-byte limit"
         )));
     }
-    let document: Value = serde_json::from_str(input)
-        .map_err(|error| SchemaImportError::new(format!("invalid JSON Schema JSON: {error}")))?;
+    // A JSON Schema number becomes a SHACL bound's lexical form: read it inside a
+    // binary64 scope so the x87 rounds `serde_json`'s exact fast path once, like every
+    // other unit (the workspace's `float_roundtrip` makes the rest correctly rounded).
+    let document: Value = {
+        let _binary64 = Binary64Scope::enter();
+        serde_json::from_str(input)
+    }
+    .map_err(|error| SchemaImportError::new(format!("invalid JSON Schema JSON: {error}")))?;
     import_schema_value_from(source, &document, config)
 }
 
@@ -1427,7 +1434,7 @@ impl ImportContext<'_> {
             .datatypes
             .for_number(number.is_i64() || number.is_u64());
         Term::Literal(Literal::new_typed_literal(
-            number.to_string(),
+            number_lexical(number),
             NamedNode::new_unchecked(datatype),
         ))
     }
@@ -2018,11 +2025,24 @@ fn unescape_regex_literal(value: &str) -> Option<String> {
     Some(output)
 }
 
+/// A JSON number's lexical form as an RDF numeric literal.
+///
+/// A non-integral number's own `Display` is `serde_json`'s shortest form, which switches
+/// to an exponent (`2.2e-230`) outside `[1e-5, 1e16)`: not in the lexical space of
+/// `xsd:decimal`, the usual carrier. The binary64's `Display` writes the same shortest
+/// digits positionally, a lexical form every numeric datatype accepts.
+fn number_lexical(number: &Number) -> String {
+    match number.as_f64() {
+        Some(value) if !(number.is_i64() || number.is_u64()) => value.to_string(),
+        _ => number.to_string(),
+    }
+}
+
 fn json_scalar_lexical(value: &Value) -> Option<String> {
     match value {
         Value::String(value) => Some(value.clone()),
         Value::Bool(value) => Some(value.to_string()),
-        Value::Number(value) => Some(value.to_string()),
+        Value::Number(value) => Some(number_lexical(value)),
         Value::Null | Value::Array(_) | Value::Object(_) => None,
     }
 }
@@ -2342,6 +2362,67 @@ mod tests {
                 .validate()
                 .expect("validate");
             assert_eq!(report.conforms, expected, "{pattern:?} on {input:?}");
+        }
+    }
+
+    /// A JSON Schema bound becomes the SHACL bound its decimal spells: a lexical form
+    /// valid for the configured decimal carrier whose value is the binary64 nearest the
+    /// schema's number. The witnesses are numbers a reader that is not correctly rounded
+    /// (or the x87's double-rounded fast path) reads as a neighbour.
+    #[test]
+    fn numeric_bounds_import_as_the_correctly_rounded_value() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        let mut lexicals = soft::misread_decimals(30);
+        lexicals.extend(soft::x87_fast_path_decimals(30));
+        let properties = lexicals
+            .iter()
+            .enumerate()
+            .map(|(index, lexical)| {
+                format!(r#""ex:v{index}":{{"type":"number","minimum":{lexical}}}"#)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let schema = format!(
+            r#"{{"$schema":"{JSON_SCHEMA_DIALECT}","$defs":{{"Probe":{{"type":"object","properties":{{{properties}}}}}}}}}"#
+        );
+        let imported = import_json_schema(&schema, &config()).expect("import schema");
+        let mut bounds = BTreeMap::new();
+        for shape in &imported.shapes.node_shapes {
+            for property in &shape.property_shapes {
+                let Path::Predicate(predicate) = &property.path else {
+                    continue;
+                };
+                for constraint in &property.constraints {
+                    if let Constraint::MinInclusive(Term::Literal(literal)) = constraint {
+                        bounds.insert(predicate.as_str().to_owned(), literal.clone());
+                    }
+                }
+            }
+        }
+        assert_eq!(bounds.len(), lexicals.len());
+        for (index, lexical) in lexicals.iter().enumerate() {
+            let literal = &bounds[&format!("https://example.org/v{index}")];
+            let correct: f64 = lexical.parse().expect("decimal");
+            assert_eq!(
+                literal.value().parse::<f64>().map(f64::to_bits),
+                Ok(correct.to_bits()),
+                "{lexical} imported as {}",
+                literal.value()
+            );
+            // In the decimal carrier's lexical space. This crate's decimal may still
+            // refuse the value as past its representable range (a scale above 18 digits,
+            // a magnitude past `i128`), which is a range and not a lexical verdict.
+            let parsed = purrdf_xsd::parse_by_iri(literal.value(), literal.datatype_str());
+            assert!(
+                matches!(
+                    parsed,
+                    Ok(Some(_)) | Err(purrdf_xsd::XsdError::OutOfRange { .. })
+                ),
+                "{lexical} imported as `{}`, not a valid <{}>: {parsed:?}",
+                literal.value(),
+                literal.datatype_str()
+            );
         }
     }
 

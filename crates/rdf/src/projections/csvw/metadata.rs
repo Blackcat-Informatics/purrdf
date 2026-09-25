@@ -273,10 +273,11 @@ impl MetadataLoader<'_> {
                 let bytes = self.input.get(&iri).ok_or_else(|| {
                     ProjectionError::package(format!("CSVW schema resource `{iri}` is absent"))
                 })?;
-                let value: Value = serde_json::from_slice(bytes).map_err(|error| {
-                    ProjectionError::syntax(format!("invalid CSVW schema JSON: {error}"))
-                        .at_path(&iri)
-                })?;
+                let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
+                    .map_err(|error| {
+                        ProjectionError::syntax(format!("invalid CSVW schema JSON: {error}"))
+                            .at_path(&iri)
+                    })?;
                 let object = value.as_object().ok_or_else(|| {
                     ProjectionError::syntax("CSVW schema resource must be a JSON object")
                         .at_path(&iri)
@@ -658,10 +659,11 @@ impl MetadataLoader<'_> {
                 let bytes = self.input.get(&iri).ok_or_else(|| {
                     ProjectionError::package(format!("CSVW dialect resource `{iri}` is absent"))
                 })?;
-                let value: Value = serde_json::from_slice(bytes).map_err(|error| {
-                    ProjectionError::syntax(format!("invalid CSVW dialect JSON: {error}"))
-                        .at_path(&iri)
-                })?;
+                let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
+                    .map_err(|error| {
+                        ProjectionError::syntax(format!("invalid CSVW dialect JSON: {error}"))
+                            .at_path(&iri)
+                    })?;
                 let object = value.as_object().ok_or_else(|| {
                     ProjectionError::syntax("CSVW dialect resource must be a JSON object")
                         .at_path(&iri)
@@ -1061,7 +1063,7 @@ impl MetadataLoader<'_> {
         let bytes = self.input.get(iri).ok_or_else(|| {
             ProjectionError::package(format!("CSVW metadata resource `{iri}` is absent"))
         })?;
-        let value: Value = serde_json::from_slice(bytes)
+        let value: Value = crate::json_number::read_json(|| serde_json::from_slice(bytes))
             .map_err(|error| {
                 ProjectionError::syntax(format!("invalid CSVW metadata JSON: {error}"))
             })

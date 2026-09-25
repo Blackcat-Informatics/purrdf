@@ -478,3 +478,468 @@ pub fn div32(a: f32, b: f32) -> f32 {
 pub fn sqrt32(a: f32) -> f32 {
     sqrt32_via(a, BINARY32)
 }
+
+// ---- decimal to binary64 -----------------------------------------------------------------
+//
+// The oracle for the readers that turn a JSON number into an `f64`: what a reader that
+// scales a `u64` significand by a power of ten computes, and the exact decimal
+// expansions of the midpoints a correctly rounded reader must decide by every digit.
+
+/// `n` rounded once to binary64.
+#[must_use]
+pub fn u64_to_f64(n: u64) -> f64 {
+    to_f64(round(
+        Exact {
+            neg: false,
+            sig: u128::from(n),
+            exp: 0,
+        },
+        BINARY64,
+    ))
+}
+
+/// `10^k` rounded once to binary64, `k ≤ 308`: the literal `1e{k}`.
+fn power_of_ten(k: u32) -> f64 {
+    format!("1e{k}")
+        .parse()
+        .expect("a decimal power of ten parses")
+}
+
+/// `significand · 10 + digit`, or `None` when it overflows a `u64`.
+fn push_digit(significand: u64, digit: u8) -> Option<u64> {
+    significand
+        .checked_mul(10)
+        .and_then(|scaled| scaled.checked_add(u64::from(digit - b'0')))
+}
+
+/// A JSON number as a significand-times-power reader scans it.
+struct Scanned {
+    negative: bool,
+    /// The leading digits, as many as fit a `u64`.
+    significand: u64,
+    /// The decimal exponent of the significand's last digit.
+    exponent: i32,
+    /// Whether a digit was left out of the significand.
+    truncated: bool,
+    /// Whether the written exponent overflowed an `i32`: `Some(positive)`.
+    exponent_overflow: Option<bool>,
+}
+
+/// Scan `lexical` the way `serde_json` does, or `None` when it is not a JSON number.
+fn scan(lexical: &str) -> Option<Scanned> {
+    let bytes = lexical.as_bytes();
+    let negative = bytes.first() == Some(&b'-');
+    let mut at = usize::from(negative);
+    let mut scanned = Scanned {
+        negative,
+        significand: 0,
+        exponent: 0,
+        truncated: false,
+        exponent_overflow: None,
+    };
+
+    let integer_start = at;
+    while let Some(&digit @ b'0'..=b'9') = bytes.get(at) {
+        at += 1;
+        if scanned.truncated {
+            scanned.exponent += 1;
+        } else if let Some(next) = push_digit(scanned.significand, digit) {
+            scanned.significand = next;
+        } else {
+            scanned.truncated = true;
+            scanned.exponent += 1;
+        }
+    }
+    let integer_digits = at - integer_start;
+    if integer_digits == 0 || (integer_digits > 1 && bytes[integer_start] == b'0') {
+        return None;
+    }
+
+    if bytes.get(at) == Some(&b'.') {
+        at += 1;
+        let fraction_start = at;
+        // After the integer part overflowed, a fraction digit is still pushed when it
+        // happens to fit: `serde_json` resumes its ordinary decimal loop there.
+        let mut fraction_overflowed = false;
+        while let Some(&digit @ b'0'..=b'9') = bytes.get(at) {
+            at += 1;
+            if fraction_overflowed {
+                continue;
+            }
+            if let Some(next) = push_digit(scanned.significand, digit) {
+                scanned.significand = next;
+                scanned.exponent -= 1;
+            } else {
+                fraction_overflowed = true;
+                scanned.truncated = true;
+            }
+        }
+        if at == fraction_start {
+            return None;
+        }
+    }
+
+    if matches!(bytes.get(at), Some(b'e' | b'E')) {
+        at += 1;
+        let positive = match bytes.get(at) {
+            Some(b'-') => {
+                at += 1;
+                false
+            }
+            Some(b'+') => {
+                at += 1;
+                true
+            }
+            _ => true,
+        };
+        let digits_start = at;
+        let mut written = Some(0_i32);
+        while let Some(&digit @ b'0'..=b'9') = bytes.get(at) {
+            at += 1;
+            written = written
+                .and_then(|value| value.checked_mul(10))
+                .and_then(|value| value.checked_add(i32::from(digit - b'0')));
+        }
+        if at == digits_start {
+            return None;
+        }
+        match written {
+            Some(written) if positive => {
+                scanned.exponent = scanned.exponent.saturating_add(written);
+            }
+            Some(written) => scanned.exponent = scanned.exponent.saturating_sub(written),
+            None => scanned.exponent_overflow = Some(positive),
+        }
+    }
+    (at == bytes.len()).then_some(scanned)
+}
+
+/// The binary64 value a significand-times-power-of-ten reader gives the JSON number
+/// `lexical`, or `None` for a malformed number or one that reader refuses as out of
+/// range.
+///
+/// The reader accumulates the decimal digits into a `u64` until the next one would
+/// overflow it; after that it drops every further fraction digit, and counts every
+/// further integer digit into the decimal exponent. It converts the significand to
+/// binary64, then multiplies or divides it by the binary64 nearest `10^|e|` (below
+/// `10^-308` it first divides by `1e308` as often as it must), each step rounded once.
+/// Every step is rounded, so the result is not the correctly rounded value of the
+/// number: one decimal can land on a neighbour of the binary64 nearest it. This is
+/// `serde_json`'s conversion without its `float_roundtrip` feature
+/// (`Deserializer::f64_from_parts`, reached through `parse_decimal`, `parse_exponent`,
+/// `parse_decimal_overflow` and `parse_long_integer`), computed here in integers so it
+/// has one result on every target; the tests of the JSON readers search it for the
+/// numbers on which such a reader and a correctly rounded one disagree.
+#[must_use]
+pub fn significand_power_decimal(lexical: &str) -> Option<f64> {
+    let scanned = scan(lexical)?;
+    let signed = |value: f64| if scanned.negative { -value } else { value };
+    if let Some(positive) = scanned.exponent_overflow {
+        // An exponent past `i32`: out of range above, zero below.
+        return (scanned.significand == 0 || !positive).then_some(signed(0.0));
+    }
+    let mut exponent = scanned.exponent;
+    let mut value = u64_to_f64(scanned.significand);
+    loop {
+        let magnitude = exponent.unsigned_abs();
+        if magnitude <= 308 {
+            let power = power_of_ten(magnitude);
+            if exponent >= 0 {
+                value = mul(value, power);
+                if value.is_infinite() {
+                    return None;
+                }
+            } else {
+                value = div(value, power);
+            }
+            break;
+        }
+        if value == 0.0 {
+            break;
+        }
+        if exponent >= 0 {
+            return None;
+        }
+        value = div(value, power_of_ten(308));
+        exponent += 308;
+    }
+    Some(signed(value))
+}
+
+/// Whether a correctly rounded reader's exact fast path, run on the x87 at its
+/// power-on 64-bit precision, misreads `lexical`.
+///
+/// A number whose digits fit a significand below `2^53` and whose decimal exponent is at
+/// most 22 in magnitude is the product or quotient of two binary64 values (the
+/// significand and `10^|e|`), and a reader computes it with that one operation (for an
+/// exponent up to 37, shifting the excess into the significand first when it still fits).
+/// Rounded once that is the correctly rounded value; through the x87's register it is
+/// rounded to 64 bits and again to 53, and this answers whether the two differ. That is
+/// the fast path of `serde_json`'s `float_roundtrip` reader (`lexical::algorithm::
+/// fast_path`) and of core's `dec2flt`, which sets the precision control around it.
+#[must_use]
+pub fn x87_fast_path_misreads(lexical: &str) -> bool {
+    let Some(scanned) = scan(lexical) else {
+        return false;
+    };
+    if scanned.truncated
+        || scanned.exponent_overflow.is_some()
+        || scanned.significand == 0
+        || scanned.significand >> 53 != 0
+    {
+        return false;
+    }
+    let (significand, exponent) = if scanned.exponent > 22 {
+        let Some(shifted) = u32::try_from(scanned.exponent - 22)
+            .ok()
+            .and_then(|shift| 10_u64.checked_pow(shift))
+            .and_then(|scale| scanned.significand.checked_mul(scale))
+            .filter(|shifted| shifted >> 53 == 0)
+        else {
+            return false;
+        };
+        (shifted, 22)
+    } else {
+        (scanned.significand, scanned.exponent)
+    };
+    if exponent == 0 || exponent < -22 {
+        return false;
+    }
+    let (a, b) = (
+        u64_to_f64(significand),
+        power_of_ten(exponent.unsigned_abs()),
+    );
+    if exponent > 0 {
+        mul(a, b).to_bits() != mul_via(a, b, X87_EXTENDED).to_bits()
+    } else {
+        div(a, b).to_bits() != div_via(a, b, X87_EXTENDED).to_bits()
+    }
+}
+
+/// The exact decimal expansion of the midpoint between the positive finite binary64
+/// `x` and its successor: the number a correctly rounded reader can only decide by
+/// reading every one of its digits (up to 767 significant ones), and whose tie it breaks
+/// to the even neighbour.
+///
+/// # Panics
+///
+/// When `x` is not positive and finite.
+#[must_use]
+pub fn successor_midpoint_decimal(x: f64) -> String {
+    assert!(x.is_finite() && x > 0.0, "a positive finite binary64");
+    let bits = x.to_bits();
+    let biased = (bits >> 52) & 0x7ff;
+    let fraction = bits & ((1 << 52) - 1);
+    let (significand, exponent) = if biased == 0 {
+        (fraction, -1074_i32)
+    } else {
+        (
+            fraction | (1 << 52),
+            i32::try_from(biased).expect("eleven bits") - 1075,
+        )
+    };
+    // The midpoint is (2·significand + 1) · 2^(exponent − 1): an odd integer times a
+    // power of two, which is an integer (a power of two ≥ 1) or an integer over 10^k
+    // (2^−k = 5^k / 10^k).
+    let mut digits: Vec<u8> = (2 * significand + 1)
+        .to_string()
+        .bytes()
+        .rev()
+        .map(|digit| digit - b'0')
+        .collect();
+    let scale = exponent - 1;
+    let multiply = |digits: &mut Vec<u8>, factor: u8| {
+        let mut carry = 0_u8;
+        for digit in digits.iter_mut() {
+            let product = *digit * factor + carry;
+            *digit = product % 10;
+            carry = product / 10;
+        }
+        if carry != 0 {
+            digits.push(carry);
+        }
+    };
+    let point = if scale >= 0 {
+        for _ in 0..scale {
+            multiply(&mut digits, 2);
+        }
+        0
+    } else {
+        for _ in 0..scale.unsigned_abs() {
+            multiply(&mut digits, 5);
+        }
+        usize::try_from(scale.unsigned_abs()).expect("small")
+    };
+    while digits.len() <= point {
+        digits.push(0);
+    }
+    let mut text = String::with_capacity(digits.len() + 1);
+    for (index, digit) in digits.iter().enumerate().rev() {
+        text.push(char::from(b'0' + digit));
+        if index == point && point != 0 {
+            text.push('.');
+        }
+    }
+    text
+}
+
+/// A SplitMix64 stream: deterministic draws, no clock and no RNG.
+struct Draws(u64);
+
+impl Draws {
+    const fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A positive finite binary64 with a decimal exponent in `[−300, 300]`.
+    fn value(&mut self) -> f64 {
+        let exponent = self.next() % 1_994 + 26; // biased 26..=2019: 2^−997 ..< 2^997
+        f64::from_bits((exponent << 52) | (self.next() & ((1 << 52) - 1)))
+    }
+}
+
+/// `count` pairs of a binary64 value and its spelling `spell(value)` that
+/// [`significand_power_decimal`] misreads, drawn deterministically: the values whose
+/// shortest, serialized or otherwise produced form a significand-times-power reader would
+/// not give back. A draw `spell` answers `None` for is skipped, so a reader with a
+/// narrower range than binary64's can ask only for values it accepts.
+///
+/// # Panics
+///
+/// When `spell` does not spell its value (a correctly rounded read of it is another
+/// value), or the draws run out before `count` are found.
+#[must_use]
+pub fn misread_spellings(
+    count: usize,
+    spell: impl Fn(f64) -> Option<String>,
+) -> Vec<(f64, String)> {
+    let mut draws = Draws(0x6d69_7372_6561_6473);
+    let mut found = Vec::with_capacity(count);
+    for _ in 0..count.saturating_mul(1_000) {
+        if found.len() == count {
+            break;
+        }
+        let value = draws.value();
+        let Some(lexical) = spell(value) else {
+            continue;
+        };
+        assert_eq!(
+            lexical.parse::<f64>().map(f64::to_bits),
+            Ok(value.to_bits()),
+            "`{lexical}` must spell {value:e}"
+        );
+        if significand_power_decimal(&lexical).map(f64::to_bits) != Some(value.to_bits()) {
+            found.push((value, lexical));
+        }
+    }
+    assert_eq!(found.len(), count, "misread spellings found");
+    found
+}
+
+/// `count` pairs of a binary64 value and its spelling `spell(value)` that a correctly
+/// rounded reader's exact fast path misreads on the x87 at 64-bit precision
+/// ([`x87_fast_path_misreads`]), drawn deterministically from the values that path can
+/// serve (`2^-80 ≤ value < 2^123`). A draw `spell` answers `None` for is skipped.
+///
+/// # Panics
+///
+/// When `spell` does not spell its value, or the draws run out before `count` are found.
+#[must_use]
+pub fn x87_misread_spellings(
+    count: usize,
+    spell: impl Fn(f64) -> Option<String>,
+) -> Vec<(f64, String)> {
+    let mut draws = Draws(0x7838_3773_7065_6c6c);
+    let mut found = Vec::with_capacity(count);
+    for _ in 0..count.saturating_mul(1_000_000) {
+        if found.len() == count {
+            break;
+        }
+        let exponent = draws.next() % 203 + 943; // biased 943..=1145: 2^-80 ..< 2^123
+        let value = f64::from_bits((exponent << 52) | (draws.next() & ((1 << 52) - 1)));
+        let Some(lexical) = spell(value) else {
+            continue;
+        };
+        assert_eq!(
+            lexical.parse::<f64>().map(f64::to_bits),
+            Ok(value.to_bits()),
+            "`{lexical}` must spell {value:e}"
+        );
+        if x87_fast_path_misreads(&lexical) {
+            found.push((value, lexical));
+        }
+    }
+    assert_eq!(found.len(), count, "x87 misread spellings found");
+    found
+}
+
+/// `count` decimal numbers of 17 to 30 significant digits that
+/// [`significand_power_decimal`] misreads, drawn deterministically: long mantissas, the
+/// digits past the nineteenth among them, which a correctly rounded reader must weigh.
+///
+/// # Panics
+///
+/// When the draws run out before `count` are found.
+#[must_use]
+pub fn misread_decimals(count: usize) -> Vec<String> {
+    let mut draws = Draws(0x6c6f_6e67_6469_6773);
+    let mut found = Vec::with_capacity(count);
+    for _ in 0..count.saturating_mul(1_000) {
+        if found.len() == count {
+            break;
+        }
+        let digits = usize::try_from(draws.next() % 14).expect("small") + 17;
+        let mut mantissa = String::with_capacity(digits + 1);
+        mantissa.push(char::from(
+            b'1' + u8::try_from(draws.next() % 9).expect("digit"),
+        ));
+        mantissa.push('.');
+        for _ in 1..digits {
+            mantissa.push(char::from(
+                b'0' + u8::try_from(draws.next() % 10).expect("digit"),
+            ));
+        }
+        let exponent = i64::try_from(draws.next() % 601).expect("small") - 300;
+        let lexical = format!("{mantissa}e{exponent}");
+        let correct = lexical.parse::<f64>().expect("a decimal");
+        if significand_power_decimal(&lexical).map(f64::to_bits) != Some(correct.to_bits()) {
+            found.push(lexical);
+        }
+    }
+    assert_eq!(found.len(), count, "misread decimals found");
+    found
+}
+
+/// `count` decimal numbers `m·10^±k` with `m < 2^53` and `k ≤ 22` -- the ones whose value
+/// is a single binary64 product or quotient of two exact binary64 values, which a reader's
+/// exact fast path computes with one operation -- on which that operation rounded first
+/// to the x87's 64-bit register significand and then to binary64 gives another value
+/// than rounding once. They are read right on the x87 only under a 53-bit precision
+/// control.
+///
+/// # Panics
+///
+/// When the draws run out before `count` are found.
+#[must_use]
+pub fn x87_fast_path_decimals(count: usize) -> Vec<String> {
+    let mut draws = Draws(0x7838_375f_6661_7374);
+    let mut found = Vec::with_capacity(count);
+    for _ in 0..count.saturating_mul(100_000) {
+        if found.len() == count {
+            break;
+        }
+        let significand = draws.next() >> 11;
+        let power = draws.next() % 22 + 1;
+        let sign = if draws.next() & 1 == 1 { "-" } else { "" };
+        let lexical = format!("{significand}e{sign}{power}");
+        if x87_fast_path_misreads(&lexical) {
+            found.push(lexical);
+        }
+    }
+    assert_eq!(found.len(), count, "x87 fast-path decimals found");
+    found
+}
