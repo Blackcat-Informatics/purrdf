@@ -176,8 +176,9 @@ fn census_counts_per_class_are_pinned() {
 /// unimplemented terms: 42 + 3 and 48 − 3. `sh:subsetOf` followed when its
 /// component became evaluated: 45 + 1 and 45 − 1, and `sh:uniqueValuesFor` —
 /// the last declared component — when its did: 46 + 1 and 44 − 1. No
-/// component parameter is unimplemented any more; the 43 that remain are terms
-/// of other kinds.
+/// component parameter is unimplemented any more. `sh:ByTypes`, the IRI value of
+/// `sh:closed`, moved to the vocabulary when `sh:closed sh:ByTypes` became
+/// evaluated: 19 + 1 and 43 − 1; the 42 that remain are terms of other kinds.
 const EXPECTED_COUNTS: [(&str, usize); 11] = [
     ("constraint-parameter", 47),
     ("non-validating", 10),
@@ -187,9 +188,9 @@ const EXPECTED_COUNTS: [(&str, usize); 11] = [
     ("structural/node-expression", 47),
     ("structural/report", 20),
     ("structural/shape-path-prefix-graph", 16),
-    ("structural/vocabulary", 19),
+    ("structural/vocabulary", 20),
     ("target", 7),
-    ("unimplemented", 43),
+    ("unimplemented", 42),
 ];
 
 /// Where a term may appear is part of its class: a constraint parameter and a

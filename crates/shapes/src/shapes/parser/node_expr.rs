@@ -17,7 +17,9 @@ use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::spec::{ExprKind, non_function_keys, primary_keys};
 use crate::term::{NamedNode, Term};
 
-use crate::shapes::{ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Path, Shape};
+use crate::shapes::{
+    ClosedMode, ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Path, Shape,
+};
 
 impl Parser<'_> {
     /// Parse all constraints declared directly on a shape node.
@@ -146,27 +148,28 @@ impl Parser<'_> {
         }
 
         // sh:closed (+ sh:ignoredProperties) — node-shape-level closed-world check.
-        // The value is a well-typed xsd:boolean or sh:ByTypes (SHACL 1.2 Core
-        // §4.8.1); an ill-typed value is refused, and only the term `true` emits
-        // the constraint (see `boolean_value`).
-        let is_closed = match self.first_object_of(id, sh::CLOSED) {
-            None => false,
+        // SHACL 1.2 Core §7.9.1: "The values of sh:closed in a shape are literals
+        // with datatype xsd:boolean or the IRI sh:ByTypes." An ill-typed value is
+        // refused; `false` emits no constraint (see `boolean_value`), `true`
+        // closes the shape over its own property shapes and `sh:ByTypes` over the
+        // properties the value node's types collect.
+        let closed_mode = match self.first_object_of(id, sh::CLOSED) {
+            None => None,
             Some(Term::NamedNode(n)) if n.as_str() == sh::BY_TYPES => {
-                return Err(format!(
-                    "shape {id} uses sh:closed sh:ByTypes, which is not evaluated by this \
-                     engine; the shape is refused rather than validated as if it were open"
-                ));
+                Some(ClosedMode::ByTypes(self.closed_type_index()?))
             }
-            Some(value) => boolean_value(&value).ok_or_else(|| {
-                format!(
-                    "sh:closed on shape {id} must be an xsd:boolean literal or sh:ByTypes, got \
-                     {value}"
-                )
-            })?,
+            Some(value) => boolean_value(&value)
+                .ok_or_else(|| {
+                    format!(
+                        "sh:closed on shape {id} must be an xsd:boolean literal or sh:ByTypes, \
+                         got {value}"
+                    )
+                })?
+                .then_some(ClosedMode::Declared),
         };
         let mut ignored_lists: Vec<Term> = self.objects_of(id, sh::IGNORED_PROPERTIES);
         crate::term::sort_terms_canonical(&mut ignored_lists);
-        if is_closed {
+        if let Some(mode) = closed_mode {
             let mut ignored: Vec<NamedNode> = Vec::new();
             for list_head in ignored_lists {
                 for item in self.walk_rdf_list(&list_head, id)? {
@@ -185,7 +188,7 @@ impl Parser<'_> {
             }
             ignored.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             ignored.dedup();
-            constraints.push(Constraint::Closed { ignored });
+            constraints.push(Constraint::Closed { ignored, mode });
         }
 
         // sh:uniqueLang — a well-typed xsd:boolean; only the term `true` activates it.

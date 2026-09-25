@@ -165,8 +165,6 @@ const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
     ),
     ("w3c12/core/misc/severity-004", R_DEBUG_TRACE),
     ("w3c12/core/misc/severity-005", R_DEBUG_TRACE),
-    ("w3c12/core/node/closed-003", R_BY_TYPES),
-    ("w3c12/core/node/closed-004", R_BY_TYPES),
     ("w3c12/core/targets/targetClassImplicit-002", R_SHAPE_CLASS),
     ("w3c12/core/targets/targetWhere-001", R_TARGET_WHERE),
     (
@@ -189,9 +187,6 @@ const R_REIFIER_ANNOTATION: &str = "annotates a (shape, parameter, value) statem
 
 const R_DEBUG_TRACE: &str = "gives a shape the sh:Debug / sh:Trace severity, which the engine \
      refuses at load as unevaluated rather than treating as blocking";
-
-const R_BY_TYPES: &str =
-    "uses sh:closed sh:ByTypes, which the engine refuses at load as unimplemented";
 
 const R_SHAPE_CLASS: &str =
     "types a shape sh:ShapeClass, whose implicit class target the engine refuses at load";
@@ -277,7 +272,11 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// Moved from 344 to 349 when `sh:uniqueValuesFor` became evaluated:
 /// `uniqueValuesFor-001` to `-005` now load and agree on a report (+5), and
 /// [`W3C12_REFUSED_AT_LOAD`] went from 19 entries to 14.
-const AGREED_ON_REPORT_CASES: usize = 349;
+///
+/// Moved from 349 to 351 when `sh:closed sh:ByTypes` became evaluated:
+/// `closed-003` and `closed-004` now load and agree on a report (+2), and
+/// [`W3C12_REFUSED_AT_LOAD`] went from 14 entries to 12.
+const AGREED_ON_REPORT_CASES: usize = 351;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -338,7 +337,12 @@ const AGREED_ON_REPORT_CASES: usize = 349;
 /// `uniqueValuesFor-001`, `-002`, `-003` and `-005` load now that the component
 /// is evaluated, and each expects — and reports — violations (+4);
 /// `uniqueValuesFor-004` expects conformance and is agreed on as an empty report.
-const AGREED_WITH_RESULTS_CASES: usize = 329;
+///
+/// # Why it moved from 329 to 331
+///
+/// `closed-003` and `closed-004` load now that `sh:closed sh:ByTypes` is
+/// evaluated, and each expects — and reports — a violation (+2).
+const AGREED_WITH_RESULTS_CASES: usize = 331;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

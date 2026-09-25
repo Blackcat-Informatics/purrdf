@@ -212,7 +212,7 @@ pub mod sh {
     pub const TRIPLE_TERM: &str = "http://www.w3.org/ns/shacl#TripleTerm";
 
     /// `sh:ByTypes` — the non-boolean value of `sh:closed` (SHACL 1.2 Core
-    /// §4.8.1).
+    /// §7.9.1).
     pub const BY_TYPES: &str = "http://www.w3.org/ns/shacl#ByTypes";
 
     /// `sh:detail` — the nested results of a validation result (SHACL 1.2 Core

@@ -321,6 +321,62 @@ fn unique_values_for_records_its_declared_code() {
     );
 }
 
+/// `sh:closed sh:ByTypes` permits what each instance's own types collect, which an
+/// object schema's one key set cannot state: it records its declared code against
+/// its shape, leaves a `$comment` and leaves the object open; the same shape with
+/// `sh:closed true` records nothing and closes the object.
+#[test]
+fn closed_by_types_records_its_declared_code_and_closed_true_does_not() {
+    let by_types = compile_ttl(
+        r"
+        ex:RecordShape a sh:NodeShape ;
+            sh:targetClass ex:Record ;
+            sh:closed sh:ByTypes ;
+            sh:property [ sh:path ex:id ; sh:minCount 1 ] .
+        ",
+    );
+    assert_eq!(recorded_codes(&by_types), vec!["sh:closed sh:ByTypes"]);
+    assert!(
+        by_types
+            .losses
+            .render_json()
+            .contains("https://example.org/RecordShape"),
+        "{}",
+        by_types.losses.render_json()
+    );
+    assert_ledger_sound(&by_types.losses, "shacl", "json-schema");
+    assert!(
+        by_types
+            .schema_json
+            .contains("a node-level sh:closed sh:ByTypes constraint was dropped"),
+        "{}",
+        by_types.schema_json
+    );
+    assert!(
+        !by_types
+            .schema_json
+            .contains("\"additionalProperties\": false"),
+        "{}",
+        by_types.schema_json
+    );
+    let closed = compile_ttl(
+        r"
+        ex:RecordShape a sh:NodeShape ;
+            sh:targetClass ex:Record ;
+            sh:closed true ;
+            sh:property [ sh:path ex:id ; sh:minCount 1 ] .
+        ",
+    );
+    assert!(closed.losses.is_empty(), "{:?}", recorded_codes(&closed));
+    assert!(
+        closed
+            .schema_json
+            .contains("\"additionalProperties\": false"),
+        "{}",
+        closed.schema_json
+    );
+}
+
 #[test]
 fn lossless_shape_compiles_with_empty_ledger() {
     let compiled = compile_ttl(

@@ -21,7 +21,9 @@ use serde_json::{Map, Number, Value};
 
 use crate::json_schema::{CompiledSchema, Namespaces};
 use crate::report::Severity;
-use crate::shapes::{Constraint, NodeKindValue, Path, PropertyShape, Shape, Shapes, Target};
+use crate::shapes::{
+    ClosedMode, Constraint, NodeKindValue, Path, PropertyShape, Shape, Shapes, Target,
+};
 use crate::term::{Literal, NamedNode, Term};
 
 const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -641,6 +643,7 @@ impl ImportContext<'_> {
             match additional {
                 Value::Bool(false) => constraints.push(Constraint::Closed {
                     ignored: closed_ignored,
+                    mode: ClosedMode::Declared,
                 }),
                 Value::Bool(true) => {}
                 Value::Object(_) => self.record(

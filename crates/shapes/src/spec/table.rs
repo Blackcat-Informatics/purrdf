@@ -245,7 +245,7 @@ pub enum ValueRule {
     /// A well-formed SHACL property path.
     Path,
     /// A literal with datatype `xsd:boolean`, or the IRI `sh:ByTypes` (SHACL 1.2
-    /// Core §4.8.1).
+    /// Core §7.9.1).
     ClosedValue,
 }
 

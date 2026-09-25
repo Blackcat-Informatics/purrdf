@@ -49,7 +49,7 @@ use crate::data_view::ShaclRead;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
 use crate::shapes::{
-    ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
+    ClosedMode, ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
 };
 use crate::term::{NamedNode, Term};
 use crate::unique_values::{UniqueGroups, UniqueSpec};
@@ -65,6 +65,23 @@ pub(crate) type TermSlot = u32;
 
 /// The position of one id SET in a [`DatasetBinding`]'s set row.
 type SetSlot = u32;
+
+/// The lowering of one `sh:closed sh:ByTypes` constraint.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoweredByTypes {
+    /// The slot of `rdf:type`, whose quads name the value node's types.
+    rdf_type: TermSlot,
+    /// The position of the shapes graph's type index in
+    /// [`LoweredShapes::closed_types`].
+    index: u32,
+}
+
+/// A [`crate::shapes::ClosedTypeIndex`], lowered: each type's slot, and the
+/// [`LoweredShapes::terms`] range its collected properties occupy.
+#[derive(Debug)]
+struct LoweredTypeIndex {
+    entries: Box<[(TermSlot, std::ops::Range<u32>)]>,
+}
 
 /// The position of one `sh:uniqueValuesFor` constraint's [`UniqueSpec`] in a
 /// lowering, and of its grouping in a [`DatasetBinding`].
@@ -226,6 +243,10 @@ pub(crate) struct LoweredShapes {
     /// Every `sh:uniqueValuesFor` constraint the walk reached, by [`UniqueSlot`]:
     /// what the grouping of its shape's target set is built from.
     unique_values: Box<[UniqueSpec]>,
+    /// Every `sh:closed sh:ByTypes` index the walk reached, by
+    /// [`LoweredByTypes::index`] — one per shared index, however many
+    /// constraints share it.
+    closed_types: Box<[LoweredTypeIndex]>,
 }
 
 impl LoweredShapes {
@@ -298,12 +319,37 @@ impl LoweredShapes {
         // built on first use (see `crate::unique_values`), so the bind does no
         // data-sized work for it and a shapes graph without one pays nothing.
         let unique_values = self.unique_values.iter().map(|_| OnceLock::new()).collect();
+        // Each `sh:closed sh:ByTypes` index, keyed by the identity THIS data graph
+        // gives each type. A type the data graph does not intern is the `rdf:type`
+        // value of no quad in it, and a property it does not intern is the
+        // predicate of none, so dropping either loses nothing a probe could ask.
+        let closed_types = self
+            .closed_types
+            .iter()
+            .map(|index| {
+                index
+                    .entries
+                    .iter()
+                    .filter_map(|(ty, range)| {
+                        let ty = terms[*ty as usize]?;
+                        let properties: FastSet<TermId> = terms
+                            [range.start as usize..range.end as usize]
+                            .iter()
+                            .copied()
+                            .flatten()
+                            .collect();
+                        (!properties.is_empty()).then_some((ty, properties))
+                    })
+                    .collect()
+            })
+            .collect();
         DatasetBinding {
             terms,
             sets,
             class_ids,
             indexes,
             unique_values,
+            closed_types,
         }
     }
 
@@ -507,7 +553,16 @@ pub(crate) enum LoweredConstraint {
     /// Dropping a permitted predicate this data graph does not intern is not a
     /// loss: an IRI with no dataset identity is the predicate of no quad in that
     /// dataset, so it can never be the predicate the probe is asking about.
-    Closed(SetSlot),
+    ///
+    /// Under `sh:closed sh:ByTypes` the set holds `sh:ignoredProperties` and
+    /// `rdf:type`, and `by_types` names the rest: the per-type property sets the
+    /// value node's `rdf:type` values select.
+    Closed {
+        /// The properties permitted whatever the value node's types.
+        permitted: SetSlot,
+        /// The `sh:closed sh:ByTypes` lowering; `None` for `sh:closed true`.
+        by_types: Option<LoweredByTypes>,
+    },
     /// `sh:minInclusive` — the bound, with its numeric parse already done.
     MinInclusive(BoundParse),
     /// `sh:maxInclusive` — the bound, with its numeric parse already done.
@@ -656,6 +711,10 @@ pub(crate) struct DatasetBinding {
     /// The grouping of each `sh:uniqueValuesFor` constraint's target set, by
     /// [`UniqueSlot`] — empty until first use, then built once for this binding.
     unique_values: Box<[OnceLock<UniqueGroups>]>,
+    /// Each `sh:closed sh:ByTypes` index, by [`LoweredByTypes::index`]: the
+    /// identity of every type this data graph interns, with the identities of the
+    /// properties it permits.
+    closed_types: Box<[FastMap<TermId, FastSet<TermId>>]>,
 }
 
 impl DatasetBinding {
@@ -712,6 +771,14 @@ impl DatasetBinding {
         self.sets
             .get(slot as usize)
             .ok_or_else(|| slot_defect("id-set", slot))
+    }
+
+    /// The `index`-th `sh:closed sh:ByTypes` index, by type identity.
+    #[inline]
+    fn closed_types(&self, index: u32) -> Result<&FastMap<TermId, FastSet<TermId>>, String> {
+        self.closed_types
+            .get(index as usize)
+            .ok_or_else(|| slot_defect("closed-type-index", index))
     }
 
     /// The shape node the `index`-th shape index holds under the dataset identity
@@ -1055,6 +1122,16 @@ impl<'a> ShapeList<'a> {
     }
 }
 
+/// The `sh:closed sh:ByTypes` half of a planned `sh:closed`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ClosedByTypes<'a> {
+    /// The dataset identity of `rdf:type`; `None` when this data graph interns
+    /// no `rdf:type`, so no value node has a type.
+    pub(crate) rdf_type: Option<TermId>,
+    /// Each type's permitted properties, by the type's dataset identity.
+    pub(crate) types: &'a FastMap<TermId, FastSet<TermId>>,
+}
+
 /// One range-facet bound, paired with the numeric parse the lowering already did.
 ///
 /// `Copy` and borrowed: a facet compared against a million value nodes reads the
@@ -1162,12 +1239,16 @@ pub(crate) enum PlannedConstraint<'a> {
     Not(ShapePlan<'a>),
     /// `sh:closed` — the identities of every predicate the shape permits.
     Closed {
-        /// The dataset identity of every permitted predicate: the shape's
-        /// simple-predicate property paths together with `sh:ignoredProperties`,
-        /// unioned at stage 0 and resolved at stage 1. Probed by the predicate id
-        /// of a focus node's outgoing quad, so nothing is materialized to decide
+        /// The dataset identity of every predicate permitted whatever the value
+        /// node's types: under `sh:closed true` the shape's simple-predicate
+        /// property paths together with `sh:ignoredProperties`, under
+        /// `sh:closed sh:ByTypes` `sh:ignoredProperties` and `rdf:type` — unioned
+        /// at stage 0 and resolved at stage 1. Probed by the predicate id of a
+        /// focus node's outgoing quad, so nothing is materialized to decide
         /// whether that quad is permitted.
         permitted: &'a FastSet<TermId>,
+        /// The `sh:closed sh:ByTypes` half; `None` under `sh:closed true`.
+        by_types: Option<ClosedByTypes<'a>>,
     },
     /// `sh:minInclusive` — the declared bound and its stage-0 numeric parse.
     MinInclusive(RangeBound<'a>),
@@ -1386,11 +1467,22 @@ impl<'a> ShapePlan<'a> {
             (Constraint::Not(shape), LoweredConstraint::Not(lowered)) => {
                 PlannedConstraint::Not(self.nested(shape, lowered))
             }
-            (Constraint::Closed { .. }, LoweredConstraint::Closed(slot)) => {
-                PlannedConstraint::Closed {
-                    permitted: self.binding.set(*slot)?,
-                }
-            }
+            (
+                Constraint::Closed { .. },
+                LoweredConstraint::Closed {
+                    permitted,
+                    by_types,
+                },
+            ) => PlannedConstraint::Closed {
+                permitted: self.binding.set(*permitted)?,
+                by_types: match by_types {
+                    None => None,
+                    Some(lowered) => Some(ClosedByTypes {
+                        rdf_type: self.binding.term(lowered.rdf_type)?,
+                        types: self.binding.closed_types(lowered.index)?,
+                    }),
+                },
+            },
             (Constraint::MinInclusive(bound), LoweredConstraint::MinInclusive(numeric)) => {
                 PlannedConstraint::MinInclusive(RangeBound {
                     term: bound,
@@ -1786,6 +1878,12 @@ struct ShapeWalk {
     footprint: FootprintWalk,
     /// Every `sh:uniqueValuesFor` constraint lowered so far, in slot order.
     unique_values: Vec<UniqueSpec>,
+    /// Every `sh:closed sh:ByTypes` index lowered so far, in position order.
+    closed_types: Vec<LoweredTypeIndex>,
+    /// The position each shared `sh:closed sh:ByTypes` index was lowered at, by
+    /// the address of its `Arc` allocation — so a shapes graph's one index is
+    /// lowered once however many constraints share it.
+    closed_type_positions: FastMap<usize, u32>,
 }
 
 impl ShapeWalk {
@@ -1812,6 +1910,35 @@ impl ShapeWalk {
         let slot = self.sets.len();
         self.sets.push(start..end);
         slot as SetSlot
+    }
+
+    /// Lower a `sh:closed sh:ByTypes` index — once per shared allocation — and
+    /// hand back its position.
+    fn closed_type_index(&mut self, index: &Arc<crate::shapes::ClosedTypeIndex>) -> u32 {
+        // The address is a stable identity only while the allocation lives, and
+        // it does: the walk borrows the shapes that hold every such `Arc`.
+        let address = Arc::as_ptr(index).addr();
+        if let Some(&position) = self.closed_type_positions.get(&address) {
+            return position;
+        }
+        let mut entries = Vec::with_capacity(index.entries().len());
+        for (ty, properties) in index.entries() {
+            let ty = self.slot(ty.clone());
+            let start = self.terms.len() as u32;
+            self.terms.extend(
+                properties
+                    .iter()
+                    .map(|property| Term::NamedNode(property.clone())),
+            );
+            let end = self.terms.len() as u32;
+            entries.push((ty, start..end));
+        }
+        let position = self.closed_types.len() as u32;
+        self.closed_types.push(LoweredTypeIndex {
+            entries: entries.into_boxed_slice(),
+        });
+        self.closed_type_positions.insert(address, position);
+        position
     }
 
     /// Record `class` as a planned class AND hand back the slot its own dataset
@@ -1873,6 +2000,7 @@ impl ShapeWalk {
             no_targets: PreparedTargets::default(),
             footprint,
             unique_values: self.unique_values.into_boxed_slice(),
+            closed_types: self.closed_types.into_boxed_slice(),
         }
     }
 
@@ -2220,10 +2348,14 @@ fn lower_constraint(
         // The permitted-predicate set, unioned once here rather than rebuilt per
         // focus node. The membership rule is the evaluator's, restated nowhere: an
         // INVERSE path constrains incoming triples and therefore permits no
-        // outgoing predicate, and `rdf:type` is permitted only when a shape lists
-        // it in `sh:ignoredProperties` (W3C `core/node/closed-001` vs `-002`).
-        Constraint::Closed { ignored } => LoweredConstraint::Closed(
-            walk.set_slot(
+        // outgoing predicate, and under `sh:closed true` `rdf:type` is permitted
+        // only when a shape lists it in `sh:ignoredProperties` (W3C
+        // `core/node/closed-001` vs `-002`).
+        Constraint::Closed {
+            ignored,
+            mode: ClosedMode::Declared,
+        } => LoweredConstraint::Closed {
+            permitted: walk.set_slot(
                 siblings
                     .iter()
                     .filter_map(|sibling| match &sibling.path {
@@ -2241,7 +2373,33 @@ fn lower_constraint(
                             .map(|predicate| Term::NamedNode(predicate.clone())),
                     ),
             ),
-        ),
+            by_types: None,
+        },
+        // SHACL 1.2 Core §7.9.1: under `sh:ByTypes`, "P is the set of IRI
+        // properties that can be reached from the value node via the following
+        // algorithm, plus rdf:type" — and the shape's OWN `sh:property` paths are
+        // not in it unless that algorithm reaches the shape. `rdf:type` and
+        // `sh:ignoredProperties` form the type-independent set; the rest is the
+        // shared type index, lowered once however many constraints share it.
+        Constraint::Closed {
+            ignored,
+            mode: ClosedMode::ByTypes(index),
+        } => {
+            let rdf_type = Term::NamedNode(NamedNode::new_unchecked(crate::model::rdf::TYPE));
+            let permitted = walk.set_slot(
+                std::iter::once(rdf_type.clone()).chain(
+                    ignored
+                        .iter()
+                        .map(|predicate| Term::NamedNode(predicate.clone())),
+                ),
+            );
+            let rdf_type = walk.slot(rdf_type);
+            let index = walk.closed_type_index(index);
+            LoweredConstraint::Closed {
+                permitted,
+                by_types: Some(LoweredByTypes { rdf_type, index }),
+            }
+        }
         Constraint::MinInclusive(bound) => {
             LoweredConstraint::MinInclusive(crate::constraints::numeric_value(bound))
         }
@@ -2904,7 +3062,7 @@ ex:FlagShape a sh:NodeShape ;
             | LoweredConstraint::MaxLength
             | LoweredConstraint::UniqueLang
             | LoweredConstraint::LanguageIn
-            | LoweredConstraint::Closed(_)
+            | LoweredConstraint::Closed { .. }
             | LoweredConstraint::MinInclusive(_)
             | LoweredConstraint::MaxInclusive(_)
             | LoweredConstraint::MinExclusive(_)

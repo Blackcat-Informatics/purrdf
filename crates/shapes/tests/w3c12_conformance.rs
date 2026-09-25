@@ -72,9 +72,6 @@ use shacl_corpora::{Expected, Multiset, W3cCase, file_iri, parse_turtle_file};
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
-const R_CLOSED_BY_TYPES: &str =
-    "sh:closed sh:ByTypes is not evaluated, so a shape using it is refused at load";
-
 const R_REIFIER_DEACTIVATED: &str = "a {| sh:deactivated true |} reifier annotation on a (shape, parameter, value) \
      statement is not evaluated, so the shapes graph is refused at load";
 
@@ -172,8 +169,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
     // ── Closed shapes ──
-    ("core/node/closed-003", R_CLOSED_BY_TYPES),
-    ("core/node/closed-004", R_CLOSED_BY_TYPES),
     // ── Reifier annotations, severities, conformance ──
     ("core/misc/deactivated-003", R_REIFIER_DEACTIVATED),
     ("core/misc/severity-003", R_REIFIER_SEVERITY),

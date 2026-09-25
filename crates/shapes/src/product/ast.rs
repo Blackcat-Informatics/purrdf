@@ -137,7 +137,8 @@
 //! | [`Path`] | `Predicate` `Inverse` `Sequence` `Alternative` `ZeroOrMore` `OneOrMore` `ZeroOrOne` |
 //! | [`Target`] | `Class` `SubjectsOf` `ObjectsOf` `Node` `ImplicitClass` `Sparql` |
 //! | [`ComponentValidator`] | `Ask` `Select` |
-//! | [`Constraint`] | 31 arms, `Class` … `Component` |
+//! | [`Constraint`] | 40 arms, `Class` … `Component` |
+//! | [`ClosedMode`] | `Declared` `ByTypes` |
 //! | [`NodeExpr`] | 32 arms, `Constant` … `Select` |
 //! | [`ShapeArg`] | `Named` `Computed` |
 //! | [`ArgKey`] | `Index` `Named` |
@@ -218,8 +219,8 @@ use crate::plan::ClassCatalog;
 use crate::report::Severity;
 use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
 use crate::shapes::{
-    ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Shapes,
-    SparqlTargetType, Target, TargetTypeParam,
+    ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint, NodeKindValue, Path,
+    PropertyShape, Shape, Shapes, SparqlTargetType, Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
@@ -315,6 +316,8 @@ const TAGS_TARGET: u8 = 6;
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
 const TAGS_CONSTRAINT: u8 = 40;
+/// The number of [`ClosedMode`] tags.
+const TAGS_CLOSED_MODE: u8 = 2;
 /// The number of [`NodeExpr`] tags.
 const TAGS_NODE_EXPR: u8 = 32;
 /// The number of [`ShapeArg`] tags.
@@ -566,6 +569,26 @@ impl AstWriter {
         self.term(&triple.subject)?;
         self.named_node(&triple.predicate);
         self.term(&triple.object)
+    }
+
+    /// Write a `sh:closed` mode: its tag, then — for `sh:ByTypes` — the type
+    /// index, already in the canonical order [`ClosedTypeIndex`] keeps.
+    fn closed_mode(&mut self, mode: &ClosedMode) -> Result<(), ShapesProductError> {
+        match mode {
+            ClosedMode::Declared => self.tag(0),
+            ClosedMode::ByTypes(index) => {
+                self.tag(1);
+                self.count(index.entries().len());
+                for (ty, properties) in index.entries() {
+                    self.term(ty)?;
+                    self.count(properties.len());
+                    for property in properties {
+                        self.named_node(property);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Write an RDF term.
@@ -1083,12 +1106,13 @@ impl AstWriter {
                 self.tag(12);
                 self.shape(shape)?;
             }
-            Constraint::Closed { ignored } => {
+            Constraint::Closed { ignored, mode } => {
                 self.tag(13);
                 self.count(ignored.len());
                 for predicate in ignored {
                     self.named_node(predicate);
                 }
+                self.closed_mode(mode)?;
             }
             Constraint::MinInclusive(bound) => {
                 self.tag(14);
@@ -1432,6 +1456,10 @@ struct AstReader<'a> {
     functions: Vec<Arc<CustomFunction>>,
     /// The ONE shape-index handle every decoded site is given a clone of.
     shape_index: Arc<OnceLock<FastMap<Term, Shape>>>,
+    /// The `sh:closed sh:ByTypes` index decoded first, which every later
+    /// constraint carrying an equal one shares — as the parse that wrote them
+    /// shared one.
+    closed_type_index: Option<Arc<ClosedTypeIndex>>,
 }
 
 impl<'a> AstReader<'a> {
@@ -1443,6 +1471,7 @@ impl<'a> AstReader<'a> {
             depth: 0,
             functions: Vec::new(),
             shape_index: Arc::new(OnceLock::new()),
+            closed_type_index: None,
         }
     }
 
@@ -1587,6 +1616,31 @@ impl<'a> AstReader<'a> {
     /// Read an IRI.
     fn named_node(&mut self) -> Result<NamedNode, ShapesProductError> {
         Ok(NamedNode::new_unchecked(self.text()?))
+    }
+
+    /// Read a `sh:closed` mode, sharing an equal `sh:ByTypes` index with the
+    /// constraints decoded before it.
+    fn closed_mode(&mut self) -> Result<ClosedMode, ShapesProductError> {
+        if self.tag("ClosedMode", TAGS_CLOSED_MODE)? == 0 {
+            return Ok(ClosedMode::Declared);
+        }
+        let entries = self.seq(|reader| Ok((reader.term()?, reader.seq(Self::named_node)?)))?;
+        let index = ClosedTypeIndex::from_canonical_entries(entries).ok_or_else(|| {
+            malformed(
+                "a sh:closed sh:ByTypes index is not in canonical form (types in canonical \
+                 term order, each once, each with a non-empty IRI-sorted property list)"
+                    .to_owned(),
+            )
+        })?;
+        let shared = match &self.closed_type_index {
+            Some(shared) if **shared == index => Arc::clone(shared),
+            _ => {
+                let fresh = Arc::new(index);
+                self.closed_type_index = Some(Arc::clone(&fresh));
+                fresh
+            }
+        };
+        Ok(ClosedMode::ByTypes(shared))
     }
 
     /// Read an RDF literal, rebuilding it through the constructor its recorded
@@ -1961,6 +2015,7 @@ impl<'a> AstReader<'a> {
             12 => Constraint::Not(Box::new(self.shape()?)),
             13 => Constraint::Closed {
                 ignored: self.seq(Self::named_node)?,
+                mode: self.closed_mode()?,
             },
             14 => Constraint::MinInclusive(self.term()?),
             15 => Constraint::MaxInclusive(self.term()?),

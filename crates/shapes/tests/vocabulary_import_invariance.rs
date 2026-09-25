@@ -90,7 +90,11 @@ const TOTAL_CASES: usize = 375;
 /// Moved from 344 to 349 when `sh:uniqueValuesFor` became evaluated:
 /// `uniqueValuesFor-001` to `-005` now load, so their reports are compared too,
 /// and the refused-at-load entries went from 19 to 14.
-const COMPARED_ON_REPORT: usize = 349;
+///
+/// Moved from 349 to 351 when `sh:closed sh:ByTypes` became evaluated:
+/// `closed-003` and `closed-004` now load, so their reports are compared too,
+/// and the refused-at-load entries went from 14 to 12.
+const COMPARED_ON_REPORT: usize = 351;
 
 /// One case, reduced to what both parses need.
 struct Input {
