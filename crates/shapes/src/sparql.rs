@@ -345,6 +345,33 @@ pub(crate) fn eval_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
         .map_err(|e| format!("scalar expression {e}"))
 }
 
+/// [`eval_scalar_query_view`], with every blank node the evaluation mints (`BNODE()`)
+/// labelled `{bnode_mint_prefix}…` — how a caller that evaluates one expression many
+/// times keeps each evaluation's fresh blank nodes distinct from every other's.
+pub(crate) fn eval_scalar_query_view_minting<D: DatasetView + Sync + FocusGraphSource>(
+    dataset: &D,
+    select: &str,
+    args: &[(String, Term)],
+    bnode_mint_prefix: &str,
+) -> Result<Option<Term>, String> {
+    let subs: Vec<Prebinding<'_>> = args
+        .iter()
+        .map(|(name, term)| Prebinding {
+            variable: name.as_str(),
+            value: term.to_term_value(),
+        })
+        .collect();
+    run_query_view(
+        dataset,
+        select,
+        &subs,
+        ShaclPrebinding::None,
+        Some(bnode_mint_prefix),
+        |outcome| project_solutions(outcome, project_scalar),
+    )
+    .map_err(|e| format!("scalar expression {e}"))
+}
+
 /// The single `?result` binding a scalar expression's wrapper SELECT produces.
 ///
 /// Shared by the `&str` scalar door and both prepared ones, so "no row at all is a

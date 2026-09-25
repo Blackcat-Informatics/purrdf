@@ -1002,4 +1002,7 @@ pub mod xsd {
 
     /// `xsd:decimal`.
     pub const DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+
+    /// `xsd:double`.
+    pub const DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 }

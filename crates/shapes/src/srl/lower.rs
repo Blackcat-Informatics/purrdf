@@ -42,6 +42,10 @@ use crate::term::Term;
 /// The partition the base graph is mirrored into when a rule matches it alone.
 pub(crate) const BASE_GRAPH: &str = "#base";
 
+/// The partition, subject, predicate and object of the marker an empty-headed rule
+/// derives — a surface no RDF term renders to, like [`BASE_GRAPH`].
+pub(crate) const EMPTY_HEAD: &str = "#empty-head";
+
 /// How one guard of the lowered program is evaluated.
 #[derive(Debug, Clone)]
 pub(crate) enum GuardImpl<'r, 'a> {
@@ -63,6 +67,8 @@ pub(crate) enum GuardImpl<'r, 'a> {
     },
     /// A fresh blank node per call.
     FreshBlank,
+    /// Its two inputs are the same RDF term.
+    SameTerm,
     /// Take a triple term apart against `pattern`. The guard's first input is the triple
     /// term; the remaining inputs are the clause variables in `pattern` already bound,
     /// its outputs the rest, both in `names` order.
@@ -370,11 +376,26 @@ impl ClauseBuilder<'_, '_, '_> {
         for (name, pattern) in std::mem::take(&mut pending.0) {
             self.take_apart(name, pattern, &mut bound, None);
         }
-        // Filters, assignments and negations, in authored order.
+        // Filters, assignments and negations, in authored order. `authored` is SPARQL 1.2
+        // RL's V(i-1) at each element: the variables of the elements BEFORE it. A
+        // negation element is evaluated "given the set of variables Vi-1", so only those
+        // are shared with it; the positive atoms all join before any guard runs, and a
+        // variable a later pattern binds is a different, local variable inside it.
+        let pattern_bound: Vec<String> = bound.clone();
+        let mut authored: Vec<String> = Vec::new();
+        let mut equalities: Vec<(String, String)> = Vec::new();
         let mut negations: Vec<Negation> = Vec::new();
         for element in &rule.body {
             match element {
-                Element::Pattern(_) => {}
+                Element::Pattern(pattern) => {
+                    let mut names = Vec::new();
+                    pattern_clause_variables(pattern, &mut names);
+                    for name in names {
+                        if !authored.contains(&name) {
+                            authored.push(name);
+                        }
+                    }
+                }
                 Element::Filter(expression) => {
                     let (query, variables, inputs) = self.expression_query(expression, true);
                     let site = GuardSite::Body(self.guards.len());
@@ -392,15 +413,37 @@ impl ClauseBuilder<'_, '_, '_> {
                     let name = format!("srl-assign {query}");
                     self.impls
                         .insert((self.index, site), GuardImpl::Assign { query, variables });
-                    let output = variable(target);
+                    let target = variable(target);
+                    // A pattern AFTER the assignment may use its variable — `SET(?x := 1)
+                    // :s ?p ?x` — and the positive atoms have already bound it by the time
+                    // the guard runs, so the guard binds a fresh variable and a same-term
+                    // check joins the two: "compatible(μ1, μ2) … μ1(v) = μ2(v)".
+                    let output = if pattern_bound.contains(&target) {
+                        let fresh = self.fresh();
+                        equalities.push((fresh.clone(), target.clone()));
+                        fresh
+                    } else {
+                        target.clone()
+                    };
                     bound.push(output.clone());
                     self.guards.push(Guard::assign(name, inputs, output));
+                    if !authored.contains(&target) {
+                        authored.push(target);
+                    }
                 }
                 Element::Negation { elements, data } => {
                     let index = negations.len();
-                    negations.push(self.negation(index, elements, *data || rule.data, &bound));
+                    negations.push(self.negation(index, elements, *data || rule.data, &authored));
                 }
             }
+        }
+        for (assigned, matched) in equalities {
+            let site = GuardSite::Body(self.guards.len());
+            self.impls.insert((self.index, site), GuardImpl::SameTerm);
+            self.guards.push(Guard::filter(
+                format!("srl-same-term {assigned} {matched}"),
+                vec![assigned, matched],
+            ));
         }
         // The head: fresh blank nodes first, then built triple terms, then the atoms.
         let mut head_blanks: Vec<String> = Vec::new();
@@ -427,7 +470,18 @@ impl ClauseBuilder<'_, '_, '_> {
                 ClauseAtom::quad(s, p, o, ClauseTerm::DefaultGraph)
             })
             .collect();
-        let clause = if head.len() == 1 {
+        let clause = if head.is_empty() {
+            // `RULE {} WHERE { … }`: "A rule head is a sequence of triple templates", and
+            // the empty sequence generates nothing. The clause IR has no empty head (that
+            // is its inconsistency clause), so the rule's body still runs and derives one
+            // constant marker into the [`EMPTY_HEAD`] partition, which nothing reads and
+            // no output decodes.
+            let marker = || ClauseTerm::literal(EMPTY_HEAD);
+            DlClause::datalog(
+                ClauseAtom::quad(marker(), marker(), marker(), marker()),
+                atoms,
+            )
+        } else if head.len() == 1 {
             DlClause::datalog(head.into_iter().next().expect("one head atom"), atoms)
         } else {
             DlClause::new(vec![HeadDisjunct::new(head)], Vec::new(), atoms)
@@ -569,6 +623,19 @@ impl ClauseBuilder<'_, '_, '_> {
             }
         }
         Negation::new(atoms, guards)
+    }
+}
+
+/// The clause variables a body pattern binds outside any negation: its variables and
+/// its blank nodes, triple terms included.
+fn pattern_clause_variables(pattern: &TriplePattern, out: &mut Vec<String>) {
+    for position in pattern.positions() {
+        match position {
+            PatternTerm::Variable(name) => out.push(variable(name)),
+            PatternTerm::BlankNode(label) => out.push(body_blank(label)),
+            PatternTerm::Triple(inner) => pattern_clause_variables(inner, out),
+            PatternTerm::Term(_) => {}
+        }
     }
 }
 

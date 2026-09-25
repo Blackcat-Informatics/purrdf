@@ -24,7 +24,8 @@
 //! * SPARQL 1.2 RL, "Evaluation of a Rule Set": "A stratum is evaluated by first
 //!   evaluating each of the run-once rules of that stratum, and then evaluating general
 //!   rules of the stratum repeatedly until no new triples are produced" — with the
-//!   strata computed by [`stratify_rules`].
+//!   strata computed by [`stratify_rules`] from clause atoms, or by
+//!   [`stratify_dependency_graph`] from a dependency graph the rule language built.
 //!
 //! # The shape
 //!
@@ -635,24 +636,105 @@ pub fn stratify_rules(rules: &[DlClause], run_once: &[bool]) -> Result<Schedule,
         run_once.len(),
         "stratify_rules needs one run-once flag per rule"
     );
-    // (R1, R2) -> closed?, merged "closed overrides open".
-    let mut edges: BTreeMap<(usize, usize), bool> = BTreeMap::new();
+    let mut graph = DependencyGraph::new(rules.len());
     for (r1, rule) in rules.iter().enumerate() {
         let reads = body_reads(rule);
         for (r2, other) in rules.iter().enumerate() {
-            let mut label: Option<bool> =
-                (rule.reads_model() && other.head_atoms().next().is_some()).then_some(true);
+            if rule.reads_model() && other.head_atoms().next().is_some() {
+                graph.depend(r1, r2, true);
+            }
             for (pattern, negated) in &reads {
                 if other.head_atoms().any(|head| may_generate(pattern, head)) {
-                    let closed = *negated || run_once[r1];
-                    label = Some(label.unwrap_or(false) || closed);
+                    graph.depend(r1, r2, *negated || run_once[r1]);
                 }
-            }
-            if let Some(closed) = label {
-                edges.insert((r1, r2), closed);
             }
         }
     }
+    stratify_dependency_graph(&graph, run_once)
+}
+
+/// A rule-set DEPENDENCY GRAPH: SPARQL 1.2 RL, "A dependency graph of a rule set is a
+/// directed graph where each vertex is a rule in the rule set, and an edge exists from
+/// rule R1 to rule R2 if R1 depends on R2. The edge is labeled either open or closed".
+///
+/// [`stratify_rules`] builds one from clause atoms; a caller whose rule language can
+/// decide "the triple template can generate a triple that matches the triple pattern"
+/// more precisely than the clause IR can state it — a triple term taken apart or built by
+/// caller code is an opaque guard variable to the clause IR, but a structured term to
+/// the caller — builds its own and stratifies it with [`stratify_dependency_graph`], so
+/// there is still exactly one stratifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyGraph {
+    /// The number of rules (vertices).
+    rules: usize,
+    /// `(R1, R2) -> closed?`, merged "closed overrides open".
+    edges: BTreeMap<(usize, usize), bool>,
+}
+
+impl DependencyGraph {
+    /// A graph over `rules` vertices and no edges.
+    #[must_use]
+    pub fn new(rules: usize) -> Self {
+        Self {
+            rules,
+            edges: BTreeMap::new(),
+        }
+    }
+
+    /// Record that rule `rule` depends on rule `depends_on`, the dependency CLOSED when
+    /// `closed`. A repeated edge keeps the specification's `mergeLabel`: "Closed
+    /// dependency overrides open dependency."
+    ///
+    /// # Panics
+    ///
+    /// Panics if either index is not a vertex — a construction bug.
+    pub fn depend(&mut self, rule: usize, depends_on: usize, closed: bool) {
+        assert!(
+            rule < self.rules && depends_on < self.rules,
+            "dependency edge {rule} -> {depends_on} outside a {}-rule graph",
+            self.rules
+        );
+        let label = self.edges.entry((rule, depends_on)).or_insert(false);
+        *label |= closed;
+    }
+
+    /// The number of rules.
+    #[must_use]
+    pub fn rule_count(&self) -> usize {
+        self.rules
+    }
+
+    /// Every edge as `(rule, depends_on, closed)`, in `(rule, depends_on)` order.
+    pub fn edges(&self) -> impl Iterator<Item = (usize, usize, bool)> + '_ {
+        self.edges
+            .iter()
+            .map(|(&(r1, r2), &closed)| (r1, r2, closed))
+    }
+}
+
+/// Stratify a [`DependencyGraph`] SPARQL 1.2 RL's way into an ordered [`Schedule`];
+/// `run_once[i]` says whether rule `i` is a run-once rule. See [`stratify_rules`] for the
+/// condition checked and the strata produced.
+///
+/// # Errors
+///
+/// [`EvalError::NonStratifiableRules`] naming the first closed edge, in `(rule,
+/// depends_on)` order, that lies in a cycle, and one shortest cycle through it.
+///
+/// # Panics
+///
+/// Panics if `run_once` does not have one entry per rule — a construction bug.
+pub fn stratify_dependency_graph(
+    graph: &DependencyGraph,
+    run_once: &[bool],
+) -> Result<Schedule, EvalError> {
+    assert_eq!(
+        graph.rules,
+        run_once.len(),
+        "stratify_dependency_graph needs one run-once flag per rule"
+    );
+    let edges = &graph.edges;
+    let rule_count = graph.rules;
 
     // The stratification condition, decided before any stratum is assigned: a closed
     // edge R1 -> R2 violates it exactly when R2 reaches R1.
@@ -660,7 +742,7 @@ pub fn stratify_rules(rules: &[DlClause], run_once: &[bool]) -> Result<Schedule,
     for &(r1, r2) in edges.keys() {
         depends.entry(r1).or_default().insert(r2);
     }
-    for (&(r1, r2), &closed) in &edges {
+    for (&(r1, r2), &closed) in edges {
         if !closed {
             continue;
         }
@@ -677,11 +759,11 @@ pub fn stratify_rules(rules: &[DlClause], run_once: &[bool]) -> Result<Schedule,
     }
 
     // The specification's relaxation; it terminates because the condition holds.
-    let mut stratum = vec![0usize; rules.len()];
+    let mut stratum = vec![0usize; rule_count];
     let mut changed = true;
     while changed {
         changed = false;
-        for (&(p, q), &closed) in &edges {
+        for (&(p, q), &closed) in edges {
             let need = if closed { stratum[q] + 1 } else { stratum[q] };
             if stratum[p] < need {
                 stratum[p] = need;
@@ -693,7 +775,7 @@ pub fn stratify_rules(rules: &[DlClause], run_once: &[bool]) -> Result<Schedule,
     let layers = (0..=top)
         .filter(|level| stratum.contains(level))
         .map(|level| {
-            let members = (0..rules.len()).filter(|&index| stratum[index] == level);
+            let members = (0..rule_count).filter(|&index| stratum[index] == level);
             let once = members
                 .clone()
                 .filter(|&index| run_once[index])
@@ -1432,6 +1514,41 @@ mod tests {
         );
         let unique: BTreeSet<usize> = schedule.rule_indices().collect();
         assert_eq!(unique.len(), 2);
+    }
+
+    /// A caller-built dependency graph is stratified by the same core: an open cycle is
+    /// one stratum, a closed edge lands its rule strictly above, a closed edge inside a
+    /// cycle is refused naming it, and a repeated edge keeps "closed overrides open".
+    #[test]
+    fn a_caller_built_dependency_graph_is_stratified_by_the_same_core() {
+        // 0 <-> 1 open, 2 -> 1 closed: two strata.
+        let mut graph = DependencyGraph::new(3);
+        graph.depend(0, 1, false);
+        graph.depend(1, 0, false);
+        graph.depend(2, 1, false);
+        graph.depend(2, 1, true);
+        assert_eq!(
+            graph.edges().collect::<Vec<_>>(),
+            [(0, 1, false), (1, 0, false), (2, 1, true)]
+        );
+        let schedule = stratify_dependency_graph(&graph, &[false, false, true]).expect("ok");
+        assert_eq!(
+            schedule.layers(),
+            [
+                Layer::new(Vec::new(), vec![vec![0], vec![1]]),
+                Layer::new(vec![vec![2]], Vec::new())
+            ]
+        );
+        // The same closed edge inside a cycle is refused by name.
+        graph.depend(1, 2, false);
+        assert_eq!(
+            stratify_dependency_graph(&graph, &[false, false, true]),
+            Err(EvalError::NonStratifiableRules {
+                rule: 2,
+                depends_on: 1,
+                cycle: vec![2, 1],
+            })
+        );
     }
 
     /// The consumers that read only clause text refuse a guarded clause by name.
