@@ -908,10 +908,12 @@ fn string_consts_in_module(source: &syn::File, module: &str) -> BTreeMap<String,
 ///
 /// * every `sh:…ConstraintComponent` IRI `crates/shapes/src/model.rs` declares —
 ///   the component identities a validation result is reported under; and
-/// * the native parameter-cardinality tables in
-///   `crates/shapes/src/shapes/parser/cardinality.rs`, resolved to the IRIs they
-///   name — which decide, with no vocabulary import, whether a second value of a
-///   parameter is a load error or a second constraint.
+/// * the native metadata-cardinality table in
+///   `crates/shapes/src/shapes/parser/cardinality.rs`, resolved to the IRIs it
+///   names — which decides, with no vocabulary import, whether a second value of
+///   a shape's metadata is a load error. The single-valued CONSTRAINT parameters
+///   are not a second table: they are the spec symbol table's `single` flags,
+///   which its canonical rendering (the third half) carries line by line.
 ///
 /// * the spec symbol table (`purrdf_shapes::spec`), one line per fact in its own
 ///   canonical rendering — which spec terms bind natively, with which signature,
@@ -955,7 +957,7 @@ pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
     let cardinality_text = std::fs::read_to_string(&cardinality_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", cardinality_path.display()));
     let cardinality = syn::parse_file(&cardinality_text).expect("cardinality.rs parses as Rust");
-    for want in ["SINGLETON_PREDICATES", "METADATA_SINGLETONS"] {
+    for want in ["METADATA_SINGLETONS"] {
         let item = cardinality
             .items
             .iter()
@@ -1498,7 +1500,12 @@ fn stage_id_is_reproducible_and_its_preimage_is_readable() {
         "parameter component MIN_COUNT_CONSTRAINT_COMPONENT = \
          http://www.w3.org/ns/shacl#MinCountConstraintComponent\n"
     ));
-    assert!(preimage.contains("SINGLETON_PREDICATES[0] sh::DATATYPE = "));
+    assert!(preimage.contains("METADATA_SINGLETONS[0] sh::PATH = "));
+    // The single-valued constraint parameters are the spec table's own flags.
+    assert!(preimage.contains(
+        "  param http://www.w3.org/ns/shacl#datatype optional=false value=iri-or-iri-list \
+         single=true property-only=false\n"
+    ));
     assert!(preimage.contains(
         "= function http://www.w3.org/ns/shacl#SPARQLExprExpression \
          http://www.w3.org/ns/shacl#NamedParameterExpressionFunction keyed \

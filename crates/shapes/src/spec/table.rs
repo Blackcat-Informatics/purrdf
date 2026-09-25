@@ -205,50 +205,60 @@ impl FunctionRow {
     }
 }
 
-/// The value a component parameter takes, as this engine's parser requires it.
+/// The value a component parameter takes: the SHACL 1.2 Core syntax rule for the
+/// parameter, as the shapes-graph well-formedness check enforces it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueRule {
     /// An IRI.
     Iri,
-    /// A `sh:nodeKind` IRI (`sh:IRI`, `sh:BlankNode`, …).
+    /// A `sh:NodeKind` IRI (one of the seven), or a well-formed SHACL list whose
+    /// members are the four basic kinds (SHACL 1.2 Core §4.1.3).
     NodeKind,
-    /// A non-negative `xsd:integer`.
+    /// A literal with datatype `xsd:integer` whose value is at least 0.
     NonNegativeInteger,
-    /// An `xsd:boolean`.
+    /// A literal with datatype `xsd:boolean`.
     Boolean,
-    /// A string literal.
+    /// A literal with datatype `xsd:string`.
     StringLiteral,
+    /// A literal (SHACL 1.2 Core §4.5: "The values of sh:minInclusive in a shape
+    /// are literals").
+    Literal,
     /// Any RDF term.
     Term,
-    /// A SHACL list of RDF terms.
+    /// A well-formed SHACL list of RDF terms.
     TermList,
-    /// A SHACL list of IRIs.
+    /// A well-formed SHACL list of IRIs.
     IriList,
-    /// A SHACL list of language-tag string literals.
+    /// A well-formed SHACL list of `xsd:string` literals.
     LanguageTagList,
-    /// A shape.
+    /// A shape: an IRI or a blank node.
     Shape,
-    /// A SHACL list of shapes.
+    /// A well-formed SHACL list of shapes.
     ShapeList,
-    /// A SPARQL-based constraint node (`sh:select` and optional `sh:prefixes`).
+    /// A SPARQL-based constraint node (`sh:select` and optional `sh:prefixes`):
+    /// an IRI or a blank node.
     SparqlConstraint,
-    /// A node expression.
+    /// A node expression: any RDF term.
     NodeExpression,
-    /// An IRI or a SHACL list of IRIs.
+    /// An IRI or a well-formed SHACL list of IRIs.
     IriOrIriList,
-    /// A property path.
+    /// A well-formed SHACL property path.
     Path,
+    /// A literal with datatype `xsd:boolean`, or the IRI `sh:ByTypes` (SHACL 1.2
+    /// Core §4.8.1).
+    ClosedValue,
 }
 
 impl ValueRule {
     /// A stable label for the table's canonical rendering.
-    const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Iri => "iri",
             Self::NodeKind => "node-kind",
             Self::NonNegativeInteger => "non-negative-integer",
             Self::Boolean => "boolean",
             Self::StringLiteral => "string-literal",
+            Self::Literal => "literal",
             Self::Term => "term",
             Self::TermList => "term-list",
             Self::IriList => "iri-list",
@@ -259,6 +269,33 @@ impl ValueRule {
             Self::NodeExpression => "node-expression",
             Self::IriOrIriList => "iri-or-iri-list",
             Self::Path => "path",
+            Self::ClosedValue => "closed-value",
+        }
+    }
+
+    /// What a value of this rule is, for a diagnostic ("… must be {describe}").
+    pub(crate) const fn describe(self) -> &'static str {
+        match self {
+            Self::Iri => "an IRI",
+            Self::NodeKind => {
+                "one of the sh:NodeKind IRIs, or a SHACL list of sh:BlankNode / sh:IRI / \
+                 sh:Literal / sh:TripleTerm"
+            }
+            Self::NonNegativeInteger => "an xsd:integer literal of at least 0",
+            Self::Boolean => "an xsd:boolean literal",
+            Self::StringLiteral => "an xsd:string literal",
+            Self::Literal => "a literal",
+            Self::Term => "an RDF term",
+            Self::TermList => "a well-formed SHACL list",
+            Self::IriList => "a well-formed SHACL list of IRIs",
+            Self::LanguageTagList => "a well-formed SHACL list of xsd:string literals",
+            Self::Shape => "a shape (an IRI or a blank node)",
+            Self::ShapeList => "a well-formed SHACL list of shapes (IRIs or blank nodes)",
+            Self::SparqlConstraint => "a SPARQL-based constraint (an IRI or a blank node)",
+            Self::NodeExpression => "a node expression",
+            Self::IriOrIriList => "an IRI or a well-formed SHACL list of IRIs",
+            Self::Path => "a well-formed SHACL property path",
+            Self::ClosedValue => "an xsd:boolean literal or sh:ByTypes",
         }
     }
 }
@@ -272,6 +309,31 @@ pub struct ComponentParam {
     pub optional: bool,
     /// What a value of the parameter must be.
     pub value: ValueRule,
+    /// Whether a shape has at most one value for the parameter (SHACL 1.2 Core:
+    /// "A shape has at most one value for …", and §3.1.1 for every parameter of a
+    /// multi-parameter component).
+    pub single: bool,
+    /// Whether node shapes cannot have any value for the parameter (SHACL 1.2
+    /// Core: "Node shapes cannot have any value for …").
+    pub property_only: bool,
+}
+
+impl ComponentParam {
+    /// This parameter, single-valued.
+    const fn single(self) -> Self {
+        Self {
+            single: true,
+            ..self
+        }
+    }
+
+    /// This parameter, forbidden on node shapes.
+    const fn property_only(self) -> Self {
+        Self {
+            property_only: true,
+            ..self
+        }
+    }
 }
 
 /// Where the parsed model carries a component's instances.
@@ -451,6 +513,8 @@ const fn param(path: &'static str, value: ValueRule) -> ComponentParam {
         path,
         optional: false,
         value,
+        single: false,
+        property_only: false,
     }
 }
 
@@ -459,6 +523,8 @@ const fn optional_param(path: &'static str, value: ValueRule) -> ComponentParam 
         path,
         optional: true,
         value,
+        single: false,
+        property_only: false,
     }
 }
 
@@ -693,20 +759,20 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ),
     native(
         sh::CLASS_CONSTRAINT_COMPONENT,
-        &[param(sh::CLASS, ValueRule::Iri)],
+        &[param(sh::CLASS, ValueRule::IriOrIriList)],
         &["Class"],
     ),
     native(
         sh::CLOSED_CONSTRAINT_COMPONENT,
         &[
-            param(sh::CLOSED, ValueRule::Boolean),
-            optional_param(sh::IGNORED_PROPERTIES, ValueRule::IriList),
+            param(sh::CLOSED, ValueRule::ClosedValue).single(),
+            optional_param(sh::IGNORED_PROPERTIES, ValueRule::IriList).single(),
         ],
         &["Closed"],
     ),
     native(
         sh::DATATYPE_CONSTRAINT_COMPONENT,
-        &[param(sh::DATATYPE, ValueRule::Iri)],
+        &[param(sh::DATATYPE, ValueRule::IriOrIriList).single()],
         &["Datatype"],
     ),
     native(
@@ -726,79 +792,87 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ),
     native(
         sh::IN_CONSTRAINT_COMPONENT,
-        &[param(sh::IN, ValueRule::TermList)],
+        &[param(sh::IN, ValueRule::TermList).single()],
         &["In"],
     ),
     native(
         sh::LANGUAGE_IN_CONSTRAINT_COMPONENT,
-        &[param(sh::LANGUAGE_IN, ValueRule::LanguageTagList)],
+        &[param(sh::LANGUAGE_IN, ValueRule::LanguageTagList).single()],
         &["LanguageIn"],
     ),
     native(
         sh::LESS_THAN_CONSTRAINT_COMPONENT,
-        &[param(sh::LESS_THAN, ValueRule::Iri)],
+        &[param(sh::LESS_THAN, ValueRule::Iri).property_only()],
         &["LessThan"],
     ),
     native(
         sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
-        &[param(sh::LESS_THAN_OR_EQUALS, ValueRule::Iri)],
+        &[param(sh::LESS_THAN_OR_EQUALS, ValueRule::Iri).property_only()],
         &["LessThanOrEquals"],
     ),
     native(
         sh::MAX_COUNT_CONSTRAINT_COMPONENT,
-        &[param(sh::MAX_COUNT, ValueRule::NonNegativeInteger)],
+        &[param(sh::MAX_COUNT, ValueRule::NonNegativeInteger)
+            .single()
+            .property_only()],
         &["MaxCount"],
     ),
     native(
         sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT,
-        &[param(sh::MAX_EXCLUSIVE, ValueRule::Term)],
+        &[param(sh::MAX_EXCLUSIVE, ValueRule::Literal).single()],
         &["MaxExclusive"],
     ),
     native(
         sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT,
-        &[param(sh::MAX_INCLUSIVE, ValueRule::Term)],
+        &[param(sh::MAX_INCLUSIVE, ValueRule::Literal).single()],
         &["MaxInclusive"],
     ),
     native(
         sh::MAX_LENGTH_CONSTRAINT_COMPONENT,
-        &[param(sh::MAX_LENGTH, ValueRule::NonNegativeInteger)],
+        &[param(sh::MAX_LENGTH, ValueRule::NonNegativeInteger).single()],
         &["MaxLength"],
     ),
     native(
         sh::MIN_COUNT_CONSTRAINT_COMPONENT,
-        &[param(sh::MIN_COUNT, ValueRule::NonNegativeInteger)],
+        &[param(sh::MIN_COUNT, ValueRule::NonNegativeInteger)
+            .single()
+            .property_only()],
         &["MinCount"],
     ),
     native(
         sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT,
-        &[param(sh::MIN_EXCLUSIVE, ValueRule::Term)],
+        &[param(sh::MIN_EXCLUSIVE, ValueRule::Literal).single()],
         &["MinExclusive"],
     ),
     native(
         sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT,
-        &[param(sh::MIN_INCLUSIVE, ValueRule::Term)],
+        &[param(sh::MIN_INCLUSIVE, ValueRule::Literal).single()],
         &["MinInclusive"],
     ),
     native(
         sh::MIN_LENGTH_CONSTRAINT_COMPONENT,
-        &[param(sh::MIN_LENGTH, ValueRule::NonNegativeInteger)],
+        &[param(sh::MIN_LENGTH, ValueRule::NonNegativeInteger).single()],
         &["MinLength"],
     ),
-    unimplemented(
+    native(
         sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
         &[param(sh::MEMBER_SHAPE, ValueRule::Shape)],
+        &["MemberShape"],
     ),
-    unimplemented(
+    native(
         sh::MIN_LIST_LENGTH_CONSTRAINT_COMPONENT,
-        &[param(sh::MIN_LIST_LENGTH, ValueRule::NonNegativeInteger)],
+        &[param(sh::MIN_LIST_LENGTH, ValueRule::NonNegativeInteger).single()],
+        &["MinListLength"],
     ),
-    unimplemented(
+    native(
         sh::MAX_LIST_LENGTH_CONSTRAINT_COMPONENT,
-        &[param(sh::MAX_LIST_LENGTH, ValueRule::NonNegativeInteger)],
+        &[param(sh::MAX_LIST_LENGTH, ValueRule::NonNegativeInteger).single()],
+        &["MaxListLength"],
     ),
-    unimplemented(
+    native(
         sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
-        &[param(sh::UNIQUE_MEMBERS, ValueRule::Boolean)],
+        &[param(sh::UNIQUE_MEMBERS, ValueRule::Boolean).single()],
+        &["UniqueMembers"],
     ),
     native(
         sh::NODE_CONSTRAINT_COMPONENT,
@@ -807,7 +881,7 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ),
     native(
         sh::NODE_KIND_CONSTRAINT_COMPONENT,
-        &[param(sh::NODE_KIND, ValueRule::NodeKind)],
+        &[param(sh::NODE_KIND, ValueRule::NodeKind).single()],
         &["NodeKind"],
     ),
     native(
@@ -823,8 +897,8 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     native(
         sh::PATTERN_CONSTRAINT_COMPONENT,
         &[
-            param(sh::PATTERN, ValueRule::StringLiteral),
-            optional_param(sh::FLAGS, ValueRule::StringLiteral),
+            param(sh::PATTERN, ValueRule::StringLiteral).single(),
+            optional_param(sh::FLAGS, ValueRule::StringLiteral).single(),
         ],
         &["Pattern"],
     ),
@@ -837,26 +911,30 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     native(
         sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,
         &[
-            param(sh::QUALIFIED_MAX_COUNT, ValueRule::NonNegativeInteger),
-            param(sh::QUALIFIED_VALUE_SHAPE, ValueRule::Shape),
-            optional_param(sh::QUALIFIED_VALUE_SHAPES_DISJOINT, ValueRule::Boolean),
+            param(sh::QUALIFIED_MAX_COUNT, ValueRule::NonNegativeInteger).single(),
+            param(sh::QUALIFIED_VALUE_SHAPE, ValueRule::Shape)
+                .single()
+                .property_only(),
+            optional_param(sh::QUALIFIED_VALUE_SHAPES_DISJOINT, ValueRule::Boolean).single(),
         ],
         &["QualifiedValueShape"],
     ),
     native(
         sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT,
         &[
-            param(sh::QUALIFIED_MIN_COUNT, ValueRule::NonNegativeInteger),
-            param(sh::QUALIFIED_VALUE_SHAPE, ValueRule::Shape),
-            optional_param(sh::QUALIFIED_VALUE_SHAPES_DISJOINT, ValueRule::Boolean),
+            param(sh::QUALIFIED_MIN_COUNT, ValueRule::NonNegativeInteger).single(),
+            param(sh::QUALIFIED_VALUE_SHAPE, ValueRule::Shape)
+                .single()
+                .property_only(),
+            optional_param(sh::QUALIFIED_VALUE_SHAPES_DISJOINT, ValueRule::Boolean).single(),
         ],
         &["QualifiedValueShape"],
     ),
     ComponentRow {
         iri: sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
         params: &[
-            param(sh::REIFIER_SHAPE, ValueRule::Shape),
-            optional_param(sh::REIFICATION_REQUIRED, ValueRule::Boolean),
+            param(sh::REIFIER_SHAPE, ValueRule::Shape).single(),
+            optional_param(sh::REIFICATION_REQUIRED, ValueRule::Boolean).single(),
         ],
         status: ComponentStatus::Native,
         carrier: Carrier::ShapeField("reifier_shapes"),
@@ -867,7 +945,7 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ),
     unimplemented(
         sh::SINGLE_LINE_CONSTRAINT_COMPONENT,
-        &[param(sh::SINGLE_LINE, ValueRule::Boolean)],
+        &[param(sh::SINGLE_LINE, ValueRule::Boolean).single()],
     ),
     unimplemented(
         sh::SOME_VALUE_CONSTRAINT_COMPONENT,
@@ -879,7 +957,9 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ),
     native(
         sh::UNIQUE_LANG_CONSTRAINT_COMPONENT,
-        &[param(sh::UNIQUE_LANG, ValueRule::Boolean)],
+        &[param(sh::UNIQUE_LANG, ValueRule::Boolean)
+            .single()
+            .property_only()],
         &["UniqueLang"],
     ),
     unimplemented(
@@ -1040,10 +1120,12 @@ pub(crate) fn canonical_lines() -> Vec<String> {
         out.push(format!("component {} {status} {carrier}", row.iri));
         for p in row.params {
             out.push(format!(
-                "  param {} optional={} value={}",
+                "  param {} optional={} value={} single={} property-only={}",
                 p.path,
                 p.optional,
-                p.value.label()
+                p.value.label(),
+                p.single,
+                p.property_only
             ));
         }
     }

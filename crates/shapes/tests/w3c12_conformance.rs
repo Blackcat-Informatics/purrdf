@@ -71,11 +71,6 @@ use shacl_corpora::{file_iri, parse_turtle_file};
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
-const R_LIST_COMPONENTS: &str = "Core list-valued components: sh:minListLength / sh:maxListLength / sh:uniqueMembers \
-     / sh:memberShape are not implemented, so a shapes graph using them is refused at load \
-     as naming an unimplemented SHACL 1.2 Core component (in-003 and xone-003 reach \
-     sh:minListLength through their shacl-shacl property shapes)";
-
 const R_UNIQUE_VALUES_FOR: &str = "sh:uniqueValuesFor is not implemented, so a shapes graph using it is refused at \
      load as naming an unimplemented SHACL 1.2 Core component (uniqueValuesFor-004 expects \
      conformance, which the former silent drop produced by coincidence)";
@@ -92,26 +87,41 @@ const R_ROOT_CLASS: &str =
 const R_SINGLE_LINE: &str =
     "sh:singleLine is not implemented, so a shapes graph using it is refused at load";
 
-const R_LIST_VALUED_PARAM: &str = "a SHACL list as the value of sh:class / sh:datatype / sh:nodeKind (disjunction) is \
-     not read, so the constraint is dropped and the shape conforms";
-
-const R_CLOSED_BY_TYPES: &str = "sh:closed sh:ByTypes is not implemented; only the xsd:boolean \"true\" form closes a \
-     shape, so the shape conforms";
+const R_CLOSED_BY_TYPES: &str =
+    "sh:closed sh:ByTypes is not evaluated, so a shape using it is refused at load";
 
 const R_PATH_PAIRS: &str = "path-valued sh:equals / sh:disjoint / sh:lessThan / sh:lessThanOrEquals: the parser \
      requires an IRI and refuses the shapes graph";
 
-const R_REIFIER_DEACTIVATED: &str = "a {| sh:deactivated true |} reifier annotation on a (shape, parameter, value) triple \
-     is not read, so the constraint stays active";
+const R_REIFIER_DEACTIVATED: &str = "a {| sh:deactivated true |} reifier annotation on a (shape, parameter, value) \
+     statement is not evaluated, so the shapes graph is refused at load";
 
 const R_REIFIER_SEVERITY: &str = "a {| sh:severity sh:Warning |} reifier annotation on a (shape, parameter, value) \
-     triple is not read, so the result keeps sh:Violation";
+     statement is not evaluated, so the shapes graph is refused at load";
 
-const R_DEBUG_TRACE: &str = "sh:Debug / sh:Trace severities are not recognised as non-blocking, so a Debug/Trace \
-     result makes the report non-conforming";
+const R_DEBUG_TRACE: &str = "the sh:Debug / sh:Trace severities are not evaluated as non-blocking, so a shape \
+     declaring one is refused at load";
 
 const R_CONFORMANCE_DISALLOWS: &str =
     "sh:conformanceDisallows is not implemented; every result blocks conformance";
+
+const R_REIFIER_MESSAGE: &str = "a {| sh:message … |} reifier annotation on a (shape, parameter, value) statement \
+     is not evaluated, so the shapes graph is refused at load (the report comparison does not \
+     grade sh:resultMessage, which is how the former silent drop of the message passed)";
+
+const R_XONE_003_EXPECTATION: &str = "the approved expected report omits sh:resultPath for the result of \
+     shsh:xoneSubjectsShapeXonePropertyShape, a property shape whose sh:path is sh:xone; SHACL \
+     1.2 Core §3.6.2.2 gives a property shape's results sh:resultPath, and PurRDF emits it";
+
+const R_SHAPE_CLASS_SUBJECT: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
+     evaluated); the rule also omits sh:subject, which SHACL 1.2 Rules defaults to the focus \
+     node";
+
+const R_SHAPE_CLASS_RUN_ONCE: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
+     evaluated); sh:runOnce / sh:tempTriple are not implemented either";
+
+const R_SHAPE_CLASS_TEMPLATE: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
+     evaluated); sh:SPARQLRuleTemplate is not implemented either";
 
 const R_REIFIER_SHAPE_VALUE: &str = "sh:reifierShape results carry the triple term as sh:value; the suite expects the \
      value node (\"invalid\")";
@@ -122,16 +132,17 @@ const R_UNIQUE_LANG_DIR: &str = "sh:uniqueLang groups by language tag only; @ar,
 const R_SHAPE_TARGET: &str = "sh:shape target declarations in the data graph are not read, so no focus node is \
      selected";
 
-const R_SHAPE_CLASS: &str = "sh:ShapeClass implicit class targets are not implemented, so no focus node is \
-     selected";
+const R_SHAPE_CLASS: &str = "sh:ShapeClass implicit class targets are not evaluated, so a shape typed \
+     sh:ShapeClass is refused at load";
 
-const R_TARGET_WHERE: &str = "sh:targetWhere is not implemented, so no focus node is selected";
+const R_TARGET_WHERE: &str =
+    "sh:targetWhere is not evaluated, so a shape using it is refused at load";
 
-const R_TARGET_NODE_EXPR: &str = "a node-expression (sh:select) value of sh:targetNode is not evaluated, so no focus \
-     node is selected";
+const R_TARGET_NODE_EXPR: &str = "a structured node-expression (sh:select) value of sh:targetNode is not \
+     evaluated, so the shape is refused at load";
 
-const R_VALUES: &str = "sh:values on a property shape is not implemented, so the value nodes are not \
-     computed and the shape's constraints see none";
+const R_VALUES: &str =
+    "sh:values on a property shape is not evaluated, so the shape is refused at load";
 
 const R_PREFIX_SCAN: &str = "prefix handling scans PREFIX lines out of the shapes document text, including one \
      inside a string literal, so the query is resolved against the wrong namespace";
@@ -139,8 +150,8 @@ const R_PREFIX_SCAN: &str = "prefix handling scans PREFIX lines out of the shape
 const R_INSTANCES_OF_EXPR: &str = "shnex:instancesOf refuses a node-expression argument (shnex:arg) and requires an \
      IRI, so the function body is rejected at load";
 
-const R_RULES_ENTAILMENT: &str =
-    "sh:entailment sh:RulesEntailment is not honoured: rules do not run before validation";
+const R_RULES_ENTAILMENT: &str = "sh:entailment sh:RulesEntailment is not supported, so the shapes graph is refused \
+     at load, as SHACL requires for an entailment regime a processor does not support";
 
 const R_TRIPLE_RULE_DEFAULT_SUBJECT: &str = "sh:TripleRule without sh:subject is refused; SHACL 1.2 Rules defaults sh:subject to \
      the focus node";
@@ -159,8 +170,8 @@ const R_RULE_TEMPLATE: &str = "sh:SPARQLRuleTemplate is not implemented: templat
 const R_RULE_PROCESSOR: &str = "sh:ruleProcessor is not validated: an unknown processor at rule or rule-set level \
      runs instead of being refused";
 
-const R_EXPECTED_PREDICATE: &str = "sh:values / sh:defaultValue / sh:expectedPredicate are not implemented, so the rule \
-     that depends on the defaulted values derives nothing";
+const R_EXPECTED_PREDICATE: &str = "sh:values / sh:defaultValue on a property shape are not evaluated, so the shapes \
+     graph the rule depends on is refused at load";
 
 const R_UNBOUND_ARG: &str = "an unbound shnex:var argument makes the sparql: call yield nothing instead of \
      reaching BOUND/COALESCE as unbound";
@@ -183,16 +194,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
     // ── Core components ──
-    ("core/node/minListLength-001", R_LIST_COMPONENTS),
-    ("core/node/maxListLength-001", R_LIST_COMPONENTS),
-    ("core/property/minListLength-001", R_LIST_COMPONENTS),
-    ("core/property/maxListLength-001", R_LIST_COMPONENTS),
-    ("core/node/in-003", R_LIST_COMPONENTS),
-    ("core/node/xone-003", R_LIST_COMPONENTS),
-    ("core/node/uniqueMembers-001", R_LIST_COMPONENTS),
-    ("core/property/uniqueMembers-001", R_LIST_COMPONENTS),
-    ("core/node/memberShape-001", R_LIST_COMPONENTS),
-    ("core/property/memberShape-001", R_LIST_COMPONENTS),
     ("core/node/uniqueValuesFor-001", R_UNIQUE_VALUES_FOR),
     ("core/node/uniqueValuesFor-002", R_UNIQUE_VALUES_FOR),
     ("core/node/uniqueValuesFor-003", R_UNIQUE_VALUES_FOR),
@@ -204,10 +205,8 @@ const XFAIL: &[(&str, &str)] = &[
     ("core/property/rootClass-001", R_ROOT_CLASS),
     ("core/property/singleLine-001", R_SINGLE_LINE),
     // ── List-valued parameters ──
-    ("core/node/datatype-003", R_LIST_VALUED_PARAM),
-    ("core/property/datatype-004", R_LIST_VALUED_PARAM),
-    ("core/property/class-002", R_LIST_VALUED_PARAM),
-    ("core/node/nodeKind-002", R_LIST_VALUED_PARAM),
+    // ── Expectation defects ──
+    ("core/node/xone-003", R_XONE_003_EXPECTATION),
     // ── Closed shapes ──
     ("core/node/closed-003", R_CLOSED_BY_TYPES),
     ("core/node/closed-004", R_CLOSED_BY_TYPES),
@@ -221,6 +220,7 @@ const XFAIL: &[(&str, &str)] = &[
     ("core/misc/severity-003", R_REIFIER_SEVERITY),
     ("core/misc/severity-004", R_DEBUG_TRACE),
     ("core/misc/severity-005", R_DEBUG_TRACE),
+    ("core/misc/message-002", R_REIFIER_MESSAGE),
     (
         "core/validation-reports/conformance-disallows-001",
         R_CONFORMANCE_DISALLOWS,
@@ -253,7 +253,7 @@ const XFAIL: &[(&str, &str)] = &[
     ),
     (
         "inference-rules/TripleRule-example-squares",
-        R_TRIPLE_RULE_DEFAULT_SUBJECT,
+        R_SHAPE_CLASS_SUBJECT,
     ),
     ("inference-rules/global-symmetric", R_GLOBAL_RULES),
     ("inference-rules/same-order", R_GLOBAL_RULES),
@@ -264,12 +264,15 @@ const XFAIL: &[(&str, &str)] = &[
     ("inference-rules/rdfs/rdfs-subclass-1", R_GLOBAL_RULES),
     ("inference-rules/rdfs/rdfs-subproperty-1", R_GLOBAL_RULES),
     ("inference-rules/layers-example", R_LAYER),
-    ("inference-rules/run-once-example", R_RUN_ONCE),
+    ("inference-rules/run-once-example", R_SHAPE_CLASS_RUN_ONCE),
     ("inference-rules/run-once-blank-node-feed", R_RUN_ONCE),
-    ("inference-rules/temp-triples-example", R_RUN_ONCE),
+    (
+        "inference-rules/temp-triples-example",
+        R_SHAPE_CLASS_RUN_ONCE,
+    ),
     (
         "inference-rules/SPARQLRuleTemplate-example-Multiply",
-        R_RULE_TEMPLATE,
+        R_SHAPE_CLASS_TEMPLATE,
     ),
     (
         "inference-rules/SPARQLRuleTemplate-example-SymmetricProperty",

@@ -985,6 +985,7 @@ fn eval_closed<S: ResultSink>(
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
             };
             result.apply_box_roles(&shape.box_roles, &path_roles);
             result
@@ -1380,6 +1381,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                     path_box_roles: vec![],
                     result_box_roles: vec![],
                     attributions: vec![],
+                    details: vec![],
                 };
                 result.apply_box_roles(&source_roles, path_roles);
                 result
@@ -1469,6 +1471,7 @@ fn reifier_result(
         path_box_roles: vec![],
         result_box_roles: vec![],
         attributions: vec![],
+        details: vec![],
     };
     let merged = merge_box_roles(source_roles, inner_source_roles);
     result.apply_box_roles(&merged, ctx.path_roles);
@@ -1664,6 +1667,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
             }
         };
         ($component:expr, $focus:expr, $value:expr) => {
@@ -1680,6 +1684,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
             }
         };
     }
@@ -1738,27 +1743,32 @@ fn eval_constraint<'a, S: ResultSink>(
 
         // ── Class (per value node; honors asserted rdfs:subClassOf, §4.2.5) ────
         //
-        // The CONSTANT-FOLDED branch: `None` = the data graph interns no term for
-        // this class, so no value node can be an instance of it and every one of
-        // them violates. That is a real verdict, not a failure to compute one, and
-        // it was decided at BIND — once for the whole validation, not once per
-        // value node of every focus node. The per-value-node arm below still runs
-        // its own `is_none_or` test, so this fold is a shortcut around work whose
-        // answer is already known and not a second statement of the rule.
-        PlannedConstraint::Class(None) => {
+        // SHACL 1.2 Core §4.1.1: a value node violates when it "is either a
+        // literal, or a non-literal that is not a SHACL instance of any of the
+        // classes" — so the class set is a DISJUNCTION, and a single-IRI value is
+        // simply a one-member set.
+        //
+        // The CONSTANT-FOLDED branch: an empty id set = the data graph interns no
+        // term for any of the classes, so no value node can be an instance of one
+        // and every one of them violates. That is a real verdict, not a failure to
+        // compute one, and it was decided at BIND — once for the whole validation,
+        // not once per value node of every focus node. The per-value-node arm
+        // below still runs its own membership test, so this fold is a shortcut
+        // around work whose answer is already known and not a second statement of
+        // the rule.
+        PlannedConstraint::Class(classes) if classes.is_empty() => {
             violate_every_value_node!(sh::CLASS_CONSTRAINT_COMPONENT)
         }
-        PlannedConstraint::Class(id) => {
-            let class_id = id;
+        PlannedConstraint::Class(classes) => {
             for vn in value_nodes {
                 // Id-native instance test: an interned value node's class membership
                 // is decided entirely in `TermId` space (literal check + `rdf:type`
                 // edge walk), so a conforming value is never materialized. A
                 // non-interned value node has no `rdf:type` edge and is no instance.
                 let violates = match vn.as_id(ds) {
-                    Some(id) => {
-                        class_id.is_none_or(|class| !store.class_view().is_instance(id, class))
-                    }
+                    Some(id) => !classes
+                        .iter()
+                        .any(|&class| store.class_view().is_instance(id, class)),
                     None => true,
                 };
                 if violates {
@@ -1771,10 +1781,13 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
-        // ── Datatype (per value node) ──────────────────────────────────────────
-        PlannedConstraint::Datatype(dt_iri) => {
+        // ── Datatype (per value node; any member of the set matches) ──────────
+        PlannedConstraint::Datatype(datatypes) => {
             for value in value_nodes {
-                if !check_value_datatype(value, ds, dt_iri) {
+                if !datatypes
+                    .iter()
+                    .any(|dt_iri| check_value_datatype(value, ds, dt_iri))
+                {
                     emit!(result!(
                         sh::DATATYPE_CONSTRAINT_COMPONENT,
                         Some(value.to_term(ds))
@@ -1784,17 +1797,150 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
-        // ── NodeKind (per value node) ──────────────────────────────────────────
-        PlannedConstraint::NodeKind(kind) => {
+        // ── NodeKind (per value node; any member of the set matches) ──────────
+        PlannedConstraint::NodeKind(kinds) => {
             for value in value_nodes {
                 // Kind-only check on the borrowed discriminant: the owned term is
                 // built only for a violation, not per conforming value node.
-                if !check_value_kind(value.kind(ds), kind) {
+                let kind_of_value = value.kind(ds);
+                if !kinds
+                    .iter()
+                    .any(|kind| check_value_kind(kind_of_value, kind))
+                {
                     emit!(result!(
                         sh::NODE_KIND_CONSTRAINT_COMPONENT,
                         Some(value.to_term(ds))
                     ));
                 }
+            }
+            Flow::Continue
+        }
+
+        // ── List components (SHACL 1.2 Core §4.9; per value node) ─────────────
+        //
+        // Each component first requires the value node to be a SHACL list: "Each
+        // value node v must be a SHACL list - if v is not a SHACL list there is a
+        // validation result." A value node that is not one gets exactly that
+        // result, and its members are never examined.
+        PlannedConstraint::MinListLength(min) => {
+            for value in value_nodes {
+                let violates = ShaclList::of(ds, value).is_none_or(|list| (list.len as u64) < min);
+                if violates {
+                    emit!(result!(
+                        sh::MIN_LIST_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MaxListLength(max) => {
+            for value in value_nodes {
+                let violates = ShaclList::of(ds, value).is_none_or(|list| (list.len as u64) > max);
+                if violates {
+                    emit!(result!(
+                        sh::MAX_LIST_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::UniqueMembers(unique) => {
+            for value in value_nodes {
+                let Some(list) = ShaclList::of(ds, value) else {
+                    emit!(result!(
+                        sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                    continue;
+                };
+                if !unique {
+                    continue;
+                }
+                // Each DISTINCT member occurring more than once, in first-occurrence
+                // order; interned terms are equal exactly when their ids are. The
+                // seen-set is inline for the short lists SHACL lists usually are.
+                let mut seen: SmallVec<[TermId; 16]> = SmallVec::new();
+                let mut duplicated: SmallVec<[TermId; 4]> = SmallVec::new();
+                for member in list.members(ds) {
+                    if seen.contains(&member) {
+                        if !duplicated.contains(&member) {
+                            duplicated.push(member);
+                        }
+                    } else {
+                        seen.push(member);
+                    }
+                }
+                if !duplicated.is_empty() {
+                    // "Each duplicate member m of a list v should be reported as a
+                    // separate sh:detail in the validation result for v."
+                    emit!({
+                        let mut outer = result!(
+                            sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                            Some(value.to_term(ds))
+                        );
+                        outer.details = duplicated
+                            .iter()
+                            .map(|&member| {
+                                result!(
+                                    sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                                    Some(term_id_to_native(ds, member))
+                                )
+                            })
+                            .collect();
+                        outer
+                    });
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MemberShape(member_shape) => {
+            for value in value_nodes {
+                let Some(list) = ShaclList::of(ds, value) else {
+                    emit!(result!(
+                        sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                    continue;
+                };
+                let mut conforms = true;
+                for member in list.members(ds) {
+                    if !conforms_memoized(context, member_shape, &FocusNode::Interned(member))? {
+                        conforms = false;
+                        break;
+                    }
+                }
+                if conforms {
+                    continue;
+                }
+                // "Each member m of a value node v that does not conform to the
+                // $memberShape should be reported as a separate sh:detail": the
+                // details are each failing member's own results against the member
+                // shape, in list order and once per distinct member, collected
+                // only by a sink that records results.
+                let mut details: Vec<ValidationResult> = Vec::new();
+                if S::RECORDS_RESULTS {
+                    let mut reported: Vec<TermId> = Vec::new();
+                    for member in list.members(ds) {
+                        if reported.contains(&member) {
+                            continue;
+                        }
+                        reported.push(member);
+                        details.extend(collect_shape(
+                            context.inner(member_shape),
+                            &FocusNode::Interned(member),
+                        )?);
+                    }
+                }
+                emit!({
+                    let mut outer = result!(
+                        sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    );
+                    outer.details = details;
+                    outer
+                });
             }
             Flow::Continue
         }
@@ -1925,6 +2071,7 @@ fn eval_constraint<'a, S: ResultSink>(
                         path_box_roles: vec![],
                         result_box_roles: vec![],
                         attributions: vec![],
+                        details: vec![],
                     });
                 }
             }
@@ -2070,6 +2217,7 @@ fn eval_constraint<'a, S: ResultSink>(
                         path_box_roles: vec![],
                         result_box_roles: vec![],
                         attributions: vec![],
+                        details: vec![],
                     });
                 }
             }
@@ -2939,6 +3087,136 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
     }
 }
 
+/// A value node that is a well-formed SHACL list in the data graph: its head
+/// cell and its length. Walking it again is allocation-free — see
+/// [`ShaclList::members`].
+#[derive(Clone, Copy)]
+struct ShaclList {
+    /// The first cell; `None` only for an empty list that is not interned.
+    head: Option<TermId>,
+    /// The number of members.
+    len: usize,
+    /// `rdf:first`, which every non-empty list's cells carry.
+    first: Option<TermId>,
+    /// `rdf:rest`, likewise.
+    rest: Option<TermId>,
+}
+
+impl ShaclList {
+    /// `value` as a SHACL list, or `None` when it is not one.
+    ///
+    /// SHACL 1.2 Core §1.4: "A SHACL list in an RDF graph G is an IRI or a blank
+    /// node that is either rdf:nil (provided that rdf:nil has no value for either
+    /// rdf:first or rdf:rest), or has exactly one value for the property rdf:first
+    /// in G and exactly one value for the property rdf:rest in G that is also a
+    /// SHACL list in G, and the list does not have itself as a value of the
+    /// property path rdf:rest+ in G."
+    ///
+    /// Every clause is checked in id space and WITHOUT allocating, because the
+    /// list components run once per value node on the change path: a cycle is
+    /// found by Floyd's two-pointer walk (the fast pointer checks every cell's
+    /// shape as it reaches it first), not by a visited set. A value node that is
+    /// not interned is the subject of no quad, so it is a list only as `rdf:nil`.
+    fn of(ds: &impl ShaclRead, value: &ValueNode) -> Option<Self> {
+        let first = ds.term_id_by_iri(rdf::FIRST);
+        let rest = ds.term_id_by_iri(rdf::REST);
+        let nil = ds.term_id_by_iri(rdf::NIL);
+        let Some(head) = value.as_id(ds) else {
+            let empty = Self {
+                head: None,
+                len: 0,
+                first,
+                rest,
+            };
+            return matches!(value, ValueNode::Foreign(Term::NamedNode(n)) if n.as_str() == rdf::NIL)
+                .then_some(empty);
+        };
+        // One well-formed step from `cell`: `Ok(None)` at `rdf:nil`,
+        // `Ok(Some(next))` from a proper cell, `Err(())` for anything else.
+        let step = |cell: TermId| -> Result<Option<TermId>, ()> {
+            let head_value = single_object(ds, cell, first)?;
+            let tail = single_object(ds, cell, rest)?;
+            if Some(cell) == nil {
+                return if head_value.is_none() && tail.is_none() {
+                    Ok(None)
+                } else {
+                    Err(())
+                };
+            }
+            if !matches!(ds.resolve(cell), TermRef::Iri(_) | TermRef::Blank { .. }) {
+                return Err(());
+            }
+            match (head_value, tail) {
+                (Some(_), Some(next)) => Ok(Some(next)),
+                _ => Err(()),
+            }
+        };
+        let mut len = 0usize;
+        let mut slow = head;
+        let mut fast = head;
+        // The fast pointer advances two cells per round; every cell is first
+        // reached — and so checked — by it. The slow pointer trails it one cell
+        // per round, over cells the fast pointer has already checked.
+        while let Some(next) = step(fast).ok()? {
+            len += 1;
+            let Some(after) = step(next).ok()? else {
+                break;
+            };
+            len += 1;
+            fast = after;
+            slow = step(slow).ok().flatten()?;
+            if slow == fast {
+                return None;
+            }
+        }
+        Some(Self {
+            head: Some(head),
+            len,
+            first,
+            rest,
+        })
+    }
+
+    /// The members, in list order. The structure was checked by [`Self::of`], so
+    /// this walk cannot fail; it allocates nothing.
+    fn members<D: ShaclRead>(self, ds: &D) -> impl Iterator<Item = TermId> + '_ {
+        let mut cell = self.head;
+        (0..self.len).filter_map(move |_| {
+            let here = cell?;
+            let member = single_object(ds, here, self.first).ok().flatten()?;
+            cell = single_object(ds, here, self.rest).ok().flatten();
+            Some(member)
+        })
+    }
+}
+
+/// The single distinct object of `(subject, predicate, ?)`: `Ok(None)` when there
+/// is none, `Err(())` when there are two. A statement asserted in several named
+/// graphs is still one value.
+fn single_object(
+    ds: &impl ShaclRead,
+    subject: TermId,
+    predicate: Option<TermId>,
+) -> Result<Option<TermId>, ()> {
+    let Some(predicate) = predicate else {
+        return Ok(None);
+    };
+    let mut found: Option<TermId> = None;
+    for quad in quads_for_pattern_ids(
+        ds,
+        Some(subject),
+        Some(predicate),
+        None,
+        GraphFilter::AnyGraph,
+    ) {
+        match found {
+            Some(existing) if existing != quad.o => return Err(()),
+            _ => found = Some(quad.o),
+        }
+    }
+    Ok(found)
+}
+
 /// Check that a `Term` satisfies `sh:nodeKind`.
 ///
 /// The constraint arm evaluates [`check_value_kind`] on the borrowed
@@ -2961,13 +3239,14 @@ fn check_node_kind(value: &Term, kind: &NodeKindValue) -> bool {
             NodeKindValue::Literal
                 | NodeKindValue::BlankNodeOrLiteral
                 | NodeKindValue::IriOrLiteral
-        )
+        ) | (Term::Triple(_), NodeKindValue::TripleTerm)
     )
 }
 
 /// `sh:nodeKind` on the bare discriminant: `Iri`/`Blank`/`Literal` match the
-/// `sh:nodeKind` values that include them; a `Triple` (quoted triple term)
-/// matches NO node kind, exactly as the owned-`Term` form's fall-through.
+/// `sh:nodeKind` values that include them, and a `Triple` (an RDF 1.2 triple
+/// term) matches `sh:TripleTerm` only (SHACL 1.2 Core §4.1.3: "Any triple term
+/// matches only sh:TripleTerm"), exactly as the owned-`Term` form.
 fn check_value_kind(value: ValueKind, kind: &NodeKindValue) -> bool {
     matches!(
         (value, kind),
@@ -2984,7 +3263,7 @@ fn check_value_kind(value: ValueKind, kind: &NodeKindValue) -> bool {
             NodeKindValue::Literal
                 | NodeKindValue::BlankNodeOrLiteral
                 | NodeKindValue::IriOrLiteral
-        )
+        ) | (ValueKind::Triple, NodeKindValue::TripleTerm)
     )
 }
 
@@ -4075,9 +4354,9 @@ mod tests {
         let reifier_shape = Shape {
             id: ex("ReifierShape"),
             targets: vec![],
-            constraints: vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            constraints: vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}RequiredReifierClass"
-            )))],
+            ))])],
             property_shapes: vec![],
             severity: Severity::Violation,
             message: None,
@@ -4150,9 +4429,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert!(results.is_empty());
@@ -4170,9 +4449,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
@@ -4190,9 +4469,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         assert!(
             validate_shape(&store, &ex("a"), &shape).is_empty(),
@@ -4209,9 +4488,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}A"
-            )))],
+            ))])],
         );
         assert!(
             validate_shape(&store, &ex("a"), &shape).is_empty(),
@@ -4229,9 +4508,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}age"),
-            vec![Constraint::Datatype(NamedNode::new_unchecked(format!(
-                "{XSD}integer"
-            )))],
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
         );
         assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
     }
@@ -4244,9 +4523,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}age"),
-            vec![Constraint::Datatype(NamedNode::new_unchecked(format!(
-                "{XSD}integer"
-            )))],
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
@@ -4261,9 +4540,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}n"),
-            vec![Constraint::Datatype(NamedNode::new_unchecked(format!(
-                "{XSD}integer"
-            )))],
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
@@ -4283,9 +4562,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}n"),
-            vec![Constraint::Datatype(NamedNode::new_unchecked(format!(
-                "{XSD}nonNegativeInteger"
-            )))],
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}nonNegativeInteger"),
+            )])],
         );
         assert!(
             validate_shape(&store, &ex("a"), &shape).is_empty(),
@@ -4331,7 +4610,7 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::NodeKind(NodeKindValue::Iri)],
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
         );
         assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
     }
@@ -4342,7 +4621,7 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::NodeKind(NodeKindValue::Iri)],
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
@@ -5136,12 +5415,12 @@ mod tests {
             "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a rdf:type ex:Foo ."
         ));
         // sh:and ([ sh:nodeKind sh:IRI ] [ sh:class ex:Foo ]) on focus node directly.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
         let member2 = shape_with(
             "M2",
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         let shape = shape_with("S", vec![Constraint::And(vec![member1, member2])]);
         assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
@@ -5153,12 +5432,12 @@ mod tests {
             "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a rdf:type ex:Bar ."
         ));
         // ex:a is IRI (passes M1) but type is ex:Bar not ex:Foo (fails M2).
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
         let member2 = shape_with(
             "M2",
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         let shape = shape_with("S", vec![Constraint::And(vec![member1, member2])]);
         let results = validate_shape(&store, &ex("a"), &shape);
@@ -5172,8 +5451,11 @@ mod tests {
     fn or_pass_first_member() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // ex:b is an IRI, passes M1.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
-        let member2 = shape_with("M2", vec![Constraint::NodeKind(NodeKindValue::Literal)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5186,7 +5468,10 @@ mod tests {
     fn or_fail_no_member() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // Both members require Literal; ex:b is IRI → fails both.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Literal)]);
+        let member1 = shape_with(
+            "M1",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
         let member2 = shape_with(
             "M2",
             vec![Constraint::MinLength(999)], // impossible length
@@ -5207,8 +5492,11 @@ mod tests {
     fn xone_pass_exactly_one() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // ex:b is IRI: M1 (IRI) passes, M2 (Literal) fails → exactly 1.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
-        let member2 = shape_with("M2", vec![Constraint::NodeKind(NodeKindValue::Literal)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5221,8 +5509,8 @@ mod tests {
     fn xone_fail_zero() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"hello\" ."));
         // Both require IRI; literal fails both → 0 conforming → violation.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
-        let member2 = shape_with("M2", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with("M2", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5237,8 +5525,8 @@ mod tests {
     fn xone_fail_two() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // Both members allow IRI → 2 conforming → violation.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
-        let member2 = shape_with("M2", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with("M2", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5255,7 +5543,10 @@ mod tests {
     fn node_pass() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // sh:node targets ex:b; inner shape requires IRI.
-        let inner = shape_with("Inner", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5267,7 +5558,10 @@ mod tests {
     #[test]
     fn node_fail() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"notAnIRI\" ."));
-        let inner = shape_with("Inner", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5578,7 +5872,7 @@ mod tests {
         let shape = Shape {
             id: ex("S"),
             targets: vec![],
-            constraints: vec![Constraint::NodeKind(NodeKindValue::Iri)],
+            constraints: vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
             property_shapes: vec![],
             severity: Severity::Violation,
             message: None,
@@ -5652,7 +5946,10 @@ mod tests {
         // Inner shape requires NodeKind(Iri); the value is a literal, so it does
         // NOT conform → sh:not is satisfied.
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"lit\" ."));
-        let inner = shape_with("Inner", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5670,7 +5967,10 @@ mod tests {
         // Inner shape requires NodeKind(Iri); the value IS an IRI, so it conforms
         // → sh:not is violated.
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
-        let inner = shape_with("Inner", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -6001,9 +6301,9 @@ mod tests {
         Constraint::QualifiedValueShape {
             shape: Box::new(shape_with(
                 "Q",
-                vec![Constraint::Class(NamedNode::new_unchecked(format!(
+                vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                     "{EX}{class_local}"
-                )))],
+                ))])],
             )),
             siblings,
             min_count,
@@ -6064,9 +6364,9 @@ mod tests {
         ));
         let finger_sibling = shape_with(
             "FingerQ",
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Finger"
-            )))],
+            ))])],
         );
 
         let without_disjoint = prop_shape(

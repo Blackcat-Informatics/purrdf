@@ -186,6 +186,19 @@ impl Footprint {
     }
 }
 
+/// The path from a SHACL list to its members, `rdf:rest*/rdf:first`.
+///
+/// Its steps are exactly the reads a list walk makes: `rdf:rest` on every cell
+/// `rdf:rest*` reaches (the closure's own step) and `rdf:first` on each of them.
+pub(crate) fn list_member_path() -> Path {
+    Path::Sequence(vec![
+        Path::ZeroOrMore(Box::new(Path::Predicate(NamedNode::new_unchecked(
+            rdf::REST,
+        )))),
+        Path::Predicate(NamedNode::new_unchecked(rdf::FIRST)),
+    ])
+}
+
 // ── The walk ────────────────────────────────────────────────────────────────────
 
 /// Which node a read is anchored at.
@@ -521,6 +534,15 @@ impl FootprintWalk {
                 Some(predicate.clone()),
                 Endpoint::Subject,
             ),
+            // LIST-STRUCTURAL (SHACL 1.2 Core §4.9): the list components walk the
+            // value node's SHACL list, reading `rdf:first` and `rdf:rest` on every
+            // cell `rdf:rest*` reaches — the reads `rdf:rest*/rdf:first` and
+            // `rdf:rest*/rdf:rest` describe. `sh:memberShape`'s own shape is
+            // lowered at the members by the lowering walk (see `list_member_path`).
+            Constraint::MinListLength(_)
+            | Constraint::MaxListLength(_)
+            | Constraint::UniqueMembers(_)
+            | Constraint::MemberShape(_) => self.record_path_steps(&list_member_path(), &[]),
             Constraint::Sparql { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
             Constraint::Component { .. } => self.mark_opaque(OPAQUE_COMPONENT),
             // Value-local: each of these judges a value node's own identity —

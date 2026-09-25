@@ -306,7 +306,7 @@ const TAGS_TERM: u8 = 4;
 /// The number of [`Severity`] tags.
 const TAGS_SEVERITY: u8 = 4;
 /// The number of [`NodeKindValue`] tags.
-const TAGS_NODE_KIND: u8 = 6;
+const TAGS_NODE_KIND: u8 = 7;
 /// The number of [`Path`] tags.
 const TAGS_PATH: u8 = 7;
 /// The number of [`Target`] tags.
@@ -314,7 +314,7 @@ const TAGS_TARGET: u8 = 6;
 /// The number of [`ComponentValidator`] tags.
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
-const TAGS_CONSTRAINT: u8 = 31;
+const TAGS_CONSTRAINT: u8 = 35;
 /// The number of [`NodeExpr`] tags.
 const TAGS_NODE_EXPR: u8 = 32;
 /// The number of [`ShapeArg`] tags.
@@ -628,6 +628,7 @@ impl AstWriter {
             NodeKindValue::BlankNodeOrIri => 3,
             NodeKindValue::BlankNodeOrLiteral => 4,
             NodeKindValue::IriOrLiteral => 5,
+            NodeKindValue::TripleTerm => 6,
         });
     }
 
@@ -1009,17 +1010,26 @@ impl AstWriter {
     fn constraint(&mut self, constraint: &Constraint) -> Result<(), ShapesProductError> {
         self.enter()?;
         match constraint {
-            Constraint::Class(class) => {
+            Constraint::Class(classes) => {
                 self.tag(0);
-                self.named_node(class);
+                self.count(classes.len());
+                for class in classes {
+                    self.named_node(class);
+                }
             }
-            Constraint::Datatype(datatype) => {
+            Constraint::Datatype(datatypes) => {
                 self.tag(1);
-                self.named_node(datatype);
+                self.count(datatypes.len());
+                for datatype in datatypes {
+                    self.named_node(datatype);
+                }
             }
-            Constraint::NodeKind(kind) => {
+            Constraint::NodeKind(kinds) => {
                 self.tag(2);
-                self.node_kind(kind);
+                self.count(kinds.len());
+                for kind in kinds {
+                    self.node_kind(kind);
+                }
             }
             Constraint::MinCount(count) => {
                 self.tag(3);
@@ -1193,6 +1203,22 @@ impl AstWriter {
                 self.component_validator(validator);
                 self.opt_text(message.as_deref());
                 self.opt_severity(severity.as_ref());
+            }
+            Constraint::MinListLength(length) => {
+                self.tag(31);
+                self.uint(*length);
+            }
+            Constraint::MaxListLength(length) => {
+                self.tag(32);
+                self.uint(*length);
+            }
+            Constraint::UniqueMembers(unique) => {
+                self.tag(33);
+                self.flag(*unique);
+            }
+            Constraint::MemberShape(shape) => {
+                self.tag(34);
+                self.shape(shape)?;
             }
         }
         self.leave();
@@ -1636,7 +1662,8 @@ impl<'a> AstReader<'a> {
             2 => NodeKindValue::Literal,
             3 => NodeKindValue::BlankNodeOrIri,
             4 => NodeKindValue::BlankNodeOrLiteral,
-            _ => NodeKindValue::IriOrLiteral,
+            5 => NodeKindValue::IriOrLiteral,
+            _ => NodeKindValue::TripleTerm,
         })
     }
 
@@ -1882,9 +1909,9 @@ impl<'a> AstReader<'a> {
     fn constraint(&mut self) -> Result<Constraint, ShapesProductError> {
         self.enter()?;
         let constraint = match self.tag("Constraint", TAGS_CONSTRAINT)? {
-            0 => Constraint::Class(self.named_node()?),
-            1 => Constraint::Datatype(self.named_node()?),
-            2 => Constraint::NodeKind(self.node_kind()?),
+            0 => Constraint::Class(self.seq(Self::named_node)?),
+            1 => Constraint::Datatype(self.seq(Self::named_node)?),
+            2 => Constraint::NodeKind(self.seq(Self::node_kind)?),
             3 => Constraint::MinCount(self.uint()?),
             4 => Constraint::MaxCount(self.uint()?),
             5 => Constraint::In(self.seq(Self::term)?),
@@ -1937,7 +1964,7 @@ impl<'a> AstReader<'a> {
                 message: self.opt_text()?,
                 severity: self.opt_severity()?,
             },
-            _ => Constraint::Component {
+            30 => Constraint::Component {
                 component: self.named_node()?,
                 source_shape: self.term()?,
                 bindings: self.seq(|reader| {
@@ -1949,6 +1976,10 @@ impl<'a> AstReader<'a> {
                 message: self.opt_text()?,
                 severity: self.opt_severity()?,
             },
+            31 => Constraint::MinListLength(self.uint()?),
+            32 => Constraint::MaxListLength(self.uint()?),
+            33 => Constraint::UniqueMembers(self.flag()?),
+            _ => Constraint::MemberShape(Box::new(self.shape()?)),
         };
         self.leave();
         Ok(constraint)
@@ -2251,8 +2282,13 @@ impl FnTable {
             | Constraint::Disjoint(_)
             | Constraint::LessThan(_)
             | Constraint::LessThanOrEquals(_)
+            | Constraint::MinListLength(_)
+            | Constraint::MaxListLength(_)
+            | Constraint::UniqueMembers(_)
             | Constraint::Component { .. } => {}
-            Constraint::Not(shape) | Constraint::Node(shape) => self.shape(shape)?,
+            Constraint::Not(shape) | Constraint::Node(shape) | Constraint::MemberShape(shape) => {
+                self.shape(shape)?;
+            }
             Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
                 for shape in shapes {
                     self.shape(shape)?;

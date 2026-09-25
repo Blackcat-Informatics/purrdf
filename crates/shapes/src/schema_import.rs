@@ -635,7 +635,7 @@ impl ImportContext<'_> {
 
         let mut constraints = Vec::new();
         if let Some(class) = type_discriminator_class(object, &self.config.namespaces)? {
-            constraints.push(Constraint::Class(class));
+            constraints.push(Constraint::Class(vec![class]));
         }
         if let Some(additional) = object.get("additionalProperties") {
             match additional {
@@ -938,12 +938,12 @@ impl ImportContext<'_> {
         }
         if is_node_ref_schema(schema) {
             if let Some(class) = node_ref_class(object, &self.config.namespaces)? {
-                constraints.push(Constraint::Class(class));
+                constraints.push(Constraint::Class(vec![class]));
             } else {
                 if object.contains_key("$comment") {
                     self.record("annotation-dropped", &format!("{path}/$comment"));
                 }
-                constraints.push(Constraint::NodeKind(NodeKindValue::BlankNodeOrIri));
+                constraints.push(Constraint::NodeKind(vec![NodeKindValue::BlankNodeOrIri]));
             }
             return Ok(());
         }
@@ -1104,7 +1104,7 @@ impl ImportContext<'_> {
                 .namespaces
                 .class_iri_for_def_key(&key)
                 .map_err(|error| SchemaImportError::new(format!("{path}: {error}")))?;
-            constraints.push(Constraint::Class(NamedNode::new_unchecked(iri)));
+            constraints.push(Constraint::Class(vec![NamedNode::new_unchecked(iri)]));
             return Ok(());
         }
         if let Some(values) = target
@@ -1178,12 +1178,13 @@ impl ImportContext<'_> {
                 node_branches += 1;
                 let object = branch.as_object().expect("node carrier is an object");
                 if let Some(class) = node_ref_class(object, &self.config.namespaces)? {
-                    node_constraints.push(Constraint::Class(class));
+                    node_constraints.push(Constraint::Class(vec![class]));
                 } else {
                     if object.contains_key("$comment") {
                         self.record("annotation-dropped", &format!("{branch_path}/$comment"));
                     }
-                    node_constraints.push(Constraint::NodeKind(NodeKindValue::BlankNodeOrIri));
+                    node_constraints
+                        .push(Constraint::NodeKind(vec![NodeKindValue::BlankNodeOrIri]));
                 }
                 continue;
             }
@@ -1242,7 +1243,7 @@ impl ImportContext<'_> {
             if node_branches == 1 {
                 constraints.extend(node_constraints);
             } else if typed_branches == 1 {
-                constraints.push(Constraint::NodeKind(NodeKindValue::Literal));
+                constraints.push(Constraint::NodeKind(vec![NodeKindValue::Literal]));
             } else if reference_branches == 1 {
                 constraints.extend(reference_constraints);
             } else {
@@ -1267,7 +1268,7 @@ impl ImportContext<'_> {
             && effective_branches
                 == node_branches + typed_branches + language_branches + scalar_branches
         {
-            constraints.push(Constraint::NodeKind(NodeKindValue::IriOrLiteral));
+            constraints.push(Constraint::NodeKind(vec![NodeKindValue::IriOrLiteral]));
             return Ok(());
         }
         self.record("schema-applicator-dropped", path);
@@ -1307,7 +1308,9 @@ impl ImportContext<'_> {
         if has_unmapped_kind || datatypes.len() > 1 {
             self.record("value-term-kind-widened", &format!("{path}/type"));
         } else if let Some(datatype) = datatypes.into_iter().next() {
-            constraints.push(Constraint::Datatype(NamedNode::new_unchecked(datatype)));
+            constraints.push(Constraint::Datatype(vec![NamedNode::new_unchecked(
+                datatype,
+            )]));
         }
         Ok(())
     }

@@ -192,6 +192,10 @@ fn constraint_name(constraint: &Constraint) -> &'static str {
         Constraint::QualifiedValueShape { .. } => "qualified-value-shape",
         Constraint::Expression { .. } => "expression",
         Constraint::NodeByExpression { .. } => "node-by-expression",
+        Constraint::MinListLength(_) => "min-list-length",
+        Constraint::MaxListLength(_) => "max-list-length",
+        Constraint::UniqueMembers(_) => "unique-members",
+        Constraint::MemberShape(_) => "member-shape",
         Constraint::Component { .. } => "component",
     }
 }
@@ -200,6 +204,12 @@ fn constraint_name(constraint: &Constraint) -> &'static str {
 fn constraint_match_is_exhaustive_and_reachable() {
     let constraint = Constraint::MinCount(1);
     assert_eq!(constraint_name(&constraint), "min-count");
+    // A class LIST is one constraint: a single-IRI value is a one-member list.
+    let list = Constraint::Class(vec![
+        iri("https://example.org/A"),
+        iri("https://example.org/B"),
+    ]);
+    assert_eq!(constraint_name(&list), "class");
 }
 
 /// Every [`NodeExpr`] variant (SHACL-AF plus the SHACL 1.2 Node Expressions and

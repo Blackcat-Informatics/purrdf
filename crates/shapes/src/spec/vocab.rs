@@ -78,6 +78,48 @@ pub fn declared() -> Result<Vocabulary, String> {
     Ok(out)
 }
 
+/// Every `sh:` and `shnex:` TERM the vendored `shacl.ttl` and `shnex.ttl` define:
+/// each IRI subject in those two namespaces, other than the ontology IRIs
+/// themselves and the `sh:Parameter` declarations (which name a component's or a
+/// function's parameter, not a term of the vocabulary).
+///
+/// # Errors
+///
+/// When a vendored file does not parse.
+pub fn declared_terms() -> Result<std::collections::BTreeSet<String>, String> {
+    let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
+    let parameter = Term::NamedNode(NamedNode::from(sh::PARAMETER));
+    let mut out = std::collections::BTreeSet::new();
+    for (name, text) in &VOCABULARIES[..2] {
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(text, None)
+            .map_err(|errors| format!("{name} does not parse: {}", errors.join("; ")))?;
+        for (subject, _, _) in native_quads(&dataset, None, None, None, GraphFilter::AnyGraph) {
+            let Term::NamedNode(iri) = &subject else {
+                continue;
+            };
+            let iri = iri.as_str();
+            let in_namespace = [sh::NS, crate::model::shnex::NS]
+                .into_iter()
+                .any(|ns| iri.len() > ns.len() && iri.starts_with(ns));
+            if !in_namespace {
+                continue;
+            }
+            let is_parameter = !native_quads(
+                &dataset,
+                Some(&subject),
+                Some(&rdf_type),
+                Some(&parameter),
+                GraphFilter::AnyGraph,
+            )
+            .is_empty();
+            if !is_parameter {
+                out.insert(iri.to_owned());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// The IRI subjects typed `class` in `dataset`.
 fn instances(dataset: &RdfDataset, class: &str, name: &str) -> Result<Vec<String>, String> {
     let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));

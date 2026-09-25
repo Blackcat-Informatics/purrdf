@@ -83,6 +83,12 @@ jobs:
       - name: Check no terminal predicate is re-derived outside its owning surface
         run: python3 scripts/check-terminal-predicates.py
 
+      - name: Check the shapes-parser silent-drop gate can still fail
+        run: python3 scripts/check-shapes-parser-drops.py --self-test
+
+      - name: Check the shapes parser drops no shapes-graph value silently
+        run: python3 scripts/check-shapes-parser-drops.py
+
       - name: Check the tracked-path gate can still fail
         run: python3 scripts/check-tracked-paths.py --self-test
 

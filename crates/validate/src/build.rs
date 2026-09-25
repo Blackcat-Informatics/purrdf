@@ -545,6 +545,7 @@ mod tests {
             path_box_roles: vec![],
             result_box_roles: vec![],
             attributions: vec![],
+            details: vec![],
         }
     }
 

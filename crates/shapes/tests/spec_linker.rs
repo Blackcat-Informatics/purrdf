@@ -51,15 +51,11 @@ const VOCABULARY_FILES: [&str; 3] = [
 /// The SHACL 1.2 Core components the vocabulary declares and this engine does not
 /// evaluate — the declared-vs-implemented gap, pinned by name. A shape using one
 /// of their parameters is a load error, never a silent conformance.
-const UNIMPLEMENTED_DECLARED_COMPONENTS: [&str; 9] = [
-    "http://www.w3.org/ns/shacl#MaxListLengthConstraintComponent",
-    "http://www.w3.org/ns/shacl#MemberShapeConstraintComponent",
-    "http://www.w3.org/ns/shacl#MinListLengthConstraintComponent",
+const UNIMPLEMENTED_DECLARED_COMPONENTS: [&str; 5] = [
     "http://www.w3.org/ns/shacl#RootClassConstraintComponent",
     "http://www.w3.org/ns/shacl#SingleLineConstraintComponent",
     "http://www.w3.org/ns/shacl#SomeValueConstraintComponent",
     "http://www.w3.org/ns/shacl#SubsetOfConstraintComponent",
-    "http://www.w3.org/ns/shacl#UniqueMembersConstraintComponent",
     "http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent",
 ];
 

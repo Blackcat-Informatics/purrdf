@@ -51,9 +51,9 @@ impl Parser<'_> {
 
     /// Parse a single `sh:rule` node into a [`Rule`].
     fn parse_rule(&mut self, shape_id: &Term, rule_node: &Term) -> Result<Rule, String> {
-        let deactivated = self
-            .first_object_of(rule_node, sh::DEACTIVATED)
-            .is_some_and(|t| matches!(&t, Term::Literal(lit) if lit.value() == "true"));
+        // A rule's sh:deactivated reads exactly as a shape's: a well-typed
+        // xsd:boolean, refused otherwise, and only the term `true` deactivates.
+        let deactivated = self.deactivated_of(rule_node)?;
 
         let order = match self.first_object_of(rule_node, sh::ORDER) {
             None => None,

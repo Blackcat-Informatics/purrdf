@@ -199,9 +199,14 @@ impl Parser<'_> {
         fn_ids.dedup();
 
         for id in fn_ids {
-            // Only IRI-named functions are callable (the call site is an IRI).
+            // Only IRI-named functions are callable (the call site is an IRI), so a
+            // blank-node declaration declares nothing any query could call: a
+            // malformed declaration, refused rather than skipped.
             let Term::NamedNode(iri) = &id else {
-                continue;
+                return Err(format!(
+                    "the sh:SPARQLFunction / sh:Function declaration {id} is not an IRI; a \
+                     function must be named by an IRI so a query can call it"
+                ));
             };
             // A node typed both `sh:SPARQLFunction` and one of the custom
             // node-expression classes has already been parsed as the latter, body and
