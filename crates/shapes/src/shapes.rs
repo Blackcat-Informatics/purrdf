@@ -22,7 +22,7 @@ use purrdf_sparql_eval::{AggregateRegistry, UserFunctionRegistry};
 use crate::components::{ComponentRegistry, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
 use crate::expression::NodeExpr;
-use crate::model::{BoxRoleVocab, rdf, rdfs, sh};
+use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::provenance::ParseProvenance;
 use crate::report::Severity;
 use crate::term::{Literal, NamedNode, Term};
@@ -137,10 +137,34 @@ pub enum Target {
     SubjectsOf(NamedNode),
     /// `sh:targetObjectsOf ex:pred`
     ObjectsOf(NamedNode),
-    /// `sh:targetNode ex:SomeNode` (or a literal)
+    /// `sh:targetNode ex:SomeNode` (or a literal, or a triple term): a CONSTANT
+    /// node expression, whose output is itself.
     Node(Term),
-    /// The shape node is itself an `rdfs:Class` → implicit class target.
+    /// An implicit class target (SHACL 1.2 Core, "Implicit Class Targets and
+    /// sh:ShapeClass"): "If s is a SHACL instance of sh:NodeShape or
+    /// sh:PropertyShape in a shapes graph SG and s is also a SHACL instance of
+    /// rdfs:Class in SG then the set of SHACL instances of s in a data graph DG is
+    /// a target from DG for s in SG", and "If s is a SHACL instance of
+    /// sh:ShapeClass in a shapes graph SG then the set of SHACL instances of s in
+    /// a data graph DG is a target from DG for s in SG." The term is the shape
+    /// node itself, always an IRI (a blank one is an ill-formed shape).
     ImplicitClass(Term),
+    /// `sh:targetNode [ … ]` — a STRUCTURED node expression (SHACL 1.2 Core, "Node
+    /// targets"): "If s is a shape in a shapes graph SG and s has value expr for
+    /// sh:targetNode in SG, then the output nodes of evalExpr(expr, data graph, s,
+    /// {}) are targets for the data graph DG as focus graph." Evaluated once per
+    /// validation, with the SHAPE as the focus node and the data graph as the
+    /// focus graph. A constant value is [`Target::Node`]; the empty expression
+    /// targets nothing and is not recorded.
+    NodeExpression(NodeExpr),
+    /// `sh:targetWhere w` (SHACL 1.2 Core, "Where Targets"): "If s is a shape in
+    /// a shapes graph SG and s has value w for sh:targetWhere in SG then the set
+    /// of nodes in a data graph DG that conform to w is a target from DG for s in
+    /// SG." The "nodes in a data graph" are the NODES of the graph as RDF 1.2
+    /// Concepts defines them — "the set of subjects and objects of the asserted
+    /// triples of the graph" — so a triple term that is an object is a candidate
+    /// and a term occurring only inside a triple term is not.
+    Where(Box<Shape>),
     /// `sh:target [ rdf:type sh:SPARQLTarget ; sh:select "SELECT ?this …" ]`
     /// or a `sh:target [ rdf:type <CustomTargetType> ; <param> <value> ]` that
     /// has been instantiated from a `sh:SPARQLTargetType` declaration.
@@ -539,6 +563,10 @@ pub enum Constraint {
     UniqueValuesFor {
         /// The property IRI (one member) or the members of the SHACL list.
         properties: Vec<NamedNode>,
+        /// The node of the shape that declares the constraint — `S` itself. Its
+        /// target nodes include the data graph's `n sh:shape S` declarations,
+        /// which name the shape by this term.
+        shape: Term,
         /// The target declarations of the shape node that declares the
         /// constraint — `$targetNodes` is "the target nodes of S", a fact about
         /// that shape node however the evaluation reached it (a nested
@@ -704,7 +732,13 @@ pub struct Shape {
 )]
 #[derive(Debug, Clone)]
 pub struct Shapes {
-    /// Node shapes extracted from the shapes graph.
+    /// The TOP-LEVEL shapes of the shapes graph: every shape validation starts
+    /// from. That is every node shape, every property shape with targets of its
+    /// own (wrapped as a single-property [`Shape`]), and every other shape an
+    /// explicit shape target (`sh:shape` in the data graph) can name — a shape
+    /// reached only through `sh:property` or `sh:node` is here too, with no
+    /// targets of its own, so that a data graph's `n sh:shape s` can make `n` its
+    /// focus node.
     pub node_shapes: Vec<Shape>,
     /// The caller-supplied box-role vocabulary these shapes were parsed with;
     /// carried into validation so data-graph role lookups use the same terms.
@@ -1311,14 +1345,47 @@ impl<'s> Parser<'s> {
         // so we don't list them as top-level node shapes.
         let mut property_shape_nodes: FastSet<Term> = FastSet::default();
 
-        // 1. Nodes typed sh:NodeShape
-        for (subject, _, _) in self.quads_with(None, Some(rdf::TYPE), Some(sh::NODE_SHAPE)) {
-            shape_ids.insert(subject);
-        }
-
-        // 2. Nodes typed sh:PropertyShape (collect to exclude from top-level)
-        for (subject, _, _) in self.quads_with(None, Some(rdf::TYPE), Some(sh::PROPERTY_SHAPE)) {
-            property_shape_nodes.insert(subject);
+        // 1./2. The SHACL instances of sh:NodeShape (top-level) and of
+        //    sh:PropertyShape (collected to exclude from top-level) — SHACL 1.2
+        //    Core's first clause of "shape": "s is a SHACL instance of
+        //    sh:NodeShape or sh:PropertyShape". A SHACL instance, not only a node
+        //    typed with the class itself: a type that is a SHACL subclass of either
+        //    counts, and so does `sh:ShapeClass`, which SHACL 1.2 Core makes "an
+        //    rdfs:subClassOf of both sh:NodeShape and rdfs:Class".
+        {
+            let mut instances = parser::shacl_instance::ShaclInstances::new(self.data);
+            let mut typed: Vec<::purrdf::TermId> = Vec::new();
+            let mut seen = ::purrdf::IdSet::default();
+            if let Some(rdf_type) = self.data.term_id_by_iri(rdf::TYPE) {
+                for quad in crate::data::quads_for_pattern_ids(
+                    self.data,
+                    None,
+                    Some(rdf_type),
+                    None,
+                    GraphFilter::AnyGraph,
+                ) {
+                    if seen.insert(quad.s) {
+                        typed.push(quad.s);
+                    }
+                }
+            }
+            for node in typed {
+                let node_shape = instances.is_node_shape(node);
+                let property_shape = instances.is_property_shape(node);
+                if !node_shape && !property_shape {
+                    continue;
+                }
+                let term = crate::term::term_id_to_native(self.data, node);
+                // A property shape is top-level when it has targets of its own,
+                // and an implicit class target is one: a property shape that is
+                // also a class is validated against the class's instances.
+                if node_shape || (property_shape && instances.has_implicit_class_target(node)) {
+                    shape_ids.insert(term.clone());
+                }
+                if property_shape {
+                    property_shape_nodes.insert(term);
+                }
+            }
         }
 
         // 3. Subjects of Core target predicates and SHACL-AF sh:target — the
@@ -1354,6 +1421,35 @@ impl<'s> Parser<'s> {
         for ps in &property_shape_nodes {
             if !self.has_own_targets(ps) {
                 shape_ids.remove(ps);
+            }
+        }
+
+        // 6. Every shape an explicit shape target can name. SHACL 1.2 Core,
+        //    "Explicit shape targets": "If s is a shape in a shapes graph and n is
+        //    a node in the data graph. If n has value s for sh:shape in the data
+        //    graph, then n is a target for s." ANY shape — a property shape reached
+        //    only through `sh:property`, a shape reached only through `sh:node` —
+        //    so each is validated at top level too, where the data graph's
+        //    `sh:shape` statements (read at validation, see
+        //    `crate::target_eval`) supply its focus nodes. It declares no target
+        //    of its own (one that did is already top-level), so without such a
+        //    statement it validates nothing.
+        //
+        //    A data graph names a shape by its TERM, and it can name a blank node
+        //    of the shapes graph only when the two are one graph — in which case
+        //    the `sh:shape` statement is in the shapes graph too. So an IRI shape
+        //    is always included, and a blank one only when a `sh:shape` statement
+        //    here names it.
+        {
+            let named: FastSet<Term> = self
+                .quads_with(None, Some(sh::SHAPE), None)
+                .into_iter()
+                .map(|(_, _, object)| object)
+                .collect();
+            for shape in self.targetable_shapes() {
+                if matches!(shape, Term::NamedNode(_)) || named.contains(&shape) {
+                    shape_ids.insert(shape);
+                }
             }
         }
 
@@ -1520,14 +1616,24 @@ impl<'s> Parser<'s> {
 
     /// Whether `id` declares any SHACL target of its own (`sh:targetClass`,
     /// `sh:targetSubjectsOf`, `sh:targetObjectsOf`, `sh:targetNode`,
-    /// SHACL-AF `sh:target`, or the implicit `rdfs:Class` target).
+    /// `sh:targetWhere`, SHACL-AF `sh:target`, or an implicit class target).
     fn has_own_targets(&self, id: &Term) -> bool {
         for pred in crate::spec::target_predicates() {
             if self.first_object_of(id, pred).is_some() {
                 return true;
             }
         }
-        matches!(id, Term::NamedNode(_)) && self.has_type(id, rdfs::CLASS)
+        matches!(id, Term::NamedNode(_)) && self.has_implicit_class_target(id)
+    }
+
+    /// Whether the shape node `id` carries an implicit class target: it is a
+    /// SHACL instance of `sh:NodeShape` or `sh:PropertyShape` and of `rdfs:Class`
+    /// in the shapes graph, which every SHACL instance of `sh:ShapeClass` is (see
+    /// [`parser::shacl_instance`]).
+    fn has_implicit_class_target(&self, id: &Term) -> bool {
+        crate::data::resolve_id(self.data, id).is_some_and(|node| {
+            parser::shacl_instance::ShaclInstances::new(self.data).has_implicit_class_target(node)
+        })
     }
 
     /// Parse a TOP-LEVEL property shape (a node with `sh:path` and its own
@@ -1794,7 +1900,7 @@ impl<'s> Parser<'s> {
     }
 
     /// Parse all target declarations for a shape node.
-    fn parse_targets(&self, id: &Term) -> Result<Vec<Target>, String> {
+    fn parse_targets(&mut self, id: &Term) -> Result<Vec<Target>, String> {
         let mut targets: Vec<Target> = Vec::new();
 
         // sh:targetClass / sh:targetSubjectsOf / sh:targetObjectsOf — each value
@@ -1822,25 +1928,32 @@ impl<'s> Parser<'s> {
             }
         }
 
-        // sh:targetNode — SHACL 1.2 Core §2.1.3.1: "Each value of sh:targetNode in
-        // a shape is a well-formed node expression", whose output nodes are the
-        // targets. An IRI, a literal and a triple term are constant expressions
-        // whose output is themselves. A blank node that is the subject of no
-        // triple is the EMPTY expression (Node Expressions §4.1.1: "its output
-        // nodes are the empty list"), so it targets nothing. Any other blank node
-        // is a structured expression this engine does not evaluate as a target,
-        // and is refused rather than mistaken for the blank node itself.
+        // sh:targetNode — SHACL 1.2 Core, "Node targets": "Each value of
+        // sh:targetNode in a shape is a well-formed node expression", and "If s is a
+        // shape in a shapes graph SG and s has value expr for sh:targetNode in SG,
+        // then the output nodes of evalExpr(expr, data graph, s, {}) are targets
+        // for the data graph DG as focus graph." An IRI, a literal and a triple
+        // term are constant expressions whose output is themselves, so they stay
+        // constants. A blank node that is the subject of no triple is the EMPTY
+        // expression (Node Expressions: "its output nodes are the empty list"), so
+        // it targets nothing. Any other blank node is a structured expression,
+        // parsed here with the shape as the prefix owner (as a constraint's
+        // expression is) and evaluated at validation from the shape.
         let mut tn: Vec<Term> = self.objects_of(id, sh::TARGET_NODE);
         crate::term::sort_terms_canonical(&mut tn);
         for t in tn {
             match &t {
                 Term::BlankNode(_) if self.is_empty_expression(&t) => {}
                 Term::BlankNode(_) => {
-                    return Err(format!(
-                        "sh:targetNode on shape {id} is the node expression {t}; a structured \
-                         node-expression sh:targetNode value is not evaluated by this engine, so \
-                         the shape is refused rather than targeting the blank node itself"
-                    ));
+                    let saved_shape = self.current_shape.replace(id.clone());
+                    let expr = self.parse_node_expr(&t);
+                    self.current_shape = saved_shape;
+                    let expr = expr.map_err(|e| {
+                        format!(
+                            "sh:targetNode on shape {id} is not a well-formed node expression: {e}"
+                        )
+                    })?;
+                    targets.push(Target::NodeExpression(expr));
                 }
                 Term::NamedNode(_) | Term::Literal(_) | Term::Triple(_) => {
                     targets.push(Target::Node(t));
@@ -1848,11 +1961,32 @@ impl<'s> Parser<'s> {
             }
         }
 
-        // Implicit class target: shape node is itself typed rdfs:Class
+        // Implicit class target — see [`Target::ImplicitClass`] for the two
+        // textual definitions. Decided on SHACL INSTANCES in the shapes graph
+        // (`rdf:type` then `rdfs:subClassOf*`), not on a direct `rdf:type
+        // rdfs:Class`. A blank shape that would qualify is an ill-formed shape,
+        // refused by the well-formedness pass before any shape is parsed.
         if let Term::NamedNode(_) = id
-            && self.has_type(id, rdfs::CLASS)
+            && self.has_implicit_class_target(id)
         {
             targets.push(Target::ImplicitClass(id.clone()));
+        }
+
+        // sh:targetWhere — SHACL 1.2 Core, "Where Targets": "Each value of
+        // sh:targetWhere in a shape is a well-formed shape", and "If s is a shape
+        // in a shapes graph SG and s has value w for sh:targetWhere in SG then the
+        // set of nodes in a data graph DG that conform to w is a target from DG for
+        // s in SG." The value is parsed the way `sh:node`'s is: one carrying
+        // `sh:path` is a property shape, not a node shape whose path is discarded.
+        let mut wheres: Vec<Term> = self.objects_of(id, sh::TARGET_WHERE);
+        crate::term::sort_terms_canonical(&mut wheres);
+        for w in wheres {
+            if !matches!(w, Term::NamedNode(_) | Term::BlankNode(_)) {
+                return Err(format!(
+                    "sh:targetWhere on shape {id} must be a shape (an IRI or a blank node), got {w}"
+                ));
+            }
+            targets.push(Target::Where(Box::new(self.parse_inline_shape(w)?)));
         }
 
         // sh:target — SHACL-AF extension targets. Supports plain sh:SPARQLTarget

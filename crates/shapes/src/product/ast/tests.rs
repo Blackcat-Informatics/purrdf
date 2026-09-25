@@ -192,6 +192,8 @@ fn sample_targets() -> Vec<Target> {
             select: "SELECT ?this WHERE { ?this a <https://example.org/Person> }".to_owned(),
             substitutions: vec![("kind".to_owned(), ex_term("Manager"))],
         },
+        Target::NodeExpression(NodeExpr::Path(Path::Predicate(ex("pointsAt")))),
+        Target::Where(Box::new(leaf_shape("Adult"))),
     ]
 }
 
@@ -454,6 +456,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         ])),
         Constraint::UniqueValuesFor {
             properties: vec![ex("notation"), ex("scheme")],
+            shape: ex_term("SchemeShape"),
             targets: vec![
                 Target::Class(ex("Concept")),
                 Target::SubjectsOf(ex("notation")),

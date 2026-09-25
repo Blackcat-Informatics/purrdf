@@ -220,9 +220,16 @@ fn repeatable_core_parameters_keep_each_constraint() {
         );
         let shapes = parse_shapes(&ttl, None)
             .unwrap_or_else(|error| panic!("repeatable sh:{parameter}: {error}"));
-        assert_eq!(shapes.node_shapes.len(), 1, "sh:{parameter}");
+        // The values of a shape-expecting parameter (`ex:A`, `ex:B`) are shapes of
+        // the graph too, and top-level so an explicit shape target can name them;
+        // the shape under test is found by its node.
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id.to_string() == "<http://example.org/Shape>")
+            .unwrap_or_else(|| panic!("sh:{parameter}: ex:Shape is top-level"));
         assert_eq!(
-            shapes.node_shapes[0].property_shapes[0].constraints.len(),
+            shape.property_shapes[0].constraints.len(),
             2,
             "both sh:{parameter} values must contribute constraints"
         );

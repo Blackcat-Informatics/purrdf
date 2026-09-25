@@ -1361,6 +1361,31 @@ pub fn eval_node_expr_in_scope(
     )
 }
 
+/// `evalExpr(expr, data graph, focus, {})` as one step of a validation RUN: the
+/// expression has no preparation of its own (a `sh:targetNode` expression is
+/// evaluated once per validation, not per focus node), so it is lowered here, and
+/// any shape it judges conformance against answers under the run's
+/// conformance-disallow set.
+///
+/// # Errors
+///
+/// As [`eval_node_expr`].
+pub(crate) fn eval_node_expr_in_run(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    disallows: &crate::report::ConformanceDisallows,
+) -> Result<Vec<Term>, String> {
+    eval_unlowered(
+        store,
+        focus,
+        expr,
+        &mut RecursionGuard::new(),
+        Scope::EMPTY,
+        disallows,
+    )
+}
+
 /// The instances of a class, canonically ordered and deduplicated.
 ///
 /// Kept out of line so the class-view iterator never lands in the recursive

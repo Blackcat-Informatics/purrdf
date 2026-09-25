@@ -67,7 +67,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        231,
+        232,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -83,12 +83,12 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unimplemented-term",
         "which is not evaluated by this engine",
-        4,
-        "a well-formed use of a SHACL 1.2 term this engine does not evaluate \
-         (sh:ShapeClass, sh:targetWhere, sh:values, a structured node-expression \
-         sh:targetNode) is refused rather than validated as if it were absent; 6 until \
-         sh:Debug and sh:Trace became evaluated severities, when severity-004 and \
-         severity-005 stopped being refused",
+        2,
+        "a well-formed use of a SHACL 1.2 term this engine does not evaluate (sh:values) \
+         is refused rather than validated as if it were absent; 6 until sh:Debug and \
+         sh:Trace became evaluated severities, when severity-004 and severity-005 stopped \
+         being refused, and 4 until sh:ShapeClass, sh:targetWhere and a structured \
+         node-expression sh:targetNode became evaluated targets",
     ),
     (
         "unsupported-entailment",
@@ -218,10 +218,13 @@ const SHACL_SHACL_BEHIND_THE_SPEC: &[BehindTheSpec] = &[
             "<http://www.w3.org/ns/shacl#targetNode>",
             "",
         )],
-        1,
-        "SHACL 1.2 Core §2.1.3.1: \"Each value of sh:targetNode in a shape is a well-formed \
-         node expression.\" A blank node that is the subject of no triple is the empty node \
-         expression; shacl-shacl.ttl still requires an IRI or a literal",
+        2,
+        "SHACL 1.2 Core, \"Node targets\": \"Each value of sh:targetNode in a shape is a \
+         well-formed node expression.\" A blank node that is the subject of no triple is the \
+         empty node expression, and one carrying sh:select is a SPARQL node expression whose \
+         output nodes are the targets (targetNode-select-001); shacl-shacl.ttl still requires \
+         an IRI or a literal. 1 until a structured sh:targetNode became evaluated and \
+         targetNode-select-001 stopped being refused at load",
     ),
     (
         "sequence-path-with-other-values",
@@ -575,8 +578,8 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
 const BASE_INPUTS: usize = 375;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 188 literal-for-IRI, 100
-/// non-integer counts, 154 lists-for-single-values, 35 non-boolean flags and 231
+/// mutation kind that finds a statement to rewrite): 189 literal-for-IRI, 101
+/// non-integer counts, 155 lists-for-single-values, 35 non-boolean flags and 232
 /// misspelled predicates.
 ///
 /// Moved from 683 to 690 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
@@ -612,7 +615,18 @@ const BASE_INPUTS: usize = 375;
 /// `-004` and `-005` each gain a literal-for-IRI (for `severity-003` its reifier
 /// `sh:severity`, refused under `reifier-annotation-value`) and a
 /// list-for-single-value (+6); `message-002` gains a list-for-single-value (+1).
-const MUTANT_INPUTS: usize = 708;
+///
+/// Moved from 708 to 712 when implicit class targets, `sh:ShapeClass` and
+/// `sh:targetWhere` became evaluated: `targetClassImplicit-002` and
+/// `targetWhere-001` now load, so each is a base both sides accept.
+/// `targetWhere-001` gains a literal-for-IRI (its first `sh:class`), a non-integer
+/// count and a list-for-single-value (its first `sh:minCount`) and a misspelled
+/// predicate (+4); `targetClassImplicit-002`, whose one shape is a `sh:ShapeClass`
+/// carrying only `sh:in`, has no statement any mutation rewrites.
+/// `targetNode-select-001` loads too, but `shacl-shacl.ttl` flags its structured
+/// `sh:targetNode` (see `node-expression-target-node`), so it is not a base both
+/// sides accept and is not mutated.
+const MUTANT_INPUTS: usize = 712;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -708,11 +722,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 188),
-        ("non-integer-count", 100),
-        ("list-where-a-single-value-is-required", 154),
+        ("literal-where-an-IRI-is-required", 189),
+        ("non-integer-count", 101),
+        ("list-where-a-single-value-is-required", 155),
         ("non-boolean-flag", 35),
-        (UNKNOWN_TERM, 231),
+        (UNKNOWN_TERM, 232),
     ]
     .into_iter()
     .collect();

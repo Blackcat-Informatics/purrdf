@@ -2091,7 +2091,15 @@ const EXPANSION_EMPTY_CHAIN_SHAPES: &str = "ex:Shape a sh:NodeShape ; sh:targetC
     sh:property [ sh:path ex:key ; sh:minCount 1 ] .";
 
 /// The expansion's fixed cost, independent of how many rows changed.
-const EXPANSION_CONST: u64 = 2;
+///
+/// It was 2 until every shapes graph gained one more read: the data graph's
+/// `n sh:shape <shape>` statements (SHACL 1.2 Core, "Explicit shape targets"),
+/// which can make any node a focus node of any shape, so the footprint carries a
+/// `sh:shape` trigger for every shapes graph. The expansion resolves each
+/// trigger's predicate once per call, and on a delta-backed view that lookup
+/// builds the owned term it asks for — one allocation, charged once, whatever the
+/// change's size. The per-row and per-doubling terms did not move.
+const EXPANSION_CONST: u64 = 3;
 
 /// What ONE changed row costs the expansion once it has a chain to walk back.
 ///
@@ -2214,7 +2222,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
     ids.len()
 }
 
-/// **Expanding a change costs `2 + 2N + 3·log2(N)` allocations for `N` changed
+/// **Expanding a change costs `3 + 2N + 3·log2(N)` allocations for `N` changed
 /// rows — and the `2N` is the delta view's type-erased probe, not the walk.**
 ///
 /// `affected_focus_node_ids` is the surface the incremental soundness claim rests
@@ -2224,7 +2232,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
 /// building a `HashSet` frontier table per changed row — while the validation
 /// beside it ran the lowered one. Measured on this revision before that was fixed,
 /// the same fixture cost `4 + 4N + 3·log2(N)`: 278 allocations for 64 changed rows
-/// and 537 for 128, against 148 and 279 now.
+/// and 537 for 128, against 149 and 280 now.
 ///
 /// A closed form rather than a flat `alloc(2N) == alloc(N)`, for the reason
 /// `tests/sparql_path_alloc.rs` states for its three surfaces: the residual terms
@@ -2269,9 +2277,10 @@ fn change_expansion_allocation_matches_its_pinned_closed_form() {
 /// matching trigger is anchored AT the changed row's subject, so the expansion takes
 /// the branch that performs no pattern lookup at all.
 ///
-/// Measured on this revision the per-row term is then exactly zero — 16 allocations
-/// for 32 changed rows and 25 for 256, which is `1 + 3·log2(N)`, the three doubling
-/// series and nothing else. So the `2N` above really is one probe per row, and a
+/// Measured on this revision the per-row term is then exactly zero — 17 allocations
+/// for 32 changed rows and 26 for 256, which is `2 + 3·log2(N)`: the three doubling
+/// series, and a constant that is one more than it was for the reason
+/// [`EXPANSION_CONST`] gives (the `sh:shape` trigger's predicate lookup). So the `2N` above really is one probe per row, and a
 /// per-row term that ever appeared HERE would be the expansion's own.
 #[test]
 fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
@@ -2289,9 +2298,9 @@ fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
         let doublings = u64::from(changes.ilog2());
         assert_eq!(
             sample.allocations,
-            1 + EXPANSION_PER_DOUBLING * doublings,
+            2 + EXPANSION_PER_DOUBLING * doublings,
             "expanding {changes} changed rows through an EMPTY chain allocated {}, not the \
-             1 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
+             2 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
              is the expansion's own, and it would mean the {EXPANSION_PER_ROW} charged per row \
              in change_expansion_allocation_matches_its_pinned_closed_form is no longer the \
              probe it is attributed to\n  {sample:?}",

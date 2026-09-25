@@ -493,9 +493,13 @@ struct SparqlCase {
     /// three, whatever their query text — which is the reading that says this is
     /// the ENTRY's own cost (the `GovernorState`, the scope guard, the expansion's
     /// return at the opacity check, and the evidence read back afterwards) and not
-    /// the query's. The one surface whose footprint is boundable measures **39**,
+    /// the query's. The one surface whose footprint is boundable measures **40**,
     /// and it is the one taking the other lane: its expansion really walks the
-    /// change instead of returning at that check.
+    /// change instead of returning at that check. It was 39 until every shapes
+    /// graph's footprint gained the `sh:shape` read (SHACL 1.2 Core, "Explicit
+    /// shape targets": a data-graph `n sh:shape <shape>` makes `n` a focus node),
+    /// whose predicate the walking expansion resolves once — one allocation on a
+    /// delta-backed view, which builds the owned term it looks up.
     ///
     /// Per case rather than shared for exactly that reason. A single number would
     /// have to be wrong for one of the two lanes, and a number loose enough to
@@ -602,7 +606,7 @@ const CASES: &[SparqlCase] = &[
         ),
         per_focus_node: 127,
         governed_per_focus_node: 152,
-        governed_entry: 39,
+        governed_entry: 40,
         footprint_is_boundable: true,
         results_per_violation: 1,
     },

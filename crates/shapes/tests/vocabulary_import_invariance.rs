@@ -72,7 +72,7 @@ const TOTAL_CASES: usize = 375;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
-/// the three corpora except the 12 declared `sht:Failure` inputs and the 7 SHACL
+/// the three corpora except the 12 declared `sht:Failure` inputs and the 4 SHACL
 /// 1.2 entries this engine refuses at load (the same partition the product
 /// equivalence harness pins).
 ///
@@ -100,7 +100,16 @@ const TOTAL_CASES: usize = 375;
 /// `severity-003`, `severity-004`, `severity-005` and `message-002` now load, so
 /// their reports are compared too, and the refused-at-load entries went from 12
 /// to 7.
-const COMPARED_ON_REPORT: usize = 356;
+///
+/// Moved from 356 to 359 when implicit class targets, `sh:ShapeClass`,
+/// `sh:targetWhere` and node-expression `sh:targetNode` values became evaluated:
+/// `targetClassImplicit-002`, `targetWhere-001` and `targetNode-select-001` now
+/// load, so their reports are compared too, and the refused-at-load entries went
+/// from 7 to 4. Merging the vocabulary adds `sh:ShapeClass rdfs:subClassOf
+/// sh:NodeShape, rdfs:Class` to the shapes graph; the engine already honours those
+/// two axioms whether or not the graph asserts them, so the merge changes no
+/// answer here either.
+const COMPARED_ON_REPORT: usize = 359;
 
 /// One case, reduced to what both parses need.
 struct Input {

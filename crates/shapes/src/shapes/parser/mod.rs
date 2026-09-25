@@ -10,5 +10,6 @@ pub(crate) mod custom_fn;
 pub(crate) mod functions;
 pub(crate) mod node_expr;
 pub(crate) mod rule_parse;
+pub(crate) mod shacl_instance;
 pub(crate) mod target_types;
 pub(crate) mod wellformed;

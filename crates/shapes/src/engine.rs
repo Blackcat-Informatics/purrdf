@@ -383,8 +383,12 @@ impl PreparedTargets {
     ///
     /// # Errors
     ///
-    /// Returns an error when a SHACL-SPARQL target fails to evaluate — an
-    /// unanswerable target is not an empty one.
+    /// `sh:targetWhere`, a structured `sh:targetNode` and the data graph's
+    /// `sh:shape` declarations are evaluated here too, once, for the same reason
+    /// (see [`crate::target_eval`]).
+    ///
+    /// Returns an error when a SHACL-SPARQL, where or node-expression target fails
+    /// to evaluate — an unanswerable target is not an empty one.
     fn for_shape(
         data: &ShaclData,
         shape: &Shape,
@@ -424,8 +428,31 @@ impl PreparedTargets {
                     }
                 }
                 Target::ImplicitClass(_) => {}
+                Target::Where(shape) => {
+                    for node in crate::target_eval::where_targets(
+                        data,
+                        shape,
+                        binding.conformance_disallows(),
+                    )? {
+                        prepared.explicit_ids.insert(node);
+                    }
+                }
+                Target::NodeExpression(expr) => {
+                    for candidate in crate::target_eval::node_expression_targets(
+                        data,
+                        &shape.id,
+                        expr,
+                        binding.conformance_disallows(),
+                    )? {
+                        prepared.insert_explicit(data.core_view(), candidate);
+                    }
+                }
             }
         }
+        // Explicit shape targets: the data graph's `n sh:shape <shape>` triples.
+        prepared
+            .explicit_ids
+            .extend(crate::target_eval::declared_shape_targets(data, &shape.id));
         Ok(prepared)
     }
 
@@ -932,13 +959,16 @@ impl FocusSet {
     }
 }
 
-/// Resolve the focus node set for a single shape from its target declarations.
+/// Resolve the focus node set for a single shape from its target declarations —
+/// `targets`, the declarations of the shape whose node is `shape`, plus the data
+/// graph's `sh:shape` declarations naming it.
 ///
 /// Interned targets are deduplicated in id space and resolved to an owned term
 /// exactly once. Results retain that id for constraint and path evaluation and
 /// are sorted canonically before return.
 pub(crate) fn resolve_focus_nodes(
     data: &ShaclData,
+    shape: &Term,
     targets: &[Target],
     binding: &DatasetBinding,
     classes: &ClassCatalog,
@@ -959,7 +989,12 @@ pub(crate) fn resolve_focus_nodes(
                 Some(instances_of_class(data, class, binding, classes)?)
             }
             Target::ImplicitClass(_) => Some(Vec::new()),
-            Target::Node(_) | Target::Sparql { .. } => None,
+            Target::Where(where_shape) => Some(crate::target_eval::where_targets(
+                data,
+                where_shape,
+                binding.conformance_disallows(),
+            )?),
+            Target::Node(_) | Target::Sparql { .. } | Target::NodeExpression(_) => None,
         };
         if let Some(ids) = ids {
             // Upper bound on the pushes this target adds: one Vec growth step
@@ -982,10 +1017,17 @@ pub(crate) fn resolve_focus_nodes(
                 substitutions,
             } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
                 .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
+            Target::NodeExpression(expr) => crate::target_eval::node_expression_targets(
+                data,
+                shape,
+                expr,
+                binding.conformance_disallows(),
+            )?,
             Target::Class(_)
             | Target::SubjectsOf(_)
             | Target::ObjectsOf(_)
-            | Target::ImplicitClass(_) => unreachable!("id-native target handled above"),
+            | Target::ImplicitClass(_)
+            | Target::Where(_) => unreachable!("id-native target handled above"),
         };
         for term in candidates {
             if let Some(id) = resolve_id(ds, &term) {
@@ -995,6 +1037,13 @@ pub(crate) fn resolve_focus_nodes(
             } else if seen_foreign.insert(term.clone()) {
                 nodes.push(FocusNode::Foreign(term));
             }
+        }
+    }
+
+    // Explicit shape targets: the data graph's `n sh:shape <shape>` triples.
+    for id in crate::target_eval::declared_shape_targets(data, shape) {
+        if seen_ids.insert(id) {
+            nodes.push(FocusNode::Interned(id));
         }
     }
 
@@ -1165,8 +1214,13 @@ where
         if shape.deactivated {
             continue;
         }
-        let mut focus_nodes =
-            resolve_focus_nodes(data, &shape.targets, bound.binding(), bound.classes())?;
+        let mut focus_nodes = resolve_focus_nodes(
+            data,
+            &shape.id,
+            &shape.targets,
+            bound.binding(),
+            bound.classes(),
+        )?;
         // `FnMut` is intentionally applied serially in canonical focus order, so
         // existing callers observe the same calls even when evaluation dispatches
         // the retained set to workers. The filter is a caller-supplied predicate
@@ -1986,7 +2040,8 @@ impl PreparedValidator {
     /// lowering itself, so it covers every route a read can take back to a focus
     /// node: a forward predicate step at any depth of a sequence, an
     /// `sh:inversePath`, a `sh:zeroOrMorePath` / `sh:oneOrMorePath` closure,
-    /// `sh:targetSubjectsOf` / `sh:targetObjectsOf`, the `rdf:type` and
+    /// `sh:targetSubjectsOf` / `sh:targetObjectsOf`, the data graph's `sh:shape`
+    /// statements (explicit shape targets), the `rdf:type` and
     /// `rdfs:subClassOf*` edges behind `sh:targetClass` and `sh:class`, a
     /// property-pair comparand predicate, and the whole nesting of `sh:node`,
     /// `sh:not`, `sh:and` / `sh:or` / `sh:xone` and `sh:qualifiedValueShape`.
@@ -1999,7 +2054,9 @@ impl PreparedValidator {
     /// A shapes graph that reads through query text this walk does not interpret —
     /// `sh:sparql`, a SPARQL target, a constraint component's `sh:ask` /
     /// `sh:select` validator, a `sh:SPARQLFunction` call, a SPARQL node expression
-    /// — has no footprint anyone can bound from the shapes graph alone. That
+    /// — has no footprint anyone can bound from the shapes graph alone, and neither
+    /// has a target EVALUATED over the whole data graph (`sh:targetWhere`, a
+    /// node-expression `sh:targetNode`). That
     /// answers [`FocusExpansion::Everything`], carrying the reason, and the caller
     /// must run [`Self::validate`]. It is reported rather than silently
     /// under-approximated because a short answer here is indistinguishable from a
@@ -3108,9 +3165,10 @@ mod tests {
             .collect()
     }
 
-    /// **`PreparedTargets::contains`, `PreparedTargets::resolve_all` and
-    /// `TargetDispatch` select the identical focus-node set — for every `Target`
-    /// variant there is.**
+    /// **`PreparedTargets::contains`, `PreparedTargets::resolve_all`,
+    /// `TargetDispatch` and `resolve_focus_nodes` select the identical focus-node
+    /// set — for every `Target` variant there is, and for the data graph's
+    /// `sh:shape` declarations, which no variant carries.**
     ///
     /// Three implementations of one predicate. `contains` DEFINES it, one
     /// (shape, node) pair at a time; `resolve_all` enumerates it forwards over the
@@ -3143,6 +3201,14 @@ mod tests {
                 sh:target [ a sh:SPARQLTarget ; sh:select
                     "SELECT ?this WHERE { ?this <http://example.org/ns#active> true }" ] ;
                 sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:WhereShape a sh:NodeShape ;
+                sh:targetWhere [ sh:datatype xsd:boolean ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ExpressionShape a sh:NodeShape ;
+                sh:targetNode [ sh:path ex:pointsAt ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:DeclaredShape a sh:NodeShape ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
             "#,
             r"
             ex:Child rdfs:subClassOf ex:Person .
@@ -3152,13 +3218,16 @@ mod tests {
             ex:tail ex:link ex:head .
             ex:explicit ex:required ex:anything .
             ex:activeNode ex:active true .
+            ex:flagged ex:flag true .
+            ex:ExpressionShape ex:pointsAt ex:pointed .
+            ex:declared sh:shape ex:DeclaredShape .
             ",
         );
 
         // The fixture's claim to be exhaustive is itself checked: a fixture that
         // quietly stopped covering a variant would leave this test green while
         // testing less, which is the failure mode an agreement test is for.
-        let mut covered = [false; 6];
+        let mut covered = [false; 8];
         for target in shapes.node_shapes.iter().flat_map(|shape| &shape.targets) {
             covered[match target {
                 Target::Class(_) => 0,
@@ -3167,6 +3236,8 @@ mod tests {
                 Target::Node(_) => 3,
                 Target::ImplicitClass(_) => 4,
                 Target::Sparql { .. } => 5,
+                Target::Where(_) => 6,
+                Target::NodeExpression(_) => 7,
             }] = true;
         }
         assert!(
@@ -3191,6 +3262,24 @@ mod tests {
             assert_eq!(
                 by_contains, by_resolve_all,
                 "{shape}: `resolve_all` disagrees with `contains`",
+            );
+            // The fourth route: the one the unprepared entry points, the rules
+            // engine and `sh:uniqueValuesFor` resolve through.
+            let declared = &shapes.node_shapes[position];
+            let by_resolve_focus_nodes: std::collections::BTreeSet<String> = resolve_focus_nodes(
+                &validator.data,
+                &declared.id,
+                &declared.targets,
+                validator.bound.binding(),
+                validator.bound.classes(),
+            )
+            .expect("fixture targets resolve")
+            .iter()
+            .map(|focus| focus.to_term(validator.data.core_view()).to_string())
+            .collect();
+            assert_eq!(
+                by_contains, by_resolve_focus_nodes,
+                "{shape}: `resolve_focus_nodes` disagrees with `contains`",
             );
         }
     }

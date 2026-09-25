@@ -1004,12 +1004,14 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
 /// loss on the shape's own subject rather than vanishing silently;
-/// `sh:targetNode` / `sh:targetSubjectsOf` / `sh:targetObjectsOf`-targeted
-/// shapes (`Target::Node` / `Target::SubjectsOf` / `Target::ObjectsOf`) are
-/// the same story — none of the three is a class extension, so none can key a
-/// `$def`, and each records its own loss instead of vanishing (a shape's
-/// `Target::ImplicitClass` — the shape node is itself `rdfs:Class` — IS a
-/// class extension and genuinely gets a `$def`, so it records no loss);
+/// `sh:targetNode` / `sh:targetSubjectsOf` / `sh:targetObjectsOf` /
+/// `sh:targetWhere`-targeted shapes (`Target::Node` and
+/// `Target::NodeExpression` / `Target::SubjectsOf` / `Target::ObjectsOf` /
+/// `Target::Where`) are the same story — none is a class extension, so none can
+/// key a `$def`, and each records its own loss instead of vanishing (a shape's
+/// `Target::ImplicitClass` — an implicit class target, the shape node being
+/// itself a class — IS a class extension and genuinely gets a `$def`, so it
+/// records no loss);
 /// `value-vocabulary` covers an enum-with-no-members projection and
 /// `value-vocabulary member` a dropped blank-node enum member. Mirrored here
 /// (rather than depended-on from this crate) because `purrdf-core` never
@@ -1137,9 +1139,9 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "sh:targetNode",
-        "A shape targeted only via sh:targetNode selects specific focus nodes, not a class \
-         extension; it has no closed-world JSON Schema $def and its constraints are not \
-         enforced by the emitted schema.",
+        "A shape targeted only via sh:targetNode selects specific focus nodes (a constant, or \
+         the output nodes of a node expression), not a class extension; it has no closed-world \
+         JSON Schema $def and its constraints are not enforced by the emitted schema.",
     ),
     (
         "sh:targetObjectsOf",
@@ -1152,6 +1154,12 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
         "A shape targeted only via sh:targetSubjectsOf selects focus nodes by a predicate's \
          subject position, not a class extension; no closed-world JSON Schema $def can be keyed \
          and its constraints are not enforced.",
+    ),
+    (
+        "sh:targetWhere",
+        "A shape targeted via sh:targetWhere selects the nodes that conform to another shape, \
+         not a class extension; it has no closed-world JSON Schema $def and its constraints are \
+         not enforced by the emitted schema.",
     ),
     (
         "sh:uniqueMembers",

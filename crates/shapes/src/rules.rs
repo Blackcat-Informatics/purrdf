@@ -941,6 +941,7 @@ impl<'a> RulePlan<'a> {
     fn focus_nodes(&self, data: &ShaclData) -> Result<Vec<Term>, String> {
         resolve_focus_nodes(
             data,
+            &self.shape.id,
             &self.shape.targets,
             &self.binding,
             self.lowered.classes(),

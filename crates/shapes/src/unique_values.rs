@@ -50,11 +50,15 @@ use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
 use crate::data_view::ShaclRead;
 use crate::plan::{ClassCatalog, DatasetBinding, TermSlot};
 use crate::shapes::Target;
+use crate::term::Term;
 
 /// One `sh:uniqueValuesFor` constraint as the shapes-graph walk lowered it: what
 /// its grouping is built from.
 #[derive(Debug)]
 pub(crate) struct UniqueSpec {
+    /// The node of the shape that declares the constraint, which the data
+    /// graph's `sh:shape` declarations name.
+    pub(crate) shape: Term,
     /// The target declarations of the shape node that declares the constraint.
     pub(crate) targets: Box<[Target]>,
     /// The slot of each property in `$properties`, in the constraint's order.
@@ -109,13 +113,15 @@ impl UniqueGroups {
             predicates,
             ..Self::default()
         };
-        // No target, or no property this data graph interns: no node has a value
-        // tuple to share, so nothing can collide.
-        if spec.targets.is_empty() || groups.predicates.iter().all(Option::is_none) {
+        // No property this data graph interns: no node has a value tuple to share,
+        // so nothing can collide. A shape with no target DECLARATIONS is not
+        // skipped: the data graph's `sh:shape` statements can still name it.
+        if groups.predicates.iter().all(Option::is_none) {
             return Ok(groups);
         }
         let ds = data.core_view();
-        let targets = crate::engine::resolve_focus_nodes(data, &spec.targets, binding, classes)?;
+        let targets =
+            crate::engine::resolve_focus_nodes(data, &spec.shape, &spec.targets, binding, classes)?;
         // The first target seen with each tuple, and whether a second one has
         // been seen since — so the first is marked colliding exactly once.
         let mut first: ::purrdf::FastMap<ValueKey, (TermId, bool)> =

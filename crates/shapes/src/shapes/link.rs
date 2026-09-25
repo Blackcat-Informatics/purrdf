@@ -71,7 +71,7 @@ use crate::product::ast::MAX_DEPTH;
 use crate::product::{ProductDimension, ShapesProductError};
 use crate::rules::RuleBody;
 use crate::shapes::parser::functions::{invoke_expression_function, invoke_native_list_function};
-use crate::shapes::{Constraint, PropertyShape, Shape};
+use crate::shapes::{Constraint, PropertyShape, Shape, Target};
 use crate::term::Term;
 
 /// The shapes graph's ONE `sh:nodeByExpression` resolution table.
@@ -436,9 +436,29 @@ impl ShapeIndexWalk<'_> {
         Ok(())
     }
 
+    /// Walk the target declarations that can reach a handle: a structured
+    /// `sh:targetNode` is a node expression, and a `sh:targetWhere` is a shape.
+    /// Wildcard-free for the reason the constraint walk is.
+    fn targets(&mut self, targets: &[Target]) -> Result<(), ShapesProductError> {
+        for target in targets {
+            match target {
+                Target::Class(_)
+                | Target::SubjectsOf(_)
+                | Target::ObjectsOf(_)
+                | Target::Node(_)
+                | Target::ImplicitClass(_)
+                | Target::Sparql { .. } => {}
+                Target::NodeExpression(expr) => self.node_expr(expr)?,
+                Target::Where(shape) => self.shape(shape)?,
+            }
+        }
+        Ok(())
+    }
+
     /// Walk a node shape.
     fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        self.targets(&shape.targets)?;
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }
@@ -515,8 +535,8 @@ impl ShapeIndexWalk<'_> {
             | Constraint::UniqueMembers(_)
             | Constraint::SingleLine(_)
             | Constraint::RootClass(_)
-            | Constraint::UniqueValuesFor { .. }
             | Constraint::Component { .. } => {}
+            Constraint::UniqueValuesFor { targets, .. } => self.targets(targets)?,
             Constraint::Not(shape)
             | Constraint::Node(shape)
             | Constraint::MemberShape(shape)

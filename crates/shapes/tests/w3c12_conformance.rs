@@ -74,28 +74,6 @@ use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_f
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
-const R_SHAPE_CLASS_SUBJECT: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
-     evaluated); the rule also omits sh:subject, which SHACL 1.2 Rules defaults to the focus \
-     node";
-
-const R_SHAPE_CLASS_RUN_ONCE: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
-     evaluated); sh:runOnce / sh:tempTriple are not implemented either";
-
-const R_SHAPE_CLASS_TEMPLATE: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
-     evaluated); sh:SPARQLRuleTemplate is not implemented either";
-
-const R_SHAPE_TARGET: &str = "sh:shape target declarations in the data graph are not read, so no focus node is \
-     selected";
-
-const R_SHAPE_CLASS: &str = "sh:ShapeClass implicit class targets are not evaluated, so a shape typed \
-     sh:ShapeClass is refused at load";
-
-const R_TARGET_WHERE: &str =
-    "sh:targetWhere is not evaluated, so a shape using it is refused at load";
-
-const R_TARGET_NODE_EXPR: &str = "a structured node-expression (sh:select) value of sh:targetNode is not \
-     evaluated, so the shape is refused at load";
-
 const R_VALUES: &str =
     "sh:values on a property shape is not evaluated, so the shape is refused at load";
 
@@ -148,11 +126,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// A ledgered entry MUST fail; when engine work fixes it the harness errors with
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
-    // ── Targets ──
-    ("core/targets/shape-001", R_SHAPE_TARGET),
-    ("core/targets/targetClassImplicit-002", R_SHAPE_CLASS),
-    ("core/targets/targetWhere-001", R_TARGET_WHERE),
-    ("sparql/targets/targetNode-select-001", R_TARGET_NODE_EXPR),
     // ── SPARQL surface ──
     ("sparql/property/property-select-001", R_VALUES),
     ("sparql/property/property-sparqlExpr-001", R_VALUES),
@@ -172,7 +145,7 @@ const XFAIL: &[(&str, &str)] = &[
     ),
     (
         "inference-rules/TripleRule-example-squares",
-        R_SHAPE_CLASS_SUBJECT,
+        R_TRIPLE_RULE_DEFAULT_SUBJECT,
     ),
     ("inference-rules/global-symmetric", R_GLOBAL_RULES),
     ("inference-rules/same-order", R_GLOBAL_RULES),
@@ -183,15 +156,12 @@ const XFAIL: &[(&str, &str)] = &[
     ("inference-rules/rdfs/rdfs-subclass-1", R_GLOBAL_RULES),
     ("inference-rules/rdfs/rdfs-subproperty-1", R_GLOBAL_RULES),
     ("inference-rules/layers-example", R_LAYER),
-    ("inference-rules/run-once-example", R_SHAPE_CLASS_RUN_ONCE),
+    ("inference-rules/run-once-example", R_RUN_ONCE),
     ("inference-rules/run-once-blank-node-feed", R_RUN_ONCE),
-    (
-        "inference-rules/temp-triples-example",
-        R_SHAPE_CLASS_RUN_ONCE,
-    ),
+    ("inference-rules/temp-triples-example", R_RUN_ONCE),
     (
         "inference-rules/SPARQLRuleTemplate-example-Multiply",
-        R_SHAPE_CLASS_TEMPLATE,
+        R_RULE_TEMPLATE,
     ),
     (
         "inference-rules/SPARQLRuleTemplate-example-SymmetricProperty",

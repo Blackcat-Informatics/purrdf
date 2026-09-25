@@ -20,8 +20,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use ::purrdf::{FastMap, IdSet, TermId};
+use ::purrdf::{IdSet, TermId};
 
+use super::shacl_instance::ShaclInstances;
 use crate::data::{GraphFilter, quads_for_pattern_ids};
 use crate::model::{rdf, rdfs, sh};
 use crate::shapes::{ClosedTypeIndex, Parser};
@@ -32,8 +33,6 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 struct Vocabulary {
     rdf_type: Option<TermId>,
     sub_class_of: Option<TermId>,
-    rdfs_class: Option<TermId>,
-    node_shape: Option<TermId>,
     property: Option<TermId>,
     path: Option<TermId>,
     target_class: Option<TermId>,
@@ -62,14 +61,12 @@ impl Parser<'_> {
         let vocabulary = Vocabulary {
             rdf_type: data.term_id_by_iri(rdf::TYPE),
             sub_class_of: data.term_id_by_iri(rdfs::SUB_CLASS_OF),
-            rdfs_class: data.term_id_by_iri(rdfs::CLASS),
-            node_shape: data.term_id_by_iri(sh::NODE_SHAPE),
             property: data.term_id_by_iri(sh::PROPERTY),
             path: data.term_id_by_iri(sh::PATH),
             target_class: data.term_id_by_iri(sh::TARGET_CLASS),
             node: data.term_id_by_iri(sh::NODE),
         };
-        let mut instances = ShaclInstances::default();
+        let mut instances = ShaclInstances::new(data);
 
         // The nodes `collectProperties` can collect anything from: the subjects of
         // `sh:property`, and the SHACL instances of `rdfs:Class` and of
@@ -81,8 +78,7 @@ impl Parser<'_> {
                 quads_for_pattern_ids(data, None, Some(rdf_type), None, GraphFilter::AnyGraph)
             {
                 if !keys.contains(&quad.s)
-                    && (instances.is_instance(self, &vocabulary, quad.s, vocabulary.rdfs_class)
-                        || instances.is_instance(self, &vocabulary, quad.s, vocabulary.node_shape))
+                    && (instances.is_class(quad.s) || instances.is_node_shape(quad.s))
                 {
                     keys.insert(quad.s);
                 }
@@ -114,7 +110,7 @@ impl Parser<'_> {
                         }
                     }
                 }
-                if instances.is_instance(self, &vocabulary, node, vocabulary.rdfs_class) {
+                if instances.is_class(node) {
                     pending.extend(self.objects_of_id(node, vocabulary.sub_class_of));
                     if let Some(target_class) = vocabulary.target_class {
                         pending.extend(
@@ -129,7 +125,7 @@ impl Parser<'_> {
                         );
                     }
                 }
-                if instances.is_instance(self, &vocabulary, node, vocabulary.node_shape) {
+                if instances.is_node_shape(node) {
                     pending.extend(self.objects_of_id(node, vocabulary.node));
                 }
             }
@@ -169,64 +165,5 @@ impl Parser<'_> {
             )
             .map(|quad| quad.s)
         })
-    }
-}
-
-/// SHACL 1.2 Core, "SHACL Instance": "A node n in an RDF graph G is a SHACL instance of a
-/// SHACL class C in G if one of the SHACL types of n in G is C", where the SHACL
-/// types are the node's `rdf:type` values and their SHACL superclasses
-/// (`rdfs:subClassOf+`). Memoized per `(type, class)`, because every node the
-/// index visits asks it of the same few classes.
-#[derive(Default)]
-struct ShaclInstances {
-    /// Whether a TYPE reaches a class through `rdfs:subClassOf*`, by
-    /// `(type, class)`.
-    reaches: FastMap<(TermId, TermId), bool>,
-}
-
-impl ShaclInstances {
-    /// Whether `node` is a SHACL instance of `class` in the shapes graph; `false`
-    /// when the shapes graph does not intern `class`.
-    fn is_instance(
-        &mut self,
-        parser: &Parser<'_>,
-        vocabulary: &Vocabulary,
-        node: TermId,
-        class: Option<TermId>,
-    ) -> bool {
-        let Some(class) = class else {
-            return false;
-        };
-        parser
-            .objects_of_id(node, vocabulary.rdf_type)
-            .any(|ty| self.reaches(parser, vocabulary, ty, class))
-    }
-
-    /// Whether `ty` is `class` or a SHACL subclass of it.
-    fn reaches(
-        &mut self,
-        parser: &Parser<'_>,
-        vocabulary: &Vocabulary,
-        ty: TermId,
-        class: TermId,
-    ) -> bool {
-        if let Some(&known) = self.reaches.get(&(ty, class)) {
-            return known;
-        }
-        let mut seen = IdSet::default();
-        let mut pending = vec![ty];
-        let mut found = false;
-        while let Some(current) = pending.pop() {
-            if !seen.insert(current) {
-                continue;
-            }
-            if current == class {
-                found = true;
-                break;
-            }
-            pending.extend(parser.objects_of_id(current, vocabulary.sub_class_of));
-        }
-        self.reaches.insert((ty, class), found);
-        found
     }
 }

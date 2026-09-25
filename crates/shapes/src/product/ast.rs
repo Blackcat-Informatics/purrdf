@@ -314,7 +314,7 @@ const TAGS_NODE_KIND: u8 = 7;
 /// The number of [`Path`] tags.
 const TAGS_PATH: u8 = 7;
 /// The number of [`Target`] tags.
-const TAGS_TARGET: u8 = 6;
+const TAGS_TARGET: u8 = 8;
 /// The number of [`ComponentValidator`] tags.
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
@@ -763,6 +763,14 @@ impl AstWriter {
                     self.text(name);
                     self.term(value)?;
                 }
+            }
+            Target::NodeExpression(expr) => {
+                self.tag(6);
+                self.node_expr(expr)?;
+            }
+            Target::Where(shape) => {
+                self.tag(7);
+                self.shape(shape)?;
             }
         }
         Ok(())
@@ -1296,6 +1304,7 @@ impl AstWriter {
             }
             Constraint::UniqueValuesFor {
                 properties,
+                shape,
                 targets,
             } => {
                 self.tag(39);
@@ -1303,6 +1312,7 @@ impl AstWriter {
                 for property in properties {
                     self.named_node(property);
                 }
+                self.term(shape)?;
                 self.count(targets.len());
                 for target in targets {
                     self.target(target)?;
@@ -1874,7 +1884,7 @@ impl<'a> AstReader<'a> {
             2 => Target::ObjectsOf(self.named_node()?),
             3 => Target::Node(self.term()?),
             4 => Target::ImplicitClass(self.term()?),
-            _ => Target::Sparql {
+            5 => Target::Sparql {
                 select: self.text()?,
                 substitutions: self.seq(|reader| {
                     let name = reader.text()?;
@@ -1882,6 +1892,8 @@ impl<'a> AstReader<'a> {
                     Ok((name, value))
                 })?,
             },
+            6 => Target::NodeExpression(self.node_expr()?),
+            _ => Target::Where(Box::new(self.shape()?)),
         })
     }
 
@@ -2170,6 +2182,7 @@ impl<'a> AstReader<'a> {
             38 => Constraint::SubsetOf(self.path()?),
             _ => Constraint::UniqueValuesFor {
                 properties: self.seq(Self::named_node)?,
+                shape: self.term()?,
                 targets: self.seq(Self::target)?,
             },
         };
@@ -2407,9 +2420,29 @@ impl FnTable {
         Ok(())
     }
 
+    /// Walk the target declarations that can reach a node expression: a
+    /// structured `sh:targetNode` is one, and a `sh:targetWhere` shape can carry
+    /// one. Wildcard-free for the reason [`Self::constraint`] is.
+    fn targets(&mut self, targets: &[Target]) -> Result<(), ShapesProductError> {
+        for target in targets {
+            match target {
+                Target::Class(_)
+                | Target::SubjectsOf(_)
+                | Target::ObjectsOf(_)
+                | Target::Node(_)
+                | Target::ImplicitClass(_)
+                | Target::Sparql { .. } => {}
+                Target::NodeExpression(expr) => self.node_expr(expr)?,
+                Target::Where(shape) => self.shape(shape)?,
+            }
+        }
+        Ok(())
+    }
+
     /// Walk a node shape.
     fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        self.targets(&shape.targets)?;
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }
@@ -2488,8 +2521,8 @@ impl FnTable {
             | Constraint::UniqueMembers(_)
             | Constraint::SingleLine(_)
             | Constraint::RootClass(_)
-            | Constraint::UniqueValuesFor { .. }
             | Constraint::Component { .. } => {}
+            Constraint::UniqueValuesFor { targets, .. } => self.targets(targets)?,
             Constraint::Not(shape)
             | Constraint::Node(shape)
             | Constraint::MemberShape(shape)
