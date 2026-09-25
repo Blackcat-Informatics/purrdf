@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import CapsuleType
 from typing import IO, Any, Callable, TypeAlias, TypedDict, overload
 
@@ -1753,6 +1753,54 @@ class shapes:
     def entail(
         shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
     ) -> str: ...
+    # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
+    # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
+    # canonical order, "proof": the proof text when explain=True, else None}. The rule
+    # source is exactly one of `shapes_ttl` (a SHACL shapes graph's default rule set)
+    # and `srl` (a SPARQL 1.2 RL rule set); neither or both raises ValueError.
+    #
+    # `max_term_generating_rounds` bounds the rounds that infer a term the graph did
+    # not hold (default 65,536); one more raises ValueError naming the limit. Lower it
+    # for UNTRUSTED rule sets: an exponential rule set reaches the engine's fixed
+    # arena and join ceilings only slowly under the default.
+    @staticmethod
+    def apply_rules(
+        data_nt: str,
+        shapes_ttl: str | None = None,
+        *,
+        srl: str | None = None,
+        shapes_base: str | None = None,
+        srl_base: str | None = None,
+        explain: bool = False,
+        max_term_generating_rounds: int | None = None,
+    ) -> dict[str, str | None]: ...
+    # Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of
+    # a data graph (N-Triples), returning its output nodes as N-Triples 1.2 terms in
+    # sequence order. `expr` is an absolute IRI or "_:label" (a blank node the shapes
+    # document labels so); `focus` and each `scope` value are an absolute IRI or an
+    # N-Triples term; `scope` maps each shnex:var name to its node. The name
+    # "focusNode", an unknown label and any parse or evaluation failure raise
+    # ValueError.
+    @staticmethod
+    def eval_node_expr(
+        shapes_ttl: str,
+        data_nt: str,
+        expr: str,
+        focus: str,
+        *,
+        scope: Mapping[str, str] | None = None,
+        shapes_base: str | None = None,
+    ) -> list[str]: ...
+    # Certify a shapes graph (Turtle), COLD: {"clean", "findings", "load_error",
+    # "shacl_shacl" (each shacl-shacl.ttl result, with "superseded" naming the
+    # SHACL 1.2 Core rule that makes a flagged graph well-formed, else None),
+    # "calls" (each function call site's "binding" / "function" / "owner", None when
+    # the loader refused the graph), "report" (the deterministic text every host
+    # prints)}. Raises ValueError only when the document is not Turtle.
+    @staticmethod
+    def lint_shapes(
+        shapes_ttl: str, *, shapes_base: str | None = None
+    ) -> dict[str, builtins.object]: ...
 
 # Back-compat alias for the native submodule's own name.
 shacl = shapes
@@ -1999,12 +2047,19 @@ class entail:
     # access and never a silently empty import. `[]` is the ordinary "imports
     # nothing" case; the argument is required, not defaulted, and sits in the
     # same position on all four hosts.
+    #
+    # `premise_iris` are the IRIs the premise document was read from (its
+    # retrieval IRI or parse base, when the caller knows one): an `owl:imports`
+    # of one names the premise itself and is resolved in place. `[]` is the
+    # ordinary case for bare text; required like `imports`, same position on
+    # all four hosts.
     @staticmethod
     def certain_answers(
         regime: RegimeLike,
         data: str,
         pattern: str,
         imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
     ) -> tuple[str, str]: ...
     # Does `premise` entail the conclusion GRAPH under the regime's rule table?
     # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
@@ -2013,7 +2068,7 @@ class entail:
     # `mechanism <name>` — which of the six mechanisms reached the verdict — and
     # then gives THREE verdicts, never two: `not-entailed` is a PROOF, and
     # `undecided` is what an incomplete procedure is entitled to say instead.
-    # `imports` is `certain_answers`'s, and applies to the PREMISE: the
+    # `imports` and `premise_iris` are `certain_answers`'s, and apply to the PREMISE: the
     # conclusion is a graph to match, not an ontology to close.
     @staticmethod
     def graph_entails(
@@ -2021,12 +2076,13 @@ class entail:
         premise: str,
         conclusion: str,
         imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
     ) -> tuple[str, str]: ...
     # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
     # Adds `warrant present|absent` and `verified true|false|not-applicable`;
     # `warrant absent` is a not-entailed or an undecided, where there is no
     # evidence to re-decide and a `false` would read as a failed check rather
-    # than an absent one. `imports` is `certain_answers`'s; the re-check runs
+    # than an absent one. `imports`/`premise_iris` are `certain_answers`'s; the re-check runs
     # against the premise AS WRITTEN, which is a stronger check than one only
     # re-decidable against a graph the library assembled.
     @staticmethod
@@ -2035,6 +2091,7 @@ class entail:
         premise: str,
         conclusion: str,
         imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
     ) -> tuple[str, str]: ...
 
     # ── The session ──────────────────────────────────────────────────────────

@@ -324,7 +324,9 @@ impl RuleOptions {
     /// `purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS`. A round that
     /// infers only terms the graph already holds is never counted. Every SHACL rule
     /// round re-executes the rule over the whole evaluation graph, so a host running
-    /// untrusted rule sets bounds the time a divergent one takes by LOWERING this limit.
+    /// untrusted rule sets bounds the time a divergent one takes by LOWERING this limit:
+    /// an exponential rule set reaches the engine's fixed arena and join ceilings only
+    /// slowly under the default (65,536 rounds).
     #[must_use]
     pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
         self.max_term_generating_rounds = rounds;

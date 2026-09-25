@@ -355,7 +355,7 @@ static int check_vendored_imports(const char *premise_path,
     size_t len = 0;
 
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, import_iris,
-                                    import_documents, 1, &answer, &certificate,
+                                    import_documents, 1, NULL, 0, &answer, &certificate,
                                     &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "graph_entails refused the vendored case: %s\n",
                 error == NULL ? "(no error)" : purrdf_error_message(error));
@@ -379,7 +379,7 @@ static int check_vendored_imports(const char *premise_path,
     /* The pattern-shaped entry point answers the same question the same way: a
      * conclusion graph is the relation with no columns, so a `yes` is one bare row. */
     if (purrdf_entail_certain_answers("owl-rl", premise, conclusion, import_iris,
-                                      import_documents, 1, &answer, &certificate,
+                                      import_documents, 1, NULL, 0, &answer, &certificate,
                                       &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "certain_answers refused the vendored case\n");
         goto done;
@@ -396,7 +396,7 @@ static int check_vendored_imports(const char *premise_path,
     certificate = NULL;
 
     if (purrdf_entail_verify_entailment("owl-rl", premise, conclusion, import_iris,
-                                        import_documents, 1, &answer, &certificate,
+                                        import_documents, 1, NULL, 0, &answer, &certificate,
                                         &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "verify_entailment refused the vendored case\n");
         goto done;
@@ -414,7 +414,7 @@ static int check_vendored_imports(const char *premise_path,
     /* An empty table with two NULL arrays is accepted as "imports nothing" — and
      * for THIS premise that is a refusal NAMING the document, never an answer
      * computed from a premise missing the axioms it told the caller about. */
-    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0,
+    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0, NULL, 0,
                                     &answer, &certificate,
                                     &error) != PURRDF_STATUS_PARSE_ERROR) {
         fprintf(stderr, "an unsupplied import was not refused\n");
@@ -436,7 +436,7 @@ static int check_vendored_imports(const char *premise_path,
 
     /* A NULL array with a NON-ZERO count is a caller error, refused before any
      * dereference rather than segfaulting. */
-    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1,
+    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1, NULL, 0,
                                     &answer, &certificate,
                                     &error) != PURRDF_STATUS_NULL_POINTER) {
         fprintf(stderr, "a null import array with a non-zero count was not refused\n");

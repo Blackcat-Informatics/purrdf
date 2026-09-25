@@ -29,7 +29,9 @@
 //! [`SHACL_SHACL_BEHIND_THE_SPEC`] is the other direction — `shacl-shacl.ttl`
 //! flags a graph PurRDF accepts — and every such difference is an under-refusal
 //! bug unless the vendored `shacl-shacl.ttl` itself lags the SHACL 1.2 Core text.
-//! Each entry quotes the specification sentence that makes the graph well-formed.
+//! Each such rule is a row of the library's own
+//! [`purrdf_shapes::lint::SHACL_SHACL_SUPERSEDED`], which quotes the specification
+//! sentence that makes the graph well-formed.
 //! Nothing else may appear there.
 
 mod shacl_corpora;
@@ -42,6 +44,7 @@ use std::sync::Arc;
 
 use purrdf::{RdfDataset, SerializeGraph, serialize_dataset};
 use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
+use purrdf_shapes::lint::SHACL_SHACL_SUPERSEDED;
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::Severity;
 use purrdf_shapes::shapes::{Shapes, from_dataset_with_config_and_graph};
@@ -117,107 +120,30 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     ),
 ];
 
-/// A graph `shacl-shacl.ttl` flags that SHACL 1.2 Core makes well-formed:
-/// `(name, the Violation results it covers as (component local name, result path,
-/// source shape), inputs it covers, the SHACL 1.2 Core sentence)`. An empty result
-/// path or source shape in the pattern matches an absent one.
-type BehindTheSpec = (
-    &'static str,
-    &'static [(&'static str, &'static str, &'static str)],
-    usize,
-    &'static str,
-);
-
-const SHACL_SHACL_BEHIND_THE_SPEC: &[BehindTheSpec] = &[
-    (
-        "closed-by-types",
-        &[(
-            "DatatypeConstraintComponent",
-            "<http://www.w3.org/ns/shacl#closed>",
-            "",
-        )],
-        2,
-        "SHACL 1.2 Core §7.9.1: \"The values of sh:closed in a shape are literals with \
-         datatype xsd:boolean or the IRI sh:ByTypes.\" — shacl-shacl.ttl still requires an \
-         xsd:boolean (closed-datatype), so the W3C suite's own closed-003 and closed-004 fail \
-         it",
-    ),
-    (
-        "list-valued-node-kind",
-        &[(
-            "InConstraintComponent",
-            "<http://www.w3.org/ns/shacl#nodeKind>",
-            "",
-        )],
-        1,
-        "SHACL 1.2 Core §4.1.3: \"The value of sh:nodeKind in a shape is either an IRI or a \
-         blank node that is a well-formed SHACL list where all members are IRIs.\" — \
-         shacl-shacl.ttl still requires one of the six SHACL 1.0 node-kind IRIs",
-    ),
-    (
-        "path-valued-property-pair",
-        &[
-            (
-                "NodeKindConstraintComponent",
-                "<http://www.w3.org/ns/shacl#equals>",
-                "",
-            ),
-            (
-                "NodeKindConstraintComponent",
-                "<http://www.w3.org/ns/shacl#disjoint>",
-                "",
-            ),
-            (
-                "NodeKindConstraintComponent",
-                "<http://www.w3.org/ns/shacl#lessThan>",
-                "",
-            ),
-            (
-                "NodeKindConstraintComponent",
-                "<http://www.w3.org/ns/shacl#lessThanOrEquals>",
-                "",
-            ),
-        ],
-        4,
-        "SHACL 1.2 Core §7.6.1: \"The values of sh:equals in a shape are well-formed SHACL \
-         property paths.\" — and §7.6.2, §7.6.4 and §7.6.5 say the same of sh:disjoint, \
-         sh:lessThan and sh:lessThanOrEquals. shacl-shacl.ttl still requires an IRI for all \
-         four (equals-nodeKind, disjoint-nodeKind, lessThan-nodeKind, \
-         lessThanOrEquals-nodeKind), so the W3C suite's own equals-002, disjoint-002, \
-         lessThan-003 and lessThanOrEquals-002 fail it",
-    ),
-    (
-        "node-expression-target-node",
-        &[(
-            "NodeKindConstraintComponent",
-            "<http://www.w3.org/ns/shacl#targetNode>",
-            "",
-        )],
-        2,
-        "SHACL 1.2 Core, \"Node targets\": \"Each value of sh:targetNode in a shape is a \
-         well-formed node expression.\" A blank node that is the subject of no triple is the \
-         empty node expression, and one carrying sh:select is a SPARQL node expression whose \
-         output nodes are the targets (targetNode-select-001); shacl-shacl.ttl still requires \
-         an IRI or a literal. 1 until a structured sh:targetNode became evaluated and \
-         targetNode-select-001 stopped being refused at load",
-    ),
-    (
-        "sequence-path-with-other-values",
-        &[(
-            "XoneConstraintComponent",
-            "",
-            "<http://www.w3.org/ns/shacl-shacl#ShapeShape>",
-        )],
-        1,
-        "SHACL 1.2 Core §2.3.1: \"An inverse path is a blank node that is the subject of \
-         exactly one triple in G.\" A sequence-path node that also carries sh:inversePath is a \
-         sequence path, and the sh:inversePath value is no path of it (the W3C suite's \
-         core/path/path-strange-002 validates exactly that path as the sequence). \
-         shacl-shacl.ttl's path walk follows sh:inversePath from every path node, judges the \
-         one-member list there as a path, and so fails the property shape's sh:node \
-         shsh:PathShape — which surfaces as the sh:xone of shsh:ShapeShape, the only result; \
-         the exact count keeps this pattern from absorbing any other input",
-    ),
+/// A graph `shacl-shacl.ttl` flags that SHACL 1.2 Core makes well-formed. The rules
+/// themselves — the results each covers and the SHACL 1.2 Core sentence that makes the
+/// graph well-formed — are the library's own table,
+/// [`purrdf_shapes::lint::SHACL_SHACL_SUPERSEDED`], which `purrdf shapes lint` reads to
+/// keep from reporting a valid shapes graph as a finding; there is no second list. This
+/// ledger pins how many inputs each rule covers, `(name, inputs)`.
+///
+/// * `closed-by-types`: the W3C suite's own closed-003 and closed-004.
+/// * `list-valued-node-kind`: one input.
+/// * `path-valued-property-pair`: the W3C suite's own equals-002, disjoint-002,
+///   lessThan-003 and lessThanOrEquals-002.
+/// * `node-expression-target-node`: a blank-node sh:targetNode that is the subject of
+///   no triple, and targetNode-select-001; 1 until a
+///   structured sh:targetNode became evaluated and targetNode-select-001 stopped being
+///   refused at load.
+/// * `sequence-path-with-other-values`: core/path/path-strange-002, whose sequence-path
+///   node also carries sh:inversePath; the exact count keeps this pattern from absorbing
+///   any other input.
+const SHACL_SHACL_BEHIND_THE_SPEC: &[(&str, usize)] = &[
+    ("closed-by-types", 2),
+    ("list-valued-node-kind", 1),
+    ("path-valued-property-pair", 4),
+    ("node-expression-target-node", 2),
+    ("sequence-path-with-other-values", 1),
 ];
 
 // ── Inputs ────────────────────────────────────────────────────────────────────
@@ -523,16 +449,12 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
         (None, false) => {
             let mut names: BTreeSet<&'static str> = BTreeSet::new();
             for (component, path, shape) in violations {
-                let entry = SHACL_SHACL_BEHIND_THE_SPEC
+                let entry = SHACL_SHACL_SUPERSEDED
                     .iter()
-                    .find(|(_, covered, _, _)| {
-                        covered.iter().any(|(c, p, s)| {
-                            component.ends_with(&format!("#{c}")) && path == p && shape == s
-                        })
-                    });
+                    .find(|rule| rule.covers_rendered(component, path, shape));
                 match entry {
-                    Some((name, ..)) => {
-                        names.insert(name);
+                    Some(rule) => {
+                        names.insert(rule.name);
                     }
                     None => {
                         return Outcome::Unexplained(format!(
@@ -709,7 +631,18 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
             "STRICTER_THAN_SHACL_SHACL[{name}] covers a different number of inputs"
         );
     }
-    for (name, _, expected, _) in SHACL_SHACL_BEHIND_THE_SPEC {
+    assert_eq!(
+        SHACL_SHACL_BEHIND_THE_SPEC
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        SHACL_SHACL_SUPERSEDED
+            .iter()
+            .map(|rule| rule.name)
+            .collect::<Vec<_>>(),
+        "every supersession rule has a pinned input count, and only those do"
+    );
+    for (name, expected) in SHACL_SHACL_BEHIND_THE_SPEC {
         assert_eq!(
             behind.get(name).copied().unwrap_or(0),
             *expected,

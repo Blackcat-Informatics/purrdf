@@ -1060,7 +1060,7 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
         "an enum grows a member the stub does not declare",
         "bindings/python/src/py_store/io.rs",
         lambda text: _swap(
-            text, "pub(crate) enum PyRdfFormat {\n", "pub(crate) enum PyRdfFormat {\n    RDF_XML,\n"
+            text, "pub(crate) enum PyRdfFormat {\n", "pub(crate) enum PyRdfFormat {\n    N3,\n"
         ),
     ),
     (

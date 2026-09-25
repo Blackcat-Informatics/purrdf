@@ -12,8 +12,8 @@ verbatim into `vectors/shacl12/`, alongside a first-party `PROVENANCE.md`
 verbatim copy of the upstream `LICENSE.md`.
 
 A second, crate-local copy of the four vocabulary files is written to
-`crates/shapes/spec/`: the Task 3 declared-vs-implemented ratchet and the
-Task 19 `purrdf shapes lint` surface need the vocabularies at runtime, and an
+`crates/shapes/spec/`: the declared-vs-implemented ratchet and the `purrdf
+shapes lint` surface need the vocabularies at runtime, and an
 `include_bytes!` reaching out of `crates/shapes/` into `vectors/` would break
 `cargo package` (a published crate does not carry the workspace's `vectors/`
 tree). The crate-local copy is the same bytes, not a re-derivation.
@@ -44,8 +44,7 @@ LICENSE_URL = "http://www.w3.org/Consortium/Legal/copyright-software"
 
 TARBALL_URL = f"https://api.github.com/repos/{REPO}/tarball/{COMMIT}"
 
-# The vocabularies the declared-vs-implemented ratchet (Task 3) and the census
-# (Task 5) parse. `shacl-ui.ttl` and `profiles/cd1.ttl` also live under
+# The vocabularies the declared-vs-implemented ratchet and the census parse. `shacl-ui.ttl` and `profiles/cd1.ttl` also live under
 # `shacl12-vocabularies/` upstream but are out of scope: SHACL 1.2 Core, its
 # node-expression extension (`shnex`), the `shnex` SPARQL function bindings and
 # the `shacl-shacl.ttl` self-description are the whole surface this repository

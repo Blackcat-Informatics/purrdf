@@ -25,6 +25,14 @@
 //! indistinguishable in a report — and a caller that cannot tell the two readings
 //! apart has been handed the weaker one believing it is the stronger.
 //!
+//! # The shapes-graph tools
+//!
+//! `purrdf_shacl_apply_rules` runs a SHACL shapes graph's rules, or a SPARQL 1.2 RL
+//! rule set, and returns the inference graph (and, on request, its proof);
+//! `purrdf_shacl_eval_node_expr` evaluates one node expression of a shapes graph;
+//! `purrdf_shacl_lint_shapes` certifies a shapes graph cold. Each is the C framing of
+//! one `purrdf_validate` function the Python and WASM bindings call too.
+//!
 //! # Prepared products, and the one thing this ABI cannot carry
 //!
 //! `purrdf_shapes_product_encode` compiles a shapes graph once into a
@@ -62,8 +70,10 @@
 use std::os::raw::c_char;
 
 use purrdf_validate::{
-    ChangeScope, ConformanceDisallows, SarifOptions, ShapesProductRefusal, ValidationOptions,
-    entail_to_ntriples_string, validate_changes_to_sarif_string, validate_to_sarif_string,
+    ChangeScope, ConformanceDisallows, LintReport, NodeExprRequest, RulesOutcome, RulesRequest,
+    SarifOptions, ShapesProductRefusal, ValidationOptions, apply_rules_to_ntriples,
+    entail_to_ntriples_string, eval_node_expr_to_terms, lint_shapes_ttl, parse_scope_binding,
+    validate_changes_to_sarif_string, validate_to_sarif_string,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -394,6 +404,229 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
             let bytes = entail_to_ntriples_bytes(shapes, base, data)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_buffer = PurrdfBuffer::into_raw(bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shapes-graph tools: rules, node expressions, lint
+// ---------------------------------------------------------------------------
+
+/// Run a rule set over a data graph. Native-testable, pointer-free core of
+/// [`purrdf_shacl_apply_rules`]: the work is [`apply_rules_to_ntriples`].
+fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, String> {
+    apply_rules_to_ntriples(request)
+}
+
+/// Run a rule set over a data graph (N-Triples) and write the INFERENCE GRAPH — the
+/// inferred triples only, never the data graph — as N-Triples 1.2 bytes, one triple per
+/// line in canonical order, to `*out_inferred` (free with `purrdf_buffer_free`).
+///
+/// The rule source is exactly one of `shapes_ttl` — a SHACL shapes graph (Turtle), whose
+/// default rule set runs — and `srl`, a SPARQL 1.2 RL rule set; both NULL, or both
+/// non-NULL, is a `ParseError`. `shapes_base_iri` / `srl_base_iri` are the documents' base
+/// IRIs and may be NULL (a C host has no retrieval IRI, so PurRDF invents none).
+///
+/// `max_term_generating_rounds` may be NULL for the engine default (65,536); otherwise it
+/// points at the limit on evaluation rounds that infer a term the graph did not hold, and
+/// one more round fails the call naming the limit. A host running UNTRUSTED rule sets
+/// should lower it: an exponential rule set reaches the engine's fixed arena and join
+/// ceilings only slowly under the default, and the limit is what bounds the time it can
+/// take.
+///
+/// `out_proof` asks for the proof: NULL skips it; non-NULL receives a buffer with the
+/// proof of every inferred triple (`derived S P O .`, then `  rule R` and one
+/// `  premise S P O .` per matched fact, or `  data-block` for a SPARQL 1.2 RL data-block
+/// triple), freed with `purrdf_buffer_free`.
+///
+/// # Safety
+/// `data_nt` must be a non-null NUL-terminated C string; `shapes_ttl`, `shapes_base_iri`,
+/// `srl` and `srl_base_iri` must each be null or a NUL-terminated C string;
+/// `max_term_generating_rounds` must be null or readable; `out_inferred` must be
+/// writable; `out_proof` and `out_error` must each be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_apply_rules(
+    data_nt: *const c_char,
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    srl: *const c_char,
+    srl_base_iri: *const c_char,
+    max_term_generating_rounds: *const u64,
+    out_inferred: *mut *mut PurrdfBuffer,
+    out_proof: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if data_nt.is_null() || out_inferred.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_shacl_apply_rules",
+                ));
+            }
+            let request = RulesRequest {
+                data_nt: cstr_to_str(data_nt)?,
+                shapes_ttl: opt_cstr_to_str(shapes_ttl)?,
+                shapes_base: opt_cstr_to_str(shapes_base_iri)?,
+                srl: opt_cstr_to_str(srl)?,
+                srl_base: opt_cstr_to_str(srl_base_iri)?,
+                explain: !out_proof.is_null(),
+                // SAFETY: the caller's contract — null or readable.
+                max_term_generating_rounds: max_term_generating_rounds.as_ref().copied(),
+            };
+            let outcome = apply_rules_outcome(&request)
+                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            if let Some(proof) = outcome.proof {
+                *out_proof = PurrdfBuffer::into_raw(proof.into_bytes());
+            }
+            *out_inferred = PurrdfBuffer::into_raw(outcome.inferred_ntriples.into_bytes());
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Evaluate one node expression. Native-testable, pointer-free core of
+/// [`purrdf_shacl_eval_node_expr`]: `scope` holds `NAME=TERM` bindings, and the output
+/// is one N-Triples 1.2 term per line.
+fn eval_node_expr_bytes(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+    expr: &str,
+    focus: &str,
+    scope: &[&str],
+) -> Result<Vec<u8>, String> {
+    let bindings = scope
+        .iter()
+        .map(|binding| parse_scope_binding(binding))
+        .collect::<Result<Vec<_>, _>>()?;
+    let terms = eval_node_expr_to_terms(&NodeExprRequest {
+        shapes_ttl,
+        shapes_base,
+        data_nt,
+        expr,
+        focus,
+        scope: &bindings,
+    })?;
+    let mut out = String::new();
+    for term in terms {
+        out.push_str(&term);
+        out.push('\n');
+    }
+    Ok(out.into_bytes())
+}
+
+/// Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of a data
+/// graph (N-Triples) — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph, focusNode,
+/// scope)` — and write its output nodes to `*out_terms` (free with `purrdf_buffer_free`):
+/// one N-Triples 1.2 term per line, in the order the expression's sequence semantics
+/// define. N-Triples escapes every line break inside a term, so each line is one term; an
+/// expression with no output writes an empty buffer.
+///
+/// `expr` is an absolute IRI or `_:label` for a blank node the shapes document labels so;
+/// `focus` is an absolute IRI or any N-Triples term. `scope` / `scope_count` are
+/// `NAME=TERM` bindings read by `shnex:var "NAME"`, the term spelled as `focus` is;
+/// `scope_count == 0` binds nothing (`scope` may then be NULL). A label the shapes
+/// document never wrote, a binding named `focusNode` or bound twice (neither could ever
+/// be read), and any parse or evaluation failure are a `ParseError`.
+///
+/// # Safety
+/// `shapes_ttl`, `data_nt`, `expr` and `focus` must be non-null NUL-terminated C strings;
+/// `shapes_base_iri` must be null or a NUL-terminated C string; when `scope_count` is
+/// non-zero, `scope` must address that many NUL-terminated C strings; `out_terms` must be
+/// writable; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    data_nt: *const c_char,
+    expr: *const c_char,
+    focus: *const c_char,
+    scope: *const *const c_char,
+    scope_count: usize,
+    out_terms: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if shapes_ttl.is_null()
+                || data_nt.is_null()
+                || expr.is_null()
+                || focus.is_null()
+                || out_terms.is_null()
+            {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_shacl_eval_node_expr",
+                ));
+            }
+            let bindings = cstr_array(scope, scope_count, "purrdf_shacl_eval_node_expr")?;
+            let bytes = eval_node_expr_bytes(
+                cstr_to_str(shapes_ttl)?,
+                opt_cstr_to_str(shapes_base_iri)?,
+                cstr_to_str(data_nt)?,
+                cstr_to_str(expr)?,
+                cstr_to_str(focus)?,
+                &bindings,
+            )
+            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            *out_terms = PurrdfBuffer::into_raw(bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Certify a shapes graph. Native-testable, pointer-free core of
+/// [`purrdf_shacl_lint_shapes`].
+fn lint_shapes_report(shapes_ttl: &str, shapes_base: Option<&str>) -> Result<LintReport, String> {
+    lint_shapes_ttl(shapes_ttl, shapes_base)
+}
+
+/// Certify a shapes graph (Turtle) COLD — the loader's verdict, every result of validating
+/// it against the W3C `shacl-shacl.ttl`, and which implementation every node-expression
+/// function call binds to — and write the report's deterministic text to `*out_report`
+/// (free with `purrdf_buffer_free`): the `load`, `shacl-shacl` (`result …` lines,
+/// `superseded NAME` where SHACL 1.2 Core makes the flagged graph well-formed) and
+/// `functions` (`call BINDING <IRI> in OWNER`) sections, then `findings N` and
+/// `clean true|false`.
+///
+/// `*out_clean` receives 1 when the report carries no finding — the loader accepted the
+/// graph and every `shacl-shacl.ttl` result is superseded — and 0 otherwise;
+/// `*out_findings` receives the finding count. A malformed shapes graph is a report with
+/// findings and status `Ok`; only a document that is not Turtle is a `ParseError`.
+///
+/// # Safety
+/// `shapes_ttl` must be a non-null NUL-terminated C string; `shapes_base_iri` must be
+/// null or a NUL-terminated C string; `out_report`, `out_clean` and `out_findings` must
+/// be writable; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_lint_shapes(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    out_report: *mut *mut PurrdfBuffer,
+    out_clean: *mut i32,
+    out_findings: *mut usize,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if shapes_ttl.is_null()
+                || out_report.is_null()
+                || out_clean.is_null()
+                || out_findings.is_null()
+            {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_shacl_lint_shapes",
+                ));
+            }
+            let report =
+                lint_shapes_report(cstr_to_str(shapes_ttl)?, opt_cstr_to_str(shapes_base_iri)?)
+                    .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            *out_clean = i32::from(report.is_clean());
+            *out_findings = report.findings();
+            *out_report = PurrdfBuffer::into_raw(report.render().into_bytes());
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1480,5 +1713,319 @@ mod tests {
             );
             purrdf_error_free(error);
         }
+    }
+
+    /// The shapes-graph tools' fixture: the W3C SHACL 1.2 declaration of
+    /// `sh:SPARQLExprExpression` verbatim, a `sh:sparqlExpr` node naming `ex:yes` through
+    /// `sh:prefixes` (`ex:Tag`), a labelled `shnex:var` node, a rule tagging every
+    /// `ex:Item` through the same expression, and a counter rule stepping `ex:n` to 5 —
+    /// exactly four term-generating rounds.
+    const TOOLS_SHAPES: &str = r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://example.org/ns#> .
+
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ] .
+ex:Tag sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes .
+_:suffix shnex:var "suffix" .
+
+ex:Tagger a sh:NodeShape ;
+  sh:targetClass ex:Item ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:tagged ;
+            sh:object [ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] ] .
+
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+"#;
+
+    /// One `ex:Item` whose counter starts at 1.
+    const TOOLS_DATA: &str = "<http://example.org/ns#a> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Item> .\n\
+        <http://example.org/ns#a> <http://example.org/ns#n> \
+        \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
+
+    /// The inference graph the fixture's rules produce, in canonical order.
+    fn tools_inference() -> String {
+        let mut out = String::new();
+        for n in 2..=5 {
+            out.push_str("<http://example.org/ns#a> <http://example.org/ns#n> \"");
+            out.push_str(&n.to_string());
+            out.push_str("\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n");
+        }
+        out.push_str(
+            "<http://example.org/ns#a> <http://example.org/ns#tagged> \
+             <http://example.org/ns#yes> .\n",
+        );
+        out
+    }
+
+    /// Read a buffer's bytes as UTF-8 and free it.
+    ///
+    /// # Safety
+    /// `buffer` must be a live buffer written by a successful call.
+    unsafe fn take_text(buffer: *mut PurrdfBuffer) -> String {
+        use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+        unsafe {
+            let mut ptr: *const u8 = std::ptr::null();
+            let mut len = 0usize;
+            assert_eq!(
+                purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
+                PurrdfStatus::Ok as i32
+            );
+            let text = std::str::from_utf8(std::slice::from_raw_parts(ptr, len))
+                .expect("utf8")
+                .to_owned();
+            purrdf_buffer_free(buffer);
+            text
+        }
+    }
+
+    /// The message of a failed call's error, freeing it.
+    ///
+    /// # Safety
+    /// `error` must be a live error written by a failed call.
+    unsafe fn take_error(error: *mut PurrdfError) -> String {
+        unsafe {
+            let message = std::ffi::CStr::from_ptr(crate::error::purrdf_error_message(error))
+                .to_string_lossy()
+                .into_owned();
+            purrdf_error_free(error);
+            message
+        }
+    }
+
+    /// `purrdf_shacl_apply_rules` across the boundary: the inference graph alone, the
+    /// proof exactly when `out_proof` is non-NULL, the round limit refusing at 3 and
+    /// completing at 4 (and at the NULL default), and SPARQL 1.2 RL text.
+    #[test]
+    fn capi_apply_rules() {
+        use std::ffi::CString;
+
+        let data = CString::new(TOOLS_DATA).expect("no NUL");
+        let shapes = CString::new(TOOLS_SHAPES).expect("no NUL");
+        let run = |shapes: *const c_char,
+                   srl: *const c_char,
+                   limit: Option<u64>,
+                   explain: bool|
+         -> Result<(String, Option<String>), String> {
+            let mut inferred: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut proof: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let limit_ptr = limit.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            // SAFETY: every pointer is a live CString, a readable local, NULL, or a
+            // writable local.
+            unsafe {
+                let status = purrdf_shacl_apply_rules(
+                    data.as_ptr(),
+                    shapes,
+                    std::ptr::null(),
+                    srl,
+                    std::ptr::null(),
+                    limit_ptr,
+                    &raw mut inferred,
+                    if explain {
+                        &raw mut proof
+                    } else {
+                        std::ptr::null_mut()
+                    },
+                    &raw mut error,
+                );
+                if status != PurrdfStatus::Ok as i32 {
+                    return Err(take_error(error));
+                }
+                let proof = (!proof.is_null()).then(|| take_text(proof));
+                Ok((take_text(inferred), proof))
+            }
+        };
+        let (graph, proof) = run(shapes.as_ptr(), std::ptr::null(), None, false).expect("runs");
+        assert_eq!(graph, tools_inference());
+        assert_eq!(proof, None);
+        let (_, proof) = run(shapes.as_ptr(), std::ptr::null(), None, true).expect("runs");
+        assert_eq!(proof.expect("asked for").matches("derived ").count(), 5);
+        let refused = run(shapes.as_ptr(), std::ptr::null(), Some(3), false)
+            .expect_err("three rounds are too few");
+        assert!(refused.contains("past the limit of 3"), "{refused}");
+        let (graph, _) = run(shapes.as_ptr(), std::ptr::null(), Some(4), false).expect("runs");
+        assert_eq!(graph, tools_inference());
+
+        let srl = CString::new(
+            "PREFIX ex: <http://example.org/ns#>\n\
+             RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\nDATA { ex:d ex:q 2 }\n",
+        )
+        .expect("no NUL");
+        let (graph, proof) = run(std::ptr::null(), srl.as_ptr(), None, true).expect("runs");
+        assert_eq!(
+            graph,
+            "<http://example.org/ns#a> <http://example.org/ns#q> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n\
+             <http://example.org/ns#d> <http://example.org/ns#q> \
+             \"2\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        );
+        assert!(proof.expect("asked for").contains("  data-block\n"));
+        let both = run(shapes.as_ptr(), srl.as_ptr(), None, false).expect_err("two sources");
+        assert!(both.contains("two rule sources"), "{both}");
+    }
+
+    /// `purrdf_shacl_eval_node_expr` across the boundary: a `sh:sparqlExpr` node
+    /// natively with its prefixes, a labelled blank node reading a `NAME=TERM` binding,
+    /// an unknown label refused, and a NULL scope array with a non-zero count refused
+    /// as a `NullPointer`.
+    #[test]
+    fn capi_eval_node_expr() {
+        use std::ffi::CString;
+
+        let shapes = CString::new(TOOLS_SHAPES).expect("no NUL");
+        let data = CString::new(TOOLS_DATA).expect("no NUL");
+        let focus = CString::new("http://example.org/ns#a").expect("no NUL");
+        let run = |expr: &str, scope: &[&str]| -> (i32, String) {
+            let expr = CString::new(expr).expect("no NUL");
+            let owned: Vec<CString> = scope
+                .iter()
+                .map(|binding| CString::new(*binding).expect("no NUL"))
+                .collect();
+            let pointers: Vec<*const c_char> = owned.iter().map(|b| b.as_ptr()).collect();
+            let mut terms: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString or a writable local; the array
+            // holds exactly `pointers.len()` elements.
+            unsafe {
+                let status = purrdf_shacl_eval_node_expr(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    expr.as_ptr(),
+                    focus.as_ptr(),
+                    if pointers.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        pointers.as_ptr()
+                    },
+                    pointers.len(),
+                    &raw mut terms,
+                    &raw mut error,
+                );
+                if status == PurrdfStatus::Ok as i32 {
+                    (status, take_text(terms))
+                } else {
+                    (status, take_error(error))
+                }
+            }
+        };
+        assert_eq!(
+            run("http://example.org/ns#Tag", &[]),
+            (
+                PurrdfStatus::Ok as i32,
+                "<http://example.org/ns#yes>\n".to_owned()
+            )
+        );
+        assert_eq!(
+            run("_:suffix", &["suffix=\"!\"@en"]),
+            (PurrdfStatus::Ok as i32, "\"!\"@en\n".to_owned())
+        );
+        let (status, message) = run("_:nosuch", &[]);
+        assert_eq!(status, PurrdfStatus::ParseError as i32);
+        assert!(
+            message.contains("mentions no blank node _:nosuch"),
+            "{message}"
+        );
+
+        let expr = CString::new("_:suffix").expect("no NUL");
+        let mut terms: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: a NULL array with a non-zero count is refused before it is read.
+        let status = unsafe {
+            purrdf_shacl_eval_node_expr(
+                shapes.as_ptr(),
+                std::ptr::null(),
+                data.as_ptr(),
+                expr.as_ptr(),
+                focus.as_ptr(),
+                std::ptr::null(),
+                1,
+                &raw mut terms,
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::NullPointer as i32);
+        // SAFETY: the failed call wrote the error.
+        unsafe { purrdf_error_free(error) };
+    }
+
+    /// `purrdf_shacl_lint_shapes` across the boundary: the fixture certifies clean with
+    /// `sh:sparqlExpr`'s function bound natively; a malformed neighbour is a report with
+    /// findings, not an error; a document that is not Turtle is a `ParseError`.
+    #[test]
+    fn capi_lint_shapes() {
+        use std::ffi::CString;
+
+        let lint = |text: &str| -> (i32, i32, usize, String) {
+            let shapes = CString::new(text).expect("no NUL");
+            let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut clean = -1i32;
+            let mut findings = usize::MAX;
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString or a writable local.
+            unsafe {
+                let status = purrdf_shacl_lint_shapes(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    &raw mut report,
+                    &raw mut clean,
+                    &raw mut findings,
+                    &raw mut error,
+                );
+                if status == PurrdfStatus::Ok as i32 {
+                    (status, clean, findings, take_text(report))
+                } else {
+                    (status, clean, findings, take_error(error))
+                }
+            }
+        };
+        let (status, clean, findings, report) = lint(TOOLS_SHAPES);
+        assert_eq!((status, clean, findings), (PurrdfStatus::Ok as i32, 1, 0));
+        assert!(
+            report.contains(
+                "call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on \
+                 <http://example.org/ns#Tagger>\n"
+            ),
+            "{report}"
+        );
+        let (status, clean, findings, report) = lint(&format!(
+            "{TOOLS_SHAPES}ex:Bad a sh:NodeShape ; \
+             sh:property [ sh:path ex:p ; sh:minCount \"one\" ] .\n"
+        ));
+        assert_eq!((status, clean), (PurrdfStatus::Ok as i32, 0));
+        assert!(findings >= 2, "{report}");
+        assert!(report.starts_with("load refused\n"), "{report}");
+        let (status, ..) = lint("@@@ not turtle");
+        assert_eq!(status, PurrdfStatus::ParseError as i32);
     }
 }

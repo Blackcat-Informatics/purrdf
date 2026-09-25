@@ -1,0 +1,470 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! End-to-end coverage of the three shapes-graph tools beside `validate` — `rules`,
+//! `node-expr` and `shapes lint` — driving the BUILT `purrdf` binary.
+//!
+//! Every shapes graph carries the W3C SHACL 1.2 declaration of `sh:SPARQLExprExpression`
+//! verbatim — the declaration that used to be refused as a bodiless custom function —
+//! beside shapes that call `sh:sparqlExpr` with `sh:prefixes`, so each command is
+//! exercised over exactly the graph that was once unloadable.
+
+use std::path::Path;
+use std::process::{Command, Output};
+
+/// The W3C SHACL 1.2 declaration of `sh:SPARQLExprExpression`, verbatim.
+const ISSUE_SNIPPET: &str = r#"
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+"#;
+
+const PREFIXES: &str = r"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://example.org/ns#> .
+";
+
+/// A `sh:sparqlExpr` expression node naming `ex:yes` through `sh:prefixes` (`ex:Tag`), a
+/// labelled `shnex:var` expression (`_:suffix`), a rule tagging every `ex:Item` through
+/// the same expression, and a counter rule that steps `ex:n` to 5 — exactly four
+/// term-generating rounds.
+const TOOLS: &str = r#"
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ] .
+ex:Tag sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes .
+_:suffix shnex:var "suffix" .
+
+ex:Tagger a sh:NodeShape ;
+  sh:targetClass ex:Item ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:tagged ;
+            sh:object [ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] ] .
+
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+"#;
+
+const DATA: &str = "@prefix ex: <http://example.org/ns#> .\nex:a a ex:Item ; ex:n 1 .\n";
+
+const INTEGER: &str = "<http://www.w3.org/2001/XMLSchema#integer>";
+
+fn run(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_purrdf"))
+        .args(args)
+        .output()
+        .expect("spawn the built purrdf binary")
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn code(out: &Output) -> i32 {
+    out.status.code().expect("the process exited normally")
+}
+
+fn write_file(dir: &Path, name: &str, contents: &str) -> String {
+    let path = dir.join(name);
+    std::fs::write(&path, contents).expect("write fixture file");
+    path.to_str().expect("utf-8 temp path").to_owned()
+}
+
+/// The shapes graph: prefixes, the issue's declaration, then `body`.
+fn shapes_file(dir: &Path, body: &str) -> String {
+    write_file(
+        dir,
+        "shapes.ttl",
+        &format!("{PREFIXES}{ISSUE_SNIPPET}{body}"),
+    )
+}
+
+/// The inference graph the fixture's rules produce, in canonical order.
+fn expected_inference() -> String {
+    let mut out = String::new();
+    for n in 2..=5 {
+        out.push_str("<http://example.org/ns#a> <http://example.org/ns#n> \"");
+        out.push_str(&n.to_string());
+        out.push_str("\"^^");
+        out.push_str(INTEGER);
+        out.push_str(" .\n");
+    }
+    out.push_str(
+        "<http://example.org/ns#a> <http://example.org/ns#tagged> <http://example.org/ns#yes> .\n",
+    );
+    out
+}
+
+/// `rules` writes the inference graph — the base triples excluded — deterministically,
+/// with the proof under `--explain` (bare to stderr, `=PATH` to a file); the round limit
+/// refuses at 3 and completes at 4 and at the default; and a SPARQL 1.2 RL rule set runs
+/// through the same command, its imports resolved from `--import`.
+#[test]
+fn cli_rules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = shapes_file(dir.path(), TOOLS);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let out = run(&["rules", "--shapes", &shapes, "--to", "ntriples", &data]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out), expected_inference());
+    assert!(
+        stderr(&out).contains("rules inferred 5\n"),
+        "{}",
+        stderr(&out)
+    );
+    let again = run(&["rules", "--shapes", &shapes, "--to", "ntriples", &data]);
+    assert_eq!(stdout(&again), stdout(&out), "byte-stable across runs");
+
+    let explained = run(&[
+        "rules",
+        "--shapes",
+        &shapes,
+        "--explain",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&explained), 0, "{}", stderr(&explained));
+    assert_eq!(
+        stdout(&explained),
+        expected_inference(),
+        "the graph is unchanged"
+    );
+    let proof = stderr(&explained);
+    assert!(
+        proof.contains(
+            "derived <http://example.org/ns#a> <http://example.org/ns#tagged> \
+             <http://example.org/ns#yes> .\n  rule _:"
+        ),
+        "{proof}"
+    );
+    assert_eq!(proof.matches("derived ").count(), 5, "{proof}");
+    let proof_path = dir.path().join("proof.txt");
+    let to_file = run(&[
+        "rules",
+        "--shapes",
+        &shapes,
+        &format!("--explain={}", proof_path.display()),
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&to_file), 0, "{}", stderr(&to_file));
+    let written = std::fs::read_to_string(&proof_path).expect("proof written");
+    assert!(
+        written.starts_with("derived <http://example.org/ns#a> <http://example.org/ns#n> \"2\""),
+        "{written}"
+    );
+    assert!(
+        !stderr(&to_file).contains("derived "),
+        "the proof went to the file only"
+    );
+
+    // The round limit: four term-generating rounds are needed.
+    let refused = run(&[
+        "rules",
+        "--shapes",
+        &shapes,
+        "--max-term-generating-rounds",
+        "3",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("past the limit of 3"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
+    let enough = run(&[
+        "rules",
+        "--shapes",
+        &shapes,
+        "--max-term-generating-rounds",
+        "4",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&enough), 0, "{}", stderr(&enough));
+    assert_eq!(stdout(&enough), expected_inference());
+
+    // SPARQL 1.2 RL text, importing a second rule set through `--import`.
+    let imported = write_file(
+        dir.path(),
+        "more.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n",
+    );
+    let srl = write_file(
+        dir.path(),
+        "rules.srl",
+        "PREFIX ex: <http://example.org/ns#>\nIMPORTS <http://example.org/more>\n\
+         RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\nDATA { ex:d ex:q 2 }\n",
+    );
+    let pair = format!("http://example.org/more={imported}");
+    let srl_run = run(&[
+        "rules",
+        "--srl",
+        &srl,
+        "--import",
+        &pair,
+        "--explain",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&srl_run), 0, "{}", stderr(&srl_run));
+    let graph = stdout(&srl_run);
+    for line in [
+        format!("<http://example.org/ns#a> <http://example.org/ns#q> \"1\"^^{INTEGER} .\n"),
+        format!("<http://example.org/ns#d> <http://example.org/ns#q> \"2\"^^{INTEGER} .\n"),
+        "<http://example.org/ns#a> <http://example.org/ns#counted> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n".to_owned(),
+    ] {
+        assert!(graph.contains(&line), "{line} missing from:\n{graph}");
+    }
+    let proof = stderr(&srl_run);
+    assert!(proof.contains("  data-block\n"), "{proof}");
+    assert!(
+        proof.contains(&format!(
+            "  premise <http://example.org/ns#a> <http://example.org/ns#n> \"1\"^^{INTEGER} .\n"
+        )),
+        "{proof}"
+    );
+    // The same rule set without the pair names the missing import; a pair nothing
+    // imports is refused as unused.
+    let missing = run(&["rules", "--srl", &srl, "--to", "ntriples", &data]);
+    assert_eq!(code(&missing), 1, "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("--import http://example.org/more=FILE"),
+        "{}",
+        stderr(&missing)
+    );
+    let lone = write_file(
+        dir.path(),
+        "lone.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n",
+    );
+    let unused = run(&[
+        "rules", "--srl", &lone, "--import", &pair, "--to", "ntriples", &data,
+    ]);
+    assert_eq!(code(&unused), 2, "{}", stderr(&unused));
+
+    // The knob reaches the SPARQL 1.2 RL route too: a rule nesting a triple term every
+    // round never stops generating terms, and a limit of 3 stops it by name.
+    let nesting = write_file(
+        dir.path(),
+        "nesting.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:n <<( ?x ex:n ?y )>> } WHERE { ?x ex:n ?y }\n",
+    );
+    let bounded = run(&[
+        "rules",
+        "--srl",
+        &nesting,
+        "--max-term-generating-rounds",
+        "3",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&bounded), 1, "{}", stderr(&bounded));
+    assert!(
+        stderr(&bounded).contains("past the limit of 3"),
+        "{}",
+        stderr(&bounded)
+    );
+
+    // Exactly one rule source.
+    let both = run(&[
+        "rules", "--shapes", &shapes, "--srl", &lone, "--to", "ntriples", &data,
+    ]);
+    assert_eq!(code(&both), 2, "{}", stderr(&both));
+    let neither = run(&["rules", "--to", "ntriples", &data]);
+    assert_eq!(code(&neither), 2, "{}", stderr(&neither));
+}
+
+/// `node-expr` evaluates one expression node of the shapes graph: a `sh:sparqlExpr` node
+/// natively, with its `sh:prefixes`; a labelled blank node reading `--scope`; a literal
+/// focus. A label the document never wrote, and a scope binding that could never be read,
+/// are refused beside the valid neighbour.
+#[test]
+fn cli_node_expr() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = shapes_file(dir.path(), TOOLS);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let tag = run(&[
+        "node-expr",
+        "--shapes",
+        &shapes,
+        "--expr",
+        "http://example.org/ns#Tag",
+        "--focus",
+        "http://example.org/ns#a",
+        &data,
+    ]);
+    assert_eq!(code(&tag), 0, "{}", stderr(&tag));
+    assert_eq!(stdout(&tag), "<http://example.org/ns#yes>\n");
+    assert!(stderr(&tag).contains("node-expr outputs 1\n"));
+
+    let scoped = run(&[
+        "node-expr",
+        "--shapes",
+        &shapes,
+        "--expr",
+        "_:suffix",
+        "--focus",
+        &format!("\"-3\"^^{INTEGER}"),
+        "--scope",
+        "suffix=\"!\"@en",
+        &data,
+    ]);
+    assert_eq!(code(&scoped), 0, "{}", stderr(&scoped));
+    assert_eq!(stdout(&scoped), "\"!\"@en\n");
+
+    let unknown = run(&[
+        "node-expr",
+        "--shapes",
+        &shapes,
+        "--expr",
+        "_:nosuch",
+        "--focus",
+        "http://example.org/ns#a",
+        &data,
+    ]);
+    assert_eq!(code(&unknown), 1, "{}", stderr(&unknown));
+    assert!(stderr(&unknown).contains("mentions no blank node _:nosuch"));
+
+    let unreadable = run(&[
+        "node-expr",
+        "--shapes",
+        &shapes,
+        "--expr",
+        "_:suffix",
+        "--focus",
+        "http://example.org/ns#a",
+        "--scope",
+        "focusNode=\"!\"",
+        &data,
+    ]);
+    assert_eq!(code(&unreadable), 1, "{}", stderr(&unreadable));
+    assert!(stderr(&unreadable).contains("can never be read"));
+
+    let relative = run(&[
+        "node-expr",
+        "--shapes",
+        &shapes,
+        "--expr",
+        "Tag",
+        "--focus",
+        "http://example.org/ns#a",
+        &data,
+    ]);
+    assert_eq!(
+        code(&relative),
+        2,
+        "an argv term is decided before any document"
+    );
+    let no_equals = run(&[
+        "node-expr",
+        "--shapes",
+        &shapes,
+        "--expr",
+        "_:suffix",
+        "--focus",
+        "http://example.org/ns#a",
+        "--scope",
+        "suffix",
+        &data,
+    ]);
+    assert_eq!(code(&no_equals), 2, "{}", stderr(&no_equals));
+}
+
+/// `shapes lint` certifies the issue's graph clean (exit 0), naming `sh:sparqlExpr`'s
+/// function as bound natively; a malformed neighbour is reported with findings (exit 1,
+/// the report still written); a graph `shacl-shacl.ttl` flags but SHACL 1.2 Core makes
+/// well-formed stays clean.
+#[test]
+fn cli_shapes_lint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let clean = shapes_file(dir.path(), TOOLS);
+    let out = run(&["shapes", "lint", &clean]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let report = stdout(&out);
+    assert!(
+        report.starts_with("load accepted\nshacl-shacl 0\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <http://example.org/ns#Tagger>\n"
+        ),
+        "{report}"
+    );
+    assert!(report.ends_with("findings 0\nclean true\n"), "{report}");
+    assert!(stderr(&out).contains("shapes lint clean true\n"));
+    assert_eq!(
+        stdout(&run(&["shapes", "lint", &clean])),
+        report,
+        "deterministic"
+    );
+
+    let malformed = write_file(
+        dir.path(),
+        "malformed.ttl",
+        &format!(
+            "{PREFIXES}{ISSUE_SNIPPET}ex:S a sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount \"one\" ] .\n"
+        ),
+    );
+    let bad = run(&["shapes", "lint", &malformed]);
+    assert_eq!(code(&bad), 1, "{}", stderr(&bad));
+    let report = stdout(&bad);
+    assert!(report.starts_with("load refused\n  error "), "{report}");
+    assert!(
+        report.contains("path <http://www.w3.org/ns/shacl#minCount>"),
+        "{report}"
+    );
+    assert!(report.contains("functions unavailable\n"), "{report}");
+    assert!(report.ends_with("clean false\n"), "{report}");
+    assert!(stderr(&bad).contains("shapes lint clean false\n"));
+
+    let by_types = write_file(
+        dir.path(),
+        "by-types.ttl",
+        &format!("{PREFIXES}{ISSUE_SNIPPET}ex:S a sh:NodeShape ; sh:closed sh:ByTypes .\n"),
+    );
+    let superseded = run(&["shapes", "lint", &by_types]);
+    assert_eq!(code(&superseded), 0, "{}", stderr(&superseded));
+    assert!(stdout(&superseded).contains(" superseded closed-by-types\n"));
+
+    let ledger = run(&["--loss-ledger", "shapes", "lint", &clean]);
+    assert_eq!(code(&ledger), 2, "a text report has no loss ledger");
+}

@@ -23,6 +23,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -107,6 +108,72 @@ impl Inference {
     #[must_use]
     pub fn contract_hash(&self) -> &str {
         &self.contract
+    }
+
+    /// The inference graph alone — the inferred triples, WITHOUT the base graph
+    /// [`Self::dataset`] carries — as a dataset. A `r rdf:reifies <<( s p o )>>`
+    /// triple is a reifier declaration and a triple whose subject is such a reifier
+    /// its annotation, exactly as a parsed graph classifies them.
+    ///
+    /// # Errors
+    ///
+    /// An internal-invariant breach: an inferred triple with a non-IRI predicate,
+    /// which the evaluation refuses before it returns.
+    pub fn inferred_dataset(&self) -> Result<Arc<RdfDataset>, String> {
+        let reifiers = rules::reifier_subjects(self.inferred.iter());
+        let mut builder = RdfDatasetBuilder::new();
+        for triple in &self.inferred {
+            rules::push_fact(&mut builder, triple, &reifiers)?;
+        }
+        builder.freeze().map_err(|e| e.to_string())
+    }
+
+    /// The inferred triples as N-Triples 1.2, one `S P O .` line each, in the canonical
+    /// order of [`Self::inferred`]. Blank nodes keep the labels the evaluation gave
+    /// them, so the lines match [`Self::proof_text`] term for term.
+    #[must_use]
+    pub fn inferred_ntriples(&self) -> String {
+        let mut out = String::new();
+        for [s, p, o] in &self.inferred {
+            let _ = writeln!(out, "{s} {p} {o} .");
+        }
+        out
+    }
+
+    /// The proof of every inferred triple, as deterministic line-oriented text.
+    ///
+    /// One block per inferred triple, in the canonical order of [`Self::inferred`]:
+    ///
+    /// ```text
+    /// derived S P O .
+    ///   rule R
+    ///   premise S P O .
+    /// ```
+    ///
+    /// `derived` names the conclusion in N-Triples 1.2 term syntax. `rule` names the rule
+    /// that derived it ([`Explanation::rule`]), followed by one `premise` line per fact
+    /// its body matched, in authored body order ([`Explanation::premises`]); a SHACL rule
+    /// is executed as one producer over the whole evaluation graph, so it lists none. A
+    /// triple no rule derived — a SPARQL 1.2 RL data-block triple — carries the single
+    /// line `  data-block` instead. Every line ends in `\n`; nothing depends on hash
+    /// order, so the text is a pure function of the evaluation.
+    #[must_use]
+    pub fn proof_text(&self) -> String {
+        let mut out = String::new();
+        for triple in &self.inferred {
+            let [s, p, o] = triple;
+            let _ = writeln!(out, "derived {s} {p} {o} .");
+            match self.explanations.get(triple) {
+                Some(explanation) => {
+                    let _ = writeln!(out, "  rule {}", explanation.rule);
+                    for [s, p, o] in &explanation.premises {
+                        let _ = writeln!(out, "  premise {s} {p} {o} .");
+                    }
+                }
+                None => out.push_str("  data-block\n"),
+            }
+        }
+        out
     }
 }
 

@@ -624,14 +624,14 @@ test("every conclusion-directed entailment service is reachable from the package
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
 
   // `?c` ranges over the ENTAILED types, so `C` is a row and it is asserted nowhere.
-  const answers = entailCertainAnswers("owl-rl", SCHEMA, pattern, [], []);
+  const answers = entailCertainAnswers("owl-rl", SCHEMA, pattern, [], [], []);
   assert.ok(answers.answer.startsWith("mechanism strict-table\nvar c\n"), answers.answer);
   assert.ok(answers.answer.includes("\nrow <http://example.org/C>\n"), answers.answer);
 
-  const decided = entailGraphEntails("owl-rl", SCHEMA, conclusion, [], []);
+  const decided = entailGraphEntails("owl-rl", SCHEMA, conclusion, [], [], []);
   assert.equal(decided.answer, "mechanism strict-table\nentailment entailed\n");
 
-  const checked = entailVerifyEntailment("owl-rl", SCHEMA, conclusion, [], []);
+  const checked = entailVerifyEntailment("owl-rl", SCHEMA, conclusion, [], [], []);
   assert.ok(checked.answer.endsWith("warrant present\nverified true\n"), checked.answer);
 
   // All three carry the run that answered, on the materialization lane's own banner,
@@ -651,7 +651,7 @@ test("a variable in PREDICATE position is projected like any other", () => {
   // naming a construct the caller had not written, while `?s <p> ?o` answered fine.
   const one =
     "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
-  const whole = entailCertainAnswers("simple", one, "?s ?p ?o .\n", [], []);
+  const whole = entailCertainAnswers("simple", one, "?s ?p ?o .\n", [], [], []);
   assert.equal(
     whole.answer,
     "mechanism strict-table\nvar s\nvar p\nvar o\n" +
@@ -661,7 +661,7 @@ test("a variable in PREDICATE position is projected like any other", () => {
   // The predicate column ranges over what the CHASE entailed: no triple of `SCHEMA`
   // states `x rdf:type C`, so `cax-sco` is the only reason this row exists.
   const bridge = "<http://example.org/x> ?p <http://example.org/C> .\n";
-  const derived = entailCertainAnswers("owl-rl", SCHEMA, bridge, [], []);
+  const derived = entailCertainAnswers("owl-rl", SCHEMA, bridge, [], [], []);
   assert.ok(derived.answer.startsWith("mechanism strict-table\nvar p\n"), derived.answer);
   assert.ok(
     derived.answer.includes(
@@ -669,7 +669,7 @@ test("a variable in PREDICATE position is projected like any other", () => {
     ),
     derived.answer,
   );
-  const asserted = entailCertainAnswers("simple", SCHEMA, bridge, [], []);
+  const asserted = entailCertainAnswers("simple", SCHEMA, bridge, [], [], []);
   assert.equal(asserted.answer, "mechanism strict-table\nvar p\n");
 
   // The stand-in the boundary rewrites a `?p` into is its own scaffolding. PurRDF mints
@@ -692,6 +692,7 @@ test("a variable in PREDICATE position is projected like any other", () => {
     "<http://example.org/s> <http://example.org/p?zzz=1> ?o .\n",
     [],
     [],
+    [],
   );
   assert.equal(
     safe.answer,
@@ -702,7 +703,7 @@ test("a variable in PREDICATE position is projected like any other", () => {
 test("a conclusion nothing derives has no warrant, and says so", () => {
   const never =
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Never> .\n";
-  const checked = entailVerifyEntailment("owl-rl", SCHEMA, never, [], []);
+  const checked = entailVerifyEntailment("owl-rl", SCHEMA, never, [], [], []);
   assert.ok(checked.answer.includes("\nentailment not-entailed\n"), checked.answer);
   // `not-applicable`, never `false`: there is no evidence to re-decide, and a `false`
   // would read as a check that ran and failed.
@@ -716,7 +717,7 @@ test("the two regimes defined by a missing input are refused by name", () => {
   const conclusion =
     "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
   for (const regime of ["owl-direct", "rif"]) {
-    assert.throws(() => entailGraphEntails(regime, SCHEMA, conclusion, [], []), exactly(regime));
+    assert.throws(() => entailGraphEntails(regime, SCHEMA, conclusion, [], [], []), exactly(regime));
   }
 });
 
@@ -764,7 +765,7 @@ test("webont-imports-011 answers from its own premise, owl:imports intact", asyn
   const iris = [SUPPORT_011_A];
   const documents = [support];
 
-  const decided = entailGraphEntails("owl-rl", premise, conclusion, iris, documents);
+  const decided = entailGraphEntails("owl-rl", premise, conclusion, iris, documents, []);
   assert.ok(
     decided.answer.startsWith("mechanism strict-table\nentailment entailed\n"),
     decided.answer,
@@ -772,9 +773,9 @@ test("webont-imports-011 answers from its own premise, owl:imports intact", asyn
   assert.match(decided.certificate, /^purrdf-reasoning-report 4\n/);
 
   // The other two services answer the same question the same way.
-  const answers = entailCertainAnswers("owl-rl", premise, conclusion, iris, documents);
+  const answers = entailCertainAnswers("owl-rl", premise, conclusion, iris, documents, []);
   assert.equal(answers.answer, "mechanism strict-table\nrow\n");
-  const checked = entailVerifyEntailment("owl-rl", premise, conclusion, iris, documents);
+  const checked = entailVerifyEntailment("owl-rl", premise, conclusion, iris, documents, []);
   assert.ok(checked.answer.endsWith("warrant present\nverified true\n"), checked.answer);
 });
 
@@ -790,11 +791,11 @@ test("an unsupplied import throws by name rather than reasoning without it", asy
   // fails if the message gains, loses or reorders a single character, not merely if it
   // stops naming the document. The IRI is interpolated so it stays declared once.
   assert.throws(
-    () => entailGraphEntails("owl-rl", premise, conclusion, [], []),
+    () => entailGraphEntails("owl-rl", premise, conclusion, [], [], []),
     (error) =>
       error.message ===
       `entailment regime "owl-rl": the premise owl:imports <${SUPPORT_011_A}>, ` +
-        "which the supplied import map does not resolve",
+        "which the supplied import map does not resolve and the premise does not contain",
   );
 });
 
@@ -805,11 +806,11 @@ test("the import arrays are parallel, and a length mismatch is refused", async (
   const conclusion = await corpusNquads("cases/webont-imports-011/conclusion.rdf");
   const support = await corpusNquads("imports/support011-A.rdf");
   assert.throws(
-    () => entailGraphEntails("owl-rl", premise, conclusion, [SUPPORT_011_A], []),
+    () => entailGraphEntails("owl-rl", premise, conclusion, [SUPPORT_011_A], [], []),
     /1 ontology IRI\(s\) and 0 document\(s\)/,
   );
   assert.throws(
-    () => entailGraphEntails("owl-rl", premise, conclusion, [], [support]),
+    () => entailGraphEntails("owl-rl", premise, conclusion, [], [support], []),
     /0 ontology IRI\(s\) and 1 document\(s\)/,
   );
 });
@@ -822,7 +823,7 @@ test("a malformed import table is refused by entry", async () => {
     () =>
       entailGraphEntails("owl-rl", premise, conclusion, [SUPPORT_011_A], [
         "this is not n-quads\n",
-      ]),
+      ], []),
     /the import document for/,
   );
   assert.throws(
@@ -833,11 +834,34 @@ test("a malformed import table is refused by entry", async () => {
         conclusion,
         [SUPPORT_011_A, SUPPORT_011_A],
         [support, ""],
+        [],
       ),
     /twice/,
   );
   assert.throws(
-    () => entailGraphEntails("owl-rl", premise, conclusion, [""], [support]),
+    () => entailGraphEntails("owl-rl", premise, conclusion, [""], [support], []),
     /empty ontology IRI/,
   );
+});
+
+// `premiseIris` reaches the boundary: a premise importing its OWN IRI, with an empty
+// import table, throws when no premise IRI is declared and answers when that IRI is —
+// the two calls differ in `premiseIris` alone.
+test("the three services honour premiseIris", () => {
+  const iri = "http://example.org/premise";
+  const premise =
+    `<${iri}> <http://www.w3.org/2002/07/owl#imports> <${iri}> .\n` +
+    "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n";
+  const conclusion = "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n";
+  const pattern = "<https://example.org/x> <https://example.org/p> ?o .\n";
+  for (const [service, question] of [
+    [entailGraphEntails, conclusion],
+    [entailVerifyEntailment, conclusion],
+    [entailCertainAnswers, pattern],
+  ]) {
+    assert.throws(() => service("simple", premise, question, [], [], []), /example\.org\/premise/);
+    const answer = service("simple", premise, question, [], [], [iri]);
+    assert.ok(answer.answer.startsWith("mechanism strict-table\n"), answer.answer);
+    answer.free();
+  }
 });

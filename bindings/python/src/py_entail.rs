@@ -642,6 +642,15 @@ fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
 /// import. `[]` is the ordinary "imports nothing" case and is required rather than defaulted,
 /// in the same position on all four hosts, so one call shape works everywhere.
 ///
+/// # `premise_iris` — the IRIs the premise document was read from
+///
+/// A `Sequence[str]`: the premise's retrieval IRI, or the base it was parsed under, when
+/// the caller knows one. An `owl:imports` of one of these names the premise ITSELF, so it
+/// is resolved in place rather than refused as missing (so is an import of an ontology the
+/// premise already declares, with no argument needed). A caller handed bare text has no
+/// such IRI, and `[]` is that ordinary case; like `imports` the argument is required rather
+/// than defaulted, in the same position on all four hosts.
+///
 /// Raises `ValueError` on `OWL_DIRECT` or `RIF` — each is defined by an input this
 /// signature does not carry, so both are refused by name rather than served by a weaker
 /// lane — on a malformed document, pattern or import document, on a duplicate or empty
@@ -650,7 +659,7 @@ fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
 /// binding to project), on an `owl:imports` `imports` does not resolve, and on an
 /// inconsistent premise, whose refusal carries the full report.
 #[pyfunction]
-#[pyo3(signature = (regime, data, pattern, imports))]
+#[pyo3(signature = (regime, data, pattern, imports, premise_iris))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn certain_answers(
     py: Python<'_>,
@@ -658,11 +667,13 @@ fn certain_answers(
     data: &str,
     pattern: &str,
     imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     let answer = py
-        .detach(|| certain_answers_to_string(name, data, pattern, &table, &[]))
+        .detach(|| certain_answers_to_string(name, data, pattern, &table, &premise_iris))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -688,13 +699,13 @@ fn certain_answers(
 /// say instead. Reading the third as the second would turn a limitation of this library
 /// into a false statement about the caller's data.
 ///
-/// `imports` is [`certain_answers`]'s, and applies to the PREMISE: the conclusion is a graph
+/// `imports` and `premise_iris` are [`certain_answers`]'s, and apply to the PREMISE: the conclusion is a graph
 /// to match rather than an ontology to close, so an `owl:imports` in it names nothing this
 /// service resolves.
 ///
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
-#[pyo3(signature = (regime, premise, conclusion, imports))]
+#[pyo3(signature = (regime, premise, conclusion, imports, premise_iris))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn graph_entails(
     py: Python<'_>,
@@ -702,11 +713,13 @@ fn graph_entails(
     premise: &str,
     conclusion: &str,
     imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     let answer = py
-        .detach(|| graph_entails_to_string(name, premise, conclusion, &table, &[]))
+        .detach(|| graph_entails_to_string(name, premise, conclusion, &table, &premise_iris))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -723,14 +736,14 @@ fn graph_entails(
 /// to re-decide, and a `false` there would read as a failed check rather than an absent
 /// one.
 ///
-/// `imports` is [`certain_answers`]'s. The re-check runs against the premise AS WRITTEN
+/// `imports` and `premise_iris` are [`certain_answers`]'s. The re-check runs against the premise AS WRITTEN
 /// rather than against its imports closure: a warrant re-decidable from the caller's own
 /// document is a stronger check than one only re-decidable against a graph the library
 /// assembled.
 ///
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
-#[pyo3(signature = (regime, premise, conclusion, imports))]
+#[pyo3(signature = (regime, premise, conclusion, imports, premise_iris))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn verify_entailment(
     py: Python<'_>,
@@ -738,11 +751,13 @@ fn verify_entailment(
     premise: &str,
     conclusion: &str,
     imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     let answer = py
-        .detach(|| verify_entailment_to_string(name, premise, conclusion, &table, &[]))
+        .detach(|| verify_entailment_to_string(name, premise, conclusion, &table, &premise_iris))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }

@@ -1402,7 +1402,8 @@ mod tests {
     /// negated rule placed strictly below; a negation inside a cycle is refused naming it.
     #[test]
     fn rule_stratification_evaluates_or_names_the_cycle() {
-        // R0: ?x exposedTo ?v <- ?x hasVuln ?v ; R1: ?x safe yes <- ?x type C, NOT ?x exposedTo ?v
+        // Rule 0: ?x exposedTo ?v <- ?x hasVuln ?v
+        // Rule 1: ?x safe yes <- ?x type C, NOT ?x exposedTo ?v
         let exposed = DlClause::datalog(
             atom(v("?x"), "exposedTo", v("?v")),
             vec![atom(v("?x"), "hasVuln", v("?v"))],

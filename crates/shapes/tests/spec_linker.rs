@@ -305,7 +305,7 @@ sh:NotABuiltin a sh:NamedParameterExpressionFunction ;
   sh:parameter [ sh:path ex:notABuiltinKey ; sh:keyParameter true ] .
 ";
 
-/// The issue's own declaration of `sh:SPARQLExprExpression`, verbatim.
+/// The W3C SHACL 1.2 declaration of `sh:SPARQLExprExpression`, verbatim.
 const ISSUE_SNIPPET: &str = r#"
 sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
   rdfs:label "SPARQL expr expression"@en ;

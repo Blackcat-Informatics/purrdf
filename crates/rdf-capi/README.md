@@ -129,23 +129,54 @@ executes that example against the generated shared library and committed header.
   before `out_error`. Recompile against the new header; there is no `_v2` alias,
   because two entry points for one job is the duplication this library exists to
   avoid.
-  `0.7.0` → `0.8.0` adds eight prepared-shapes-product entry points plus
-  `purrdf_shacl_validate_changes_to_sarif` (the SHACL change path), appends one
-  status discriminant, and carries ONE break: `purrdf_shacl_validate_to_sarif`
+  `0.7.0` → `0.8.0` adds eight prepared-shapes-product entry points,
+  `purrdf_shacl_validate_changes_to_sarif` (the SHACL change path) and the three
+  shapes-graph tools (`purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr`,
+  `purrdf_shacl_lint_shapes`), appends one
+  status discriminant, and carries four breaks: `purrdf_shacl_validate_to_sarif`
   gained `conformance_disallows` / `conformance_disallows_count` (the SHACL 1.2
   conformance-disallow set; count `0` is the default set) between `data_nt` and
-  `out_buffer`, so a `0.7.0` host recompiles. It bumps in any case because `0.7.0` is the ABI of the released
-  `2.0.x` libraries, which export nine fewer symbols — leaving the triple still
+  `out_buffer`, and `purrdf_entail_certain_answers`, `purrdf_entail_graph_entails`
+  and `purrdf_entail_verify_entailment` gained `premise_iris` /
+  `premise_iri_count` (the IRIs the premise document was read from; count `0` is
+  bare text) between `import_count` and `out_answer`, so a `0.7.0` host recompiles. It bumps in any case because `0.7.0` is the ABI of the released
+  `2.0.x` libraries, which export twelve fewer symbols — leaving the triple still
   would have two shippable libraries answering `purrdf_abi_version` identically
   while offering different surfaces, and telling a host they agree right before it
   fails to resolve a symbol is the one thing this number exists to prevent.
+
+## Shapes-graph tools
+
+Beside validation, three entry points reach the same engine every other PurRDF host
+does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
+
+- `purrdf_shacl_apply_rules(data_nt, shapes_ttl, shapes_base_iri, srl, srl_base_iri,
+  max_term_generating_rounds, out_inferred, out_proof, out_error)` runs exactly one
+  rule source — the SHACL 1.2 rules of `shapes_ttl`, or the SPARQL 1.2 RL rule set
+  `srl` — and writes the **inference graph** (the inferred triples only, never the
+  data graph) as canonical N-Triples. A non-NULL `out_proof` also receives the proof
+  of every inferred triple. `max_term_generating_rounds` is a nullable `uint64_t *`:
+  NULL keeps the default of 65,536 rounds that infer a new term. A host running
+  untrusted rule sets should pass a lower limit, because an exponential rule set
+  reaches the engine's fixed arena and join ceilings only slowly under the default.
+- `purrdf_shacl_eval_node_expr(shapes_ttl, shapes_base_iri, data_nt, expr, focus,
+  scope, scope_count, out_terms, out_error)` evaluates one node expression of the
+  shapes graph. `expr` is an IRI or `_:label`, `focus` an IRI or an N-Triples term,
+  and each `scope` entry a `NAME=TERM` binding. The output nodes come back one
+  N-Triples term per line, in sequence order.
+- `purrdf_shacl_lint_shapes(shapes_ttl, shapes_base_iri, out_report, out_clean,
+  out_findings, out_error)` certifies a shapes graph: the loader's verdict, the W3C
+  `shacl-shacl.ttl` results, and which implementation every function call binds to.
+  It writes the same deterministic report text as `purrdf shapes lint`. A malformed
+  shapes graph is a report with findings and `*out_clean == 0`, not an error.
 
 ## Base IRIs across the surface
 
 Every entry point that reads or writes an RDF **syntax admitting a relative IRI**
 takes a nullable base, in the slot beside the document it qualifies:
 `purrdf_parse`, `purrdf_serialize`, `purrdf_serialize_jsonld_configured`, the
-SHACL pair's `shapes_base_iri`, and the SPARQL request base on `purrdf_query`,
+SHACL entry points' `shapes_base_iri` (and `purrdf_shacl_apply_rules`' `srl_base_iri`),
+and the SPARQL request base on `purrdf_query`,
 `purrdf_query_json`, `purrdf_query_governed`,
 `purrdf_query_entailment_governed`, and `purrdf_update_governed`.
 
