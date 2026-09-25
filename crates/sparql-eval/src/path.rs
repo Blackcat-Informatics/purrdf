@@ -703,8 +703,24 @@ fn path_is_reflexive(path: &PropertyPathExpression) -> bool {
 ///   cyclic/infinite graphs, and mandated even when the repetition is nested
 ///   under a combinator (e.g. `(:p/:q)+`).
 fn path_has_repetition(path: &PropertyPathExpression) -> bool {
+    // `true`, not `false`: the caller (`eval_path_traversal`) uses this answer to choose
+    // between `simple_reach_multiset` (valid ONLY for a repetition-free path — it
+    // `unreachable!()`s on `ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) and `reach_cached`
+    // (the ALP fixpoint, which every arm of `reach_uncached` handles, repetition or not).
+    // At low stack the true answer cannot be computed, so the safe default must be the one
+    // that keeps `eval_path_traversal` on the seam valid for EVERY path shape — `true`
+    // routes to `reach_cached`, never to the multiset path an unclassified answer could
+    // route incorrectly to a genuinely repeating path.
+    //
+    // This local answer, not a coincidence elsewhere, is what keeps
+    // `simple_reach_multiset`'s `unreachable!()` unreached: `reach_cached` (and the
+    // `closure`/`range_reach` it calls for repetition) also observe the same low stack and
+    // return an empty placeholder rather than recursing further, and the enclosing
+    // `crate::stack::walk` scope in `eval_path` discards that placeholder and reports the
+    // typed refusal — so nothing downstream of this answer ever computes over it, but the
+    // *routing decision itself* no longer depends on that discard to stay memory-safe.
     if crate::stack::walk_is_low("property path") {
-        return false;
+        return true;
     }
     use PropertyPathExpression as P;
     match path {
@@ -1272,6 +1288,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TrippedGovernor};
     use purrdf_sparql_algebra::{NamedNode, TriplePattern};
+    use std::cell::Cell;
 
     const EX: &str = "http://ex/";
 
@@ -2281,5 +2298,107 @@ mod tests {
             !message.contains("BGP"),
             "message must not claim this variable was found in a BGP: {message:?}"
         );
+    }
+
+    // ---- `path_has_repetition` at low stack ---------------------------------
+
+    /// Force `is_low()` true for the calling thread — the same
+    /// [`purrdf_stack::replace_floor`] technique `tests/evaluation_stack.rs` uses — run
+    /// `body` inside a [`purrdf_stack::walk`] scope (outside one, `walk_is_low` is
+    /// unconditionally `false`; see its doc), and restore the real floor afterwards.
+    /// `body` reports its own observations through a captured reference rather than a
+    /// return value, because [`purrdf_stack::walk`] discards the closure's return value
+    /// once a level inside it has refused — only side effects survive.
+    fn with_forced_low_stack(body: impl FnOnce()) {
+        let low_floor = purrdf_stack::stack_pointer().wrapping_sub(4096);
+        let real_floor = purrdf_stack::replace_floor(low_floor);
+        let outcome = purrdf_stack::walk(body);
+        purrdf_stack::replace_floor(real_floor);
+        assert!(
+            outcome.is_err(),
+            "the floor this test forced must actually be observed as low"
+        );
+    }
+
+    /// The low-stack guard's answer must default to `true` — "assume repetition" —
+    /// never `false`, for EVERY path shape, not only ones that truly repeat.
+    ///
+    /// `eval_path_traversal` uses this answer to route between `simple_reach_multiset`
+    /// (valid ONLY for a repetition-free path: it `unreachable!()`s on
+    /// `ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) and `reach_cached` (the ALP fixpoint,
+    /// which `reach_uncached` handles for every path shape). At low stack the true answer
+    /// cannot be computed, so the only answer that keeps the routing decision safe on its
+    /// own — not merely safe because a later, coincidental check also happens to catch
+    /// the low stack first — is the one that always selects `reach_cached`: `true`.
+    #[test]
+    fn path_has_repetition_defaults_to_true_when_the_stack_is_low() {
+        // A genuinely repetition-free path (would truly answer `false` with room to
+        // compute) and a genuinely repeating one: both must answer `true` once the stack
+        // is low, so the low-stack answer is not merely "whatever the real answer would
+        // have been happens to already be `true`".
+        let repetition_free = PropertyPathExpression::Sequence(
+            Box::new(named("p")),
+            Box::new(PropertyPathExpression::NegatedPropertySet(vec![npe(
+                "q", false,
+            )])),
+        );
+        assert!(
+            !path_has_repetition(&repetition_free),
+            "sanity: with room to compute, this path truly has no repetition"
+        );
+        let repeating = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        assert!(
+            path_has_repetition(&repeating),
+            "sanity: with room to compute, this path truly does repeat"
+        );
+
+        let repetition_free_low = Cell::new(None);
+        let repeating_low = Cell::new(None);
+        with_forced_low_stack(|| {
+            repetition_free_low.set(Some(path_has_repetition(&repetition_free)));
+            repeating_low.set(Some(path_has_repetition(&repeating)));
+        });
+        assert_eq!(
+            repetition_free_low.get(),
+            Some(true),
+            "a repetition-free path must still answer the safe default `true` once the \
+             stack is low — the old `false` could route it to `simple_reach_multiset`, \
+             which is valid for it, but only by coincidence of the answer being correct"
+        );
+        assert_eq!(
+            repeating_low.get(),
+            Some(true),
+            "a genuinely repeating path must answer `true`, routing to `reach_cached` \
+             rather than `simple_reach_multiset`, which `unreachable!()`s on it"
+        );
+    }
+
+    /// End to end through the public [`eval_path`] entry: a repetition path forced to
+    /// evaluate with no stack left is the typed [`EvalError::StackExhausted`] — never a
+    /// panic, and never a wrong answer reported as complete.
+    ///
+    /// Before this fix, `path_has_repetition` answered `false` here (a repetition-free
+    /// path with no stack to compute the true answer), which would have routed this
+    /// `OneOrMore` path to `simple_reach_multiset` — the one path shape its match
+    /// arm cannot handle (`unreachable!()`). It stayed unreached only because
+    /// `simple_reach_multiset`'s own low-stack guard, observing the SAME scope-wide
+    /// latch `path_has_repetition`'s guard had already set, returns an empty placeholder
+    /// before ever reaching that arm — a fact about the shared walk scope, not about
+    /// `path_has_repetition`'s own answer. This test exercises the real, public seam
+    /// rather than relying on that coupling: whatever the routing decision, the outcome
+    /// here must be the typed refusal, never a panic.
+    #[test]
+    fn a_repetition_path_forced_low_refuses_typed_never_panics() {
+        let ds = graph_of(&[("a", "p", "b"), ("b", "p", "c")]);
+        let plus = PropertyPathExpression::OneOrMore(Box::new(named("p")));
+        let low_floor = purrdf_stack::stack_pointer().wrapping_sub(4096);
+        let real_floor = purrdf_stack::replace_floor(low_floor);
+        let mut ctx = EvalCtx::new(&ds);
+        let result = eval_path(&ground("a"), &plus, &var("o"), &mut ctx);
+        purrdf_stack::replace_floor(real_floor);
+        match result {
+            Err(EvalError::StackExhausted { .. }) => {}
+            other => panic!("expected the typed stack refusal, got {other:?}"),
+        }
     }
 }
