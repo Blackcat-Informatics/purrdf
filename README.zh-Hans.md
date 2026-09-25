@@ -290,9 +290,11 @@ ORDER BY ?rank
   `SERVICE` 扩展点：一个宿主可注入的 `ServiceResolver`，携带**逐服务上下文**（请求头、
   凭据、超时、能力；默认拒绝），发出的 SPARQL Protocol 请求由确定性的序列化器构造，
   并在 823 项随库固化的语料上往返扫描（含更新请求）。止步于何处：PurRDF 不附带 HTTP
-  客户端——交换是一个由 Rust 宿主实现的 `HttpTransport` trait——而且没有任何随库发布的
-  接口（CLI、Python、wasm、C）安装解析器，因此那里的 `SERVICE` 与 `LOAD` 会按名称失败，
-  除非写作 `SILENT`；联邦查询是 Rust 宿主的组合，不是开箱即用的功能。原生扩展点上的宿主标量
+  客户端——交换是一个由 Rust 宿主实现的 `HttpTransport` trait。CLI、Python 与 C 接口
+  不安装解析器，wasm 包的同步方法同样不安装，因此那里的 `SERVICE` 与 `LOAD` 会按名称
+  失败，除非写作 `SILENT`。wasm 包的异步方法接受宿主提供的解析器：作业经由 JSPI 挂起、
+  等待其应答的 JavaScript `resolveService`/`resolveLoad` 处理函数，或由其 Cloudflare
+  适配器构建的、基于 `fetch` 的处理函数。联邦查询是宿主的组合，而不是内置的网络客户端。原生扩展点上的宿主标量
   函数携带 SPARQL 的表达式错误通道：逐解的定义域错误在 `FILTER` 下消去该行，在
   `BIND`/`SELECT` 下让变量保持未绑定，而不是中止查询。由完整的 W3C SPARQL 1.1 + 1.2
   求值语料把关：**862 个通过**，5 个入台账的上游勘误夹具。结果以 SPARQL

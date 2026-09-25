@@ -91,7 +91,16 @@ Design pillars:
   `QueryOptions` — `remote` answers `SERVICE` in a query and in an UPDATE's
   `WHERE` alike, and `load` answers `LOAD`, taking precedence over a resolver
   installed on the engine — so every entry, governed or not, federates the
-  same way.
+  same way. The seam has two consumers: a Rust host that implements
+  `HttpTransport`, and the wasm package's asynchronous lane, whose resolvers
+  suspend the evaluation through JSPI while a JavaScript host answers each
+  `SERVICE` and `LOAD`.
+- **SPARQL 1.1 Protocol** — the `protocol` module reads an HTTP request's
+  method, `Content-Type`, query string and body into a query or update
+  operation, applies the dataset parameters (`default-graph-uri`,
+  `named-graph-uri`, `using-graph-uri`, `using-named-graph-uri`) to its text,
+  and negotiates the result format from an `Accept` header. It performs no
+  I/O; a refusal is a typed `ProtocolError` the host maps to its HTTP status.
 - **Caller-keyed extension seams** — scalar functions (`UserFunctionRegistry`,
   whose native bodies carry SPARQL's expression-error channel so a per-solution
   domain error drops the row under `FILTER` or leaves the variable unbound

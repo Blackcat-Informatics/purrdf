@@ -69,7 +69,7 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 
 ## API 接口
 
-- **`ready(bytesOrUrl?)`**——在做任何事之前 await 一次。
+- **`ready(bytesOrUrl?)`**——在做任何事之前 await 一次；它也接受已编译的 `WebAssembly.Module`。
 - **`DataFactory`**——`namedNode`、`blankNode`、
   `literal(value, languageOrDatatype?)`、`typedLiteral`、
   `directionalLiteral`、`variable`、`defaultGraph`、`quad`、`quotedTriple`、
@@ -87,9 +87,7 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
   configJson, payloadArchive)` 加入有界的、随附的 RO-Crate 载荷；
   `liftProjection(...)` 为各双向 profile 重建 RDF。参见
   [图、表格与 Research Object 投影](../concepts/projections.md)。
-- **SPARQL**——`QueryEngine` 在多次调用之间保持原生计划缓存存活，并暴露带类型的
-  `select` / `ask` / `construct` / `describe`、原子的 `update`，以及
-  `queryRaw` 序列化。`Dataset.query(...)` 仍作为兼容用的裸字符串辅助方法保留。
+- **SPARQL**——`QueryEngine` 在多次调用之间保持原生计划缓存存活，并暴露带类型的 `select` / `ask` / `construct` / `describe`、原子的 `update`，以及 `queryRaw` 序列化。`Dataset.query(...)` 仍作为兼容用的裸字符串辅助方法保留。每个求值方法都有一个返回 Promise 的孪生方法，接受宿主为 `SERVICE` 与 `LOAD` 提供的处理函数——见[下文](#asynchronous-queries-and-federation)。
 - **SHACL**——`shaclValidateToSarif(shapesTtl, dataNt)` 用一份 Turtle 形状图验证一份
   N-Triples 数据图并返回 SARIF 2.1.0 报告；`shaclEntail(shapesTtl, dataNt)` 把
   SHACL-AF `sh:rule` 的推论物化为 N-Triples。
@@ -98,10 +96,121 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 
 RDF/JS 映射的更多内容见 [JavaScript 中的 RDF/JS](../interop/rdfjs.md)。
 
+## Asynchronous queries and federation
+
+<!-- 此标题保留英文：本书其他页面以 #asynchronous-queries-and-federation 链接到这里，而锚点由标题文字生成。 -->
+
+同步方法是离线通道：它们不安装任何 `SERVICE` 或 `LOAD` 来源，因此非 `SILENT` 的 `SERVICE` 或 `LOAD` 会按名称失败。每个求值方法还有一个返回 Promise 的孪生方法——`QueryEngine` 上的 `queryAsync`、`selectAsync`、`askAsync`、`constructAsync`、`describeAsync`、`queryRawAsync`、`queryRawBytesAsync`、`queryRawWithContextAsync`、`queryGovernedAsync`、`queryEntailmentGovernedAsync`、`updateAsync` 与 `updateGovernedAsync`，以及 `Dataset.queryAsync`——此外还有 `queryGovernedNegotiatedAsync`，它把受 governor 管控的查询按 HTTP `Accept` 请求头协商出的格式作为文档返回。孪生方法在调用开始时为数据集拍下快照，并在快照上运行同一个求值器；它以作业的形式执行：宿主应答 `SERVICE` 或 `LOAD` 时作业挂起，求值期间作业把事件循环让出，最终兑现为与其同步孪生方法完全相同的返回值。I/O 由宿主完成，相应的策略也归宿主所有；解析、求值、连接、`SILENT` 语义与结果编码仍由 PurRDF 负责。
+
+孪生方法运行在 WebAssembly JavaScript Promise Integration（JSPI）之上，它在 Chrome 与 Edge 137+、Firefox 139+、Safari 27、Node 24.20+ 以及 Cloudflare Workers（workerd）中默认启用。`hasAsyncQueries()` 报告当前引擎是否支持 JSPI；在不支持的引擎上，每个孪生方法都会在触及 wasm 之前以同一个错误拒绝，而同步 API 照常工作。
+
+### 应答 `SERVICE`
+
+`resolveService(request, ctx)` 收到的是需要发送的 SPARQL 1.1 Protocol POST 请求：`endpoint`、`queryText`、`contentType`（`application/sparql-query`）、`accept`（`application/sparql-results+json`）、`userAgent`、`timeoutMs`，以及 `headers`——目录 profile 的请求头与凭据，形式为按发送顺序排列的 `[name, value]` 对。`ctx` 携带 `signal`（在取消或到达截止时间时触发）、`remainingDeadlineMs`、`silent` 与 `maxIntermediateCells`。处理函数的应答可以是 SPARQL Results JSON（字节或字符串）、一个 `Response`（非 2xx 状态视为传输失败）、`{ kind: "transport", message }`——`SERVICE SILENT` 会把它吞掉，代之以连接的单位元——或 `{ kind: "denied", message }`，后者即使在 `SILENT` 下也会让查询失败。处理函数若抛出异常、返回被拒绝的 Promise 或返回任何其他值，即视为发生故障；故障即使在 `SERVICE SILENT` 下也会让作业失败，因为它不是应答。`ctx.silent` 仅供参考：处理函数无权自行编造一个空应答。
+
+```js resolve-service-recipe
+import { ready, Dataset, QueryEngine } from "@blackcatinformatics/purrdf";
+
+await ready();
+
+// One SERVICE request, sent as a SPARQL 1.1 Protocol POST.
+async function resolveService(request, { signal }) {
+  try {
+    // A Response is an answer as it stands: a 2xx body is read as SPARQL Results
+    // JSON, and any other status is a transport failure.
+    return await fetch(request.endpoint, {
+      method: "POST",
+      headers: [
+        ["Content-Type", request.contentType], // application/sparql-query
+        ["Accept", request.accept], // application/sparql-results+json
+        ...request.headers, // the catalog profile's headers, in sending order
+      ],
+      body: request.queryText,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(request.timeoutMs)]),
+    });
+  } catch (error) {
+    // Never rethrow: a throw is a fault, which fails the query even under SERVICE SILENT.
+    return { kind: "transport", message: String(error) };
+  }
+}
+
+const engine = new QueryEngine();
+const dataset = Dataset.parse(
+  "<https://example.org/a> <https://example.org/p> <https://example.org/o1> .\n",
+  "nquads",
+);
+const { rows } = await engine.selectAsync(
+  dataset,
+  `SELECT ?s ?x WHERE {
+     ?s <https://example.org/p> ?o
+     SERVICE <https://remote.example.org/sparql> { ?o <https://example.org/q> ?x }
+   }`,
+  { resolveService },
+);
+for (const row of rows) console.log(row.s.value, row.x.value);
+```
+
+以 `catalog` 传入的 `ServiceCatalog` 会在调用处理函数之前授权每一个请求（默认拒绝，每个端点一个 profile，另可设一个兜底 profile）；被拒绝的请求即使在 `SERVICE SILENT` 下也会让查询失败。`localServices` 在进程内用一个 `Dataset` 应答指定的端点。`resolveLoad` 以同样的方式应答 `LOAD`：返回一份文档及其媒体类型、一个 `Response`、一个 `Dataset`，或一个带类型的失败；`LOAD SILENT` 会吞掉传输失败，但绝不吞掉拒绝。
+
+在浏览器中，由远程端点的 CORS 策略决定 `fetch` 能否读取其应答：不允许页面所在源的端点会表现为网络错误，上面的处理函数把它报告为传输失败。若某个端点可能不可达、且其结果行可有可无，请写 `SERVICE SILENT`。
+
+### 让出、取消与并发
+
+- 作业每经过 `yieldEveryPolls` 次 governor 轮询就把事件循环让出一轮（默认 65 536；`0` 表示每次轮询都让出），所用的宏任务原语由 `asyncYieldPrimitive()` 报告。只有求值阶段会让出：冻结数据集与序列化结果都会一次运行到底，`evidence.async` 报告每个阶段的耗时。
+- `signal: AbortSignal` 会在作业下一次让出或发出宿主请求时取消它。在受 governor 管控的孪生方法上，`deadlineMs` 包含等待处理函数的时间；一次 governor 触发——包括截止时间与取消——是一个结果，而不是一次 Promise 拒绝。
+- 查询读取自己的快照；同一数据集上的异步更新按调用顺序逐个运行，且只有在其运行期间数据集未被修改时才会应用。`configureAsync({ maxConcurrentJobs })` 限定同时在途的作业数（默认 16）。
+- 每个作业在自己的栈区域上求值，其大小为 `stackBytes` 字节（默认 2 MiB）；`evidence.async.stackHighWaterBytes` 报告它用到了多深，而嵌套深度超出该区域的请求会以带类型的错误失败。若某个作业的栈帧越过了区域下方的保护区，该实例即被毒化：此后每一次异步调用都会拒绝，直到模块被重新实例化。
+
+### Cloudflare Workers
+
+`@blackcatinformatics/purrdf/cloudflare` 提供 `createFetchServiceResolver`、`createFetchLoadResolver` 与 `handleSparqlRequest`；后者以一个 `Response` 应答一个 SPARQL 1.1 Protocol 请求：`200` 附带协商出的文档，governor 叫停请求时返回 `422` 或 `503`（绝不会以 `200` 返回部分结果），错误以 `application/problem+json` 给出，`Server-Timing` 取自作业的证据，并在配置后发送 CORS 头。一个完整的 Worker：
+
+```js worker-recipe
+import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";
+import { ready, Dataset, QueryEngine, ServiceCatalog } from "@blackcatinformatics/purrdf";
+import { createFetchServiceResolver, handleSparqlRequest } from "@blackcatinformatics/purrdf/cloudflare";
+
+await ready(wasm);
+const engine = new QueryEngine();
+const dataset = Dataset.parse(
+  "<https://example.org/a> <https://example.org/p> <https://example.org/o1> .\n",
+  "nquads",
+);
+const catalog = new ServiceCatalog();
+catalog.addService(
+  "https://remote.example.org/sparql",
+  JSON.stringify({ capabilities: ["query", "network"] }),
+);
+
+export default {
+  fetch(request, env, ctx) {
+    const resolveService = createFetchServiceResolver({
+      catalog,
+      timeoutMs: 5_000,
+      bindings: { "https://remote.example.org": env.REMOTE },
+      cache: caches.default,
+      cacheTtlSeconds: 300,
+      waitUntil: (promise) => ctx.waitUntil(promise),
+    });
+    return handleSparqlRequest(request, {
+      engine,
+      dataset,
+      catalog,
+      resolveService,
+      cors: { origins: "*" },
+      governors: { deadlineMs: 10_000, maxRemoteRequests: 40 },
+    });
+  },
+};
+```
+
+Workers 限制单次调用可以发出的子请求数量，而 `maxRemoteRequests` 正是与之精确对应的控制项：每个 `SERVICE` 请求和每个 `LOAD` 都在到达处理函数之前计数，因此一个请求发出的子请求绝不会超过该上限。Cache API 在 `workers.dev` 主机名上不起任何作用，因此 `cache` 选项只在自定义域名上生效。在 Workers 上，`Date.now()` 在 CPU 密集执行期间不会前进，因此同步的 `deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出和每一次宿主请求时检查截止时间。
+
+包的 [README](https://github.com/Blackcat-Informatics/purrdf/tree/main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-adapter) 是这些约定的完整参考。
+
 ## 范围与当前限制
 
-- **仅限内存。** SPARQL 查询在内存数据集上运行；本包不提供网络解析器，因此远程
-  `SERVICE` 与 `LOAD` 会显式失败。
+- **仅限内存。** SPARQL 查询在内存数据集上运行。同步方法不安装任何 `SERVICE` 或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 除非写作 `SILENT`，否则会显式失败；异步孪生方法只能经由宿主传入的处理函数到达远程端点。
 - **各格式的三元组项。**`serialize` 是写入器原生通道：宾语位置的引用三元组项与 RDF 1.2 陈述层在 Turtle、N-Triples、N-Quads 与 TriG
   （写作 `<<( … )>>`）、RDF/XML（写作 `rdf:parseType="Triple"`）以及 JSON-LD /
   YAML-LD（写作 `@triple`）中都得以保留。TriX 与 HexTuples 不支持三元组项，因此把

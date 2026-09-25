@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The offline, in-browser SPARQL query surface over the wasm [`Dataset`].
+//! The synchronous, offline SPARQL query surface over the wasm [`Dataset`].
 //!
 //! Binds the native multiset SPARQL evaluator
 //! ([`NativeSparqlEngine`](purrdf_sparql_eval::NativeSparqlEngine)) to JavaScript so a
@@ -9,13 +9,13 @@
 //! server and no network. The engine is the same one the native query gate uses,
 //! with no baked-in HTTP client.
 //!
-//! ## Federation is intentionally absent
+//! ## Two lanes: this one is offline
 //!
-//! This binds the plain [`SparqlEngine::query`](purrdf_core::SparqlEngine::query)
-//! entry — the one with **no** [`ServiceResolver`](purrdf_sparql_eval::remote)
-//! installed. A `SERVICE` or `LOAD` clause therefore **hard-fails** with a JsError
-//! rather than silently returning an empty or partial result: in a browser there is
-//! no resolver to fetch a remote graph, and a false answer is worse than an error.
+//! Every method here is the *synchronous* lane: it runs to completion inside one wasm
+//! call and installs **no** [`ServiceResolver`](purrdf_sparql_eval::remote) and no
+//! `GraphResolver`. A `SERVICE` or `LOAD` clause therefore **hard-fails** with a JsError
+//! rather than silently returning an empty or partial result: a synchronous call cannot
+//! wait for the network, and a false answer is worse than an error.
 //!
 //! The one exception is the caller's own: `SERVICE SILENT` and `LOAD SILENT` succeed
 //! with nothing fetched — the `SILENT` keyword is the query author writing "an
@@ -23,6 +23,11 @@
 //! §3.1.4 require it to be honoured. `SERVICE SILENT` contributes the join identity
 //! (so the surrounding pattern's own solutions come back, unaugmented) and
 //! `LOAD SILENT` leaves the dataset untouched. Drop `SILENT` to get the hard failure.
+//!
+//! The second lane is the `async_query` module: every evaluating method here has an
+//! asynchronous twin that runs the same evaluator as a job suspending through JSPI on
+//! host-resolved `SERVICE` and `LOAD` effects, so federation is the host's to supply
+//! there and never a hidden network client here.
 //!
 //! ## Result encoding
 //!

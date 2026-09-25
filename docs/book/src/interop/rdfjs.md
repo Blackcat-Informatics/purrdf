@@ -103,11 +103,15 @@ The package speaks the async RDF/JS Stream/Sink protocol over the
 ## Scope notes
 
 - The engine is **in-memory**; there is no persistent store in the wasm
-  build. SPARQL runs over the in-memory dataset; this package provides no
-  network resolver, so remote `SERVICE` and `LOAD` fail explicitly.
-- A quoted-triple term as a quad **object** currently round-trips only
-  through **N-Quads** (a current native serializer limitation for the other
-  formats).
+  build. SPARQL runs over the in-memory dataset. The synchronous methods
+  install no `SERVICE` or `LOAD` source, so there a remote `SERVICE` or `LOAD`
+  fails explicitly unless it is written `SILENT`; the asynchronous twins reach
+  remote endpoints only through the handlers the host passes them (see
+  [Asynchronous queries and federation](../getting-started/javascript.md#asynchronous-queries-and-federation)).
+- A quoted-triple term as a quad **object** round-trips through Turtle,
+  N-Triples, N-Quads, TriG, RDF/XML and JSON-LD / YAML-LD; TriX and HexTuples
+  have no triple-term surface, and serializing one to them throws (see
+  [Scope and current limitations](../getting-started/javascript.md#scope-and-current-limitations)).
 
 ## Related
 

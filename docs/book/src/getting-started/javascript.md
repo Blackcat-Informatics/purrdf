@@ -62,7 +62,8 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 
 ## API surface
 
-- **`ready(bytesOrUrl?)`** — await once before anything else.
+- **`ready(bytesOrUrl?)`** — await once before anything else; it also accepts
+  a compiled `WebAssembly.Module`.
 - **`DataFactory`** — `namedNode`, `blankNode`,
   `literal(value, languageOrDatatype?)`, `typedLiteral`,
   `directionalLiteral`, `variable`, `defaultGraph`, `quad`, `quotedTriple`,
@@ -84,7 +85,9 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 - **SPARQL** — `QueryEngine` keeps the native plan cache alive across calls and
   exposes typed `select` / `ask` / `construct` / `describe`, atomic `update`,
   and `queryRaw` serialization. `Dataset.query(...)` remains the compatibility
-  raw-string helper.
+  raw-string helper. Each evaluating method has a Promise-returning twin that
+  takes host handlers for `SERVICE` and `LOAD` — see
+  [below](#asynchronous-queries-and-federation).
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples
   data graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule`
@@ -95,11 +98,190 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 
 More on the RDF/JS mapping in [RDF/JS in JavaScript](../interop/rdfjs.md).
 
+## Asynchronous queries and federation
+
+The synchronous methods are the offline lane: they install no `SERVICE` or
+`LOAD` source, so a non-`SILENT` `SERVICE` or `LOAD` fails by name. Every
+evaluating method also has a Promise-returning twin — `queryAsync`,
+`selectAsync`, `askAsync`, `constructAsync`, `describeAsync`, `queryRawAsync`,
+`queryRawBytesAsync`, `queryRawWithContextAsync`, `queryGovernedAsync`,
+`queryEntailmentGovernedAsync`, `updateAsync` and `updateGovernedAsync` on
+`QueryEngine`, and `Dataset.queryAsync` — plus `queryGovernedNegotiatedAsync`,
+which answers a governed query as a document in the format an HTTP `Accept`
+header negotiates. A twin runs the same evaluator over a snapshot of the dataset
+taken when the call starts, as a job that suspends while the host answers a
+`SERVICE` or `LOAD` and gives the event loop back while it evaluates, and it
+resolves to exactly what its synchronous twin returns. The host does the I/O
+and owns its policy; PurRDF keeps the parsing, the evaluation, the joins, the
+`SILENT` semantics and the result encoding.
+
+The twins run over WebAssembly JavaScript Promise Integration (JSPI), on by
+default in Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and
+Cloudflare Workers (workerd). `hasAsyncQueries()` reports whether the current
+engine has it; where it does not, every twin rejects with one error before it
+touches wasm, and the synchronous API works as before.
+
+### Answering `SERVICE`
+
+`resolveService(request, ctx)` receives the SPARQL 1.1 Protocol POST to send:
+`endpoint`, `queryText`, `contentType` (`application/sparql-query`), `accept`
+(`application/sparql-results+json`), `userAgent`, `timeoutMs`, and `headers` —
+the catalog profile's headers and credential as `[name, value]` pairs in sending
+order. `ctx` carries `signal` (fires on cancellation or the deadline),
+`remainingDeadlineMs`, `silent` and `maxIntermediateCells`. The handler answers
+with SPARQL Results JSON (bytes or a string), a `Response` (a non-2xx status is a
+transport failure), `{ kind: "transport", message }` — which `SERVICE SILENT`
+swallows to the join identity — or `{ kind: "denied", message }`, which fails
+the query even under `SILENT`. A handler that throws, rejects or returns
+anything else has faulted, and a fault fails the job even under `SERVICE
+SILENT`, because it is not an answer. `ctx.silent` is for information only: an
+empty answer is not the handler's to invent.
+
+```js resolve-service-recipe
+import { ready, Dataset, QueryEngine } from "@blackcatinformatics/purrdf";
+
+await ready();
+
+// One SERVICE request, sent as a SPARQL 1.1 Protocol POST.
+async function resolveService(request, { signal }) {
+  try {
+    // A Response is an answer as it stands: a 2xx body is read as SPARQL Results
+    // JSON, and any other status is a transport failure.
+    return await fetch(request.endpoint, {
+      method: "POST",
+      headers: [
+        ["Content-Type", request.contentType], // application/sparql-query
+        ["Accept", request.accept], // application/sparql-results+json
+        ...request.headers, // the catalog profile's headers, in sending order
+      ],
+      body: request.queryText,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(request.timeoutMs)]),
+    });
+  } catch (error) {
+    // Never rethrow: a throw is a fault, which fails the query even under SERVICE SILENT.
+    return { kind: "transport", message: String(error) };
+  }
+}
+
+const engine = new QueryEngine();
+const dataset = Dataset.parse(
+  "<https://example.org/a> <https://example.org/p> <https://example.org/o1> .\n",
+  "nquads",
+);
+const { rows } = await engine.selectAsync(
+  dataset,
+  `SELECT ?s ?x WHERE {
+     ?s <https://example.org/p> ?o
+     SERVICE <https://remote.example.org/sparql> { ?o <https://example.org/q> ?x }
+   }`,
+  { resolveService },
+);
+for (const row of rows) console.log(row.s.value, row.x.value);
+```
+
+A `ServiceCatalog` passed as `catalog` authorizes every request before the
+handler is called (deny by default, one profile per endpoint, an optional
+fallback); a denial fails the query even under `SERVICE SILENT`.
+`localServices` answers named endpoints in process from a `Dataset`.
+`resolveLoad` answers `LOAD` the same way, with a document and its media type, a
+`Response`, a `Dataset`, or a typed failure: `LOAD SILENT` swallows a transport
+failure and never a denial.
+
+In a browser, the remote endpoint's CORS policy governs whether `fetch` can
+read its answer: an endpoint that does not allow the page's origin surfaces as a
+network error, which the handler above reports as a transport failure. Write
+`SERVICE SILENT` where an endpoint may be unreachable and its rows are optional.
+
+### Yielding, cancellation and concurrency
+
+- A job gives the event loop one turn every `yieldEveryPolls` governor polls
+  (65 536 by default; `0` yields at every poll), through the macrotask primitive
+  `asyncYieldPrimitive()` reports. Only evaluation yields: freezing the dataset
+  and serializing the result run to completion, and `evidence.async` reports
+  what each phase cost.
+- `signal: AbortSignal` cancels a job at its next yield or host effect. On the
+  governed twins, `deadlineMs` includes the time spent waiting for the handlers,
+  and a trip — a deadline or a cancellation included — is an outcome, not a
+  rejection.
+- A query reads its own snapshot; asynchronous updates on one dataset run one at
+  a time, in call order, and an update is applied only if the dataset was not
+  mutated while it ran. `configureAsync({ maxConcurrentJobs })` bounds the jobs
+  in flight (16 by default).
+- Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by
+  default); `evidence.async.stackHighWaterBytes` reports how deep it went, and a
+  request too deep for the region fails with a typed error. A job whose frames
+  run past the region's guard zone poisons the instance: every later
+  asynchronous call refuses until the module is instantiated again.
+
+### Cloudflare Workers
+
+`@blackcatinformatics/purrdf/cloudflare` provides
+`createFetchServiceResolver`, `createFetchLoadResolver` and
+`handleSparqlRequest`, which answers one SPARQL 1.1 Protocol request with a
+`Response`: `200` with the negotiated document, `422` or `503` when a governor
+stopped it (never a `200` with a partial body), `application/problem+json`
+errors, `Server-Timing` from the job's evidence, and CORS when asked for. A
+complete Worker:
+
+```js worker-recipe
+import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";
+import { ready, Dataset, QueryEngine, ServiceCatalog } from "@blackcatinformatics/purrdf";
+import { createFetchServiceResolver, handleSparqlRequest } from "@blackcatinformatics/purrdf/cloudflare";
+
+await ready(wasm);
+const engine = new QueryEngine();
+const dataset = Dataset.parse(
+  "<https://example.org/a> <https://example.org/p> <https://example.org/o1> .\n",
+  "nquads",
+);
+const catalog = new ServiceCatalog();
+catalog.addService(
+  "https://remote.example.org/sparql",
+  JSON.stringify({ capabilities: ["query", "network"] }),
+);
+
+export default {
+  fetch(request, env, ctx) {
+    const resolveService = createFetchServiceResolver({
+      catalog,
+      timeoutMs: 5_000,
+      bindings: { "https://remote.example.org": env.REMOTE },
+      cache: caches.default,
+      cacheTtlSeconds: 300,
+      waitUntil: (promise) => ctx.waitUntil(promise),
+    });
+    return handleSparqlRequest(request, {
+      engine,
+      dataset,
+      catalog,
+      resolveService,
+      cors: { origins: "*" },
+      governors: { deadlineMs: 10_000, maxRemoteRequests: 40 },
+    });
+  },
+};
+```
+
+Workers limits how many subrequests one invocation may make, and
+`maxRemoteRequests` is the exact control for it: every `SERVICE` request and
+every `LOAD` is charged before it reaches the handler, so a request never makes
+more subrequests than the ceiling. The Cache API does nothing on `workers.dev`
+hostnames, so the `cache` option takes effect only on a custom domain. On
+Workers `Date.now()` does not advance during CPU-bound execution, so a
+synchronous `deadlineMs` cannot trip during CPU-bound work there; the
+asynchronous lane observes the deadline at every yield and every effect.
+
+The package
+[README](https://github.com/Blackcat-Informatics/purrdf/tree/main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-adapter)
+is the complete reference for these contracts.
+
 ## Scope and current limitations
 
-- **In-memory only.** SPARQL queries run over the in-memory dataset;
-  this package provides no network resolver, so remote `SERVICE` and `LOAD`
-  fail explicitly.
+- **In-memory only.** SPARQL queries run over the in-memory dataset. The
+  synchronous methods install no `SERVICE` or `LOAD` source, so there a remote
+  `SERVICE` or `LOAD` fails explicitly unless it is written `SILENT`; the
+  asynchronous twins reach remote endpoints only through the handlers the host
+  passes them.
 - **Triple terms per format.** `serialize` is the writer-native lane: an
   object-position quoted-triple term and the RDF 1.2 statement layer survive
   Turtle, N-Triples, N-Quads and TriG (as `<<( … )>>`), RDF/XML (as

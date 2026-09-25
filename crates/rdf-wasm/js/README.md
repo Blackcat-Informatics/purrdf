@@ -171,7 +171,8 @@ ownership, and all limits. Complete examples are in
 
 ## API surface
 
-- `ready(bytesOrUrl?)` — one-time async wasm instantiation.
+- `ready(bytesOrUrl?)` — one-time async wasm instantiation, from bytes, a URL, or a
+  compiled `WebAssembly.Module` (what a Cloudflare Worker's `.wasm` import yields).
 - `DataFactory` — `namedNode`, `blankNode`, `literal`, `typedLiteral`,
   `directionalLiteral`, `variable`, `defaultGraph`, `quad`, `quotedTriple`,
   `fromTerm`, `fromQuad`.
@@ -219,6 +220,13 @@ ownership, and all limits. Complete examples are in
   budget from. A tripped UPDATE applies **nothing**. This is the ceiling a browser tab
   needs: the evaluator runs on the UI thread, so an accidental cross product with no
   deadline freezes the page.
+- `QueryEngine.queryAsync` … `updateGovernedAsync`, `Dataset.queryAsync` — the
+  Promise-returning twins, which take `resolveService` / `resolveLoad` handlers, a
+  `ServiceCatalog`, `localServices`, an `AbortSignal` and the yielding and stack options;
+  `hasAsyncQueries()`, `asyncYieldPrimitive()` and `configureAsync(...)` describe and
+  configure the scheduler, and `SparqlProtocolRequest` reads a SPARQL 1.1 Protocol
+  request. See
+  [Asynchronous queries, federation and the Cloudflare adapter](#asynchronous-queries-federation-and-the-cloudflare-adapter).
 - `QueryEngine.explainQuery(dataset, sparql, options?)` / `governorDimensions()` — the
   metered charge ledger a budget is sized from (join orders, plan estimates, per-node
   cost) and the engine's dimension vocabulary, which keys every `evidence` map.
@@ -277,11 +285,276 @@ promotes statements only when they need identity. Incidence mode exposes exact
 subject/predicate/object ports. Table mode scales statement inspection without
 discarding the same underlying model.
 
+## Asynchronous queries, federation and the Cloudflare adapter
+
+The synchronous methods are the offline lane: they install no `SERVICE` or `LOAD`
+source, so a non-`SILENT` `SERVICE` or `LOAD` fails by name. Every evaluating method
+also has a Promise-returning twin that takes the host's handlers for those two
+clauses:
+
+- on `QueryEngine`: `queryAsync`, `selectAsync`, `askAsync`, `constructAsync`,
+  `describeAsync`, `queryRawAsync`, `queryRawBytesAsync`, `queryRawWithContextAsync`,
+  `queryGovernedAsync`, `queryEntailmentGovernedAsync`, `updateAsync` and
+  `updateGovernedAsync`, plus `queryGovernedNegotiatedAsync` (a governed query answered
+  as a document in the format negotiated from an HTTP `Accept` header, which has no
+  synchronous twin);
+- on `Dataset`: `queryAsync`.
+
+Each twin runs the same evaluator as its synchronous twin, over a snapshot of the
+dataset taken when the call starts, and resolves to exactly the shape the synchronous
+twin returns. It runs as a *job*: the job suspends while the host answers a `SERVICE`
+or `LOAD`, and it gives the event loop back at regular intervals while it evaluates.
+The host does the I/O and owns its policy. PurRDF keeps the parsing, the evaluation,
+the joins, the `SILENT` semantics and the result encoding.
+
+### Hosts
+
+The twins run over WebAssembly JavaScript Promise Integration (JSPI), which is on by
+default in Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and Cloudflare
+Workers (workerd). `hasAsyncQueries()` reports whether the current engine has it. Where
+it does not, every twin rejects with one error naming what is missing before it touches
+wasm, and the synchronous API works as before.
+
+### Answering `SERVICE`: `resolveService`
+
+`resolveService(request, ctx)` is called once for each `SERVICE` request a job issues,
+and may return its answer or a Promise of it. `request` is the SPARQL 1.1 Protocol POST
+to send:
+
+- `endpoint`: the service IRI;
+- `queryText`: the forwarded query;
+- `contentType`: `application/sparql-query`;
+- `accept`: `application/sparql-results+json`;
+- `userAgent`;
+- `timeoutMs`: the catalog profile's timeout, or the default;
+- `headers`: the catalog profile's headers and then its credential header, as
+  `[name, value]` pairs in sending order. Append each pair and never merge repeated
+  names. Without a catalog the list is empty.
+
+`ctx` carries four fields:
+
+- `signal`: an `AbortSignal` that fires when the job is cancelled or its deadline
+  passes. From then on the job no longer waits for the handler.
+- `remainingDeadlineMs`: the time left before the deadline, when the job has one.
+- `silent`: whether the clause was written `SERVICE SILENT`.
+- `maxIntermediateCells`: the query's cell ceiling, when one is set.
+
+The answer is one of:
+
+- SPARQL Results JSON as a `Uint8Array`, an `ArrayBuffer` or a string;
+- a `Response`, whose 2xx body is read as SPARQL Results JSON. Any other status is a
+  transport failure;
+- `{ kind: "transport", message }` when the endpoint could not be reached or read.
+  `SERVICE SILENT` swallows this failure and contributes the join identity, so the
+  surrounding pattern's own solutions come back unextended. Without `SILENT` the
+  query fails;
+- `{ kind: "denied", message }` when the host's policy refuses the request. This
+  failure fails the query even under `SERVICE SILENT`.
+
+A handler that throws, rejects, or returns anything else has *faulted*. A fault fails
+the job even under `SERVICE SILENT`, because a fault is not an answer. `ctx.silent` is
+for information only: an empty answer is not the handler's to invent, and the failure
+it reports decides what `SILENT` does with it.
+
+This handler sends each request with `fetch`:
+
+```js resolve-service-recipe
+import { ready, Dataset, QueryEngine } from "@blackcatinformatics/purrdf";
+
+await ready();
+
+// One SERVICE request, sent as a SPARQL 1.1 Protocol POST.
+async function resolveService(request, { signal }) {
+  try {
+    // A Response is an answer as it stands: a 2xx body is read as SPARQL Results
+    // JSON, and any other status is a transport failure.
+    return await fetch(request.endpoint, {
+      method: "POST",
+      headers: [
+        ["Content-Type", request.contentType], // application/sparql-query
+        ["Accept", request.accept], // application/sparql-results+json
+        ...request.headers, // the catalog profile's headers, in sending order
+      ],
+      body: request.queryText,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(request.timeoutMs)]),
+    });
+  } catch (error) {
+    // Never rethrow: a throw is a fault, which fails the query even under SERVICE SILENT.
+    return { kind: "transport", message: String(error) };
+  }
+}
+
+const engine = new QueryEngine();
+const dataset = Dataset.parse(
+  "<https://example.org/a> <https://example.org/p> <https://example.org/o1> .\n",
+  "nquads",
+);
+const { rows } = await engine.selectAsync(
+  dataset,
+  `SELECT ?s ?x WHERE {
+     ?s <https://example.org/p> ?o
+     SERVICE <https://remote.example.org/sparql> { ?o <https://example.org/q> ?x }
+   }`,
+  { resolveService },
+);
+for (const row of rows) console.log(row.s.value, row.x.value);
+```
+
+A `ServiceCatalog` passed as `catalog` authorizes every request before the handler is
+called. It denies by default, holds one profile per endpoint and an optional fallback,
+and a profile grants the capabilities `query`, `network` and `credentials` and may add
+headers, a credential header, a `User-Agent` and a timeout. A denied request fails the
+query even under `SERVICE SILENT`. `localServices: { [endpoint]: dataset }` answers the
+named endpoints in process from a snapshot of a `Dataset`, without calling the handler.
+
+In a browser, the remote endpoint's CORS policy governs whether `fetch` can read its
+answer: a cross-origin endpoint that does not allow the page's origin surfaces as a
+network error, which the handler above reports as a transport failure. Write
+`SERVICE SILENT` where an endpoint may be unreachable and its rows are optional.
+
+### Answering `LOAD`: `resolveLoad`
+
+`resolveLoad({ kind: "load", iri }, { signal })` answers one `LOAD` with any of:
+
+- `{ bytes, mediaType, base? }` or `{ text, mediaType, base? }`. `mediaType` is a media
+  type or any format name `Dataset.parse` accepts, and `base` defaults to the IRI;
+- a `Response`, whose `Content-Type` names the media type;
+- a `Dataset`;
+- `{ kind: "transport" }`, which `LOAD SILENT` swallows;
+- `{ kind: "denied" }`, which fails the request even under `LOAD SILENT`.
+
+A bare string or bytes carry no media type and are a fault. A document that does not
+parse is the `LOAD`'s own failure.
+
+### Yielding, cancellation and deadlines
+
+A job counts the evaluator's governor polls and gives the event loop one turn every
+`yieldEveryPolls` polls: 65 536 by default, and `0` yields at every poll. The count, not
+the clock, decides when to yield. It yields through one macrotask primitive, chosen when
+the module loads and reported by `asyncYieldPrimitive()`: `scheduler.yield`,
+`setImmediate` or `MessageChannel`, in that order of preference. Only evaluation yields
+(an entailment closure included). Freezing the dataset before the job and serializing
+the result after are linear passes that run to completion. `evidence.async` reports
+what each phase cost (`freezeMs`, `evaluateMs`, `serializeMs`).
+
+`signal: AbortSignal` cancels a job. The job observes it at the next yield or host
+effect, and the twin rejects with `signal.reason` (an `AbortError` when the signal has no
+reason). A governed twin reports the cancellation as a tripped governor instead. Passing
+`cancel` (a `CancellationToken`) to a twin is a `TypeError` that names `signal`. On the
+governed twins, `deadlineMs` includes the time spent waiting for the handlers as well as
+evaluation. The job checks it at every yield and every host effect, and a timer aborts an
+effect still pending when it passes.
+
+On Cloudflare Workers, `Date.now()` does not advance during CPU-bound execution; it moves
+only across I/O. A synchronous `deadlineMs` therefore cannot trip during CPU-bound work
+there. The asynchronous lane observes the deadline at every yield and every effect, which
+is where the clock moves.
+
+### Concurrency
+
+Jobs interleave at every yield and effect, and synchronous calls may run between them. A
+query reads the snapshot taken when it started, so a later mutation never shows up in a
+running job. Asynchronous updates on one dataset run one at a time, in call order. Each
+update reads a snapshot and is applied only if the dataset was not mutated while it ran;
+otherwise it rejects and applies nothing. `dataset.id` identifies a dataset within the
+wasm instance, and `dataset.generation` counts the mutations it has seen.
+`configureAsync({ maxConcurrentJobs })` bounds how many jobs may be in flight (16 by
+default); a twin started beyond the bound rejects. Identical `SERVICE` requests in flight
+through the same `resolveService` share one call.
+
+### Stack regions and faults
+
+Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by default, at
+least 524 288). `evidence.async.stackHighWaterBytes` reports the deepest the job went, so
+the region can be sized from a real run. A request that nests deeper than the region
+allows fails with a typed error that says to raise `stackBytes`. The job fails and the
+instance stays usable. If a job's frames ever run past the guard zone below its region,
+memory outside the job may have been overwritten. The instance is then *poisoned*: every
+in-flight job rejects, and every later asynchronous call refuses with the same error,
+until the module is instantiated again in a fresh page, Worker isolate or process.
+
+### The Cloudflare adapter
+
+`@blackcatinformatics/purrdf/cloudflare` builds a SPARQL 1.1 Protocol endpoint from these
+pieces:
+
+- `createFetchServiceResolver({ catalog, timeoutMs, fetch?, bindings?, cache?, cacheTtlSeconds?, waitUntil? })`
+  returns a `resolveService` that POSTs each request with `fetch`, or through the
+  service binding registered for the endpoint's origin. A network error, a timeout or
+  a non-2xx status is reported as `{ kind: "transport" }`, never thrown. With `cache`
+  and `cacheTtlSeconds` it reuses answers through the Cache API, and it refuses a request
+  that carries a credential with a `TypeError` (a fault) rather than read it from or
+  write it to a shared cache.
+- `createFetchLoadResolver({ catalog, timeoutMs, fetch?, bindings? })` returns a
+  `resolveLoad` that authorizes each IRI against the catalog and then GETs it.
+- `handleSparqlRequest(request, options)` answers one protocol request (`GET ?query=`,
+  or a `POST` of `application/sparql-query`, `application/sparql-update` or a form) with
+  a `Response`. The statuses are `200` with the negotiated document, `204` for an
+  applied update, `400`/`405`/`415` for a malformed request, `406` when no acceptable
+  format can carry the result, `422` when a deterministic ceiling stopped the request,
+  `503` when the deadline or a cancellation did, and `500` when evaluation failed.
+  A partial answer is never sent with a `200`. Every error body is
+  `application/problem+json` (RFC 9457) with a stable `code`, and every evaluated
+  response carries `Server-Timing` from the job's evidence. The `cors` option answers
+  preflights and adds `Access-Control-Allow-Origin`; without it no CORS header is sent.
+  `governors.deadlineMs` is required.
+
+A complete Worker:
+
+```js worker-recipe
+import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";
+import { ready, Dataset, QueryEngine, ServiceCatalog } from "@blackcatinformatics/purrdf";
+import { createFetchServiceResolver, handleSparqlRequest } from "@blackcatinformatics/purrdf/cloudflare";
+
+await ready(wasm);
+const engine = new QueryEngine();
+const dataset = Dataset.parse(
+  "<https://example.org/a> <https://example.org/p> <https://example.org/o1> .\n",
+  "nquads",
+);
+const catalog = new ServiceCatalog();
+catalog.addService(
+  "https://remote.example.org/sparql",
+  JSON.stringify({ capabilities: ["query", "network"] }),
+);
+
+export default {
+  fetch(request, env, ctx) {
+    const resolveService = createFetchServiceResolver({
+      catalog,
+      timeoutMs: 5_000,
+      bindings: { "https://remote.example.org": env.REMOTE },
+      cache: caches.default,
+      cacheTtlSeconds: 300,
+      waitUntil: (promise) => ctx.waitUntil(promise),
+    });
+    return handleSparqlRequest(request, {
+      engine,
+      dataset,
+      catalog,
+      resolveService,
+      cors: { origins: "*" },
+      governors: { deadlineMs: 10_000, maxRemoteRequests: 40 },
+    });
+  },
+};
+```
+
+Workers limits how many subrequests one invocation may make. `maxRemoteRequests` is the
+exact control for that limit. Every `SERVICE` request and every `LOAD` is charged against
+it before it reaches the handler, including one the cache then answers, so a request
+never makes more subrequests than the ceiling. Set it to the subrequests you allow one
+query. The Cache API does nothing on `workers.dev` hostnames, so the `cache` option takes
+effect only on a Worker served from a custom domain.
+
 ## Scope
 
 In-memory only, by design: no persistent store and no network I/O inside the
-wasm module. This package provides no network resolver, so remote `SERVICE`
-and `LOAD` fail explicitly. For the container transport (GTS), native APIs, and the
+wasm module. The synchronous methods install no `SERVICE` or `LOAD` source, so
+there a remote `SERVICE` or `LOAD` fails explicitly unless it is written `SILENT`.
+The asynchronous twins reach remote endpoints only through the handlers the host
+passes them (`resolveService`, `resolveLoad`), or through the Cloudflare adapter's
+`fetch`-based handlers. For the container transport (GTS), native APIs, and the
 rest of the toolkit, see the
 [main repository](https://github.com/Blackcat-Informatics/purrdf).
 

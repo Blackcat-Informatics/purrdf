@@ -355,10 +355,13 @@ triple pattern.
   outgoing SPARQL Protocol request built by the deterministic serializer,
   round-trip-swept over the 823-item vendored corpus (update requests
   included). Where it stops: PurRDF ships no HTTP client — the exchange is an
-  `HttpTransport` trait the Rust host implements — and no shipped surface (CLI,
-  Python, wasm, C) installs a resolver, so `SERVICE` and `LOAD` there fail by
-  name unless written `SILENT`; federation is a Rust-host composition, not a
-  turnkey feature. A host scalar function
+  `HttpTransport` trait the Rust host implements. The CLI, Python and C surfaces
+  install no resolver, and neither do the wasm package's synchronous methods, so
+  `SERVICE` and `LOAD` there fail by name unless written `SILENT`. The wasm
+  package's asynchronous methods take host resolvers: JavaScript
+  `resolveService`/`resolveLoad` handlers the job suspends on through JSPI, or
+  the `fetch`-based ones its Cloudflare adapter builds. Federation is a host
+  composition, not a built-in network client. A host scalar function
   on the native seam carries SPARQL's expression-error channel: a per-solution
   domain error eliminates the row under `FILTER` or leaves the variable unbound
   under `BIND`/`SELECT` instead of aborting the query. Gated by the full W3C

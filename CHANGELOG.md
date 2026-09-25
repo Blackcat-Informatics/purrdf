@@ -409,6 +409,106 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   resolution carries `"sharing_weights"`, and `retrieval.crossing_rank_at` computes
   a crossing rank from raw weights.
 
+- **wasm:** an asynchronous lane beside the synchronous one. Every evaluating
+  `QueryEngine` method has a Promise-returning twin: `queryAsync`, `selectAsync`,
+  `askAsync`, `constructAsync`, `describeAsync`, `queryRawAsync`,
+  `queryRawBytesAsync`, `queryRawWithContextAsync`, `queryGovernedAsync`,
+  `queryEntailmentGovernedAsync`, `updateAsync` and `updateGovernedAsync`, with
+  `Dataset.queryAsync` beside them. `queryGovernedNegotiatedAsync` answers a governed
+  query as a document in the format an HTTP `Accept` header negotiates. Each twin
+  runs the same evaluator over a snapshot of the dataset, as a job on its own stack
+  region that suspends through WebAssembly JavaScript Promise Integration (JSPI)
+  while the host answers a `SERVICE` or `LOAD`, and resolves to its synchronous
+  twin's result shape. The options are:
+  - `resolveService` and `resolveLoad`, the host's handlers. A handler answers with
+    data or with a typed `{ kind: "transport" }` or `{ kind: "denied" }` failure.
+    `SILENT` swallows a transport failure and never a denial. A handler that throws
+    has faulted, and the fault fails the job even under `SILENT`;
+  - `catalog`, a `ServiceCatalog` (deny by default, one profile per endpoint, an
+    optional fallback, `carriesCredential`, `authorizeLoad`) that authorizes each
+    request before the handler is called, and `localServices`, endpoints answered in
+    process from a `Dataset`;
+  - `signal`, an `AbortSignal` observed at every yield and every effect. It is the
+    only way to cancel a twin: passing `cancel` is a `TypeError`;
+  - `yieldEveryPolls` (default 65 536; `0` yields at every poll). A job gives the
+    event loop one turn per that many governor polls, counted rather than timed,
+    through the macrotask primitive `asyncYieldPrimitive()` reports;
+  - `stackBytes` (default 2 MiB, at least 524 288), the job's stack region.
+
+  Asynchronous updates on one dataset run one at a time and commit only if the
+  dataset was not mutated while they ran; `Dataset.id` and `Dataset.generation`
+  expose the identity and mutation count that check reads. Governed outcomes and
+  twin errors carry `evidence.async` (polls, yields, effects, time waited per
+  effect kind, freeze/evaluate/serialize time, stack high-water mark).
+  `hasAsyncQueries()` reports JSPI support; without it every twin rejects before
+  touching wasm and the synchronous API is unchanged. JSPI is on by default in
+  Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and Cloudflare
+  Workers. `configureAsync({ maxConcurrentJobs })` bounds the jobs in flight
+  (default 16). A job that overruns its region's guard zone poisons the instance,
+  and every later asynchronous call refuses. `SparqlProtocolRequest` reads a SPARQL
+  1.1 Protocol request through the Rust `protocol` module. `ready()` accepts a
+  compiled `WebAssembly.Module`, and the package exports its `.wasm` file for hosts
+  that import it.
+
+- **cloudflare:** a new package subpath, `@blackcatinformatics/purrdf/cloudflare`.
+  `createFetchServiceResolver` answers `SERVICE` with `fetch`, or with a service
+  binding chosen by origin. It sends the catalog profile's headers and credential,
+  bounds each request by a timeout, and reports network errors, timeouts and
+  non-2xx responses as transport failures. Its optional Cache API layer is keyed by
+  a digest of the endpoint, query, `Accept` header and headers, and a credentialed
+  request is never cached. `createFetchLoadResolver` answers `LOAD` after the
+  catalog authorizes the source. `handleSparqlRequest` answers one SPARQL 1.1
+  Protocol request. It requires governors with a deadline. The statuses are
+  200/204, 400/405/415 for a malformed request, 406 when no acceptable format can
+  carry the result, 422 for a deterministic ceiling, 503 for a deadline or
+  cancellation, and 500 for an evaluation failure, and a partial answer is never
+  sent with a 200. Errors are
+  `application/problem+json` bodies with a stable `code`, `Server-Timing` reports
+  the job's phases, and CORS headers are sent only when configured.
+  `maxRemoteRequests` bounds the subrequests a request makes, because every
+  `SERVICE` request and `LOAD` is charged before it reaches a handler.
+
+- **sparql-eval:** `QueryOptions` gains `remote` (the `SERVICE` source) and `load`
+  (the `LOAD` source, taking precedence over a resolver installed on the engine).
+  Every query path, `CONSTRUCT` into a view, EXPLAIN and an UPDATE's `WHERE` see the
+  request's sources, so a `SERVICE` inside `INSERT … WHERE` or `DELETE WHERE`
+  federates exactly as it does in a query. The `*_with_source` entries are thin
+  wrappers over these fields, with unchanged signatures. `LOAD_DENIED`
+  (`native-sparql-load-denied`) is the code a `GraphResolver` reports when the
+  host's policy refuses a source. `protocol` is a SPARQL 1.1 Protocol module:
+  `ProtocolRequest::parse` reads a query by `GET`, or by `POST` with a direct body
+  or URL-encoded parameters, and an update by `POST` in either form, together with
+  the dataset parameters, and every refusal is a typed `ProtocolError`.
+  `effective_text` applies the dataset parameters by splicing at positions the
+  parser reports. `negotiate` picks a result format from `Accept` per RFC 9110, and
+  offers an `ASK` result only JSON and XML, since CSV and TSV exist only for
+  `SELECT`. `EvalError::StackExhausted` (`native-sparql-evaluation-stack-exhausted`)
+  and `RemoteError::StackExhausted` report a request too deep for the stack that
+  evaluates it; see Fixed.
+
+- **sparql-algebra:** `SparqlParser::parse_query_dataset_slot` returns a
+  `QueryDatasetSlot`: where a query's dataset clause is, or where one would go.
+  `parse_update_split` returns an `UpdateSplit` giving each update operation's
+  `WITH`/`USING`/`WHERE` positions (`UpdateDatasetSlot`). `parse_update_with` runs
+  through the same split. `MAX_NESTING_DEPTH` (128) is the one nesting budget every
+  recursive production shares, and `ParseError::StackExhausted` refuses a parse
+  that the thread's remaining stack cannot hold.
+
+- **stack:** a new publishable crate, `purrdf-stack`, that measures how much stack
+  the running thread has left. `remaining`, `is_low` and `replace_floor` read that
+  measurement, and `MARGIN_BYTES` (128 KiB natively, 64 KiB on `wasm32`) is the
+  margin the SPARQL parser and evaluator refuse at. Natively the floor is the
+  operating system's thread limit, read through `stacker`, which is a dependency on
+  native targets only. On `wasm32` it is the shadow stack's low end, which a host
+  can replace. The crate forbids `unsafe` code.
+
+- **build:** `scripts/check-wasm-jspi-frame.py`, run by `make wasm-pkg` on the
+  optimized artifact. Every function that calls the suspending import must restore
+  the stack pointer from its own frame before any call, branch or read of the
+  pointer, which is what makes resuming a job safe. The check is structural, because
+  `wasm-opt` inlines the frame function. The pack checks now fail when the tarball
+  lacks a path `package.json` promises.
+
 ### Measured
 
 Peak allocator bytes, from the deterministic counting allocator rather than timings.
@@ -438,6 +538,59 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **sparql-eval:** the default HTTP federation user agent named version 0.1. It is
+  now `purrdf-sparql-eval/<crate version> (SERVICE federation)`.
+
+- **sparql-eval:** EXPLAIN refused every query containing `SERVICE`. With
+  `QueryOptions::remote` set it now explains the query, evaluating it against that
+  source as the evaluation it explains would.
+
+- **sparql-algebra:** only group patterns were bounded, so a query nested deeply
+  enough anywhere else exhausted the parser's stack. About 950 nested parentheses
+  trapped the wasm build, and every other recursive production overflowed a native
+  stack at 10 000 levels. Every recursive production of the query and update
+  grammars now goes through one guard (`MAX_NESTING_DEPTH`, 128) and fails with the
+  typed parse error groups already produced. The guarded productions are groups,
+  `EXISTS` bodies, bracketed expressions, unary operators, function, built-in and
+  aggregate calls, `IN` lists, triple terms, reifiers, annotations, path groups,
+  blank-node property lists and collections. Operator chains and path sequences are
+  parsed by loops, so no recursion guard saw them, yet a 100 000-operator chain
+  exhausted the stack walking its tree. Every node's height is now charged against
+  a bound of 512, the height validation already admitted. The parser also checks the
+  stack it has left and refuses with `ParseError::StackExhausted` rather than
+  overflowing.
+
+- **sparql-eval:** evaluating what the parser admits could still exhaust the stack.
+  On the synchronous wasm lane, 62 nested `NOT EXISTS` or about 104 nested `LATERAL`
+  ran the shadow stack below its floor and trapped the instance. The evaluator now
+  measures the stack it has left at every recursive step that can deepen without
+  bound, and refuses with `native-sparql-evaluation-stack-exhausted` before the
+  margin is spent. Walks that have no error channel run inside a scope that discards
+  the half-built result. A stack refusal inside an in-process `SERVICE` body cannot be
+  silenced by `SERVICE SILENT`.
+
+- **sparql-algebra, sparql-eval:** a `SERVICE` body the parser admitted could be
+  forwarded as text the parser refuses. The serializer bracketed every binary
+  operator, so a chain of more than 127 operators exceeded the nesting budget. The
+  in-process resolver's re-parse then failed as a decode error, and under
+  `SERVICE SILENT` that became the join identity: a 440-operator filter body
+  answered every row unfiltered. The serializer now brackets only where precedence
+  and associativity require it, writes `UNION` chains flat and
+  `OPTIONAL`/`MINUS`/`BIND`/`UNFOLD` chains unbraced, and never double-braces a
+  sub-`SELECT`. The evaluator no longer forces a brace per group around a one-row
+  `VALUES` block it joins beside a group's filters. The forwarded text of every
+  admitted body re-parses. Remote endpoints may therefore receive different, and
+  shorter, query text for the same `SERVICE` clause.
+
+- **sparql-algebra:** a `BIND` or `UNFOLD` after a braced group containing a
+  `FILTER` was serialized unbraced, so on re-parse the `FILTER` moved above the
+  `BIND` and the forwarded query meant something else.
+
+- **sparql-eval:** `LOAD SILENT` swallowed a source the host's policy refused, as if
+  the source were unreachable. A resolver now reports a policy refusal as
+  `LOAD_DENIED`, which fails the request even under `LOAD SILENT`, matching how a
+  denied `SERVICE` is never silenced. An unreachable source is still swallowed.
 
 - **rdf, shapes, shex:** a JSON number read through `serde_json` could become the
   neighbour of the binary64 its decimal spells. Without its `float_roundtrip` feature
@@ -2043,6 +2196,19 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `RankedDeclaration` and `Scalar`. They are listed so that a consumer of an
   intermediate build can see every break. The exact-kNN fold order, the
   float-environment refusal and the MSRV change released behaviour.
+
+- **BREAKING** **sparql-eval:** `QueryOptions` has two new public fields, `remote`
+  and `load`. The struct is not `#[non_exhaustive]`, so a struct literal that names
+  every field no longer compiles. The documented construction,
+  `QueryOptions { …, ..QueryOptions::EMPTY }`, is unaffected.
+
+- **BREAKING** **sparql-algebra:** a query or update that nests any recursive
+  production more than `MAX_NESTING_DEPTH` (128) levels deep is now a parse error,
+  where only group patterns were bounded before. This refuses some text a native
+  build used to accept, such as 130 nested function calls or 200 nested
+  parentheses. The same constructs nested further trapped the wasm build (about
+  950 parentheses) or overflowed a native stack. Expression height stays bounded at
+  512, the bound validation already applied.
 
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as
