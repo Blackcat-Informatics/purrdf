@@ -391,7 +391,7 @@ pub enum SequenceContract {
     Multiset,
     /// The definition makes the output a SET: no duplicates, and no order. The
     /// evaluator returns the members in the canonical term order
-    /// ([`crate::term::sort_terms_canonical`]), which is one admissible order and
+    /// (`crate::term::sort_terms_canonical`), which is one admissible order and
     /// the one every consumer can reproduce.
     Set,
 }

@@ -60,7 +60,7 @@
 //!
 //! Every ceiling of [`crate::seminaive`] applies, each round of each group counting as a
 //! round — the caller's term-generating round limit
-//! ([`EvalOptions`](crate::seminaive::EvalOptions)) included, which is what stops a rule
+//! ([`EvalOptions`]) included, which is what stops a rule
 //! that computes a new term every pass (the SHACL rules specification: "Rule engines MAY
 //! also report a failure after a pre-configured maximum iteration count has been
 //! exceeded").

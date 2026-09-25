@@ -48,7 +48,7 @@ pub const PROP_SHACL_SEVERITY: &str = "shaclSeverity";
 /// `"direction"` (`"ltr"`/`"rtl"`) and `"datatype"` when the literal has them
 /// (`datatype` is omitted for `xsd:string` and the language-string types, which
 /// the other two keys already say). SARIF's `message.text` is one plain string, so
-/// it carries the [`primary_message`] and this bag carries all of them — present
+/// it carries the `primary_message` and this bag carries all of them — present
 /// whenever `message.text` alone would lose something, that is, unless the result
 /// has no message or exactly one untagged `xsd:string` message.
 pub const PROP_SHACL_MESSAGES: &str = "shaclMessages";
