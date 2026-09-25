@@ -1,7 +1,3 @@
----
-source: crates/sparql-results/tests/results_corpus.rs
-expression: "text(&books(), SparqlResultsFormat::Xml, &ResultProvenance::default())"
----
 <?xml version="1.0"?>
 <sparql xmlns="http://www.w3.org/2005/sparql-results#">
   <head>

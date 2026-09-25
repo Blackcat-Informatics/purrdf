@@ -1,7 +1,3 @@
----
-source: crates/sparql-results/tests/results_corpus.rs
-expression: "text(&edge_cases(), SparqlResultsFormat::Xml, &ResultProvenance::default(),\nNone,)"
----
 <?xml version="1.0"?>
 <sparql xmlns="http://www.w3.org/2005/sparql-results#" xmlns:its="http://www.w3.org/2005/11/its" its:version="2.0">
   <head>

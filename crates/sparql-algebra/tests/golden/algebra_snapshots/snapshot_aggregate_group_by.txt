@@ -1,8 +1,3 @@
----
-source: crates/sparql-algebra/tests/algebra_snapshots.rs
-assertion_line: 52
-expression: "parse(\"SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t\")"
----
 Select {
     pattern: Project {
         inner: Extend {
