@@ -3011,7 +3011,10 @@ mod tests {
             .expect("compiler-produced losses stay profile-sound");
         let models = std::str::from_utf8(&out.artifacts["example_models/models.py"]).unwrap();
         assert!(models.contains("class Person(PurrdfBaseModel):"));
-        assert!(models.contains("name: Annotated[StrictStr, Field(min_length=1)] |"));
+        assert!(
+            models.contains("name: Annotated[StrictStr, Field(min_length=1)] ="),
+            "{models}"
+        );
         assert!(models.contains(" = Field(alias=\"ex:name\")"));
     }
 

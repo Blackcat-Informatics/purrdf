@@ -367,8 +367,9 @@ fn result_to_sarif(
         message: None,
     };
 
-    // The source shape as a related location ("shape defined here").
-    let related = vec![Location {
+    // The source shape as a related location ("shape defined here"), then every
+    // nested result that details this one.
+    let mut related = vec![Location {
         physical_location: None,
         logical_locations: vec![LogicalLocation {
             name: result.source_shape.to_string(),
@@ -377,6 +378,7 @@ fn result_to_sarif(
         }],
         message: Some(Message::text("shape defined here")),
     }];
+    push_detail_locations(result, sources, base_id, &mut related);
 
     SarifResult {
         rule_id: result.source_constraint_component.as_str().to_owned(),
@@ -387,6 +389,56 @@ fn result_to_sarif(
         locations: vec![primary],
         related_locations: related,
         properties,
+    }
+}
+
+/// Append one related location per result that details `result` (`sh:detail`,
+/// SHACL 1.2 Core): for a `sh:memberShape` result, each non-conforming list
+/// member's results; for `sh:uniqueMembers`, each duplicated member's.
+///
+/// SARIF's `relatedLocations` is a flat list, so a detail's own details follow
+/// it, depth first, in the report's deterministic order. Each location carries
+/// the detail's focus node (with its source span when tracked), result path,
+/// constraint component and source shape as logical locations, and its message
+/// — the detail's own, or one synthesized from its parts — prefixed `sh:detail`,
+/// so nothing a nested result says is lost.
+fn push_detail_locations(
+    result: &ValidationResult,
+    sources: &SarifSources<'_>,
+    base_id: Option<&str>,
+    related: &mut Vec<Location>,
+) {
+    let mut pending: Vec<&ValidationResult> = result.details.iter().rev().collect();
+    while let Some(detail) = pending.pop() {
+        let mut logical = vec![LogicalLocation {
+            name: detail.focus_value(),
+            fully_qualified_name: None,
+            kind: Some("focusNode".to_owned()),
+        }];
+        if let Some(path) = &detail.result_path {
+            logical.push(LogicalLocation {
+                name: path.to_string(),
+                fully_qualified_name: detail.path_structure.as_ref().map(render_path),
+                kind: Some("resultPath".to_owned()),
+            });
+        }
+        logical.push(LogicalLocation {
+            name: detail.source_constraint_component.as_str().to_owned(),
+            fully_qualified_name: None,
+            kind: Some("constraintComponent".to_owned()),
+        });
+        logical.push(LogicalLocation {
+            name: detail.source_shape.to_string(),
+            fully_qualified_name: None,
+            kind: Some("sourceShape".to_owned()),
+        });
+        let text = primary_message(&detail.messages).unwrap_or_else(|| synthesize_message(detail));
+        related.push(Location {
+            physical_location: focus_physical_location(detail, sources, base_id),
+            logical_locations: logical,
+            message: Some(Message::text(format!("sh:detail: {text}"))),
+        });
+        pending.extend(detail.details.iter().rev());
     }
 }
 

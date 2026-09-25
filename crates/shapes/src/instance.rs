@@ -20,6 +20,8 @@
 //!   as bare JSON scalars (the scalar branch the value schema's `anyOf` accepts);
 //!   `xsd:string` / `rdf:langString` plain strings are emitted as bare strings.
 //! * **Language-tagged literal** — `{"@value": "<lexical>", "@language": "<tag>"}`.
+//! * **Triple term** (RDF 1.2) — the JSON-LD-star embedded node
+//!   `{"@id": {"@id": <subject>, "<predicate>": <object>}}`.
 //!
 //! Multi-valued predicates project as a JSON array; single-valued as the scalar.
 //! Subjects, predicate keys, and array members are sorted for determinism.
@@ -183,9 +185,24 @@ pub(crate) fn project_value(term: &Term, ns: &Namespaces) -> Value {
             // Other typed literals → the {"@value","@type"} object form.
             json!({ "@value": lit.value(), "@type": ns.compact_iri(dt_iri) })
         }
-        // Quoted triple (RDF-1.2) and any other term: stringify (statement-layer
-        // reifiers are projected via @annotation, not as plain object values).
-        other @ Term::Triple(_) => Value::String(other.to_string()),
+        // An RDF 1.2 triple term is the JSON-LD-star embedded node: an `@id`
+        // whose value is the node object stating the one triple. It is neither a
+        // string nor a node reference, so no schema confuses it with a literal
+        // or a named node. (Statement-layer reifiers are projected via
+        // `@annotation`, not as plain object values.)
+        Term::Triple(triple) => {
+            let subject = match project_value(&triple.subject, ns) {
+                Value::Object(mut reference) => reference.remove("@id").unwrap_or(Value::Null),
+                other => other,
+            };
+            let mut embedded = Map::new();
+            embedded.insert("@id".to_owned(), subject);
+            embedded.insert(
+                ns.compact_iri(triple.predicate.as_str()),
+                project_value(&triple.object, ns),
+            );
+            json!({ "@id": Value::Object(embedded) })
+        }
     }
 }
 

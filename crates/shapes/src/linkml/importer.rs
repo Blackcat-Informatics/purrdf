@@ -1575,12 +1575,62 @@ impl NativeImporter {
                 LinkmlError::new(format!("#/classes/{name}/attributes/@id must be a mapping"))
             })?;
             if optional_bool(id, "required", "#/classes/helper/attributes/@id")? == Some(true) {
+                // An IRI or blank-node reference states its `@id` label pattern.
+                let mut id_schema = serde_json::json!({ "type": "string" });
+                if let Some(pattern) = id.get("pattern") {
+                    let pattern = pattern.as_str().ok_or_else(|| {
+                        LinkmlError::new(format!(
+                            "#/classes/{name}/attributes/@id/pattern must be a string"
+                        ))
+                    })?;
+                    id_schema["pattern"] = Value::String(pattern.to_owned());
+                }
                 return Ok(Some(serde_json::json!({
                     "type": "object",
-                    "properties": { "@id": { "type": "string" } },
+                    "properties": { "@id": id_schema },
                     "required": ["@id"]
                 })));
             }
+        }
+        if attributes.len() == 2
+            && attributes.contains_key("@value")
+            && attributes.contains_key("@type")
+            && let Some(datatype) = attributes["@type"]
+                .get("equals_string")
+                .and_then(Value::as_str)
+        {
+            // One datatype's typed-literal object: `@type` is the datatype, and
+            // `@value` a string carrying the datatype's format or lexical pattern.
+            let value = attributes["@value"].as_object().ok_or_else(|| {
+                LinkmlError::new(format!(
+                    "#/classes/{name}/attributes/@value must be a mapping"
+                ))
+            })?;
+            let mut value_schema = serde_json::json!({ "type": "string" });
+            match value.get("range").and_then(Value::as_str) {
+                Some("string") | None => {}
+                Some("datetime") => value_schema["format"] = Value::from("date-time"),
+                Some("date") => value_schema["format"] = Value::from("date"),
+                Some("time") => value_schema["format"] = Value::from("time"),
+                Some("uri") => value_schema["format"] = Value::from("uri"),
+                Some(_) => return Ok(None),
+            }
+            if let Some(pattern) = value.get("pattern") {
+                let pattern = pattern.as_str().ok_or_else(|| {
+                    LinkmlError::new(format!(
+                        "#/classes/{name}/attributes/@value/pattern must be a string"
+                    ))
+                })?;
+                value_schema["pattern"] = Value::String(pattern.to_owned());
+            }
+            return Ok(Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "@value": value_schema,
+                    "@type": { "const": datatype }
+                },
+                "required": ["@value", "@type"]
+            })));
         }
         if attributes.len() == 2
             && attributes.contains_key("@value")
@@ -1630,19 +1680,22 @@ impl NativeImporter {
                     "#/classes/helper/attributes/@language",
                 )? == Some(true)
             {
-                let pattern = language
-                    .get("pattern")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
+                // A `sh:languageIn` object states its tag pattern; the object of
+                // any language-tagged literal (`rdf:langString`) states none.
+                let mut language_schema = serde_json::json!({ "type": "string" });
+                if let Some(pattern) = language.get("pattern") {
+                    let pattern = pattern.as_str().ok_or_else(|| {
                         LinkmlError::new(format!(
                             "#/classes/{name}/attributes/@language/pattern must be a string"
                         ))
                     })?;
+                    language_schema["pattern"] = Value::String(pattern.to_owned());
+                }
                 return Ok(Some(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "@value": { "type": "string" },
-                        "@language": { "type": "string", "pattern": pattern }
+                        "@language": language_schema
                     },
                     "required": ["@value", "@language"]
                 })));
