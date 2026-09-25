@@ -102,6 +102,10 @@ pub mod hash;
 // `purrdf-datalog`'s proof keys — not `purrdf-core` internals. Pure
 // `core`/`alloc`, dependency-free and wasm-clean.
 pub mod hex;
+// `owl:imports`: the one rule for when a graph's imports closure is in hand, and the one
+// merge that folds a resolved closure into a dataset. Shared by entailment and SHACL, which
+// do not depend on each other; it reads nothing but the IR it sits beside.
+pub mod imports;
 // The immutable, value-interned RDF 1.2 dataset IR (C1).
 pub mod ir;
 // Generic provenance sidecar for the immutable RDF 1.2 dataset (S2):

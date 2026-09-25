@@ -148,7 +148,7 @@ pub use entails::{
     FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization,
     HomomorphismWarrant, ImportMap, MATCH_BUDGET, MissReason, NegativeFact, REFUTATION_BUDGET,
     ReflexivityWarrant, Refutation, RefutationWarrant, UndecidedReason, VarKey, certain_answers,
-    entails, verify,
+    entails, rif_resolver, verify,
 };
 pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
