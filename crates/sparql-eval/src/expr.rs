@@ -2817,6 +2817,12 @@ fn wrap_with_expr_term_only_values(
 /// is then a `Lateral`'s direct right operand, the position the evaluator drives per
 /// left row with that row's terms in hand. The call keeps its variable, so its column
 /// survives beside the driven value.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the result is stored as a `Box<GraphPattern>` child field, and the lint's size \
+              threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
+              targets such as wasm32, where the same box is still the field's type"
+)]
 fn bind_row_into_call(
     call: &purrdf_sparql_algebra::PropertyFunctionCall,
     row: &SubstitutionRow,
@@ -2842,6 +2848,12 @@ fn bind_row_into_call(
 /// [`join_leaf_with_values`] maps its wrapper: `seed` is scaffolding, and the new
 /// node, not `node`, becomes `source`'s row-counting entry, because its output (not
 /// `node`'s, which lacks the driven column) is `source`'s true output for this row.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the result is stored as a `Box<GraphPattern>` child field, and the lint's size \
+              threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
+              targets such as wasm32, where the same box is still the field's type"
+)]
 fn plant_mapped_driver(
     node: Box<GraphPattern>,
     seed: GraphPattern,
