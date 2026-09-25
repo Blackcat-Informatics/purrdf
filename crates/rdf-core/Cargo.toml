@@ -57,7 +57,7 @@ purrdf-events = { workspace = true }
 ahash = { workspace = true }
 # Raw `HashTable` for the store-once builder interner/dedup: each term/
 # row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
-# introduced in hashbrown 0.14.2; the workspace tracks 0.15.)
+# introduced in hashbrown 0.14.2; the workspace tracks 0.17.)
 hashbrown = { workspace = true }
 # Tab-separated body parser for the native SSSOM codec: handles quoting,
 # flexible column counts, and by-name column access. The SSSOM `#`-prefixed YAML
