@@ -11,9 +11,8 @@ a6ec284978027c59340bcd0e5577566ef313884464fd786d887707d5378c24e5  af/function/ma
 96f7ca6141127a2ff8a0539d5b8740efa753f3eaca337c00715273b952389618  af/rules/classify-square-sparql/expected-inferred.ttl
 ccfbc597aadd119070af36646bc4b91f6bf45985fb47e40e1a73a8051808426e  af/rules/classify-square-sparql/input.ttl
 2d89c2a9791c8b7dc78072b8b545cbbbb456b3acba66d3c2ccf4ecc22c1bba3b  af/rules/err-diverging-fresh-term/input.ttl
-ade33a3366f09ae20b8949b4a8f701dcb79c645d35c9010ef4e2d2546e8005ed  af/rules/err-literal-subject/input.ttl
 c9ff15536d8bf123cb9fc8c0bf7b0bfed2b80ed5e1d2d5db4eb2d2fce551b463  af/rules/fp-blank-minting/expected-inferred.ttl
-a2e85fb26babba64dc78ffa5b65bf1aa03d278468ca35d41abf1555f9ad73fda  af/rules/fp-blank-minting/input.ttl
+1454d88e19d51a2aec24663e0b5aa1a16b5a238547b84af9cbc4da9937709559  af/rules/fp-blank-minting/input.ttl
 1faf270ece41178777390bd088427a6840d66d23858992775ae3adf58acb8c8e  af/rules/fp-condition-gating/expected-inferred.ttl
 c2b6cbabce69fa35f2020abce4d8bd75994380ec0f54bb767a181f3dfde6ae83  af/rules/fp-condition-gating/input.ttl
 09680526f1b59daf8306678fad1358c6e67a2e056b1507592308827b74d5bbc2  af/rules/fp-cyclic-data/expected-inferred.ttl
@@ -22,6 +21,8 @@ ce90db5a1a1fc7c9f241f073a1029565776310e586bb5b2bd2d2d8a2cd785407  af/rules/fp-de
 64bb30807be7220085f3b20e9aaa07a650ca905c3533336e71c7ec47a386f8c0  af/rules/fp-deactivated/input.ttl
 82e3dffd29b6b4e26d622ec2d29590ef1a538f8ade7f1fad43f0d03ed7cd0771  af/rules/fp-fixpoint-chain/expected-inferred.ttl
 96fd90cbcd20518d5f5a3207f48861964e2fda9ec708aecef1eb83c2af5ecd9a  af/rules/fp-fixpoint-chain/input.ttl
+8d43a355370712e38a92c9b25d9fea36a1ed6231b5a223f828d25171aa7f318a  af/rules/fp-ill-formed-skipped/expected-inferred.ttl
+18d4464f3d6a11ee566fd86a11408568a8d15c603a5e9705667138cbea0b6015  af/rules/fp-ill-formed-skipped/input.ttl
 cb5a2f0f6e433232ea03bd226ad792050dcd0e9e652a3303fe3cdc9a6648dd1e  af/rules/fp-named-graph/expected-inferred.ttl
 ca638c81d572167af11491c50e31a70d0a741efc107a903697d8793e71ba0426  af/rules/fp-named-graph/input.trig
 1763edf462b57cd51d27fcf6ee5fe0e6f2e5bb2a9cb0ce61ced130ee77e2e610  af/rules/fp-nonmonotonic/expected-inferred.ttl
@@ -33,7 +34,7 @@ ceb7e7ef29e71404198a9fa94f820551f710932f657f63299f1102665d0cdce5  af/rules/fp-or
 0024953f25950f83df64bd25d5a8ce1489142de8ebe02aa73eb4af41d758c707  af/rules/layered-stratum-gating/expected-inferred.ttl
 f8152010593d1d56ef02e28006d691862562a46378c05f895d93c71e42570d88  af/rules/layered-stratum-gating/input.ttl
 6c25709b8a75b94ca4392e631ded3548ea3914f3fe9fa0eb7db2c87d5eb85dd6  af/rules/once-stratum-mint/expected-inferred.ttl
-332165817ad1b2b3ed363f765130cdf530d9f3b261297f7eb200642c8e32c519  af/rules/once-stratum-mint/input.ttl
+a592e09054a8b01b6c17d7aa5475e780992f807aba17f5d01df4bd58b3c517d8  af/rules/once-stratum-mint/input.ttl
 734477d39975f130c332b6ce2cde89e5d788ad6dde7d23bba03bac74bd665091  af/rules/person2schema/expected-inferred.ttl
 f32bd87efc983fb5d1c3e27a2a7abf656116e3a7fb631f7634b0b32ee5380399  af/rules/person2schema/input.ttl
 84589d90965c48525289673c82fceeca0baae402ce99736996838b897f5cbc13  af/rules/rectangle-sparql/expected-inferred.ttl

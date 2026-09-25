@@ -26,11 +26,9 @@
 //!   the node; a constraint parameter's value must meet its value rule, and a
 //!   parameter SHACL forbids on node shapes must not appear on one.
 //!
-//! The pass also enforces the one graph-level MUST SHACL places on a processor
-//! that supports no entailment regime: "If a shapes graph contains any triple
-//! with the predicate sh:entailment and the object E and the SHACL processor
-//! does not support E as an entailment regime for the given data graph then the
-//! processor MUST signal a failure."
+//! The graph-level MUST SHACL places on a processor for an entailment regime it does
+//! not support is enforced where the one regime this processor supports is read
+//! (`Parser::parse_rule_graph`).
 
 use ::purrdf::FastSet;
 
@@ -48,8 +46,6 @@ const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langSt
 const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 /// `rdf:HTML`.
 const RDF_HTML: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#HTML";
-/// `sh:entailment`.
-const ENTAILMENT: &str = "http://www.w3.org/ns/shacl#entailment";
 
 /// The terms a SPARQL-based constraint or target node carries (SHACL 1.2 SPARQL
 /// Extensions §3 and §5): its query and the prefixes, message, severity and
@@ -75,18 +71,6 @@ impl Parser<'_> {
     /// The first violation in a deterministic order (shapes in canonical term
     /// order, predicates in IRI order), naming the term and the node.
     pub(crate) fn check_well_formed(&self) -> Result<(), String> {
-        if let Some((subject, _, object)) = self
-            .quads_with(None, Some(ENTAILMENT), None)
-            .into_iter()
-            .next()
-        {
-            return Err(format!(
-                "the shapes graph declares {subject} sh:entailment {object}; this processor \
-                 supports no entailment regime for validation, and SHACL requires a processor \
-                 to signal a failure for a regime it does not support"
-            ));
-        }
-
         let parameter_declarations: FastSet<Term> = self
             .quads_with(None, Some(sh::PARAMETER_PROPERTY), None)
             .into_iter()

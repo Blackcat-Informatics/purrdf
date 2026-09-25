@@ -232,9 +232,6 @@ const fn non_validating(iri: &'static str) -> CensusRow {
 const JS: &str = "SHACL JavaScript Extensions are not part of SHACL 1.2 and are not evaluated by \
      this engine";
 
-/// Why a rule term the rules engine does not implement is refused.
-const RULES: &str = "this SHACL 1.2 Rules feature is not implemented by this engine";
-
 /// Every term the spec symbol table has no row for, classified by hand. Each is
 /// a term SHACL 1.2 Core, Node Expressions, SPARQL Extensions or Rules, SHACL
 /// Advanced Features or SHACL-JS DEFINES; PurRDF mints none of them.
@@ -278,21 +275,16 @@ static EXPLICIT: &[CensusRow] = &[
     vocabulary(sh_iri!("Graph")),
     vocabulary(sh_iri!("DataGraph")),
     vocabulary(sh_iri!("ShapesGraph")),
-    unimplemented(
-        sh_iri!("RulesGraph"),
-        "sh:RulesGraph rule graphs are not executed",
-    ),
+    // SHACL 1.2 Inference Rules, "Rules Graph": "A rules graph is a shapes graph that
+    // contains SHACL rules. The sh:RulesGraph class MAY be used as an rdf:type of the IRI
+    // of a graph that typically acts in the role of a rules graph."
+    vocabulary(sh::RULES_GRAPH),
     structural(sh_iri!("shapesGraph"), Role::Graph),
     structural(sh_iri!("suggestedShapesGraph"), Role::Graph),
-    unimplemented(
-        sh_iri!("entailment"),
-        "no entailment regime is supported by validation, and SHACL requires a processor to \
-         signal a failure for a regime it does not support",
-    ),
-    unimplemented(
-        sh_iri!("RulesEntailment"),
-        "the sh:RulesEntailment regime is not supported",
-    ),
+    // "The IRI sh:RulesEntailment represents the SHACL rules entailment regime" — the one
+    // regime this processor supports; any other `sh:entailment` value is refused at load.
+    structural(sh::ENTAILMENT, Role::Graph),
+    vocabulary(sh::RULES_ENTAILMENT),
     // ── Validation reports (§3.6) ──
     structural(sh::VALIDATION_REPORT, Role::Report),
     structural(sh_iri!("ProcessorConfiguration"), Role::Report),
@@ -404,7 +396,7 @@ static EXPLICIT: &[CensusRow] = &[
     non_validating(sh_iri!("unit")),
     vocabulary(sh_iri!("PropertyGroup")),
     // ── Rules (SHACL Advanced Features / SHACL 1.2 Rules) ──
-    row(sh_iri!("Rule"), TermClass::Rule),
+    row(sh::RULE_CLASS, TermClass::Rule),
     row(sh::RULE, TermClass::Rule),
     row(sh::CONDITION, TermClass::Rule),
     row(sh::SUBJECT, TermClass::Rule),
@@ -415,15 +407,19 @@ static EXPLICIT: &[CensusRow] = &[
     // the derived triples for all values of the property sh:expectedPredicate at
     // the rule."
     row(sh::EXPECTED_PREDICATE, TermClass::Rule),
-    unimplemented(sh_iri!("layer"), RULES),
-    unimplemented(sh_iri!("runOnce"), RULES),
-    unimplemented(sh_iri!("RuleSet"), RULES),
-    unimplemented(sh_iri!("includesRuleSet"), RULES),
-    unimplemented(sh_iri!("hasRule"), RULES),
-    unimplemented(sh_iri!("ruleProcessor"), RULES),
-    unimplemented(sh_iri!("sourceRule"), RULES),
-    unimplemented(sh_iri!("tempTriple"), RULES),
-    unimplemented(sh_iri!("SPARQLRuleTemplate"), RULES),
+    // "Grouping of Rules into Layers (sh:layer)", "Run-once Rules (sh:runOnce)", "Rule
+    // Sets", "Custom Rule Processors (sh:ruleProcessor)", "Tracking the Rule that has
+    // produced a Triple (sh:sourceRule)", "Temporary Triples" and "SPARQL Rule
+    // Templates" of SHACL 1.2 Inference Rules, all executed by the rules engine.
+    row(sh::LAYER, TermClass::Rule),
+    row(sh::RUN_ONCE, TermClass::Rule),
+    row(sh::RULE_SET, TermClass::Rule),
+    row(sh::INCLUDES_RULE_SET, TermClass::Rule),
+    row(sh::HAS_RULE, TermClass::Rule),
+    row(sh::RULE_PROCESSOR, TermClass::Rule),
+    row(sh::SOURCE_RULE, TermClass::Rule),
+    row(sh::TEMP_TRIPLE, TermClass::Rule),
+    row(sh::SPARQL_RULE_TEMPLATE, TermClass::Rule),
     // ── Targets (SHACL Advanced Features) ──
     row(sh_iri!("Target"), TermClass::Target),
     row(sh::SPARQL_TARGET, TermClass::Target),

@@ -90,6 +90,7 @@
 //! criterion measurements outside them pay one relaxed load per allocation.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Once};
@@ -1456,6 +1457,60 @@ fn bench_subclass_rule_rounds(c: &mut Criterion) {
     group.finish();
 }
 
+/// The chain lengths the SHACL-rules transitive-closure bench sweeps.
+const CLOSURE_CHAIN_LENGTHS: [usize; 3] = [8, 16, 32];
+
+/// A global SPARQL rule closing `ex:link` transitively into `ex:reaches`, over a chain
+/// of `n` nodes: `n − 1` links, `n(n − 1)/2` reaches.
+fn closure_fixture(n: usize) -> (Arc<RdfDataset>, Shapes) {
+    let mut data = format!("@prefix ex: <{BENCH_EX}> .\n");
+    for i in 0..n.saturating_sub(1) {
+        writeln!(data, "ex:n{i} ex:link ex:n{} .", i + 1).expect("writes to a String");
+    }
+    let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&data, None)
+        .expect("closure data must parse");
+    let shapes = parse_shapes(
+        &format!(
+            r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:base a sh:SPARQLRule ;
+    sh:construct "CONSTRUCT {{ ?a <{BENCH_EX}reaches> ?b }} WHERE {{ ?a <{BENCH_EX}link> ?b }}" .
+ex:step a sh:SPARQLRule ; sh:order 1 ;
+    sh:construct "CONSTRUCT {{ ?a <{BENCH_EX}reaches> ?c }} WHERE {{ ?a <{BENCH_EX}link> ?b . ?b <{BENCH_EX}reaches> ?c }}" .
+"#
+        ),
+        None,
+    )
+    .expect("closure rule shapes must parse");
+    (dataset, shapes)
+}
+
+/// The SHACL rules engine closing a chain transitively: every iteration re-executes the
+/// iterating rule over the evaluation graph until a pass infers nothing, so the cost
+/// grows with the chain length in iterations and in graph size at once. Report-only.
+fn bench_rules_transitive_closure(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_rules_transitive_closure");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    for n in CLOSURE_CHAIN_LENGTHS {
+        let (dataset, shapes) = closure_fixture(n);
+        let expected = dataset.quad_count() + n * (n - 1) / 2;
+        group.throughput(Throughput::Elements((n * (n - 1) / 2) as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                let output = entail_dataset(black_box(dataset.as_ref()), black_box(&shapes))
+                    .expect("the closure rules must entail");
+                assert_eq!(output.quad_count(), expected);
+                black_box(output);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn schema_import_config() -> SchemaImportConfig {
     let namespaces = Namespaces::new(
         "ex",
@@ -1789,6 +1844,7 @@ criterion_group!(
     bench_subclass_membership,
     bench_subclass_patterns,
     bench_subclass_rule_rounds,
+    bench_rules_transitive_closure,
     bench_schema_import,
     bench_linkml_import,
     bench_linkml_slot_emission

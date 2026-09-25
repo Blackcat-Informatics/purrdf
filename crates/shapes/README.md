@@ -23,7 +23,8 @@ functions and target types, and SHACL Rules materialized as a new dataset),
 running entirely on PurRDF's own interned IR and native SPARQL engine. The
 SHACL-AF surface is aligned with the SHACL 1.2 Node Expressions (`shnex:`),
 SPARQL Extensions and SPARQL 1.2 RL Working Drafts: both spellings of a node
-expression parse to one representation, and rules execute as `sh:order` strata.
+expression parse to one representation, and rules execute on one rules engine —
+SHACL 1.2 Inference Rules' layers, orders and run-once rules on `purrdf-datalog`.
 Every IRI it implements is defined by a W3C document; it mints none. It
 validates an RDF 1.2 data graph against a SHACL shapes graph without general
 RDFS or OWL entailment. SHACL class membership follows asserted

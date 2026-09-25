@@ -35,9 +35,11 @@ inference** (parity with pySHACL `inference="none"`); combine with
   SHACL-AF spelling of a node expression parse to one representation and run
   through one evaluator; `sh:nodeByExpression` is validated; SPARQL-based node
   expressions and expression-bodied functions ride the native engine; and rules
-  execute as `sh:order` strata with the `once`/`general` partition of the
-  SPARQL 1.2 RL draft, each stratum materialized before the next runs, so
-  swapping two rules' orders can change the closure. `sh:condition` resolves at
+  execute as SHACL 1.2 Inference Rules defines — layers (`sh:layer`) in ascending
+  order, each running its run-once rules (`sh:runOnce`) once and then its
+  iterating rules, in `sh:order` groups, until a pass infers nothing — on the one
+  rules engine, `purrdf-datalog`, so swapping two rules' orders can change the
+  inferences. `sh:condition` resolves at
   shapes-load, so an unresolvable condition is a load error rather than a rule
   that silently never fires. Every one of those IRIs is defined by a W3C
   document; PurRDF mints none. Some

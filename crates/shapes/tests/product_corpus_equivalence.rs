@@ -158,13 +158,10 @@ const W3C12_DECLARED_FAILURES: usize = 5;
 /// as unevaluated, where the engine's answer is a load error rather than a report. There is no shapes graph to pack, so the codec has nothing to say
 /// about them. The ledger runs both ways: an entry whose shapes graph starts
 /// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
-const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[(
-    "w3c12/inference-rules/rules-entailment-validation",
-    R_ENTAILMENT,
-)];
-
-const R_ENTAILMENT: &str = "declares sh:entailment, and SHACL requires a processor to signal a \
-     failure for an entailment regime it does not support";
+///
+/// Empty since the `sh:RulesEntailment` regime became supported: its one entry,
+/// `inference-rules/rules-entailment-validation`, now loads, packs and agrees.
+const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[];
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
 
@@ -264,7 +261,11 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// Moved from 362 to 363 when the first-party corpus gained
 /// `73-expr-if-list-true`, which pins SHACL 1.2 Node Expressions §4.1.6 — `then`
 /// only for the condition list `( true )` — and agrees on a report (+1).
-const AGREED_ON_REPORT_CASES: usize = 363;
+///
+/// Moved from 363 to 364 when the `sh:RulesEntailment` regime became supported:
+/// `inference-rules/rules-entailment-validation` now loads, packs, and its three
+/// lanes agree on a report — validation after the regime ran the rules.
+const AGREED_ON_REPORT_CASES: usize = 364;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.

@@ -24,7 +24,7 @@ const SHAPES_TTL: &str = r#"
 
 ex:ThingShape a sh:NodeShape ;
   sh:targetClass ex:Thing ;
-  sh:rule [ a sh:SPARQLRule ; sh:construct
+  sh:rule [ a sh:SPARQLRule ; sh:runOnce true ; sh:construct
     "CONSTRUCT { $this sh:property [ sh:path ex:name ; sh:minCount 1 ] } WHERE { $this a ex:Thing }" ] .
 "#;
 

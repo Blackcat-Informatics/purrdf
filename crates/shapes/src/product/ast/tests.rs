@@ -19,9 +19,9 @@ use std::sync::{Arc, OnceLock};
 use super::{
     AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ANNOTATED_CONSTRAINT,
     TAGS_ARG_KEY, TAGS_CLOSED_MODE, TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND,
-    TAGS_FN_CALL, TAGS_NODE_EXPR, TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_RULE_SCHEDULE,
-    TAGS_SEVERITY, TAGS_SHAPE_ARG, TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast_derived,
-    speculative_capacity, write_varint,
+    TAGS_FN_CALL, TAGS_NODE_EXPR, TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_SEVERITY,
+    TAGS_SHAPE_ARG, TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast_derived, speculative_capacity,
+    write_varint,
 };
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -29,7 +29,7 @@ use crate::expression::{
 use crate::model::{BoxRoleVocab, sparql_ns};
 use crate::product::{ProductDimension, ShapesProductError};
 use crate::report::Severity;
-use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
+use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration};
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
     ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
@@ -222,21 +222,17 @@ fn sample_custom_fn_kinds() -> Vec<CustomFnKind> {
     vec![CustomFnKind::ListParameter, CustomFnKind::NamedParameter]
 }
 
-/// One [`RuleSchedule`] per tag.
-fn sample_rule_schedules() -> Vec<RuleSchedule> {
-    vec![RuleSchedule::Once, RuleSchedule::General]
-}
-
 /// One [`RuleBody`] per tag.
 fn sample_rule_bodies() -> Vec<RuleBody> {
     vec![
         RuleBody::Triple {
-            subject: NodeExpr::This,
-            predicate: NodeExpr::Constant(ex_term("derived")),
-            object: NodeExpr::Path(Path::Predicate(ex("source"))),
+            subject: None,
+            predicate: Some(NodeExpr::Constant(ex_term("derived"))),
+            object: Some(NodeExpr::Path(Path::Predicate(ex("source")))),
         },
         RuleBody::Sparql {
-            construct: "CONSTRUCT { $this <https://example.org/p> 1 } WHERE {}".to_owned(),
+            construct: "CONSTRUCT { $this <https://example.org/p> $v } WHERE {}".to_owned(),
+            parameters: vec![("v".to_owned(), ex_term("value"))],
         },
     ]
 }
@@ -729,20 +725,30 @@ fn full_fixture() -> Shapes {
 
     let mut rules = Vec::new();
     for (index, body) in sample_rule_bodies().into_iter().enumerate() {
-        for (offset, schedule) in sample_rule_schedules().into_iter().enumerate() {
+        for (offset, run_once) in [true, false].into_iter().enumerate() {
             rules.push(Rule {
                 id: ex_term(&format!("rule/{index}-{offset}")),
                 body: body.clone(),
                 conditions: vec![leaf_shape("Condition")],
+                layer: if offset == 1 {
+                    Some(OrderKey::new(3.0))
+                } else {
+                    None
+                },
                 order: if offset == 0 {
                     Some(OrderKey::new(1.5))
                 } else {
                     None
                 },
+                run_once,
                 deactivated: offset == 1,
-                schedule,
                 expected_predicates: if offset == 0 {
                     vec![ex("expected")]
+                } else {
+                    Vec::new()
+                },
+                processors: if offset == 0 {
+                    vec![ex_term("processor")]
                 } else {
                     Vec::new()
                 },
@@ -896,16 +902,6 @@ fn every_known_tag_decodes() {
         reader_fn!(custom_fn_kind),
     );
     roundtrip_tags(
-        "RuleSchedule",
-        TAGS_RULE_SCHEDULE,
-        &sample_rule_schedules(),
-        |writer, value| {
-            writer.rule_schedule(*value);
-            Ok(())
-        },
-        reader_fn!(rule_schedule),
-    );
-    roundtrip_tags(
         "RuleBody",
         TAGS_RULE_BODY,
         &sample_rule_bodies(),
@@ -978,11 +974,6 @@ fn unknown_variant_tag_is_unsupported_capability() {
             "CustomFnKind",
             TAGS_CUSTOM_FN_KIND,
             reader_probe!(custom_fn_kind),
-        ),
-        (
-            "RuleSchedule",
-            TAGS_RULE_SCHEDULE,
-            reader_probe!(rule_schedule),
         ),
     ];
 
@@ -1215,12 +1206,15 @@ fn shapes_with_order(order: Option<OrderKey>) -> Shapes {
             id: ex_term("rule"),
             body: RuleBody::Sparql {
                 construct: "CONSTRUCT { $this <https://example.org/p> 1 } WHERE {}".to_owned(),
+                parameters: Vec::new(),
             },
             conditions: Vec::new(),
+            layer: None,
             order,
+            run_once: false,
             deactivated: false,
-            schedule: RuleSchedule::General,
             expected_predicates: Vec::new(),
+            processors: Vec::new(),
         }],
         ..leaf_shape("Ordered")
     }])
@@ -1450,40 +1444,91 @@ fn sparql_target_type_round_trips() {
 
 // ── Rules ───────────────────────────────────────────────────────────────────────
 
-/// Every [`RuleSchedule`] variant survives, and the two are distinguishable.
+/// A run-once rule and an iterating rule survive a round trip, and are distinguishable.
 #[test]
-fn rule_schedule_round_trips() {
-    let schedules = sample_rule_schedules();
-    assert_eq!(schedules.len(), usize::from(TAGS_RULE_SCHEDULE));
-
+fn run_once_round_trips() {
     let mut encodings = Vec::new();
-    for schedule in schedules {
+    for run_once in [true, false] {
         let shapes = shapes_of(vec![Shape {
             rules: vec![Rule {
                 id: ex_term("rule"),
                 body: RuleBody::Sparql {
                     construct: "CONSTRUCT { $this <https://example.org/p> 1 } WHERE {}".to_owned(),
+                    parameters: Vec::new(),
                 },
                 conditions: vec![leaf_shape("Condition")],
+                layer: Some(OrderKey::new(1.0)),
                 order: Some(OrderKey::new(2.0)),
+                run_once,
                 deactivated: false,
-                schedule,
                 expected_predicates: Vec::new(),
+                processors: Vec::new(),
             }],
             ..leaf_shape("Scheduled")
         }]);
         let bytes = encode_ast_derived(&shapes).expect("encodes");
         let parts = decode_ast(&bytes).expect("decodes");
         assert_eq!(
-            parts.node_shapes[0].rules[0].schedule, schedule,
-            "a run-once rule and a general rule run on different schedules; collapsing them would \
-             change what the closure contains",
+            parts.node_shapes[0].rules[0].run_once, run_once,
+            "a run-once rule and an iterating rule run on different schedules; collapsing them \
+             would change what the inferences contain",
         );
         encodings.push(bytes);
     }
     assert_ne!(
         encodings[0], encodings[1],
         "the two schedules must not share a byte form",
+    );
+}
+
+/// The global rules, the rule sets and the rules entailment declaration round-trip.
+#[test]
+fn rule_graph_round_trips() {
+    let shapes = Shapes {
+        rules: RuleGraph {
+            global_rules: vec![Rule {
+                id: ex_term("global"),
+                body: RuleBody::Triple {
+                    subject: Some(NodeExpr::Constant(ex_term("s"))),
+                    predicate: Some(NodeExpr::Constant(ex_term("p"))),
+                    object: None,
+                },
+                conditions: Vec::new(),
+                layer: Some(OrderKey::new(-1.0)),
+                order: None,
+                run_once: true,
+                deactivated: false,
+                expected_predicates: vec![ex("expected")],
+                processors: vec![ex_term("processor")],
+            }],
+            rule_sets: vec![RuleSetDeclaration {
+                id: ex("set"),
+                rules: vec![ex_term("global")],
+                includes: vec![ex("other-set")],
+                processors: vec![ex_term("processor")],
+            }],
+            entailment: true,
+        },
+        ..shapes_of(vec![leaf_shape("S")])
+    };
+    let bytes = encode_ast_derived(&shapes).expect("encodes");
+    let parts = decode_ast(&bytes).expect("decodes");
+    assert_eq!(parts.rules.global_rules.len(), 1);
+    assert!(parts.rules.global_rules[0].run_once);
+    assert_eq!(
+        parts.rules.global_rules[0].processors,
+        [ex_term("processor")]
+    );
+    assert_eq!(parts.rules.rule_sets, shapes.rules.rule_sets);
+    assert!(parts.rules.entailment);
+    let without = Shapes {
+        rules: RuleGraph::default(),
+        ..shapes_of(vec![leaf_shape("S")])
+    };
+    assert_ne!(
+        encode_ast_derived(&without).expect("encodes"),
+        bytes,
+        "the rule graph reaches the byte form"
     );
 }
 

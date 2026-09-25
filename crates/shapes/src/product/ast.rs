@@ -98,12 +98,13 @@
 //! | 1 | `fn_decls` | `seq<decl>` | the custom node-expression function declarations, **sorted by IRI** |
 //! | 2 | `fn_bodies` | `opt<node_expr>` × `fn_decls` count | each declaration's `sh:bodyExpression`, in the same order |
 //! | 3 | `node_shapes` | `seq<shape>` | the shapes graph's top-level node shapes |
-//! | 4 | `box_role_vocab` | `opt<box_role_vocab>` | absent = the box-role feature is inactive |
-//! | 5 | `target_types` | `seq<(str, sparql_target_type)>` | `sh:SPARQLTargetType` declarations, **key-sorted** |
-//! | 6 | `shapes_graph` | `opt<str>` | the named-graph IRI the shapes dataset is exposed under |
-//! | 7 | `class_catalog` | `seq<(str, uint)>` | the REUSABLE ANALYSIS: every planned class IRI and its binding-row position, **sorted by IRI** |
+//! | 4 | `rule_graph` | `seq<rule>`, `seq<rule_set>`, `bool` | the global rules, the rule sets, and whether `sh:RulesEntailment` is declared |
+//! | 5 | `box_role_vocab` | `opt<box_role_vocab>` | absent = the box-role feature is inactive |
+//! | 6 | `target_types` | `seq<(str, sparql_target_type)>` | `sh:SPARQLTargetType` declarations, **key-sorted** |
+//! | 7 | `shapes_graph` | `opt<str>` | the named-graph IRI the shapes dataset is exposed under |
+//! | 8 | `class_catalog` | `seq<(str, uint)>` | the REUSABLE ANALYSIS: every planned class IRI and its binding-row position, **sorted by IRI** |
 //!
-//! Any byte after field 7 is [`Malformed`]: trailing bytes are a structure the
+//! Any byte after field 8 is [`Malformed`]: trailing bytes are a structure the
 //! writer did not produce, and skipping them is how a silent truncation passes
 //! for a successful load.
 //!
@@ -145,7 +146,6 @@
 //! | [`CustomFnKind`] | `ListParameter` `NamedParameter` |
 //! | [`FnCall`] | `Builtin` `UserDefined` `Sparql` |
 //! | [`RuleBody`] | `Triple` `Sparql` |
-//! | [`RuleSchedule`] | `Once` `General` |
 //! | `NodeExpr::Select::key` | `sh:select` `sh:sparqlExpr` |
 //! | `Literal::direction` | `Ltr` `Rtl` |
 //!
@@ -217,7 +217,7 @@ use crate::expression::{
 use crate::model::{BoxRoleVocab, sparql_ns};
 use crate::plan::ClassCatalog;
 use crate::report::Severity;
-use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
+use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration};
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
     ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
@@ -333,8 +333,6 @@ const TAGS_CUSTOM_FN_KIND: u8 = 2;
 const TAGS_FN_CALL: u8 = 3;
 /// The number of [`RuleBody`] tags.
 const TAGS_RULE_BODY: u8 = 2;
-/// The number of [`RuleSchedule`] tags.
-const TAGS_RULE_SCHEDULE: u8 = 2;
 /// The number of `NodeExpr::Select::key` tags.
 const TAGS_SELECT_KEY: u8 = 2;
 /// The number of `Literal::direction` tags.
@@ -426,6 +424,8 @@ pub(crate) fn from_pack(error: PackBitsError) -> ShapesProductError {
 pub(crate) struct AstParts {
     /// The shapes graph's top-level node shapes, in their encoded order.
     pub(crate) node_shapes: Vec<Shape>,
+    /// The global rules, rule sets and rules entailment declaration.
+    pub(crate) rules: RuleGraph,
     /// The caller-supplied box-role vocabulary, or `None` when the feature was
     /// inactive at preparation.
     pub(crate) box_role_vocab: Option<BoxRoleVocab>,
@@ -1398,14 +1398,6 @@ impl AstWriter {
 
     // ── Rules ──────────────────────────────────────────────────────────────
 
-    /// Write a rule's stratification half.
-    fn rule_schedule(&mut self, schedule: RuleSchedule) {
-        self.tag(match schedule {
-            RuleSchedule::Once => 0,
-            RuleSchedule::General => 1,
-        });
-    }
-
     /// Write a rule head.
     fn rule_body(&mut self, body: &RuleBody) -> Result<(), ShapesProductError> {
         self.enter()?;
@@ -1416,20 +1408,42 @@ impl AstWriter {
                 object,
             } => {
                 self.tag(0);
-                self.node_expr(subject)?;
-                self.node_expr(predicate)?;
-                self.node_expr(object)?;
+                self.opt_node_expr(subject.as_ref())?;
+                self.opt_node_expr(predicate.as_ref())?;
+                self.opt_node_expr(object.as_ref())?;
             }
-            RuleBody::Sparql { construct } => {
+            RuleBody::Sparql {
+                construct,
+                parameters,
+            } => {
                 self.tag(1);
                 self.text(construct);
+                self.count(parameters.len());
+                for (name, value) in parameters {
+                    self.text(name);
+                    self.term(value)?;
+                }
             }
         }
         self.leave();
         Ok(())
     }
 
-    /// Write a `sh:order` key, canonically.
+    /// Write an optional `sh:layer` / `sh:order` key.
+    fn opt_order_key(&mut self, key: Option<OrderKey>) -> Result<(), ShapesProductError> {
+        match key {
+            None => {
+                self.flag(false);
+                Ok(())
+            }
+            Some(key) => {
+                self.flag(true);
+                self.order_key(key)
+            }
+        }
+    }
+
+    /// Write a `sh:layer` / `sh:order` key, canonically.
     fn order_key(&mut self, key: OrderKey) -> Result<(), ShapesProductError> {
         // `+ 0.0` is the same normalization `OrderKey::new` applies, repeated here
         // so the BYTES are canonical whatever produced the value: `-0.0` and
@@ -1453,20 +1467,45 @@ impl AstWriter {
         self.term(&rule.id)?;
         self.rule_body(&rule.body)?;
         self.shapes_seq(&rule.conditions)?;
-        match rule.order {
-            None => self.flag(false),
-            Some(key) => {
-                self.flag(true);
-                self.order_key(key)?;
-            }
-        }
+        self.opt_order_key(rule.layer)?;
+        self.opt_order_key(rule.order)?;
+        self.flag(rule.run_once);
         self.flag(rule.deactivated);
-        self.rule_schedule(rule.schedule);
         self.count(rule.expected_predicates.len());
         for predicate in &rule.expected_predicates {
             self.named_node(predicate);
         }
+        self.count(rule.processors.len());
+        for processor in &rule.processors {
+            self.term(processor)?;
+        }
         self.leave();
+        Ok(())
+    }
+
+    /// Write the global rules, rule sets and rules entailment declaration.
+    fn rule_graph(&mut self, rules: &RuleGraph) -> Result<(), ShapesProductError> {
+        self.count(rules.global_rules.len());
+        for rule in &rules.global_rules {
+            self.rule(rule)?;
+        }
+        self.count(rules.rule_sets.len());
+        for set in &rules.rule_sets {
+            self.named_node(&set.id);
+            self.count(set.rules.len());
+            for rule in &set.rules {
+                self.term(rule)?;
+            }
+            self.count(set.includes.len());
+            for include in &set.includes {
+                self.named_node(include);
+            }
+            self.count(set.processors.len());
+            for processor in &set.processors {
+                self.term(processor)?;
+            }
+        }
+        self.flag(rules.entailment);
         Ok(())
     }
 
@@ -2268,25 +2307,18 @@ impl<'a> AstReader<'a> {
 
     // ── Rules ──────────────────────────────────────────────────────────────
 
-    /// Read a rule's stratification half.
-    fn rule_schedule(&mut self) -> Result<RuleSchedule, ShapesProductError> {
-        Ok(match self.tag("RuleSchedule", TAGS_RULE_SCHEDULE)? {
-            0 => RuleSchedule::Once,
-            _ => RuleSchedule::General,
-        })
-    }
-
     /// Read a rule head.
     fn rule_body(&mut self) -> Result<RuleBody, ShapesProductError> {
         self.enter()?;
         let body = match self.tag("RuleBody", TAGS_RULE_BODY)? {
             0 => RuleBody::Triple {
-                subject: self.node_expr()?,
-                predicate: self.node_expr()?,
-                object: self.node_expr()?,
+                subject: self.opt_node_expr()?,
+                predicate: self.opt_node_expr()?,
+                object: self.opt_node_expr()?,
             },
             _ => RuleBody::Sparql {
                 construct: self.text()?,
+                parameters: self.seq(|reader| Ok((reader.text()?, reader.term()?)))?,
             },
         };
         self.leave();
@@ -2325,17 +2357,42 @@ impl<'a> AstReader<'a> {
             id: self.term()?,
             body: self.rule_body()?,
             conditions: self.seq(Self::shape)?,
-            order: if self.flag()? {
-                Some(self.order_key()?)
-            } else {
-                None
-            },
+            layer: self.opt_order_key()?,
+            order: self.opt_order_key()?,
+            run_once: self.flag()?,
             deactivated: self.flag()?,
-            schedule: self.rule_schedule()?,
             expected_predicates: self.seq(Self::named_node)?,
+            processors: self.seq(Self::term)?,
         };
         self.leave();
         Ok(rule)
+    }
+
+    /// Read an optional `sh:layer` / `sh:order` key.
+    fn opt_order_key(&mut self) -> Result<Option<OrderKey>, ShapesProductError> {
+        if self.flag()? {
+            Ok(Some(self.order_key()?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Read the global rules, rule sets and rules entailment declaration.
+    fn rule_graph(&mut self) -> Result<RuleGraph, ShapesProductError> {
+        let global_rules = self.seq(Self::rule)?;
+        let rule_sets = self.seq(|reader| {
+            Ok(RuleSetDeclaration {
+                id: reader.named_node()?,
+                rules: reader.seq(Self::term)?,
+                includes: reader.seq(Self::named_node)?,
+                processors: reader.seq(Self::term)?,
+            })
+        })?;
+        Ok(RuleGraph {
+            global_rules,
+            rule_sets,
+            entailment: self.flag()?,
+        })
     }
 
     // ── Shapes-level ───────────────────────────────────────────────────────
@@ -2412,6 +2469,9 @@ impl FnTable {
         for shape in &shapes.node_shapes {
             table.shape(shape)?;
         }
+        for rule in &shapes.rules.global_rules {
+            table.rule(rule)?;
+        }
         Ok(table.by_iri.into_values().collect())
     }
 
@@ -2482,23 +2542,32 @@ impl FnTable {
             self.property_shape(property)?;
         }
         for rule in &shape.rules {
-            match &rule.body {
-                RuleBody::Triple {
-                    subject,
-                    predicate,
-                    object,
-                } => {
-                    self.node_expr(subject)?;
-                    self.node_expr(predicate)?;
-                    self.node_expr(object)?;
-                }
-                RuleBody::Sparql { construct: _ } => {}
-            }
-            for condition in &rule.conditions {
-                self.shape(condition)?;
-            }
+            self.rule(rule)?;
         }
         self.leave();
+        Ok(())
+    }
+
+    /// Walk a rule: its node expressions and its condition shapes.
+    fn rule(&mut self, rule: &Rule) -> Result<(), ShapesProductError> {
+        match &rule.body {
+            RuleBody::Triple {
+                subject,
+                predicate,
+                object,
+            } => {
+                for expr in [subject, predicate, object].into_iter().flatten() {
+                    self.node_expr(expr)?;
+                }
+            }
+            RuleBody::Sparql {
+                construct: _,
+                parameters: _,
+            } => {}
+        }
+        for condition in &rule.conditions {
+            self.shape(condition)?;
+        }
         Ok(())
     }
 
@@ -2746,7 +2815,9 @@ pub(crate) fn encode_ast(
     for shape in &shapes.node_shapes {
         writer.shape(shape)?;
     }
-    // 4. The caller-supplied box-role vocabulary.
+    // 4. The global rules, rule sets and rules entailment declaration.
+    writer.rule_graph(&shapes.rules)?;
+    // 5. The caller-supplied box-role vocabulary.
     match &shapes.box_role_vocab {
         None => writer.flag(false),
         Some(vocab) => {
@@ -2754,16 +2825,16 @@ pub(crate) fn encode_ast(
             writer.box_role_vocab(vocab);
         }
     }
-    // 5. `sh:SPARQLTargetType` declarations, key-sorted (a `BTreeMap`'s own
+    // 6. `sh:SPARQLTargetType` declarations, key-sorted (a `BTreeMap`'s own
     //    order — no hash-ordered container is ever written).
     writer.count(shapes.target_types.len());
     for (iri, target_type) in &shapes.target_types {
         writer.text(iri);
         writer.sparql_target_type(target_type)?;
     }
-    // 6. The shapes-graph IRI.
+    // 7. The shapes-graph IRI.
     writer.opt_text(shapes.shapes_graph.as_deref());
-    // 7. The reusable class analysis.
+    // 8. The reusable class analysis.
     encode_classes(&mut writer, classes);
 
     Ok(writer.out)
@@ -2935,8 +3006,9 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
         }
     }
 
-    // 3..6. The shapes-level fields, in stream order.
+    // 3..7. The shapes-level fields, in stream order.
     let node_shapes = reader.seq(AstReader::shape)?;
+    let rules = reader.rule_graph()?;
     let box_role_vocab = if reader.flag()? {
         Some(reader.box_role_vocab()?)
     } else {
@@ -2957,7 +3029,7 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
     }
     let shapes_graph = reader.opt_text()?;
 
-    // 7. The reusable class analysis, after the model it was derived from.
+    // 8. The reusable class analysis, after the model it was derived from.
     let classes = decode_classes(&mut reader)?;
 
     if reader.pos != bytes.len() {
@@ -2972,6 +3044,7 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
 
     Ok(AstParts {
         node_shapes,
+        rules,
         box_role_vocab,
         target_types,
         shapes_graph,

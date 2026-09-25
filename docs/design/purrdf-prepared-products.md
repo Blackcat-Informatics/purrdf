@@ -252,8 +252,8 @@ model no longer reaches fails too.
 This is not hypothetical tidiness. The closure turned up types a hand-written
 enumeration had missed, and they were load-bearing ones: `SparqlTargetType` and
 `TargetTypeParam`, reached through `Shapes::target_types`, which carry the
-`sh:SPARQLTargetType` declarations; and `Rule`, `RuleBody` and `RuleSchedule`,
-which carry the SHACL-AF rules. A product built against the enumeration would have
+`sh:SPARQLTargetType` declarations; and `Rule`, `RuleBody`, `RuleGraph` and
+`RuleSetDeclaration`, which carry the SHACL rules. A product built against the enumeration would have
 verified, restored, and validated with the rules missing. An enumeration silently
 omits exactly the types nobody happened to think of, which is the same set as the
 types nobody will think to check.

@@ -209,6 +209,14 @@ impl Shapes {
         for shape in &self.node_shapes {
             walk_shape(shape, &mut usage, env, &mut flight);
         }
+        for rule in &self.rules.global_rules {
+            if let RuleBody::Sparql { construct, .. } = &rule.body {
+                usage.record(format!("global rule {}", rule.id), construct, env);
+            }
+            for condition in &rule.conditions {
+                walk_shape(condition, &mut usage, env, &mut flight);
+            }
+        }
         usage
     }
 }
@@ -278,7 +286,7 @@ fn walk_shape(
 
     walk_targets(&shape.targets, &id, usage, env, flight);
     for rule in &shape.rules {
-        if let RuleBody::Sparql { construct } = &rule.body {
+        if let RuleBody::Sparql { construct, .. } = &rule.body {
             usage.record(format!("sh:rule on {id}"), construct, env);
         }
     }

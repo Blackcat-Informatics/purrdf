@@ -1149,6 +1149,35 @@ impl RelationStore {
             .into_iter()
     }
 
+    /// Every live row with its [`RowId`], in ROW order — the order the rows were inserted.
+    ///
+    /// The rebuild seam for a caller that must drop facts: this store has no deletion,
+    /// because the semi-naive delta addresses rows as a dense range, so a retraction is a
+    /// new store built from the surviving rows in their original order — which keeps the
+    /// relative row order, and with it every order-derived observable, unchanged.
+    pub(crate) fn facts_in_row_order(&self) -> Vec<(RowId, Fact)> {
+        let mut rows = Vec::with_capacity(self.row_count);
+        for &slot in &self.order {
+            let (predicate, graph) = self.keys[slot];
+            let predicate = self.interner.resolve(predicate);
+            let graph = self.interner.resolve(graph);
+            let mut cursor = self.relations[slot].select(Bound::Any);
+            while let Some((s_id, o_id, row)) = crate::cursor::LendingIterator::next(&mut cursor) {
+                rows.push((
+                    row,
+                    Fact {
+                        subject: self.interner.resolve(s_id).to_owned(),
+                        predicate: predicate.to_owned(),
+                        object: self.interner.resolve(o_id).to_owned(),
+                        graph: graph.to_owned(),
+                    },
+                ));
+            }
+        }
+        rows.sort_unstable_by_key(|(row, _)| row.index());
+        rows
+    }
+
     /// Project every live row back to a [`Fact`] quad of lexical surfaces, in sorted
     /// `(subject, predicate, object, graph)` order.
     ///

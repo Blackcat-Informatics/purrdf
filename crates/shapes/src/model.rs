@@ -497,6 +497,45 @@ pub mod sh {
     /// `sh:condition` — a shape a focus node must conform to for a rule to fire.
     pub const CONDITION: &str = "http://www.w3.org/ns/shacl#condition";
 
+    /// `sh:Rule` — the class of SHACL rules.
+    pub const RULE_CLASS: &str = "http://www.w3.org/ns/shacl#Rule";
+
+    /// `sh:layer` — the numeric layer a rule executes in.
+    pub const LAYER: &str = "http://www.w3.org/ns/shacl#layer";
+
+    /// `sh:runOnce` — marks a rule executed once, before the layer's iterating rules.
+    pub const RUN_ONCE: &str = "http://www.w3.org/ns/shacl#runOnce";
+
+    /// `sh:ruleProcessor` — a non-standard processor a rule or rule set requires.
+    pub const RULE_PROCESSOR: &str = "http://www.w3.org/ns/shacl#ruleProcessor";
+
+    /// `sh:RuleSet` — the class of rule sets.
+    pub const RULE_SET: &str = "http://www.w3.org/ns/shacl#RuleSet";
+
+    /// `sh:hasRule` — a rule set's member rule.
+    pub const HAS_RULE: &str = "http://www.w3.org/ns/shacl#hasRule";
+
+    /// `sh:includesRuleSet` — a rule set a rule set includes.
+    pub const INCLUDES_RULE_SET: &str = "http://www.w3.org/ns/shacl#includesRuleSet";
+
+    /// `sh:SPARQLRuleTemplate` — the class of SPARQL rule templates.
+    pub const SPARQL_RULE_TEMPLATE: &str = "http://www.w3.org/ns/shacl#SPARQLRuleTemplate";
+
+    /// `sh:tempTriple` — marks, on a reifier, a temporary inferred triple.
+    pub const TEMP_TRIPLE: &str = "http://www.w3.org/ns/shacl#tempTriple";
+
+    /// `sh:sourceRule` — links, on a reifier, an inferred triple with its rule.
+    pub const SOURCE_RULE: &str = "http://www.w3.org/ns/shacl#sourceRule";
+
+    /// `sh:RulesGraph` — the class of rules graphs.
+    pub const RULES_GRAPH: &str = "http://www.w3.org/ns/shacl#RulesGraph";
+
+    /// `sh:entailment` — an entailment regime a shapes graph requires.
+    pub const ENTAILMENT: &str = "http://www.w3.org/ns/shacl#entailment";
+
+    /// `sh:RulesEntailment` — the SHACL rules entailment regime.
+    pub const RULES_ENTAILMENT: &str = "http://www.w3.org/ns/shacl#RulesEntailment";
+
     // ── Custom constraint-component vocabulary ───────────────────────────────
 
     /// `sh:ConstraintComponent` — the class of constraint components.
@@ -960,4 +999,7 @@ pub mod xsd {
 
     /// `xsd:integer` — the integer datatype IRI.
     pub const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+    /// `xsd:decimal`.
+    pub const DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 }

@@ -67,7 +67,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        235,
+        236,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -79,14 +79,6 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
         "SHACL 1.2 Core §7.9.4: \"The values of sh:rootClass in a shape are either IRIs or \
          blank nodes that are well-formed SHACL lists where all members are IRIs.\" — \
          shacl-shacl.ttl states no rule for sh:rootClass",
-    ),
-    (
-        "unsupported-entailment",
-        "supports no entailment regime",
-        1,
-        "SHACL: \"If a shapes graph contains any triple with the predicate sh:entailment and \
-         the object E and the SHACL processor does not support E as an entailment regime for \
-         the given data graph then the processor MUST signal a failure.\"",
     ),
     (
         "reifier-annotation-value",
@@ -628,7 +620,14 @@ const BASE_INPUTS: usize = 376;
 /// `73-expr-if-list-true`, a base both sides accept: the literal-for-IRI kind
 /// rewrites its `sh:targetClass` (+1). Its one shape is a node shape with no
 /// property shape, so it gains no misspelled predicate.
-const MUTANT_INPUTS: usize = 720;
+///
+/// Moved from 720 to 724 when the `sh:RulesEntailment` regime became supported:
+/// `inference-rules/rules-entailment-validation` now loads, so it is a base both
+/// sides accept. The literal-for-IRI kind rewrites its `sh:targetClass` (+1), the
+/// non-integer-count and list-for-single-value kinds its property shape's
+/// `sh:minCount` (+2), and the property shape gains a misspelled predicate (+1,
+/// refused under `unknown-term`).
+const MUTANT_INPUTS: usize = 724;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -720,11 +719,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 192),
-        ("non-integer-count", 101),
-        ("list-where-a-single-value-is-required", 157),
+        ("literal-where-an-IRI-is-required", 193),
+        ("non-integer-count", 102),
+        ("list-where-a-single-value-is-required", 158),
         ("non-boolean-flag", 35),
-        (UNKNOWN_TERM, 235),
+        (UNKNOWN_TERM, 236),
     ]
     .into_iter()
     .collect();

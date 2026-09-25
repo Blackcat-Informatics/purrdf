@@ -25,7 +25,7 @@
 //!            ([`census_closure_is_complete`]) — an enumeration silently omits the
 //!            types nobody happened to think of, and here that set is load-bearing:
 //!            `Shapes::target_types` carries the `sh:SPARQLTargetType` declarations
-//!            and `Rule` / `RuleSchedule` carry the SHACL-AF rules.
+//!            and `Rule` / `RuleGraph` / `RuleSetDeclaration` carry the SHACL rules.
 //!
 //!   RULE 2 — STAGE ID. [`stage_id`] is a content-derived capability digest over
 //!            the whole census plus the tables the model's MEANING depends on. It
@@ -90,7 +90,7 @@ const CENSUS_ROOT: &str = "Shapes";
 /// Checked for equality against the closure in [`census_closure_is_complete`], so
 /// this list cannot go stale in either direction — a reachable type missing from it
 /// fails, and a row here that the model no longer reaches fails too.
-const CENSUS_TYPES: [&str; 31] = [
+const CENSUS_TYPES: [&str; 32] = [
     "AnnotatedConstraint",
     "ArgKey",
     "BoxRoleVocab",
@@ -111,7 +111,8 @@ const CENSUS_TYPES: [&str; 31] = [
     "PropertyShape",
     "Rule",
     "RuleBody",
-    "RuleSchedule",
+    "RuleGraph",
+    "RuleSetDeclaration",
     "Severity",
     "Shape",
     "ShapeArg",
@@ -1423,13 +1424,21 @@ fn census_rows_carry_every_variant_and_field() {
         "Shapes::parse_provenance is pub(crate) and must be censused as non-public"
     );
 
-    assert_eq!(by_name["RuleSchedule"].variants.len(), 2);
     assert_eq!(by_name["RuleBody"].variants.len(), 2);
+    for field in ["layer", "order", "run_once", "processors"] {
+        assert!(
+            by_name["Rule"].variants[0]
+                .fields
+                .iter()
+                .any(|f| f.name == field),
+            "Rule::{field} carries a rule's schedule or processor and must be censused"
+        );
+    }
     assert!(
-        by_name["Rule"].variants[0]
-            .fields
+        fields
             .iter()
-            .any(|field| field.name == "schedule")
+            .any(|field| field.name == "rules" && field.public),
+        "Shapes::rules carries the global rules and rule sets and must be censused"
     );
 
     for row in &rows {

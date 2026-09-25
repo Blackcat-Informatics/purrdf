@@ -1695,6 +1695,11 @@ fn lower_datalog_clauses(
         let Some(head_atom) = clause.datalog_head() else {
             return Err(NonDatalogClause::new(index, clause.head_form()));
         };
+        // A guard's truth is caller code the backward resolver has no way to run, so a
+        // guarded clause is refused by name rather than resolved as if the guard held.
+        if clause.is_guarded() {
+            return Err(NonDatalogClause::guarded(index, clause.head_form()));
+        }
         let mut scope: BTreeMap<String, NodeId> = BTreeMap::new();
         let head = lower_atom(dag, triple_op, &mut scope, head_atom);
         let body = clause

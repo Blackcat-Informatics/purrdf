@@ -69,7 +69,7 @@ use purrdf_sparql_eval::{Arity, ExprFnCall, UserFunctionRegistry};
 use crate::expression::{CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg};
 use crate::product::ast::MAX_DEPTH;
 use crate::product::{ProductDimension, ShapesProductError};
-use crate::rules::RuleBody;
+use crate::rules::{Rule, RuleBody};
 use crate::shapes::parser::functions::{invoke_expression_function, invoke_native_list_function};
 use crate::shapes::{Constraint, PropertyShape, Shape, Target};
 use crate::term::Term;
@@ -144,6 +144,28 @@ fn depth_limit() -> ShapesProductError {
 /// is missing after installation, or when any reachable shape-index handle is not
 /// the one `shape_index` names. [`ProductDimension::DepthLimit`] when the model
 /// nests past [`MAX_DEPTH`].
+/// Prove the GLOBAL rules' shape-index handles are the graph's one handle, exactly as
+/// [`link_shapes`] proves every shape's: a global rule's node expressions and condition
+/// shapes reach a `sh:nodeByExpression` constraint just as a shape rule's do.
+///
+/// # Errors
+///
+/// A handle that is not the shared one.
+pub(crate) fn link_global_rules(
+    rules: &[Rule],
+    shape_index: &ShapeIndex,
+) -> Result<(), ShapesProductError> {
+    let mut walk = ShapeIndexWalk {
+        index: shape_index,
+        depth: 0,
+        seen_fns: Vec::new(),
+    };
+    for rule in rules {
+        walk.rule(rule)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn link_shapes(
     node_shapes: &[Shape],
     shape_index: &ShapeIndex,
@@ -466,23 +488,32 @@ impl ShapeIndexWalk<'_> {
             self.property_shape(property)?;
         }
         for rule in &shape.rules {
-            match &rule.body {
-                RuleBody::Triple {
-                    subject,
-                    predicate,
-                    object,
-                } => {
-                    self.node_expr(subject)?;
-                    self.node_expr(predicate)?;
-                    self.node_expr(object)?;
-                }
-                RuleBody::Sparql { construct: _ } => {}
-            }
-            for condition in &rule.conditions {
-                self.shape(condition)?;
-            }
+            self.rule(rule)?;
         }
         self.leave();
+        Ok(())
+    }
+
+    /// Walk a rule: its node expressions and its condition shapes.
+    fn rule(&mut self, rule: &Rule) -> Result<(), ShapesProductError> {
+        match &rule.body {
+            RuleBody::Triple {
+                subject,
+                predicate,
+                object,
+            } => {
+                for expr in [subject, predicate, object].into_iter().flatten() {
+                    self.node_expr(expr)?;
+                }
+            }
+            RuleBody::Sparql {
+                construct: _,
+                parameters: _,
+            } => {}
+        }
+        for condition in &rule.conditions {
+            self.shape(condition)?;
+        }
         Ok(())
     }
 

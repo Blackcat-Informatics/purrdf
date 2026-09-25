@@ -188,20 +188,25 @@ fn census_counts_per_class_are_pinned() {
 /// explicit shape targets became evaluated: 22 + 1, 7 + 2 and 39 − 3. `sh:values`
 /// and `sh:defaultValue` became a property shape's computed value nodes, and
 /// `sh:expectedPredicate` a rule term, when the three became evaluated: 0 + 2,
-/// 9 + 1 and 36 − 3; the 33 that remain are terms of other kinds.
+/// 9 + 1 and 36 − 3. When the rules engine came to execute SHACL 1.2 Inference Rules
+/// whole, `sh:layer`, `sh:runOnce`, `sh:RuleSet`, `sh:includesRuleSet`, `sh:hasRule`,
+/// `sh:ruleProcessor`, `sh:sourceRule`, `sh:tempTriple` and `sh:SPARQLRuleTemplate`
+/// became rule terms (10 + 9), `sh:RulesGraph` and `sh:RulesEntailment` vocabulary
+/// (23 + 2) and `sh:entailment` graph structure (16 + 1): 33 − 12 = 21 remain
+/// unimplemented, every one of them a term of another kind.
 const EXPECTED_COUNTS: [(&str, usize); 12] = [
     ("constraint-parameter", 47),
     ("non-validating", 10),
-    ("rule", 10),
+    ("rule", 19),
     ("structural/builtin", 68),
     ("structural/computed-values", 2),
     ("structural/declaration", 32),
     ("structural/node-expression", 47),
     ("structural/report", 21),
-    ("structural/shape-path-prefix-graph", 16),
-    ("structural/vocabulary", 23),
+    ("structural/shape-path-prefix-graph", 17),
+    ("structural/vocabulary", 25),
     ("target", 9),
-    ("unimplemented", 33),
+    ("unimplemented", 21),
 ];
 
 /// Where a term may appear is part of its class: a constraint parameter and a

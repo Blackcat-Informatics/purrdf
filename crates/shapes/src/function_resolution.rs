@@ -103,6 +103,9 @@ impl Shapes {
         for shape in &self.node_shapes {
             walk.shape(shape);
         }
+        for rule in &self.rules.global_rules {
+            walk.rule(rule, &format!("global rule {}", rule.id));
+        }
         walk.out
     }
 }
@@ -126,26 +129,30 @@ impl Walk<'_> {
         });
     }
 
+    /// Walk one rule: its node expressions, under `owner`, and its condition shapes.
+    fn rule(&mut self, rule: &crate::rules::Rule, owner: &str) {
+        if let RuleBody::Triple {
+            subject,
+            predicate,
+            object,
+        } = &rule.body
+        {
+            for expr in [subject, predicate, object].into_iter().flatten() {
+                self.node_expr(expr, owner);
+            }
+        }
+        for condition in &rule.conditions {
+            self.shape(condition);
+        }
+    }
+
     fn shape(&mut self, shape: &Shape) {
         let id = shape.id.to_string();
         if !self.seen_shapes.insert(id.clone()) {
             return;
         }
         for rule in &shape.rules {
-            if let RuleBody::Triple {
-                subject,
-                predicate,
-                object,
-            } = &rule.body
-            {
-                let owner = format!("sh:rule on {id}");
-                self.node_expr(subject, &owner);
-                self.node_expr(predicate, &owner);
-                self.node_expr(object, &owner);
-            }
-            for condition in &rule.conditions {
-                self.shape(condition);
-            }
+            self.rule(rule, &format!("sh:rule on {id}"));
         }
         self.targets(&shape.targets, &id);
         self.constraints(&shape.constraints, &id);
