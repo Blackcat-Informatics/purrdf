@@ -67,7 +67,7 @@ use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
 use shacl_corpora::shacl12::{
     Body, Case12, InferCase, InferExpected, NodeExprCase, SrlCase, W3C12_TOTAL_CASES, shacl12_cases,
 };
-use shacl_corpora::{Expected, Multiset, W3cCase, file_iri, parse_turtle_file};
+use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_file};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
@@ -83,12 +83,6 @@ const R_SHAPE_CLASS_RUN_ONCE: &str = "a shape typed sh:ShapeClass is refused at 
 
 const R_SHAPE_CLASS_TEMPLATE: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
      evaluated); sh:SPARQLRuleTemplate is not implemented either";
-
-const R_REIFIER_SHAPE_VALUE: &str = "sh:reifierShape results carry the triple term as sh:value; the suite expects the \
-     value node (\"invalid\")";
-
-const R_UNIQUE_LANG_DIR: &str = "sh:uniqueLang groups by language tag only; @ar, @ar--ltr and @ar--rtl must be three \
-     distinct (language, direction) groups";
 
 const R_SHAPE_TARGET: &str = "sh:shape target declarations in the data graph are not read, so no focus node is \
      selected";
@@ -154,10 +148,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// A ledgered entry MUST fail; when engine work fixes it the harness errors with
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
-    // ── Report details ──
-    ("core/property/reifierShape-001", R_REIFIER_SHAPE_VALUE),
-    ("core/property/reifierShape-002", R_REIFIER_SHAPE_VALUE),
-    ("core/property/uniqueLang-003", R_UNIQUE_LANG_DIR),
     // ── Targets ──
     ("core/targets/shape-001", R_SHAPE_TARGET),
     ("core/targets/targetClassImplicit-002", R_SHAPE_CLASS),
@@ -542,19 +532,55 @@ fn canonical_expectation(id: &str, expected: &[Term]) -> Result<Vec<Term>, Strin
 
 // ── Expectation defects ───────────────────────────────────────────────────────
 
-/// One amendment of one approved expected result: the result identified by its
-/// `(focus node, value, source constraint component, severity)` — the compared
-/// tuple with NO `sh:resultPath` — carries `result_path` as its `sh:resultPath`.
-/// Every term is spelled as the comparison tuple spells it (see
-/// `shacl_corpora::norm`): an IRI in angle brackets, a literal in N-Triples form.
-#[derive(Clone, Copy, Debug)]
-struct AddResultPath {
+/// One compared result tuple, spelled as the comparison spells it (see
+/// `shacl_corpora::norm`): an IRI in angle brackets, a literal or triple term in
+/// N-Triples form, any blank node as `_:`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResultTuple {
     focus: &'static str,
+    path: Option<&'static str>,
     value: Option<&'static str>,
     component: &'static str,
     severity: &'static str,
-    result_path: &'static str,
 }
+
+impl ResultTuple {
+    /// This tuple as a multiset key.
+    fn key(self) -> Tuple {
+        (
+            self.focus.to_owned(),
+            self.path.map(ToOwned::to_owned),
+            self.value.map(ToOwned::to_owned),
+            self.component.to_owned(),
+            self.severity.to_owned(),
+        )
+    }
+}
+
+/// One amendment of one approved expected result: the approved report's
+/// `approved` result is graded as `graded` instead. Every field the two do not
+/// share IS the delta; every field they share is held.
+#[derive(Clone, Copy, Debug)]
+struct Amendment {
+    approved: ResultTuple,
+    graded: ResultTuple,
+}
+
+const REIFIER_SHAPE_COMPONENT: &str =
+    "<http://www.w3.org/ns/shacl#ReifierShapeConstraintComponent>";
+const VIOLATION: &str = "<http://www.w3.org/ns/shacl#Violation>";
+const INVALID_RESOURCE_1: &str = "<http://example.com/ns#InvalidResource1>";
+const PROPERTY_A: &str = "<http://example.com/ns#propertyA>";
+
+/// The SHACL 1.2 Core §7.8.5 sentences the `sh:reifierShape` entries grade
+/// against, quoted from the Working Draft and the editor's draft, which agree
+/// word for word.
+const REIFIER_SHAPE_CLAUSE: &str = "SHACL 1.2 Core §7.8.5 sh:reifierShape: \"Let t be the triple \
+     term (focus node, $path, value node). […] For each reifier t that does not conform to \
+     $reifierShape, there is a validation result with t as sh:value.\"";
+const REIFICATION_REQUIRED_CLAUSE: &str = "SHACL 1.2 Core §7.8.5 sh:reificationRequired: \"If \
+     $reificationRequired is set to true and there is no reified statement for the triple term \
+     t in the data graph, there is a validation result with t as sh:value.\"";
 
 /// Approved W3C SHACL 1.2 expectations that contradict normative SHACL 1.2 Core
 /// text: `(test id, the normative sentence quoted with its section, the exact
@@ -574,59 +600,107 @@ struct AddResultPath {
 ///   is `sh:xone`, through `sh:minListLength`, whose definition states no
 ///   exception to §6.7.2.2. The approved report omits `sh:resultPath`; the
 ///   quoted sentence makes it the shape's `sh:path`.
-const EXPECTATION_DEFECTS: &[(&str, &str, &[AddResultPath])] = &[(
-    "core/node/xone-003",
-    "SHACL 1.2 Core §6.7.2.2: \"For results produced by a property shape, this SHACL \
-     property path is equivalent to the value of sh:path of the shape, unless stated \
-     otherwise.\"",
-    &[AddResultPath {
-        focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
-        value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
-        component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
-        severity: "<http://www.w3.org/ns/shacl#Warning>",
-        result_path: "<http://www.w3.org/ns/shacl#xone>",
-    }],
-)];
+/// * `core/property/reifierShape-001` — `ex:InvalidResource1`'s statement has one
+///   reifier (the annotation's blank node), and it fails `ex:ReifyShape`. The
+///   approved report gives the VALUE NODE, `sh:value "invalid"`; the quoted
+///   sentence's `t` is bound by "for each reifier t", so `sh:value` is the
+///   reifier, a blank node (`_:` in the comparison).
+/// * `core/property/reifierShape-002` — `ex:InvalidResource1`'s statement has no
+///   reifier and `sh:reificationRequired true`. The approved report gives
+///   `sh:value "invalid"`; the quoted sentence's `t` is the triple term
+///   `<<( ex:InvalidResource1 ex:propertyA "invalid" )>>`, so that is `sh:value`.
+const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[
+    (
+        "core/node/xone-003",
+        "SHACL 1.2 Core §6.7.2.2: \"For results produced by a property shape, this SHACL \
+         property path is equivalent to the value of sh:path of the shape, unless stated \
+         otherwise.\"",
+        &[Amendment {
+            approved: ResultTuple {
+                focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
+                path: None,
+                value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
+                component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
+                severity: "<http://www.w3.org/ns/shacl#Warning>",
+            },
+            graded: ResultTuple {
+                focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
+                path: Some("<http://www.w3.org/ns/shacl#xone>"),
+                value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
+                component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
+                severity: "<http://www.w3.org/ns/shacl#Warning>",
+            },
+        }],
+    ),
+    (
+        "core/property/reifierShape-001",
+        REIFIER_SHAPE_CLAUSE,
+        &[Amendment {
+            approved: ResultTuple {
+                focus: INVALID_RESOURCE_1,
+                path: Some(PROPERTY_A),
+                value: Some("\"invalid\""),
+                component: REIFIER_SHAPE_COMPONENT,
+                severity: VIOLATION,
+            },
+            graded: ResultTuple {
+                focus: INVALID_RESOURCE_1,
+                path: Some(PROPERTY_A),
+                value: Some("_:"),
+                component: REIFIER_SHAPE_COMPONENT,
+                severity: VIOLATION,
+            },
+        }],
+    ),
+    (
+        "core/property/reifierShape-002",
+        REIFICATION_REQUIRED_CLAUSE,
+        &[Amendment {
+            approved: ResultTuple {
+                focus: INVALID_RESOURCE_1,
+                path: Some(PROPERTY_A),
+                value: Some("\"invalid\""),
+                component: REIFIER_SHAPE_COMPONENT,
+                severity: VIOLATION,
+            },
+            graded: ResultTuple {
+                focus: INVALID_RESOURCE_1,
+                path: Some(PROPERTY_A),
+                value: Some(
+                    "<<( <http://example.com/ns#InvalidResource1> \
+                     <http://example.com/ns#propertyA> \"invalid\" )>>",
+                ),
+                component: REIFIER_SHAPE_COMPONENT,
+                severity: VIOLATION,
+            },
+        }],
+    ),
+];
 
 /// [`EXPECTATION_DEFECTS`] pinned by count, so an entry cannot be added or
 /// dropped without this number moving with it.
-const EXPECTATION_DEFECTS_COUNT: usize = 1;
+const EXPECTATION_DEFECTS_COUNT: usize = 3;
 
 /// The approved expected results of `id` with `deltas` applied. A delta whose
-/// path-less result the approved report does not contain is a stale entry and an
+/// approved result the approved report does not contain is a stale entry and an
 /// error, so an entry can never amend a result into existence.
-fn amend(id: &str, results: &Multiset, deltas: &[AddResultPath]) -> Result<Multiset, String> {
+fn amend(id: &str, results: &Multiset, deltas: &[Amendment]) -> Result<Multiset, String> {
     let mut amended = results.clone();
     for delta in deltas {
-        let without = (
-            delta.focus.to_owned(),
-            None,
-            delta.value.map(ToOwned::to_owned),
-            delta.component.to_owned(),
-            delta.severity.to_owned(),
-        );
-        match amended.get_mut(&without) {
+        let approved = delta.approved.key();
+        match amended.get_mut(&approved) {
             Some(count) if *count > 1 => *count -= 1,
             Some(_) => {
-                amended.remove(&without);
+                amended.remove(&approved);
             }
             None => {
                 return Err(format!(
-                    "EXPECTATION_DEFECTS amends {id} at {without:?}, which is not among its \
-                     approved expected results without a sh:resultPath — stale entry"
+                    "EXPECTATION_DEFECTS amends {id} at {approved:?}, which is not among its \
+                     approved expected results — stale entry"
                 ));
             }
         }
-        let (focus, _, value, component, severity) = without;
-        *amended
-            .entry((
-                focus,
-                Some(delta.result_path.to_owned()),
-                value,
-                component,
-                severity,
-            ))
-            .or_insert(0) += 1;
+        *amended.entry(delta.graded.key()).or_insert(0) += 1;
     }
     Ok(amended)
 }
@@ -1066,8 +1140,10 @@ fn non_canonical_expectations_are_really_non_canonical() {
 /// held fixed:
 ///
 /// * a report MISSING the delta — the approved results verbatim — fails;
-/// * a report carrying a DIFFERENT delta — the same result amended with another
-///   `sh:resultPath` — fails;
+/// * a report carrying a DIFFERENT delta — the same result, every field the
+///   delta changes given another value — fails;
+/// * a report carrying the delta plus a difference in any field the delta holds
+///   (focus node, path, value, component or severity, one at a time) fails;
 /// * a report carrying the delta PLUS an extra, different amendment of another
 ///   result fails.
 #[test]
@@ -1134,15 +1210,16 @@ fn expectation_defects_are_exact() {
             "{id}: a report missing the delta must fail"
         );
 
-        // A report with a different delta in its place.
-        let other_path: Vec<AddResultPath> = deltas
+        // A report with a different delta in its place: every field the delta
+        // changes carries another value instead.
+        let differently: Vec<Amendment> = deltas
             .iter()
-            .map(|delta| AddResultPath {
-                result_path: "<http://example.org/ns#another-path>",
+            .map(|delta| Amendment {
+                graded: other_in_delta_fields(delta),
                 ..*delta
             })
             .collect();
-        let differently_amended = amend(id, results, &other_path).expect("the same result");
+        let differently_amended = amend(id, results, &differently).expect("the same result");
         assert!(
             grade(
                 &amended_expectation,
@@ -1151,6 +1228,20 @@ fn expectation_defects_are_exact() {
             .is_err(),
             "{id}: a report carrying a different delta must fail"
         );
+
+        // A report with the delta AND a difference in a field the delta holds:
+        // the entry licenses its delta and nothing else about that result.
+        for (field, held) in deltas.iter().flat_map(|delta| {
+            held_field_variants(delta)
+                .into_iter()
+                .map(move |(field, graded)| (field, Amendment { graded, ..*delta }))
+        }) {
+            let widened = amend(id, results, &[held]).expect("the same result");
+            assert!(
+                grade(&amended_expectation, Ok((produced_conforms, widened))).is_err(),
+                "{id}: a report carrying the delta plus a different {field} must fail"
+            );
+        }
 
         // A report with the delta plus an extra, different result.
         let mut extra = amended;
@@ -1170,6 +1261,95 @@ fn expectation_defects_are_exact() {
     }
 }
 
+/// A value no vendored report carries, standing in for "some other term".
+const ELSEWHERE: &str = "<http://example.org/ns#elsewhere>";
+
+/// `delta`'s graded tuple with every field the delta CHANGES replaced by
+/// [`ELSEWHERE`]: the same result, amended differently.
+fn other_in_delta_fields(delta: &Amendment) -> ResultTuple {
+    let (approved, graded) = (delta.approved, delta.graded);
+    ResultTuple {
+        focus: if approved.focus == graded.focus {
+            graded.focus
+        } else {
+            ELSEWHERE
+        },
+        path: if approved.path == graded.path {
+            graded.path
+        } else {
+            Some(ELSEWHERE)
+        },
+        value: if approved.value == graded.value {
+            graded.value
+        } else {
+            Some(ELSEWHERE)
+        },
+        component: if approved.component == graded.component {
+            graded.component
+        } else {
+            ELSEWHERE
+        },
+        severity: if approved.severity == graded.severity {
+            graded.severity
+        } else {
+            ELSEWHERE
+        },
+    }
+}
+
+/// One variant of `delta`'s graded tuple per field the delta HOLDS, that field
+/// replaced by [`ELSEWHERE`], named for the assertion message.
+fn held_field_variants(delta: &Amendment) -> Vec<(&'static str, ResultTuple)> {
+    let (approved, graded) = (delta.approved, delta.graded);
+    let mut variants = Vec::new();
+    if approved.focus == graded.focus {
+        variants.push((
+            "focus node",
+            ResultTuple {
+                focus: ELSEWHERE,
+                ..graded
+            },
+        ));
+    }
+    if approved.path == graded.path {
+        variants.push((
+            "result path",
+            ResultTuple {
+                path: Some(ELSEWHERE),
+                ..graded
+            },
+        ));
+    }
+    if approved.value == graded.value {
+        variants.push((
+            "value",
+            ResultTuple {
+                value: Some(ELSEWHERE),
+                ..graded
+            },
+        ));
+    }
+    if approved.component == graded.component {
+        variants.push((
+            "component",
+            ResultTuple {
+                component: ELSEWHERE,
+                ..graded
+            },
+        ));
+    }
+    if approved.severity == graded.severity {
+        variants.push((
+            "severity",
+            ResultTuple {
+                severity: ELSEWHERE,
+                ..graded
+            },
+        ));
+    }
+    variants
+}
+
 /// A delta naming a result the approved report does not hold is refused as a
 /// stale entry rather than amending a result into existence; the neighbouring
 /// delta that names a real result applies.
@@ -1178,26 +1358,27 @@ fn a_stale_expectation_defect_is_refused() {
     let focus = "<http://example.org/ns#focus>";
     let component = "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>";
     let severity = "<http://www.w3.org/ns/shacl#Violation>";
-    let mut results = Multiset::new();
-    results.insert(
-        (
-            focus.to_owned(),
-            None,
-            None,
-            component.to_owned(),
-            severity.to_owned(),
-        ),
-        1,
-    );
-    let real = AddResultPath {
+    let approved = ResultTuple {
         focus,
+        path: None,
         value: None,
         component,
         severity,
-        result_path: "<http://example.org/ns#p>",
     };
-    let stale = AddResultPath {
-        focus: "<http://example.org/ns#elsewhere>",
+    let mut results = Multiset::new();
+    results.insert(approved.key(), 1);
+    let real = Amendment {
+        approved,
+        graded: ResultTuple {
+            path: Some("<http://example.org/ns#p>"),
+            ..approved
+        },
+    };
+    let stale = Amendment {
+        approved: ResultTuple {
+            focus: ELSEWHERE,
+            ..approved
+        },
         ..real
     };
     let amended = amend("control", &results, &[real]).expect("a real result is amended");
