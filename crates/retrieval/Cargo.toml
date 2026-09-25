@@ -59,8 +59,6 @@ blake3.workspace = true
 ahash.workspace = true
 # Serialization of the plan as a plain document. `derive` builds the impls.
 serde.workspace = true
-# Error types carry structured context; `derive` builds the impls.
-thiserror.workspace = true
 
 [dev-dependencies]
 # The workspace's shared counting allocator, for `tests/fusion_frontier_alloc.rs`.

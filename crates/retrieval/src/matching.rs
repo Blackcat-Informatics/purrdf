@@ -111,20 +111,18 @@ pub(crate) struct Invocation {
 /// question than the one the caller asked. A producer that trips one is not
 /// bound by the planner and is not emitted by the compiler; it is never bound
 /// with the offending facet silently dropped.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PlacementError {
     /// No alternative the producer accepts matches the request term.
     ///
     /// A term index the request does not carry also lands here: a term that is
     /// not in the request has, trivially, no accepted alternative.
-    #[error("request term {term_index} matches no accepted alternative")]
     NoAcceptedAlternative {
         /// The index into the plan's request terms.
         term_index: u32,
     },
 
     /// The matched alternative renders a facet the request term does not carry.
-    #[error("request term {term_index} carries no {} facet", facet.as_str())]
     MissingFacet {
         /// The index into the plan's request terms.
         term_index: u32,
@@ -133,7 +131,6 @@ pub(crate) enum PlacementError {
     },
 
     /// The facet exists but has no SPARQL constant form.
-    #[error("request term {term_index}'s {} facet cannot be rendered: {reason}", facet.as_str())]
     Unrenderable {
         /// The index into the plan's request terms.
         term_index: u32,
@@ -145,14 +142,12 @@ pub(crate) enum PlacementError {
 
     /// Two placements target one position with different values, or a declared
     /// position lies outside the relation's arity, so nothing can occupy it.
-    #[error("argument position {position} cannot hold every value placed in it")]
     PositionConflict {
         /// The contested flattened argument position.
         position: usize,
     },
 
     /// No declared access pattern is general enough to serve the invocation.
-    #[error("invocation mode {invocation} is served by none of the declared modes {declared:?}")]
     NoSatisfiableMode {
         /// The invocation's own per-position code.
         invocation: String,
@@ -160,6 +155,44 @@ pub(crate) enum PlacementError {
         declared: Vec<String>,
     },
 }
+
+impl std::fmt::Display for PlacementError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoAcceptedAlternative { term_index } => write!(
+                f,
+                "request term {term_index} matches no accepted alternative"
+            ),
+            Self::MissingFacet { term_index, facet } => write!(
+                f,
+                "request term {term_index} carries no {} facet",
+                facet.as_str()
+            ),
+            Self::Unrenderable {
+                term_index,
+                facet,
+                reason,
+            } => write!(
+                f,
+                "request term {term_index}'s {} facet cannot be rendered: {reason}",
+                facet.as_str()
+            ),
+            Self::PositionConflict { position } => write!(
+                f,
+                "argument position {position} cannot hold every value placed in it"
+            ),
+            Self::NoSatisfiableMode {
+                invocation,
+                declared,
+            } => write!(
+                f,
+                "invocation mode {invocation} is served by none of the declared modes {declared:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PlacementError {}
 
 impl PlacementError {
     /// The stable name of the rule that refused.

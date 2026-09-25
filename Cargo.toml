@@ -184,10 +184,6 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # Maintained continuation of the archived serde_yaml 0.9 (same API; the
 # `serde_yaml` name is kept at use sites via this package rename).
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
-# Derive-based structured error types for `purrdf-retrieval`'s plan layer. A
-# proc-macro, so it expands at compile time and adds nothing to the wasm or
-# runtime path.
-thiserror = "2"
 # digest-0.10 family, matching sha2/md-5.
 sha1 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
