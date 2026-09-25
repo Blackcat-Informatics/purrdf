@@ -10,3 +10,7 @@ crates/rdf/tests/fixtures/obographs-0.3.2/README.upstream.md -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/pom.upstream.xml -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/obographs-schema.json -text -diff
 crates/rdf/tests/fixtures/obographs-0.3.2/subschemas/** -text -diff
+
+# Test goldens hold a serializer's exact bytes, CRLF record ends included (see
+# each crate's tests/support/golden.rs), so no end-of-line conversion applies.
+crates/*/tests/golden/** -text

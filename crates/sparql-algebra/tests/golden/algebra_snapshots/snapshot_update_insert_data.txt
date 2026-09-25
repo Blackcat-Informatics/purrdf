@@ -1,7 +1,3 @@
----
-source: crates/sparql-algebra/tests/algebra_snapshots.rs
-expression: "parse_update(\"INSERT DATA { purrdf:s purrdf:p purrdf:o . GRAPH purrdf:g { purrdf:s purrdf:p purrdf:o2 } }\")"
----
 Update {
     operations: [
         InsertData {

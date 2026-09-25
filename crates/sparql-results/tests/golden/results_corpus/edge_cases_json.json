@@ -1,0 +1,1 @@
+{"head":{"vars":["term","note"]},"results":{"bindings":[{"term":{"type":"literal","value":"مرحبا","xml:lang":"ar","its:dir":"rtl"},"note":{"type":"literal","value":"right-to-left greeting"}},{"term":{"type":"literal","value":"a, \"b\" & <c>"},"note":{"type":"literal","value":"hello","xml:lang":"en","its:dir":"ltr"}}]}}

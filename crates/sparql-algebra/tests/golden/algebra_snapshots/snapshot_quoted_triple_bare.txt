@@ -1,7 +1,3 @@
----
-source: crates/sparql-algebra/tests/algebra_snapshots.rs
-expression: "parse(\"SELECT ?r WHERE { ?r rdf:reifies << ?s purrdf:p ?o >> }\")"
----
 Select {
     pattern: Project {
         inner: Bgp {

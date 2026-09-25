@@ -1,7 +1,3 @@
----
-source: crates/sparql-algebra/tests/scanner_boundary_sweep.rs
-expression: rendered
----
 WS
   U+0009..U+000A
   U+000D

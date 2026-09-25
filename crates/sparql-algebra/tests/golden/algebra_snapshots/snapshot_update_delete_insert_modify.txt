@@ -1,7 +1,3 @@
----
-source: crates/sparql-algebra/tests/algebra_snapshots.rs
-expression: "parse_update(\"DELETE { ?s purrdf:p ?o } INSERT { ?s purrdf:q ?o } WHERE { ?s purrdf:p ?o }\")"
----
 Update {
     operations: [
         DeleteInsert {

@@ -1,7 +1,3 @@
----
-source: crates/sparql-algebra/tests/algebra_snapshots.rs
-expression: "parse(\"SELECT ?x WHERE { ?d purrdf:members/rdf:rest*/rdf:first ?x }\")"
----
 Select {
     pattern: Project {
         inner: Path {
