@@ -948,7 +948,7 @@ impl<'a> ShapesPlan<'a> {
 /// A pack/GTS container stores resolved IRIs and has no document base to derive, so a
 /// `--shapes-base` against one would be read and never used: a usage error, never a silent
 /// no-op.
-fn shapes_document_base(
+pub(crate) fn shapes_document_base(
     path: &str,
     format: SourceFormat,
     shapes_base: Option<&str>,

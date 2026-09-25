@@ -247,6 +247,16 @@ _PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
         "capi": ("import_iris", "import_documents", "import_count"),
         "cli": ("--import",),
     },
+    # The IRIs the premise document was read from. The CLI has no flag of its own for
+    # them: it derives the premise's `file://` retrieval IRI, or takes `--base`, which is
+    # therefore this parameter's spelling there.
+    "premise_iris": {
+        "python": ("premise_iris",),
+        "wasm": ("premise_iris",),
+        "dts": ("premiseIris",),
+        "capi": ("premise_iris", "premise_iri_count"),
+        "cli": ("--base",),
+    },
 }
 
 # What each host appends AFTER the boundary's own parameters, and nothing else. The C
@@ -258,11 +268,12 @@ _HOST_PLUMBING: dict[str, tuple[str, ...]] = {
 
 # The `purrdf entails` flags that answer to no boundary parameter and to no service, and
 # are therefore the subcommand's own plumbing. `--report` is the certificate target every
-# reasoning subcommand carries; `--from` and `--base` are the CLI's own format resolution,
-# which runs in FRONT of a boundary that parses one media type; `OUT` is positional and so
-# is not a flag at all. A flag outside this list and outside the two tables above is a
-# capability with no boundary behind it, and fails the gate.
-_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--base"})
+# reasoning subcommand carries; `--from` is the CLI's own format resolution, which runs in
+# FRONT of a boundary that parses one media type; `OUT` is positional and so is not a flag
+# at all. (`--base` is not plumbing: it is how the CLI spells `premise_iris`.) A flag
+# outside this list and outside the two tables above is a capability with no boundary
+# behind it, and fails the gate.
+_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from"})
 
 # Where the CLI's three needles live.
 _CLI_COMMAND_TREE = Path("crates/cli/src/cli.rs")
@@ -1061,8 +1072,8 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
         "bindings/python/src/py_entail.rs",
         lambda text: _swap(
             text,
+            "#[pyo3(signature = (regime, data, pattern, imports, premise_iris))]",
             "#[pyo3(signature = (regime, data, pattern, imports))]",
-            "#[pyo3(signature = (regime, data, pattern))]",
         ),
     ),
     (

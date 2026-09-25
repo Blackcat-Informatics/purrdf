@@ -190,6 +190,166 @@ fn entail(
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+/// Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH — the
+/// inferred triples only, never the data graph — as a dict:
+///
+/// - `"inferred"` — N-Triples 1.2, one triple per line, in canonical order;
+/// - `"proof"` — when `explain` is true, the proof of every inferred triple
+///   (`derived S P O .`, then `  rule R` and one `  premise S P O .` per matched fact,
+///   or `  data-block` for a SPARQL 1.2 RL data-block triple); otherwise `None`.
+///
+/// The rule source is exactly one of `shapes_ttl` — a SHACL shapes graph (Turtle), whose
+/// default rule set runs — and `srl`, a SPARQL 1.2 RL rule set; naming neither or both
+/// raises `ValueError`. `shapes_base` / `srl_base` are the documents' base IRIs.
+///
+/// `max_term_generating_rounds` bounds the evaluation rounds that infer a term the graph
+/// did not hold; one more raises `ValueError` naming the limit. `None` keeps the engine
+/// default (65,536). A host running UNTRUSTED rule sets should lower it: an exponential
+/// rule set reaches the engine's fixed arena and join ceilings only slowly under the
+/// default, and the limit is what bounds the time it can take.
+///
+/// The work is [`purrdf_validate::apply_rules_to_ntriples`], the function the WASM and
+/// C-ABI bindings call.
+#[pyfunction]
+#[pyo3(signature = (
+    data_nt,
+    shapes_ttl=None,
+    *,
+    srl=None,
+    shapes_base=None,
+    srl_base=None,
+    explain=false,
+    max_term_generating_rounds=None,
+))]
+#[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
+fn apply_rules(
+    py: Python<'_>,
+    data_nt: &str,
+    shapes_ttl: Option<&str>,
+    srl: Option<&str>,
+    shapes_base: Option<&str>,
+    srl_base: Option<&str>,
+    explain: bool,
+    max_term_generating_rounds: Option<u64>,
+) -> PyResult<Py<PyAny>> {
+    let outcome = py
+        .detach(|| {
+            purrdf_validate::apply_rules_to_ntriples(&purrdf_validate::RulesRequest {
+                data_nt,
+                shapes_ttl,
+                shapes_base,
+                srl,
+                srl_base,
+                explain,
+                max_term_generating_rounds,
+            })
+        })
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let out = PyDict::new(py);
+    out.set_item("inferred", outcome.inferred_ntriples)?;
+    out.set_item("proof", outcome.proof)?;
+    Ok(out.into_any().unbind())
+}
+
+/// Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of a data
+/// graph (N-Triples) — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph, focusNode,
+/// scope)` — returning its output nodes as N-Triples 1.2 terms, in the order the
+/// expression's sequence semantics define.
+///
+/// `expr` is the expression node: an absolute IRI, or `"_:label"` for a blank node the
+/// shapes document labels so. `focus` is an absolute IRI or any N-Triples term. `scope`
+/// maps each `shnex:var` name to a term spelled as `focus` is; the name `focusNode`
+/// (resolved to the focus node before the scope is searched) raises `ValueError`, as do a
+/// label the shapes document never wrote and any parse or evaluation failure.
+#[pyfunction]
+#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, scope=None, shapes_base=None))]
+fn eval_node_expr(
+    py: Python<'_>,
+    shapes_ttl: &str,
+    data_nt: &str,
+    expr: &str,
+    focus: &str,
+    scope: Option<std::collections::BTreeMap<String, String>>,
+    shapes_base: Option<&str>,
+) -> PyResult<Vec<String>> {
+    let scope = scope.unwrap_or_default();
+    let bindings: Vec<(&str, &str)> = scope
+        .iter()
+        .map(|(name, term)| (name.as_str(), term.as_str()))
+        .collect();
+    py.detach(|| {
+        purrdf_validate::eval_node_expr_to_terms(&purrdf_validate::NodeExprRequest {
+            shapes_ttl,
+            shapes_base,
+            data_nt,
+            expr,
+            focus,
+            scope: &bindings,
+        })
+    })
+    .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Certify a shapes graph (Turtle), COLD: the loader's verdict, every result of validating
+/// it against the W3C `shacl-shacl.ttl`, and which implementation every node-expression
+/// function call binds to. Returns a dict:
+///
+/// - `"clean"` — no finding: the loader accepted the graph and every `shacl-shacl`
+///   result is superseded (flagged by `shacl-shacl.ttl` but well-formed SHACL 1.2 Core);
+/// - `"findings"` — the finding count;
+/// - `"load_error"` — the loader's refusal, or `None`;
+/// - `"shacl_shacl"` — one dict per result: `"focus"`, `"path"`, `"value"`,
+///   `"component"`, `"source_shape"`, `"severity"`, `"messages"`, `"superseded"` (the
+///   supersession rule's name, or `None`);
+/// - `"calls"` — one dict per function call site, `"binding"` (`native`, `custom`,
+///   `sparql-registered`, `host-extension`), `"function"`, `"owner"`; `None` when the
+///   loader refused the graph;
+/// - `"report"` — the deterministic text every PurRDF host prints.
+///
+/// Raises `ValueError` only when the document is not Turtle; a malformed shapes graph is a
+/// report, not an exception.
+#[pyfunction]
+#[pyo3(signature = (shapes_ttl, *, shapes_base=None))]
+fn lint_shapes(py: Python<'_>, shapes_ttl: &str, shapes_base: Option<&str>) -> PyResult<Py<PyAny>> {
+    let report = py
+        .detach(|| purrdf_validate::lint_shapes_ttl(shapes_ttl, shapes_base))
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let out = PyDict::new(py);
+    out.set_item("clean", report.is_clean())?;
+    out.set_item("findings", report.findings())?;
+    out.set_item("load_error", report.load_error())?;
+    let results = PyList::empty(py);
+    for result in report.shacl_shacl() {
+        let d = PyDict::new(py);
+        d.set_item("focus", result.focus.to_string())?;
+        d.set_item("path", result.path.as_ref().map(ToString::to_string))?;
+        d.set_item("value", result.value.as_ref().map(ToString::to_string))?;
+        d.set_item("component", &result.component)?;
+        d.set_item("source_shape", result.source_shape.to_string())?;
+        d.set_item("severity", &result.severity)?;
+        d.set_item("messages", &result.messages)?;
+        d.set_item("superseded", result.superseded.map(|rule| rule.name))?;
+        results.append(d)?;
+    }
+    out.set_item("shacl_shacl", results)?;
+    match report.function_resolution() {
+        None => out.set_item("calls", py.None())?,
+        Some(functions) => {
+            let calls = PyList::empty(py);
+            for site in functions.sites() {
+                let d = PyDict::new(py);
+                d.set_item("binding", site.binding.label())?;
+                d.set_item("function", &site.function)?;
+                d.set_item("owner", &site.owner)?;
+                calls.append(d)?;
+            }
+            out.set_item("calls", calls)?;
+        }
+    }
+    out.set_item("report", report.render())?;
+    Ok(out.into_any().unbind())
+}
+
 /// Parsed SHACL shapes that can be reused to validate multiple data graphs.
 ///
 /// Construct from a Turtle shapes graph with `PyShapes(shapes_ttl)`, then call
@@ -1016,7 +1176,8 @@ fn pack_product<'py>(
 /// Register the `purrdf-shapes` surface on a Python module.
 ///
 /// Exposes the legacy `validate(shapes_ttl, data_nt)` function, the SHACL-AF
-/// `entail(shapes_ttl, data_nt)` rule-entailment function, and the reusable
+/// `entail(shapes_ttl, data_nt)` rule-entailment function, the shapes-graph tools
+/// `apply_rules`, `eval_node_expr` and `lint_shapes`, and the reusable
 /// `Shapes` / `ValidationReport` wrappers used by the Rust-native orchestration
 /// in `purrdf-validate`. Called by the unified `purrdf_native` cdylib to
 /// populate the `purrdf_native.shacl` submodule.
@@ -1024,6 +1185,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(entail, m)?)?;
     m.add_function(wrap_pyfunction!(pack_product, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_rules, m)?)?;
+    m.add_function(wrap_pyfunction!(eval_node_expr, m)?)?;
+    m.add_function(wrap_pyfunction!(lint_shapes, m)?)?;
     m.add_class::<PyShapes>()?;
     m.add_class::<PyValidationReport>()?;
     m.add_class::<PyPreparedShapes>()?;

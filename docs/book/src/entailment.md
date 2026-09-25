@@ -93,8 +93,8 @@ because a check that cannot withhold a green light is not a check.
 | --- | --- | --- | --- |
 | Rust | `entails(&p, &c, Regime::OwlRl, &imports)` | `verify(warrant, &p, &c)` | `certain_answers(&p, &bgp, Regime::OwlRl, &imports)` |
 | CLI | `purrdf entails --regime owl-rl --premise P --conclusion C` | `… --conclusion C --verify` | `… --pattern BGP` |
-| Python | `purrdf.entail.graph_entails("owl-rl", p, c, imports)` | `purrdf.entail.verify_entailment(...)` | `purrdf.entail.certain_answers("owl-rl", p, bgp, imports)` |
-| JavaScript / WebAssembly | `entailGraphEntails("owl-rl", p, c, iris, docs)` | `entailVerifyEntailment(...)` | `entailCertainAnswers(...)` |
+| Python | `purrdf.entail.graph_entails("owl-rl", p, c, imports, premise_iris)` | `purrdf.entail.verify_entailment(...)` | `purrdf.entail.certain_answers("owl-rl", p, bgp, imports, premise_iris)` |
+| JavaScript / WebAssembly | `entailGraphEntails("owl-rl", p, c, iris, docs, premiseIris)` | `entailVerifyEntailment(...)` | `entailCertainAnswers(...)` |
 | C | `purrdf_entail_graph_entails(...)` | `purrdf_entail_verify_entailment(...)` | `purrdf_entail_certain_answers(...)` |
 
 Two things differ from the materializing table above, and both are consequences of
@@ -110,8 +110,10 @@ the question rather than of any host:
   is a different premise. PurRDF fetches nothing, so the closure arrives as
   caller-supplied configuration: an ordered list of `(ontology IRI, document)`
   pairs, spelled `--import IRI=FILE` on the command line. An import needs no pair
-  when it names the premise document itself (the CLI's `file://` retrieval IRI or
-  `--base`), or an ontology the premise already holds (`<X> a owl:Ontology`, or an
+  when it names the premise document itself — the CLI's `file://` retrieval IRI or
+  `--base`, and on the Python, WebAssembly and C hosts the `premise_iris` argument
+  (`premiseIris` in JavaScript), the IRIs the caller read the premise from, `[]` for
+  bare text — or an ontology the premise already holds (`<X> a owl:Ontology`, or an
   `owl:versionIRI` naming it). Any other unresolved import is a refusal naming the document, never
   a silently truncated premise.
 

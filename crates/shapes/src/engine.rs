@@ -2803,7 +2803,7 @@ where
 /// Without a shapes graph both consumers retain the same view, sharing its lazy
 /// class-membership analysis. When a shapes-graph IRI is known, SPARQL receives a
 /// composite with every shapes row placed into that named graph.
-fn build_projected_data(
+pub(crate) fn build_projected_data(
     data: Arc<RdfDataset>,
     shapes: &Shapes,
     override_graph: Option<&str>,

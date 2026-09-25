@@ -1333,6 +1333,11 @@ export function entailExplainConclusion(
  * pattern or import document, on import arrays of different lengths, on a duplicate or
  * empty import IRI, on a pattern that names a graph, on an `owl:imports` the table does
  * not resolve and the premise does not hold, and on an inconsistent premise.
+ *
+ * `premiseIris` are the IRIs the premise document was read from — its retrieval IRI or
+ * parse base, when the host knows one. An `owl:imports` of one of them names the premise
+ * itself and is resolved in place. The empty array is the ordinary case for bare text;
+ * like the import arrays it is required, in the same position on every host.
  */
 export function entailCertainAnswers(
   regime: EntailmentRegime | string,
@@ -1340,6 +1345,7 @@ export function entailCertainAnswers(
   pattern: string,
   importIris: readonly string[],
   importDocuments: readonly string[],
+  premiseIris: readonly string[],
 ): ReasoningAnswer;
 
 /**
@@ -1367,6 +1373,7 @@ export function entailGraphEntails(
   conclusion: string,
   importIris: readonly string[],
   importDocuments: readonly string[],
+  premiseIris: readonly string[],
 ): ReasoningAnswer;
 
 /**
@@ -1389,6 +1396,7 @@ export function entailVerifyEntailment(
   conclusion: string,
   importIris: readonly string[],
   importDocuments: readonly string[],
+  premiseIris: readonly string[],
 ): ReasoningAnswer;
 
 /**
@@ -1402,6 +1410,97 @@ export function shaclEntail(
   dataNt: string,
   shapesBase?: string,
 ): string;
+
+/**
+ * The outcome of `shaclApplyRules`. Like every other class in this package it owns
+ * wasm memory: call `free()`.
+ */
+export class ShaclRulesInference {
+  free(): void;
+  /**
+   * The INFERENCE GRAPH — the inferred triples only, never the data graph — as
+   * N-Triples 1.2, one triple per line, in canonical order.
+   */
+  readonly inferred: string;
+  /**
+   * The proof of every inferred triple, or `undefined` when `explain` was not set:
+   * `derived S P O .`, then `  rule R` and one `  premise S P O .` per fact the rule's
+   * body matched, or `  data-block` for a SPARQL 1.2 RL data-block triple.
+   */
+  readonly proof?: string;
+}
+
+/**
+ * Run exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
+ * Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
+ * `srl`. Naming neither or both throws. `shapesBase` / `srlBase` are the documents' base
+ * IRIs.
+ *
+ * `maxTermGeneratingRounds` bounds the evaluation rounds that infer a term the graph did
+ * not hold; one more throws naming the limit. Omitted, the engine default (65,536)
+ * applies. A host running UNTRUSTED rule sets should lower it: an exponential rule set
+ * reaches the engine's fixed arena and join ceilings only slowly under the default.
+ */
+export function shaclApplyRules(
+  dataNt: string,
+  shapesTtl?: string,
+  srl?: string,
+  shapesBase?: string,
+  srlBase?: string,
+  explain?: boolean,
+  maxTermGeneratingRounds?: bigint,
+): ShaclRulesInference;
+
+/**
+ * Evaluate ONE node expression of the Turtle shapes graph against a focus node of the
+ * N-Triples data graph — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph,
+ * focusNode, scope)` — returning its output nodes as N-Triples 1.2 terms, in the order the
+ * expression's sequence semantics define.
+ *
+ * `expr` is an absolute IRI or `"_:label"` for a blank node the shapes document labels
+ * so; `focus` is an absolute IRI or any N-Triples term; `scope` is an array of
+ * `"NAME=TERM"` bindings read by `shnex:var "NAME"`. Throws on a label the shapes
+ * document never wrote, a binding named `focusNode` or bound twice, and any parse or
+ * evaluation failure.
+ */
+export function shaclEvalNodeExpr(
+  shapesTtl: string,
+  dataNt: string,
+  expr: string,
+  focus: string,
+  scope?: readonly string[],
+  shapesBase?: string,
+): string[];
+
+/**
+ * The cold-certify report of a shapes graph, returned by `shaclLintShapes`. Like every
+ * other class in this package it owns wasm memory: call `free()`.
+ */
+export class ShaclLintReport {
+  free(): void;
+  /**
+   * No finding: the loader accepted the graph and every `shacl-shacl.ttl` result is
+   * superseded (flagged there, well-formed SHACL 1.2 Core).
+   */
+  readonly clean: boolean;
+  /** One for a load refusal, plus every `shacl-shacl.ttl` result no supersession covers. */
+  readonly findings: number;
+  /** The loader's refusal, or `undefined` when it accepted the graph. */
+  readonly loadError?: string;
+  /**
+   * The deterministic text every PurRDF host prints: the `load`, `shacl-shacl` and
+   * `functions` (`call BINDING <IRI> in OWNER`) sections, then `findings N` and
+   * `clean true|false`.
+   */
+  readonly report: string;
+}
+
+/**
+ * Certify a Turtle shapes graph COLD: the loader's verdict, every result of validating it
+ * against the W3C `shacl-shacl.ttl`, and which implementation every node-expression
+ * function call binds to. Throws only when the document is not Turtle.
+ */
+export function shaclLintShapes(shapesTtl: string, shapesBase?: string): ShaclLintReport;
 /**
  * A SHACL severity IRI. The five built-in levels SHACL 1.2 Core names, most severe
  * first; any other IRI is a custom severity and is carried verbatim.

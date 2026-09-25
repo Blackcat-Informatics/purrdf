@@ -172,6 +172,34 @@ Complete SHACL Core, SHACL-SPARQL constraints/targets, and SHACL-AF `sh:rule`
 entailment via `shapes.entail(...)`. Reusable parsed shapes are available as
 `shapes.Shapes(shapes_ttl).validate_nt(data_nt)`.
 
+Three tools sit beside validation, each the same library call the CLI, WebAssembly
+and C surfaces make:
+
+```python
+# Run the SHACL 1.2 rules of a shapes graph, or a SPARQL 1.2 RL rule set (srl=...),
+# and get the INFERENCE GRAPH: the inferred triples only, as N-Triples. With
+# explain=True, "proof" carries the proof of every inferred triple.
+out = shapes.apply_rules(my_data, my_shapes, explain=True)
+out["inferred"], out["proof"]
+
+# An untrusted rule set: lower the term-generating round limit (default 65,536),
+# so a divergent rule set fails fast instead of running long.
+shapes.apply_rules(my_data, srl=untrusted_rules, max_term_generating_rounds=64)
+
+# Evaluate one node expression of a shapes graph against a focus node. The
+# expression is an IRI or "_:label"; the scope binds shnex:var names.
+shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
+                      "http://example.org/a", scope={"suffix": '"!"'})
+
+# Certify a shapes graph: the loader's verdict, the W3C shacl-shacl.ttl results,
+# and which implementation every function call binds to.
+lint = shapes.lint_shapes(my_shapes)
+lint["clean"], lint["findings"], lint["calls"], lint["report"]
+```
+
+A malformed shapes graph is a `lint_shapes` report with findings, not an
+exception; only a document that is not Turtle raises `ValueError`.
+
 ## Validate with ShEx
 
 ```python
@@ -341,9 +369,9 @@ table* whether a premise entails a conclusion *graph*.
 
 | Service | Call | Answer |
 | --- | --- | --- |
-| Certain answers | `entail.certain_answers(regime, data, pattern, imports)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
-| Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
-| Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
+| Certain answers | `entail.certain_answers(regime, data, pattern, imports, premise_iris)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
+| Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports, premise_iris)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
+| Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports, premise_iris)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
 
 `pattern` is N-Triples with `?name` in any position, the **predicate** included; a blank
 node in it is a non-distinguished variable, constrained by the match and not projected,
@@ -397,6 +425,12 @@ same position on all four hosts, so one call shape works from Python, from JavaS
 from C and from Rust. Resolution is transitive to a fixpoint, so a supplied document's
 own `owl:imports` is followed too.
 
+`premise_iris` is the list of IRIs the premise document was read from — its URL, or the
+base you parsed it under, when you know one. An `owl:imports` of one of those names the
+premise itself and is resolved in place, with no `imports` entry; so is an import of an
+ontology the premise already declares. Text you were handed with no location has no such
+IRI, and `[]` is that ordinary case. Like `imports`, the argument is required.
+
 ```python
 from purrdf import entail
 
@@ -416,14 +450,14 @@ conclusion = (
 )
 
 answer, _ = entail.graph_entails(
-    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)]
+    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)], []
 )
 assert "entailment entailed" in answer
 
 # The same call with nothing supplied refuses BY NAME rather than reasoning over a
 # premise that is missing the axioms it told you about.
 try:
-    entail.graph_entails("owl-rl", premise, conclusion, [])
+    entail.graph_entails("owl-rl", premise, conclusion, [], [])
 except ValueError as refusal:
     assert "https://example.org/schema" in str(refusal)
 ```

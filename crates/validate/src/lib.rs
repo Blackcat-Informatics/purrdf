@@ -33,6 +33,9 @@
 //!   change path, returning the SARIF log beside the scope it describes.
 //! * [`entail::entail_to_ntriples_string`] — SHACL-AF `sh:rule` entailment →
 //!   canonical N-Triples.
+//! * [`shapes_tools`] — the shapes-graph tools beside validation: running SHACL or
+//!   SPARQL 1.2 RL rules ([`apply_rules_to_ntriples`]), evaluating one node expression
+//!   ([`eval_node_expr_to_terms`]) and certifying a shapes graph ([`lint_shapes_ttl`]).
 //! * [`regime`] — SPARQL entailment-regime materialization → canonical N-Quads
 //!   plus a deterministically rendered [`ReasoningReport`]. Despite the name, this
 //!   is *not* the same thing as [`entail`]; that module's docs spell the
@@ -63,6 +66,7 @@ pub mod product;
 pub mod regime;
 pub mod rules;
 pub mod shacl;
+pub mod shapes_tools;
 
 pub use build::{
     SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
@@ -100,5 +104,12 @@ pub use purrdf_shapes::engine::ChangeScope;
 /// re-exported so a host binding names them without depending on the engine
 /// crate — [`SarifOptions::validation`] is where they travel.
 pub use purrdf_shapes::engine::ValidationOptions;
+/// The cold-certify report [`lint_shapes_ttl`] returns, re-exported so a host binding names
+/// it without depending on the engine crate.
+pub use purrdf_shapes::lint::LintReport;
 pub use purrdf_shapes::report::ConformanceDisallows;
 pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
+pub use shapes_tools::{
+    NodeExprRequest, RulesOutcome, RulesRequest, apply_rules_to_ntriples, eval_node_expr_to_terms,
+    lint_shapes_ttl, parse_scope_binding,
+};

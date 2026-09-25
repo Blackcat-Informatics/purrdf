@@ -88,7 +88,11 @@ const reparsed = Dataset.parse(nq, "nquads");
   a shapes graph whose constraints read through SPARQL query text has no bounded
   footprint and falls back to validating everything;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
-  N-Triples.
+  N-Triples. Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
+  SHACL 1.2 rules or a SPARQL 1.2 RL rule set and returns the inference graph (and,
+  on request, its proof), `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?)`
+  evaluates one node expression, and `shaclLintShapes(shapesTtl)` certifies a shapes
+  graph against the W3C `shacl-shacl.ttl` and reports every function call's binding.
 - **Entailment regimes** — `entailMaterialize(document, regime, program)` closes an N-Quads
   (or N-Triples) document under any of the SEVEN SPARQL entailment regimes
   (`simple` / `rdf` / `rdfs` / `owl-rl` / `d` / `owl-direct` / `rif`; none is

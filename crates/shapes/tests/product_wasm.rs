@@ -31,6 +31,17 @@
 //! Both runs assert the *same* expectations, so the native run is not a weaker
 //! version of the wasm one — it is the other half of the comparison.
 //!
+//! # The W3C SHACL 1.2 subset
+//!
+//! The second half of this file runs a vendored W3C SHACL 1.2 subset the same
+//! way — the list components with `sh:detail`, `sh:closed sh:ByTypes`,
+//! `sh:uniqueValuesFor`, a node-expression entry evaluated through the standalone
+//! evaluator every host reaches, a SPARQL 1.2 RL evaluation, and a shapes graph
+//! that merges all three vendored SHACL 1.2 vocabularies — each graded against the
+//! expectation the W3C file itself states, on whichever target runs it. A
+//! behaviour that holds natively but not in a browser fails here rather than in a
+//! user's page.
+//!
 //! # No filesystem, on purpose
 //!
 //! Nothing here opens a file. The shapes graph, the data graph and the golden
@@ -128,4 +139,292 @@ fn the_committed_golden_restores_on_this_target() {
         "the committed golden restored on this target to a validator that answers differently \
          from a fresh parse of the same shapes graph",
     );
+}
+
+// ── The W3C SHACL 1.2 subset ──────────────────────────────────────────────────
+
+mod shacl12_subset {
+    use std::sync::Arc;
+
+    use purrdf::RdfDataset;
+    use purrdf_shapes::data::{GraphFilter, native_quads};
+    use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
+    use purrdf_shapes::free_expression::{FreeExpression, evaluate};
+    use purrdf_shapes::shapes::from_dataset_with_config_and_graph;
+    use purrdf_shapes::srl::{self, InferOptions};
+    use purrdf_shapes::term::{NamedNode, Term};
+    use purrdf_shapes::text_ingest::parse_turtle_document;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    const SH: &str = "http://www.w3.org/ns/shacl#";
+    const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
+    const SHT: &str = "http://www.w3.org/ns/shacl-test#";
+
+    /// The base every vendored file parses under: the files name themselves with `<>`
+    /// and their entries relatively, and no filesystem path exists on wasm32.
+    fn base(name: &str) -> String {
+        format!("http://example.org/shacl12/{name}")
+    }
+
+    fn iri(value: &str) -> Term {
+        Term::NamedNode(NamedNode::new_unchecked(value))
+    }
+
+    fn objects(dataset: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
+        native_quads(
+            dataset,
+            Some(subject),
+            Some(&iri(predicate)),
+            None,
+            GraphFilter::AnyGraph,
+        )
+        .into_iter()
+        .map(|(_, _, object)| object)
+        .collect()
+    }
+
+    fn one(dataset: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
+        let mut found = objects(dataset, subject, predicate);
+        assert!(found.len() <= 1, "{subject} has several {predicate}");
+        found.pop()
+    }
+
+    /// A term as a grading key: a blank node is `_` (its label is the parser's, not the
+    /// test's), an absent one `-`.
+    fn key(term: Option<&Term>) -> String {
+        match term {
+            None => "-".to_owned(),
+            Some(Term::BlankNode(_)) => "_".to_owned(),
+            Some(term) => term.to_string(),
+        }
+    }
+
+    /// The members of the RDF list headed by `head`.
+    fn list(dataset: &RdfDataset, head: &Term) -> Vec<Term> {
+        let mut out = Vec::new();
+        let mut cursor = head.clone();
+        while cursor != iri(&format!("{RDF}nil")) {
+            out.push(one(dataset, &cursor, &format!("{RDF}first")).expect("a list cell"));
+            cursor = one(dataset, &cursor, &format!("{RDF}rest")).expect("a list cell");
+        }
+        out
+    }
+
+    /// Validate an `sht:Validate` file against itself and grade the report's top-level
+    /// results — focus, component, severity, source shape, value and path — and its
+    /// `sh:conforms` against the file's own `mf:result`.
+    fn grade_validate(name: &str, text: &str, entry: &str) {
+        let document = parse_turtle_document(text, Some(&base(name))).expect("the file parses");
+        let shapes =
+            from_dataset_with_config_and_graph(&document.dataset, &document.prefixes, None, None)
+                .unwrap_or_else(|e| panic!("{name}: the shapes graph loads on this target: {e}"));
+        let report = validate_dataset_with_shapes_graph(&document.dataset, &shapes, None)
+            .unwrap_or_else(|e| panic!("{name}: validation runs on this target: {e}"));
+        let mut produced: Vec<String> = report
+            .results
+            .iter()
+            .map(|result| {
+                format!(
+                    "{} {} <{}> {} {} {}",
+                    key(Some(&result.focus_node)),
+                    result.source_constraint_component,
+                    result.severity.iri(),
+                    key(Some(&result.source_shape)),
+                    key(result.value.as_ref()),
+                    key(result.result_path.as_ref()),
+                )
+            })
+            .collect();
+        produced.sort();
+
+        let dataset = &document.dataset;
+        let entry = iri(&base(entry));
+        let expected_report = one(dataset, &entry, &format!("{MF}result")).expect("mf:result");
+        let conforms = one(dataset, &expected_report, &format!("{SH}conforms"))
+            .expect("sh:conforms")
+            .to_string();
+        let mut expected: Vec<String> = objects(dataset, &expected_report, &format!("{SH}result"))
+            .iter()
+            .map(|result| {
+                let field = |local: &str| one(dataset, result, &format!("{SH}{local}"));
+                format!(
+                    "{} {} {} {} {} {}",
+                    key(field("focusNode").as_ref()),
+                    key(field("sourceConstraintComponent").as_ref()),
+                    key(field("resultSeverity").as_ref()),
+                    key(field("sourceShape").as_ref()),
+                    key(field("value").as_ref()),
+                    key(field("resultPath").as_ref()),
+                )
+            })
+            .collect();
+        expected.sort();
+        assert!(!expected.is_empty(), "{name}: a non-vacuous expectation");
+        assert_eq!(produced, expected, "{name}: the results on this target");
+        assert_eq!(
+            conforms.contains("true"),
+            report.conforms,
+            "{name}: sh:conforms on this target"
+        );
+    }
+
+    /// SHACL 1.2 Core `sh:memberShape`, with `sh:detail` results.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn member_shape_001_on_this_target() {
+        grade_validate(
+            "core/node/memberShape-001.ttl",
+            include_str!("../../../vectors/shacl12/tests/core/node/memberShape-001.ttl"),
+            "core/node/memberShape-001",
+        );
+    }
+
+    /// SHACL 1.2 Core `sh:closed sh:ByTypes`.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn closed_by_types_003_on_this_target() {
+        grade_validate(
+            "core/node/closed-003.ttl",
+            include_str!("../../../vectors/shacl12/tests/core/node/closed-003.ttl"),
+            "core/node/closed-003",
+        );
+    }
+
+    /// SHACL 1.2 Core `sh:uniqueValuesFor`.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn unique_values_for_001_on_this_target() {
+        grade_validate(
+            "core/node/uniqueValuesFor-001.ttl",
+            include_str!("../../../vectors/shacl12/tests/core/node/uniqueValuesFor-001.ttl"),
+            "core/node/uniqueValuesFor-001",
+        );
+    }
+
+    /// Every `sht:EvalNodeExpr` entry of `shnex/concat.ttl`, through the standalone
+    /// evaluator every host reaches, graded term for term and in order against its
+    /// `mf:result` list.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn node_expr_concat_on_this_target() {
+        let name = "node-expr/shnex/concat.ttl";
+        let document = parse_turtle_document(
+            include_str!("../../../vectors/shacl12/tests/node-expr/shnex/concat.ttl"),
+            Some(&base(name)),
+        )
+        .expect("the file parses");
+        let dataset: &Arc<RdfDataset> = &document.dataset;
+        let manifest = iri(&base(name));
+        let entries = list(
+            dataset,
+            &one(dataset, &manifest, &format!("{MF}entries")).expect("mf:entries"),
+        );
+        assert_eq!(entries.len(), 3, "the file's three entries");
+        for entry in entries {
+            let action = one(dataset, &entry, &format!("{MF}action")).expect("mf:action");
+            let root = one(dataset, &action, &format!("{SHT}nodeExpr")).expect("sht:nodeExpr");
+            // No `sht:focusNode`: a blank node the graph never mentions, as the native
+            // harness uses.
+            let focus = Term::blank("absent-focus-node");
+            let produced = evaluate(&FreeExpression {
+                shapes: dataset,
+                prefixes: &document.prefixes,
+                root: &root,
+                data: dataset,
+                focus: &focus,
+                scope: &[],
+            })
+            .unwrap_or_else(|e| panic!("{entry}: evaluates on this target: {e}"));
+            let expected = list(
+                dataset,
+                &one(dataset, &entry, &format!("{MF}result")).expect("mf:result"),
+            );
+            assert_eq!(produced, expected, "{entry} on this target");
+        }
+    }
+
+    /// A SPARQL 1.2 RL evaluation entry: the inference graph equals the results file.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn srl_eval_filter_01_on_this_target() {
+        let document = srl::parse_and_check(
+            include_str!("../../../vectors/shacl12/tests/sparql-rl/eval/eval-filter-01.srl"),
+            Some(&base("sparql-rl/eval/eval-filter-01.srl")),
+        )
+        .expect("the rule set parses");
+        let data = parse_turtle_document(
+            include_str!("../../../vectors/shacl12/tests/sparql-rl/eval/eval-filter-01-data.ttl"),
+            Some(&base("sparql-rl/eval/eval-filter-01-data.ttl")),
+        )
+        .expect("the data parses");
+        let inference = srl::infer(&document, &data.dataset, &InferOptions::default())
+            .expect("the rule set runs on this target");
+        let results = parse_turtle_document(
+            include_str!(
+                "../../../vectors/shacl12/tests/sparql-rl/eval/eval-filter-01-results.ttl"
+            ),
+            Some(&base("sparql-rl/eval/eval-filter-01-results.ttl")),
+        )
+        .expect("the results parse");
+        let mut expected: Vec<String> = native_quads(
+            results.dataset.as_ref(),
+            None,
+            None,
+            None,
+            GraphFilter::AnyGraph,
+        )
+        .into_iter()
+        .map(|(s, p, o)| format!("{s} {p} {o} .\n"))
+        .collect();
+        expected.sort();
+        assert!(!expected.is_empty(), "a non-vacuous expectation");
+        assert_eq!(inference.inferred_ntriples(), expected.concat());
+    }
+
+    /// A shapes graph that merges all three vendored SHACL 1.2 vocabularies — every
+    /// built-in function and component DECLARED, none with a body — loads on this
+    /// target, and `sh:sparqlExpr` with `sh:prefixes` still evaluates natively: exactly
+    /// the instance whose `ex:size` is not above 2 violates.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn merged_vocabularies_load_and_validate_on_this_target() {
+        let shapes_text = [
+            include_str!("../spec/shacl.ttl"),
+            include_str!("../spec/shnex.ttl"),
+            include_str!("../spec/shnex-sparql.ttl"),
+            r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://example.org/ns#> .
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ] .
+ex:Big a sh:NodeShape ;
+  sh:targetClass ex:Item ;
+  sh:expression [ sh:sparqlExpr "EXISTS { $this ex:size ?s FILTER(?s > 2) }" ;
+                  sh:prefixes ex:Prefixes ] .
+"#,
+        ]
+        .join("\n");
+        let document = parse_turtle_document(&shapes_text, Some(&base("merged.ttl")))
+            .expect("the merged vocabularies parse");
+        let shapes =
+            from_dataset_with_config_and_graph(&document.dataset, &document.prefixes, None, None)
+                .unwrap_or_else(|e| panic!("the merged vocabularies load on this target: {e}"));
+        let data = parse_turtle_document(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             ex:small a ex:Item ; ex:size 1 .\nex:large a ex:Item ; ex:size 3 .\n",
+            None,
+        )
+        .expect("data parses");
+        let report = validate_dataset_with_shapes_graph(&data.dataset, &shapes, None)
+            .expect("validation runs on this target");
+        let focus: Vec<String> = report
+            .results
+            .iter()
+            .map(|result| result.focus_node.to_string())
+            .collect();
+        assert_eq!(focus, vec!["<http://example.org/ns#small>".to_owned()]);
+    }
 }

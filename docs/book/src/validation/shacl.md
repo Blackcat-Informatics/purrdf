@@ -407,6 +407,79 @@ make graphql-oracle
 GraphQL.js is dev-only. Emission and value translation remain filesystem-free,
 wasm-clean Rust.
 
+## Rules, node expressions and certifying a shapes graph
+
+Three tools sit beside validation. Every host reaches the same library entry
+point, so the command line, Python, WebAssembly and C cannot disagree about the
+answer.
+
+| Tool | Rust | CLI | Python (`purrdf.shapes`) | WebAssembly | C ABI |
+|---|---|---|---|---|---|
+| Run rules, write the inference graph | `purrdf_shapes::infer`, `srl::infer` | `purrdf rules` | `apply_rules` | `shaclApplyRules` | `purrdf_shacl_apply_rules` |
+| Evaluate one node expression | `free_expression::evaluate` | `purrdf node-expr` | `eval_node_expr` | `shaclEvalNodeExpr` | `purrdf_shacl_eval_node_expr` |
+| Certify a shapes graph | `lint::lint` | `purrdf shapes lint` | `lint_shapes` | `shaclLintShapes` | `purrdf_shacl_lint_shapes` |
+
+**Rules.** The rule source is either a shapes graph, whose SHACL 1.2 rules run
+(its default rule set), or a SPARQL 1.2 RL rule set, but not both. The result is
+the **inference graph**: the inferred triples only, never the data graph, as
+N-Triples 1.2 in one canonical order. On request, each host also returns the
+proof of every inferred triple. The proof is one block per triple: `derived S P
+O .`, then `  rule R` and one `  premise S P O .` line for each fact the rule's
+body matched. A SPARQL 1.2 RL data-block triple has `  data-block` instead.
+
+Every host takes the same **term-generating round limit**. This bounds the
+evaluation rounds that infer a term the graph did not already hold, and one more
+round fails the run naming the limit. The default is 65,536 rounds. **A host
+running untrusted rule sets should lower it**: a rule set whose term generation
+diverges (an exponential one in particular) reaches the engine's fixed arena and
+join ceilings only slowly under the default.
+
+```python
+import purrdf
+
+out = purrdf.shapes.apply_rules(data_nt, shapes_ttl, explain=True,
+                                max_term_generating_rounds=1024)
+print(out["inferred"])   # the inference graph, N-Triples
+print(out["proof"])      # the proof text
+out = purrdf.shapes.apply_rules(data_nt, srl=srl_text)  # SPARQL 1.2 RL
+```
+
+**Node expressions.** One node expression of a shapes graph is evaluated
+against a focus node of a data graph, as SHACL 1.2 Node Expressions'
+`evalExpr(expr, focusGraph, focusNode, scope)`. The expression is parsed by the
+shapes parser itself, so custom functions, shape references and `sh:prefixes`
+bind as they do inside a shape. The expression is named by IRI, or by `_:label`
+for a blank node the shapes document labels. Scope variables are bound by name
+and read by `shnex:var`. The output nodes come back as N-Triples terms in the
+order the expression's sequence semantics define.
+
+```python
+purrdf.shapes.eval_node_expr(shapes_ttl, data_nt, "_:suffix",
+                             "http://example.org/a", scope={"suffix": '"!"'})
+```
+
+**Certifying a shapes graph.** Loading a shapes graph is the hot path: it
+refuses the first construct it cannot evaluate faithfully, and does not pay for
+validating the graph against the W3C `shacl-shacl.ttl`. Linting pays that cost
+once, on request, and reports three sections:
+
+1. `load`: the loader's verdict, accepted or the refusal it raised.
+2. `shacl-shacl`: every result of validating the shapes graph against the
+   vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core
+   relaxations (`sh:closed sh:ByTypes`, a list-valued `sh:nodeKind`, a
+   path-valued `sh:equals`, a node-expression `sh:targetNode`). A result SHACL
+   1.2 Core makes well-formed is marked `superseded` and is not a finding, but
+   only when the loader accepted the graph.
+3. `functions`: which implementation every node-expression function call binds
+   to — `native`, `custom`, `sparql-registered` or `host-extension`. For a shapes
+   graph that merges the W3C SHACL 1.2 vocabularies, a `sh:sparqlExpr` call
+   binds `native` even though the graph declares `sh:SPARQLExprExpression`.
+
+A report is clean when the loader accepted the graph and every `shacl-shacl`
+result is superseded. Every host renders the same deterministic text; the
+[CLI reference](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/cli/README.md#shapes-lint)
+shows it.
+
 ## From Python
 
 ```python
@@ -418,7 +491,8 @@ print(report["results"])   # list of violation dicts
 ```
 
 Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
-`component`, `source_shape`, and `message`.
+`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each a
+dict with `text` and its `language` / `direction` / `datatype` when present).
 
 ## The report is a dataset
 
@@ -456,7 +530,7 @@ let data = r#"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-synta
 <http://example.org/alice> <http://example.org/age> "nope" .
 "#;
 
-let sarif = validate_to_sarif_string(shapes, data, &SarifOptions::default())
+let sarif = validate_to_sarif_string(shapes, None, data, &SarifOptions::default())
     .expect("sarif produced");
 assert!(sarif.contains("\"version\": \"2.1.0\""));
 ```

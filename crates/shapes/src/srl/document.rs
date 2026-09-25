@@ -284,6 +284,13 @@ impl InferOptions {
     /// term from a triple term it matched, every round; SPARQL 1.2 RL §C: "Applications
     /// should take care to limit the amount of computation and memory usage that can be
     /// caused by applying a SPARQL-RL rule set."
+    ///
+    /// The default is `purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS`
+    /// (65,536), which a trusted rule set that genuinely counts far needs. A host running
+    /// UNTRUSTED rule sets should LOWER it: a rule set whose term generation diverges —
+    /// an exponential one in particular — reaches the engine's fixed arena and join
+    /// ceilings only slowly under the default, and this limit is what bounds the time
+    /// such a rule set can take.
     #[must_use]
     pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
         self.max_term_generating_rounds = rounds;

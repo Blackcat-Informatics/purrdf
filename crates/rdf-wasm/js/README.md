@@ -232,6 +232,24 @@ ownership, and all limits. Complete examples are in
   through SPARQL query text, no bounded footprint exists for it, the call fell
   back to a FULL validation, and an empty log means *the graph conforms*. Call
   `free()` when done.
+- `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
+  maxTermGeneratingRounds?)` — runs exactly one rule source, the SHACL 1.2 rules of
+  `shapesTtl` or the SPARQL 1.2 RL rule set `srl`, and returns a
+  `ShaclRulesInference`: `inferred` is the inference graph (the inferred triples
+  only) as N-Triples, and `proof` is the proof of every inferred triple when
+  `explain` is set. `maxTermGeneratingRounds` (a `bigint`, default 65,536) bounds
+  the rounds that infer a new term; lower it for an untrusted rule set, which
+  otherwise reaches the engine's fixed ceilings only slowly. Call `free()` when
+  done.
+- `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?)` —
+  evaluates one node expression of the shapes graph (`expr` is an IRI or
+  `"_:label"`) against a focus node, with `scope` as `"NAME=TERM"` strings, and
+  returns the output nodes as N-Triples terms in sequence order.
+- `shaclLintShapes(shapesTtl, shapesBase?)` — certifies a shapes graph: the
+  loader's verdict, every result of validating it against the W3C
+  `shacl-shacl.ttl`, and which implementation every function call binds to.
+  Returns a `ShaclLintReport` with `clean`, `findings`, `loadError` and the
+  deterministic `report` text. Call `free()` when done.
 - `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
   materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /
   `"owl-rl"` / `"d"` / `"owl-direct"` / `"rif"` — none is refused), returning

@@ -3,7 +3,7 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, twelve subcommands ([`Command`]), and two global flags
+//! One pipeline, sixteen subcommands ([`Command`]), and two global flags
 //! (`--loss-ledger`, `--jsonld-options`). The format / regime / results-format
 //! choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
@@ -278,7 +278,7 @@ impl Cli {
     }
 }
 
-/// The twelve pipeline subcommands.
+/// The sixteen pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Convert RDF between syntaxes, and to/from the native pack container.
@@ -1158,6 +1158,223 @@ pub(crate) enum Command {
         /// The shacl subcommand to run.
         #[command(subcommand)]
         command: ShaclCommand,
+    },
+    /// Run a rule set over a data graph and write the INFERENCE GRAPH: the SHACL 1.2 rules
+    /// of a shapes graph (`--shapes`), or a SPARQL 1.2 RL rule set (`--srl`).
+    ///
+    /// The output is the inferred triples alone — SHACL 1.2 Inference Rules' "inferred
+    /// triples", SPARQL 1.2 RL's "graph GI of inferred triples" — never the data graph they
+    /// were inferred from, serialized in the `--to` syntax in one canonical order, so two
+    /// runs over the same inputs write identical bytes. Both frontends lower to the one
+    /// rules engine every PurRDF host reaches (`purrdf_shapes::infer`,
+    /// `purrdf_shapes::srl::infer`).
+    ///
+    /// Exit codes: **0** when the rule set ran to completion, whether it inferred anything
+    /// or not. **1** for a malformed data graph, shapes graph or rule set; a rule set that is
+    /// ill-formed or cannot be stratified; a `sh:ruleProcessor` this engine does not handle;
+    /// a rule that fails during execution; and a rule set that passes
+    /// `--max-term-generating-rounds` — SHACL 1.2 Inference Rules lets an engine "report a
+    /// failure after a pre-configured maximum iteration count has been exceeded", and this
+    /// one does, writing no graph. **2** for a usage error.
+    ///
+    /// The count of inferred triples is always written to stderr as `rules inferred N`.
+    Rules {
+        /// The SHACL shapes graph `FILE` whose rules run (its default rule set), or `-` for
+        /// stdin (which requires `--shapes-from`). Exactly one of this and `--srl` is
+        /// required: a shapes graph and a SPARQL 1.2 RL rule set are two rule sets, and
+        /// neither specification defines running them as one.
+        #[arg(
+            long,
+            value_name = "FILE",
+            required_unless_present = "srl",
+            conflicts_with = "srl"
+        )]
+        shapes: Option<String>,
+        /// Shapes-graph format override; inferred from the shapes path's extension when
+        /// omitted.
+        #[arg(long = "shapes-from", value_enum, requires = "shapes")]
+        shapes_from: Option<CliRdfFormat>,
+        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+        /// of its `file://` retrieval IRI; also its own IRI for `owl:imports`. The same flag
+        /// `validate --shapes-base` is.
+        #[arg(
+            long = "shapes-base",
+            value_name = "IRI",
+            value_parser = parse_base_iri,
+            requires = "shapes"
+        )]
+        shapes_base: Option<String>,
+        /// The SPARQL 1.2 RL rule-set `FILE`, or `-` for stdin.
+        #[arg(long, value_name = "FILE")]
+        srl: Option<String>,
+        /// Base IRI the rule set's relative IRI references resolve against, in place of its
+        /// `file://` retrieval IRI. Stdin has no retrieval IRI, so this is the only base a
+        /// `--srl -` rule set can have.
+        #[arg(
+            long = "srl-base",
+            value_name = "IRI",
+            value_parser = parse_base_iri,
+            requires = "srl"
+        )]
+        srl_base: Option<String>,
+        /// Resolve an import of the rule source to a LOCAL document: an `owl:imports` of
+        /// the shapes graph, or an `IMPORTS` of the SPARQL 1.2 RL rule set. Repeatable and
+        /// followed transitively. PurRDF fetches nothing, so an import no pair resolves is
+        /// refused by name (exit 1), and a pair the imports never reach is refused as
+        /// unused (exit 2).
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
+        /// Write the PROOF of every inferred triple: bare writes it to stderr,
+        /// `--explain=PATH` writes it to PATH. One block per inferred triple, in the
+        /// output's order — `derived S P O .`, then `  rule R` and one `  premise S P O .`
+        /// per fact the rule's body matched (a SHACL rule, executed as one producer over
+        /// the whole graph, lists none), or `  data-block` for a SPARQL 1.2 RL data-block
+        /// triple. Terms are N-Triples 1.2, with the blank-node labels of the evaluation.
+        #[allow(clippy::option_option)]
+        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+        explain: Option<Option<PathBuf>>,
+        /// Permit at most `N` evaluation rounds that infer a term the evaluation graph did
+        /// not hold; one more fails the run naming the limit. Defaults to 65,536, which a
+        /// trusted rule set that genuinely counts far needs. Running an UNTRUSTED rule set,
+        /// lower it: a rule set whose term generation diverges — an exponential one in
+        /// particular — reaches the engine's fixed arena and join ceilings only slowly
+        /// under the default, and this is what bounds the time it can take.
+        #[arg(long = "max-term-generating-rounds", value_name = "N")]
+        max_term_generating_rounds: Option<u64>,
+        /// Data-graph format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Output format override; inferred from the output extension when omitted.
+        #[arg(long, value_enum)]
+        to: Option<CliRdfFormat>,
+        /// Base IRI, on BOTH legs of the data: a relative IRI in `IN` resolves against it
+        /// while parsing, and a `--to` syntax that can write a base directive emits it as
+        /// the inference graph's base and relativizes against it.
+        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+        base: Option<String>,
+        /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+        /// Output path `OUT`, or `-` for stdout (which requires `--to`).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+    /// Evaluate ONE node expression of a shapes graph against a focus node of a data graph
+    /// — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph, focusNode, scope)`.
+    ///
+    /// The expression is a node of the shapes graph, parsed by the shapes parser itself,
+    /// so its custom-function calls, shape references and SPARQL prefixes bind exactly as
+    /// they would inside a shape. The answer is the expression's output nodes, one
+    /// N-Triples 1.2 term per line, in the order its sequence semantics define.
+    ///
+    /// Exit codes: **0** when the expression evaluated, whether to nodes or to none.
+    /// **1** for a malformed shapes graph or data graph, an expression that does not parse
+    /// or fails to evaluate, and an expression blank node the shapes document never
+    /// labelled. **2** for a usage error. The output count is always written to stderr as
+    /// `node-expr outputs N`.
+    NodeExpr {
+        /// The shapes graph `FILE` carrying the expression, or `-` for stdin (which
+        /// requires `--shapes-from`).
+        #[arg(long, value_name = "FILE")]
+        shapes: String,
+        /// Shapes-graph format override; inferred from the shapes path's extension when
+        /// omitted.
+        #[arg(long = "shapes-from", value_enum)]
+        shapes_from: Option<CliRdfFormat>,
+        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+        /// of its `file://` retrieval IRI.
+        #[arg(long = "shapes-base", value_name = "IRI", value_parser = parse_base_iri)]
+        shapes_base: Option<String>,
+        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document, as `validate
+        /// --import` does.
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
+        /// The expression node: an absolute IRI, or `_:LABEL` for a blank node the shapes
+        /// document labels `_:LABEL`. An IRI that is the subject of no triple is a constant
+        /// expression, evaluating to itself; a label the document never wrote is refused.
+        #[arg(long, value_name = "IRI|_:LABEL")]
+        expr: String,
+        /// The focus node: an absolute IRI, or any N-Triples 1.2 term (`"-3"^^<…>`,
+        /// `_:b`, …). A blank node names the node the data document labels so.
+        #[arg(long, value_name = "TERM")]
+        focus: String,
+        /// Bind a scope variable, read by `shnex:var "NAME"`: `NAME=TERM`, the term spelled
+        /// as `--focus` is. Repeatable; a name bound twice, and the name `focusNode` (which
+        /// SHACL 1.2 Node Expressions resolves to the focus node before the scope is
+        /// searched), are refused, since neither binding could ever be read.
+        #[arg(long, value_name = "NAME=TERM")]
+        scope: Vec<String>,
+        /// Data-graph format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing the DATA graph.
+        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+        base: Option<String>,
+        /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+        /// Output path `OUT`, or `-` for stdout (the default).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+    /// Shapes-graph authoring tools.
+    Shapes {
+        /// The shapes subcommand to run.
+        #[command(subcommand)]
+        command: ShapesCommand,
+    },
+}
+
+/// The `shapes` subcommands.
+#[derive(Subcommand, Debug)]
+pub(crate) enum ShapesCommand {
+    /// Certify a shapes graph, COLD: everything PurRDF can say about it before any data is
+    /// validated, in one deterministic report.
+    ///
+    /// Three sections. `load`: the loader's own verdict — accepted, or the refusal it
+    /// raised (an unknown `sh:` term, an ill-typed parameter, an unresolved function, …).
+    /// `shacl-shacl`: every result of validating the shapes graph, as data, against the
+    /// W3C's `shacl-shacl.ttl`, the shapes graph for shapes graphs; a result SHACL 1.2
+    /// Core makes well-formed where that file still flags it (`sh:closed sh:ByTypes`, a
+    /// list-valued `sh:nodeKind`, …) is marked `superseded NAME` and is not a finding.
+    /// `functions`: which implementation every node-expression function call binds to —
+    /// `native`, `custom`, `sparql-registered` or `host-extension`.
+    ///
+    /// Validation never pays for the `shacl-shacl.ttl` pass; this verb is where it is paid,
+    /// on request.
+    ///
+    /// Exit codes follow `shacl verify`, the other certify verb: **0** when the report is
+    /// clean — the loader accepted the graph and every `shacl-shacl` result is superseded.
+    /// **1** when it carries a finding, and for a document that does not parse or an
+    /// `owl:imports` no `--import` resolves; the report is still written when there is one.
+    /// **2** for a usage error. `shapes lint clean true|false` and `shapes lint findings N`
+    /// are always written to stderr.
+    Lint {
+        /// Shapes-graph format override; inferred from the path's extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI the shapes document's relative IRI references resolve against, in place
+        /// of its `file://` retrieval IRI.
+        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+        base: Option<String>,
+        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document, as `validate
+        /// --import` does: the graph certified is the one validation would use.
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
+        /// The graph-box role vocabulary NAMESPACE the loader is configured with, as
+        /// `validate --box-role-vocab`.
+        #[arg(long = "box-role-vocab", value_name = "NS")]
+        box_role_vocab: Option<String>,
+        /// The shapes-graph IRI the loader is configured with, as `validate
+        /// --shapes-graph`; resolved against the document's base.
+        #[arg(long = "shapes-graph", value_name = "IRI")]
+        shapes_graph: Option<String>,
+        /// Shapes-graph path `FILE`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "FILE", default_value = "-")]
+        input: String,
+        /// Report path `OUT`, or `-` for stdout (the default).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
     },
 }
 

@@ -3,7 +3,7 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as thirteen subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as sixteen subcommands:
 //!
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
@@ -31,6 +31,13 @@
 //!   one, `verify` runs the codec's cold-path canonical certification over one, and
 //!   `explain` decodes what one says it was compiled from without admitting it — see
 //!   [`shacl`] for why an untrusted product is an admission boundary rather than a cache.
+//! * `rules` — run the SHACL 1.2 rules of a shapes graph, or a SPARQL 1.2 RL rule set,
+//!   over a data graph and write the inference graph, with the proof of every inferred
+//!   triple under `--explain`;
+//! * `node-expr` — evaluate one node expression of a shapes graph against a focus node;
+//! * `shapes` — shapes-graph authoring tools; its `lint` verb certifies a shapes graph
+//!   cold: the loader's verdict, the W3C `shacl-shacl.ttl` results and every function
+//!   call's binding — see [`shapes_tools`].
 //!
 //! `reason` and `entails` are the two halves of entailment and neither is the
 //! other: `reason` computes a CLOSURE, which is what a caller wants who will go on
@@ -97,6 +104,7 @@ mod reason;
 mod report;
 mod shacl;
 mod shapes_source;
+mod shapes_tools;
 mod shex;
 mod sink;
 mod source;
@@ -114,7 +122,7 @@ use std::io::Read as _;
 use clap::Parser as _;
 use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
-use crate::cli::{Cli, Command, PackCommand, ReportTarget, ShaclCommand};
+use crate::cli::{Cli, Command, PackCommand, ReportTarget, ShaclCommand, ShapesCommand};
 use crate::error::{CliError, CliOutcome};
 use crate::governors::GovernorFlags;
 
@@ -513,6 +521,94 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             ShaclCommand::Verify { input } => shacl::verify(input),
             ShaclCommand::Explain { input } => shacl::explain(input),
             ShaclCommand::Diff { a, b } => shacl::diff(a, b),
+        }
+        .map(|()| CliOutcome::Complete),
+        Command::Rules {
+            shapes,
+            shapes_from,
+            shapes_base,
+            srl,
+            srl_base,
+            import,
+            explain,
+            max_term_generating_rounds,
+            from,
+            to,
+            base,
+            input,
+            output,
+        } => shapes_tools::run_rules(
+            &shapes_tools::RulesOptions {
+                shapes: shapes.as_deref(),
+                shapes_from: *shapes_from,
+                shapes_base: shapes_base.as_deref(),
+                srl: srl.as_deref(),
+                srl_base: srl_base.as_deref(),
+                imports: import,
+                explain: ReportTarget::decode(explain.as_ref()),
+                max_term_generating_rounds: *max_term_generating_rounds,
+                from: *from,
+                to: *to,
+                base: base.as_deref(),
+                input,
+                output,
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::NodeExpr {
+            shapes,
+            shapes_from,
+            shapes_base,
+            import,
+            expr,
+            focus,
+            scope,
+            from,
+            base,
+            input,
+            output,
+        } => shapes_tools::run_node_expr(
+            &shapes_tools::NodeExprOptions {
+                shapes,
+                shapes_from: *shapes_from,
+                shapes_base: shapes_base.as_deref(),
+                imports: import,
+                expr,
+                focus,
+                scope,
+                from: *from,
+                base: base.as_deref(),
+                input,
+                output,
+            },
+            &ledger_target,
+            jsonld_options.as_ref(),
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Shapes { command } => match command {
+            ShapesCommand::Lint {
+                from,
+                base,
+                import,
+                box_role_vocab,
+                shapes_graph,
+                input,
+                output,
+            } => shapes_tools::run_lint(
+                &shapes_tools::LintOptions {
+                    from: *from,
+                    base: base.as_deref(),
+                    imports: import,
+                    box_role_vocab: box_role_vocab.as_deref(),
+                    shapes_graph: shapes_graph.as_deref(),
+                    input,
+                    output,
+                },
+                &ledger_target,
+                jsonld_options.as_ref(),
+            ),
         }
         .map(|()| CliOutcome::Complete),
     }

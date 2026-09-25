@@ -298,6 +298,225 @@ pub fn shacl_entail(
 }
 
 // ---------------------------------------------------------------------------
+// Shapes-graph tools: rules, node expressions, lint
+// ---------------------------------------------------------------------------
+
+/// The outcome of `shaclApplyRules`: the inference graph, and its proof when one was
+/// asked for.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclRulesInference {
+    /// The inference graph as N-Triples.
+    inferred: String,
+    /// The proof text, when `explain` was set.
+    proof: Option<String>,
+}
+
+#[wasm_bindgen]
+impl ShaclRulesInference {
+    /// The INFERENCE GRAPH — the inferred triples only, never the data graph — as
+    /// N-Triples 1.2, one triple per line, in canonical order.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn inferred(&self) -> String {
+        self.inferred.clone()
+    }
+
+    /// The proof of every inferred triple, or `undefined` when `explain` was not set:
+    /// `derived S P O .`, then `  rule R` and one `  premise S P O .` per fact the rule's
+    /// body matched, or `  data-block` for a SPARQL 1.2 RL data-block triple.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn proof(&self) -> Option<String> {
+        self.proof.clone()
+    }
+}
+
+/// Run a rule set over `data_nt`. Native-testable core of [`shacl_apply_rules`]; a plain
+/// `String` error for the reason [`validate_to_sarif_impl`] gives.
+pub(crate) fn apply_rules_impl(
+    request: &purrdf_validate::RulesRequest<'_>,
+) -> Result<purrdf_validate::RulesOutcome, String> {
+    purrdf_validate::apply_rules_to_ntriples(request)
+}
+
+/// `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
+/// maxTermGeneratingRounds?)` → a `ShaclRulesInference`.
+///
+/// Runs exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
+/// Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
+/// `srl`. Naming neither or both throws. `shapesBase` / `srlBase` are the documents' base
+/// IRIs — a guest has no retrieval IRI to derive one from.
+///
+/// `maxTermGeneratingRounds` (a `bigint`) bounds the evaluation rounds that infer a term
+/// the graph did not hold; one more throws naming the limit. Omitted, the engine default
+/// (65,536) applies. A host running UNTRUSTED rule sets should lower it: an exponential
+/// rule set reaches the engine's fixed arena and join ceilings only slowly under the
+/// default, and the limit is what bounds the time it can take.
+///
+/// Throws on a document that does not parse, an ill-formed or unstratifiable rule set, a
+/// rule failing during execution, and a passed round limit. Call `.free()` on the result.
+#[wasm_bindgen(js_name = shaclApplyRules)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn shacl_apply_rules(
+    data_nt: &str,
+    shapes_ttl: Option<String>,
+    srl: Option<String>,
+    shapes_base: Option<String>,
+    srl_base: Option<String>,
+    explain: Option<bool>,
+    max_term_generating_rounds: Option<u64>,
+) -> Result<ShaclRulesInference, JsError> {
+    let outcome = apply_rules_impl(&purrdf_validate::RulesRequest {
+        data_nt,
+        shapes_ttl: shapes_ttl.as_deref(),
+        shapes_base: shapes_base.as_deref(),
+        srl: srl.as_deref(),
+        srl_base: srl_base.as_deref(),
+        explain: explain.unwrap_or(false),
+        max_term_generating_rounds,
+    })
+    .map_err(|e| JsError::new(&e))?;
+    Ok(ShaclRulesInference {
+        inferred: outcome.inferred_ntriples,
+        proof: outcome.proof,
+    })
+}
+
+/// Evaluate one node expression. Native-testable core of [`shacl_eval_node_expr`]:
+/// `scope` holds `NAME=TERM` bindings.
+pub(crate) fn eval_node_expr_impl(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+    expr: &str,
+    focus: &str,
+    scope: &[String],
+) -> Result<Vec<String>, String> {
+    let bindings = scope
+        .iter()
+        .map(|binding| purrdf_validate::parse_scope_binding(binding))
+        .collect::<Result<Vec<_>, _>>()?;
+    purrdf_validate::eval_node_expr_to_terms(&purrdf_validate::NodeExprRequest {
+        shapes_ttl,
+        shapes_base,
+        data_nt,
+        expr,
+        focus,
+        scope: &bindings,
+    })
+}
+
+/// `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?)` → the output
+/// nodes, as an array of N-Triples 1.2 terms in the order the expression's sequence
+/// semantics define.
+///
+/// Evaluates ONE node expression of the Turtle shapes graph — SHACL 1.2 Node Expressions'
+/// `evalExpr(expr, focusGraph, focusNode, scope)` — against a focus node of the
+/// N-Triples data graph. `expr` is an absolute IRI or `"_:label"` for a blank node the
+/// shapes document labels so; `focus` is an absolute IRI or any N-Triples term; `scope` is
+/// an array of `"NAME=TERM"` bindings read by `shnex:var "NAME"`, the term spelled as
+/// `focus` is. Throws on a label the shapes document never wrote, a binding named
+/// `focusNode` or bound twice (neither could ever be read), and any parse or evaluation
+/// failure.
+#[wasm_bindgen(js_name = shaclEvalNodeExpr)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn shacl_eval_node_expr(
+    shapes_ttl: &str,
+    data_nt: &str,
+    expr: &str,
+    focus: &str,
+    scope: Option<Vec<String>>,
+    shapes_base: Option<String>,
+) -> Result<Vec<String>, JsError> {
+    eval_node_expr_impl(
+        shapes_ttl,
+        shapes_base.as_deref(),
+        data_nt,
+        expr,
+        focus,
+        scope.as_deref().unwrap_or_default(),
+    )
+    .map_err(|e| JsError::new(&e))
+}
+
+/// The outcome of `shaclLintShapes`: the cold-certify report of a shapes graph.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclLintReport {
+    /// The engine's report.
+    report: purrdf_validate::LintReport,
+}
+
+#[wasm_bindgen]
+impl ShaclLintReport {
+    /// Whether the report carries no finding: the loader accepted the graph and every
+    /// `shacl-shacl.ttl` result is superseded (flagged there, well-formed SHACL 1.2 Core).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn clean(&self) -> bool {
+        self.report.is_clean()
+    }
+
+    /// The finding count: one for a load refusal, plus every `shacl-shacl.ttl` result no
+    /// supersession covers.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn findings(&self) -> usize {
+        self.report.findings()
+    }
+
+    /// The loader's refusal, or `undefined` when it accepted the graph.
+    #[wasm_bindgen(getter = loadError)]
+    #[must_use]
+    pub fn load_error(&self) -> Option<String> {
+        self.report.load_error().map(ToOwned::to_owned)
+    }
+
+    /// The whole report as the deterministic text every PurRDF host prints: the `load`,
+    /// `shacl-shacl` (`result …` lines, `superseded NAME` where SHACL 1.2 Core makes the
+    /// flagged graph well-formed) and `functions` (`call BINDING <IRI> in OWNER`) sections,
+    /// then `findings N` and `clean true|false`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn report(&self) -> String {
+        self.report.render()
+    }
+}
+
+/// Certify a shapes graph. Native-testable core of [`shacl_lint_shapes`].
+pub(crate) fn lint_shapes_impl(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+) -> Result<purrdf_validate::LintReport, String> {
+    purrdf_validate::lint_shapes_ttl(shapes_ttl, shapes_base)
+}
+
+/// `shaclLintShapes(shapesTtl, shapesBase?)` → a `ShaclLintReport`.
+///
+/// Certifies a Turtle shapes graph COLD: the loader's verdict, every result of validating
+/// it against the W3C `shacl-shacl.ttl`, and which implementation every node-expression
+/// function call binds to (`native`, `custom`, `sparql-registered`, `host-extension`).
+/// Throws only when the document is not Turtle; a malformed shapes graph is a report with
+/// findings, not an exception. Call `.free()` on the result.
+#[wasm_bindgen(js_name = shaclLintShapes)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn shacl_lint_shapes(
+    shapes_ttl: &str,
+    shapes_base: Option<String>,
+) -> Result<ShaclLintReport, JsError> {
+    lint_shapes_impl(shapes_ttl, shapes_base.as_deref())
+        .map(|report| ShaclLintReport { report })
+        .map_err(|e| JsError::new(&e))
+}
+
+// ---------------------------------------------------------------------------
 // Prepared shapes products
 // ---------------------------------------------------------------------------
 
@@ -979,5 +1198,223 @@ mod tests {
         // care about.
         product_validate_rebuild_expecting_impl(&product, DATA, &own.to_uppercase())
             .expect("an upper-case selector names the same product");
+    }
+
+    /// The shapes-graph tools' fixture: the W3C SHACL 1.2 declaration of
+    /// `sh:SPARQLExprExpression` verbatim, a `sh:sparqlExpr` node naming `ex:yes` through
+    /// `sh:prefixes` (`ex:Tag`), a labelled `shnex:var` node, a rule tagging every
+    /// `ex:Item` through the same expression, and a counter rule stepping `ex:n` to 5 —
+    /// exactly four term-generating rounds.
+    const TOOLS_SHAPES: &str = r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://example.org/ns#> .
+
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ] .
+ex:Tag sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes .
+_:suffix shnex:var "suffix" .
+
+ex:Tagger a sh:NodeShape ;
+  sh:targetClass ex:Item ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:tagged ;
+            sh:object [ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] ] .
+
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+"#;
+
+    /// One `ex:Item` whose counter starts at 1.
+    const TOOLS_DATA: &str = "<http://example.org/ns#a> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Item> .\n\
+        <http://example.org/ns#a> <http://example.org/ns#n> \
+        \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
+
+    /// The inference graph the fixture's rules produce, in canonical order.
+    fn tools_inference() -> String {
+        let mut out = String::new();
+        for n in 2..=5 {
+            out.push_str("<http://example.org/ns#a> <http://example.org/ns#n> \"");
+            out.push_str(&n.to_string());
+            out.push_str("\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n");
+        }
+        out.push_str(
+            "<http://example.org/ns#a> <http://example.org/ns#tagged> \
+             <http://example.org/ns#yes> .\n",
+        );
+        out
+    }
+
+    /// The rules entry point: the inference graph alone, the proof on request, the
+    /// round limit refusing at 3 and completing at 4, and SPARQL 1.2 RL text.
+    #[test]
+    fn wasm_apply_rules() {
+        let request = purrdf_validate::RulesRequest {
+            data_nt: TOOLS_DATA,
+            shapes_ttl: Some(TOOLS_SHAPES),
+            ..purrdf_validate::RulesRequest::default()
+        };
+        let plain = apply_rules_impl(&request).expect("rules run");
+        assert_eq!(plain.inferred_ntriples, tools_inference());
+        assert_eq!(plain.proof, None);
+        let explained = apply_rules_impl(&purrdf_validate::RulesRequest {
+            explain: true,
+            ..request
+        })
+        .expect("rules run");
+        let proof = explained.proof.expect("a proof was asked for");
+        assert_eq!(proof.matches("derived ").count(), 5, "{proof}");
+        let refused = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_term_generating_rounds: Some(3),
+            ..request
+        })
+        .expect_err("three rounds are too few");
+        assert!(refused.contains("past the limit of 3"), "{refused}");
+        let enough = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_term_generating_rounds: Some(4),
+            ..request
+        })
+        .expect("four rounds suffice");
+        assert_eq!(enough.inferred_ntriples, tools_inference());
+        let srl = apply_rules_impl(&purrdf_validate::RulesRequest {
+            data_nt: TOOLS_DATA,
+            srl: Some(
+                "PREFIX ex: <http://example.org/ns#>\n\
+                 RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\nDATA { ex:d ex:q 2 }\n",
+            ),
+            explain: true,
+            ..purrdf_validate::RulesRequest::default()
+        })
+        .expect("SPARQL 1.2 RL runs");
+        assert_eq!(
+            srl.inferred_ntriples,
+            "<http://example.org/ns#a> <http://example.org/ns#q> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n\
+             <http://example.org/ns#d> <http://example.org/ns#q> \
+             \"2\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        );
+        assert!(srl.proof.expect("proof").contains("  data-block\n"));
+        assert!(
+            apply_rules_impl(&purrdf_validate::RulesRequest {
+                data_nt: TOOLS_DATA,
+                ..purrdf_validate::RulesRequest::default()
+            })
+            .is_err(),
+            "no rule source"
+        );
+    }
+
+    /// The node-expression entry point: a `sh:sparqlExpr` node natively with its
+    /// prefixes, a labelled blank node reading a `NAME=TERM` scope binding, and the
+    /// refusals beside them.
+    #[test]
+    fn wasm_eval_node_expr() {
+        assert_eq!(
+            eval_node_expr_impl(
+                TOOLS_SHAPES,
+                None,
+                TOOLS_DATA,
+                "http://example.org/ns#Tag",
+                "http://example.org/ns#a",
+                &[]
+            ),
+            Ok(vec!["<http://example.org/ns#yes>".to_owned()])
+        );
+        assert_eq!(
+            eval_node_expr_impl(
+                TOOLS_SHAPES,
+                None,
+                TOOLS_DATA,
+                "_:suffix",
+                "http://example.org/ns#a",
+                &["suffix=\"!\"@en".to_owned()]
+            ),
+            Ok(vec!["\"!\"@en".to_owned()])
+        );
+        let unknown = eval_node_expr_impl(
+            TOOLS_SHAPES,
+            None,
+            TOOLS_DATA,
+            "_:nosuch",
+            "http://example.org/ns#a",
+            &[],
+        )
+        .expect_err("an unknown label");
+        assert!(
+            unknown.contains("mentions no blank node _:nosuch"),
+            "{unknown}"
+        );
+        let no_equals = eval_node_expr_impl(
+            TOOLS_SHAPES,
+            None,
+            TOOLS_DATA,
+            "_:suffix",
+            "http://example.org/ns#a",
+            &["suffix".to_owned()],
+        )
+        .expect_err("a binding with no `=`");
+        assert!(no_equals.contains("not NAME=TERM"), "{no_equals}");
+    }
+
+    /// The lint entry point: the fixture certifies clean with `sh:sparqlExpr`'s function
+    /// bound natively; a malformed neighbour carries findings.
+    #[test]
+    fn wasm_lint_shapes() {
+        let clean = ShaclLintReport {
+            report: lint_shapes_impl(TOOLS_SHAPES, None).expect("lint runs"),
+        };
+        assert!(clean.clean());
+        assert_eq!(clean.findings(), 0);
+        assert_eq!(clean.load_error(), None);
+        assert!(
+            clean.report().contains(
+                "call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on \
+                 <http://example.org/ns#Tagger>\n"
+            ),
+            "{}",
+            clean.report()
+        );
+        let malformed = ShaclLintReport {
+            report: lint_shapes_impl(
+                &format!(
+                    "{TOOLS_SHAPES}ex:Bad a sh:NodeShape ; \
+                     sh:property [ sh:path ex:p ; sh:minCount \"one\" ] .\n"
+                ),
+                None,
+            )
+            .expect("lint runs"),
+        };
+        assert!(!malformed.clean());
+        assert!(malformed.findings() >= 2, "{}", malformed.report());
+        assert!(malformed.load_error().is_some());
+        assert!(malformed.report().ends_with("clean false\n"));
+        assert!(lint_shapes_impl("@@@ not turtle", None).is_err());
     }
 }

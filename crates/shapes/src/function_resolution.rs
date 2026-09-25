@@ -48,6 +48,20 @@ pub enum FunctionBinding {
     HostExtension,
 }
 
+impl FunctionBinding {
+    /// The binding's stable kebab-case label — `native`, `custom`,
+    /// `sparql-registered` or `host-extension` — the token every host prints for it.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Custom => "custom",
+            Self::SparqlRegistered => "sparql-registered",
+            Self::HostExtension => "host-extension",
+        }
+    }
+}
+
 /// One call site: where it is, which function it calls, and what that bound to.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CallSite {

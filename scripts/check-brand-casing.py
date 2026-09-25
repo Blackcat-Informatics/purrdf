@@ -160,7 +160,6 @@ PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
         ("crates/shapes/src/engine.rs", 1),
         ("crates/shapes/src/expression.rs", 2),
         ("crates/shapes/src/report.rs", 2),
-        ("crates/shapes/src/text_ingest.rs", 1),
         ("crates/slice/src/claim_view.rs", 3),
         ("crates/slice/src/dsl_stats_emit.rs", 1),
         ("crates/slice/src/mapping_support.rs", 1),
