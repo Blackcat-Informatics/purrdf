@@ -122,6 +122,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/check-simd-asm.py --self-test
+	python3 scripts/check-wasm-jspi-frame.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
 	python3 scripts/benchmark-acquire.py --self-test
@@ -680,6 +681,13 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
 		"$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/purrdf_wasm.wasm" \
 		--out-dir crates/rdf-wasm/js/pkg --target web
+	@# The asynchronous lane's suspending import comes from ./purrdf_jspi.mjs, which the
+	@# glue imports by relative path and wires into the instance's import object as is.
+	@# The module ships next to the glue; a glue that does not import it would leave
+	@# the raw import unresolved at instantiation, so its absence is a build failure.
+	cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+	@grep -qE '^import \* as [A-Za-z_$$][A-Za-z0-9_$$]* from "\./purrdf_jspi\.mjs"$$' crates/rdf-wasm/js/pkg/purrdf_wasm.js || { \
+		echo "ERROR: the wasm-bindgen glue does not import ./purrdf_jspi.mjs (expected: import * as <name> from \"./purrdf_jspi.mjs\")"; exit 1; }
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
 	@# The --enable flags cover the post-MVP features rustc emits by default
 	@# for wasm32-unknown-unknown; older binaryen builds (e.g. Ubuntu's apt
@@ -697,6 +705,13 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		--enable-bulk-memory --enable-nontrapping-float-to-int \
 		--enable-sign-ext --enable-mutable-globals --enable-simd \
 		-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+	@# A resumed asynchronous job must restore its own stack pointer before anything
+	@# can allocate a frame. wasm-opt inlines the frame function that guarantees it, so
+	@# the optimized module is checked structurally at every call of the import; the
+	@# gate's own fixtures run first, so a gate that stopped detecting a missing restore
+	@# cannot pass the artifact.
+	python3 scripts/check-wasm-jspi-frame.py --self-test
+	python3 scripts/check-wasm-jspi-frame.py crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
 	@# Durable proof that +simd128 actually produced SIMD codegen: a green
 	@# wasm-pkg-test round-trip only proves the module runs correctly, not that
 	@# it is vectorized — a memchr/RUSTFLAGS/dependency regression could ship a

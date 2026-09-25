@@ -31,6 +31,7 @@
     "README.md",
     "index.mjs",
     "index.d.ts",
+    "pkg/purrdf_jspi.mjs",
     "pkg/purrdf_wasm.js",
     "pkg/purrdf_wasm.d.ts",
     "pkg/purrdf_wasm_bg.wasm",

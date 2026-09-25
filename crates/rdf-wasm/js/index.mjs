@@ -98,6 +98,7 @@ import init, {
   Term,
   version,
 } from "./pkg/purrdf_wasm.js";
+import { installAsync } from "./pkg/purrdf_jspi.mjs";
 
 let _ready = false;
 
@@ -565,18 +566,20 @@ function updateOutcomeToObject(raw) {
  */
 export async function ready(wasmBytesOrUrl) {
   if (_ready) return;
+  let exports;
   if (wasmBytesOrUrl !== undefined) {
-    await init({ module_or_path: wasmBytesOrUrl });
+    exports = await init({ module_or_path: wasmBytesOrUrl });
   } else if (typeof process !== "undefined" && process.versions?.node) {
     const { readFile } = await import("node:fs/promises");
     const { fileURLToPath } = await import("node:url");
     const wasmPath = fileURLToPath(
       new URL("./pkg/purrdf_wasm_bg.wasm", import.meta.url),
     );
-    await init({ module_or_path: await readFile(wasmPath) });
+    exports = await init({ module_or_path: await readFile(wasmPath) });
   } else {
-    await init();
+    exports = await init();
   }
+  installAsync(exports);
 
   // RDF/JS DatasetCore is iterable over its quads.
   if (!Dataset.prototype[Symbol.iterator]) {

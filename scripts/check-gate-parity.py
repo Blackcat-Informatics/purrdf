@@ -124,6 +124,11 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "evaluates the full W3C corpora, tens of minutes. `make conformance` is the local "
         "entry point; only its `--self-test` arm is cheap enough for `make check`"
     ),
+    "scripts/check-wasm-jspi-frame.py crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm": (
+        "disassembles the optimized npm artifact, so it needs the release wasm32 build, "
+        "wasm-bindgen and binaryen that only the wasm job installs. `make wasm-pkg` is the "
+        "local entry point; only its `--self-test` arm runs in `make check`"
+    ),
     "scripts/check-simd-asm.py --doc": (
         "emits asm for seven target configurations; needs the wasm32 and aarch64 std "
         "targets. `make simd-asm` is the local entry point; only its `--self-test` arm "
@@ -137,7 +142,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
 # refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
 # both the changelog and the PR body is the proof that nothing noticed. Growth is now a
 # deliberate, visible edit to this number.
-ONE_SIDED_COUNT = 7
+ONE_SIDED_COUNT = 8
 
 
 def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:

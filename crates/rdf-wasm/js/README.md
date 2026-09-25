@@ -41,6 +41,13 @@ The wasm artifact is built with WebAssembly SIMD (`+simd128`) for higher parse
 throughput, so it requires a runtime with wasm SIMD support: every major browser
 since ~2021 (Chrome/Edge 91+, Firefox 89+, Safari 16.4+) and Node ≥ 18.
 
+Asynchronous operations — jobs that suspend while the host answers a `SERVICE`
+or `LOAD`, and that yield to the event loop while they evaluate — run over
+WebAssembly JavaScript Promise Integration (JSPI): Chrome/Edge 137+, Firefox
+139+, Safari 27, Node ≥ 24.20 and Cloudflare Workers. On a runtime without JSPI
+the synchronous API is unchanged, and the asynchronous methods refuse with one
+clear error before touching wasm.
+
 ## Quickstart
 
 ```js
