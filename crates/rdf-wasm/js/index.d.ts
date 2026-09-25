@@ -1062,6 +1062,20 @@ export class QueryEngine {
     sparql: string,
     options?: AsyncGovernedQueryOptions | null,
   ): Promise<AsyncQueryOutcome>;
+  /**
+   * A governed query whose complete answer is a document in the format negotiated from
+   * `accept` (an HTTP `Accept` header; absent means the SPARQL Protocol defaults) — the
+   * query a SPARQL Protocol endpoint answers. The format is chosen once the result exists,
+   * so a CONSTRUCT/DESCRIBE result carrying named graphs is offered only in the syntaxes
+   * that can hold them (TriG, N-Quads, JSON-LD). When `accept` allows none of those, it
+   * rejects with a `NotAcceptableError` naming them. A governor trip is an outcome, as on
+   * `queryGovernedAsync`. It has no synchronous twin.
+   */
+  queryGovernedNegotiatedAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncNegotiatedQueryOptions | null,
+  ): Promise<AsyncNegotiatedQueryOutcome>;
   /** The twin of `queryEntailmentGoverned`. */
   queryEntailmentGovernedAsync(
     dataset: Dataset,
@@ -1123,6 +1137,121 @@ export class ServiceCatalog {
   addService(endpoint: string, profileJson: string): void;
   /** Apply `profileJson` to every service with no entry of its own. */
   setFallback(profileJson: string): void;
+  /**
+   * Whether the profile governing `endpoint` (its own, or the fallback) carries a
+   * credential — whether a request to it is one a shared cache must never answer.
+   */
+  carriesCredential(endpoint: string): boolean;
+  /**
+   * Authorize a `LOAD` of `iri` against this catalog: a document fetch needs the
+   * `network` capability (and a credential `credentials`), exactly as a `SERVICE` request
+   * is authorized.
+   */
+  authorizeLoad(iri: string): LoadAuthorization;
+  free(): void;
+}
+
+/** What `ServiceCatalog.authorizeLoad` decided for one `LOAD` IRI (a wasm handle: `free()` it). */
+export interface LoadAuthorization {
+  /** Why the catalog refuses the `LOAD`, or `undefined` when it allows it. */
+  readonly denial: string | undefined;
+  /**
+   * The profile's headers, then its credential header, as flattened `[name, value, …]`
+   * pairs in sending order. Empty on a denial.
+   */
+  readonly headers: string[];
+  /** The `Accept` header a `LOAD` fetch sends: every RDF syntax the engine parses. */
+  readonly accept: string;
+  /** The profile's `User-Agent`, when it names one. */
+  readonly userAgent: string | undefined;
+  /** The profile's per-request timeout in milliseconds, when it sets one. */
+  readonly timeoutMs: number | undefined;
+  free(): void;
+}
+
+/** A result shape the SPARQL Protocol negotiates formats for. */
+export type ProtocolResultKind = "solutions" | "boolean" | "graph" | "dataset";
+
+/** A format token `SparqlProtocolRequest#negotiate` returns. */
+export type ProtocolFormat =
+  | "json"
+  | "xml"
+  | "csv"
+  | "tsv"
+  | "turtle"
+  | "trig"
+  | "ntriples"
+  | "nquads"
+  | "jsonld";
+
+/**
+ * The `Error` `SparqlProtocolRequest` throws for a request that is not a SPARQL 1.1
+ * Protocol operation: `name` is the refusal's stable identifier (e.g.
+ * `"MissingOperation"`, `"UnsupportedContentType"`, `"MalformedOperation"`), `status`
+ * the HTTP status it maps to (`405` for a method, `415` for a `Content-Type`, `400`
+ * otherwise), and `parameter` the protocol parameter at fault, when there is one.
+ */
+export interface SparqlProtocolError extends Error {
+  readonly status: 400 | 405 | 415;
+  readonly parameter?: string;
+}
+
+/**
+ * One SPARQL 1.1 Protocol operation read from an HTTP request: `GET ?query=`, `POST
+ * application/sparql-query`, `POST application/sparql-update`, and `POST
+ * application/x-www-form-urlencoded` (`query=` / `update=`), with the dataset parameters.
+ * Every protocol decision is made in Rust; a refusal throws a `SparqlProtocolError`.
+ */
+export class SparqlProtocolRequest {
+  private constructor();
+  /**
+   * Read one operation from a request's method, `Content-Type` header, query string
+   * (without the leading `?`) and body bytes.
+   *
+   * @throws {SparqlProtocolError} A request that is not a protocol operation.
+   */
+  static parse(
+    method: string,
+    contentType: string | null | undefined,
+    queryString: string | null | undefined,
+    body: Uint8Array,
+  ): SparqlProtocolRequest;
+  /** The media type of a format token `negotiate` returns; `undefined` for any other string. */
+  static formatMediaType(token: string): string | undefined;
+  /** The media types a result of `kind` is offered in, in server preference order. */
+  static offeredMediaTypes(kind: ProtocolResultKind): string[];
+  /** The `detail` of a `406` for a result of `kind`, naming the formats that can carry it. */
+  static notAcceptableDetail(kind: ProtocolResultKind): string;
+  readonly kind: "query" | "update";
+  /** The operation text as the request carried it. */
+  readonly text: string;
+  /**
+   * The query's result kind from its query form, or `undefined` for an update.
+   *
+   * @throws {SparqlProtocolError} `MalformedOperation` when no query form follows the prologue.
+   */
+  readonly resultKind: "solutions" | "boolean" | "graph" | undefined;
+  readonly hasDatasetParameters: boolean;
+  readonly defaultGraphUris: string[];
+  readonly namedGraphUris: string[];
+  readonly usingGraphUris: string[];
+  readonly usingNamedGraphUris: string[];
+  /** Parameters the protocol does not define, as flattened `[name, value, …]` pairs in request order. */
+  readonly extraParameters: string[];
+  /**
+   * The operation text to evaluate: the dataset parameters applied, and the whole text
+   * parsed under the engine's reading, so a malformed operation is refused here.
+   *
+   * @throws {SparqlProtocolError} `MalformedOperation` or `UsingConflictsWithClause`.
+   */
+  effectiveText(): string;
+  /**
+   * The format token to answer this query in, negotiated from an `Accept` header (absent
+   * means the protocol default), or `undefined` when none is acceptable — a `406`.
+   *
+   * @throws {Error} On an update, which has no result to negotiate.
+   */
+  negotiate(accept?: string | null): ProtocolFormat | undefined;
   free(): void;
 }
 
@@ -1258,6 +1387,11 @@ export interface AsyncEntailmentQueryOptions extends AsyncGovernedQueryOptions {
 
 export interface AsyncUpdateOptions extends QueryOptions, AsyncHostOptions {}
 
+export interface AsyncNegotiatedQueryOptions extends AsyncGovernedQueryOptions {
+  /** The client's `Accept` header; absent means the SPARQL Protocol defaults. */
+  readonly accept?: string | null;
+}
+
 /**
  * What one asynchronous job did: counts from the runtime, times in milliseconds.
  * `stackHighWaterBytes` is the deepest the job's stack region was used — size
@@ -1296,6 +1430,30 @@ export interface AsyncEntailmentQueryOutcome extends EntailmentQueryOutcome {
   readonly evidence: { readonly async: AsyncEvidence };
 }
 
+/** A negotiated query's complete answer, serialized. */
+export interface NegotiatedBody {
+  /** The document's UTF-8 bytes. */
+  readonly bytes: Uint8Array;
+  readonly format: ProtocolFormat;
+  /** The document's media type, for a `Content-Type` header. */
+  readonly mediaType: string;
+}
+
+/**
+ * `queryGovernedNegotiatedAsync`'s outcome: a complete answer as a document, or an
+ * exhausted budget carrying the typed partial answers it reached. Never a thrown trip.
+ */
+export interface AsyncNegotiatedQueryOutcome {
+  readonly isComplete: boolean;
+  /** The complete answer. Absent when a governor stopped the execution. */
+  readonly body?: NegotiatedBody;
+  /** What the rows the execution reached bound. Absent when it completed. */
+  readonly partial?: PartialAnswers;
+  /** The governor that stopped the execution. Absent when it completed. */
+  readonly tripped?: TrippedGovernor;
+  readonly evidence: AsyncGovernorEvidence;
+}
+
 /** `updateGovernedAsync`'s outcome: an `UpdateOutcome` whose evidence carries the job's. */
 export interface AsyncUpdateOutcome extends UpdateOutcome {
   readonly evidence: AsyncGovernorEvidence;
@@ -1304,8 +1462,9 @@ export interface AsyncUpdateOutcome extends UpdateOutcome {
 /**
  * The shape of an error an asynchronous twin builds for a job that failed: `name` is
  * `"Error"` for a failure or a fault, `"AbortError"` for a cancellation without a
- * `signal.reason`, and `"TimeoutError"` for an ungoverned job's deadline. A cancellation
- * with a `signal.reason` rejects with that reason itself, untouched.
+ * `signal.reason`, `"TimeoutError"` for an ungoverned job's deadline, and
+ * `"NotAcceptableError"` for a negotiated query whose result no acceptable format can carry.
+ * A cancellation with a `signal.reason` rejects with that reason itself, untouched.
  */
 export interface AsyncJobError extends Error {
   readonly evidence: { readonly async: AsyncEvidence };
@@ -1400,7 +1559,9 @@ export function provenanceFromJson(json: string, prefix: string, iri: string): P
 /** The XML twin of {@link provenanceFromJson}. */
 export function provenanceFromXml(xml: string, prefix: string, iri: string): ProvenanceInfo;
 
-export function ready(wasmBytesOrUrl?: BufferSource | URL | string): Promise<void>;
+export function ready(
+  wasmBytesOrUrl?: BufferSource | URL | string | WebAssembly.Module,
+): Promise<void>;
 export function datasetToStream(dataset: Dataset): AsyncIterableIterator<Quad>;
 export function streamToDataset(
   quadStream: AsyncIterable<Quad> | Iterable<Quad>,

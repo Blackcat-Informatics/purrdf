@@ -192,6 +192,7 @@ use purrdf::{
     RdfDiagnostic, parse_dataset, query_with_entailment_governed,
 };
 use purrdf_core::SparqlResult;
+use purrdf_sparql_eval::protocol::negotiate;
 use purrdf_sparql_eval::{
     CancellationFlag, GovernedOutcome, GovernedUpdateOutcome, GraphResolveRequest, GraphResolver,
     HttpRemoteQuerySource, HttpRequest, HttpTransport, InProcessServiceResolver,
@@ -207,10 +208,12 @@ use wasm_bindgen::prelude::*;
 use crate::codec::resolve_media_type;
 use crate::dataset::{Dataset, diag_to_err};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
+use crate::protocol::not_acceptable_message;
 use crate::query::{
-    EntailmentQueryOutcome, GovernorArgs, QueryEngine, QueryOutcome, QueryResult,
-    UPDATE_REFUSES_MAX_ANSWERS, UpdateOutcome, aggregate_env_message, build_aggregates,
-    build_provenance_namespace, entailment_query_outcome_from_native, kind_mismatch,
+    EntailmentQueryOutcome, GovernorArgs, NegotiatedOutcome, NegotiatedValue, QueryEngine,
+    QueryOutcome, QueryResult, UPDATE_REFUSES_MAX_ANSWERS, UpdateOutcome, aggregate_env_message,
+    build_aggregates, build_provenance_namespace, entailment_query_outcome_from_native,
+    kind_mismatch, negotiable_result_kind, negotiated_outcome_from_value,
     query_outcome_from_governed, query_result_from_sparql, serialize_configured_graph,
     serialize_query_result, sparql_request, update_outcome_from_governed,
 };
@@ -1436,6 +1439,10 @@ pub enum AsyncOperationKind {
     Update = 5,
     /// `updateGoverned`: a governed outcome, applied through [`AsyncJob::commit_update`].
     UpdateGoverned = 6,
+    /// `queryGovernedNegotiatedAsync`: a governed outcome whose complete answer is
+    /// serialized in the format negotiated from an `Accept` header, once the result's
+    /// shape is known. The asynchronous lane's own: a SPARQL Protocol endpoint's query.
+    Negotiated = 7,
 }
 
 impl AsyncOperationKind {
@@ -1448,13 +1455,14 @@ impl AsyncOperationKind {
             Self::EntailmentGoverned => "entailmentGoverned",
             Self::Update => "update",
             Self::UpdateGoverned => "updateGoverned",
+            Self::Negotiated => "negotiated",
         }
     }
 
     const fn is_governed(self) -> bool {
         matches!(
             self,
-            Self::Governed | Self::EntailmentGoverned | Self::UpdateGoverned
+            Self::Governed | Self::EntailmentGoverned | Self::UpdateGoverned | Self::Negotiated
         )
     }
 }
@@ -1470,6 +1478,9 @@ enum JobErrorKind {
     Deadline,
     /// A latched fault.
     Fault,
+    /// A negotiated query's result, whose shape (a graph carrying named graphs) no format
+    /// the `Accept` header allows can carry.
+    NotAcceptable,
 }
 
 impl JobErrorKind {
@@ -1479,6 +1490,7 @@ impl JobErrorKind {
             Self::Cancelled => "cancelled",
             Self::Deadline => "deadline",
             Self::Fault => "fault",
+            Self::NotAcceptable => "not-acceptable",
         }
     }
 }
@@ -1494,6 +1506,14 @@ impl JobError {
         Self {
             kind: JobErrorKind::Error,
             message: message.into(),
+        }
+    }
+
+    /// A negotiated query whose result no acceptable format can carry.
+    const fn not_acceptable(message: String) -> Self {
+        Self {
+            kind: JobErrorKind::NotAcceptable,
+            message,
         }
     }
 
@@ -1529,6 +1549,7 @@ enum JobOutcome {
         outcome: GovernedUpdateOutcome,
         frozen: Option<Arc<RdfDataset>>,
     },
+    Negotiated(Box<NegotiatedValue>),
     Failed(JobError),
 }
 
@@ -1541,6 +1562,7 @@ impl fmt::Debug for JobOutcome {
             Self::Entailment(_) => "Entailment",
             Self::Updated(_) => "Updated",
             Self::UpdateGoverned { .. } => "UpdateGoverned",
+            Self::Negotiated(_) => "Negotiated",
             Self::Failed(_) => "Failed",
         })
     }
@@ -1606,6 +1628,7 @@ struct OperationInput {
     jsonld: Option<JsonLdSerializeOptions>,
     regime: Option<String>,
     program: Option<String>,
+    accept: Option<String>,
 }
 
 /// Run an ungoverned query under the metered base and the job's signal.
@@ -1656,6 +1679,7 @@ impl OperationInput {
             jsonld,
             regime,
             program,
+            accept,
         } = self;
         let request = sparql_request(&sparql, base.as_deref());
         match kind {
@@ -1690,6 +1714,42 @@ impl OperationInput {
                     })
                     .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
                 Ok(JobOutcome::Governed(Box::new(outcome)))
+            }
+            AsyncOperationKind::Negotiated => {
+                let env = governed_env(aggregate_namespace)?;
+                let governors = run.governors(ceilings.ceilings());
+                let outcome = run
+                    .evaluate(|| {
+                        engine.query_governed(&frozen, request, run.options(&env), &governors)
+                    })
+                    .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
+                let value = match outcome {
+                    GovernedOutcome::Complete {
+                        result, evidence, ..
+                    } => {
+                        // Negotiated against the result's actual shape: a graph carrying
+                        // named graphs is offered only in the syntaxes that can hold it,
+                        // so no format ever silently drops a graph.
+                        let shape = negotiable_result_kind(&result);
+                        let format = negotiate(accept.as_deref(), shape).ok_or_else(|| {
+                            JobError::not_acceptable(not_acceptable_message(shape))
+                        })?;
+                        let text = run
+                            .serialize(|| {
+                                serialize_query_result(&result, Some(format), None, &sparql)
+                            })
+                            .map_err(JobError::error)?;
+                        NegotiatedValue::Complete {
+                            bytes: text.into_bytes(),
+                            format,
+                            evidence,
+                        }
+                    }
+                    GovernedOutcome::BudgetExhausted(exhausted) => {
+                        NegotiatedValue::Exhausted(exhausted)
+                    }
+                };
+                Ok(JobOutcome::Negotiated(Box::new(value)))
             }
             AsyncOperationKind::EntailmentGoverned => {
                 let regime = regime.unwrap_or_default();
@@ -2407,6 +2467,21 @@ impl AsyncJob {
         }
     }
 
+    /// A negotiated query job's outcome: the serialized complete answer, or the trip.
+    #[wasm_bindgen(js_name = takeNegotiatedOutcome)]
+    pub fn take_negotiated_outcome(&self) -> Result<NegotiatedOutcome, JsError> {
+        match self
+            .inner
+            .take_outcome("takeNegotiatedOutcome", &[AsyncOperationKind::Negotiated])
+            .map_err(|message| js_error(&message))?
+        {
+            JobOutcome::Negotiated(value) => negotiated_outcome_from_value(*value),
+            _ => Err(js_error(
+                "takeNegotiatedOutcome: the job holds no negotiated outcome",
+            )),
+        }
+    }
+
     /// A governed entailment job's outcome.
     #[wasm_bindgen(js_name = takeEntailmentOutcome)]
     pub fn take_entailment_outcome(&self) -> Result<EntailmentQueryOutcome, JsError> {
@@ -2518,6 +2593,7 @@ pub struct AsyncJobOptions {
     aggregate_namespace: Option<String>,
     regime: Option<String>,
     program: Option<String>,
+    accept: Option<String>,
     fuel: Option<i64>,
     deadline_ms: Option<i64>,
     max_answers: Option<i64>,
@@ -2613,6 +2689,13 @@ impl AsyncJobOptions {
     #[wasm_bindgen(js_name = setProgram)]
     pub fn set_program(&mut self, program: Option<String>) {
         self.program = program;
+    }
+
+    /// The client's `Accept` header (the negotiated operation only; absent means the
+    /// protocol's defaults).
+    #[wasm_bindgen(js_name = setAccept)]
+    pub fn set_accept(&mut self, accept: Option<String>) {
+        self.accept = accept;
     }
 
     /// The fuel ceiling (governed operations only).
@@ -2813,6 +2896,12 @@ impl AsyncJobOptions {
         {
             return Err(format!(
                 "provenanceNamespace applies only to raw operations; a {op} operation would \
+                 ignore it"
+            ));
+        }
+        if kind != AsyncOperationKind::Negotiated && self.accept.is_some() {
+            return Err(format!(
+                "accept applies only to the negotiated operation; a {op} operation would \
                  ignore it"
             ));
         }
@@ -3025,6 +3114,112 @@ impl ServiceCatalog {
         self.set_fallback_message(profile_json)
             .map_err(|message| js_error(&message))
     }
+
+    /// Whether the profile governing `endpoint` (its own, or the fallback) carries a
+    /// credential — whether a request to it is one a shared cache must never answer.
+    #[wasm_bindgen(js_name = carriesCredential)]
+    #[must_use]
+    pub fn carries_credential(&self, endpoint: &str) -> bool {
+        self.inner
+            .profile_for(endpoint)
+            .is_some_and(|profile| profile.credential().is_some())
+    }
+
+    /// Authorize a `LOAD` of `iri` against this catalog, the same policy a `SERVICE`
+    /// request meets: a document fetch needs the `network` capability, and a credential
+    /// needs `credentials` too. The answer carries either the denial or everything the
+    /// fetch must send — the profile's headers and credential, its user agent and its
+    /// timeout, and an `Accept` header naming every RDF syntax a `LOAD` can parse.
+    #[wasm_bindgen(js_name = authorizeLoad)]
+    #[must_use]
+    pub fn authorize_load(&self, iri: &str) -> LoadAuthorization {
+        load_authorization(&self.inner, iri)
+    }
+}
+
+/// What [`ServiceCatalog::authorize_load`] decided for one `LOAD` IRI.
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct LoadAuthorization {
+    denial: Option<String>,
+    headers: Vec<(String, String)>,
+    user_agent: Option<String>,
+    timeout_ms: Option<f64>,
+}
+
+#[wasm_bindgen]
+impl LoadAuthorization {
+    /// Why the catalog refuses the `LOAD`, or `undefined` when it allows it.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn denial(&self) -> Option<String> {
+        self.denial.clone()
+    }
+
+    /// The request headers as flattened `[name, value, name, value, …]` pairs — the
+    /// profile's headers, then its credential header — in the order they must be sent.
+    /// Empty on a denial.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn headers(&self) -> Vec<String> {
+        self.headers
+            .iter()
+            .flat_map(|(name, value)| [name.clone(), value.clone()])
+            .collect()
+    }
+
+    /// The `Accept` header a `LOAD` fetch sends: the media type of every RDF syntax the
+    /// engine parses, in its registry order.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn accept(&self) -> String {
+        load_accept()
+    }
+
+    /// The profile's `User-Agent`, when it names one.
+    #[wasm_bindgen(getter, js_name = userAgent)]
+    #[must_use]
+    pub fn user_agent(&self) -> Option<String> {
+        self.user_agent.clone()
+    }
+
+    /// The profile's per-request timeout in milliseconds, when it sets one.
+    #[wasm_bindgen(getter, js_name = timeoutMs)]
+    #[must_use]
+    pub fn timeout_ms(&self) -> Option<f64> {
+        self.timeout_ms
+    }
+}
+
+/// The `Accept` header of a `LOAD` fetch: every parseable RDF syntax's media type.
+fn load_accept() -> String {
+    purrdf::NativeRdfFormat::all()
+        .map(purrdf::NativeRdfFormat::media_type)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// [`ServiceCatalog::authorize_load`], on the native catalog.
+fn load_authorization(catalog: &NativeServiceCatalog, iri: &str) -> LoadAuthorization {
+    match catalog.authorize(
+        iri,
+        ServiceCapabilities::granting([ServiceCapability::Network]),
+    ) {
+        Err(denial) => LoadAuthorization {
+            denial: Some(format!("LOAD <{iri}>: {denial}")),
+            headers: Vec::new(),
+            user_agent: None,
+            timeout_ms: None,
+        },
+        Ok(profile) => LoadAuthorization {
+            denial: None,
+            headers: profile.request_headers(),
+            user_agent: profile.user_agent().map(str::to_owned),
+            timeout_ms: profile
+                .timeout()
+                .map(|timeout| timeout.as_secs_f64() * 1000.0),
+        },
+    }
 }
 
 impl ServiceCatalog {
@@ -3085,6 +3280,7 @@ fn begin_job(
         jsonld,
         regime: options.regime.clone(),
         program: options.program.clone(),
+        accept: options.accept.clone(),
     };
     let region = StackRegion::new(validated.stack_bytes as usize);
     let inner = register_job(|id| {
@@ -4578,5 +4774,195 @@ mod tests {
         }
         assert!(signal.polls.load(Ordering::Relaxed) > 0);
         SHARED.with(|shared| *shared.borrow_mut() = None);
+    }
+
+    const GRAPH_CONSTRUCT: &str = "CONSTRUCT { GRAPH <http://example.org/out> { ?s ?p ?o } } \
+                                   WHERE { ?s ?p ?o }";
+
+    fn negotiated(accept: Option<&str>) -> AsyncJobOptions {
+        let mut options = options();
+        options.set_accept(accept.map(str::to_owned));
+        options
+    }
+
+    #[test]
+    fn a_negotiated_graph_carrying_named_graphs_defaults_to_trig_and_a_plain_one_to_turtle() {
+        let engine = QueryEngine::new();
+        let dataset = seed();
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Negotiated,
+            GRAPH_CONSTRUCT,
+            &negotiated(None),
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let mut outcome = job.take_negotiated_outcome().expect("an outcome");
+        assert!(outcome.is_complete());
+        assert_eq!(outcome.format().as_deref(), Some("trig"));
+        assert_eq!(outcome.media_type().as_deref(), Some("application/trig"));
+        let body = String::from_utf8(outcome.take_body().expect("a body")).expect("UTF-8");
+        assert!(body.contains("<http://example.org/out>"), "{body}");
+        assert!(outcome.take_evidence().is_some());
+        job.finish();
+
+        // The neighbour without a named graph in its template is plain Turtle.
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Negotiated,
+            "CONSTRUCT WHERE { ?s ?p ?o }",
+            &negotiated(None),
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let outcome = job.take_negotiated_outcome().expect("an outcome");
+        assert_eq!(outcome.format().as_deref(), Some("turtle"));
+        job.finish();
+    }
+
+    #[test]
+    fn an_explicit_triples_only_accept_refuses_named_graphs_but_serves_a_plain_graph() {
+        let engine = QueryEngine::new();
+        let dataset = seed();
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Negotiated,
+            GRAPH_CONSTRUCT,
+            &negotiated(Some("text/turtle")),
+        );
+        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(job.error_kind().as_deref(), Some("not-acceptable"));
+        let error = job.take_error().expect("an error");
+        assert!(error.contains("application/trig, application/n-quads, application/ld+json"));
+        job.finish();
+
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Negotiated,
+            "CONSTRUCT WHERE { ?s ?p ?o }",
+            &negotiated(Some("text/turtle")),
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let outcome = job.take_negotiated_outcome().expect("an outcome");
+        assert_eq!(outcome.format().as_deref(), Some("turtle"));
+        job.finish();
+
+        // A client that prefers Turtle but accepts N-Quads is sent N-Quads for the dataset.
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Negotiated,
+            GRAPH_CONSTRUCT,
+            &negotiated(Some("text/turtle, application/n-quads;q=0.5")),
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let outcome = job.take_negotiated_outcome().expect("an outcome");
+        assert_eq!(outcome.format().as_deref(), Some("nquads"));
+        job.finish();
+    }
+
+    #[test]
+    fn a_negotiated_solutions_result_honours_accept_and_a_trip_is_an_outcome_without_a_body() {
+        let engine = QueryEngine::new();
+        let dataset = seed();
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Negotiated,
+            "SELECT ?s WHERE { ?s ?p ?o }",
+            &negotiated(Some("text/csv")),
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let mut outcome = job.take_negotiated_outcome().expect("an outcome");
+        assert_eq!(outcome.format().as_deref(), Some("csv"));
+        let body = String::from_utf8(outcome.take_body().expect("a body")).expect("UTF-8");
+        assert!(body.starts_with("s\r\n"), "{body:?}");
+        job.finish();
+
+        let mut capped = negotiated(None);
+        capped.set_max_answers(Some(1));
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Negotiated,
+            "SELECT ?s WHERE { ?s ?p ?o }",
+            &capped,
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let mut outcome = job.take_negotiated_outcome().expect("an outcome");
+        assert!(!outcome.is_complete());
+        assert!(outcome.take_body().is_none());
+        assert!(outcome.format().is_none());
+        assert!(outcome.take_tripped().is_some());
+        assert!(outcome.take_partial().is_some());
+        job.finish();
+    }
+
+    #[test]
+    fn accept_is_refused_on_every_operation_but_the_negotiated_one() {
+        let with_accept = negotiated(Some("text/csv"));
+        let error = with_accept
+            .validate(AsyncOperationKind::Governed)
+            .expect_err("a governed query would ignore accept");
+        assert!(
+            error.contains("accept applies only to the negotiated operation"),
+            "{error}"
+        );
+        assert!(with_accept.validate(AsyncOperationKind::Negotiated).is_ok());
+        let mut with_format = options();
+        with_format.set_format(Some("json".to_owned()));
+        assert!(
+            with_format
+                .validate(AsyncOperationKind::Negotiated)
+                .is_err()
+        );
+        assert!(with_format.validate(AsyncOperationKind::Raw).is_ok());
+    }
+
+    #[test]
+    fn load_authorization_is_the_catalogs_policy() {
+        let mut catalog = ServiceCatalog::new();
+        catalog
+            .add_service_message(
+                "http://example.org/doc".to_owned(),
+                r#"{"capabilities":["network"],"headers":[["X-A","1"]],"userAgent":"w/1","timeoutMs":250}"#,
+            )
+            .expect("profile");
+        catalog
+            .add_service_message(
+                "http://example.org/query-only".to_owned(),
+                r#"{"capabilities":["query"]}"#,
+            )
+            .expect("profile");
+        let allowed = catalog.authorize_load("http://example.org/doc");
+        assert_eq!(allowed.denial(), None);
+        assert_eq!(allowed.headers(), ["X-A", "1"]);
+        assert_eq!(allowed.user_agent().as_deref(), Some("w/1"));
+        assert_eq!(allowed.timeout_ms(), Some(250.0));
+        assert!(allowed.accept().contains("text/turtle"));
+        let withheld = catalog.authorize_load("http://example.org/query-only");
+        assert!(withheld.denial().expect("denied").contains("network"));
+        assert!(
+            catalog
+                .authorize_load("http://example.org/unlisted")
+                .denial()
+                .is_some()
+        );
+        assert!(!catalog.carries_credential("http://example.org/doc"));
+        catalog
+            .add_service_message(
+                "http://example.org/secret".to_owned(),
+                r#"{"capabilities":["network","credentials"],"credential":{"header":"X-Key","value":"k"}}"#,
+            )
+            .expect("profile");
+        assert!(catalog.carries_credential("http://example.org/secret"));
+        assert_eq!(
+            catalog
+                .authorize_load("http://example.org/secret")
+                .headers(),
+            ["X-Key", "k"]
+        );
     }
 }

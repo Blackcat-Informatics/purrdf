@@ -936,6 +936,147 @@ impl QueryOutcome {
     }
 }
 
+/// The outcome of one governed query whose complete answer was serialized in the format
+/// negotiated from an `Accept` header (`queryGovernedNegotiatedAsync`).
+///
+/// The same two shapes as [`QueryOutcome`], with the complete answer as a document rather
+/// than a typed result: `takeBody()` with its `format` and `mediaType` when every governor
+/// held, `takePartial()` with `takeTripped()` when one did not. The partial rows stay
+/// typed — they are a certificate to inspect, not a document to send.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct NegotiatedOutcome {
+    /// The serialized complete answer, present on the complete path only.
+    body: Option<Vec<u8>>,
+    /// The negotiated format token, present on the complete path only.
+    format: Option<&'static str>,
+    /// What the rows in hand bound, present on the exhausted path only.
+    partial: Option<PartialAnswers>,
+    /// The governor that stopped the execution, present on the exhausted path only.
+    tripped: Option<TrippedGovernor>,
+    /// This execution's consumption and ceilings, present on both paths.
+    evidence: Option<GovernorEvidence>,
+    /// Whether the execution completed, latched at construction.
+    complete: bool,
+}
+
+#[wasm_bindgen]
+impl NegotiatedOutcome {
+    /// Whether every governor stayed intact and the body is the query's complete answer.
+    #[wasm_bindgen(getter, js_name = isComplete)]
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    /// The negotiated format token (`json`, `xml`, `csv`, `tsv`, `turtle`, `trig`,
+    /// `ntriples`, `nquads` or `jsonld`), or `undefined` when a governor stopped the
+    /// execution.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn format(&self) -> Option<String> {
+        self.format.map(str::to_owned)
+    }
+
+    /// The body's media type, for the response's `Content-Type`, or `undefined` when a
+    /// governor stopped the execution.
+    #[wasm_bindgen(getter, js_name = mediaType)]
+    #[must_use]
+    pub fn media_type(&self) -> Option<String> {
+        self.format
+            .and_then(purrdf_sparql_eval::protocol::format_media_type)
+            .map(str::to_owned)
+    }
+
+    /// Move the complete answer's UTF-8 bytes out, or `undefined` when a governor stopped
+    /// the execution.
+    #[wasm_bindgen(js_name = takeBody)]
+    pub fn take_body(&mut self) -> Option<Vec<u8>> {
+        self.body.take()
+    }
+
+    /// Move the partial-answer certificate out, or `undefined` when the query completed.
+    #[wasm_bindgen(js_name = takePartial)]
+    pub fn take_partial(&mut self) -> Option<PartialAnswers> {
+        self.partial.take()
+    }
+
+    /// Move the tripped governor out, or `undefined` when the query completed.
+    #[wasm_bindgen(js_name = takeTripped)]
+    pub fn take_tripped(&mut self) -> Option<TrippedGovernor> {
+        self.tripped.take()
+    }
+
+    /// Move this execution's receipt out. Present on both paths.
+    #[wasm_bindgen(js_name = takeEvidence)]
+    pub fn take_evidence(&mut self) -> Option<GovernorEvidence> {
+        self.evidence.take()
+    }
+}
+
+/// What a negotiated governed query produced, before it crosses to JavaScript: the
+/// complete answer already serialized, or the exhausted outcome untouched.
+#[derive(Debug)]
+pub(crate) enum NegotiatedValue {
+    /// Every governor held; the answer is serialized in `format`.
+    Complete {
+        bytes: Vec<u8>,
+        format: &'static str,
+        evidence: EvidenceValue,
+    },
+    /// A governor stopped the execution.
+    Exhausted(BudgetExhausted),
+}
+
+/// Convert a [`NegotiatedValue`] into the JS-facing [`NegotiatedOutcome`].
+pub(crate) fn negotiated_outcome_from_value(
+    value: NegotiatedValue,
+) -> Result<NegotiatedOutcome, JsError> {
+    match value {
+        NegotiatedValue::Complete {
+            bytes,
+            format,
+            evidence,
+        } => Ok(NegotiatedOutcome {
+            body: Some(bytes),
+            format: Some(format),
+            partial: None,
+            tripped: None,
+            evidence: Some(GovernorEvidence { inner: evidence }),
+            complete: true,
+        }),
+        NegotiatedValue::Exhausted(BudgetExhausted {
+            tripped,
+            evidence,
+            partial,
+            ..
+        }) => Ok(NegotiatedOutcome {
+            body: None,
+            format: None,
+            partial: Some(partial_answers_from_native(partial)?),
+            tripped: Some(TrippedGovernor { inner: tripped }),
+            evidence: Some(GovernorEvidence { inner: evidence }),
+            complete: false,
+        }),
+    }
+}
+
+/// The protocol result kind of an evaluated result: solutions, a graph, or a graph that
+/// carries named graphs — the shape that decides which formats can hold it.
+pub(crate) fn negotiable_result_kind(
+    result: &SparqlResult,
+) -> purrdf_sparql_eval::protocol::ResultKind {
+    use purrdf_sparql_eval::protocol::ResultKind;
+    match result {
+        SparqlResult::Graph(graph) if !distinct_graph_names(&**graph).is_empty() => {
+            ResultKind::Dataset
+        }
+        SparqlResult::Graph(_) => ResultKind::Graph,
+        SparqlResult::Solutions { .. } => ResultKind::Solutions,
+        SparqlResult::Boolean(_) => ResultKind::Boolean,
+    }
+}
+
 /// The two-phase outcome of a governed entailment-aware query.
 ///
 /// `takeOutcome()` and `report` are present together only after closure completed. A

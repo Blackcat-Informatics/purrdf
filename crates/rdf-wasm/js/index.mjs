@@ -4,7 +4,8 @@
 // purrdf — the idiomatic RDF/JS surface over the wasm engine.
 //
 // The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term,
-// RegimeClosure, ReasoningAnswer, SerializeLoss, ServiceCatalog, ShaclProductRefusal)
+// RegimeClosure, ReasoningAnswer, SerializeLoss, ServiceCatalog, ShaclProductRefusal,
+// SparqlProtocolRequest)
 // and the free functions (version,
 // shaclValidateToSarif, shaclValidateChangesToSarif, shaclEntail,
 // shaclPackProduct, shaclProductExplain,
@@ -35,11 +36,13 @@
 //     below drain them into ordinary JS objects and free the handles, exactly as
 //     `queryResultToObject` already does for an ungoverned result.
 //   * the asynchronous twins (`queryAsync`, `selectAsync`, …, `updateGovernedAsync`,
-//     `Dataset#queryAsync`) — each begins a job in Rust (`QueryEngine.beginAsync`),
-//     hands it to the scheduler in `./pkg/purrdf_jspi.mjs` with the host's `SERVICE` and
-//     `LOAD` handlers and its `AbortSignal`, and drains the finished job into the very
-//     shape its synchronous twin returns. The scheduler is the same module instance the
-//     wasm glue imports its suspending function from.
+//     `queryGovernedNegotiatedAsync`, `Dataset#queryAsync`) — each begins a job in Rust
+//     (`QueryEngine.beginAsync`), hands it to the scheduler in `./pkg/purrdf_jspi.mjs`
+//     with the host's `SERVICE` and `LOAD` handlers and its `AbortSignal`, and drains the
+//     finished job into the very shape its synchronous twin returns (the negotiated twin,
+//     which has no synchronous twin, into a governed outcome carrying a document). The
+//     scheduler is the same module instance the wasm glue imports its suspending
+//     function from.
 //
 // What this module deliberately does NOT do is decide anything about governors. It sets
 // no default ceiling, applies no fallback, and never converts a trip into a throw: the
@@ -104,6 +107,7 @@ import init, {
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
   Sink,
+  SparqlProtocolRequest,
   Term,
   version,
 } from "./pkg/purrdf_wasm.js";
@@ -505,6 +509,60 @@ function queryOutcomeToObject(raw) {
   }
 }
 
+function negotiatedOutcomeToObject(raw) {
+  let partialRaw;
+  let trippedRaw;
+  let evidenceRaw;
+  try {
+    const isComplete = raw.isComplete;
+    const format = raw.format;
+    const mediaType = raw.mediaType;
+    const bytes = raw.takeBody();
+    partialRaw = raw.takePartial();
+    trippedRaw = raw.takeTripped();
+    evidenceRaw = raw.takeEvidence();
+    if (evidenceRaw === undefined) {
+      throw new Error("negotiated query outcome omitted required evidence");
+    }
+    const evidenceHandle = evidenceRaw;
+    evidenceRaw = undefined;
+    const evidence = governorEvidenceToObject(evidenceHandle);
+    const trippedHandle = trippedRaw;
+    trippedRaw = undefined;
+    const tripped =
+      trippedHandle === undefined ? undefined : trippedGovernorToObject(trippedHandle);
+    if (isComplete) {
+      if (bytes === undefined) {
+        throw new Error("complete negotiated query outcome omitted its body");
+      }
+      return {
+        isComplete,
+        body: { bytes, format, mediaType },
+        partial: undefined,
+        tripped,
+        evidence,
+      };
+    }
+    if (partialRaw === undefined) {
+      throw new Error("exhausted negotiated query outcome omitted its partial certificate");
+    }
+    const partialHandle = partialRaw;
+    partialRaw = undefined;
+    return {
+      isComplete,
+      body: undefined,
+      partial: partialAnswersToObject(partialHandle),
+      tripped,
+      evidence,
+    };
+  } finally {
+    partialRaw?.free?.();
+    trippedRaw?.free?.();
+    evidenceRaw?.free?.();
+    raw.free?.();
+  }
+}
+
 function entailmentQueryOutcomeToObject(raw) {
   let outcomeRaw;
   let trippedRaw;
@@ -612,6 +670,7 @@ const ASYNC_OPERATION_KEYS = {
   entailmentGoverned: { keys: [...GOVERNED_ASYNC_KEYS, "program"], governed: true },
   update: { keys: ["base"], governed: false },
   updateGoverned: { keys: GOVERNED_ASYNC_KEYS, governed: true },
+  negotiated: { keys: [...GOVERNED_ASYNC_KEYS, "accept"], governed: true },
 };
 
 function isPresent(value) {
@@ -734,6 +793,7 @@ function normalizeAsyncOptions(options, kind) {
   return {
     base: optionalString(source.base, "base"),
     format: optionalString(source.format, "format"),
+    accept: optionalString(source.accept, "accept"),
     optionsJson: optionalString(source.optionsJson, "optionsJson"),
     yamlSchemaUrl: optionalString(source.yamlSchemaUrl, "yamlSchemaUrl"),
     // Positional on `queryEntailmentGovernedAsync`, set there.
@@ -764,6 +824,7 @@ function buildJobOptions(normalized) {
   try {
     jobOptions.setBase(normalized.base);
     jobOptions.setFormat(normalized.format);
+    jobOptions.setAccept(normalized.accept);
     jobOptions.setOptionsJson(normalized.optionsJson);
     jobOptions.setProvenancePrefix(normalized.provenancePrefix);
     jobOptions.setProvenanceIri(normalized.provenanceIri);
@@ -848,6 +909,9 @@ function jobFailure(job, signal) {
       break;
     case "deadline":
       error = namedError(message, "TimeoutError");
+      break;
+    case "not-acceptable":
+      error = namedError(message, "NotAcceptableError");
       break;
     default:
       error = namedError(message, "Error");
@@ -950,7 +1014,9 @@ export function configureAsync(options) {
 /**
  * Instantiate the wasm module. Idempotent. In Node the wasm bytes are read from the
  * colocated file; in a browser, pass the bytes/URL (or omit to fetch the colocated
- * `.wasm`). Must be awaited once before any other API is used.
+ * `.wasm`); in a Worker, pass the compiled `WebAssembly.Module` its bundler imports from
+ * `@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm`. Must be awaited once before any
+ * other API is used.
  */
 export async function ready(wasmBytesOrUrl) {
   if (_ready) return;
@@ -1299,6 +1365,24 @@ export async function ready(wasmBytesOrUrl) {
         },
       );
     };
+    QueryEngine.prototype.queryGovernedNegotiatedAsync = async function (
+      dataset,
+      sparql,
+      options,
+    ) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "negotiated");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Negotiated, sparql),
+        (job) => {
+          const evidence = asyncEvidenceToObject(job.takeEvidence());
+          const outcome = negotiatedOutcomeToObject(job.takeNegotiatedOutcome());
+          outcome.evidence.async = evidence;
+          return outcome;
+        },
+      );
+    };
     QueryEngine.prototype.queryEntailmentGovernedAsync = async function (
       dataset,
       sparql,
@@ -1460,6 +1544,7 @@ export {
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
   Sink,
+  SparqlProtocolRequest,
   Term,
   version,
 };

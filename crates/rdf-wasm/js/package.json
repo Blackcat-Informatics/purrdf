@@ -25,12 +25,19 @@
     ".": {
       "types": "./index.d.ts",
       "import": "./index.mjs"
-    }
+    },
+    "./cloudflare": {
+      "types": "./cloudflare.d.ts",
+      "import": "./cloudflare.mjs"
+    },
+    "./purrdf_wasm_bg.wasm": "./pkg/purrdf_wasm_bg.wasm"
   },
   "files": [
     "README.md",
     "index.mjs",
     "index.d.ts",
+    "cloudflare.mjs",
+    "cloudflare.d.ts",
     "pkg/purrdf_jspi.mjs",
     "pkg/purrdf_wasm.js",
     "pkg/purrdf_wasm.d.ts",

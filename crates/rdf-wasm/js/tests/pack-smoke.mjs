@@ -55,6 +55,7 @@ import {
   QueryEngine,
   shaclValidateToSarif,
 } from "@blackcatinformatics/purrdf";
+import { handleSparqlRequest } from "@blackcatinformatics/purrdf/cloudflare";
 
 await ready();
 
@@ -129,6 +130,17 @@ const data = [
   '<http://example.org/alice> <http://example.org/age> "nope" .',
   "",
 ].join("\n");
+// The ./cloudflare subpath resolves from the installed package and answers a request.
+const endpoint = await handleSparqlRequest(
+  new Request(
+    "https://example.org/sparql?query=" +
+      encodeURIComponent("PREFIX ex: <https://example.org/> ASK { ex:stmt ex:says ?msg }"),
+  ),
+  { engine, dataset: reparsed, governors: { deadlineMs: 10000 } },
+);
+assert.equal(endpoint.status, 200);
+assert.deepEqual(await endpoint.json(), { head: {}, boolean: true });
+
 const sarif = JSON.parse(shaclValidateToSarif(shapes, data));
 assert.equal(sarif.version, "2.1.0");
 assert.ok(sarif.runs.flatMap((run) => run.results ?? []).length >= 1);

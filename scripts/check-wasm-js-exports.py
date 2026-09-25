@@ -55,6 +55,12 @@ _INDEX_DTS = _REPO / "crates" / "rdf-wasm" / "js" / "index.d.ts"
 # indents four spaces under the `impl`.
 _ATTR_RE = re.compile(r"^#\[wasm_bindgen\b.*\]$")
 _JS_NAME_RE = re.compile(r"js_name\s*=\s*(\w+)")
+# `#[wasm_bindgen(start)]`: the module's own initializer, which the generated glue runs
+# once at instantiation. It is not a consumer API — calling it again from JavaScript would
+# re-run start-up work (today: resetting the stack floor the SPARQL guards measure
+# against, possibly while an asynchronous job is standing on its own region) — so it is
+# deliberately NOT re-exported from the package root, and this gate does not demand it.
+_START_RE = re.compile(r"^#\[wasm_bindgen\(\s*start\s*\)\]$")
 _PUB_FN_RE = re.compile(r"^pub fn (\w+)")
 
 
@@ -70,7 +76,8 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
     follow it — collecting `js_name` from any of them — until it reaches the
     decorated item. If that item is `pub fn NAME`, the function is exported under its
     `js_name` if one was given, or under `NAME` verbatim otherwise (wasm-bindgen's own
-    default: it does not case-convert an un-renamed free function). If the item is
+    default: it does not case-convert an un-renamed free function). A
+    `#[wasm_bindgen(start)]` initializer is not recorded (see `_START_RE`). If the item is
     anything else (`pub struct`, `impl`), nothing is recorded — that free-function
     scoping is the whole point (see module docstring).
     """
@@ -84,6 +91,7 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
                 i += 1
                 continue
             attr_line = i + 1
+            is_start = bool(_START_RE.match(lines[i]))
             js_name: str | None = None
             match = _JS_NAME_RE.search(lines[i])
             if match:
@@ -94,7 +102,7 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
                 if nested:
                     js_name = nested.group(1)
                 j += 1
-            if j < n:
+            if j < n and not is_start:
                 fn_match = _PUB_FN_RE.match(lines[j])
                 if fn_match:
                     rust_name = fn_match.group(1)

@@ -187,7 +187,7 @@ fn an_update_via_post_directly_reads_the_body() {
 fn the_result_kind_is_read_from_the_query_form() {
     for (query, kind) in [
         ("SELECT * { ?s ?p ?o }", ResultKind::Solutions),
-        ("ask { ?s ?p ?o }", ResultKind::Solutions),
+        ("ask { ?s ?p ?o }", ResultKind::Boolean),
         ("CONSTRUCT WHERE { ?s ?p ?o }", ResultKind::Graph),
         ("DESCRIBE <http://example.org/s>", ResultKind::Graph),
         (

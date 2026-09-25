@@ -45,6 +45,10 @@ purrdf-core = { workspace = true }
 # in-browser `Dataset.query`. SERVICE federation is host-injected through
 # `RemoteQuerySource`; this crate does not bake in an HTTP client.
 purrdf-sparql-eval = { workspace = true }
+# The SPARQL parser the protocol surface (`protocol` module) reads an operation with,
+# under the same parser options the engine evaluates it under, so a malformed operation
+# is refused as the protocol's client error before any job begins.
+purrdf-sparql-algebra = { workspace = true }
 # The stack measurement the parser and evaluator refuse against: this crate installs
 # the floor of every stack it runs them on — the linker's `__stack_low` at start-up,
 # each asynchronous job's region while the job runs — and its job runtime's poll-time

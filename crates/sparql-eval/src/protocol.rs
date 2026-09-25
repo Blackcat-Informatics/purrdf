@@ -77,14 +77,28 @@ impl OperationKind {
     }
 }
 
-/// The two shapes a query result takes, which decide the formats it can be sent in
+/// The shapes a query result takes, which decide the formats it can be sent in
 /// (Protocol §2.1.5 → the SPARQL 1.1 result formats and the RDF syntaxes).
+///
+/// [`ProtocolRequest::result_kind`] reads [`Self::Solutions`], [`Self::Boolean`] or
+/// [`Self::Graph`] from the query form, before evaluation. [`Self::Dataset`] is known only once a graph result
+/// exists: it is a `CONSTRUCT`/`DESCRIBE` result that carries a named graph, which only
+/// the quad-capable syntaxes can hold. A host negotiates for [`Self::Graph`] before
+/// evaluating (to answer `406` without spending the evaluation) and again for
+/// [`Self::Dataset`] when the result turns out to carry named graphs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResultKind {
-    /// A `SELECT` solution sequence or an `ASK` boolean: a SPARQL results document.
+    /// A `SELECT` solution sequence: a SPARQL results document.
     Solutions,
+    /// An `ASK` boolean: a SPARQL results document in JSON or XML. The CSV and TSV result
+    /// formats are defined for `SELECT` variable bindings only (SPARQL 1.1 Query Results
+    /// CSV and TSV Formats §1), so they are never offered for a boolean.
+    Boolean,
     /// A `CONSTRUCT` or `DESCRIBE` graph: an RDF document.
     Graph,
+    /// A `CONSTRUCT` or `DESCRIBE` result carrying at least one named graph: an RDF
+    /// document in a syntax that can carry named graphs.
+    Dataset,
 }
 
 /// Why an HTTP request is not a SPARQL 1.1 Protocol operation, or why its dataset
@@ -579,8 +593,11 @@ impl ProtocolRequest {
                 {
                     continue;
                 }
-                if word.eq_ignore_ascii_case("SELECT") || word.eq_ignore_ascii_case("ASK") {
+                if word.eq_ignore_ascii_case("SELECT") {
                     return Ok(Some(ResultKind::Solutions));
+                }
+                if word.eq_ignore_ascii_case("ASK") {
+                    return Ok(Some(ResultKind::Boolean));
                 }
                 if word.eq_ignore_ascii_case("CONSTRUCT") || word.eq_ignore_ascii_case("DESCRIBE") {
                     return Ok(Some(ResultKind::Graph));
@@ -919,11 +936,35 @@ const GRAPH_FORMATS: [(&str, &str); 5] = [
     ("jsonld", "application/ld+json"),
 ];
 
+/// The formats a graph result carrying named graphs is offered in, in server preference
+/// order: the quad-capable subset of [`GRAPH_FORMATS`], in the same relative order. The
+/// first is the default (TriG).
+const DATASET_FORMATS: [(&str, &str); 3] = [
+    ("trig", "application/trig"),
+    ("nquads", "application/n-quads"),
+    ("jsonld", "application/ld+json"),
+];
+
+/// The formats an `ASK` boolean is offered in: the SPARQL results formats that define a
+/// boolean result, in the same relative order. The first is the default (JSON).
+const BOOLEAN_FORMATS: [(&str, &str); 2] = [
+    ("json", "application/sparql-results+json"),
+    ("xml", "application/sparql-results+xml"),
+];
+
 const fn formats(kind: ResultKind) -> &'static [(&'static str, &'static str)] {
     match kind {
         ResultKind::Solutions => &SOLUTION_FORMATS,
+        ResultKind::Boolean => &BOOLEAN_FORMATS,
         ResultKind::Graph => &GRAPH_FORMATS,
+        ResultKind::Dataset => &DATASET_FORMATS,
     }
+}
+
+/// The media types a result of `kind` is offered in, in server preference order — the
+/// formats [`negotiate`] chooses among, for a `406` response that names them.
+pub fn offered_media_types(kind: ResultKind) -> impl ExactSizeIterator<Item = &'static str> {
+    formats(kind).iter().map(|&(_, media)| media)
 }
 
 /// The media type of a format token [`negotiate`] returns, for the response's
@@ -1020,13 +1061,15 @@ fn parse_weight(text: &str) -> Option<u16> {
 /// (SPARQL 1.1 Protocol §2.1.5, RFC 9110 §12.5.1), as the format token the engine's
 /// serializers take.
 ///
-/// - No `Accept` header (or an empty one): the default — `json` for solutions, `turtle`
-///   for a graph.
+/// - No `Accept` header (or an empty one): the default — `json` for solutions and a
+///   boolean, `turtle` for a graph, `trig` for a graph carrying named graphs.
 /// - Otherwise each offered format takes the weight of the most specific media range
 ///   that matches it (`type/subtype` over `type/*` over `*/*`); a weight of `0`
 ///   excludes it. The highest-weighted format wins, and a tie goes to the server's
-///   preference order: `json`, `xml`, `csv`, `tsv` for solutions; `turtle`, `trig`,
-///   `ntriples`, `nquads`, `jsonld` for a graph.
+///   preference order: `json`, `xml`, `csv`, `tsv` for solutions; `json`, `xml` for a
+///   boolean; `turtle`, `trig`,
+///   `ntriples`, `nquads`, `jsonld` for a graph; `trig`, `nquads`, `jsonld` for a graph
+///   carrying named graphs.
 /// - `None` when no offered format is acceptable — the host's `406 Not Acceptable`.
 ///
 /// A malformed element of the header (no `/`, a weight outside `0`–`1`) is skipped

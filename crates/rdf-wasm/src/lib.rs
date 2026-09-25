@@ -75,6 +75,9 @@ use wasm_bindgen::prelude::*;
 //   * `async_query` — the asynchronous operation runtime: every evaluating `query`
 //                 surface as a job that suspends on host-resolved SERVICE / LOAD
 //                 effects and yields to the event loop, through JSPI
+//   * `protocol` — the SPARQL 1.1 Protocol request surface (`SparqlProtocolRequest`):
+//                 an HTTP request read into an operation, its dataset parameters
+//                 applied, its response format negotiated
 mod async_query;
 mod codec;
 mod convert;
@@ -83,6 +86,7 @@ pub mod entail;
 mod factory;
 mod jsonld;
 mod projection;
+mod protocol;
 mod query;
 pub mod shacl;
 mod stream;
@@ -92,17 +96,18 @@ mod term;
 pub use async_query::purrdf_jspi_run;
 pub use async_query::{
     AsyncEffect, AsyncEffectKind, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind,
-    ServiceCatalog,
+    LoadAuthorization, ServiceCatalog,
 };
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;
 pub use factory::DataFactory;
 pub use jsonld::CompiledJsonLdContext;
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
+pub use protocol::SparqlProtocolRequest;
 pub use query::{
-    CancellationToken, EntailmentQueryOutcome, GovernorEvidence, PartialAnswers, ProvenanceInfo,
-    QueryEngine, QueryOutcome, QueryResult, SelectResult, SelectRow, TrippedGovernor,
-    UpdateOutcome, governor_dimensions, provenance_from_json, provenance_from_xml,
+    CancellationToken, EntailmentQueryOutcome, GovernorEvidence, NegotiatedOutcome, PartialAnswers,
+    ProvenanceInfo, QueryEngine, QueryOutcome, QueryResult, SelectResult, SelectRow,
+    TrippedGovernor, UpdateOutcome, governor_dimensions, provenance_from_json, provenance_from_xml,
 };
 pub use stream::Sink;
 pub use term::{Quad, Term};
