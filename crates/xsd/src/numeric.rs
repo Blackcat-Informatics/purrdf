@@ -41,10 +41,29 @@ impl Decimal {
         self.scale
     }
 
-    /// Lossy conversion to `f64` (for promotion to `double`/`float`).
+    /// The correctly rounded `f64` value (round-to-nearest, ties-to-even) — the
+    /// conversion XPath `xs:double` casting (F&O §19.1.2) and SPARQL's
+    /// `decimal ⊂ double` promotion require. Every decimal is finite and at most
+    /// `2^127` in magnitude, so the result is always finite; zero is `+0.0`.
+    ///
+    /// The exact value `mantissa / 10^scale` is rounded ONCE (see
+    /// `decimal_float`'s module docs for the algorithm and its cost). An earlier
+    /// revision computed `mantissa as f64 / 10^scale`, rounding in the cast
+    /// whenever `|mantissa| > 2^53` and again in the division, which could land
+    /// one ulp away from the correctly rounded value.
     #[must_use]
     pub fn to_f64(&self) -> f64 {
-        self.mantissa as f64 / 10f64.powi(i32::from(self.scale))
+        crate::decimal_float::decimal_to_f64(self.mantissa, self.scale)
+    }
+
+    /// The correctly rounded `f32` value (round-to-nearest, ties-to-even) — the
+    /// `decimal ⊂ float` twin of [`Self::to_f64`] (XPath `xs:float` casting),
+    /// rounded once straight to single precision. Narrowing [`Self::to_f64`]
+    /// would round twice, which differs from the correctly rounded value when the
+    /// first rounding lands exactly on an `f32` halfway point.
+    #[must_use]
+    pub fn to_f32(&self) -> f32 {
+        crate::decimal_float::decimal_to_f32(self.mantissa, self.scale)
     }
 
     /// The integer (truncated-toward-zero) part of the value.
@@ -728,6 +747,7 @@ fn num_f64(v: &XsdValue) -> Option<f64> {
         // Large i128 values (> 2^53) lose low-order bits; this is required behaviour,
         // not an accident.
         XsdValue::Integer { value, .. } => *value as f64,
+        // decimal ⊂ double: correctly rounded, once (see `Decimal::to_f64`).
         XsdValue::Decimal(d) => d.to_f64(),
         XsdValue::Float(f) => f64::from(*f),
         XsdValue::Double(d) => *d,
@@ -741,10 +761,10 @@ fn num_f32(v: &XsdValue) -> Option<f32> {
         // Spec-mandated lossy promotion: integer ⊂ float (SPARQL §17.3 numeric tower).
         // Large i128 values (> 2^24) lose precision; required by IEEE promotion semantics.
         XsdValue::Integer { value, .. } => *value as f32,
-        // Decimal → f64 → f32: two rounds of precision loss. First round is inherent
-        // (decimal to IEEE double), second round narrows to single. Both are required by
-        // the SPARQL promotion rules (decimal ⊂ float); no intermediate Decimal→f32 path exists.
-        XsdValue::Decimal(d) => d.to_f64() as f32,
+        // decimal ⊂ float: the exact decimal rounded ONCE, straight to single
+        // precision (XPath `xs:float` casting). Going through `f64` first would round
+        // twice — nothing in the spec asks for that, and it can land one ulp off.
+        XsdValue::Decimal(d) => d.to_f32(),
         XsdValue::Float(f) => *f,
         // double → float narrowing: required by the numeric tower when a float operand
         // forces promotion of the other operand down (SPARQL §17.3).
@@ -776,29 +796,28 @@ fn int_binop(
 }
 
 /// Align two decimals to the same (higher) scale by scaling up the mantissa of
-/// the lower-scale operand. Returns `(a_mantissa, b_mantissa, common_scale)`.
+/// the lower-scale operand. Returns `(a_mantissa, b_mantissa, common_scale)`, or
+/// `None` when the scaled-up mantissa leaves `i128` — the same overflow the
+/// following addition/subtraction would report, reached one step earlier.
 ///
-/// ## Overflow-safety argument
-///
-/// Both operands satisfy `|mantissa| < 10^scale ≤ 10^MAX_DECIMAL_SCALE` (= 10^18).
-/// The scale-up factor is `10^diff` where `diff ≤ 18`.
-/// Product `< 10^18 × 10^18 = 10^36 < i128::MAX (≈ 1.70×10^38)`. No overflow.
-/// However, the mantissa of an *add/sub result* can be up to `2 × 10^36` which still
-/// fits in i128; the caller must not further scale without checking.
-pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> (i128, i128, u8) {
+/// The scale-up factor is `10^diff` with `diff ≤ MAX_DECIMAL_SCALE` (18), but
+/// the mantissa being scaled is NOT bounded by `10^scale`: a scale-0 decimal
+/// may carry any `i128` mantissa (`1e30` is a valid `xsd:decimal`), so
+/// `1e30 + 0.000000000000000001` must scale `1e30` by `10^18` — past `i128`.
+/// The multiplication is therefore checked; an unchecked one panicked under
+/// overflow checks and silently wrapped to a wrong sum without them.
+pub(crate) fn align_decimals(a: &Decimal, b: &Decimal) -> Option<(i128, i128, u8)> {
     if a.scale() == b.scale() {
-        return (a.mantissa(), b.mantissa(), a.scale());
+        return Some((a.mantissa(), b.mantissa(), a.scale()));
     }
     if a.scale() > b.scale() {
         let diff = u32::from(a.scale() - b.scale());
-        // SAFETY: b.mantissa < 10^b.scale ≤ 10^18; diff ≤ 18; product < 10^36 < i128::MAX
-        let b_scaled = b.mantissa() * 10i128.pow(diff);
-        (a.mantissa(), b_scaled, a.scale())
+        let b_scaled = b.mantissa().checked_mul(10i128.pow(diff))?;
+        Some((a.mantissa(), b_scaled, a.scale()))
     } else {
         let diff = u32::from(b.scale() - a.scale());
-        // SAFETY: a.mantissa < 10^a.scale ≤ 10^18; diff ≤ 18; product < 10^36 < i128::MAX
-        let a_scaled = a.mantissa() * 10i128.pow(diff);
-        (a_scaled, b.mantissa(), b.scale())
+        let a_scaled = a.mantissa().checked_mul(10i128.pow(diff))?;
+        Some((a_scaled, b.mantissa(), b.scale()))
     }
 }
 
@@ -880,8 +899,9 @@ pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 }
 
 fn decimal_add(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
-    let (am, bm, scale) = align_decimals(a, b);
-    let result = am.checked_add(bm).ok_or_else(|| XsdError::OutOfRange {
+    let result = align_decimals(a, b)
+        .and_then(|(am, bm, scale)| am.checked_add(bm).map(|mantissa| (mantissa, scale)));
+    let (result, scale) = result.ok_or_else(|| XsdError::OutOfRange {
         datatype: XsdDatatype::Decimal,
         lexical: String::new(),
         reason: "decimal addition overflow",
@@ -930,8 +950,9 @@ pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
 }
 
 fn decimal_sub(a: &Decimal, b: &Decimal) -> Result<XsdValue, XsdError> {
-    let (am, bm, scale) = align_decimals(a, b);
-    let result = am.checked_sub(bm).ok_or_else(|| XsdError::OutOfRange {
+    let result = align_decimals(a, b)
+        .and_then(|(am, bm, scale)| am.checked_sub(bm).map(|mantissa| (mantissa, scale)));
+    let (result, scale) = result.ok_or_else(|| XsdError::OutOfRange {
         datatype: XsdDatatype::Decimal,
         lexical: String::new(),
         reason: "decimal subtraction overflow",
@@ -2425,6 +2446,37 @@ mod tests {
         );
     }
 
+    /// Aligning a large scale-0 mantissa to scale 18 leaves `i128` before the
+    /// addition does: `1e30 + 1e-18` needs the mantissa `1e48`. That is an
+    /// `OutOfRange` overflow (it used to panic under overflow checks and wrap
+    /// to a wrong sum without them); the neighbouring `1e19 + 1e-18` (mantissa
+    /// `1e37`) still fits and must still add exactly — for `-` too.
+    #[test]
+    fn decimal_alignment_overflow_is_out_of_range_and_its_neighbour_adds() {
+        let tiny = dec_val("0.000000000000000001");
+        let huge = dec_val("1000000000000000000000000000000");
+        for result in [
+            numeric_add(&huge, &tiny),
+            numeric_add(&tiny, &huge),
+            numeric_sub(&huge, &tiny),
+            numeric_add(&int_val(10i128.pow(30)), &tiny),
+        ] {
+            assert!(
+                matches!(result, Err(XsdError::OutOfRange { .. })),
+                "expected OutOfRange, got {result:?}"
+            );
+        }
+        let fits = dec_val("10000000000000000000");
+        assert_eq!(
+            numeric_add(&fits, &tiny).unwrap().canonical_lexical(),
+            "10000000000000000000.000000000000000001"
+        );
+        assert_eq!(
+            numeric_sub(&fits, &tiny).unwrap().canonical_lexical(),
+            "9999999999999999999.999999999999999999"
+        );
+    }
+
     // -- numeric promotion: integer + double → double --
 
     #[test]
@@ -2449,6 +2501,41 @@ mod tests {
         );
         // 1.5 + 0.5 = 2.0
         assert_eq!(as_float(&result), 2.0_f32);
+    }
+
+    /// Promotion reads the correctly rounded value: `72922151633738826.80` is
+    /// `7.292215163373883e16` as a double (the old two-rounding conversion gave
+    /// `…882e16`, so `=` against the correctly rounded double was false), and
+    /// `18446745173221179393.0` is `(2^24 + 2) × 2^40` as a float (narrowing the
+    /// double rounds twice, to `2^64`). The neighbouring double one ulp down
+    /// still compares unequal, so the `=` is observed, not assumed.
+    #[test]
+    fn decimal_promotion_rounds_once_to_double_and_to_float() {
+        let witness = dec_val("72922151633738826.80");
+        let correct = 7.292_215_163_373_883e16_f64;
+        assert_eq!(
+            numeric_cmp(&witness, &XsdValue::Double(correct)),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            numeric_cmp(&witness, &XsdValue::Double(correct.next_down())),
+            Some(Ordering::Greater)
+        );
+        let sum = numeric_add(&witness, &XsdValue::Double(0.0)).unwrap();
+        assert_eq!(as_double(&sum).to_bits(), correct.to_bits());
+
+        let above_tie = dec_val("18446745173221179393.0");
+        let correct_f32 = f32::from_bits(((127 + 64) << 23) | 1);
+        let sum = numeric_add(&above_tie, &float_val(0.0)).unwrap();
+        assert_eq!(as_float(&sum).to_bits(), correct_f32.to_bits());
+        assert_eq!(
+            numeric_cmp(&above_tie, &float_val(correct_f32)),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            numeric_cmp(&above_tie, &float_val(2f32.powi(64))),
+            Some(Ordering::Greater)
+        );
     }
 
     // -- numeric promotion: integer × decimal → decimal --

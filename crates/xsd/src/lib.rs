@@ -161,6 +161,7 @@
 pub mod bigint;
 pub mod binary;
 pub mod datatype;
+mod decimal_float;
 pub mod numeric;
 pub mod ops;
 pub mod range;
