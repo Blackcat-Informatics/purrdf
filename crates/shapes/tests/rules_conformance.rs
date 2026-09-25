@@ -75,15 +75,25 @@ fn file_iri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
-/// Parse an `input.ttl` / `input.trig` fixture into a frozen dataset.
-fn parse_input(path: &Path, text: &str) -> Result<Arc<RdfDataset>, String> {
+/// A parsed input fixture: the frozen dataset and the document prefix map the codec
+/// recorded while parsing it.
+type ParsedInput = (Arc<RdfDataset>, Vec<(String, String)>);
+
+/// Parse an `input.ttl` / `input.trig` fixture into a [`ParsedInput`].
+fn parse_input(path: &Path, text: &str) -> Result<ParsedInput, String> {
     let media = if path.extension().and_then(|e| e.to_str()) == Some("trig") {
         "application/trig"
     } else {
         "text/turtle"
     };
-    purrdf::parse_dataset(text.as_bytes(), media, Some(&file_iri(path)))
-        .map_err(|e| format!("cannot parse {}: {e}", path.display()))
+    let outcome = purrdf::parse_dataset_with(
+        text.as_bytes(),
+        media,
+        Some(&file_iri(path)),
+        &purrdf::ParseOptions::default(),
+    )
+    .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+    Ok((outcome.dataset, outcome.document_prefixes))
 }
 
 // ── Expected-graph reconstruction ──────────────────────────────────────────────
@@ -112,8 +122,7 @@ struct Case {
 fn load(case: &Case) -> Result<(purrdf_shapes::shapes::Shapes, Arc<RdfDataset>), String> {
     let text = fs::read_to_string(&case.input_path)
         .map_err(|e| format!("cannot read {}: {e}", case.input_path.display()))?;
-    let input = parse_input(&case.input_path, &text)?;
-    let doc_prefixes = text_ingest::extract_prefixes(&text);
+    let (input, doc_prefixes) = parse_input(&case.input_path, &text)?;
     let shapes = from_dataset_with_prefixes(&input, &doc_prefixes)
         .map_err(|e| format!("shapes parse error: {e}"))?;
     let projected = engine::project_dataset(input.as_ref())?;
@@ -271,8 +280,13 @@ fn entail_dataset_composes_project_then_apply_rules() {
         ex:S a sh:NodeShape ; sh:targetClass ex:Person ;\n\
           sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .";
     let input = purrdf::parse_dataset(text.as_bytes(), "text/turtle", None).expect("parse");
-    let shapes =
-        from_dataset_with_prefixes(&input, &text_ingest::extract_prefixes(text)).expect("shapes");
+    let shapes = from_dataset_with_prefixes(
+        &input,
+        &text_ingest::parse_turtle_document(text, None)
+            .expect("parse")
+            .prefixes,
+    )
+    .expect("shapes");
 
     let via_entail = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("entail");
 
@@ -307,9 +321,13 @@ fn sh_order_is_order_independent_over_the_closure() {
         let shapes_text = format!("{PREFIXES}{shapes_body}");
         let shapes_ds = purrdf::parse_dataset(shapes_text.as_bytes(), "text/turtle", None)
             .expect("shapes parse");
-        let shapes =
-            from_dataset_with_prefixes(&shapes_ds, &text_ingest::extract_prefixes(&shapes_text))
-                .expect("shapes");
+        let shapes = from_dataset_with_prefixes(
+            &shapes_ds,
+            &text_ingest::parse_turtle_document(&shapes_text, None)
+                .expect("shapes parse")
+                .prefixes,
+        )
+        .expect("shapes");
         canonicalize(
             purrdf_shapes::entail_dataset(data.as_ref(), &shapes)
                 .expect("entail")

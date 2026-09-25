@@ -74,9 +74,6 @@ use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_f
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
-const R_PREFIX_SCAN: &str = "prefix handling scans PREFIX lines out of the shapes document text, including one \
-     inside a string literal, so the query is resolved against the wrong namespace";
-
 const R_INSTANCES_OF_EXPR: &str = "shnex:instancesOf refuses a node-expression argument (shnex:arg) and requires an \
      IRI, so the function body is rejected at load";
 
@@ -121,7 +118,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
     // ── SPARQL surface ──
-    ("sparql/node/prefixes-002", R_PREFIX_SCAN),
     (
         "sparql/functions/instanceCount-example",
         R_INSTANCES_OF_EXPR,
@@ -751,7 +747,9 @@ fn eval_in_scope(
 fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
     let text = fs::read_to_string(&tc.file)
         .map_err(|e| format!("cannot read {}: {e}", tc.file.display()))?;
-    let doc_prefixes = text_ingest::extract_prefixes(&text);
+    let doc_prefixes = text_ingest::parse_turtle_document(&text, Some(&file_iri(&tc.file)))
+        .map_err(|errors| format!("node-expression graph parse error: {}", errors.join("; ")))?
+        .prefixes;
     let (shapes, mut exprs) = shapes::from_dataset_with_node_expressions(
         &tc.dataset,
         &doc_prefixes,
@@ -812,13 +810,12 @@ fn run_node_expr(id: &str, tc: &NodeExprCase) -> Result<(), String> {
 fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
-    let shapes_dataset = purrdf::parse_dataset(
-        shapes_text.as_bytes(),
-        "text/turtle",
-        Some(&file_iri(&tc.shapes_path)),
-    )
-    .map_err(|e| format!("shapes graph parse error: {e}"))?;
-    let doc_prefixes = text_ingest::extract_prefixes(&shapes_text);
+    let text_ingest::TurtleDocument {
+        dataset: shapes_dataset,
+        prefixes: doc_prefixes,
+        ..
+    } = text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
+        .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
     let shapes = shapes::from_dataset_with_config_and_graph(
         &shapes_dataset,
         &doc_prefixes,

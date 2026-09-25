@@ -352,7 +352,17 @@ const AGREED_ON_REPORT_CASES: usize = 361;
 /// computed URI length fails `sh:hasValue 27` at `ex:Invalid` — the violation the
 /// suite expects (+1). `property-select-001` loads too and is agreed on as an
 /// empty report: its computed full name satisfies `sh:hasValue "John Muir"`.
-const AGREED_WITH_RESULTS_CASES: usize = 340;
+///
+/// # Why it moved from 340 to 341
+///
+/// `sparql/node/prefixes-002` loaded before, and every lane agreed on an EMPTY
+/// report: a `PREFIX test:` line quoted inside a SECOND constraint's `sh:select`
+/// was read as a document prefix and rebound `test:` for the first constraint too,
+/// so its `FILTER (?value = test:Value)` matched nothing. The document prefix map
+/// is now the Turtle codec's own record, and the first constraint takes `test:` from
+/// the `sh:ShapesGraph`'s implicit `sh:declare`; the lanes agree on the violation
+/// the suite expects (+1).
+const AGREED_WITH_RESULTS_CASES: usize = 341;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 
@@ -426,13 +436,15 @@ enum Bucket {
 fn load_w3c(case: &shacl_corpora::W3cCase) -> Result<Loaded, String> {
     let shapes_text = fs::read_to_string(&case.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", case.shapes_path.display()))?;
-    let shapes_dataset = purrdf::parse_dataset(
-        shapes_text.as_bytes(),
-        "text/turtle",
+    let purrdf_shapes::text_ingest::TurtleDocument {
+        dataset: shapes_dataset,
+        prefixes: doc_prefixes,
+        ..
+    } = purrdf_shapes::text_ingest::parse_turtle_document(
+        &shapes_text,
         Some(&file_iri(&case.shapes_path)),
     )
-    .map_err(|e| format!("shapes graph parse error: {e}"))?;
-    let doc_prefixes = purrdf_shapes::text_ingest::extract_prefixes(&shapes_text);
+    .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
     let shapes = purrdf_shapes::shapes::from_dataset_with_config_and_graph(
         &shapes_dataset,
         &doc_prefixes,

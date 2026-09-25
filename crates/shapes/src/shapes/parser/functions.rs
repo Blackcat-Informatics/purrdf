@@ -402,7 +402,7 @@ impl Parser<'_> {
                 ));
             }
         };
-        let body_text = format!("{}{raw_body}", self.prefix_header(&[id]));
+        let body_text = format!("{}{raw_body}", self.prefix_header(&[id])?);
         // A GRAMMAR check, and deliberately only that.
         //
         // This parse runs under default options — no registered relation IRIs —

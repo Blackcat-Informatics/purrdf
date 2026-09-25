@@ -25,8 +25,8 @@ use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{
-    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss, parse_quads,
-    read_input,
+    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss,
+    parse_quads_and_prefixes, read_input,
 };
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
@@ -69,6 +69,11 @@ impl PyStore {
 
     /// Load RDF into the store. Either `input` (bytes/str data) or the keyword
     /// `path` (a file to read) must be given, together with `format`.
+    ///
+    /// Returns the document's prefix map, from the same parse: the `@prefix` /
+    /// `PREFIX` bindings a Turtle or TriG document left in force at its end, as
+    /// `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
+    /// every other format.
     #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn load(
         &mut self,
@@ -77,7 +82,7 @@ impl PyStore {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Vec<(String, String)>> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
         // Parse natively into the flat quad stream, then insert into the COW set.
@@ -96,14 +101,15 @@ impl PyStore {
         // plain Rust data.
         py.detach(move || {
             let base_ref = base.as_deref();
-            for quad in parse_quads(&data, format.to_native(), base_ref)
-                .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?
-            {
+            let (quads, prefixes) =
+                parse_quads_and_prefixes(&data, format.to_native(), base_ref)
+                    .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?;
+            for quad in quads {
                 inner
                     .insert(rdf_quad_to_values_scoped(&quad, scope))
                     .map_err(|e| iri_value_error(&e))?;
             }
-            Ok(())
+            Ok(prefixes)
         })
     }
 
@@ -117,7 +123,7 @@ impl PyStore {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Vec<(String, String)>> {
         self.load(py, input, format, path, base)
     }
 

@@ -16,8 +16,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::io::{
-    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss, parse_quads,
-    read_input,
+    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss,
+    parse_quads_and_prefixes, read_input,
 };
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
@@ -60,6 +60,8 @@ impl PyMutableDataset {
     }
 
     /// Load RDF into the mutable dataset.
+    ///
+    /// Returns the document's prefix map exactly as `Store.load` does.
     #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn load(
         &mut self,
@@ -68,7 +70,7 @@ impl PyMutableDataset {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Vec<(String, String)>> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
         let blank_scope = self.allocate_blank_scope();
@@ -76,14 +78,15 @@ impl PyMutableDataset {
         // Parse + insert run detached (GIL released); only plain Rust data is touched.
         py.detach(move || {
             let base_ref = base.as_deref();
-            for quad in parse_quads(&data, format.to_native(), base_ref)
-                .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?
-            {
+            let (quads, prefixes) =
+                parse_quads_and_prefixes(&data, format.to_native(), base_ref)
+                    .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?;
+            for quad in quads {
                 inner
                     .insert(rdf_quad_to_values_scoped(&quad, blank_scope))
                     .map_err(|e| iri_value_error(&e))?;
             }
-            Ok(())
+            Ok(prefixes)
         })
     }
 

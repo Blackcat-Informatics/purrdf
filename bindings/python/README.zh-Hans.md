@@ -44,8 +44,8 @@ quads = purrdf.parse(
 )
 ```
 
-`purrdf.parse` 接受 Turtle、TriG、N-Triples、N-Quads、TriX 与 HexTuples
-（`purrdf.RdfFormat`）；JSON-LD 与 RDF/XML 经由专门的
+`purrdf.parse` 接受 Turtle、TriG、N-Triples、N-Quads、TriX、HexTuples 与 RDF/XML
+（`purrdf.RdfFormat`）；JSON-LD 与 RDF/XML 另有专门的
 `purrdf.from_json_ld` / `purrdf.to_json_ld` 与 `purrdf.from_rdf_xml` /
 `purrdf.to_rdf_xml` 转换器。所有编解码器均为第一方实现，输出字节级确定。
 

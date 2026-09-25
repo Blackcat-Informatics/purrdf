@@ -37,8 +37,8 @@ quads = purrdf.parse(
 )
 ```
 
-`purrdf.parse` accepts Turtle, TriG, N-Triples, N-Quads, TriX, and HexTuples
-(`purrdf.RdfFormat`); JSON-LD and RDF/XML travel through the dedicated
+`purrdf.parse` accepts Turtle, TriG, N-Triples, N-Quads, TriX, HexTuples, and
+RDF/XML (`purrdf.RdfFormat`); JSON-LD and RDF/XML also have the dedicated
 `purrdf.from_json_ld` / `purrdf.to_json_ld` and `purrdf.from_rdf_xml` /
 `purrdf.to_rdf_xml` converters. All codecs are first-party with
 byte-deterministic output.

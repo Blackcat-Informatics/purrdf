@@ -496,7 +496,7 @@ impl Parser<'_> {
                     )
                 })?;
             // SHACL-AF sh:prefixes may be declared on the shape or the sh:sparql node.
-            let select = format!("{}{raw_select}", self.prefix_header(&[id, &c_node]));
+            let select = format!("{}{raw_select}", self.prefix_header(&[id, &c_node])?);
 
             // Parse-time query validation via the native parser (hard-fail on
             // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
@@ -1614,8 +1614,8 @@ impl Parser<'_> {
                 // `&[id, &c_node]`). Honouring only the expression node made the
                 // identical declaration fail here as an "unparsable query".
                 let header = match self.current_shape.clone() {
-                    Some(shape) => self.prefix_header(&[&shape, node]),
-                    None => self.prefix_header(&[node]),
+                    Some(shape) => self.prefix_header(&[&shape, node])?,
+                    None => self.prefix_header(&[node])?,
                 };
                 let (query, key) = if iri == sh::SELECT {
                     (format!("{header}{}", body.value()), "sh:select")

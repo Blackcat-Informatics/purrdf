@@ -19,9 +19,9 @@ use pyo3::types::{PyBytes, PyString};
 use super::query::{PyQueryQuads, PyQueryTriples};
 use super::term::PyQuad;
 use crate::{
-    NativeRdfFormat, RdfDataset, RdfQuad, RdfTriple, SerializeGraph, SerializeOptions,
-    StatementLayer, flat_dataset_from_quads, flat_rdf_quads_from_dataset, parse_dataset,
-    serialize_dataset_to_format, serialize_dataset_with,
+    NativeRdfFormat, ParseOptions, RdfDataset, RdfQuad, RdfTriple, SerializeGraph,
+    SerializeOptions, StatementLayer, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
+    parse_dataset, parse_dataset_with, serialize_dataset_to_format, serialize_dataset_with,
 };
 
 // ── RDF serialization format enum ───────────────────────────────────────────────
@@ -46,6 +46,7 @@ pub(crate) enum PyRdfFormat {
     HEXTUPLES,
     JSON_LD,
     YAML_LD,
+    RDF_XML,
 }
 
 impl PyRdfFormat {
@@ -61,6 +62,7 @@ impl PyRdfFormat {
             Self::HEXTUPLES => NativeRdfFormat::HexTuples,
             Self::JSON_LD => NativeRdfFormat::JsonLd,
             Self::YAML_LD => NativeRdfFormat::YamlLd,
+            Self::RDF_XML => NativeRdfFormat::RdfXml,
         }
     }
 
@@ -80,6 +82,7 @@ impl PyRdfFormat {
             Self::HEXTUPLES => "RdfFormat.HEXTUPLES",
             Self::JSON_LD => "RdfFormat.JSON_LD",
             Self::YAML_LD => "RdfFormat.YAML_LD",
+            Self::RDF_XML => "RdfFormat.RDF_XML",
         }
     }
 }
@@ -333,6 +336,27 @@ pub(crate) fn parse_quads(
 ) -> Result<Vec<RdfQuad>, String> {
     let dataset = parse_dataset(data, format.media_type(), base).map_err(|e| e.to_string())?;
     Ok(flat_rdf_quads_from_dataset(&dataset))
+}
+
+/// A parsed document's quads and the prefix bindings it declared.
+pub(crate) type LoadedDocument = (Vec<RdfQuad>, Vec<(String, String)>);
+
+/// [`parse_quads`], also returning the document's prefix map from the SAME parse: the
+/// `@prefix` / `PREFIX` bindings a Turtle or TriG document left in force at its end,
+/// sorted by label, each namespace resolved (`ParseOutcome::document_prefixes`). Empty
+/// for every other format. This is the codec's own record, so a `PREFIX` line quoted
+/// inside a string literal is never reported.
+pub(crate) fn parse_quads_and_prefixes(
+    data: &[u8],
+    format: NativeRdfFormat,
+    base: Option<&str>,
+) -> Result<LoadedDocument, String> {
+    let outcome = parse_dataset_with(data, format.media_type(), base, &ParseOptions::default())
+        .map_err(|e| e.to_string())?;
+    Ok((
+        flat_rdf_quads_from_dataset(&outcome.dataset),
+        outcome.document_prefixes,
+    ))
 }
 
 /// Serialize triples through the native codec under an optional document `base`.

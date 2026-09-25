@@ -25,7 +25,8 @@ use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs, sh, xsd};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
-use crate::shapes::{ComponentValidator, Path, build_prefix_header};
+use crate::shapes::prefixes::PrefixResolver;
+use crate::shapes::{ComponentValidator, Path};
 use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_prebinding_view};
 use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 
@@ -109,10 +110,7 @@ impl ComponentRegistry {
     ///
     /// Returns `Err(String)` when a component, parameter, or validator is
     /// malformed or when a validator query violates the pre-binding restrictions.
-    pub(crate) fn parse(
-        data: &RdfDataset,
-        doc_prefixes: &[(String, String)],
-    ) -> Result<Self, String> {
+    pub(crate) fn parse(data: &RdfDataset, prefixes: &PrefixResolver) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
         let mut seen: FastSet<String> = FastSet::default();
@@ -159,7 +157,7 @@ impl ComponentRegistry {
             let component_term = Term::NamedNode(NamedNode::from(component_iri.as_str()));
             let component = parse_component(
                 data,
-                doc_prefixes,
+                prefixes,
                 &component_term,
                 &component_iri,
                 &mut subclass_memo,
@@ -708,7 +706,7 @@ fn is_valid_varname(name: &str) -> bool {
 /// Parse a single SPARQL validator node attached to a component.
 fn parse_validator(
     data: &RdfDataset,
-    doc_prefixes: &[(String, String)],
+    prefixes: &PrefixResolver,
     component: &Term,
     validator: &Term,
     param_names: &[String],
@@ -740,7 +738,7 @@ fn parse_validator(
     };
     let query_text = format!(
         "{}{raw_query}",
-        build_prefix_header(data, doc_prefixes, &[component, validator])
+        prefixes.header(data, &[component, validator])?
     );
 
     let query = match purrdf_sparql_algebra::SparqlParser::new().parse_query(&query_text) {
@@ -799,7 +797,7 @@ fn parse_validator(
 /// Parse a single constraint component node and its parameters / validators.
 fn parse_component(
     data: &RdfDataset,
-    doc_prefixes: &[(String, String)],
+    prefixes: &PrefixResolver,
     component: &Term,
     component_iri: &str,
     subclass_memo: &mut FastMap<(String, String), bool>,
@@ -830,47 +828,20 @@ fn parse_component(
     crate::term::sort_terms_canonical(&mut node_validator_nodes);
     let node_validators = node_validator_nodes
         .into_iter()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
+        .map(|v| parse_validator(data, prefixes, component, &v, &param_names, subclass_memo))
         .collect::<Result<Vec<Validator>, _>>()?;
     let mut property_validator_nodes: Vec<Term> =
         objects_of(data, component, sh::PROPERTY_VALIDATOR);
     crate::term::sort_terms_canonical(&mut property_validator_nodes);
     let property_validators = property_validator_nodes
         .into_iter()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
+        .map(|v| parse_validator(data, prefixes, component, &v, &param_names, subclass_memo))
         .collect::<Result<Vec<Validator>, _>>()?;
     let mut validator_nodes: Vec<Term> = objects_of(data, component, sh::VALIDATOR);
     crate::term::sort_terms_canonical(&mut validator_nodes);
     let validators = validator_nodes
         .into_iter()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
+        .map(|v| parse_validator(data, prefixes, component, &v, &param_names, subclass_memo))
         .collect::<Result<Vec<Validator>, _>>()?;
 
     for (attachment, parsed, expect_ask) in [
@@ -927,18 +898,14 @@ fn declared_messages(data: &RdfDataset, node: &Term) -> Result<Vec<Literal>, Str
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::term::Literal;
-    use crate::text_ingest::extract_prefixes;
+    use crate::text_ingest::parse_turtle_document;
 
     fn load_registry(ttl: &str, base_iri: &str) -> ComponentRegistry {
-        let prefixes = extract_prefixes(ttl);
-        let dataset: Arc<::purrdf::RdfDataset> =
-            ::purrdf::parse_dataset(ttl.as_bytes(), "text/turtle", Some(base_iri))
-                .expect("fixture parses");
-        ComponentRegistry::parse(dataset.as_ref(), &prefixes).expect("registry parses")
+        let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
+        let prefixes = PrefixResolver::new(&document.prefixes);
+        ComponentRegistry::parse(document.dataset.as_ref(), &prefixes).expect("registry parses")
     }
 
     #[test]
@@ -1069,12 +1036,10 @@ mod tests {
     }
 
     fn validate_fixture(ttl: &str, base_iri: &str) -> crate::report::ValidationReport {
-        let prefixes = extract_prefixes(ttl);
-        let dataset: Arc<::purrdf::RdfDataset> =
-            ::purrdf::parse_dataset(ttl.as_bytes(), "text/turtle", Some(base_iri))
-                .expect("fixture parses");
-        let shapes =
-            crate::shapes::from_dataset_with_prefixes(&dataset, &prefixes).expect("shapes parse");
+        let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
+        let dataset = document.dataset;
+        let shapes = crate::shapes::from_dataset_with_prefixes(&dataset, &document.prefixes)
+            .expect("shapes parse");
         crate::engine::validate_dataset(&dataset, &shapes).expect("validation evaluates")
     }
 

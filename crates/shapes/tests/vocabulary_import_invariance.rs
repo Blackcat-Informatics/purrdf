@@ -43,7 +43,7 @@ use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
 use purrdf_shapes::shapes::{__linked_declarations, Shapes, from_dataset_with_config_and_graph};
 use purrdf_shapes::text_ingest::{
-    extract_prefixes, parse_ntriples_to_dataset, parse_turtle_to_dataset,
+    parse_ntriples_to_dataset, parse_turtle_document, parse_turtle_to_dataset,
 };
 
 use shacl_corpora::shacl12::{Body, shacl12_cases};
@@ -133,7 +133,12 @@ struct Input {
 fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String> {
     let dataset = parse_turtle_to_dataset(text, input.base.as_deref())
         .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    let prefixes = extract_prefixes(&input.shapes_text);
+    // The ORIGINAL document's prefix map, for both runs: appending the vocabulary adds
+    // its own `@prefix` directives, and the invariance claim is about the graph it
+    // merges, not about the fallback map a different document would declare.
+    let prefixes = parse_turtle_document(&input.shapes_text, input.base.as_deref())
+        .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?
+        .prefixes;
     let shapes = from_dataset_with_config_and_graph(
         &dataset,
         &prefixes,

@@ -97,7 +97,8 @@ pub(crate) struct ShapesDocument {
 /// Stopping short is what makes an import closure possible at all: the imports have to be
 /// read off the GRAPH, and the documents merged as graphs, before anything is asked to be a
 /// shape. The composition is deliberately the identical one `parse_shapes` performs —
-/// `parse_turtle_to_dataset` + `extract_prefixes`, then `from_dataset_with_config(…, None)` —
+/// `parse_turtle_document` (the dataset and the codec's own prefix map, from one parse),
+/// then `from_dataset_with_config(…, None)` —
 /// so a single document with no imports parses to exactly the `Shapes` it did before this
 /// seam existed. `what` names the flag for the diagnostic, since this reads `--shapes` and
 /// `--import` alike.
@@ -112,10 +113,12 @@ pub(crate) fn read_shapes_document(
         let text = String::from_utf8(bytes).map_err(|error| {
             CliError::Runtime(format!("{what} {path}: not UTF-8 text: {error}"))
         })?;
-        let (dataset, document_base) =
-            purrdf::shapes::text_ingest::parse_turtle_document(&text, base).map_err(|errors| {
-                CliError::Runtime(format!("{what} {path}: {}", errors.join("\n")))
-            })?;
+        let purrdf::shapes::text_ingest::TurtleDocument {
+            dataset,
+            base: document_base,
+            prefixes,
+        } = purrdf::shapes::text_ingest::parse_turtle_document(&text, base)
+            .map_err(|errors| CliError::Runtime(format!("{what} {path}: {}", errors.join("\n"))))?;
         let mut loaded: Vec<String> = base.into_iter().map(str::to_owned).collect();
         if let Some(document_base) = document_base
             && !loaded.contains(&document_base)
@@ -124,7 +127,7 @@ pub(crate) fn read_shapes_document(
         }
         return Ok(ShapesDocument {
             dataset,
-            prefixes: purrdf::shapes::text_ingest::extract_prefixes(&text),
+            prefixes,
             loaded,
         });
     }

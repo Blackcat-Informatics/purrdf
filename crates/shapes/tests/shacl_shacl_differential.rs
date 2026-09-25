@@ -45,7 +45,7 @@ use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::Severity;
 use purrdf_shapes::shapes::{Shapes, from_dataset_with_config_and_graph};
-use purrdf_shapes::text_ingest::extract_prefixes;
+use purrdf_shapes::text_ingest::parse_turtle_document;
 
 use shacl_corpora::shacl12::{Body, shacl12_cases};
 use shacl_corpora::{file_iri, first_party_box_role_vocab, first_party_cases, w3c_cases};
@@ -248,9 +248,9 @@ struct Input {
 
 fn parse(path: &Path) -> (Arc<RdfDataset>, Vec<(String, String)>) {
     let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let dataset = purrdf::parse_dataset(text.as_bytes(), "text/turtle", Some(&file_iri(path)))
-        .unwrap_or_else(|e| panic!("{} does not parse: {e}", path.display()));
-    (dataset, extract_prefixes(&text))
+    let document = parse_turtle_document(&text, Some(&file_iri(path)))
+        .unwrap_or_else(|e| panic!("{} does not parse: {e:?}", path.display()));
+    (document.dataset, document.prefixes)
 }
 
 /// Every shapes graph of the three corpora, once per distinct file.
@@ -628,15 +628,11 @@ const MUTANT_INPUTS: usize = 717;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
-    let oracle_dataset = purrdf::parse_dataset(SHACL_SHACL.as_bytes(), "text/turtle", None)
-        .expect("shacl-shacl.ttl parses");
-    let oracle = from_dataset_with_config_and_graph(
-        &oracle_dataset,
-        &extract_prefixes(SHACL_SHACL),
-        None,
-        None,
-    )
-    .expect("shacl-shacl.ttl loads as a shapes graph");
+    let oracle_document = parse_turtle_document(SHACL_SHACL, None).expect("shacl-shacl.ttl parses");
+    let oracle_dataset = oracle_document.dataset;
+    let oracle =
+        from_dataset_with_config_and_graph(&oracle_dataset, &oracle_document.prefixes, None, None)
+            .expect("shacl-shacl.ttl loads as a shapes graph");
 
     let mut unexplained: Vec<String> = Vec::new();
     let mut stricter: BTreeMap<&str, usize> = BTreeMap::new();

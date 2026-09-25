@@ -30,6 +30,7 @@ use parser::annotations::Annotated;
 
 pub(crate) mod link;
 mod parser;
+pub(crate) mod prefixes;
 
 /// Re-derive a shapes graph's `sh:SPARQLFunction` declarations from the shapes
 /// dataset it carries.
@@ -957,8 +958,8 @@ impl LinkedDeclarations {
 /// The linker's own refusal, exactly as a parse of `dataset` would report it.
 #[doc(hidden)]
 pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarations, String> {
-    let registry = ComponentRegistry::parse(dataset.as_ref(), &[])?;
     let parser = Parser::new(dataset.as_ref(), None, &[], None, Arc::clone(dataset), None);
+    let registry = ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?;
     let linked = parser.discover_custom_functions()?;
     let mut registered_components: Vec<String> = registry.components.keys().cloned().collect();
     registered_components.sort();
@@ -1140,9 +1141,10 @@ pub(crate) struct Parser<'s> {
     /// against, carried only so [`Shapes::provenance`] can report it; `None` when
     /// the caller supplied none or entered with an already-resolved dataset.
     base: Option<String>,
-    /// The shapes document's `@prefix` map (prefix → namespace), used as the
-    /// fallback PREFIX header for SHACL-AF `sh:select` queries.
-    doc_prefixes: Vec<(String, String)>,
+    /// The prefix sources every SHACL-SPARQL query header is built from
+    /// ([`prefixes::PrefixResolver`]), including the shapes document's `@prefix` map
+    /// the parse's provenance records.
+    prefix_resolver: prefixes::PrefixResolver,
     /// The caller-supplied box-role vocabulary; `None` = feature inactive.
     box_role_vocab: Option<BoxRoleVocab>,
     /// Registry of SHACL-SPARQL custom constraint components declared in the
@@ -1240,7 +1242,7 @@ pub(crate) struct Parser<'s> {
     annotations_applied: FastSet<(Term, String, Term)>,
 }
 
-// ── Prefix-header helper (used by shapes and component registry) ───────────────
+// ── Graph read helper (used by the parser's free functions and `prefixes`) ─────
 
 /// Return all objects for `(subject, predicate, ?)`.
 fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
@@ -1260,60 +1262,6 @@ fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     .collect()
 }
 
-/// Return the first object for `(subject, predicate, ?)`, if any.
-fn first_object_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
-    objects_of(data, subject, predicate).into_iter().next()
-}
-
-/// Build the SPARQL `PREFIX` header prepended to a SHACL-SPARQL query.
-///
-/// Two sources contribute, lowest precedence first:
-///
-/// 1. The shapes **document's** `@prefix` declarations (the pySHACL-compatible
-///    fallback — real shapes rely on these without `sh:prefixes`).
-/// 2. SHACL-AF `sh:prefixes` → `sh:declare` on the `owners` (spec §5.2.1), which
-///    **override** the document fallback for any colliding prefix.
-///
-/// Output is one `PREFIX p: <ns>` line per prefix, sorted (a `BTreeMap` keeps
-/// it deterministic and one-entry-per-prefix). Empty when nothing is declared.
-pub(crate) fn build_prefix_header(
-    data: &RdfDataset,
-    doc_prefixes: &[(String, String)],
-    owners: &[&Term],
-) -> String {
-    let mut map: std::collections::BTreeMap<String, String> = doc_prefixes
-        .iter()
-        .map(|(p, ns)| (p.clone(), ns.clone()))
-        .collect();
-    // `sh:prefix` is a string literal; `sh:namespace` is typically an
-    // `xsd:anyURI` literal but the SHACL spec also permits a bare IRI
-    // (NamedNode). Accept both lexical forms so an IRI-valued namespace is
-    // not silently dropped (which would omit a PREFIX line and break the
-    // dependent SHACL-AF query — a silent under-validation, P11/§11).
-    let term_value = |t: Term| match t {
-        Term::Literal(lit) => Some(lit.value().to_owned()),
-        Term::NamedNode(node) => Some(node.as_str().to_owned()),
-        _ => None, // blank node / quoted triple: not a prefix or namespace value
-    };
-    for owner in owners {
-        for prefixes_node in objects_of(data, owner, sh::PREFIXES) {
-            for declare in objects_of(data, &prefixes_node, sh::DECLARE) {
-                let prefix = first_object_of(data, &declare, sh::PREFIX).and_then(term_value);
-                let namespace = first_object_of(data, &declare, sh::NAMESPACE).and_then(term_value);
-                if let (Some(p), Some(ns)) = (prefix, namespace) {
-                    map.insert(p, ns); // sh:prefixes overrides the document fallback
-                }
-            }
-        }
-    }
-    use std::fmt::Write as _;
-    let mut header = String::new();
-    for (prefix, namespace) in map {
-        let _ = writeln!(header, "PREFIX {prefix}: <{namespace}>");
-    }
-    header
-}
-
 impl<'s> Parser<'s> {
     fn new(
         data: &'s RdfDataset,
@@ -1327,7 +1275,7 @@ impl<'s> Parser<'s> {
             data,
             in_flight: FastSet::default(),
             base,
-            doc_prefixes: doc_prefixes.to_vec(),
+            prefix_resolver: prefixes::PrefixResolver::new(doc_prefixes),
             box_role_vocab,
             component_registry: ComponentRegistry::default(),
             shapes_dataset,
@@ -1475,7 +1423,7 @@ impl<'s> Parser<'s> {
 
         // Custom SHACL-SPARQL constraint components are parsed up-front; any
         // malformed component, parameter, or validator query is a hard failure.
-        self.component_registry = ComponentRegistry::parse(self.data, &self.doc_prefixes)?;
+        self.component_registry = ComponentRegistry::parse(self.data, &self.prefix_resolver)?;
 
         // Every shape of the shapes graph, checked against the census before any
         // is parsed: an unknown or unimplemented term, or an ill-typed parameter
@@ -1563,7 +1511,7 @@ impl<'s> Parser<'s> {
             // normalization of it.
             parse_provenance: ParseProvenance::new(
                 self.base.clone(),
-                self.doc_prefixes.clone(),
+                self.prefix_resolver.document().to_vec(),
                 self.box_role_vocab.clone(),
                 self.shapes_graph.clone(),
             ),
@@ -1767,20 +1715,18 @@ impl<'s> Parser<'s> {
 
     /// Build the SPARQL `PREFIX` header prepended to a SHACL-AF `sh:select` query.
     ///
-    /// oxigraph's SPARQL parser has no SHACL awareness, so prefixed names in a
-    /// query must be declared in the query text. Two sources contribute, lowest
-    /// precedence first:
+    /// The SPARQL `PREFIX` header for a query whose owners are `owners` (the
+    /// query node, and the shape or component carrying it). SPARQL prefixed names
+    /// must be declared in the query text, so every SHACL-SPARQL query is compiled
+    /// with this header prepended; [`prefixes`] states which sources contribute and
+    /// how they rank.
     ///
-    /// 1. The shapes **document's** `@prefix` declarations (the pySHACL-compatible
-    ///    fallback — real shapes rely on these without `sh:prefixes`).
-    /// 2. SHACL-AF `sh:prefixes` → `sh:declare` on the shape and/or the
-    ///    `sh:sparql` / `sh:SPARQLTarget` node (spec §5.2.1), which **override**
-    ///    the document fallback for any colliding prefix.
+    /// # Errors
     ///
-    /// Output is one `PREFIX p: <ns>` line per prefix, sorted (a `BTreeMap` keeps
-    /// it deterministic and one-entry-per-prefix). Empty when nothing is declared.
-    fn prefix_header(&self, owners: &[&Term]) -> String {
-        build_prefix_header(self.data, &self.doc_prefixes, owners)
+    /// When the prefix declarations the query reaches make the shapes graph
+    /// ill-formed ([`prefixes::PrefixResolver::header`]).
+    fn prefix_header(&self, owners: &[&Term]) -> Result<String, String> {
+        self.prefix_resolver.header(self.data, owners)
     }
 
     /// The `sh:message` values of `node`, every one, in
@@ -2028,7 +1974,7 @@ impl<'s> Parser<'s> {
                         )
                     })?;
                 // SHACL-AF sh:prefixes may be declared on the shape or the target node.
-                let select = format!("{}{raw_select}", self.prefix_header(&[id, &t_node]));
+                let select = format!("{}{raw_select}", self.prefix_header(&[id, &t_node])?);
 
                 // Parse-time query validation via the native parser (hard-fail on
                 // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
@@ -2113,7 +2059,7 @@ impl<'s> Parser<'s> {
             // and the target-type declaration itself.
             let select = format!(
                 "{}{}",
-                self.prefix_header(&[id, &t_node, &target_type.id]),
+                self.prefix_header(&[id, &t_node, &target_type.id])?,
                 target_type.select
             );
             match purrdf_sparql_algebra::SparqlParser::new().parse_query(&select) {

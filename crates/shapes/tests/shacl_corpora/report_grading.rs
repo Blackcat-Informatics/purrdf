@@ -52,13 +52,15 @@ use super::{Expected, Multiset, Tuple, W3cCase, file_iri, norm};
 fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
-    let shapes_dataset = purrdf::parse_dataset(
-        shapes_text.as_bytes(),
-        "text/turtle",
+    let purrdf_shapes::text_ingest::TurtleDocument {
+        dataset: shapes_dataset,
+        prefixes: doc_prefixes,
+        ..
+    } = purrdf_shapes::text_ingest::parse_turtle_document(
+        &shapes_text,
         Some(&file_iri(&tc.shapes_path)),
     )
-    .map_err(|e| format!("shapes graph parse error: {e}"))?;
-    let doc_prefixes = purrdf_shapes::text_ingest::extract_prefixes(&shapes_text);
+    .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
     let shapes_graph_iri = tc.shapes_graph_iri.as_deref();
     let shapes = purrdf_shapes::shapes::from_dataset_with_config_and_graph(
         &shapes_dataset,
