@@ -32,7 +32,7 @@
 
 use std::collections::BTreeSet;
 
-use purrdf_core::distance::{Arithmetic, BuildShape, Exact, Resolved, RowsRef};
+use purrdf_core::distance::{Arithmetic, BuildShape, Exact, Resolved, RowsRef, Selected};
 
 use crate::error::{HnswError, Result};
 use crate::params::Params;
@@ -66,8 +66,8 @@ pub(crate) struct Recorded {
 }
 
 impl Recorded {
-    /// What an image computed by `arithmetic` in this build records.
-    pub(crate) fn of<A: Arithmetic>(arithmetic: Resolved<A>) -> Self {
+    /// What an image computed on `arithmetic`'s path in this build records.
+    pub(crate) fn of<A: Arithmetic>(arithmetic: Selected<A>) -> Self {
         Self {
             code: arithmetic.image_code(),
             shape: A::build_shape(),

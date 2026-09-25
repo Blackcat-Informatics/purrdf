@@ -73,11 +73,12 @@ use purrdf_core::DistanceMetric;
 use purrdf_core::distance::Measure;
 
 /// The stored-scalar width trait, the bound a partial fold is tested against, the
-/// bounded outcome, the two arithmetics, the trait that resolves them and the resolved
-/// handle every distance entry point takes, re-exported from the module that defines
-/// them so a caller names one type for each.
+/// bounded outcome, the two arithmetics, the trait that resolves them, the per-thread
+/// resolved handle every distance entry point takes and the thread-free selection a
+/// relation stores, re-exported from the module that defines them so a caller names one
+/// type for each.
 pub use purrdf_core::distance::{
-    Arithmetic, Bound, Bounded, Exact, Reassociated, Resolved, Scalar,
+    Arithmetic, Bound, Bounded, Exact, Reassociated, Resolved, Scalar, Selected,
 };
 
 /// The three built-in metrics, decoded from a family contract's declaration.

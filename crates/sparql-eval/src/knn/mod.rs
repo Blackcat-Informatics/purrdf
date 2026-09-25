@@ -111,7 +111,7 @@
 //! reassociated arithmetic's freedom to the exact one's cross-target bits builds
 //! [`EmbeddingKnnRelation::new_reassociated`] instead: the same exhaustive scan under
 //! `Reassociated`, whose last bits depend on the target, the build and the dispatch path
-//! it resolved at construction. It is a different type, and its ranked declaration says
+//! it selected at construction. It is a different type, and its ranked declaration says
 //! so — it names the law and declares a perturbed order carrying the arithmetic's own
 //! evidence — so the difference reaches every plan and every fused answer that uses it.
 
@@ -139,7 +139,8 @@ use crate::user_fn::Volatility;
 
 use crate::property_fn::ExclusionBasis;
 pub use metric::{
-    Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, best,
+    Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, Selected,
+    best,
 };
 
 /// The `?neighbour` position: the retrieved term.
@@ -647,7 +648,7 @@ impl EmbeddingSpace {
     /// without ranking anything.
     ///
     /// The one arithmetic path: the same batch kernel of `A`, on the same dispatch path
-    /// (`declared` when the relation resolved one, else this thread's), over the same
+    /// (`declared` when the relation selected one, else this thread's), over the same
     /// stored components and the same precomputed norms [`Self::search`] uses, so the
     /// value is bit-identical to the one a scan would have produced for this pair.
     /// There is no second distance formula in this crate and this does not add one.
@@ -661,12 +662,11 @@ impl EmbeddingSpace {
     /// is not the IEEE one the arithmetic defines.
     fn row_distance<A: Arithmetic>(
         &self,
-        declared: Option<Resolved<A>>,
+        declared: Option<Selected<A>>,
         query_row: usize,
         row: usize,
     ) -> Result<f64, EvalError> {
-        let here = A::resolve().map_err(EvalError::FloatEnvironment)?;
-        let arithmetic = declared.unwrap_or(here);
+        let arithmetic = resolve_here(declared)?;
         let rows = self.rows()?;
         let mut distance = [None];
         arithmetic.distances_indexed(
@@ -714,10 +714,11 @@ impl EmbeddingSpace {
     /// of the calling thread and an invocation may run on a different thread from the one
     /// that built the space.
     ///
-    /// `declared` is the handle a relation resolved at construction and named in its
+    /// `declared` is the path a relation selected at construction and named in its
     /// declaration, when it did; the scan runs that path, which is the processor's and so
-    /// the same on every thread. Without one the path this thread resolves is used, which
-    /// for [`Exact`] is any of its paths, since they all return the same bits.
+    /// the same on every thread, resolved here, on the calling thread, which is what
+    /// checks that thread's environment. Without one the path this thread resolves is
+    /// used, which for [`Exact`] is any of its paths, since they all return the same bits.
     ///
     /// # Errors
     ///
@@ -727,7 +728,7 @@ impl EmbeddingSpace {
     /// is not the IEEE one the arithmetic defines.
     fn search<A: Arithmetic>(
         &self,
-        declared: Option<Resolved<A>>,
+        declared: Option<Selected<A>>,
         query_row: usize,
         k: usize,
     ) -> Result<(Vec<Ranked>, u64), EvalError> {
@@ -736,8 +737,7 @@ impl EmbeddingSpace {
             // reported. A zero request is a well-formed question with an empty answer.
             return Ok((Vec::new(), 0));
         }
-        let here = A::resolve().map_err(EvalError::FloatEnvironment)?;
-        let arithmetic = declared.unwrap_or(here);
+        let arithmetic = resolve_here(declared)?;
         let rows = self.rows()?;
         let mut distances: Vec<Option<f64>> = vec![None; self.row_count()];
         arithmetic.distances(
@@ -762,6 +762,24 @@ impl EmbeddingSpace {
         let examined = scored.len() as u64;
         Ok((best(k, scored), examined))
     }
+}
+
+/// Arithmetic `A` resolved on the calling thread: on `declared`'s path when the relation
+/// selected one, else on the path this thread's resolve selects.
+///
+/// The one place a kNN computation obtains its handle, and it runs on the thread that
+/// computes: a relation stores only the thread-free [`Selected`] path, because the float
+/// environment the handle proves is the calling thread's, and a relation is invoked on
+/// whatever thread the engine runs it.
+///
+/// # Errors
+///
+/// [`EvalError::FloatEnvironment`] when the calling thread's float environment is not the
+/// IEEE one the arithmetic defines.
+fn resolve_here<A: Arithmetic>(declared: Option<Selected<A>>) -> Result<Resolved<A>, EvalError> {
+    declared
+        .map_or_else(A::resolve, Selected::resolve)
+        .map_err(EvalError::FloatEnvironment)
 }
 
 /// Place each binding at its target's row, proving the cover is exact.
@@ -1106,7 +1124,8 @@ fn check_index_guards(
 /// two of its rows under the relation's arithmetic. Under [`Exact`] an invocation's rows
 /// are the same on the main thread, on a fork-join worker, and on
 /// `wasm32-unknown-unknown`; under [`Reassociated`] they are the same wherever this
-/// process runs the dispatch path the relation resolved, which is every thread of it.
+/// process runs the dispatch path the relation selected, which is every thread of it
+/// whose float environment its per-search resolve accepts.
 #[derive(Debug, Clone)]
 pub struct EmbeddingKnnRelation<A: Arithmetic = Exact> {
     /// The space every invocation searches.
@@ -1114,12 +1133,16 @@ pub struct EmbeddingKnnRelation<A: Arithmetic = Exact> {
     /// The declared modes, materialized once so [`PropertyFunction::modes`] can
     /// hand out a slice.
     modes: [BindingPattern; 2],
-    /// The dispatch path resolved at construction, whose evidence the declaration
+    /// The dispatch path selected at construction, whose evidence the declaration
     /// names and whose compilation every search runs; `None` for a relation built by
-    /// [`EmbeddingKnnRelation::new`], which resolves per search. [`Exact`] names no
+    /// [`EmbeddingKnnRelation::new`], which selects per search. [`Exact`] names no
     /// evidence and returns the same bits on every path, so it has nothing to fix at
     /// construction, and `new` stays infallible.
-    declared: Option<Resolved<A>>,
+    ///
+    /// A [`Selected`] path, never a [`Resolved`] handle: the relation is shared across
+    /// the engine's threads, and the float environment a handle proves is one thread's.
+    /// Every search resolves it again on the thread that runs it.
+    declared: Option<Selected<A>>,
     /// The search every invocation runs, fixed by the constructor that named the law.
     scan: Scan<A>,
     /// The membership lookup's one pairwise distance, fixed alongside [`Self::scan`]
@@ -1219,12 +1242,12 @@ impl KnnObservations {
 /// and every dispatch path it calls, is then compiled once, here, and the asm evidence
 /// gate measures the copy every registered relation runs.
 type Scan<A> =
-    fn(&EmbeddingSpace, Option<Resolved<A>>, usize, usize) -> Result<(Vec<Ranked>, u64), EvalError>;
+    fn(&EmbeddingSpace, Option<Selected<A>>, usize, usize) -> Result<(Vec<Ranked>, u64), EvalError>;
 
 /// One membership distance under arithmetic `A`: [`EmbeddingSpace::row_distance`] at a
 /// concrete law, instantiated in the constructors for the reason [`Scan`] is, so the
 /// pairwise evaluation a candidate-bound call runs is the copy this crate compiled.
-type Lookup<A> = fn(&EmbeddingSpace, Option<Resolved<A>>, usize, usize) -> Result<f64, EvalError>;
+type Lookup<A> = fn(&EmbeddingSpace, Option<Selected<A>>, usize, usize) -> Result<f64, EvalError>;
 
 impl EmbeddingKnnRelation {
     /// A nearest-neighbour relation over `space`, ranking under the [`Exact`] arithmetic.
@@ -1261,9 +1284,10 @@ impl EmbeddingKnnRelation<Reassociated> {
     /// A nearest-neighbour relation over `space`, ranking under the [`Reassociated`]
     /// arithmetic.
     ///
-    /// The dispatch path is resolved here, once, and every search runs it; the
+    /// The dispatch path is selected here, once, and every search runs it; the
     /// declaration names its evidence. The float environment is checked here and again
-    /// on every search, since it belongs to the calling thread.
+    /// on every search, on the thread that runs it, since it belongs to the calling
+    /// thread: the relation keeps the [`Selected`] path, never the handle.
     ///
     /// # Errors
     ///
@@ -1279,7 +1303,7 @@ impl EmbeddingKnnRelation<Reassociated> {
                 BindingPattern::from_code(KNN_MODE),
                 BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
             ],
-            declared: Some(resolved),
+            declared: Some(resolved.selected()),
             scan: EmbeddingSpace::search::<Reassociated>,
             lookup: EmbeddingSpace::row_distance::<Reassociated>,
             observations: Arc::new(KnnObservations::default()),
@@ -1306,11 +1330,14 @@ impl<A: Arithmetic> EmbeddingKnnRelation<A> {
         Arc::clone(&self.observations)
     }
 
-    /// The dispatch path this relation resolved at construction, or `None` for an
-    /// [`Exact`] relation, which resolves per search and whose every path returns the
+    /// The dispatch path this relation selected at construction, or `None` for an
+    /// [`Exact`] relation, which selects per search and whose every path returns the
     /// same bits.
+    ///
+    /// A thread-free [`Selected`] path: a caller that computes with it calls
+    /// [`Selected::resolve`] on the thread that computes, as every search does.
     #[must_use]
-    pub fn resolved(&self) -> Option<Resolved<A>> {
+    pub const fn selected(&self) -> Option<Selected<A>> {
         self.declared
     }
 
@@ -1318,7 +1345,7 @@ impl<A: Arithmetic> EmbeddingKnnRelation<A> {
     /// arithmetic whose bits are the same on every path, and perturbed, carrying that
     /// arithmetic's evidence along the resolved path, under one whose bits are not.
     fn arithmetic_order(&self) -> OrderFidelity {
-        match self.declared.and_then(Resolved::evidence) {
+        match self.declared.and_then(Selected::evidence) {
             Some(evidence) => OrderFidelity::Perturbed {
                 evidence: Arc::from(evidence),
             },
@@ -1425,7 +1452,7 @@ impl<A: Arithmetic> EmbeddingKnnRelation<A> {
     /// * Under an arithmetic whose bits depend on the dispatch path —
     ///   [`Reassociated`] — the order axis is composed with
     ///   [`OrderFidelity::Perturbed`] carrying that arithmetic's evidence along the
-    ///   path resolved at construction, verbatim, by [`composed_order_fidelity`].
+    ///   path selected at construction, verbatim, by [`composed_order_fidelity`].
     ///   The composition only degrades: a host passing
     ///   [`OrderFidelity::Faithful`] says it did nothing to the vectors, and cannot
     ///   talk a reassociated sum back into a faithful order. Two near-tied rows may
@@ -1866,9 +1893,9 @@ enum Answer {
 struct KnnCursor<A: Arithmetic> {
     /// The space being searched.
     space: Arc<EmbeddingSpace>,
-    /// The relation's dispatch path, when it resolved one at construction; see
+    /// The relation's dispatch path, when it selected one at construction; see
     /// [`EmbeddingSpace::search`].
-    declared: Option<Resolved<A>>,
+    declared: Option<Selected<A>>,
     /// The relation's search; see [`Scan`].
     scan: Scan<A>,
     /// The relation's membership distance; see [`Lookup`].

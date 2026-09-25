@@ -24,7 +24,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     carrying the `Path` and a `PathUnavailable` reason (`NotCompiled`, or
     `MissingFeature` naming the first feature the processor does not report);
   - `Resolved<A>`, an arithmetic bound to its dispatch `Path` for one scan, with
-    `distances`, `distances_indexed`, `distance` and `distance_bounded`;
+    `distances`, `distances_indexed`, `distance` and `distance_bounded`. It is
+    neither `Send` nor `Sync`, because the float environment it proved belongs to
+    the thread that resolved it;
+  - `Selected<A>`, the thread-free form a long-lived structure stores
+    (`Resolved::selected()`): the arithmetic and its dispatch path, with `path`,
+    `image_code`, `evidence` and `build_shape`, `Send + Sync + Copy`, and
+    computing nothing. `Selected::resolve()` checks the calling thread's float
+    environment and returns that thread's `Resolved<A>` on the same path;
   - `Exact` (`binary64-lane16-tree-v1`). It accumulates 16 f64 lanes over array
     chunks, combines them in a fixed pairwise tree, adds the tail sequentially
     and uses no FMA. Every dispatch path returns the same bits;
@@ -2044,6 +2051,24 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
     verified on any thread. `HnswError` maps that variant to its own
     `FloatEnvironment`, and `HnswSpace::from_artifact` now resolves before it
     verifies, so the refusal keeps its name.
+  - The handle cannot be carried to another thread either. Before, `Resolved<A>`
+    was `Send + Sync`, so a handle resolved on a clean thread could be copied to
+    one that flushes subnormals and every kernel then ran there unchecked;
+    `HnswIndex` stored one and shared it with the rayon workers of
+    `search_batch`, and the reassociated kNN relation stored one for every
+    search. `Resolved<A>` is now `!Send` and `!Sync` (still `Copy`); a structure
+    that outlives a thread stores the new `Selected<A>` and resolves it on the
+    thread that computes. `HnswIndex::arithmetic()` returns a `Selected<A>`
+    instead of a `Resolved<A>` (its `path`, `image_code`, `evidence` and
+    `build_shape` are unchanged; call `.resolve()?` for a handle).
+    `EmbeddingKnnRelation::resolved()` is replaced by
+    `EmbeddingKnnRelation::selected()`, returning `Option<Selected<A>>`, and
+    `knn` re-exports `Selected`. Every HNSW search, `row_distance`,
+    `verify_rebuild` and every kNN scan and membership lookup resolves on the
+    calling thread; `search_batch` and the build's parallel proposals resolve
+    once inside each rayon worker. A worker that flushes subnormals is refused
+    with `HnswError::FloatEnvironment` or `EvalError::FloatEnvironment` by name,
+    whichever thread built the index or relation.
 
 - **hnsw:** goldens that moved, re-pinned by hand. Distances now fold in the
   16-lane tree order, and the image header carries the arithmetic field.

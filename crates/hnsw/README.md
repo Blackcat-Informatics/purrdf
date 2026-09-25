@@ -59,6 +59,14 @@ replaced with a fixed rule:
   `guard::read_effective_matrix` take a `Resolved<Exact>`, obtained from any
   resolved handle with `Resolved::exact`, since the norm is PURREMB's one-order
   fold whatever arithmetic ranks the distances.
+* **The check belongs to the thread that computes.** The float environment is
+  per-thread control state, so a `Resolved<A>` handle is neither `Send` nor
+  `Sync` and cannot be carried to another thread. An index stores only the
+  thread-free `Selected<A>` path (`HnswIndex::arithmetic`), and every search,
+  membership lookup and rebuild verification resolves it on the thread that
+  runs it; `search_batch` resolves once inside each rayon worker. An index built
+  on a clean thread and searched from one that flushes subnormals is refused
+  there by name.
 * **The digest** committed by a guard is a hand-rolled FNV-1a fold of the
   canonical payload bytes, stable across toolchain bumps; it is never
   `DefaultHasher` (SipHash, unspecified) or a randomly seeded map.

@@ -1392,7 +1392,7 @@ The reassociated kNN relation, `EmbeddingKnnRelation::new_reassociated`, adds th
 one fact about its order that is its own. Its scan is as exhaustive as the exact
 relation's, so the completeness axis is still the host's, unchanged. Its distances,
 though, are computed under the `Reassociated` arithmetic: sums may be reassociated
-and contracted to fused multiply-add along the dispatch path the relation resolved,
+and contracted to fused multiply-add along the dispatch path the relation selected,
 so two near-tied rows may swap relative to the exact ranking, and a row can arrive
 at a better rank than it earned. That is an order-perturbed producer. The relation
 therefore composes the host's `OrderFidelity` with `Perturbed`, carrying the

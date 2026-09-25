@@ -1966,7 +1966,7 @@ fn a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores() {
 fn fusion_trailer_names_reassociated_kernel() {
     let fast = EmbeddingKnnRelation::new_reassociated(Arc::new(embedding_space()))
         .expect("the default float environment is the IEEE one");
-    let resolved = fast.resolved().expect("resolved at construction");
+    let resolved = fast.selected().expect("selected at construction");
     let evidence = resolved
         .evidence()
         .expect("the reassociated arithmetic names its divergence");

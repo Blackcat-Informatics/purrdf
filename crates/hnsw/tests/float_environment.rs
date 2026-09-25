@@ -30,9 +30,11 @@ use purrdf_core::distance::{
     Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence, Measure,
     Reassociated, RecordedPathError, Resolved, RowsRef,
 };
-use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Params, VectorMatrix, guard, relation::HnswSpace};
+use purrdf_hnsw::{
+    HnswError, HnswIndex, Kernel, Params, Ranked, VectorMatrix, guard, relation::HnswSpace,
+};
 use purrdf_sparql_eval::{
-    EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PropertyFunction,
+    EmbeddingKnnRelation, EmbeddingSpace, EvalError, KnnGuard, PfArgs, PfRow, PropertyFunction,
 };
 
 /// MXCSR flush-to-zero.
@@ -319,6 +321,195 @@ fn every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the
     assert_eq!(index.search_vector(&query, 4).expect("searches").len(), 4);
     assert!(guard::verify_rebuild(&selected, &matrix, &params()).expect("verifies"));
     assert!(open().is_ok());
+}
+
+/// Every row of one kNN invocation seeded at `seed`: the ranked read of depth `k` when
+/// `neighbour` is free, the membership lookup of `neighbour` when it is bound.
+fn knn_invoke<A: Arithmetic>(
+    relation: &EmbeddingKnnRelation<A>,
+    seed: &purrdf_core::TermValue,
+    neighbour: Option<&purrdf_core::TermValue>,
+) -> Result<Vec<PfRow>, EvalError> {
+    let count =
+        purrdf_core::TermValue::typed_literal("3", "http://www.w3.org/2001/XMLSchema#integer");
+    let subject = [neighbour];
+    let object = [Some(seed), neighbour.is_none().then_some(&count), None];
+    let args = PfArgs::new(&subject, &object);
+    let mut cursor = relation.open(&args, None)?;
+    let mut rows = Vec::new();
+    while let Some(row) = cursor.next()? {
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// A batch answer as its rows and distance bits, so equality is bit-identity.
+fn bits(batch: &[Vec<Ranked>]) -> Vec<Vec<(usize, u64)>> {
+    batch
+        .iter()
+        .map(|ranked| {
+            ranked
+                .iter()
+                .map(|scored| (scored.row, scored.distance.to_bits()))
+                .collect()
+        })
+        .collect()
+}
+
+/// What one thread's calls answered, every compute entry that runs on a shared index or
+/// relation after it was built on another thread.
+struct WorkerAnswers {
+    exact_batch: Result<Vec<Vec<Ranked>>, HnswError>,
+    fast_batch: Result<Vec<Vec<Ranked>>, HnswError>,
+    exact_pair: Result<f64, HnswError>,
+    fast_pair: Result<f64, HnswError>,
+    exact_scan: Result<Vec<PfRow>, EvalError>,
+    fast_scan: Result<Vec<PfRow>, EvalError>,
+    exact_lookup: Result<Vec<PfRow>, EvalError>,
+    fast_lookup: Result<Vec<PfRow>, EvalError>,
+}
+
+/// **The float-environment check belongs to the thread that computes, not the one that
+/// built.**
+///
+/// Every index and relation here is built on the test thread, in the default
+/// environment, and then shared with two worker threads through plain references —
+/// which is exactly what a stored, thread-free selection allows and a stored handle no
+/// longer can (`Resolved` is neither `Send` nor `Sync`). One worker sets flush-to-zero
+/// on itself and makes the calls; the other makes the same calls in the default
+/// environment.
+///
+/// The treatment: every call from the flushing worker — `search_batch` and `row_distance`
+/// on the exact and reassociated indexes, the ranked scan and the membership lookup on
+/// the exact and reassociated kNN relations — is refused by name. A structure that
+/// carried the builder's proof across would have computed there and answered.
+///
+/// The valid neighbour: every call from the clean worker answers, bit for bit, what the
+/// same calls answer on the test thread, so the refusal is the worker's environment and
+/// not a structure that cannot be searched off the thread that built it.
+#[test]
+fn a_worker_thread_is_checked_where_it_computes_not_where_the_index_was_built() {
+    let fixture = purremb::Fixture::new(40, 20, params());
+    let matrix = fixture.matrix.clone();
+    let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
+        .expect("builds in the default environment");
+    let fast =
+        HnswIndex::build_reassociated(matrix.clone(), &DistanceMetric::SquaredEuclidean, params())
+            .expect("builds in the default environment");
+    let space = Arc::new(
+        EmbeddingSpace::from_artifact(
+            &fixture.without_index,
+            fixture.target_set,
+            fixture.vector_space,
+            fixture.bindings(),
+            KnnGuard::new(64, 8).expect("valid"),
+        )
+        .expect("the space opens in the default environment"),
+    );
+    let exact_knn = EmbeddingKnnRelation::new(Arc::clone(&space));
+    let fast_knn = EmbeddingKnnRelation::new_reassociated(Arc::clone(&space))
+        .expect("the reassociated relation constructs in the default environment");
+    let seed = fixture.terms[0].clone();
+    let held = fixture.terms[7].clone();
+    let queries: Vec<usize> = (0..matrix.rows()).collect();
+
+    let answers = || WorkerAnswers {
+        exact_batch: exact.search_batch(&queries, 4),
+        fast_batch: fast.search_batch(&queries, 4),
+        exact_pair: exact.row_distance(0, 7),
+        fast_pair: fast.row_distance(0, 7),
+        exact_scan: knn_invoke(&exact_knn, &seed, None),
+        fast_scan: knn_invoke(&fast_knn, &seed, None),
+        exact_lookup: knn_invoke(&exact_knn, &seed, Some(&held)),
+        fast_lookup: knn_invoke(&fast_knn, &seed, Some(&held)),
+    };
+
+    // The single-thread oracle, on the thread that built everything.
+    let single_exact: Vec<Vec<Ranked>> = queries
+        .iter()
+        .map(|&row| exact.search_rows(row, 4).expect("searches"))
+        .collect();
+    let single_fast: Vec<Vec<Ranked>> = queries
+        .iter()
+        .map(|&row| fast.search_rows(row, 4).expect("searches"))
+        .collect();
+    let here = answers();
+
+    let (flushed, clean) = std::thread::scope(|scope| {
+        let flushed = scope.spawn(|| {
+            let _flushed = Flushed::new();
+            answers()
+        });
+        let clean = scope.spawn(answers);
+        (
+            flushed.join().expect("the flushing worker returns"),
+            clean.join().expect("the clean worker returns"),
+        )
+    });
+
+    assert!(
+        is_ftz(&flushed.exact_batch.expect_err("refused")),
+        "exact search_batch"
+    );
+    assert!(
+        is_ftz(&flushed.fast_batch.expect_err("refused")),
+        "reassociated search_batch"
+    );
+    assert!(
+        is_ftz(&flushed.exact_pair.expect_err("refused")),
+        "exact row_distance"
+    );
+    assert!(
+        is_ftz(&flushed.fast_pair.expect_err("refused")),
+        "reassociated row_distance"
+    );
+    assert!(
+        is_ftz_eval(&flushed.exact_scan.expect_err("refused")),
+        "exact kNN scan"
+    );
+    assert!(
+        is_ftz_eval(&flushed.fast_scan.expect_err("refused")),
+        "reassociated kNN scan, whose relation selected its path on the building thread"
+    );
+    assert!(
+        is_ftz_eval(&flushed.exact_lookup.expect_err("refused")),
+        "exact kNN membership lookup"
+    );
+    assert!(
+        is_ftz_eval(&flushed.fast_lookup.expect_err("refused")),
+        "reassociated kNN membership lookup"
+    );
+
+    let clean_exact = clean.exact_batch.expect("the clean worker searches");
+    let clean_fast = clean.fast_batch.expect("the clean worker searches");
+    assert_eq!(bits(&clean_exact), bits(&single_exact), "exact batch");
+    assert_eq!(bits(&clean_fast), bits(&single_fast), "reassociated batch");
+    assert_eq!(
+        bits(&here.exact_batch.expect("searches")),
+        bits(&single_exact)
+    );
+    assert_eq!(
+        clean.exact_pair.expect("answers").to_bits(),
+        here.exact_pair.expect("answers").to_bits()
+    );
+    assert_eq!(
+        clean.fast_pair.expect("answers").to_bits(),
+        here.fast_pair.expect("answers").to_bits()
+    );
+    let exact_scan = here.exact_scan.expect("answers");
+    assert_eq!(exact_scan.len(), 3);
+    assert_eq!(clean.exact_scan.expect("answers"), exact_scan);
+    assert_eq!(
+        clean.fast_scan.expect("answers"),
+        here.fast_scan.expect("answers")
+    );
+    let lookup = here.exact_lookup.expect("answers");
+    assert_eq!(lookup.len(), 1, "the held term is answered by its row");
+    assert_eq!(clean.exact_lookup.expect("answers"), lookup);
+    assert_eq!(
+        clean.fast_lookup.expect("answers"),
+        here.fast_lookup.expect("answers")
+    );
 }
 
 /// The smallest-magnitude row this suite scores: its square, and its product with itself,

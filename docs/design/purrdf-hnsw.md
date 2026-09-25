@@ -256,6 +256,17 @@ takes one for the deterministic-L2 rows it reads. `HnswSpace::from_artifact` res
 exact arithmetic before it verifies the artifact, so a flushing thread is refused as
 `EvalError::FloatEnvironment` rather than as an artifact that failed to verify.
 
+The check is the calling thread's, and the type keeps it there. The float environment is
+per-thread control state (MXCSR, FPCR), so `Resolved<A>` is neither `Send` nor `Sync`: a
+handle resolved on a clean thread cannot be carried to one that flushes subnormals. An
+index is shared across threads, so it never stores one. It stores the thread-free
+`Selected<A>` path its image records (`HnswIndex::arithmetic`), and every search,
+membership lookup (`row_distance`) and rebuild verification resolves that path on the
+thread that computes. `search_batch` checks the calling thread and then resolves once
+inside each rayon worker, per worker's share of the batch rather than per query or pair,
+so a worker thread that flushes subnormals refuses its queries by name while a clean one
+answers with the single-thread bits.
+
 ### 2.5 What a binding proves before a search runs
 
 `guard::load` is the strict entry point, in order: the guard declares this

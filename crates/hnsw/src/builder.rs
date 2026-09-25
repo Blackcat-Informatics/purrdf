@@ -119,8 +119,16 @@ pub(crate) fn build_with_batch<A: Arithmetic>(
 ) -> Result<HnswIndex<A>> {
     let arithmetic = A::resolve()?;
     let (graph, norms) = (compiled.build_graph)(&matrix, arithmetic, kernel, params, batch)?;
+    // The index keeps the thread-free selection, never this thread's handle: it outlives
+    // the build and is searched on whatever thread its caller runs.
     Ok(HnswIndex::new(
-        matrix, kernel, params, graph, norms, arithmetic, compiled,
+        matrix,
+        kernel,
+        params,
+        graph,
+        norms,
+        arithmetic.selected(),
+        compiled,
     ))
 }
 

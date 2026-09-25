@@ -75,6 +75,10 @@ target — eight binary64 operations whose IEEE-754 results are known constants,
 read of the control register where one is readable (MXCSR on x86-64, FPCR on aarch64) —
 and refuses such a thread with `EvalError::FloatEnvironment`, at space
 construction and again at every search, since an invocation may run on another thread.
+The handle that check returns cannot leave the thread that made it: the environment is
+per-thread control state, so `Resolved<A>` is neither `Send` nor `Sync`. A relation, which
+the engine shares across threads, stores only the thread-free `Selected<A>` path, and
+every scan and every membership lookup resolves it on the thread that runs it.
 The per-pair entry points follow the same law: `Kernel::distance` and
 `Kernel::distance_bounded` take the `Resolved<Exact>` handle that `Exact::resolve`
 returns (both re-exported from `knn`), and the reassociated pair take a
@@ -115,8 +119,10 @@ resolves the float environment and a dispatch path per search, and every exact p
 returns the same bits. `EmbeddingKnnRelation::new_reassociated(space)` returns
 `Result<EmbeddingKnnRelation<Reassociated>, EvalError>`: it resolves the reassociated
 dispatch path once, refuses a flushing float environment with the named
-`EvalError::FloatEnvironment`, and every search then runs `A`'s batch kernel on that
-one path (the environment is still checked per search, on the calling thread). The
+`EvalError::FloatEnvironment`, keeps the path as a `Selected<Reassociated>`
+(`EmbeddingKnnRelation::selected`), and every search and membership lookup then
+resolves that path on the calling thread, which checks that thread's environment, and
+runs `A`'s batch kernel on it. The
 scan is the same scan in both, scoring every row, so the reassociated relation omits
 nothing the exact one would name; what it can do is order two near-tied rows
 differently.

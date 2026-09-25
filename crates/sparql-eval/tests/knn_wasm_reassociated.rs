@@ -36,7 +36,7 @@ use purrdf_core::{
     EmbeddingFamilyContract, MatrixInput, MatrixRow, PrefixPostprocessing, ProjectionSpec,
     RdfDatasetBuilder, RdfTermTarget, StageImplementation, TargetSet, TermValue, VectorDtype,
 };
-use purrdf_sparql_eval::knn::{Bound, Bounded, Exact, Reassociated, Resolved};
+use purrdf_sparql_eval::knn::{Bound, Bounded, Exact, Reassociated, Resolved, Selected};
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, PfArgs, PropertyFunction,
 };
@@ -367,7 +367,7 @@ fn the_reassociated_relation_constructs_and_ranks_within_the_error_bound_of_the_
         );
         let fast = fast.expect("checked above");
         assert_eq!(
-            fast.resolved().map(Resolved::path),
+            fast.selected().map(Selected::path),
             Some(resolved().path()),
             "the relation runs the path this build resolves"
         );

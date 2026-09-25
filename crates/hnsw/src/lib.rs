@@ -112,7 +112,7 @@ use std::sync::Mutex;
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{
-    Arithmetic, BuildShape, Exact, Reassociated, RecordedPathError, Resolved,
+    Arithmetic, BuildShape, Exact, Reassociated, RecordedPathError, Resolved, Selected,
 };
 use rayon::prelude::*;
 
@@ -350,7 +350,12 @@ pub struct HnswIndex<A: Arithmetic = Exact> {
     norms: Vec<f64>,
     /// The dispatch path every recorded distance was computed on, whose code the image
     /// header records.
-    arithmetic: Resolved<A>,
+    ///
+    /// A thread-free [`Selected`] path, never a [`Resolved`] handle: the index is shared
+    /// across threads (a batch search fans out over rayon's workers), and the float
+    /// environment a handle proves is one thread's control state. Every compute entry
+    /// resolves this path on the thread that computes, through [`Self::resolve_here`].
+    arithmetic: Selected<A>,
     /// The walks this crate compiled for `A`.
     compiled: Compiled<A>,
     /// Reusable visited scratch, one buffer per concurrent search.
@@ -498,7 +503,7 @@ impl<A: Arithmetic> HnswIndex<A> {
         params: Params,
         graph: Graph,
         norms: Vec<f64>,
-        arithmetic: Resolved<A>,
+        arithmetic: Selected<A>,
         compiled: Compiled<A>,
     ) -> Self {
         Self {
@@ -514,6 +519,11 @@ impl<A: Arithmetic> HnswIndex<A> {
     }
 
     /// Arithmetic `A` resolved for the calling thread, on the path this index recorded.
+    ///
+    /// The only way any of this index's compute entries obtains a handle, and it runs on
+    /// the thread that computes: the stored path is resolved afresh, so a thread whose
+    /// float environment flushes subnormals is refused there, by name, whichever thread
+    /// built or decoded the index.
     ///
     /// The build shape is not held here: an index in memory was built, or decoded and
     /// checked, by this build, so its shape is this build's.
@@ -794,7 +804,7 @@ impl<A: Arithmetic> HnswIndex<A> {
             image.params,
             image.graph,
             norms,
-            here,
+            here.selected(),
             compiled,
         ))
     }
@@ -877,10 +887,12 @@ impl<A: Arithmetic> HnswIndex<A> {
     /// The arithmetic every distance of this index is computed under, on the dispatch
     /// path its image records.
     ///
-    /// [`Resolved::evidence`] is that arithmetic's divergence along the path, `None` for
-    /// [`Exact`]; [`Resolved::image_code`] is the code the image header carries.
+    /// [`Selected::evidence`] is that arithmetic's divergence along the path, `None` for
+    /// [`Exact`]; [`Selected::image_code`] is the code the image header carries. It is the
+    /// thread-free selection, not a handle: a caller that computes with it calls
+    /// [`Selected::resolve`] on the thread that computes, as every search here does.
     #[must_use]
-    pub const fn arithmetic(&self) -> Resolved<A> {
+    pub const fn arithmetic(&self) -> Selected<A> {
         self.arithmetic
     }
 
@@ -1285,7 +1297,15 @@ mod tests {
         let compiled = Compiled::here();
         let (graph, norms) =
             (compiled.build_graph)(&matrix, arithmetic, kernel, params(), None).expect("builds");
-        HnswIndex::new(matrix, kernel, params(), graph, norms, arithmetic, compiled)
+        HnswIndex::new(
+            matrix,
+            kernel,
+            params(),
+            graph,
+            norms,
+            arithmetic.selected(),
+            compiled,
+        )
     }
 
     /// Every reassociated code this host runs, narrowest first, as the processor reports.
@@ -1334,6 +1354,9 @@ mod tests {
             let built = reassociated_on(matrix.clone(), code);
             let recorded = built.arithmetic();
             assert_eq!(recorded.image_code(), code);
+            let on_recorded_path = recorded
+                .resolve()
+                .expect("the test thread runs the default float environment");
             let image = built.canonical_image();
             assert_eq!(
                 header_code(&image),
@@ -1383,7 +1406,7 @@ mod tests {
                     vec![offered.clone()]
                 );
                 for candidate in &offered {
-                    let on_recorded = pair(recorded, row, candidate.row);
+                    let on_recorded = pair(on_recorded_path, row, candidate.row);
                     assert_eq!(
                         candidate.distance.to_bits(),
                         on_recorded.to_bits(),
@@ -1399,7 +1422,7 @@ mod tests {
             for candidate in decoded.search_vector(&query, 8).expect("searches") {
                 assert_eq!(
                     candidate.distance.to_bits(),
-                    pair(recorded, 0, candidate.row).to_bits()
+                    pair(on_recorded_path, 0, candidate.row).to_bits()
                 );
             }
             let how = if told_apart > 0 {
@@ -1496,7 +1519,10 @@ mod tests {
         for code in host_codes() {
             let matrix = fixture(48, 70);
             let built = reassociated_on(matrix.clone(), code);
-            let recorded = built.arithmetic();
+            let recorded = built
+                .arithmetic()
+                .resolve()
+                .expect("the test thread runs the default float environment");
             assert_eq!(recorded.image_code(), code, "built on the path it names");
             for row in 0..matrix.rows() {
                 for candidate in built.search_rows(row, 4).expect("searches") {
@@ -1849,7 +1875,9 @@ mod tests {
         let decoded = HnswIndex::decode(matrix, &image).expect("decodes");
         assert_eq!(
             decoded.arithmetic(),
-            Exact::resolve().expect("the test thread runs the default float environment")
+            Exact::resolve()
+                .expect("the test thread runs the default float environment")
+                .selected()
         );
         assert!(decoded.verify_rebuild().expect("rebuilds"));
         assert_eq!(decoded.canonical_image(), image);
@@ -1915,7 +1943,10 @@ mod tests {
             for matrix in [fixture(40, 150), fixture_f32(40, 150)] {
                 let index = HnswIndex::build_reassociated(matrix.clone(), metric, params())
                     .expect("builds");
-                let arithmetic = index.arithmetic();
+                let arithmetic = index
+                    .arithmetic()
+                    .resolve()
+                    .expect("the test thread runs the default float environment");
                 let kernel = index.kernel();
                 let norms = &index.norms;
                 let pair = |a: usize, b: usize| {

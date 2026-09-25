@@ -204,8 +204,8 @@ fn space(metric: &DistanceMetric, rows: &[(&str, Vec<f64>)]) -> EmbeddingSpace {
 }
 
 /// Invoke `relation` with the given per-position bindings and drain the cursor.
-fn invoke(
-    relation: &EmbeddingKnnRelation,
+fn invoke<A: Arithmetic>(
+    relation: &EmbeddingKnnRelation<A>,
     bound: &[Option<TermValue>],
     ceiling: Option<u64>,
 ) -> Result<Vec<PfRow>, EvalError> {
@@ -2053,7 +2053,7 @@ fn reassociated(metric: &DistanceMetric) -> EmbeddingKnnRelation<Reassociated> {
 #[test]
 fn reassociated_relation_declares_perturbed_order() {
     let relation = reassociated(&DistanceMetric::SquaredEuclidean);
-    let resolved = relation.resolved().expect("resolved at construction");
+    let resolved = relation.selected().expect("selected at construction");
     let evidence = resolved
         .evidence()
         .expect("the reassociated arithmetic names its divergence");
@@ -2126,8 +2126,8 @@ fn exact_relation_names_exact_arithmetic() {
         &arithmetic_rows(),
     )));
     assert!(
-        relation.resolved().is_none(),
-        "the exact relation resolves per search"
+        relation.selected().is_none(),
+        "the exact relation selects per search"
     );
     let declaration = declared(&relation);
     assert_eq!(
@@ -2230,7 +2230,11 @@ fn reassociated_scan_matches_reassociated_kernel_bits() {
     ] {
         let kernel = Kernel::of(&metric).expect("built-in");
         let relation = reassociated(&metric);
-        let resolved = relation.resolved().expect("resolved");
+        let resolved = relation
+            .selected()
+            .expect("selected at construction")
+            .resolve()
+            .expect("the test thread runs the default float environment");
         let emitted = every_distance(&relation, &rows);
         assert_eq!(emitted.len(), rows.len() * rows.len());
         for (query, neighbour, distance) in emitted {
@@ -2250,7 +2254,7 @@ fn reassociated_scan_matches_reassociated_kernel_bits() {
     // The observation that the relation ran the reassociated kernel and not the exact
     // one: on a path that fuses, the crafted pair's distance leaves the exact zero.
     let relation = reassociated(&DistanceMetric::NegativeDot);
-    let path = relation.resolved().expect("resolved").path();
+    let path = relation.selected().expect("selected").path();
     let crafted = every_distance(&relation, &rows)
         .into_iter()
         .find(|(query, neighbour, _)| query == "fused" && neighbour == "plain")
@@ -2581,13 +2585,33 @@ fn the_count_position_of_a_membership_answer_is_the_universe_size() {
 #[test]
 fn every_term_of_the_universe_agrees_with_its_row() {
     let space = Arc::new(membership_space());
-    let relation = EmbeddingKnnRelation::new(Arc::clone(&space));
+    every_term_agrees_with_its_row(&EmbeddingKnnRelation::new(Arc::clone(&space)), &space);
+}
+
+/// The walk, over the reassociated relation: membership is a fact about the space's
+/// term order, so the arithmetic changes nothing in the verdict, and the reassociated
+/// relation's own lookup (`EmbeddingSpace::row_distance::<Reassociated>`) is executed
+/// rather than inferred from the exact relation's.
+#[test]
+fn every_term_of_the_universe_agrees_with_its_row_under_the_reassociated_arithmetic() {
+    let space = Arc::new(membership_space());
+    let relation = EmbeddingKnnRelation::new_reassociated(Arc::clone(&space))
+        .expect("the default float environment is the IEEE one");
+    every_term_agrees_with_its_row(&relation, &space);
+}
+
+/// Every term of the universe, asked as a membership lookup seeded at `a`, is answered by
+/// exactly its own row when `space` holds one and by nothing when it does not.
+fn every_term_agrees_with_its_row<A: Arithmetic>(
+    relation: &EmbeddingKnnRelation<A>,
+    space: &EmbeddingSpace,
+) {
     let seed = iri("a");
 
     let (mut present, mut absent) = (0_u64, 0_u64);
     for term in membership_universe() {
         let rows = invoke(
-            &relation,
+            relation,
             &[Some(term.clone()), Some(seed.clone()), None, None],
             None,
         )
@@ -2618,8 +2642,22 @@ fn every_term_of_the_universe_agrees_with_its_row() {
 
 #[test]
 fn a_membership_lookup_scans_nothing_and_a_ranked_read_does() {
-    let space = Arc::new(membership_space());
-    let relation = EmbeddingKnnRelation::new(Arc::clone(&space));
+    a_lookup_scans_nothing(&EmbeddingKnnRelation::new(Arc::new(membership_space())));
+}
+
+/// The cost, over the reassociated relation: the same counters, the same zeroes, and the
+/// same control, so its membership arm is shown to be a point lookup as well.
+#[test]
+fn a_reassociated_membership_lookup_scans_nothing_and_a_ranked_read_does() {
+    a_lookup_scans_nothing(
+        &EmbeddingKnnRelation::new_reassociated(Arc::new(membership_space()))
+            .expect("the default float environment is the IEEE one"),
+    );
+}
+
+/// An excluded candidate costs one lookup and nothing else, a held one one pairwise
+/// distance and no scan, and the ranked read beside them scans every row.
+fn a_lookup_scans_nothing<A: Arithmetic>(relation: &EmbeddingKnnRelation<A>) {
     let observed = relation.observations();
     let report = || {
         format!(
@@ -2635,7 +2673,7 @@ fn a_membership_lookup_scans_nothing_and_a_ranked_read_does() {
     //    scanned row. A zero read off a counter rather than inferred from a timing,
     //    which a fixture this small could never distinguish.
     let rows = invoke(
-        &relation,
+        relation,
         &[Some(iri("x")), Some(iri("a")), None, None],
         None,
     )
@@ -2650,7 +2688,7 @@ fn a_membership_lookup_scans_nothing_and_a_ranked_read_does() {
     //    the emitted row carries, and still no scan. `k` was four and the space was
     //    never walked, which is the whole claim.
     let rows = invoke(
-        &relation,
+        relation,
         &[Some(iri("c")), Some(iri("a")), None, None],
         None,
     )
@@ -2664,7 +2702,7 @@ fn a_membership_lookup_scans_nothing_and_a_ranked_read_does() {
     // 3. The control, so the zeroes above are not the zeroes of a relation that never
     //    scans anything. The same relation, the same seed, the candidate left free.
     let rows = invoke(
-        &relation,
+        relation,
         &[None, Some(iri("a")), Some(count(4)), None],
         None,
     )
@@ -2705,6 +2743,112 @@ fn the_distance_a_lookup_reports_is_the_one_the_scan_would_have() {
         assert_eq!(
             looked_up[0][KNN_DISTANCE], row[KNN_DISTANCE],
             "the lookup's distance for {neighbour:?} must be the scan's own"
+        );
+    }
+}
+
+/// **Under the reassociated arithmetic, a lookup's distance is still the scan's, bit for
+/// bit, and it is the reassociated kernel's rather than the exact one's.**
+///
+/// The reassociated relation's membership arm computes its one distance through
+/// `EmbeddingSpace::row_distance::<Reassociated>` (its `lookup`), on the path the relation
+/// selected and resolved on the calling thread; the scan computes the same pair through
+/// `EmbeddingSpace::search::<Reassociated>`. Every seed of the arithmetic fixture, every
+/// neighbour, under all three metrics, is read both ways and held to the reassociated
+/// kernel itself on that path.
+///
+/// The observing oracle is the exact relation's lookup of the same pair. The fixture's
+/// crafted pair has an exact dot product of zero that any contraction to fused
+/// multiply-add moves off zero, so on a path that fuses the two relations must disagree
+/// on it, and the reassociated lookup must be on the reassociated side; a lookup that
+/// silently ran the exact law would equal the exact column. On a path that does not fuse
+/// the two may agree bitwise, which is reported.
+#[test]
+fn a_reassociated_lookup_reports_the_distance_its_scan_would_have() {
+    let rows = arithmetic_rows();
+    let depth = count(i64::try_from(rows.len()).expect("small"));
+    let mut compared = 0_usize;
+    let mut told_apart = 0_usize;
+    let mut path = None;
+    for metric in [
+        DistanceMetric::SquaredEuclidean,
+        DistanceMetric::NegativeDot,
+        DistanceMetric::Cosine,
+    ] {
+        let kernel = Kernel::of(&metric).expect("built-in");
+        let relation = reassociated(&metric);
+        let exact = EmbeddingKnnRelation::new(Arc::new(space(&metric, &rows)));
+        let observed = relation.observations();
+        let resolved = relation
+            .selected()
+            .expect("selected at construction")
+            .resolve()
+            .expect("the test thread runs the default float environment");
+        path = Some(resolved.path());
+        for (query, _) in &rows {
+            let ranked = invoke(
+                &relation,
+                &[None, Some(iri(query)), Some(depth.clone()), None],
+                None,
+            )
+            .expect("answered");
+            assert_eq!(ranked.len(), rows.len(), "every row is a neighbour");
+            for row in &ranked {
+                let neighbour = row[KNN_NEIGHBOUR].clone();
+                let bound = [Some(neighbour.clone()), Some(iri(query)), None, None];
+                let (lookups, distances, scans) = (
+                    observed.membership_lookups(),
+                    observed.membership_distances(),
+                    observed.scans(),
+                );
+                let looked_up = invoke(&relation, &bound, None).expect("answered");
+                assert_eq!(looked_up.len(), 1);
+                assert_eq!(
+                    (
+                        observed.membership_lookups(),
+                        observed.membership_distances(),
+                        observed.scans()
+                    ),
+                    (lookups + 1, distances + 1, scans),
+                    "{metric:?}: the membership arm answered, with one distance and no scan"
+                );
+                assert_eq!(
+                    looked_up[0][KNN_DISTANCE], row[KNN_DISTANCE],
+                    "{metric:?} {query}: the lookup's distance for {neighbour:?} must be the \
+                     scan's own"
+                );
+                let (name, lexical) = named(&looked_up).remove(0);
+                let (q, q_norm) = row_named(&rows, query);
+                let (c, c_norm) = row_named(&rows, &name);
+                let expected = kernel
+                    .distance_reassociated(resolved, q, q_norm, c, c_norm)
+                    .expect("finite");
+                assert_eq!(
+                    lexical.parse::<f64>().expect("an xsd:double").to_bits(),
+                    expected.to_bits(),
+                    "{metric:?} {query} -> {name}: the reassociated kernel on {}",
+                    resolved.path()
+                );
+                let control = invoke(&exact, &bound, None).expect("answered");
+                assert_eq!(control.len(), 1, "the exact relation holds the same term");
+                if control[0][KNN_DISTANCE] != looked_up[0][KNN_DISTANCE] {
+                    told_apart += 1;
+                }
+                compared += 1;
+            }
+        }
+    }
+    let path = path.expect("three metrics ran");
+    assert_eq!(compared, 3 * rows.len() * rows.len());
+    println!(
+        "reassociated lookups on {path}: {told_apart} of {compared} told apart from the exact \
+         relation's"
+    );
+    if fuses(path) {
+        assert!(
+            told_apart > 0,
+            "on a fusing path the crafted pair separates the two laws, or the agreement above \
+             cannot tell a reassociated lookup from an exact one"
         );
     }
 }

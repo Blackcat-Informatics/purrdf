@@ -855,7 +855,7 @@ fn reassociated_distances_match_reassociated_kernel() {
                 .expect("the fixture builds");
             assert_eq!(
                 index.arithmetic(),
-                resolved,
+                resolved.selected(),
                 "{}: the index records the path this process resolves",
                 fixture.name
             );

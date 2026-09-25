@@ -63,8 +63,9 @@
 //!
 //! # Dispatch happens once, inside one contract
 //!
-//! [`Arithmetic::resolve`] is called once per scan, relation or index and returns a
-//! [`Resolved`] handle naming the dispatch [`Path`] this process will run. On
+//! [`Arithmetic::resolve`] is called once per scan or call and returns a [`Resolved`]
+//! handle naming the dispatch [`Path`] this process will run, for the calling thread; a
+//! relation or index that outlives the call stores the thread-free [`Selected`] path. On
 //! `x86_64`, `Exact` has two: a portable compilation of the generic body and an
 //! AVX2 compilation of the *same* body. They are two compilations of one source order,
 //! so they return the same bits, and a test holds every path the host can execute to
@@ -130,6 +131,12 @@
 //! is computed on it, rather than handed different bits by whichever entry point did
 //! not ask. The handle is resolved once per scan or call site and is `Copy`, so the
 //! check is never repeated per pair.
+//!
+//! Nor can it be carried past: the environment is per-thread control state, so a
+//! [`Resolved`] handle is neither `Send` nor `Sync`, and the compiler refuses to move one
+//! from the thread that checked to one that did not. What outlives a thread, or crosses
+//! to a worker, is the [`Selected`] path, which computes nothing until the receiving
+//! thread calls [`Selected::resolve`] and passes the same check.
 
 mod dispatch;
 mod env;
@@ -531,8 +538,10 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
 
     /// Check the float environment and select this process's dispatch path.
     ///
-    /// Called once per scan, relation or index. The environment is a per-thread
-    /// property, so a caller that moves work to another thread resolves there too.
+    /// Called once per scan or call, on the thread that computes. The environment is a
+    /// per-thread property, so the handle cannot leave the thread (see [`Resolved`]): a
+    /// relation or index stores its [`Selected`] path and resolves it again, with
+    /// [`Selected::resolve`], on whichever thread runs each search.
     ///
     /// # Errors
     ///
@@ -621,14 +630,64 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
 }
 
 /// An arithmetic whose float environment was checked and whose dispatch path was
-/// selected, by [`Arithmetic::resolve`] or [`Arithmetic::resolve_recorded`].
+/// selected, by [`Arithmetic::resolve`] or [`Arithmetic::resolve_recorded`], **on the
+/// thread that holds it**.
 ///
 /// `Copy` and cheap: it is the path and nothing else. It cannot be constructed any other
 /// way, so a path that names a processor feature is always one the processor reported.
+///
+/// # A handle never leaves its thread
+///
+/// The float environment it proved is a property of one thread: MXCSR on `x86`, FPCR on
+/// `aarch64`, and whatever state the behavioural probe observed elsewhere are per-thread
+/// control state, saved and restored with the thread. A handle resolved on a thread
+/// running the IEEE environment proves nothing about another thread, which may flush
+/// subnormals to zero. So `Resolved` is neither [`Send`] nor [`Sync`]: the compiler
+/// refuses to move it, or a reference to it, to another thread, and every kernel it runs
+/// runs where the check ran. Work that moves to another thread resolves there, and
+/// anything that outlives the thread holds the thread-free [`Selected`] instead, whose
+/// [`Selected::resolve`] repeats the check on the thread that computes.
+///
+/// ```compile_fail,E0277
+/// use purrdf_core::distance::{Arithmetic, Exact};
+///
+/// let exact = Exact::resolve().expect("the default environment is the IEEE one");
+/// // Refused: `Resolved<Exact>` cannot be sent to another thread.
+/// std::thread::spawn(move || exact.norm(&[3.0_f64, 4.0])).join().unwrap();
+/// ```
+///
+/// ```compile_fail,E0277
+/// use purrdf_core::distance::{Arithmetic, Exact, Resolved};
+///
+/// fn shared<T: Sync>(_: &T) {}
+/// let exact = Exact::resolve().expect("the default environment is the IEEE one");
+/// // Refused: a shared reference would let another thread run it too.
+/// shared::<Resolved<Exact>>(&exact);
+/// ```
+///
+/// The selection it was made on is thread-free, and the thread that receives it resolves
+/// for itself:
+///
+/// ```
+/// use purrdf_core::distance::{Arithmetic, Exact};
+///
+/// let exact = Exact::resolve().expect("the default environment is the IEEE one");
+/// let selected = exact.selected();
+/// let norm = std::thread::spawn(move || {
+///     let here = selected.resolve().expect("the worker runs the IEEE environment");
+///     here.norm(&[3.0_f64, 4.0])
+/// })
+/// .join()
+/// .unwrap();
+/// assert_eq!(norm.to_bits(), exact.norm(&[3.0_f64, 4.0]).to_bits());
+/// ```
 #[derive(Clone, Copy)]
 pub struct Resolved<A: Arithmetic> {
     path: Path,
     arithmetic: PhantomData<fn() -> A>,
+    /// Neither `Send` nor `Sync`: the environment this handle proved is the resolving
+    /// thread's own control state. See the type documentation.
+    thread: PhantomData<*const ()>,
 }
 
 impl<A: Arithmetic> Resolved<A> {
@@ -636,6 +695,20 @@ impl<A: Arithmetic> Resolved<A> {
     const fn on(path: Path) -> Self {
         Self {
             path,
+            arithmetic: PhantomData,
+            thread: PhantomData,
+        }
+    }
+
+    /// The thread-free selection this handle was made on: its arithmetic and dispatch
+    /// path, without the float-environment proof that belongs to this thread.
+    ///
+    /// What a long-lived structure stores, and what crosses to a worker thread, which
+    /// calls [`Selected::resolve`] before it computes anything.
+    #[must_use]
+    pub const fn selected(self) -> Selected<A> {
+        Selected {
+            path: self.path,
             arithmetic: PhantomData,
         }
     }
@@ -764,6 +837,94 @@ impl Resolved<Exact> {
     #[must_use]
     pub fn norm<T: Scalar>(self, vector: &[T]) -> f64 {
         l2_norm(vector)
+    }
+}
+
+/// An arithmetic's dispatch path, selected by a [`Resolved`] handle on some thread, that
+/// outlives that thread.
+///
+/// A [`Resolved`] handle is confined to the thread whose float environment it proved; a
+/// selection is what an index, a relation or any other structure shared between threads
+/// stores instead. It is `Copy`, [`Send`] and [`Sync`], and computes nothing: the only way
+/// from it to a kernel is [`Selected::resolve`], which checks the float environment of the
+/// thread that calls it. So a structure built on a clean thread and searched on a thread
+/// that flushes subnormals is refused there, by name, rather than computing on it.
+///
+/// It can only be obtained from a [`Resolved`] handle ([`Resolved::selected`]), so its
+/// path is always one this process's processor reported; resolving it again repeats only
+/// the environment check, not the path selection.
+#[derive(Clone, Copy)]
+pub struct Selected<A: Arithmetic> {
+    path: Path,
+    arithmetic: PhantomData<fn() -> A>,
+}
+
+impl<A: Arithmetic> Selected<A> {
+    /// Check the calling thread's float environment and hand back the handle on this
+    /// selection's dispatch path, for this thread only.
+    ///
+    /// The per-thread half of [`Arithmetic::resolve`]: the control-register read and the
+    /// eight-operation probe, with no path selection, since the path was selected when the
+    /// selection was made and processor features belong to the process. Cheap enough to
+    /// call once per search, per worker or per chunk; never needed per pair.
+    ///
+    /// # Errors
+    ///
+    /// [`FloatEnvironmentError`] as for [`Arithmetic::resolve`], when the calling thread
+    /// flushes subnormals or rounds other than to nearest, ties to even.
+    pub fn resolve(self) -> Result<Resolved<A>, FloatEnvironmentError> {
+        env::check()?;
+        Ok(Resolved::on(self.path))
+    }
+
+    /// The dispatch path this selection names.
+    #[must_use]
+    pub const fn path(self) -> Path {
+        self.path
+    }
+
+    /// The divergence evidence of this arithmetic along this path; see
+    /// [`Arithmetic::evidence`].
+    #[must_use]
+    pub fn evidence(self) -> Option<&'static str> {
+        A::evidence(self.path)
+    }
+
+    /// The code an image records for results computed on this path; see
+    /// [`Arithmetic::image_code`].
+    #[must_use]
+    pub fn image_code(self) -> u32 {
+        A::image_code(self.path).unwrap_or_else(|| {
+            unreachable!(
+                "{} selected {}, which is not one of its paths",
+                A::ID,
+                self.path
+            )
+        })
+    }
+
+    /// The compile shape of this build's compilations of the arithmetic; see
+    /// [`Arithmetic::build_shape`].
+    #[must_use]
+    pub fn build_shape(self) -> Option<BuildShape> {
+        A::build_shape()
+    }
+}
+
+impl<A: Arithmetic> PartialEq for Selected<A> {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
+impl<A: Arithmetic> Eq for Selected<A> {}
+
+impl<A: Arithmetic> fmt::Debug for Selected<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Selected")
+            .field("arithmetic", &A::ID)
+            .field("path", &self.path)
+            .finish()
     }
 }
 
