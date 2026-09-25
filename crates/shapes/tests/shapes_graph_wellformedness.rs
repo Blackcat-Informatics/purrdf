@@ -14,8 +14,9 @@
 //! Also here: SHACL Advanced Features 1.0 graphs (`sh:SPARQLFunction`, `sh:rule`,
 //! the AF node-expression spellings) and every non-validating shape property still
 //! load, and the SHACL 1.2 list-valued `sh:class` / `sh:datatype` / `sh:nodeKind`,
-//! the list components, `sh:singleLine`, `sh:rootClass` and `sh:someValue` answer
-//! as the specification says.
+//! the list components, `sh:singleLine`, `sh:rootClass` and `sh:someValue`, and
+//! the path-valued property pairs and `sh:subsetOf` answer as the specification
+//! says.
 
 use std::sync::Arc;
 
@@ -1040,4 +1041,250 @@ fn a_shape_with_every_non_validating_property_loads_and_validates_unchanged() {
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:name ex:NotText .",
         "shacl#name",
     );
+}
+
+// ── SHACL 1.2 path-valued property pairs and sh:subsetOf ─────────────────────
+
+const EQUALS: &str = "http://www.w3.org/ns/shacl#EqualsConstraintComponent";
+const DISJOINT: &str = "http://www.w3.org/ns/shacl#DisjointConstraintComponent";
+const SUBSET_OF: &str = "http://www.w3.org/ns/shacl#SubsetOfConstraintComponent";
+const LESS_THAN: &str = "http://www.w3.org/ns/shacl#LessThanConstraintComponent";
+const LESS_THAN_OR_EQUALS: &str = "http://www.w3.org/ns/shacl#LessThanOrEqualsConstraintComponent";
+
+fn x(local: &str) -> String {
+    format!("<http://example.org/ns#{local}>")
+}
+
+/// The IRI form of every property pair answers as it always has: the IRI is the
+/// one-hop predicate path, each component reports exactly the value nodes the
+/// SHACL 1.0 text names, and the parsed constraint still carries that predicate.
+#[test]
+fn iri_valued_property_pairs_answer_as_before() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:equals ex:q ; sh:disjoint ex:r ] ;
+           sh:property [ sh:path ex:start ; sh:lessThan ex:end ;
+                         sh:lessThanOrEquals ex:stop ] .";
+    let report = validate(
+        shapes,
+        "ex:a ex:p ex:v1, ex:v2 ; ex:q ex:v2, ex:v3 ; ex:r ex:v1 ;
+              ex:start 5 ; ex:end 5 ; ex:stop 4 .",
+    );
+    let a = x("a");
+    assert_eq!(
+        component_results(&report, EQUALS),
+        vec![(a.clone(), x("v1")), (a.clone(), x("v3"))]
+    );
+    assert_eq!(
+        component_results(&report, DISJOINT),
+        vec![(a.clone(), x("v1"))]
+    );
+    let five = "\"5\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned();
+    assert_eq!(
+        component_results(&report, LESS_THAN),
+        vec![(a.clone(), five.clone())]
+    );
+    assert_eq!(
+        component_results(&report, LESS_THAN_OR_EQUALS),
+        vec![(a, five)]
+    );
+    assert_eq!(report.results.len(), 5);
+    // The neighbour row conforms under the same shapes.
+    let conforming = validate(
+        shapes,
+        "ex:a ex:p ex:v2 ; ex:q ex:v2 ; ex:r ex:v1 ; ex:start 4 ; ex:end 5 ; ex:stop 4 .",
+    );
+    assert!(conforming.conforms, "{:?}", conforming.results);
+    // The parsed constraint is the predicate path of the IRI.
+    let parsed = loads(shapes);
+    let property = &parsed.node_shapes[0].property_shapes[0];
+    assert!(property.constraints.iter().any(|c| matches!(
+        c,
+        purrdf_shapes::shapes::Constraint::Equals(purrdf_shapes::shapes::Path::Predicate(n))
+            if n.as_str() == "http://example.org/ns#q"
+    )));
+}
+
+/// `sh:equals [ sh:inversePath ex:q ]` compares against the nodes that reach the
+/// focus node through `ex:q`. The treatment row conforms only under the inverse
+/// reading and the control row conforms only under the forward one, so a reading
+/// that dropped the inversion answers both rows the other way round.
+#[test]
+fn an_inverse_path_equals_is_evaluated_as_the_inverse() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:equals [ sh:inversePath ex:q ] ] .";
+    let inverse = validate(shapes, "ex:a ex:p ex:b . ex:b ex:q ex:a .");
+    assert!(inverse.conforms, "{:?}", inverse.results);
+    let forward = validate(shapes, "ex:a ex:p ex:b ; ex:q ex:b .");
+    assert_eq!(component_results(&forward, EQUALS), vec![(x("a"), x("b"))]);
+}
+
+/// `sh:disjoint ( ex:a ex:b )` compares against the two-hop values. The control
+/// row puts the value one hop away along each step alone, which the sequence
+/// never reaches, so only the treatment row reports it.
+#[test]
+fn a_sequence_path_disjoint_is_evaluated_as_the_sequence() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:f ;
+           sh:property [ sh:path ex:p ; sh:disjoint ( ex:a ex:b ) ] .";
+    let treatment = validate(shapes, "ex:f ex:p \"v\" ; ex:a ex:n . ex:n ex:b \"v\" .");
+    assert_eq!(
+        component_results(&treatment, DISJOINT),
+        vec![(x("f"), "\"v\"".to_owned())]
+    );
+    let control = validate(shapes, "ex:f ex:p \"v\" ; ex:a \"v\" ; ex:b \"v\" .");
+    assert!(control.conforms, "{:?}", control.results);
+}
+
+/// `sh:lessThan ( ex:next ex:start )` orders each value below the start of the
+/// next node — a comparand only the sequence reaches.
+#[test]
+fn a_sequence_path_less_than_orders_against_the_reached_nodes() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:f ;
+           sh:property [ sh:path ex:start ; sh:lessThan ( ex:next ex:start ) ] .";
+    let before = validate(shapes, "ex:f ex:start 1 ; ex:next ex:g . ex:g ex:start 2 .");
+    assert!(before.conforms, "{:?}", before.results);
+    let after = validate(shapes, "ex:f ex:start 3 ; ex:next ex:g . ex:g ex:start 2 .");
+    assert_eq!(
+        component_results(&after, LESS_THAN),
+        vec![(
+            x("f"),
+            "\"3\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned()
+        )]
+    );
+}
+
+/// `sh:subsetOf` reports each value node the compared path does not reach, with
+/// the value node as `sh:value`. Against `ex:child` a grandchild is outside the
+/// subset; against `[ sh:oneOrMorePath ex:child ]` it is inside — the same data
+/// row, two different answers.
+#[test]
+fn subset_of_reports_each_value_outside_the_reached_nodes() {
+    let data_ttl = "ex:f ex:favourite ex:c, ex:b ; ex:child ex:b . ex:b ex:child ex:c .";
+    let direct = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:f ;
+           sh:property [ sh:path ex:favourite ; sh:subsetOf ex:child ] .",
+        data_ttl,
+    );
+    assert_eq!(
+        component_results(&direct, SUBSET_OF),
+        vec![(x("f"), x("c"))]
+    );
+    assert_eq!(direct.results.len(), 1);
+    let descendants = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:f ;
+           sh:property [ sh:path ex:favourite ; sh:subsetOf [ sh:oneOrMorePath ex:child ] ] .",
+        data_ttl,
+    );
+    assert!(descendants.conforms, "{:?}", descendants.results);
+}
+
+/// A focus node the data graph does not intern reaches itself through a
+/// zero-length path and nothing else. `sh:equals [ sh:zeroOrMorePath ex:q ]`
+/// and `sh:subsetOf [ sh:zeroOrOnePath ex:q ]` therefore hold for it; the IRI
+/// form of each reaches nothing, so the same focus node is reported.
+#[test]
+fn a_focus_node_absent_from_the_data_reaches_itself_along_a_reflexive_path() {
+    let reflexive = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:absent ;
+           sh:property [ sh:path [ sh:zeroOrMorePath ex:p ] ;
+                         sh:equals [ sh:zeroOrMorePath ex:q ] ;
+                         sh:subsetOf [ sh:zeroOrOnePath ex:q ] ] .",
+        "ex:other ex:p ex:other .",
+    );
+    assert!(reflexive.conforms, "{:?}", reflexive.results);
+    let one_hop = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:absent ;
+           sh:property [ sh:path [ sh:zeroOrMorePath ex:p ] ;
+                         sh:equals ex:q ; sh:subsetOf ex:q ] .",
+        "ex:other ex:p ex:other .",
+    );
+    assert_eq!(
+        component_results(&one_hop, EQUALS),
+        vec![(x("absent"), x("absent"))]
+    );
+    assert_eq!(
+        component_results(&one_hop, SUBSET_OF),
+        vec![(x("absent"), x("absent"))]
+    );
+}
+
+/// SHACL 1.2 Core §7.6.3 sets no node-shape restriction on `sh:subsetOf` (unlike
+/// §7.6.4 and §7.6.5 for `sh:lessThan` and `sh:lessThanOrEquals`), so on a node
+/// shape it loads and judges the focus node, its one value node: it holds when
+/// the path leads back to the focus node and is reported when it does not.
+#[test]
+fn subset_of_on_a_node_shape_judges_the_focus_node() {
+    let shapes = "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:subsetOf ex:self .";
+    let back = validate(shapes, "ex:a ex:self ex:a .");
+    assert!(back.conforms, "{:?}", back.results);
+    let away = validate(shapes, "ex:a ex:self ex:b .");
+    assert_eq!(component_results(&away, SUBSET_OF), vec![(x("a"), x("a"))]);
+}
+
+/// `sh:lessThan` over a sequence path on a node shape is refused ("Node shapes
+/// cannot have any value for sh:lessThan"); the same value on a property shape
+/// loads and is evaluated.
+#[test]
+fn a_path_valued_less_than_on_a_node_shape_is_refused_and_on_a_property_shape_loads() {
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:lessThan ( ex:next ex:start ) .",
+        "lessThan",
+    );
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:lessThanOrEquals ( ex:next ex:start ) .",
+        "lessThanOrEquals",
+    );
+    let report = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:start ; sh:lessThanOrEquals ( ex:next ex:start ) ] .",
+        "ex:a ex:start 3 ; ex:next ex:g . ex:g ex:start 2 .",
+    );
+    assert_eq!(component_results(&report, LESS_THAN_OR_EQUALS).len(), 1);
+}
+
+/// A literal is no property path: as the value of `sh:subsetOf` or of any other
+/// pair it is refused, and the IRI neighbour loads and is honoured.
+#[test]
+fn a_literal_pair_value_is_refused_and_an_iri_path_loads() {
+    for parameter in [
+        "subsetOf",
+        "equals",
+        "disjoint",
+        "lessThan",
+        "lessThanOrEquals",
+    ] {
+        refused(
+            &format!(
+                "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+                   sh:property [ sh:path ex:p ; sh:{parameter} \"ex:q\" ] ."
+            ),
+            parameter,
+        );
+    }
+    let report = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:subsetOf ex:q ] .",
+        "ex:a ex:p ex:v .",
+    );
+    assert_eq!(
+        component_results(&report, SUBSET_OF),
+        vec![(x("a"), x("v"))]
+    );
+}
+
+/// A blank node that is no path form — here one carrying an unrelated predicate —
+/// is refused as the value of `sh:equals`; a well-formed blank path loads.
+#[test]
+fn a_malformed_blank_pair_path_is_refused_and_a_well_formed_one_loads() {
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:equals [ ex:notAPath ex:q ] ] .",
+        "equals",
+    );
+    let report = validate(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:property [ sh:path ex:p ; sh:equals [ sh:alternativePath ( ex:q ex:r ) ] ] .",
+        "ex:a ex:p ex:v ; ex:q ex:v ; ex:r ex:w .",
+    );
+    assert_eq!(component_results(&report, EQUALS), vec![(x("a"), x("w"))]);
 }

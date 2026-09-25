@@ -19,7 +19,9 @@ use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, r
 use crate::engine::FocusNode;
 use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::path;
-use crate::plan::{PlannedConstraint, PropertyPlan, RangeBound, ShapePlan};
+use crate::plan::{
+    DatasetBinding, PairPath, PlannedConstraint, PropertyPlan, RangeBound, ShapePlan,
+};
 use crate::report::ValidationResult;
 use crate::shapes::{ComponentValidator, NodeKindValue, Path, PropertyShape, Shape};
 use crate::term::{NamedNode, Term, Triple, canonical_cmp_ids, term_id_to_native};
@@ -746,7 +748,7 @@ pub(crate) fn validate_shape_with_plan_at(
 /// rather than once per call.
 struct OneShotLowering<'a> {
     lowered: crate::plan::LoweredShapes,
-    binding: crate::plan::DatasetBinding,
+    binding: DatasetBinding,
     shape: &'a Shape,
 }
 
@@ -2498,17 +2500,18 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
-        // ── Property-pair constraints (§4.3): compare the value nodes against
-        //    the objects of the given predicate from the SAME focus node. ──────
-        PlannedConstraint::Equals(pred) => {
+        // ── Property-pair constraints (SHACL 1.2 Core §7.6): compare the value
+        //    nodes against "the set of nodes that can be reached from the focus
+        //    node via $path" — the SAME focus node. ──────────────────────────────
+        PlannedConstraint::Equals(other) => {
             // Membership is identity, so the comparison stays in `TermId` space
             // end to end: the comparands are collected as ids and never
             // materialized, and only an OFFENDING term is ever built.
-            let others = PairComparands::collect(ds, focus_node, pred);
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
             // The dedup set is only ever touched by an OFFENDING value node, so a
             // conforming focus node never allocates it.
             let mut seen: FastSet<Term> = FastSet::default();
-            // Value nodes missing from the predicate's objects…
+            // Value nodes missing from the comparands…
             for v in value_nodes {
                 if !others.contains_value(ds, v) {
                     let term = v.to_term(ds);
@@ -2521,7 +2524,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     }
                 }
             }
-            // …and predicate objects missing from the value nodes. Building the
+            // …and comparands missing from the value nodes. Building the
             // value-node index is itself gated on there being a comparand to ask
             // about, so an empty comparand set costs nothing.
             if !others.is_empty() {
@@ -2538,13 +2541,28 @@ fn eval_constraint<'a, S: ResultSink>(
                         }
                     }
                 }
+                // A comparand this dataset does not intern can only be matched by
+                // a value node it does not intern either, and only by term
+                // equality.
+                for other in others.foreign() {
+                    let matched = value_nodes
+                        .iter()
+                        .any(|v| v.as_id(ds).is_none() && v.to_term(ds) == *other);
+                    if !matched && seen.insert(other.clone()) {
+                        emit!(result!(
+                            sh::EQUALS_CONSTRAINT_COMPONENT,
+                            focus_node.to_term(ds),
+                            Some(other.clone())
+                        ));
+                    }
+                }
             }
             Flow::Continue
         }
-        PlannedConstraint::Disjoint(pred) => {
+        PlannedConstraint::Disjoint(other) => {
             // Identity check in `TermId` space; only offending value nodes are
             // materialized.
-            let others = PairComparands::collect(ds, focus_node, pred);
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
             for v in value_nodes {
                 if others.contains_value(ds, v) {
                     emit!(result!(
@@ -2556,11 +2574,28 @@ fn eval_constraint<'a, S: ResultSink>(
             }
             Flow::Continue
         }
-        PlannedConstraint::LessThan(pred) => {
+        PlannedConstraint::SubsetOf(other) => {
+            // "For each value node that does not exist in $otherNodes, there is a
+            // validation result with the value node as sh:value." The value nodes
+            // are already a set, so each offender is reported once.
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for v in value_nodes {
+                if !others.contains_value(ds, v) {
+                    emit!(result!(
+                        sh::SUBSET_OF_CONSTRAINT_COMPONENT,
+                        focus_node.to_term(ds),
+                        Some(v.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::LessThan(other) => {
             // Order comparison reads the numeric/string/temporal value space, but
             // it reads it through BORROWED lexical forms on both sides, so neither
             // the value nodes nor the comparands are materialized to compare them.
-            for value in pair_order_offenders(ds, focus_node, value_nodes, pred, false) {
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for value in pair_order_offenders(ds, value_nodes, &others, false) {
                 emit!(result!(
                     sh::LESS_THAN_CONSTRAINT_COMPONENT,
                     focus_node.to_term(ds),
@@ -2569,8 +2604,9 @@ fn eval_constraint<'a, S: ResultSink>(
             }
             Flow::Continue
         }
-        PlannedConstraint::LessThanOrEquals(pred) => {
-            for value in pair_order_offenders(ds, focus_node, value_nodes, pred, true) {
+        PlannedConstraint::LessThanOrEquals(other) => {
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for value in pair_order_offenders(ds, value_nodes, &others, true) {
                 emit!(result!(
                     sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
                     focus_node.to_term(ds),
@@ -3589,13 +3625,13 @@ const PAIR_COMPARANDS_INLINE: usize = 4;
 /// back O(1) probes.
 const PAIR_COMPARANDS_INDEX_AT: usize = 16;
 
-/// The distinct objects of `(focus, pred, ?)` in the default graph, first-seen
-/// order — the "other" side of a property-pair constraint (§4.3) — held as
-/// INTERNED IDS.
+/// The distinct nodes reachable from the focus node along the compared path, in
+/// first-seen order — `$otherNodes`, the "other" side of a property-pair
+/// constraint (SHACL 1.2 Core §7.6) — held as INTERNED IDS.
 ///
-/// Every comparand comes out of the data graph and is therefore interned, and the
-/// interner is injective, so identity between a comparand and an interned value
-/// node is exactly id equality, and order between two comparable literals is
+/// Every comparand a path step reaches comes out of the data graph and is
+/// therefore interned, and the interner is injective, so identity between a
+/// comparand and an interned value node is exactly id equality, and order between two comparable literals is
 /// decided from their borrowed lexical forms. Neither needs an owned [`Term`], so
 /// the comparand set is never materialized: on the change path a conforming focus
 /// node used to pay two string allocations per comparand for terms that were only
@@ -3614,11 +3650,62 @@ struct PairComparands {
     /// Membership index over `ids`, populated only once `ids` grows past
     /// [`PAIR_COMPARANDS_INDEX_AT`]. Empty means "scan `ids`".
     index: IdSet,
+    /// The comparands this dataset does NOT intern, in first-seen order. The only
+    /// one a path can reach is a focus node the dataset does not intern, through a
+    /// path that admits the zero-length step (`sh:zeroOrMorePath`,
+    /// `sh:zeroOrOnePath`): every other step reads a quad, and a quad's terms are
+    /// interned. Empty — and therefore never allocated — for an interned focus.
+    foreign: Vec<Term>,
 }
 
 impl PairComparands {
+    /// Collect `$otherNodes`: the nodes reachable from `focus` along `other` in
+    /// the default graph.
+    ///
+    /// An IRI path is one hop, read straight off the quad index by the
+    /// predicate's bound identity; every other path is walked by the one path
+    /// evaluator, the same one that computes the value nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lowered path names a slot the walk never handed
+    /// out — a defect in this crate, never in a caller's data.
+    fn collect(
+        ds: &impl ShaclRead,
+        focus: &FocusNode,
+        other: PairPath<'_>,
+        binding: &DatasetBinding,
+    ) -> Result<Self, String> {
+        match other {
+            PairPath::Predicate(pred) => Ok(Self::collect_predicate(ds, focus, pred)),
+            PairPath::Path(lowered) => {
+                let mut out = Self::default();
+                match focus {
+                    FocusNode::Interned(id) => {
+                        for reached in path::eval_planned_ids_from_id(ds, *id, lowered, binding)? {
+                            out.push(reached);
+                        }
+                    }
+                    FocusNode::Foreign(term) => {
+                        for reached in path::eval_planned(ds, term, lowered, binding)? {
+                            match resolve_id(ds, &reached) {
+                                Some(id) => out.push(id),
+                                None => {
+                                    if !out.foreign.contains(&reached) {
+                                        out.foreign.push(reached);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
+    }
+
     /// Collect the comparands of `(focus, pred, ?)` from the default graph.
-    fn collect(ds: &impl ShaclRead, focus: &FocusNode, pred: Option<TermId>) -> Self {
+    fn collect_predicate(ds: &impl ShaclRead, focus: &FocusNode, pred: Option<TermId>) -> Self {
         let mut out = Self::default();
         // The comparand predicate's identity was resolved at BIND. `None` means
         // this data graph interns no such IRI, so it has no objects at all — an
@@ -3682,15 +3769,22 @@ impl PairComparands {
             Some(id) => self.contains_id(id),
             None => {
                 let term = value.to_term(ds);
-                self.iter()
-                    .any(|id| terms_equal(&term_id_to_native(ds, id), &term))
+                self.foreign.iter().any(|other| terms_equal(other, &term))
+                    || self
+                        .iter()
+                        .any(|id| terms_equal(&term_id_to_native(ds, id), &term))
             }
         }
     }
 
     /// Whether there are no comparands at all.
     fn is_empty(&self) -> bool {
-        self.ids.is_empty()
+        self.ids.is_empty() && self.foreign.is_empty()
+    }
+
+    /// The comparands this dataset does not intern, in first-seen order.
+    fn foreign(&self) -> &[Term] {
+        &self.foreign
     }
 
     /// The comparands in first-seen order.
@@ -3738,8 +3832,8 @@ impl<'a> ValueNodeIds<'a> {
 }
 
 /// The value nodes violating `sh:lessThan` (`allow_equal = false`) or
-/// `sh:lessThanOrEquals` (`allow_equal = true`) against the objects of `pred`
-/// from the same focus node.
+/// `sh:lessThanOrEquals` (`allow_equal = true`) against `$otherNodes`, the nodes
+/// reachable from the same focus node along the compared path.
 ///
 /// Per spec §4.3.3–4.3.4 a result exists for every offending `(value, other)`
 /// pair; a result records only the value node, so a value offending against
@@ -3753,24 +3847,29 @@ impl<'a> ValueNodeIds<'a> {
 /// not allocate.
 fn pair_order_offenders(
     ds: &impl ShaclRead,
-    focus: &FocusNode,
     value_nodes: &[ValueNode],
-    pred: Option<TermId>,
+    others: &PairComparands,
     allow_equal: bool,
 ) -> Vec<Term> {
-    let others = PairComparands::collect(ds, focus, pred);
+    let ordered = |right: Option<LiteralView<'_>>, left: Option<LiteralView<'_>>| {
+        match compare_literal_views(left, right) {
+            Some(std::cmp::Ordering::Less) => true,
+            Some(std::cmp::Ordering::Equal) => allow_equal,
+            Some(std::cmp::Ordering::Greater) | None => false,
+        }
+    };
     let mut offending: Vec<Term> = Vec::new();
     for v in value_nodes {
         // Identity is an id here; ORDER is not — interning order is insertion
         // order. The comparison key is the value space, read back off each id.
         let left = v.literal_view(ds);
         for o in others.iter() {
-            let ok = match compare_literal_views(left, literal_view_of_id(ds, o)) {
-                Some(std::cmp::Ordering::Less) => true,
-                Some(std::cmp::Ordering::Equal) => allow_equal,
-                Some(std::cmp::Ordering::Greater) | None => false,
-            };
-            if !ok {
+            if !ordered(literal_view_of_id(ds, o), left) {
+                offending.push(v.to_term(ds));
+            }
+        }
+        for o in others.foreign() {
+            if !ordered(literal_view_of_term(o), left) {
                 offending.push(v.to_term(ds));
             }
         }
@@ -6209,8 +6308,8 @@ mod tests {
 
     // ── Property-pair constraints (§4.3) ───────────────────────────────────────
 
-    fn pair_pred(local: &str) -> NamedNode {
-        NamedNode::new_unchecked(format!("{EX}{local}"))
+    fn pair_pred(local: &str) -> Path {
+        Path::Predicate(NamedNode::new_unchecked(format!("{EX}{local}")))
     }
 
     #[test]

@@ -76,14 +76,8 @@ const R_UNIQUE_VALUES_FOR: &str = "sh:uniqueValuesFor is not implemented, so a s
      load as naming an unimplemented SHACL 1.2 Core component (uniqueValuesFor-004 expects \
      conformance, which the former silent drop produced by coincidence)";
 
-const R_SUBSET_OF: &str =
-    "sh:subsetOf is not implemented, so a shapes graph using it is refused at load";
-
 const R_CLOSED_BY_TYPES: &str =
     "sh:closed sh:ByTypes is not evaluated, so a shape using it is refused at load";
-
-const R_PATH_PAIRS: &str = "path-valued sh:equals / sh:disjoint / sh:lessThan / sh:lessThanOrEquals: the parser \
-     requires an IRI and refuses the shapes graph";
 
 const R_REIFIER_DEACTIVATED: &str = "a {| sh:deactivated true |} reifier annotation on a (shape, parameter, value) \
      statement is not evaluated, so the shapes graph is refused at load";
@@ -187,16 +181,9 @@ const XFAIL: &[(&str, &str)] = &[
     ("core/node/uniqueValuesFor-003", R_UNIQUE_VALUES_FOR),
     ("core/node/uniqueValuesFor-004", R_UNIQUE_VALUES_FOR),
     ("core/node/uniqueValuesFor-005", R_UNIQUE_VALUES_FOR),
-    ("core/property/subsetOf-001", R_SUBSET_OF),
-    ("core/property/subsetOf-002", R_SUBSET_OF),
     // ── Closed shapes ──
     ("core/node/closed-003", R_CLOSED_BY_TYPES),
     ("core/node/closed-004", R_CLOSED_BY_TYPES),
-    // ── Path-valued property pairs ──
-    ("core/property/equals-002", R_PATH_PAIRS),
-    ("core/property/disjoint-002", R_PATH_PAIRS),
-    ("core/property/lessThan-003", R_PATH_PAIRS),
-    ("core/property/lessThanOrEquals-002", R_PATH_PAIRS),
     // ── Reifier annotations, severities, conformance ──
     ("core/misc/deactivated-003", R_REIFIER_DEACTIVATED),
     ("core/misc/severity-003", R_REIFIER_SEVERITY),

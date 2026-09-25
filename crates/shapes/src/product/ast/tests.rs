@@ -377,10 +377,14 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
             message: Some("no".to_owned()),
             severity: Some(Severity::Warning),
         },
-        Constraint::Equals(ex("p")),
-        Constraint::Disjoint(ex("p")),
-        Constraint::LessThan(ex("p")),
-        Constraint::LessThanOrEquals(ex("p")),
+        // A composite path, so the pair tags are exercised past the IRI form.
+        Constraint::Equals(Path::Sequence(vec![
+            Path::Inverse(Box::new(Path::Predicate(ex("p")))),
+            Path::ZeroOrMore(Box::new(Path::Predicate(ex("q")))),
+        ])),
+        Constraint::Disjoint(Path::Predicate(ex("p"))),
+        Constraint::LessThan(Path::Predicate(ex("p"))),
+        Constraint::LessThanOrEquals(Path::Predicate(ex("p"))),
         Constraint::QualifiedValueShape {
             shape: Box::new(leaf_shape("Qualified")),
             siblings: vec![leaf_shape("Sibling")],
@@ -419,6 +423,10 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         Constraint::SingleLine(true),
         Constraint::RootClass(vec![ex("RootA"), ex("RootB")]),
         Constraint::SomeValue(Box::new(leaf_shape("SomeValue"))),
+        Constraint::SubsetOf(Path::Alternative(vec![
+            Path::Predicate(ex("p")),
+            Path::ZeroOrOne(Box::new(Path::Predicate(ex("q")))),
+        ])),
     ]
 }
 

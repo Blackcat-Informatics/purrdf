@@ -67,6 +67,7 @@ impl<'a> MetadataSubjects<'a> {
             sh::ROOT_CLASS,
             sh::EQUALS,
             sh::DISJOINT,
+            sh::SUBSET_OF,
             sh::LESS_THAN,
             sh::LESS_THAN_OR_EQUALS,
             sh::SPARQL,

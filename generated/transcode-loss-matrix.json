@@ -2562,11 +2562,39 @@
     "note": "A shape targeted only via SHACL-AF sh:target/sh:SPARQLTarget (an arbitrary SPARQL SELECT, not a class extension) has no closed-world JSON Schema equivalent; the shape is excluded from the compiled $defs."
   },
   {
+    "code": "sh:disjoint",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL sh:disjoint constraint keeps the values apart from the nodes a property path (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains each property on its own and cannot relate one property's values to another path's, so the constraint is dropped."
+  },
+  {
+    "code": "sh:equals",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL sh:equals constraint requires the values to be exactly the nodes a property path (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains each property on its own and cannot relate one property's values to another path's, so the constraint is dropped."
+  },
+  {
     "code": "sh:expression",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
     "note": "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is dropped."
+  },
+  {
+    "code": "sh:lessThan",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL sh:lessThan constraint orders the values below every node a property path (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains each property on its own and cannot relate one property's values to another path's, so the constraint is dropped."
+  },
+  {
+    "code": "sh:lessThanOrEquals",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL sh:lessThanOrEquals constraint orders the values at or below every node a property path (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains each property on its own and cannot relate one property's values to another path's, so the constraint is dropped."
   },
   {
     "code": "sh:maxListLength",
@@ -2637,6 +2665,13 @@
     "to": "json-schema",
     "intentional": true,
     "note": "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is dropped."
+  },
+  {
+    "code": "sh:subsetOf",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:subsetOf constraint requires every value to be among the nodes a property path reaches from the focus node; JSON Schema constrains each property on its own and cannot relate one property's values to another path's, so the constraint is dropped."
   },
   {
     "code": "sh:targetNode",

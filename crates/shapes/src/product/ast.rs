@@ -314,7 +314,7 @@ const TAGS_TARGET: u8 = 6;
 /// The number of [`ComponentValidator`] tags.
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
-const TAGS_CONSTRAINT: u8 = 38;
+const TAGS_CONSTRAINT: u8 = 39;
 /// The number of [`NodeExpr`] tags.
 const TAGS_NODE_EXPR: u8 = 32;
 /// The number of [`ShapeArg`] tags.
@@ -1132,21 +1132,21 @@ impl AstWriter {
                 self.opt_text(message.as_deref());
                 self.opt_severity(severity.as_ref());
             }
-            Constraint::Equals(predicate) => {
+            Constraint::Equals(path) => {
                 self.tag(23);
-                self.named_node(predicate);
+                self.path(path)?;
             }
-            Constraint::Disjoint(predicate) => {
+            Constraint::Disjoint(path) => {
                 self.tag(24);
-                self.named_node(predicate);
+                self.path(path)?;
             }
-            Constraint::LessThan(predicate) => {
+            Constraint::LessThan(path) => {
                 self.tag(25);
-                self.named_node(predicate);
+                self.path(path)?;
             }
-            Constraint::LessThanOrEquals(predicate) => {
+            Constraint::LessThanOrEquals(path) => {
                 self.tag(26);
-                self.named_node(predicate);
+                self.path(path)?;
             }
             Constraint::QualifiedValueShape {
                 shape,
@@ -1234,6 +1234,10 @@ impl AstWriter {
             Constraint::SomeValue(shape) => {
                 self.tag(37);
                 self.shape(shape)?;
+            }
+            Constraint::SubsetOf(path) => {
+                self.tag(38);
+                self.path(path)?;
             }
         }
         self.leave();
@@ -1957,10 +1961,10 @@ impl<'a> AstReader<'a> {
                 message: self.opt_text()?,
                 severity: self.opt_severity()?,
             },
-            23 => Constraint::Equals(self.named_node()?),
-            24 => Constraint::Disjoint(self.named_node()?),
-            25 => Constraint::LessThan(self.named_node()?),
-            26 => Constraint::LessThanOrEquals(self.named_node()?),
+            23 => Constraint::Equals(self.path()?),
+            24 => Constraint::Disjoint(self.path()?),
+            25 => Constraint::LessThan(self.path()?),
+            26 => Constraint::LessThanOrEquals(self.path()?),
             27 => Constraint::QualifiedValueShape {
                 shape: Box::new(self.shape()?),
                 siblings: self.seq(Self::shape)?,
@@ -1997,7 +2001,8 @@ impl<'a> AstReader<'a> {
             34 => Constraint::MemberShape(Box::new(self.shape()?)),
             35 => Constraint::SingleLine(self.flag()?),
             36 => Constraint::RootClass(self.seq(Self::named_node)?),
-            _ => Constraint::SomeValue(Box::new(self.shape()?)),
+            37 => Constraint::SomeValue(Box::new(self.shape()?)),
+            _ => Constraint::SubsetOf(self.path()?),
         };
         self.leave();
         Ok(constraint)
@@ -2298,6 +2303,7 @@ impl FnTable {
             | Constraint::Sparql { .. }
             | Constraint::Equals(_)
             | Constraint::Disjoint(_)
+            | Constraint::SubsetOf(_)
             | Constraint::LessThan(_)
             | Constraint::LessThanOrEquals(_)
             | Constraint::MinListLength(_)

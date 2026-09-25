@@ -1696,8 +1696,8 @@ fn stage_id_changes_when_the_spec_table_changes() {
     let mut flipped = components;
     let row = flipped
         .iter_mut()
-        .find(|(_, line)| line.contains("SubsetOfConstraintComponent unimplemented"))
-        .expect("the unimplemented subsetOf row is a table fact");
+        .find(|(_, line)| line.contains("UniqueValuesForConstraintComponent unimplemented"))
+        .expect("the unimplemented uniqueValuesFor row is a table fact");
     row.1 = row.1.replace("unimplemented", "native");
     assert_ne!(real, stage_id(&types, &builtins, &flipped, &analysis));
 }

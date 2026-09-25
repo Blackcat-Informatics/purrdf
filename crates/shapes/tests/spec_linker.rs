@@ -51,10 +51,8 @@ const VOCABULARY_FILES: [&str; 3] = [
 /// The SHACL 1.2 Core components the vocabulary declares and this engine does not
 /// evaluate — the declared-vs-implemented gap, pinned by name. A shape using one
 /// of their parameters is a load error, never a silent conformance.
-const UNIMPLEMENTED_DECLARED_COMPONENTS: [&str; 2] = [
-    "http://www.w3.org/ns/shacl#SubsetOfConstraintComponent",
-    "http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent",
-];
+const UNIMPLEMENTED_DECLARED_COMPONENTS: [&str; 1] =
+    ["http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent"];
 
 const SPARQL_NS: &str = "http://www.w3.org/ns/sparql#";
 
@@ -591,27 +589,28 @@ fn a_builtin_redefined_as_a_sparql_function_is_a_duplicate_definition() {
 
 // ── Declared-but-unimplemented components ────────────────────────────────────
 
-const SUBSET_OF_DECLARATION: &str = r"
-sh:SubsetOfConstraintComponent a sh:ConstraintComponent ;
-  sh:parameter sh:SubsetOfConstraintComponent-subsetOf .
-sh:SubsetOfConstraintComponent-subsetOf a sh:Parameter ;
-  sh:path sh:subsetOf ; sh:nodeKind sh:BlankNodeOrIRI .
+const UNIQUE_VALUES_FOR_DECLARATION: &str = r"
+sh:UniqueValuesForConstraintComponent a sh:ConstraintComponent ;
+  sh:parameter sh:UniqueValuesForConstraintComponent-uniqueValuesFor .
+sh:UniqueValuesForConstraintComponent-uniqueValuesFor a sh:Parameter ;
+  sh:path sh:uniqueValuesFor ; sh:nodeKind sh:BlankNodeOrIRI .
 ";
 
-const SUBSET_OF_SHAPE: &str = r"
+const UNIQUE_VALUES_FOR_SHAPE: &str = r"
 ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-  sh:property [ sh:path ex:text ; sh:subsetOf ex:allowed ] .
+  sh:property [ sh:path ex:text ; sh:uniqueValuesFor ex:allowed ] .
 ";
 
 #[test]
 fn a_shape_using_an_unimplemented_component_is_refused() {
     for shapes in [
-        SUBSET_OF_SHAPE.to_owned(),
-        format!("{SUBSET_OF_DECLARATION}{SUBSET_OF_SHAPE}"),
+        UNIQUE_VALUES_FOR_SHAPE.to_owned(),
+        format!("{UNIQUE_VALUES_FOR_DECLARATION}{UNIQUE_VALUES_FOR_SHAPE}"),
     ] {
         let error = load_error(&shapes);
         assert!(
-            error.contains("SubsetOfConstraintComponent") && error.contains("does not implement"),
+            error.contains("UniqueValuesForConstraintComponent")
+                && error.contains("does not implement"),
             "{error}"
         );
     }
@@ -623,7 +622,7 @@ fn a_shape_using_an_unimplemented_component_is_refused() {
 fn a_bare_unimplemented_component_declaration_loads() {
     let report = validate(
         &format!(
-            "{SUBSET_OF_DECLARATION}
+            "{UNIQUE_VALUES_FOR_DECLARATION}
              ex:S a sh:NodeShape ; sh:targetNode ex:a ;
                sh:property [ sh:path ex:text ; sh:minCount 1 ] ."
         ),
@@ -634,7 +633,7 @@ fn a_bare_unimplemented_component_declaration_loads() {
         vec!["<http://example.org/ns#a>".to_owned()]
     );
     assert_eq!(
-        linked(SUBSET_OF_DECLARATION).registered_components,
+        linked(UNIQUE_VALUES_FOR_DECLARATION).registered_components,
         Vec::<String>::new()
     );
 }
@@ -645,12 +644,12 @@ fn a_bare_unimplemented_component_declaration_loads() {
 #[test]
 fn a_user_implemented_unimplemented_component_is_evaluated() {
     let shapes = format!(
-        r#"{SUBSET_OF_DECLARATION}
-        sh:SubsetOfConstraintComponent sh:validator [
+        r#"{UNIQUE_VALUES_FOR_DECLARATION}
+        sh:UniqueValuesForConstraintComponent sh:validator [
           a sh:SPARQLAskValidator ;
-          sh:ask """ASK {{ $this $subsetOf $value }}"""
+          sh:ask """ASK {{ $this $uniqueValuesFor $value }}"""
         ] .
-        {SUBSET_OF_SHAPE}"#
+        {UNIQUE_VALUES_FOR_SHAPE}"#
     );
     let outside = validate(&shapes, "ex:a ex:text \"two\" ; ex:allowed \"one\" .");
     let inside = validate(&shapes, "ex:a ex:text \"one\" ; ex:allowed \"one\" .");
@@ -658,10 +657,10 @@ fn a_user_implemented_unimplemented_component_is_evaluated() {
         focus_nodes(&outside),
         vec!["<http://example.org/ns#a>".to_owned()]
     );
-    assert!(inside.conforms, "a value in the subset conforms");
+    assert!(inside.conforms, "a value the validator accepts conforms");
     assert_eq!(
         linked(&shapes).registered_components,
-        vec!["http://www.w3.org/ns/shacl#SubsetOfConstraintComponent".to_owned()]
+        vec!["http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent".to_owned()]
     );
 }
 
