@@ -426,3 +426,42 @@ test("SERVICE SILENT and LOAD SILENT succeed with nothing fetched", () => {
   engine.update(ds, "LOAD SILENT <https://e/doc>");
   assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
 });
+
+// Nesting is bounded by the parser, not by the stack. The parser is recursive descent,
+// so before it refused deep nesting, a FILTER nested about 950 parentheses deep ran the
+// wasm shadow stack out of linear memory: the call trapped ("memory access out of
+// bounds") and the instance was unusable afterwards. The parser now refuses the level
+// past its nesting limit with a typed syntax error, however deep the request goes.
+const NESTING_LIMIT = 128;
+const PARENTHESIZED_REFUSAL = new RegExp(
+  `bracketted expression nesting exceeds the safety limit of ${NESTING_LIMIT}`,
+);
+/** A FILTER comparing `?o` with itself, the left operand wrapped in `depth` parentheses. */
+const parenthesizedFilter = (depth) =>
+  `SELECT ?s WHERE { ?s ?p ?o FILTER(${"(".repeat(depth)}?o${")".repeat(depth)} = ?o) }`;
+
+test("a FILTER nested 10 000 parentheses deep is a typed parse error, and the engine answers afterwards", () => {
+  const ds = Dataset.parse(TRIG, "trig");
+  const engine = new QueryEngine();
+  // Twice: a trap would have left the instance unusable, so the second call would not
+  // reach the parser to refuse it the same way.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.throws(() => engine.select(ds, parenthesizedFilter(10_000)), PARENTHESIZED_REFUSAL);
+  }
+  // The instance is intact: an ordinary query answers exactly.
+  const names = engine
+    .select(ds, "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
+    .rows.toArray()
+    .map((row) => row.name.value);
+  assert.deepEqual(names, ["Ann", "Bob"]);
+});
+
+test("the deepest parenthesised FILTER the parser admits answers, and one parenthesis more is refused", () => {
+  const ds = Dataset.parse(TRIG, "trig");
+  const engine = new QueryEngine();
+  // The WHERE group is the first nesting level, so a FILTER inside it holds one
+  // parenthesis fewer than the limit. `?o = ?o` holds on every default-graph triple.
+  const deepest = engine.select(ds, parenthesizedFilter(NESTING_LIMIT - 1));
+  assert.equal(deepest.rowCount, 3, "every default-graph triple passes the deepest admitted FILTER");
+  assert.throws(() => engine.select(ds, parenthesizedFilter(NESTING_LIMIT)), PARENTHESIZED_REFUSAL);
+});

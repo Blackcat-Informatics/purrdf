@@ -200,34 +200,42 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
   assert.equal((await engine.queryAsync(chain, nestedOptional(8))).rowCount, 200);
 
-  // Frames that never poll: the parser recurses once per parenthesis, so 900 nested
-  // parentheses run far past a 512 KiB region's base before the first poll — into the
-  // overrun zone beneath it, never into another allocation. (The synchronous lane parses
-  // this query on its own 1 MiB stack.) The job fails with the same typed error, and the
+  // Frames that never poll: expression evaluation recurses once per operator without
+  // polling, so an operator chain run beneath a few EXISTS levels (which poll) goes far
+  // past a 512 KiB region's base before the next poll — into the overrun zone beneath it,
+  // never into another allocation. The request is the deepest the parser admits of its
+  // shape: sixteen EXISTS levels around a chain of 477 additions, one short of the
+  // expression-height budget. Measured on the shipped artifact by painting the region:
+  // it reaches about 631 000 bytes below the region's top, about 107 000 past a 512 KiB
+  // region's base, while its deepest poll is about 271 000 bytes down — so the canary,
+  // not the guard band, is what stops it. The synchronous lane runs it on its own 1 MiB
+  // stack (about 638 000 bytes deep). The job fails with the same typed error, and the
   // instance stays intact.
-  let parenthesized = "?o";
-  for (let level = 0; level < 900; level += 1) parenthesized = `(${parenthesized})`;
-  const deepParse = `SELECT ?s WHERE { ?s <${EX}p> ?o FILTER(${parenthesized} = ?o) }`;
+  const deepChain = `SELECT ?s WHERE { ?s <${EX}p> ?o ${`FILTER EXISTS { ?s <${EX}p> ?o `.repeat(16)}BIND(1 AS ?one) FILTER(${"?one + ".repeat(477)}?one > 0)${" }".repeat(16)} }`;
   // A separate engine answers it synchronously: the engine caches a parsed plan per
   // query text, and a cached plan would spare the asynchronous run its parse.
-  assert.equal(new QueryEngine().select(chain, deepParse).rowCount, 200, "the synchronous lane answers it");
+  assert.equal(new QueryEngine().select(chain, deepChain).rowCount, 200, "the synchronous lane answers it");
   let overran;
   try {
-    await engine.queryGovernedAsync(chain, deepParse, { stackBytes: SMALL_REGION });
+    await engine.queryGovernedAsync(chain, deepChain, { stackBytes: SMALL_REGION });
   } catch (error) {
     overran = error;
   }
-  assert.ok(overran instanceof Error, "the small region refuses the deep parse");
+  assert.ok(overran instanceof Error, "the small region refuses the deep chain");
   assert.equal(overran.message, "asynchronous job stack region exhausted (524288 bytes); raise stackBytes");
-  assert.equal(typeof overran.evidence.async.stackHighWaterBytes, "number");
+  const overranPollDepth = overran.evidence.async.stackHighWaterBytes;
+  assert.ok(
+    overranPollDepth < SMALL_REGION - GUARD_BAND,
+    `no poll reached the guard band (${overranPollDepth} bytes deep): the canary stopped the job`,
+  );
   assert.equal(stackPointer(), IDLE);
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
   assert.equal((await engine.queryAsync(chain, nestedOptional(8))).rowCount, 200);
-  const parsedOnLargeRegion = await new QueryEngine().queryGovernedAsync(chain, deepParse, {
+  const chainOnLargeRegion = await new QueryEngine().queryGovernedAsync(chain, deepChain, {
     stackBytes: 4 * 1024 * 1024,
   });
-  assert.equal(parsedOnLargeRegion.isComplete, true, "the 4 MiB neighbour parses and answers it");
-  assert.equal(parsedOnLargeRegion.result.rowCount, 200);
+  assert.equal(chainOnLargeRegion.isComplete, true, "the 4 MiB neighbour evaluates and answers it");
+  assert.equal(chainOnLargeRegion.result.rowCount, 200);
 
   // The neighbour: the same query on a 4 MiB region answers — deeper than the small
   // region could ever have hosted.
@@ -237,6 +245,52 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   const answeredDepth = answered.evidence.async.stackHighWaterBytes;
   assert.ok(answeredDepth > SMALL_REGION - GUARD_BAND, `${answeredDepth} bytes deep`);
   assert.ok(answeredDepth < 4 * 1024 * 1024 - GUARD_BAND);
+  assert.equal(stackPointer(), IDLE);
+});
+
+// Nesting is bounded by the parser, not by the region. A FILTER nested 10 000
+// parentheses deep would recurse through the parser without a poll, far past any
+// region; the parser refuses the level past its limit with a typed syntax error first.
+const NESTING_LIMIT = 128;
+const PARENTHESIZED_REFUSAL = new RegExp(
+  `bracketted expression nesting exceeds the safety limit of ${NESTING_LIMIT}`,
+);
+/** A FILTER comparing `?o` with itself, the left operand wrapped in `depth` parentheses. */
+const parenthesizedFilter = (depth) =>
+  `SELECT ?s WHERE { ?s <${EX}p> ?o FILTER(${"(".repeat(depth)}?o${")".repeat(depth)} = ?o) }`;
+
+test("a FILTER nested 10 000 parentheses deep is a typed parse error on the smallest region, and the instance is not poisoned", async () => {
+  const engine = new QueryEngine();
+  const chain = Dataset.parse(CHAIN, "nquads");
+  // Twice: a trap or an overrun of the region's zone would poison the instance, and the
+  // second job would reject with the poison instead of the parser's refusal.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      engine.queryAsync(chain, parenthesizedFilter(10_000), { stackBytes: SMALL_REGION }),
+      PARENTHESIZED_REFUSAL,
+    );
+    assert.equal(stackPointer(), IDLE);
+  }
+  // The instance is intact on both lanes.
+  assert.equal((await engine.queryAsync(chain, nestedOptional(8), { stackBytes: SMALL_REGION })).rowCount, 200);
+  assert.equal(engine.select(chain, nestedOptional(8)).rowCount, 200);
+  assert.equal(stackPointer(), IDLE);
+});
+
+test("the deepest parenthesised FILTER the parser admits answers on the smallest region", async () => {
+  const engine = new QueryEngine();
+  const chain = Dataset.parse(CHAIN, "nquads");
+  // The WHERE group is the first nesting level, so a FILTER inside it holds one
+  // parenthesis fewer than the limit. `?o = ?o` holds on every chain edge.
+  const deepest = await engine.queryAsync(chain, parenthesizedFilter(NESTING_LIMIT - 1), {
+    stackBytes: SMALL_REGION,
+  });
+  assert.equal(deepest.rowCount, 200, "every chain edge passes the deepest admitted FILTER");
+  // The refused neighbour, one parenthesis deeper.
+  await assert.rejects(
+    engine.queryAsync(chain, parenthesizedFilter(NESTING_LIMIT), { stackBytes: SMALL_REGION }),
+    PARENTHESIZED_REFUSAL,
+  );
   assert.equal(stackPointer(), IDLE);
 });
 

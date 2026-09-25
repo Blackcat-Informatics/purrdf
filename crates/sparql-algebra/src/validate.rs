@@ -12,8 +12,9 @@ use crate::{
 };
 
 // Unlike a flat graph-combinator spine, expressions, paths and RDF values are
-// recursively evaluated. Keep their own envelope within native-stack bounds.
-const MAX_VALUE_NESTING: usize = 512;
+// recursively evaluated. Keep their own envelope within native-stack bounds: the
+// same height the parser's operator-chain accounting stops at.
+const MAX_VALUE_NESTING: usize = crate::parser::MAX_EXPRESSION_HEIGHT;
 
 #[derive(Clone, Copy)]
 struct Depth {

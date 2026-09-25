@@ -38,12 +38,80 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
+/// Maximum number of recursive constructs the parser nests, whatever mix of them a
+/// request writes.
+///
+/// The parser is recursive descent, so an input's nesting is an instruction about how
+/// much native stack to consume, and exhausting it is not an error: nothing unwinds, the
+/// process aborts, and on `wasm32-unknown-unknown` the shadow stack runs into linear
+/// memory and traps. Every production that can reach itself again is therefore entered
+/// through one guard that charges one level of this single budget:
+/// a group graph pattern (sub-`SELECT`, `OPTIONAL`, `MINUS`, `GRAPH`, `SERVICE`,
+/// `LATERAL` and `UNION` arms included), an `EXISTS`/`NOT EXISTS` body (one level for the
+/// keyword and one for its group), a bracketted expression, a unary `!`/`+`/`-`, a
+/// function or built-in argument list, an `IN` list, an aggregate call, an expression
+/// triple term, a property-path group, a blank-node property list, a collection, a
+/// triple term or reifying triple (pattern, template and `VALUES` forms), and an
+/// annotation block, in queries and updates alike. The level past the limit is refused
+/// with a typed [`ParseError::Syntax`] naming the construct and this limit.
+///
+/// # Why 128
+///
+/// One budget for every construct bounds the stack by 128 times the costliest single
+/// level, so the limit is sized from that level. Measured natively (x86_64, the
+/// workspace's opt-level-3 test profile), driving each construct to its refusal needs
+/// at most 544 KiB of stack: a sub-`SELECT` spends two levels and about 8.5 KiB per
+/// written level, a built-in call such as `STR(` about 3.9 KiB, an aggregate call
+/// 3.8 KiB, a group 3.3 KiB, a bracketted expression 2.4 KiB, an `IN` list or a
+/// property-path group 1.5 KiB, and every term and triple-term construct under
+/// 1.4 KiB. Before this guard, the same
+/// constructs aborted a 1 MiB native stack at 273 nested built-in calls, 398 nested
+/// function calls and 461 nested parentheses.
+///
+/// The smallest stacks PurRDF ships on are wasm32's: the synchronous lane's 1 MiB shadow
+/// stack (the linker default; nothing overrides it), where nested parentheses trapped at
+/// about 950 before this guard, and an asynchronous job's stack region, whose smallest
+/// size (512 KiB) leaves 384 KiB above its guard band. Measured on the shipped npm
+/// artifact by painting the shadow stack, a level costs 0.37–0.45 of its native size, and
+/// parsing every construct to its refusal at this limit reaches at most 231 KiB deep on
+/// the synchronous lane and 236 KiB in a job's region (which adds its runner's 6 KiB):
+/// a built-in call about 1.8 KiB per level, a sub-`SELECT` 3.2 KiB per written level, a
+/// group 1.2 KiB, a bracketted expression 1.0 KiB, and every term, triple-term and
+/// property-path construct at most 0.6 KiB. That is 4.4× inside the synchronous stack
+/// and 1.6× inside the smallest region. Written ten thousand deep, every construct is
+/// the typed refusal on both lanes, with V8's default 984 KiB native stack under a
+/// suspendable job, and the instance answers the next request.
+///
+/// 128 is also the number the rest of the workspace publishes for document nesting.
+pub const MAX_NESTING_DEPTH: usize = 128;
+
 /// Maximum number of nested group graph patterns accepted by the parser and evaluator.
 ///
 /// This is a structural safety limit, not an execution governor: it rejects an algebra
 /// whose recursive evaluation would otherwise be able to exhaust the native stack before
-/// a fuel or stop check could run.
-pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
+/// a fuel or stop check could run. A group is one of the constructs charged against the
+/// parser's single nesting budget, so this is [`MAX_NESTING_DEPTH`] itself; the evaluator
+/// sizes its own graph-pattern depth guard from this name.
+pub const MAX_GRAPH_PATTERN_DEPTH: usize = MAX_NESTING_DEPTH;
+
+/// The tallest expression or property-path tree the parser builds, counted in levels
+/// from the outermost enclosing construct: four times [`MAX_NESTING_DEPTH`].
+///
+/// Operator chains (`a || b || …`, `a + b - …`, `p1 / p2 | …`) are parsed by a loop, so
+/// [`MAX_NESTING_DEPTH`] never sees them, yet every operator makes the tree one level
+/// taller — and the tree's height is the recursion depth of every walk over it,
+/// including its own `Drop`. Unbounded, a 100 000-operator chain aborted a 2 MiB native
+/// stack. Each operator, relational wrapper, path modifier and `NOT EXISTS` is charged
+/// here instead, through [`Parser::account_height`]. A chain costs no parser stack, only
+/// the walkers' much smaller frames (the parse of a 512-tall chain needs 48 KiB natively
+/// and 6 KiB on wasm32), so the budget is wider than the recursion budget. Evaluating
+/// the tallest chain it admits takes about 0.92 KiB of wasm32 shadow stack per operator,
+/// 479 KiB in all: half the synchronous lane's stack, and inside the smallest
+/// asynchronous region, which it answers on. It is the same number
+/// [`crate::Query::validate`] admits for expression, path and term nesting, and wide
+/// enough that a generated `?x = <a> || ?x = <b> || …` of several hundred alternatives
+/// still parses.
+pub(crate) const MAX_EXPRESSION_HEIGHT: usize = 4 * MAX_NESTING_DEPTH;
 
 /// Maximum number of graph-pattern *combinator* nodes — `Join`/`LeftJoin`/
 /// `Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/`Minus` — a single
@@ -502,7 +570,8 @@ impl SparqlParser {
             anon_counter: 0,
             anon_prefix,
             group_counter: 0,
-            group_pattern_depth: 0,
+            nesting_depth: 0,
+            nesting_peak: 0,
             pattern_node_budget: 0,
             exists_scope_stack: Vec::new(),
             dataset_at: None,
@@ -579,7 +648,14 @@ struct Parser<'a, 'o> {
     /// The label prefix [`Parser::fresh_anon`] mints under — see [`anon_label_prefix`].
     anon_prefix: String,
     group_counter: usize,
-    group_pattern_depth: usize,
+    /// How many recursive constructs enclose the cursor — the single count every
+    /// recursive production charges against [`MAX_NESTING_DEPTH`] through
+    /// [`Parser::nested`].
+    nesting_depth: usize,
+    /// The deepest level ([`Self::nesting_depth`] plus the height of an operator
+    /// chain built there) reached since the innermost [`Parser::measured`] window
+    /// opened; outside such a window its value is never read.
+    nesting_peak: usize,
     /// Running count of graph-pattern combinator nodes charged so far against
     /// [`MAX_GRAPH_PATTERN_NODES`] — see [`Parser::charge_pattern_nodes`].
     pattern_node_budget: usize,
@@ -765,7 +841,8 @@ impl<'a> Parser<'a, '_> {
             anon_counter: self.anon_counter,
             anon_prefix: self.anon_prefix.clone(),
             group_counter: self.group_counter,
-            group_pattern_depth: self.group_pattern_depth,
+            nesting_depth: self.nesting_depth,
+            nesting_peak: self.nesting_depth,
             pattern_node_budget: self.pattern_node_budget,
             // A fork reparses only a bounded braced block for a template/quad
             // reading (`CONSTRUCT`'s short-form template, `DELETE WHERE`'s
@@ -824,6 +901,71 @@ impl<'a> Parser<'a, '_> {
                 self.span(),
             ));
         }
+        Ok(())
+    }
+
+    /// Parse one recursive construct one nesting level deeper, refusing it with a
+    /// typed [`ParseError`] — naming `construct` and [`MAX_NESTING_DEPTH`] — when the
+    /// cursor is already that many constructs deep.
+    ///
+    /// This is the parser's one recursion guard. Every production that can reach
+    /// itself again (a group graph pattern, an `EXISTS` body, a bracketted
+    /// expression, a unary operator, an argument or `IN` list, an aggregate call, an
+    /// expression triple term, a property-path group, a blank-node property list, a
+    /// collection, a triple term or reifying triple, an annotation block, a ground
+    /// triple term) enters through it, and every such production shares one count, so
+    /// the native stack the parser can consume is bounded by [`MAX_NESTING_DEPTH`]
+    /// times the costliest single level, whatever mix of constructs a request nests.
+    /// The count is restored on the error path too.
+    fn nested<T>(
+        &mut self,
+        construct: &'static str,
+        parse: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        if self.nesting_depth >= MAX_NESTING_DEPTH {
+            return Err(ParseError::syntax(
+                format!("{construct} nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"),
+                self.span(),
+            ));
+        }
+        self.nesting_depth += 1;
+        self.nesting_peak = self.nesting_peak.max(self.nesting_depth);
+        let result = parse(self);
+        self.nesting_depth -= 1;
+        result
+    }
+
+    /// Parse one operand of a tree-building production and report how tall the tree
+    /// it built may be: the number of levels its [`Self::nested`] constructs and
+    /// [`Self::account_height`] charges reached below the current depth. An upper
+    /// bound, never an under-count.
+    fn measured<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<(T, usize)> {
+        let outer_peak = std::mem::replace(&mut self.nesting_peak, self.nesting_depth);
+        let result = parse(self);
+        let height = self.nesting_peak - self.nesting_depth;
+        self.nesting_peak = self.nesting_peak.max(outer_peak);
+        Ok((result?, height))
+    }
+
+    /// Charge a node about to be built `height` levels tall (counted from the current
+    /// depth) against [`MAX_EXPRESSION_HEIGHT`], refusing it with the same typed
+    /// nesting error [`Self::nested`] raises.
+    ///
+    /// Operator chains (`a || b || …`, `a + b - …`, `p1 / p2 / …`) are parsed by a
+    /// loop, not by recursion, so [`Self::nested`] never sees them — yet each operator
+    /// makes the tree one level taller, and a tree's height is the recursion depth of
+    /// everything that walks it afterwards, its own `Drop` included. Every node the
+    /// expression and property-path productions build above an operand they measured
+    /// is charged here before it is built.
+    fn account_height(&mut self, construct: &'static str, height: usize) -> Result<()> {
+        let reach = self.nesting_depth + height;
+        if reach > MAX_EXPRESSION_HEIGHT {
+            return Err(ParseError::syntax(
+                format!("{construct} nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"),
+                self.span(),
+            ));
+        }
+        self.nesting_peak = self.nesting_peak.max(reach);
         Ok(())
     }
 
@@ -2621,19 +2763,7 @@ impl<'a> Parser<'a, '_> {
     // ── group graph pattern → algebra (§18.2.2) ──────────────────────────────
 
     fn parse_group_graph_pattern(&mut self) -> Result<GraphPattern> {
-        if self.group_pattern_depth >= MAX_GRAPH_PATTERN_DEPTH {
-            return Err(ParseError::syntax(
-                format!(
-                    "group graph pattern nesting exceeds the safety limit of \
-                     {MAX_GRAPH_PATTERN_DEPTH}"
-                ),
-                self.span(),
-            ));
-        }
-        self.group_pattern_depth += 1;
-        let result = self.parse_group_graph_pattern_inner();
-        self.group_pattern_depth -= 1;
-        result
+        self.nested("group graph pattern", Self::parse_group_graph_pattern_inner)
     }
 
     fn parse_group_graph_pattern_inner(&mut self) -> Result<GraphPattern> {
@@ -3206,6 +3336,13 @@ impl<'a> Parser<'a, '_> {
     /// parser as [`Token::Anon`], and is handled by
     /// [`Self::parse_term_pattern`].
     fn parse_blank_node_property_list(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
+        self.nested("blank node property list", |p| {
+            p.parse_blank_node_property_list_body(sink)
+        })
+    }
+
+    /// [`Self::parse_blank_node_property_list`]'s body, one nesting level deeper.
+    fn parse_blank_node_property_list_body(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::LBracket)?;
         if self.at(&Token::RBracket) {
             return Err(self.empty_bracket_pair());
@@ -3226,6 +3363,11 @@ impl<'a> Parser<'a, '_> {
     /// list `[ … ]`, or a nested collection `( … )` — so the recursion mirrors the
     /// `parse_blank_node_property_list` object idiom.
     fn parse_collection(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
+        self.nested("collection", |p| p.parse_collection_body(sink))
+    }
+
+    /// [`Self::parse_collection`]'s body, one nesting level deeper.
+    fn parse_collection_body(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::LParen)?;
         // The SPARQL grammar requires at least one node inside the parentheses, but
         // RDF's empty collection `()` is `rdf:nil`; accept it for robustness.
@@ -3290,6 +3432,11 @@ impl<'a> Parser<'a, '_> {
     ///
     /// The inner `s`/`o` may themselves be triple nodes (nesting is supported).
     fn parse_triple_node(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
+        self.nested("triple term", |p| p.parse_triple_node_body(sink))
+    }
+
+    /// [`Self::parse_triple_node`]'s body, one nesting level deeper.
+    fn parse_triple_node_body(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::TripleOpen)?;
         let is_triple_term = self.eat(&Token::LParen);
         let inner = self.parse_inner_triple(sink)?;
@@ -3465,7 +3612,9 @@ impl<'a> Parser<'a, '_> {
                         r
                     }
                 };
-                self.parse_predicate_object_list(&SubjectArgs::Term(reifier), sink)?;
+                self.nested("annotation block", |p| {
+                    p.parse_predicate_object_list(&SubjectArgs::Term(reifier), sink)
+                })?;
                 self.expect(&Token::AnnotationClose)?;
             } else {
                 break;
@@ -3586,18 +3735,22 @@ impl<'a> Parser<'a, '_> {
     }
 
     fn parse_path_alternative(&mut self) -> Result<PropertyPathExpression> {
-        let mut left = self.parse_path_sequence()?;
+        let (mut left, mut height) = self.measured(Self::parse_path_sequence)?;
         while self.eat(&Token::Pipe) {
-            let right = self.parse_path_sequence()?;
+            let (right, right_height) = self.measured(Self::parse_path_sequence)?;
+            height = 1 + height.max(right_height);
+            self.account_height("property path", height)?;
             left = PropertyPathExpression::Alternative(Box::new(left), Box::new(right));
         }
         Ok(left)
     }
 
     fn parse_path_sequence(&mut self) -> Result<PropertyPathExpression> {
-        let mut left = self.parse_path_elt_or_inverse()?;
+        let (mut left, mut height) = self.measured(Self::parse_path_elt_or_inverse)?;
         while self.eat(&Token::Slash) {
-            let right = self.parse_path_elt_or_inverse()?;
+            let (right, right_height) = self.measured(Self::parse_path_elt_or_inverse)?;
+            height = 1 + height.max(right_height);
+            self.account_height("property path", height)?;
             left = PropertyPathExpression::Sequence(Box::new(left), Box::new(right));
         }
         Ok(left)
@@ -3605,16 +3758,23 @@ impl<'a> Parser<'a, '_> {
 
     fn parse_path_elt_or_inverse(&mut self) -> Result<PropertyPathExpression> {
         if self.eat(&Token::Caret) {
-            Ok(PropertyPathExpression::Reverse(Box::new(
-                self.parse_path_elt()?,
-            )))
+            let (elt, height) = self.measured(Self::parse_path_elt)?;
+            self.account_height("property path", height + 1)?;
+            Ok(PropertyPathExpression::Reverse(Box::new(elt)))
         } else {
             self.parse_path_elt()
         }
     }
 
     fn parse_path_elt(&mut self) -> Result<PropertyPathExpression> {
-        let primary = self.parse_path_primary()?;
+        let (primary, height) = self.measured(Self::parse_path_primary)?;
+        if matches!(
+            self.peek(),
+            Some(Token::Star | Token::Plus | Token::Question | Token::LBrace)
+        ) {
+            // A postfix modifier wraps the primary in one more level.
+            self.account_height("property path", height + 1)?;
+        }
         Ok(match self.peek() {
             Some(Token::Star) => {
                 self.pos += 1;
@@ -3719,7 +3879,7 @@ impl<'a> Parser<'a, '_> {
             }
             Some(Token::LParen) => {
                 self.pos += 1;
-                let inner = self.parse_path()?;
+                let inner = self.nested("property path group", Self::parse_path)?;
                 self.expect(&Token::RParen)?;
                 Ok(inner)
             }
@@ -3799,7 +3959,7 @@ impl<'a> Parser<'a, '_> {
                 Ok(TermPattern::Literal(self.parse_literal()?))
             }
             Some(Token::TripleOpen) => {
-                let t = self.parse_quoted_triple()?;
+                let t = self.nested("triple term", Self::parse_quoted_triple)?;
                 Ok(TermPattern::Triple(Box::new(t)))
             }
             other => Err(ParseError::syntax(
@@ -4011,7 +4171,7 @@ impl<'a> Parser<'a, '_> {
                 Ok(GroundTerm::NamedNode(self.expect_iri_node()?))
             }
             Some(Token::TripleOpen) => {
-                let t = self.parse_ground_triple()?;
+                let t = self.nested("triple term", Self::parse_ground_triple)?;
                 Ok(GroundTerm::Triple(Box::new(t)))
             }
             // Every other legal ground term — a string, a boolean, or a numeral
@@ -4281,18 +4441,22 @@ impl<'a> Parser<'a, '_> {
     }
 
     fn parse_or(&mut self, aggs: &mut Vec<(Variable, AggregateExpression)>) -> Result<Expression> {
-        let mut left = self.parse_and(aggs)?;
+        let (mut left, mut height) = self.measured(|p| p.parse_and(aggs))?;
         while self.eat(&Token::Or) {
-            let right = self.parse_and(aggs)?;
+            let (right, right_height) = self.measured(|p| p.parse_and(aggs))?;
+            height = 1 + height.max(right_height);
+            self.account_height("expression", height)?;
             left = Expression::Or(Box::new(left), Box::new(right));
         }
         Ok(left)
     }
 
     fn parse_and(&mut self, aggs: &mut Vec<(Variable, AggregateExpression)>) -> Result<Expression> {
-        let mut left = self.parse_relational(aggs)?;
+        let (mut left, mut height) = self.measured(|p| p.parse_relational(aggs))?;
         while self.eat(&Token::And) {
-            let right = self.parse_relational(aggs)?;
+            let (right, right_height) = self.measured(|p| p.parse_relational(aggs))?;
+            height = 1 + height.max(right_height);
+            self.account_height("expression", height)?;
             left = Expression::And(Box::new(left), Box::new(right));
         }
         Ok(left)
@@ -4302,7 +4466,7 @@ impl<'a> Parser<'a, '_> {
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
-        let left = self.parse_additive(aggs)?;
+        let (left, left_height) = self.measured(|p| p.parse_additive(aggs))?;
         let op = match self.peek() {
             Some(Token::Eq) => Some("="),
             Some(Token::NotEq) => Some("!="),
@@ -4314,7 +4478,10 @@ impl<'a> Parser<'a, '_> {
         };
         if let Some(op) = op {
             self.pos += 1;
-            let right = self.parse_additive(aggs)?;
+            let (right, right_height) = self.measured(|p| p.parse_additive(aggs))?;
+            // `!=` builds two levels: `Not(Equal(l, r))`.
+            let levels = if op == "!=" { 2 } else { 1 };
+            self.account_height("expression", levels + left_height.max(right_height))?;
             let (l, r) = (Box::new(left), Box::new(right));
             return Ok(match op {
                 "=" => Expression::Equal(l, r),
@@ -4327,12 +4494,14 @@ impl<'a> Parser<'a, '_> {
         }
         if self.peek_kw("IN") {
             self.pos += 1;
-            let list = self.parse_expression_list(aggs)?;
+            let (list, list_height) = self.measured(|p| p.parse_expression_list(aggs))?;
+            self.account_height("expression", 1 + left_height.max(list_height))?;
             return Ok(Expression::In(Box::new(left), list));
         }
         if self.peek_kw("NOT") && self.peek2_kw("IN") {
             self.pos += 2;
-            let list = self.parse_expression_list(aggs)?;
+            let (list, list_height) = self.measured(|p| p.parse_expression_list(aggs))?;
+            self.account_height("expression", 2 + left_height.max(list_height))?;
             return Ok(Expression::Not(Box::new(Expression::In(
                 Box::new(left),
                 list,
@@ -4345,17 +4514,24 @@ impl<'a> Parser<'a, '_> {
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
-        let mut left = self.parse_multiplicative(aggs)?;
+        let (mut left, mut height) = self.measured(|p| p.parse_multiplicative(aggs))?;
         loop {
-            if self.eat(&Token::Plus) {
-                let right = self.parse_multiplicative(aggs)?;
-                left = Expression::Add(Box::new(left), Box::new(right));
+            let add = if self.eat(&Token::Plus) {
+                true
             } else if self.eat(&Token::Minus) {
-                let right = self.parse_multiplicative(aggs)?;
-                left = Expression::Subtract(Box::new(left), Box::new(right));
+                false
             } else {
                 break;
-            }
+            };
+            let (right, right_height) = self.measured(|p| p.parse_multiplicative(aggs))?;
+            height = 1 + height.max(right_height);
+            self.account_height("expression", height)?;
+            let (l, r) = (Box::new(left), Box::new(right));
+            left = if add {
+                Expression::Add(l, r)
+            } else {
+                Expression::Subtract(l, r)
+            };
         }
         Ok(left)
     }
@@ -4364,17 +4540,24 @@ impl<'a> Parser<'a, '_> {
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
-        let mut left = self.parse_unary(aggs)?;
+        let (mut left, mut height) = self.measured(|p| p.parse_unary(aggs))?;
         loop {
-            if self.eat(&Token::Star) {
-                let right = self.parse_unary(aggs)?;
-                left = Expression::Multiply(Box::new(left), Box::new(right));
+            let multiply = if self.eat(&Token::Star) {
+                true
             } else if self.eat(&Token::Slash) {
-                let right = self.parse_unary(aggs)?;
-                left = Expression::Divide(Box::new(left), Box::new(right));
+                false
             } else {
                 break;
-            }
+            };
+            let (right, right_height) = self.measured(|p| p.parse_unary(aggs))?;
+            height = 1 + height.max(right_height);
+            self.account_height("expression", height)?;
+            let (l, r) = (Box::new(left), Box::new(right));
+            left = if multiply {
+                Expression::Multiply(l, r)
+            } else {
+                Expression::Divide(l, r)
+            };
         }
         Ok(left)
     }
@@ -4384,11 +4567,14 @@ impl<'a> Parser<'a, '_> {
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
         if self.eat(&Token::Bang) {
-            Ok(Expression::Not(Box::new(self.parse_unary(aggs)?)))
+            let operand = self.nested("unary operator", |p| p.parse_unary(aggs))?;
+            Ok(Expression::Not(Box::new(operand)))
         } else if self.eat(&Token::Plus) {
-            Ok(Expression::UnaryPlus(Box::new(self.parse_unary(aggs)?)))
+            let operand = self.nested("unary operator", |p| p.parse_unary(aggs))?;
+            Ok(Expression::UnaryPlus(Box::new(operand)))
         } else if self.eat(&Token::Minus) {
-            Ok(Expression::UnaryMinus(Box::new(self.parse_unary(aggs)?)))
+            let operand = self.nested("unary operator", |p| p.parse_unary(aggs))?;
+            Ok(Expression::UnaryMinus(Box::new(operand)))
         } else {
             self.parse_primary_with_aggs(aggs)
         }
@@ -4452,7 +4638,7 @@ impl<'a> Parser<'a, '_> {
         match self.peek() {
             Some(Token::LParen) => {
                 self.pos += 1;
-                let e = self.parse_or(aggs)?;
+                let e = self.nested("bracketted expression", |p| p.parse_or(aggs))?;
                 self.expect(&Token::RParen)?;
                 Ok(e)
             }
@@ -4465,7 +4651,9 @@ impl<'a> Parser<'a, '_> {
                 | Token::Decimal(_)
                 | Token::Double(_),
             ) => Ok(Expression::Literal(self.parse_literal()?)),
-            Some(Token::TripleOpen) => self.parse_triple_term_expr(aggs),
+            Some(Token::TripleOpen) => {
+                self.nested("expression triple term", |p| p.parse_triple_term_expr(aggs))
+            }
             Some(Token::Word(w)) => {
                 let w = *w;
                 if w == "true" || w == "false" {
@@ -4609,13 +4797,18 @@ impl<'a> Parser<'a, '_> {
             }
             "EXISTS" => {
                 self.pos += 1;
-                Ok(Expression::Exists(Box::new(self.parse_exists_body()?)))
+                let body = self.nested("EXISTS", Self::parse_exists_body)?;
+                Ok(Expression::Exists(Box::new(body)))
             }
             "NOT" => {
                 self.pos += 1;
                 self.expect_kw("EXISTS")?;
+                let (body, height) =
+                    self.measured(|p| p.nested("NOT EXISTS", Self::parse_exists_body))?;
+                // `Not(Exists(…))`: one level above the one `nested` charged.
+                self.account_height("expression", height + 1)?;
                 Ok(Expression::Not(Box::new(Expression::Exists(Box::new(
-                    self.parse_exists_body()?,
+                    body,
                 )))))
             }
             "SAMETERM" => {
@@ -4649,6 +4842,16 @@ impl<'a> Parser<'a, '_> {
     }
 
     fn parse_aggregate(
+        &mut self,
+        func: AggregateFunction,
+        name: &str,
+        aggs: &mut Vec<(Variable, AggregateExpression)>,
+    ) -> Result<Expression> {
+        self.nested("aggregate", |p| p.parse_aggregate_call(func, name, aggs))
+    }
+
+    /// [`Self::parse_aggregate`]'s body, one nesting level deeper.
+    fn parse_aggregate_call(
         &mut self,
         func: AggregateFunction,
         name: &str,
@@ -4809,6 +5012,14 @@ impl<'a> Parser<'a, '_> {
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Expression> {
+        self.nested("aggregate", |p| p.parse_custom_aggregate_call(aggs))
+    }
+
+    /// [`Self::parse_agg_call`]'s body, one nesting level deeper.
+    fn parse_custom_aggregate_call(
+        &mut self,
+        aggs: &mut Vec<(Variable, AggregateExpression)>,
+    ) -> Result<Expression> {
         self.pos += 1; // `AGG`
         self.expect(&Token::LParen)?;
         let iri = self.expect_iri_node()?;
@@ -4966,6 +5177,14 @@ impl<'a> Parser<'a, '_> {
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Vec<Expression>> {
+        self.nested("function argument list", |p| p.parse_arg_list_body(aggs))
+    }
+
+    /// [`Self::parse_arg_list`]'s body, one nesting level deeper.
+    fn parse_arg_list_body(
+        &mut self,
+        aggs: &mut Vec<(Variable, AggregateExpression)>,
+    ) -> Result<Vec<Expression>> {
         self.expect(&Token::LParen)?;
         let mut args = Vec::new();
         if self.eat(&Token::Star) {
@@ -4989,6 +5208,14 @@ impl<'a> Parser<'a, '_> {
     }
 
     fn parse_expression_list(
+        &mut self,
+        aggs: &mut Vec<(Variable, AggregateExpression)>,
+    ) -> Result<Vec<Expression>> {
+        self.nested("IN list", |p| p.parse_expression_list_body(aggs))
+    }
+
+    /// [`Self::parse_expression_list`]'s body, one nesting level deeper.
+    fn parse_expression_list_body(
         &mut self,
         aggs: &mut Vec<(Variable, AggregateExpression)>,
     ) -> Result<Vec<Expression>> {
@@ -6395,6 +6622,722 @@ mod tests {
         assert!(error.to_string().contains("nesting exceeds"));
     }
 
+    /// `open`, repeated `levels` times, around `core`, closed by `close` as often.
+    fn wrapped(open: &str, core: &str, close: &str, levels: usize) -> String {
+        format!("{}{core}{}", open.repeat(levels), close.repeat(levels))
+    }
+
+    /// One recursive production of the query or update grammar, written `levels` deep.
+    struct NestingFamily {
+        /// What the family is, for assertion messages.
+        name: &'static str,
+        /// The construct a refusal of this family names.
+        refused_as: &'static str,
+        /// Budget levels the enclosing text charges before the first written level
+        /// (a query's `WHERE` group; nothing for an update's `INSERT DATA` block or a
+        /// projection, which are read outside any group).
+        enclosing: usize,
+        /// Budget levels one written level charges.
+        per_level: usize,
+        /// Whether `text` is an update request rather than a query.
+        update: bool,
+        /// The request, written `levels` deep.
+        text: fn(usize) -> String,
+        /// A substring of the parsed algebra's `Debug` form, and how often it occurs
+        /// once `levels` levels were parsed: the oracle that the accepted neighbour
+        /// really holds every level rather than a truncated or dropped one.
+        marker: &'static str,
+        occurrences: fn(usize) -> usize,
+    }
+
+    impl NestingFamily {
+        /// The deepest this family can be written and still parse.
+        const fn max_levels(&self) -> usize {
+            (MAX_NESTING_DEPTH - self.enclosing) / self.per_level
+        }
+
+        fn parse(&self, levels: usize) -> Result<String> {
+            let text = (self.text)(levels);
+            if self.update {
+                SparqlParser::new()
+                    .parse_update(&text)
+                    .map(|u| format!("{u:?}"))
+            } else {
+                SparqlParser::new()
+                    .parse_query(&text)
+                    .map(|q| format!("{q:?}"))
+            }
+        }
+
+        /// The refusal at `levels`, asserted to be the typed nesting error that names
+        /// this family's construct and the limit.
+        fn assert_refused(&self, levels: usize) {
+            let error = self.parse(levels).expect_err(&format!(
+                "{} written {levels} deep must be refused",
+                self.name
+            ));
+            assert!(
+                matches!(error, ParseError::Syntax { .. }),
+                "{}: the nesting refusal is a typed syntax error: {error}",
+                self.name
+            );
+            let expected = format!(
+                "{} nesting exceeds the safety limit of {MAX_NESTING_DEPTH}",
+                self.refused_as
+            );
+            assert!(
+                error.to_string().contains(&expected),
+                "{}: expected `{expected}`, got: {error}",
+                self.name
+            );
+        }
+    }
+
+    const EX_P: &str = "<http://example.org/p>";
+
+    /// Every recursive production of the query and update grammars.
+    fn nesting_families() -> Vec<NestingFamily> {
+        vec![
+            NestingFamily {
+                name: "group graph pattern",
+                refused_as: "group graph pattern",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ {} }}",
+                        wrapped("{ ?s <http://example.org/g> ?o ", "", " }", n)
+                    )
+                },
+                marker: "<http://example.org/g>",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "OPTIONAL group",
+                refused_as: "group graph pattern",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ {} }}",
+                        wrapped("?s ?p ?o OPTIONAL { ", "?s ?p ?innermost", " }", n)
+                    )
+                },
+                marker: "LeftJoin {",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "sub-SELECT",
+                refused_as: "group graph pattern",
+                enclosing: 1,
+                per_level: 2,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ {} }}",
+                        wrapped("{ SELECT * WHERE { ", "?s ?p ?innermost", " } }", n)
+                    )
+                },
+                marker: "Project {",
+                occurrences: |n| n + 1,
+            },
+            NestingFamily {
+                name: "FILTER EXISTS",
+                refused_as: "group graph pattern",
+                enclosing: 1,
+                per_level: 2,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ {} }}",
+                        wrapped("?s ?p ?o FILTER EXISTS { ", "?s ?p ?innermost", " }", n)
+                    )
+                },
+                marker: "Exists(",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "FILTER NOT EXISTS",
+                refused_as: "group graph pattern",
+                enclosing: 1,
+                per_level: 2,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ {} }}",
+                        wrapped("?s ?p ?o FILTER NOT EXISTS { ", "?s ?p ?innermost", " }", n)
+                    )
+                },
+                marker: "Not(Exists(",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "bracketted expression",
+                refused_as: "bracketted expression",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ FILTER({}) }}",
+                        wrapped("(", "?innermost", ")", n)
+                    )
+                },
+                // Brackets build no node: the oracle is that the innermost operand survived.
+                marker: "?innermost",
+                occurrences: |_| 1,
+            },
+            NestingFamily {
+                name: "logical negation",
+                refused_as: "unary operator",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "!".repeat(n)),
+                marker: "Not(",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "unary minus",
+                refused_as: "unary operator",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "- ".repeat(n)),
+                marker: "UnaryMinus(",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "unary plus",
+                refused_as: "unary operator",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| format!("SELECT * WHERE {{ FILTER({}?innermost) }}", "+ ".repeat(n)),
+                marker: "UnaryPlus(",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "function call",
+                refused_as: "function argument list",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ FILTER({}) }}",
+                        wrapped("<http://example.org/fn>(", "?innermost", ")", n)
+                    )
+                },
+                marker: "Custom(<http://example.org/fn>)",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "built-in call",
+                refused_as: "function argument list",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ FILTER({}) }}",
+                        wrapped("STR(", "?innermost", ")", n)
+                    )
+                },
+                marker: "FunctionCall(Str,",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "IN list",
+                refused_as: "IN list",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ FILTER({}) }}",
+                        wrapped("?x IN (", "?innermost", ")", n)
+                    )
+                },
+                marker: "In(Variable(?x)",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "expression triple term",
+                refused_as: "expression triple term",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ FILTER(?x = {}) }}",
+                        wrapped("<<( ?s ?p ", "?innermost", " )>>", n)
+                    )
+                },
+                marker: "FunctionCall(Triple,",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "property-path group",
+                refused_as: "property path group",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ ?s {} ?o }}",
+                        wrapped("(", "<http://example.org/innermost>+", ")", n)
+                    )
+                },
+                marker: "OneOrMore(",
+                occurrences: |_| 1,
+            },
+            NestingFamily {
+                name: "blank-node property list",
+                refused_as: "blank node property list",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ ?s {} }}",
+                        wrapped(
+                            "<http://example.org/p> [ ",
+                            "<http://example.org/p> ?innermost",
+                            " ]",
+                            n
+                        )
+                    )
+                },
+                marker: "<http://example.org/p>",
+                occurrences: |n| n + 1,
+            },
+            NestingFamily {
+                name: "collection",
+                refused_as: "collection",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ ?s {EX_P} {} }}",
+                        wrapped("( ", "?innermost", " )", n)
+                    )
+                },
+                marker: "rdf-syntax-ns#first",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "triple term",
+                refused_as: "triple term",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ {} <http://example.org/q> ?z }}",
+                        wrapped("<<( ?s <http://example.org/p> ", "?innermost", " )>>", n)
+                    )
+                },
+                marker: "<http://example.org/p>",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "reifying triple",
+                refused_as: "triple term",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ {} <http://example.org/q> ?z }}",
+                        wrapped("<< ?s <http://example.org/p> ", "?innermost", " >>", n)
+                    )
+                },
+                marker: "rdf-syntax-ns#reifies",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "annotation block",
+                refused_as: "annotation block",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ ?s {EX_P} ?o {} }}",
+                        wrapped("{| <http://example.org/a> ?innermost ", "", " |}", n)
+                    )
+                },
+                // Each block asserts `R <a> ?innermost`, and each block but the first
+                // reifies the previous one's `<a>` triple.
+                marker: "<http://example.org/a>",
+                occurrences: |n| 2 * n - 1,
+            },
+            NestingFamily {
+                name: "VALUES triple term",
+                refused_as: "triple term",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ VALUES ?x {{ {} }} }}",
+                        wrapped(
+                            "<<( <http://example.org/s> <http://example.org/p> ",
+                            "1",
+                            " )>>",
+                            n
+                        )
+                    )
+                },
+                marker: "<http://example.org/p>",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "CONSTRUCT template collection",
+                refused_as: "collection",
+                enclosing: 0,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "CONSTRUCT {{ ?s {EX_P} {} }} WHERE {{ ?s ?p ?innermost }}",
+                        wrapped("( ", "?innermost", " )", n)
+                    )
+                },
+                marker: "rdf-syntax-ns#first",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "INSERT DATA blank-node property list",
+                refused_as: "blank node property list",
+                enclosing: 0,
+                per_level: 1,
+                update: true,
+                text: |n| {
+                    format!(
+                        "INSERT DATA {{ <http://example.org/s> {} }}",
+                        wrapped(
+                            "<http://example.org/p> [ ",
+                            "<http://example.org/p> 1",
+                            " ]",
+                            n
+                        )
+                    )
+                },
+                marker: "<http://example.org/p>",
+                occurrences: |n| n + 1,
+            },
+            NestingFamily {
+                name: "INSERT DATA collection",
+                refused_as: "collection",
+                enclosing: 0,
+                per_level: 1,
+                update: true,
+                text: |n| {
+                    format!(
+                        "INSERT DATA {{ <http://example.org/s> {EX_P} {} }}",
+                        wrapped("( ", "1", " )", n)
+                    )
+                },
+                marker: "rdf-syntax-ns#first",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "INSERT DATA triple term",
+                refused_as: "triple term",
+                enclosing: 0,
+                per_level: 1,
+                update: true,
+                text: |n| {
+                    format!(
+                        "INSERT DATA {{ {} <http://example.org/q> 1 }}",
+                        wrapped(
+                            "<<( <http://example.org/s> <http://example.org/p> ",
+                            "1",
+                            " )>>",
+                            n
+                        )
+                    )
+                },
+                marker: "<http://example.org/p>",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "update WHERE expression",
+                refused_as: "unary operator",
+                enclosing: 1,
+                per_level: 1,
+                update: true,
+                text: |n| {
+                    format!(
+                        "DELETE {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o FILTER({}?innermost) }}",
+                        "!".repeat(n)
+                    )
+                },
+                marker: "Not(",
+                occurrences: |n| n,
+            },
+            NestingFamily {
+                name: "update WHERE group",
+                refused_as: "group graph pattern",
+                enclosing: 1,
+                per_level: 1,
+                update: true,
+                text: |n| {
+                    format!(
+                        "DELETE {{ ?s ?p ?o }} WHERE {{ {} }}",
+                        wrapped("?s ?p ?o OPTIONAL { ", "?s ?p ?innermost", " }", n)
+                    )
+                },
+                marker: "LeftJoin {",
+                occurrences: |n| n,
+            },
+        ]
+    }
+
+    /// Every recursive production is bounded by the one nesting budget: written as deep
+    /// as the budget allows it parses — every level present in the algebra, which the
+    /// refused neighbour one level deeper cannot produce — and one level deeper it is
+    /// refused with the typed error naming the construct and the limit.
+    #[test]
+    fn every_recursive_production_parses_at_the_nesting_limit_and_is_refused_one_past_it() {
+        for family in nesting_families() {
+            let max = family.max_levels();
+            assert!(
+                max > 0,
+                "{}: the budget admits at least one level",
+                family.name
+            );
+            let algebra = family.parse(max).unwrap_or_else(|error| {
+                panic!(
+                    "{} written {max} deep (the limit) must parse: {error}",
+                    family.name
+                )
+            });
+            assert_eq!(
+                algebra.matches(family.marker).count(),
+                (family.occurrences)(max),
+                "{}: the accepted neighbour holds every one of its {max} levels",
+                family.name
+            );
+            family.assert_refused(max + 1);
+        }
+    }
+
+    /// A request nested ten thousand deep is the typed refusal, never a stack overflow
+    /// (which would abort this test process rather than fail an assertion).
+    #[test]
+    fn every_recursive_production_ten_thousand_deep_is_a_typed_refusal() {
+        for family in nesting_families() {
+            family.assert_refused(10_000);
+        }
+    }
+
+    /// The bound the limit's documentation states: driving every recursive production to
+    /// its refusal fits a 1 MiB stack — the size of wasm32's shadow stack — even at
+    /// native frame sizes, which are larger than wasm32's.
+    #[test]
+    fn every_recursive_production_is_refused_inside_a_one_mebibyte_stack() {
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                for family in nesting_families() {
+                    family.assert_refused(10_000);
+                }
+            })
+            .expect("spawn a 1 MiB thread")
+            .join()
+            .expect("every family is refused on a 1 MiB stack");
+    }
+
+    /// Aggregates cannot nest in a valid query, but the parser still recurses through a
+    /// nested aggregate call before it can say so: ten thousand of them are the typed
+    /// nesting refusal. The valid neighbour — an aggregate over function calls filling the
+    /// rest of the budget — parses with every level present, and one level more is refused.
+    #[test]
+    fn aggregate_calls_share_the_nesting_budget() {
+        let over_calls = |calls: usize| {
+            format!(
+                "SELECT (SUM({}) AS ?total) WHERE {{ ?s ?p ?x }}",
+                wrapped("<http://example.org/fn>(", "?x", ")", calls)
+            )
+        };
+        // A projection is read before any group, so the aggregate is the first level.
+        let parsed = SparqlParser::new()
+            .parse_query(&over_calls(MAX_NESTING_DEPTH - 1))
+            .expect("an aggregate over calls filling the budget parses");
+        assert_eq!(
+            format!("{parsed:?}")
+                .matches("Custom(<http://example.org/fn>)")
+                .count(),
+            MAX_NESTING_DEPTH - 1
+        );
+        let error = SparqlParser::new()
+            .parse_query(&over_calls(MAX_NESTING_DEPTH))
+            .expect_err("one call past the budget is refused");
+        assert!(
+            error.to_string().contains(&format!(
+                "function argument list nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"
+            )),
+            "{error}"
+        );
+        for (open, close) in [("SUM(", ")"), ("AGG(<http://example.org/agg>, ", ")")] {
+            let text = format!(
+                "SELECT ({} AS ?total) WHERE {{ ?s ?p ?x }}",
+                wrapped(open, "?x", close, 10_000)
+            );
+            let error = SparqlParser::new()
+                .parse_query(&text)
+                .expect_err("ten thousand nested aggregates are refused");
+            assert!(
+                matches!(error, ParseError::Syntax { .. })
+                    && error.to_string().contains(&format!(
+                        "aggregate nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"
+                    )),
+                "{open}: {error}"
+            );
+        }
+    }
+
+    /// Constructs of different kinds draw on ONE budget: a group, a bracketted expression,
+    /// a call, a negation and an `EXISTS` body interleaved stop at the same total as any
+    /// one of them alone.
+    #[test]
+    fn mixed_constructs_draw_on_one_nesting_budget() {
+        // Each written level charges five: argument list, brackets, `!`, EXISTS, group.
+        let mixed = |levels: usize| {
+            format!(
+                "SELECT * WHERE {{ {} }}",
+                wrapped(
+                    "?s ?p ?o FILTER(<http://example.org/fn>((!EXISTS { ",
+                    "?s ?p ?innermost",
+                    " }))) ",
+                    levels
+                )
+            )
+        };
+        let max = (MAX_NESTING_DEPTH - 1) / 5;
+        let parsed = SparqlParser::new()
+            .parse_query(&mixed(max))
+            .expect("interleaved constructs within the budget parse");
+        assert_eq!(format!("{parsed:?}").matches("Exists(").count(), max);
+        let error = SparqlParser::new()
+            .parse_query(&mixed(max + 1))
+            .expect_err("interleaved constructs past the budget are refused");
+        assert!(
+            error.to_string().contains(&format!(
+                "nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"
+            )),
+            "{error}"
+        );
+    }
+
+    /// An operator chain is parsed by a loop, not by recursion, but every operator makes
+    /// the tree one level taller: the tallest chain the height budget admits parses with
+    /// every operator present, one operator more is the typed refusal, and so is a chain
+    /// of a hundred thousand.
+    #[test]
+    fn operator_chains_are_bounded_by_the_expression_height_budget() {
+        /// The construct a refusal names, the request spelled `ops` operators long, and
+        /// the `Debug` marker each operator leaves in the algebra.
+        type Chain = (&'static str, fn(usize) -> String, &'static str);
+        let chains: [Chain; 6] = [
+            (
+                "expression",
+                |ops| format!("SELECT * WHERE {{ FILTER({}1) }}", "?x + ".repeat(ops)),
+                "Add(",
+            ),
+            (
+                "expression",
+                |ops| format!("SELECT * WHERE {{ FILTER({}?y) }}", "?x || ".repeat(ops)),
+                "Or(",
+            ),
+            (
+                "expression",
+                |ops| format!("SELECT * WHERE {{ FILTER({}?y) }}", "?x && ".repeat(ops)),
+                "And(",
+            ),
+            (
+                "expression",
+                |ops| format!("SELECT * WHERE {{ FILTER({}2) }}", "?x * ".repeat(ops)),
+                "Multiply(",
+            ),
+            (
+                "property path",
+                |ops| {
+                    format!(
+                        "SELECT * WHERE {{ ?s {}{EX_P} ?o }}",
+                        format!("{EX_P}/").repeat(ops)
+                    )
+                },
+                "Sequence(",
+            ),
+            (
+                "property path",
+                |ops| {
+                    format!(
+                        "SELECT * WHERE {{ ?s {}{EX_P} ?o }}",
+                        format!("{EX_P}|").repeat(ops)
+                    )
+                },
+                "Alternative(",
+            ),
+        ];
+        // The WHERE group is the first level; a chain of `ops` operators is `ops` tall.
+        let max = MAX_EXPRESSION_HEIGHT - 1;
+        for (construct, text, marker) in chains {
+            let parsed = SparqlParser::new()
+                .parse_query(&text(max))
+                .unwrap_or_else(|error| panic!("{marker}: a {max}-operator chain parses: {error}"));
+            assert_eq!(format!("{parsed:?}").matches(marker).count(), max);
+            for ops in [max + 1, 100_000] {
+                let error = SparqlParser::new()
+                    .parse_query(&text(ops))
+                    .expect_err("a chain past the height budget is refused");
+                assert!(
+                    matches!(error, ParseError::Syntax { .. })
+                        && error.to_string().contains(&format!(
+                            "{construct} nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"
+                        )),
+                    "{marker} x{ops}: {error}"
+                );
+            }
+        }
+    }
+
+    /// Chains nested inside brackets stack up: each bracket level's chain sits on top of
+    /// the one inside it, so the tree is as tall as all of them together — and that
+    /// total, not any single chain, is what is bounded. Forty levels of ten operators
+    /// (400 levels tall) parse; fifty (500 operators, over the budget once the brackets
+    /// are counted) are refused, although no single chain is longer than ten.
+    #[test]
+    fn chains_nested_in_brackets_are_bounded_by_their_total_height() {
+        let stacked = |levels: usize| {
+            let mut expression = String::from("?x");
+            for _ in 0..levels {
+                expression = format!("({expression}{})", " + ?x".repeat(10));
+            }
+            format!("SELECT * WHERE {{ FILTER({expression} > 0) }}")
+        };
+        let parsed = SparqlParser::new()
+            .parse_query(&stacked(40))
+            .expect("400 stacked operators parse");
+        assert_eq!(format!("{parsed:?}").matches("Add(").count(), 400);
+        let error = SparqlParser::new()
+            .parse_query(&stacked(50))
+            .expect_err("stacked chains past the height budget are refused");
+        assert!(
+            error.to_string().contains(&format!(
+                "expression nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"
+            )),
+            "{error}"
+        );
+    }
+
     /// Locate the EXACT repetition count at which a monotonic spine generator
     /// — one more repetition of `spine` only ever charges MORE combinator
     /// nodes, never fewer, true of every generator this helper is applied to
@@ -6445,7 +7388,7 @@ mod tests {
 
     /// A run of SIBLING `OPTIONAL { }` elements at ONE brace depth: each
     /// keyword adds one `LeftJoin` level to a left-deep spine while
-    /// `group_pattern_depth` never exceeds 1 — the exact shape
+    /// `nesting_depth` never exceeds 1 — the exact shape
     /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, and the shape
     /// [`MAX_GRAPH_PATTERN_NODES`] exists to bound instead.
     #[test]
