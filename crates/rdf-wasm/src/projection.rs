@@ -3,7 +3,6 @@
 
 //! In-memory graph, tabular, and research-object projection carrier bindings.
 
-use purrdf::ir::MutableDataset;
 use purrdf::{
     LiftProfile, ProjectionConfig, ProjectionProfile, RoCrateAssets, lift_archive, project_archive,
     project_archive_with_assets,
@@ -78,7 +77,7 @@ impl Dataset {
             .parse::<ProjectionProfile>()
             .map_err(|error| JsError::new(&error.to_string()))?;
         let config = parse_projection_config(config_json).map_err(|error| JsError::new(&error))?;
-        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let frozen = self.view().freeze().map_err(|error| diag_to_err(&error))?;
         let outcome = project_archive(frozen.as_ref(), profile, &config)
             .map_err(|error| JsError::new(&error.to_string()))?;
         Ok(ProjectionPackage {
@@ -102,7 +101,7 @@ impl Dataset {
         let config = parse_projection_config(config_json).map_err(|error| JsError::new(&error))?;
         let assets = RoCrateAssets::from_ustar(assets_archive, config.limits())
             .map_err(|error| JsError::new(&error.to_string()))?;
-        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let frozen = self.view().freeze().map_err(|error| diag_to_err(&error))?;
         let outcome = project_archive_with_assets(frozen.as_ref(), profile, &config, &assets)
             .map_err(|error| JsError::new(&error.to_string()))?;
         Ok(ProjectionPackage {
@@ -128,9 +127,7 @@ pub fn lift_projection(
     let outcome = lift_archive(archive, profile, &config)
         .map_err(|error| JsError::new(&error.to_string()))?;
     Ok(ProjectionLift {
-        dataset: Some(Dataset {
-            inner: MutableDataset::new(outcome.dataset),
-        }),
+        dataset: Some(Dataset::from_frozen(outcome.dataset)),
         loss_ledger_json: outcome.loss_ledger.render_json(),
     })
 }

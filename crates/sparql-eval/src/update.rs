@@ -256,6 +256,11 @@ fn charge_mutations(
         .map_err(UpdateAbort::Tripped)
 }
 
+/// The diagnostic code a [`GraphResolver`] reports when the host's policy refuses a `LOAD`
+/// source. It is the one resolver failure `LOAD SILENT` does not swallow — see
+/// [`GraphResolver`].
+pub const LOAD_DENIED: &str = "native-sparql-load-denied";
+
 /// One governed request handed to a SPARQL `LOAD` host resolver.
 #[derive(Clone, Copy)]
 pub struct GraphResolveRequest<'a> {
@@ -284,6 +289,13 @@ impl core::fmt::Debug for GraphResolveRequest<'_> {
 /// HTTP/parse stack). A host that wants `LOAD` to dereference real documents injects
 /// a resolver: it is responsible for fetching the IRI and parsing the response into
 /// a frozen [`RdfDataset`]. Without a resolver, `LOAD` hard-fails (unless `SILENT`).
+///
+/// A resolver that refuses a source **by policy** — the host's catalog does not admit it —
+/// reports a diagnostic whose code is [`LOAD_DENIED`]. `LOAD SILENT` licenses the query
+/// author to ignore an unreachable source; it does not license bypassing the host's own
+/// policy, so a denial fails the request even under `SILENT`, exactly as a denied
+/// `SERVICE` does. Every other resolver failure is an unreachable source and `SILENT`
+/// swallows it.
 pub trait GraphResolver {
     /// Resolve `request.iri` to a frozen dataset, or a diagnostic on fetch/parse failure.
     fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, RdfDiagnostic>;
@@ -809,7 +821,7 @@ fn load(
             ds
         }
         Err(e) => {
-            if silent {
+            if silent && e.code != LOAD_DENIED {
                 if let Some(tripped) = post_return_trip {
                     return Err(tripped);
                 }
@@ -1743,6 +1755,53 @@ mod tests {
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).expect("silent load no-ops");
+        assert_eq!(quad_set(&m).len(), 1, "unchanged");
+    }
+
+    /// A resolver that refuses every source with the diagnostic code it is given.
+    struct FailingResolver(&'static str);
+    impl GraphResolver for FailingResolver {
+        fn resolve(
+            &self,
+            request: GraphResolveRequest<'_>,
+        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+            Err(RdfDiagnostic::error(
+                self.0,
+                format!("LOAD <{}>: refused", request.iri),
+            ))
+        }
+    }
+
+    #[test]
+    fn load_silent_does_not_swallow_a_policy_denial() {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let cache = BoundedOrderCache::default();
+        let cfg = ungoverned(&cache);
+        let err = eval_update(
+            &parse("LOAD SILENT ex:doc"),
+            &mut m,
+            Some(&FailingResolver(LOAD_DENIED)),
+            &cfg,
+        )
+        .expect_err("a denial fails even under SILENT");
+        match err {
+            UpdateAbort::Failed(diagnostic) => assert_eq!(diagnostic.code, LOAD_DENIED),
+            UpdateAbort::Tripped(other) => panic!("expected the denial, got a trip: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_silent_swallows_an_unreachable_source() {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let cache = BoundedOrderCache::default();
+        let cfg = ungoverned(&cache);
+        eval_update(
+            &parse("LOAD SILENT ex:doc"),
+            &mut m,
+            Some(&FailingResolver("native-sparql-load-failed")),
+            &cfg,
+        )
+        .expect("an unreachable source is what SILENT licenses");
         assert_eq!(quad_set(&m).len(), 1, "unchanged");
     }
 

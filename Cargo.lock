@@ -1777,6 +1777,7 @@ name = "purrdf-wasm"
 version = "2.0.2"
 dependencies = [
  "criterion",
+ "js-sys",
  "pretty_assertions",
  "purrdf",
  "purrdf-core",

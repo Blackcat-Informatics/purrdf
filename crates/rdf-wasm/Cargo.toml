@@ -64,6 +64,11 @@ sha2 = { workspace = true }
 # `make wasm-pkg` and the CI Node lane install `wasm-bindgen-cli@0.2.125` to match.
 wasm-bindgen = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser wall clock (`Date.now()`) the asynchronous lane reads for its evidence and
+# its deadline's remaining budget. Target-gated so native builds never pull js-sys.
+js-sys = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 pretty_assertions = { workspace = true }

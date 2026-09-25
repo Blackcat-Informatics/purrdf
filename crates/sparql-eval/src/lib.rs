@@ -268,7 +268,7 @@ pub use service::{
     ServiceCredential, ServiceDenial, ServiceProfile, ServiceRouter,
 };
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
-pub use update::{GraphResolveRequest, GraphResolver};
+pub use update::{GraphResolveRequest, GraphResolver, LOAD_DENIED};
 pub use user_fn::{
     Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody,
     NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,

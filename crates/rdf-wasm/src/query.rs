@@ -62,7 +62,6 @@ use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use purrdf::ir::MutableDataset;
 use purrdf::{
     ClosureRelations, GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan,
     SerializeGraph, query_with_entailment_governed, serialize_dataset,
@@ -82,7 +81,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::codec::resolve_format;
 use crate::convert::term_value_into_rdf_term;
-use crate::dataset::{Dataset, diag_to_err};
+use crate::dataset::{Dataset, diag_to_err, serialize_frozen_with_options};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::Term;
 
@@ -367,13 +366,19 @@ pub fn governor_dimensions() -> Vec<String> {
 ///
 /// # Cancelling a *running* wasm call
 ///
-/// A JavaScript host is single-threaded and the wasm boundary is synchronous, so a token
-/// flipped on the same thread that is inside `queryGoverned` can never be observed by it —
-/// the flip cannot run until the call returns. The token is therefore for the two shapes
-/// that genuinely work: cancelling *before* a call (a queued query the user has since
-/// navigated away from), and cancelling a worker's query from the main thread when the
+/// A synchronous governed call holds the thread for its whole duration, so a token
+/// flipped on that same thread cannot run until the call returns and is never observed
+/// by it. For a synchronous call the token is therefore for the two shapes that
+/// genuinely work: cancelling *before* the call (a queued query the user has since
+/// navigated away from), and cancelling a worker's query from another thread when the
 /// token is shared through a `SharedArrayBuffer`-backed worker split. Both observe the
 /// same latching bit, and both report the same `"cancelled"` trip.
+///
+/// The asynchronous lane (`crate::async_query`) is different: its jobs give the event
+/// loop back at every yield and every host effect, so the page's own code does run
+/// mid-query. It is cancelled through the job itself (the package root wires an
+/// `AbortSignal` to it) and observes the cancellation at the next yield or effect — a
+/// token is neither needed nor accepted there.
 #[wasm_bindgen]
 #[derive(Debug, Default)]
 pub struct CancellationToken {
@@ -485,7 +490,7 @@ impl StopSignal for WasmStopWatch {
 /// `None` in a slot means the caller declined that ceiling — never zero, which is a
 /// perfectly valid ceiling that trips on the first charged unit of work.
 #[derive(Debug, Clone, Copy, Default)]
-struct GovernorArgs {
+pub(crate) struct GovernorArgs {
     /// Abstract execution steps.
     fuel: Option<u64>,
     /// Wall-clock budget in milliseconds. Zero expires on the first poll.
@@ -502,21 +507,47 @@ struct GovernorArgs {
 }
 
 impl GovernorArgs {
-    /// Engage these ceilings, plus the caller's stop sources, as one call's governors.
+    /// Decode every ceiling from the JavaScript boundary, in the order the governed
+    /// entries name them. The one decoding path for the synchronous and asynchronous
+    /// lanes alike, so a ceiling cannot mean one thing on one lane and another on the
+    /// other.
     ///
-    /// # Why the base is `METERED` rather than `UNBOUNDED`
+    /// # Errors
     ///
-    /// Two reasons, and both are about what a governed call promises. First, every outcome
-    /// — including a complete one — carries evidence a caller can size the next budget
-    /// from; `UNBOUNDED` reports nothing, because it charges nothing. Second, the evaluator
-    /// polls the stop signal every `STOP_POLL_FUEL` units of fuel *and* at each algebra
-    /// node it enters; with fuel disengaged only the second of those runs, so a query
-    /// spending a long time inside one operator would notice a deadline or a cancellation
-    /// late. Metering costs a saturating add per charge point and buys prompt interruption
-    /// on every query shape, which is the trade a caller who asked for governors has
-    /// already chosen. The **ungoverned** entries (`query`, `select`, `update`, …) are
-    /// untouched by any of this and still charge nothing at all.
-    fn engage(self, cancel: Option<&CancellationToken>) -> QueryGovernors {
+    /// The first negative ceiling, in [`decode_ceiling_message`]'s words.
+    pub(crate) fn decode(
+        fuel: Option<i64>,
+        deadline_ms: Option<i64>,
+        max_answers: Option<i64>,
+        max_intermediate_cells: Option<i64>,
+        max_scratch_bytes: Option<i64>,
+        max_remote_requests: Option<i64>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            fuel: decode_ceiling_message("fuel", fuel)?,
+            deadline_ms: decode_ceiling_message("deadlineMs", deadline_ms)?,
+            max_answers: decode_ceiling_message("maxAnswers", max_answers)?,
+            max_intermediate_cells: decode_ceiling_message(
+                "maxIntermediateCells",
+                max_intermediate_cells,
+            )?,
+            max_scratch_bytes: decode_ceiling_message("maxScratchBytes", max_scratch_bytes)?,
+            max_remote_requests: decode_ceiling_message("maxRemoteRequests", max_remote_requests)?,
+        })
+    }
+
+    /// The caller's wall-clock budget, for a stop signal that is not a [`WasmStopWatch`]
+    /// to arm itself from.
+    pub(crate) const fn deadline_ms(&self) -> Option<u64> {
+        self.deadline_ms
+    }
+
+    /// These ceilings over the `METERED` base, with no stop signal attached yet.
+    ///
+    /// The one construction path for a call's ceilings: [`Self::engage`] attaches the
+    /// synchronous lane's [`WasmStopWatch`] to it, and the asynchronous lane attaches its
+    /// own watch instead. See [`Self::engage`] for why the base is `METERED`.
+    pub(crate) fn ceilings(self) -> QueryGovernors {
         let mut governors = QueryGovernors::METERED;
         if let Some(fuel) = self.fuel {
             governors = governors.with_fuel(fuel);
@@ -533,7 +564,27 @@ impl GovernorArgs {
         if let Some(requests) = self.max_remote_requests {
             governors = governors.with_max_remote_requests(requests);
         }
-        let watch = WasmStopWatch::new(self.deadline_ms, cancel);
+        governors
+    }
+
+    /// Engage these ceilings, plus the caller's stop sources, as one call's governors.
+    ///
+    /// # Why the base is `METERED` rather than `UNBOUNDED`
+    ///
+    /// Two reasons, and both are about what a governed call promises. First, every outcome
+    /// — including a complete one — carries evidence a caller can size the next budget
+    /// from; `UNBOUNDED` reports nothing, because it charges nothing. Second, the evaluator
+    /// polls the stop signal every `STOP_POLL_FUEL` units of fuel *and* at each algebra
+    /// node it enters; with fuel disengaged only the second of those runs, so a query
+    /// spending a long time inside one operator would notice a deadline or a cancellation
+    /// late. Metering costs a saturating add per charge point and buys prompt interruption
+    /// on every query shape, which is the trade a caller who asked for governors has
+    /// already chosen. The **ungoverned** entries (`query`, `select`, `update`, …) are
+    /// untouched by any of this and still charge nothing at all.
+    fn engage(self, cancel: Option<&CancellationToken>) -> QueryGovernors {
+        let deadline_ms = self.deadline_ms;
+        let mut governors = self.ceilings();
+        let watch = WasmStopWatch::new(deadline_ms, cancel);
         if watch.is_armed() {
             let signal: Arc<dyn StopSignal> = Arc::new(watch);
             governors = governors.with_stop_signal(signal);
@@ -542,7 +593,16 @@ impl GovernorArgs {
     }
 }
 
+/// Why an UPDATE refuses `maxAnswers`, shared verbatim by the synchronous and
+/// asynchronous governed UPDATE entries.
+pub(crate) const UPDATE_REFUSES_MAX_ANSWERS: &str = "maxAnswers is not accepted by updateGoverned: an UPDATE has no answer \
+     sequence to bound. Bound the work that computes the request with fuel, \
+     maxIntermediateCells, or maxScratchBytes instead";
+
 /// Decode one ceiling from the JavaScript boundary.
+///
+/// Returns a plain `String` error (not a `JsError`) so the refusal is unit-testable on
+/// the native build, where constructing a `JsError` panics.
 ///
 /// The boundary type is a signed 64-bit integer (a JS `bigint`) rather than a `u64`
 /// precisely so that a negative can be *seen* and refused here. Taking a `u64` would make
@@ -553,16 +613,36 @@ impl GovernorArgs {
 /// # Errors
 ///
 /// A negative ceiling, which is not a smaller budget but an unrepresentable one.
-fn decode_ceiling(name: &str, value: Option<i64>) -> Result<Option<u64>, JsError> {
+fn decode_ceiling_message(name: &str, value: Option<i64>) -> Result<Option<u64>, String> {
     match value {
         None => Ok(None),
-        Some(raw) if raw < 0 => Err(JsError::new(&format!(
+        Some(raw) if raw < 0 => Err(format!(
             "governor ceiling `{name}` must be a non-negative integer, got {raw} \
              (omit it to decline the ceiling; 0 is a valid ceiling that trips on the \
              first charged unit of work)"
-        ))),
+        )),
         Some(raw) => Ok(Some(raw.unsigned_abs())),
     }
+}
+
+/// [`GovernorArgs::decode`] at the synchronous `#[wasm_bindgen]` boundary.
+fn decode_governor_args(
+    fuel: Option<i64>,
+    deadline_ms: Option<i64>,
+    max_answers: Option<i64>,
+    max_intermediate_cells: Option<i64>,
+    max_scratch_bytes: Option<i64>,
+    max_remote_requests: Option<i64>,
+) -> Result<GovernorArgs, JsError> {
+    GovernorArgs::decode(
+        fuel,
+        deadline_ms,
+        max_answers,
+        max_intermediate_cells,
+        max_scratch_bytes,
+        max_remote_requests,
+    )
+    .map_err(|message| JsError::new(&message))
 }
 
 // ---------------------------------------------------------------------------
@@ -948,9 +1028,13 @@ impl UpdateOutcome {
 }
 
 /// A reusable SPARQL engine that keeps the native plan cache alive across calls.
+///
+/// The engine is reference-counted so an asynchronous job can keep evaluating on it
+/// after the JavaScript handle that started the job has been freed, and so the
+/// synchronous methods can run on it while a job is suspended.
 #[wasm_bindgen]
 pub struct QueryEngine {
-    inner: NativeSparqlEngine,
+    inner: Rc<NativeSparqlEngine>,
 }
 
 impl std::fmt::Debug for QueryEngine {
@@ -965,7 +1049,7 @@ impl QueryEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            inner: NativeSparqlEngine::new(),
+            inner: Rc::new(NativeSparqlEngine::new()),
         }
     }
 
@@ -1043,11 +1127,11 @@ impl QueryEngine {
         sparql: &str,
         base: Option<String>,
     ) -> Result<(), JsError> {
-        let mut frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let mut frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
         self.inner
             .update(&mut frozen, sparql_request(sparql, base.as_deref()))
             .map_err(|e| diag_to_err(&e))?;
-        dataset.inner = MutableDataset::new(frozen);
+        dataset.replace(frozen);
         Ok(())
     }
 
@@ -1088,6 +1172,7 @@ impl QueryEngine {
         let result = self.run_query(dataset, sparql, base.as_deref())?;
         let namespace = build_provenance_namespace(provenance_prefix, provenance_iri)?;
         serialize_query_result(&result, format.as_deref(), namespace.as_ref(), sparql)
+            .map_err(|message| JsError::new(&message))
     }
 
     /// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD.
@@ -1151,16 +1236,16 @@ impl QueryEngine {
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
     ) -> Result<QueryOutcome, JsError> {
-        let args = GovernorArgs {
-            fuel: decode_ceiling("fuel", fuel)?,
-            deadline_ms: decode_ceiling("deadlineMs", deadline_ms)?,
-            max_answers: decode_ceiling("maxAnswers", max_answers)?,
-            max_intermediate_cells: decode_ceiling("maxIntermediateCells", max_intermediate_cells)?,
-            max_scratch_bytes: decode_ceiling("maxScratchBytes", max_scratch_bytes)?,
-            max_remote_requests: decode_ceiling("maxRemoteRequests", max_remote_requests)?,
-        };
+        let args = decode_governor_args(
+            fuel,
+            deadline_ms,
+            max_answers,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+        )?;
         let governors = args.engage(cancel.as_ref());
-        let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
         let aggregates = build_aggregates(aggregate_namespace);
         let outcome = self
             .inner
@@ -1215,16 +1300,16 @@ impl QueryEngine {
     ) -> Result<EntailmentQueryOutcome, JsError> {
         let plan = QueryEntailmentPlan::parse(regime, program.as_deref().unwrap_or(""))
             .map_err(|error| JsError::new(&error))?;
-        let args = GovernorArgs {
-            fuel: decode_ceiling("fuel", fuel)?,
-            deadline_ms: decode_ceiling("deadlineMs", deadline_ms)?,
-            max_answers: decode_ceiling("maxAnswers", max_answers)?,
-            max_intermediate_cells: decode_ceiling("maxIntermediateCells", max_intermediate_cells)?,
-            max_scratch_bytes: decode_ceiling("maxScratchBytes", max_scratch_bytes)?,
-            max_remote_requests: decode_ceiling("maxRemoteRequests", max_remote_requests)?,
-        };
+        let args = decode_governor_args(
+            fuel,
+            deadline_ms,
+            max_answers,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+        )?;
         let governors = args.engage(cancel.as_ref());
-        let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
         let aggregates = build_aggregates(aggregate_namespace);
         let outcome = query_with_entailment_governed(
             &self.inner,
@@ -1288,22 +1373,18 @@ impl QueryEngine {
         cancel: Option<CancellationToken>,
     ) -> Result<UpdateOutcome, JsError> {
         if max_answers.is_some() {
-            return Err(JsError::new(
-                "maxAnswers is not accepted by updateGoverned: an UPDATE has no answer \
-                 sequence to bound. Bound the work that computes the request with fuel, \
-                 maxIntermediateCells, or maxScratchBytes instead",
-            ));
+            return Err(JsError::new(UPDATE_REFUSES_MAX_ANSWERS));
         }
-        let args = GovernorArgs {
-            fuel: decode_ceiling("fuel", fuel)?,
-            deadline_ms: decode_ceiling("deadlineMs", deadline_ms)?,
-            max_answers: None,
-            max_intermediate_cells: decode_ceiling("maxIntermediateCells", max_intermediate_cells)?,
-            max_scratch_bytes: decode_ceiling("maxScratchBytes", max_scratch_bytes)?,
-            max_remote_requests: decode_ceiling("maxRemoteRequests", max_remote_requests)?,
-        };
+        let args = decode_governor_args(
+            fuel,
+            deadline_ms,
+            None,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+        )?;
         let governors = args.engage(cancel.as_ref());
-        let mut frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let mut frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
         let aggregates = build_aggregates(aggregate_namespace);
         let outcome = self
             .inner
@@ -1320,7 +1401,7 @@ impl QueryEngine {
         // The engine publishes into its own `Arc` only on the applied path, so adopting
         // the returned base on a trip would adopt a base nothing was written to.
         if outcome.is_applied() {
-            dataset.inner = MutableDataset::new(frozen);
+            dataset.replace(frozen);
         }
         Ok(update_outcome_from_governed(&outcome))
     }
@@ -1343,7 +1424,7 @@ impl QueryEngine {
         sparql: &str,
         base: Option<String>,
     ) -> Result<String, JsError> {
-        let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
         Ok(self
             .inner
             .explain_query(&frozen, sparql, base.as_deref())
@@ -1380,13 +1461,18 @@ impl Default for QueryEngine {
 }
 
 impl QueryEngine {
+    /// The shared engine, for an asynchronous job to hold for its own lifetime.
+    pub(crate) const fn engine(&self) -> &Rc<NativeSparqlEngine> {
+        &self.inner
+    }
+
     fn run_query(
         &self,
         dataset: &Dataset,
         sparql: &str,
         base: Option<&str>,
     ) -> Result<SparqlResult, JsError> {
-        let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let frozen = dataset.view().freeze().map_err(|e| diag_to_err(&e))?;
         self.inner
             .query(&frozen, sparql_request(sparql, base))
             .map_err(|e| diag_to_err(&e))
@@ -1400,28 +1486,36 @@ impl QueryEngine {
         format: &str,
         options: &JsonLdSerializeOptions,
     ) -> Result<String, JsError> {
-        match self.run_query(dataset, sparql, base)? {
-            SparqlResult::Graph(graph) => Dataset {
-                inner: MutableDataset::new(graph),
-            }
-            // WHICH BASE: none. `base` above is the SPARQL *query* base — it resolves
-            // relative IRI references inside the query TEXT. The trailing argument here
-            // is the *document* base a result is WRITTEN under. They are different
-            // things, and a query that happened to need a base to parse is no evidence
-            // about how its answer should be spelled, so forwarding it would silently
-            // relativize the result against the query's base.
-            //
-            // This stays `None` even though the core seam can now express a document
-            // base together with a graph selection and the statement layer: the blocker
-            // was never the seam, it is that this function has no document base to pass.
-            // Giving the caller one would mean a NEW parameter on `queryRawConfigured`,
-            // not reusing this one.
-            .serialize_with_options(format, options, None),
-            other => Err(kind_mismatch(
-                "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
-                &other,
-            )),
-        }
+        serialize_configured_graph(self.run_query(dataset, sparql, base)?, format, options)
+            .map_err(|message| JsError::new(&message))
+    }
+}
+
+/// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD options — the
+/// `queryRawConfigured`/`queryRawWithContext` egress, shared by the synchronous and
+/// asynchronous lanes, with a plain `String` error.
+pub(crate) fn serialize_configured_graph(
+    result: SparqlResult,
+    format: &str,
+    options: &JsonLdSerializeOptions,
+) -> Result<String, String> {
+    match result {
+        // WHICH BASE: none. The query's `base` resolves relative IRI references inside
+        // the query TEXT. The trailing argument here is the *document* base a result is
+        // WRITTEN under. They are different things, and a query that happened to need a
+        // base to parse is no evidence about how its answer should be spelled, so
+        // forwarding it would silently relativize the result against the query's base.
+        //
+        // This stays `None` even though the core seam can now express a document base
+        // together with a graph selection and the statement layer: the blocker was never
+        // the seam, it is that this function has no document base to pass. Giving the
+        // caller one would mean a NEW parameter on `queryRawConfigured`, not reusing the
+        // query's.
+        SparqlResult::Graph(graph) => serialize_frozen_with_options(&graph, format, options, None),
+        other => Err(kind_mismatch_message(
+            "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
+            &other,
+        )),
     }
 }
 
@@ -1446,7 +1540,7 @@ impl Dataset {
     }
 }
 
-fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> SparqlRequest<'a> {
+pub(crate) fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> SparqlRequest<'a> {
     SparqlRequest {
         query: sparql,
         base_iri: base,
@@ -1481,20 +1575,28 @@ fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> SparqlRequest<'
 fn aggregate_env(
     aggregates: Option<&AggregateRegistry>,
 ) -> Result<purrdf_sparql_eval::ExtensionEnv, JsError> {
+    aggregate_env_message(aggregates).map_err(|message| JsError::new(&message))
+}
+
+/// [`aggregate_env`] with a plain `String` error, for the asynchronous lane, which
+/// records a failure on the job rather than throwing it across a suspended frame.
+pub(crate) fn aggregate_env_message(
+    aggregates: Option<&AggregateRegistry>,
+) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
     purrdf_sparql_eval::ExtensionEnv::over_aggregates(
         aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
     )
-    .map_err(|e| JsError::new(&format!("extension environment: {e}")))
+    .map_err(|e| format!("extension environment: {e}"))
 }
 
-fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
+pub(crate) fn build_aggregates(namespace: Option<String>) -> Option<AggregateRegistry> {
     let namespace = namespace?;
     let mut registry = AggregateRegistry::new();
     registry.register_statistical_aggregates(&namespace);
     Some(registry)
 }
 
-fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResult, JsError> {
+pub(crate) fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResult, JsError> {
     Ok(match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -1508,9 +1610,7 @@ fn query_result_from_sparql(result: SparqlResult) -> Result<QueryResult, JsError
         },
         SparqlResult::Graph(graph) => QueryResult {
             kind: QueryResultKind::Graph,
-            value: Some(QueryResultValue::Graph(Dataset {
-                inner: MutableDataset::new(graph),
-            })),
+            value: Some(QueryResultValue::Graph(Dataset::from_frozen(graph))),
         },
     })
 }
@@ -1526,9 +1626,7 @@ fn select_result_from_sparql(result: SparqlResult) -> Result<SelectResult, JsErr
 
 fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
     match result {
-        SparqlResult::Graph(graph) => Ok(Dataset {
-            inner: MutableDataset::new(graph),
-        }),
+        SparqlResult::Graph(graph) => Ok(Dataset::from_frozen(graph)),
         other => Err(kind_mismatch("CONSTRUCT/DESCRIBE graph", &other)),
     }
 }
@@ -1537,7 +1635,9 @@ fn graph_result_from_sparql(result: SparqlResult) -> Result<Dataset, JsError> {
 ///
 /// Both arms produce an object; neither produces an error. That asymmetry with
 /// `Result` is the whole point of the type.
-fn query_outcome_from_governed(outcome: GovernedOutcome) -> Result<QueryOutcome, JsError> {
+pub(crate) fn query_outcome_from_governed(
+    outcome: GovernedOutcome,
+) -> Result<QueryOutcome, JsError> {
     match outcome {
         GovernedOutcome::Complete {
             result, evidence, ..
@@ -1563,7 +1663,7 @@ fn query_outcome_from_governed(outcome: GovernedOutcome) -> Result<QueryOutcome,
     }
 }
 
-fn entailment_query_outcome_from_native(
+pub(crate) fn entailment_query_outcome_from_native(
     outcome: GovernedEntailment,
 ) -> Result<EntailmentQueryOutcome, JsError> {
     match outcome {
@@ -1589,7 +1689,7 @@ fn entailment_query_outcome_from_native(
 }
 
 /// Convert a native governed UPDATE outcome into the JS-facing [`UpdateOutcome`] object.
-fn update_outcome_from_governed(outcome: &GovernedUpdateOutcome) -> UpdateOutcome {
+pub(crate) fn update_outcome_from_governed(outcome: &GovernedUpdateOutcome) -> UpdateOutcome {
     UpdateOutcome {
         tripped: outcome.tripped().map(|inner| TrippedGovernor { inner }),
         evidence: Some(GovernorEvidence {
@@ -1670,7 +1770,7 @@ fn term_from_value(value: purrdf::TermValue) -> Result<Term, String> {
 /// optional [`purrdf_sparql_results::ProvenanceNamespace`]. Exactly one `Some` is a
 /// usage error: a namespace needs both halves, and silently treating a lone prefix or
 /// IRI as "no namespace" would be the exact silent-drop this binding refuses elsewhere.
-fn build_provenance_namespace(
+pub(crate) fn build_provenance_namespace(
     prefix: Option<String>,
     iri: Option<String>,
 ) -> Result<Option<purrdf_sparql_results::ProvenanceNamespace>, JsError> {
@@ -1710,12 +1810,16 @@ fn build_query_provenance(
     }
 }
 
-fn serialize_query_result(
+/// Serialize a query result to text in `format`, or the kind's default when `None`.
+///
+/// Returns a plain `String` error so the asynchronous lane can record it on a job and
+/// the native build can test it; the synchronous entry maps it to a `JsError`.
+pub(crate) fn serialize_query_result(
     result: &SparqlResult,
     format: Option<&str>,
     provenance_namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
     query: &str,
-) -> Result<String, JsError> {
+) -> Result<String, String> {
     match result {
         SparqlResult::Graph(graph) => {
             serialize_graph_result(graph, format.unwrap_or_else(|| default_graph_format(graph)))
@@ -1730,7 +1834,7 @@ fn serialize_query_result(
     }
 }
 
-fn resolve_results_format(format: &str) -> Result<SparqlResultsFormat, JsError> {
+fn resolve_results_format(format: &str) -> Result<SparqlResultsFormat, String> {
     let normalized = format.trim().to_ascii_lowercase();
     match normalized.as_str() {
         "json" | "srj" | "sparql-json" | "application/sparql-results+json" => {
@@ -1739,10 +1843,10 @@ fn resolve_results_format(format: &str) -> Result<SparqlResultsFormat, JsError> 
         "xml" | "sparql-xml" | "application/sparql-results+xml" => Ok(SparqlResultsFormat::Xml),
         "csv" | "text/csv" => Ok(SparqlResultsFormat::Csv),
         "tsv" | "text/tab-separated-values" => Ok(SparqlResultsFormat::Tsv),
-        other => Err(JsError::new(&format!(
+        other => Err(format!(
             "unsupported SPARQL results format {other:?} \
              (use json/xml/csv/tsv or graph formats for CONSTRUCT/DESCRIBE)"
-        ))),
+        )),
     }
 }
 
@@ -1751,12 +1855,11 @@ fn serialize_tabular_result(
     format: SparqlResultsFormat,
     provenance_namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
     query: &str,
-) -> Result<String, JsError> {
+) -> Result<String, String> {
     let provenance = build_query_provenance(provenance_namespace, query);
     let outcome = serialize_results(result, format, &provenance, provenance_namespace)
-        .map_err(|e| JsError::new(&e.to_string()))?;
-    String::from_utf8(outcome.bytes)
-        .map_err(|e| JsError::new(&format!("SPARQL result is not valid UTF-8: {e}")))
+        .map_err(|e| e.to_string())?;
+    String::from_utf8(outcome.bytes).map_err(|e| format!("SPARQL result is not valid UTF-8: {e}"))
 }
 
 /// The closing imperative of every named-graph refusal on this binding: the
@@ -1815,9 +1918,9 @@ fn refuse_uncarriable_named_graphs(
     graph: &Arc<purrdf::RdfDataset>,
     fmt: purrdf::NativeRdfFormat,
     token: &str,
-) -> Result<(), JsError> {
+) -> Result<(), String> {
     match uncarriable_named_graphs(graph, fmt, token) {
-        Some(message) => Err(JsError::new(&message)),
+        Some(message) => Err(message),
         None => Ok(()),
     }
 }
@@ -1854,25 +1957,23 @@ fn uncarriable_named_graphs(
 /// Giving callers one means a new parameter on the `queryRaw`/`queryGraph` surface, not
 /// reusing the query base. `serialize_dataset` applies `StatementLayer::Emit`, so an
 /// answer graph carrying RDF 1.2 statement rows keeps them.
-fn serialize_graph_result(
-    graph: &Arc<purrdf::RdfDataset>,
-    format: &str,
-) -> Result<String, JsError> {
-    let fmt = resolve_format(format).map_err(|e| JsError::new(&e))?;
+fn serialize_graph_result(graph: &Arc<purrdf::RdfDataset>, format: &str) -> Result<String, String> {
+    let fmt = resolve_format(format)?;
     // Refused BEFORE the serializer runs: a result the requested syntax would silently
     // empty out never becomes a string.
     refuse_uncarriable_named_graphs(graph, fmt, format)?;
     let bytes = serialize_dataset(graph, fmt.media_type(), SerializeGraph::Dataset)
-        .map_err(|e| diag_to_err(&e))?;
-    String::from_utf8(bytes)
-        .map_err(|e| JsError::new(&format!("SPARQL graph result is not valid UTF-8: {e}")))
+        .map_err(|e| e.to_string())?;
+    String::from_utf8(bytes).map_err(|e| format!("SPARQL graph result is not valid UTF-8: {e}"))
 }
 
-fn kind_mismatch(expected: &str, actual: &SparqlResult) -> JsError {
-    JsError::new(&format!(
-        "expected {expected}, got {}",
-        sparql_result_kind(actual)
-    ))
+pub(crate) fn kind_mismatch(expected: &str, actual: &SparqlResult) -> JsError {
+    JsError::new(&kind_mismatch_message(expected, actual))
+}
+
+/// The words of [`kind_mismatch`], for a caller that records rather than throws.
+pub(crate) fn kind_mismatch_message(expected: &str, actual: &SparqlResult) -> String {
+    format!("expected {expected}, got {}", sparql_result_kind(actual))
 }
 
 fn sparql_result_kind(result: &SparqlResult) -> &'static str {
@@ -2007,7 +2108,7 @@ mod tests {
         let constructed = QueryEngine::new()
             .construct(&seed(), GRAPH_CONSTRUCT, None)
             .expect("quad-template CONSTRUCT evaluates");
-        let frozen = constructed.inner.freeze().expect("freeze");
+        let frozen = constructed.view().freeze().expect("freeze");
         for token in ["turtle", "ntriples", "rdfxml"] {
             let fmt = resolve_format(token).expect("format resolves");
             let message = uncarriable_named_graphs(&frozen, fmt, token)
@@ -2033,7 +2134,7 @@ mod tests {
         let plain = QueryEngine::new()
             .construct(&seed(), PLAIN_CONSTRUCT, None)
             .expect("plain CONSTRUCT evaluates");
-        let plain = plain.inner.freeze().expect("freeze");
+        let plain = plain.view().freeze().expect("freeze");
         let fmt = resolve_format("turtle").expect("format resolves");
         assert!(uncarriable_named_graphs(&plain, fmt, "turtle").is_none());
     }
@@ -2062,14 +2163,14 @@ mod tests {
         let graphed = QueryEngine::new()
             .construct(&seed(), GRAPH_CONSTRUCT, None)
             .expect("quad-template CONSTRUCT evaluates")
-            .inner
+            .view()
             .freeze()
             .expect("freeze");
         assert_eq!(default_graph_format(&graphed), "trig");
         let plain = QueryEngine::new()
             .construct(&seed(), PLAIN_CONSTRUCT, None)
             .expect("plain CONSTRUCT evaluates")
-            .inner
+            .view()
             .freeze()
             .expect("freeze");
         assert_eq!(default_graph_format(&plain), "turtle");
@@ -2114,7 +2215,7 @@ mod tests {
             );
         }
 
-        let frozen = described.inner.freeze().expect("freeze");
+        let frozen = described.view().freeze().expect("freeze");
         assert_eq!(
             default_graph_format(&frozen),
             "trig",

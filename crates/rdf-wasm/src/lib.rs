@@ -15,13 +15,16 @@
 //!   compile to wasm and are deliberately excluded — this is the
 //!   value-interned IR + the COW [`MutableDataset`](purrdf::ir::MutableDataset),
 //!   not a persistent quad store.
-//! - **Offline SPARQL.** The native, oxigraph-free multiset evaluator
+//! - **Two SPARQL lanes.** The native, oxigraph-free multiset evaluator
 //!   ([`purrdf_sparql_eval`]) binds to the wasm [`Dataset`] (see the `query` module),
-//!   so SELECT / ASK / CONSTRUCT / DESCRIBE run client-side with no server. Only the
-//!   host can provide SERVICE federation; this default browser surface installs no
-//!   remote source, so `SERVICE` / `LOAD` hard-fails here rather than silently
-//!   returning a partial answer — except for the `SILENT` forms, which SPARQL 1.1
-//!   requires to succeed with nothing fetched (see the `query` module).
+//!   so SELECT / ASK / CONSTRUCT / DESCRIBE run client-side with no server. The
+//!   synchronous lane is offline: it installs no remote source, so `SERVICE` / `LOAD`
+//!   hard-fails there rather than silently returning a partial answer — except for the
+//!   `SILENT` forms, which SPARQL 1.1 requires to succeed with nothing fetched. The
+//!   asynchronous lane (the `async_query` module) runs the same evaluator as a job that
+//!   suspends through JSPI on host-resolved `SERVICE` and `LOAD` effects and yields to
+//!   the event loop, so the host owns the I/O and its policy while PurRDF keeps the
+//!   parsing, evaluation, joins, `SILENT` semantics and result encoding.
 //! - **Separate from the C-ABI (P8).** WASM has its own ownership model,
 //!   packaging, and async I/O; it is not a C-ABI consumer and does not depend on the
 //!   `no_std` track.
@@ -69,6 +72,10 @@ use wasm_bindgen::prelude::*;
 //   * `shacl`   — SHACL validation to SARIF + SHACL-AF entailment
 //                 (`shaclValidateToSarif`/`shaclEntail`)
 //   * `stream`  — the RDF/JS Sink over the `purrdf-events` ingestion protocol
+//   * `async_query` — the asynchronous operation runtime: every evaluating `query`
+//                 surface as a job that suspends on host-resolved SERVICE / LOAD
+//                 effects and yields to the event loop, through JSPI
+mod async_query;
 mod codec;
 mod convert;
 mod dataset;
@@ -81,6 +88,12 @@ pub mod shacl;
 mod stream;
 mod term;
 
+#[cfg(target_arch = "wasm32")]
+pub use async_query::purrdf_jspi_run;
+pub use async_query::{
+    AsyncEffect, AsyncEffectKind, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind,
+    ServiceCatalog,
+};
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;
 pub use factory::DataFactory;
