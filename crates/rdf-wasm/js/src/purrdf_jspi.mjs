@@ -70,6 +70,10 @@ const NO_YIELD_MESSAGE =
 const NOT_INSTALLED_MESSAGE =
   "the asynchronous runtime is not installed; await ready() before any asynchronous call";
 
+// `purrdf_jspi_run`: the job's frames ran past its region's overrun zone; memory
+// outside the job's allocation may be overwritten, so the instance is poisoned.
+const RUN_OVERRAN = 4;
+
 // Statuses of `purrdf_jspi_suspend` (returned to wasm).
 const SUSPEND_ANSWERED = 0;
 const SUSPEND_ABANDONED = 1;
@@ -258,7 +262,8 @@ export function configureAsync(options) {
  * `job.errorKind` / `job.takeError()`), 2 the job is unknown, 3 it was already started.
  * Rejects only when the call cannot run at all (see `assertAsyncQueries`), when
  * `maxConcurrentJobs` jobs are already in flight, for a malformed `host`, or when the
- * instance traps — which poisons it. The job stays the caller's to `finish()` and
+ * instance traps or the job's frames ran past its region's overrun zone — either of
+ * which poisons it. The job stays the caller's to `finish()` and
  * `free()` in every case.
  */
 export async function runJob(job, host = {}) {
@@ -830,6 +835,11 @@ function startRun(record) {
     pending.then(
       (status) => {
         leaveRegion(record);
+        if (status >>> 0 === RUN_OVERRAN) {
+          poison(record.job.takeError() ?? `asynchronous job ${record.id} overran its stack region`);
+          reject(poisonError());
+          return;
+        }
         resolve(status >>> 0);
       },
       (error) => {

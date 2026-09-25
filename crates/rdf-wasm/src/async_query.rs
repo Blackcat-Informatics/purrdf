@@ -61,6 +61,18 @@
 //! job cleanly — before a deeper frame could run off the region into the heap. It also
 //! records the low-water mark, reported as [`AsyncEvidence::stack_high_water_bytes`].
 //!
+//! Work that never polls — parsing, planning, serializing — can still recurse past the
+//! base between two polls. Beneath every base lies an overrun zone
+//! ([`STACK_OVERRUN_ZONE_BYTES`], filled with a known byte) that absorbs such frames
+//! inside the job's own allocation. The first poll after one sees the canary it
+//! overwrote and stops the job with the same typed exhaustion error; when the run
+//! returns, the zone is inspected: an overrun that stayed above its floor
+//! ([`STACK_OVERRUN_FLOOR_BYTES`]) is that typed error, and one that reached the floor
+//! may have left the allocation, so the run reports status 4 and the host poisons the
+//! instance rather than let it run on over memory that may be corrupt. The zone is as
+//! large as the synchronous lane's whole stack, so any request the synchronous lane runs
+//! without trapping ends here answered or typed, never in corruption.
+//!
 //! # Faults, statuses, and the rule that nothing crosses a suspended frame
 //!
 //! A panic or a JavaScript exception that unwinds through a suspended frame bricks the
@@ -81,7 +93,8 @@
 //! after the job's signal won the race, and not a fault; 2 malformed, with the job's
 //! fault latched; 3 the job has already finished and nothing changed. Statuses of
 //! `purrdf_jspi_run`: 0 an outcome is stored, 1 an error is stored, 2 no such job, 3 the
-//! job had already been started.
+//! job had already been started, 4 the job overran its region's overrun zone (an error is
+//! stored and the host poisons the instance).
 //!
 //! # The failure taxonomy, and the inherited `SILENT` table
 //!
@@ -209,6 +222,33 @@ const MIN_STACK_BYTES: u32 = 512 * 1024;
 /// before a deeper frame can leave the region.
 const STACK_GUARD_BYTES: usize = 128 * 1024;
 
+/// The overrun zone below every region's base: 1 MiB.
+///
+/// The guard band only stops frames that *poll*. Work that never polls — parsing the
+/// request, planning it, serializing its answer — can recurse past the region's base, and
+/// below the base lies other heap memory: an overrun there would corrupt it silently. So
+/// every region is allocated with this many bytes beneath its base, filled with
+/// [`STACK_ZONE_FILL`], and inspected when the run returns (see [`StackRegion::overrun`]):
+/// an overrun that stayed above the zone's floor ([`STACK_OVERRUN_FLOOR_BYTES`]) touched
+/// nothing but the job's own allocation, and fails the job with the typed exhaustion
+/// error; one that reached the floor may have left the allocation, and poisons the
+/// instance.
+///
+/// Sized from the synchronous lane: its whole shadow stack is the linker's 1 MiB, so the
+/// non-polling frames of any request it runs without trapping fit in 1 MiB, and on a
+/// region of at least [`MIN_STACK_BYTES`] they overrun the base by at most 512 KiB plus
+/// the runner's own few frames — well above the floor. A request the synchronous lane
+/// can run is therefore never corruption here: it answers, or fails typed.
+const STACK_OVERRUN_ZONE_BYTES: usize = 1024 * 1024;
+
+/// The lowest part of the overrun zone. A byte changed here means the frames may have
+/// run past the whole zone — out of the job's allocation — so the instance is poisoned.
+const STACK_OVERRUN_FLOOR_BYTES: usize = 256 * 1024;
+
+/// The byte the overrun zone is filled with. Not zero: frames routinely write zeros, and
+/// an overrun that wrote only the fill would go unseen.
+const STACK_ZONE_FILL: u8 = 0xA5;
+
 /// Polls between clock reads for the wall deadline.
 const CLOCK_EVERY_POLLS: u64 = 1_024;
 
@@ -235,6 +275,10 @@ const RUN_ERROR: u32 = 1;
 const RUN_UNKNOWN_JOB: u32 = 2;
 /// `purrdf_jspi_run`: the job had already been started.
 const RUN_ALREADY_STARTED: u32 = 3;
+/// `purrdf_jspi_run`: the job's frames ran past its region's overrun zone. Memory outside
+/// the job's allocation may have been overwritten, so the host must poison the instance;
+/// the job's error names what happened.
+const RUN_OVERRAN: u32 = 4;
 
 /// `purrdf_jspi_suspend`: the effect was answered.
 const SUSPEND_ANSWERED: u32 = 0;
@@ -286,8 +330,9 @@ fn suspend(_job: u32, _ticket: u32) -> u32 {
 /// Run job `job` on the stack region the host has just switched to.
 ///
 /// The raw export `WebAssembly.promising` drives. Returns 0 when an outcome is stored, 1
-/// when an error is stored, 2 when no job has this id, and 3 when the job had already
-/// been started.
+/// when an error is stored, 2 when no job has this id, 3 when the job had already been
+/// started, and 4 when the job's frames ran past its region's overrun zone (an error is
+/// stored, and the host must poison the instance).
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn purrdf_jspi_run(job: u32) -> u32 {
@@ -809,12 +854,17 @@ impl StackBounds {
             ));
         }
         if sp < self.base.saturating_add(STACK_GUARD_BYTES) {
-            return Err(format!(
-                "asynchronous job stack region exhausted ({} bytes); raise stackBytes",
-                self.top - self.base
-            ));
+            return Err(self.exhausted());
         }
         Ok(())
+    }
+
+    /// The typed error of a job that ran out of its region.
+    fn exhausted(self) -> String {
+        format!(
+            "asynchronous job stack region exhausted ({} bytes); raise stackBytes",
+            self.top - self.base
+        )
     }
 }
 
@@ -1028,6 +1078,15 @@ impl JspiStopWatch {
     fn stack_check(&self) -> Result<(), String> {
         if !self.slots.region_armed.load(Ordering::Relaxed) {
             return Ok(());
+        }
+        // A frame that never polled may have run past the base since the last poll (see
+        // `STACK_OVERRUN_ZONE_BYTES`); the canary it overwrote on the way stops the job at
+        // the first poll after, before anything suspends on a damaged region.
+        // SAFETY: the region is armed only while the job runs on it, and the job's
+        // `StackRegion` — which owns the word at `base` — outlives every run.
+        let canary = unsafe { core::ptr::read_volatile(self.slots.bounds.base as *const u32) };
+        if canary != STACK_CANARY {
+            return Err(self.slots.bounds.exhausted());
         }
         // An address-taken local lives on the shadow stack; its address is this frame's
         // depth. `black_box` keeps the slot a real, escaping one.
@@ -1655,13 +1714,28 @@ enum JobState {
     Done,
 }
 
-/// A job's stack region: owned heap memory the job's frames live in while it runs.
+/// A job's stack region: owned heap memory the job's frames live in while it runs, above
+/// an overrun zone of [`STACK_OVERRUN_ZONE_BYTES`].
 struct StackRegion {
-    /// The allocation. Never read or written by Rust after construction: while the job
-    /// runs, its frames own these bytes. Held only to keep them allocated.
-    #[allow(dead_code, reason = "owned to keep the region allocated, never read")]
+    /// The allocation: alignment padding, the overrun zone, then the region. While the
+    /// job runs its frames own the region's bytes; Rust reads the zone only after a run
+    /// returns ([`Self::overrun`]).
     memory: Box<[u8]>,
+    /// Where the overrun zone starts inside `memory`.
+    zone_offset: usize,
     bounds: StackBounds,
+}
+
+/// How far a finished run's frames reached below its region's base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overrun {
+    /// Never past the base: the canary and the whole zone are intact.
+    None,
+    /// Past the base, but never into the zone's floor: nothing outside the job's own
+    /// allocation was touched.
+    Absorbed,
+    /// Into the zone's floor: the frames may have left the allocation.
+    Escaped,
 }
 
 impl fmt::Debug for StackRegion {
@@ -1673,21 +1747,43 @@ impl fmt::Debug for StackRegion {
 }
 
 impl StackRegion {
-    /// A zeroed region of `bytes`, its base and top aligned to 16 inside the allocation
-    /// and the canary written at the base.
+    /// A zeroed region of `bytes` rounded down to 16, its base and top aligned to 16,
+    /// the canary written at the base and the filled overrun zone beneath it. The
+    /// region's size depends only on `bytes`, never on where the allocator put it.
     fn new(bytes: usize) -> Self {
-        let mut memory = vec![0u8; bytes].into_boxed_slice();
+        let usable = bytes & !15;
+        let mut memory = vec![0u8; 15 + STACK_OVERRUN_ZONE_BYTES + usable].into_boxed_slice();
         let start = memory.as_ptr() as usize;
-        let base_offset = start.next_multiple_of(16) - start;
-        let top = (start + bytes) & !15;
+        let zone_offset = start.next_multiple_of(16) - start;
+        let base_offset = zone_offset + STACK_OVERRUN_ZONE_BYTES;
+        memory[zone_offset..base_offset].fill(STACK_ZONE_FILL);
         memory[base_offset..base_offset + 4].copy_from_slice(&STACK_CANARY.to_le_bytes());
+        let base = start + base_offset;
         Self {
             memory,
+            zone_offset,
             bounds: StackBounds {
-                base: start + base_offset,
-                top,
+                base,
+                top: base + usable,
             },
         }
+    }
+
+    /// How far the finished run's frames reached below the base. Read only once the run
+    /// has returned, when no frame lives in the region any more.
+    fn overrun(&self) -> Overrun {
+        let zone = &self.memory[self.zone_offset..self.zone_offset + STACK_OVERRUN_ZONE_BYTES];
+        let (floor, upper) = zone.split_at(STACK_OVERRUN_FLOOR_BYTES);
+        if floor.iter().any(|&byte| byte != STACK_ZONE_FILL) {
+            return Overrun::Escaped;
+        }
+        let base_offset = self.zone_offset + STACK_OVERRUN_ZONE_BYTES;
+        let canary = &self.memory[base_offset..base_offset + 4];
+        if canary != STACK_CANARY.to_le_bytes() || upper.iter().any(|&byte| byte != STACK_ZONE_FILL)
+        {
+            return Overrun::Absorbed;
+        }
+        Overrun::None
     }
 }
 
@@ -1748,6 +1844,28 @@ impl JobInner {
             }
         };
         slots.region_armed.store(false, Ordering::Relaxed);
+        match self.region.overrun() {
+            Overrun::None => {}
+            // Frames that never polled ran past the base into the zone: nothing outside
+            // the job's allocation was touched, so this is the job's typed exhaustion.
+            Overrun::Absorbed => slots.latch_fault(self.region.bounds.exhausted()),
+            Overrun::Escaped => {
+                slots.finished.store(true, Ordering::Relaxed);
+                *self.error.borrow_mut() = Some(JobError {
+                    kind: JobErrorKind::Fault,
+                    message: format!(
+                        "asynchronous job {} ran more than {} bytes past the base of its \
+                         stack region ({} bytes), so memory outside it may be overwritten; \
+                         raise stackBytes",
+                        self.id,
+                        STACK_OVERRUN_ZONE_BYTES - STACK_OVERRUN_FLOOR_BYTES,
+                        self.region.bounds.top - self.region.bounds.base
+                    ),
+                });
+                self.state.set(JobState::Done);
+                return RUN_OVERRAN;
+            }
+        }
         slots.finished.store(true, Ordering::Relaxed);
         // A latched fault outranks whatever the operation reached: that outcome was
         // produced by a job whose effects cannot be trusted, and an update is never
@@ -3870,13 +3988,92 @@ mod tests {
         let region = StackRegion::new(524_288 + 7);
         assert_eq!(region.bounds.base % 16, 0);
         assert_eq!(region.bounds.top % 16, 0);
-        assert!(region.bounds.top - region.bounds.base >= 524_288 - 16);
+        assert_eq!(region.bounds.top - region.bounds.base, 524_288);
         let offset = region.bounds.base - region.memory.as_ptr() as usize;
         assert_eq!(
             region.memory[offset..offset + 4],
             STACK_CANARY.to_le_bytes(),
             "the canary sits at the base"
         );
+    }
+
+    #[test]
+    fn a_region_size_and_its_exhaustion_message_depend_only_on_the_request() {
+        // Allocations land at different alignments; the region (and so the message a
+        // host sees) must not follow them.
+        let regions: Vec<StackRegion> = (0..8).map(|_| StackRegion::new(524_288 + 7)).collect();
+        for region in &regions {
+            assert_eq!(region.bounds.top - region.bounds.base, 524_288);
+            assert_eq!(
+                region.bounds.exhausted(),
+                "asynchronous job stack region exhausted (524288 bytes); raise stackBytes"
+            );
+        }
+        let larger = StackRegion::new(4 * 1024 * 1024);
+        assert_eq!(
+            larger.bounds.exhausted(),
+            "asynchronous job stack region exhausted (4194304 bytes); raise stackBytes",
+            "a different request is a different message"
+        );
+    }
+
+    #[test]
+    fn an_overrun_the_zone_absorbs_is_told_apart_from_one_that_escapes() {
+        let base_offset = |region: &StackRegion| region.zone_offset + STACK_OVERRUN_ZONE_BYTES;
+
+        // The valid neighbour: frames anywhere inside the region leave no trace below it.
+        let mut inside = StackRegion::new(524_288);
+        let offset = base_offset(&inside);
+        inside.memory[offset + 4..offset + 4096].fill(0);
+        assert_eq!(inside.overrun(), Overrun::None);
+
+        // A frame that overwrote only the canary.
+        let mut canary = StackRegion::new(524_288);
+        let offset = base_offset(&canary);
+        canary.memory[offset] ^= 0xFF;
+        assert_eq!(canary.overrun(), Overrun::Absorbed);
+
+        // Frames down to the floor, the canary rewritten by chance.
+        let mut upper = StackRegion::new(524_288);
+        let offset = base_offset(&upper);
+        upper.memory[offset - (STACK_OVERRUN_ZONE_BYTES - STACK_OVERRUN_FLOOR_BYTES)..offset]
+            .fill(0);
+        assert_eq!(upper.overrun(), Overrun::Absorbed);
+
+        // One byte in the floor: the frames may have left the allocation.
+        let mut floor = StackRegion::new(524_288);
+        let zone = floor.zone_offset;
+        floor.memory[zone + STACK_OVERRUN_FLOOR_BYTES - 1] = 0;
+        assert_eq!(floor.overrun(), Overrun::Escaped);
+        let mut bottom = StackRegion::new(524_288);
+        let zone = bottom.zone_offset;
+        bottom.memory[zone] = 0;
+        assert_eq!(bottom.overrun(), Overrun::Escaped);
+    }
+
+    #[test]
+    fn a_poll_after_frames_overwrote_the_canary_stops_with_the_typed_exhaustion() {
+        let region = StackRegion::new(524_288);
+        let slots = Arc::new(JobSlots::new(1, region.bounds));
+        slots.region_armed.store(true, Ordering::Relaxed);
+        let watch = JspiStopWatch::new(Arc::clone(&slots), None, u32::MAX);
+        // The valid neighbour: the canary is intact, so the guard goes on to the frame's
+        // own address — which on the native build is never inside the region.
+        assert!(
+            watch
+                .stack_check()
+                .expect_err("a native frame is outside the region")
+                .contains("not running on its stack region")
+        );
+        let mut region = region;
+        let offset = region.zone_offset + STACK_OVERRUN_ZONE_BYTES;
+        region.memory[offset..offset + 4].fill(0);
+        assert_eq!(
+            watch.stack_check().expect_err("the canary is gone"),
+            "asynchronous job stack region exhausted (524288 bytes); raise stackBytes"
+        );
+        drop(watch);
+        drop(region);
     }
 
     // ── Jobs, end to end on the native build (no effect is issued) ───────────────────
