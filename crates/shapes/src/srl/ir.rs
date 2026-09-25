@@ -21,7 +21,7 @@
 //!   evaluation graph, and scheduled by its declared `sh:layer`, `sh:order` and
 //!   `sh:runOnce`.
 //!
-//! Both kinds lower onto `purrdf-datalog` ([`super::lower`]): a triple pattern becomes a
+//! Both kinds lower onto `purrdf-datalog` (`super::lower`): a triple pattern becomes a
 //! clause atom, a filter or an assignment a guard literal, a negation element a negated
 //! conjunction, and a SHACL producer a clause whose body is one model-reading guard. The
 //! rule set is then evaluated by that crate's ordered schedule — under the declared
@@ -212,7 +212,7 @@ pub struct TriplePattern {
 pub enum PatternTerm {
     /// A variable, by name without `?`.
     Variable(String),
-    /// A blank node, by label. In a body pattern it "behave[s] like variables"
+    /// A blank node, by label. In a body pattern it "behave\[s\] like variables"
     /// ("each blank node in a triple pattern in R.body is replaced by a variable which
     /// is not used in the rule"); in a head template it is fresh per solution.
     BlankNode(String),

@@ -39,7 +39,7 @@
 //!
 //! Derived rows — every constraint parameter, component, built-in function and
 //! its parameters, node-expression alias, target predicate and rule type — come
-//! from the spec symbol table ([`super::table`]); only the terms the table has
+//! from the spec symbol table (`super::table`); only the terms the table has
 //! no row for are listed here, so there is no second list of either.
 
 use std::sync::LazyLock;
