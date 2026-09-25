@@ -730,7 +730,7 @@ mod x87 {
 #[test]
 fn the_significand_power_model_reproduces_the_published_misreadings() {
     for (lexical, published) in [
-        // serde-rs/json#707.
+        // An 18-significant-digit value the default reader returns one ulp off.
         ("122.416294033786585", 122.416_294_033_786_6),
         // A 17-significant-digit shortest form from a JavaScript producer.
         ("51.708947112827516", 51.708_947_112_827_52),
