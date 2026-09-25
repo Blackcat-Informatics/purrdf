@@ -137,7 +137,7 @@ test("shaclEvalNodeExpr evaluates one expression node, natively and with a scope
   );
 });
 
-test("shaclLintShapes certifies the issue's graph clean and reports a malformed one", () => {
+test("shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one", () => {
   const clean = shaclLintShapes(SHAPES);
   assert.equal(clean.clean, true);
   assert.equal(clean.findings, 0);

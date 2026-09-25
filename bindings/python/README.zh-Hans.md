@@ -166,8 +166,40 @@ report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 ```
 
-完整的 SHACL Core、SHACL-SPARQL 约束/目标，以及经由 `shapes.entail(...)` 的 SHACL-AF
-`sh:rule` 蕴涵。可复用的已解析形状为 `shapes.Shapes(shapes_ttl).validate_nt(data_nt)`。
+SHACL 1.2 Core、SPARQL 扩展与节点表达式，以及经由 `shapes.entail(...)` 的 SHACL 规则
+蕴涵。可复用的已解析形状可通过 `shapes.Shapes(shapes_ttl).validate_nt(data_nt)` 使用。每个结果
+字典都携带 `messages`：每条 `sh:resultMessage` 各为一个字典，含 `text`，存在时还含
+`language`、`direction` 与 `datatype`。`shapes.validate(...,
+conformance_disallows=[...])` 设定哪些严重级别 IRI 会使报告判定为不符合（默认为
+`sh:Violation`、`sh:Warning` 与 `sh:Info`），结果字典中的 `conformance_disallows`
+给出报告判定时所依据的集合。
+
+验证之外还有三个工具，每一个都是 CLI、WebAssembly 与 C 接口所发出的同一个库调用：
+
+```python
+# Run the SHACL 1.2 rules of a shapes graph, or a SPARQL 1.2 RL rule set (srl=...),
+# and get the INFERENCE GRAPH: the inferred triples only, as N-Triples. With
+# explain=True, "proof" carries the proof of every inferred triple.
+out = shapes.apply_rules(my_data, my_shapes, explain=True)
+out["inferred"], out["proof"]
+
+# An untrusted rule set: lower the term-generating round limit (default 65,536),
+# so a divergent rule set fails fast instead of running long.
+shapes.apply_rules(my_data, srl=untrusted_rules, max_term_generating_rounds=64)
+
+# Evaluate one node expression of a shapes graph against a focus node. The
+# expression is an IRI or "_:label"; the scope binds shnex:var names.
+shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
+                      "http://example.org/a", scope={"suffix": '"!"'})
+
+# Certify a shapes graph: the loader's verdict, the W3C shacl-shacl.ttl results,
+# and which implementation every function call binds to.
+lint = shapes.lint_shapes(my_shapes)
+lint["clean"], lint["findings"], lint["calls"], lint["report"]
+```
+
+格式错误的形状图得到的是一份带有问题项的 `lint_shapes` 报告，而不是异常；只有不是
+Turtle 的文档才会抛出 `ValueError`。
 
 ## 用 ShEx 验证
 
@@ -316,9 +348,9 @@ OWL 2 RDF 映射中的一条*公理*，而 `entail.graph_entails` 向蕴涵机�
 
 | 服务 | 调用 | 答案 |
 | --- | --- | --- |
-| 确定答案 | `entail.certain_answers(regime, data, pattern, imports)` | `mechanism`，每个投影变量一行 `var`，每个确定答案一行 `row`，以及行集可能不完备的每个原因一行 `limit` |
-| 图蕴涵 | `entail.graph_entails(regime, premise, conclusion, imports)` | `mechanism <name>`，随后是 `entailment entailed` / `not-entailed` / `undecided`——三种裁决，绝不是两种 |
-| 已验证蕴涵 | `entail.verify_entailment(regime, premise, conclusion, imports)` | 上述内容加上 `warrant present`/`absent` 与 `verified true`/`false`/`not-applicable` |
+| 确定答案 | `entail.certain_answers(regime, data, pattern, imports, premise_iris)` | `mechanism`，每个投影变量一行 `var`，每个确定答案一行 `row`，以及行集可能不完备的每个原因一行 `limit` |
+| 图蕴涵 | `entail.graph_entails(regime, premise, conclusion, imports, premise_iris)` | `mechanism <name>`，随后是 `entailment entailed` / `not-entailed` / `undecided`——三种裁决，绝不是两种 |
+| 已验证蕴涵 | `entail.verify_entailment(regime, premise, conclusion, imports, premise_iris)` | 上述内容加上 `warrant present`/`absent` 与 `verified true`/`false`/`not-applicable` |
 
 `pattern` 是在任意位置（**谓词**位置也包括在内）带 `?name` 的 N-Triples；其中的空节点
 是非区分变量，受匹配约束但不投影，这正是 SPARQL 对查询空节点的定义。RDF 1.2 三元组项
@@ -362,6 +394,11 @@ OWL 2 RDF 映射中的一条*公理*，而 `entail.graph_entails` 向蕴涵机�
 JavaScript、C 与 Rust 中都可用。解析是传递到不动点的，因此所提供文档自身的
 `owl:imports` 同样会被跟进。
 
+`premise_iris` 是读取前提文档所用的 IRI 列表——在已知的情况下，即它的 URL，或解析它时
+所用的基准 IRI。指向其中之一的 `owl:imports` 指的就是前提本身，会原地解析，无需
+`imports` 条目；对前提已声明的本体的导入同样如此。没有来源位置、直接交到你手上的文本
+没有这样的 IRI，`[]` 就是这种普通情形。与 `imports` 一样，该参数是必填的。
+
 ```python
 from purrdf import entail
 
@@ -381,14 +418,14 @@ conclusion = (
 )
 
 answer, _ = entail.graph_entails(
-    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)]
+    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)], []
 )
 assert "entailment entailed" in answer
 
 # The same call with nothing supplied refuses BY NAME rather than reasoning over a
 # premise that is missing the axioms it told you about.
 try:
-    entail.graph_entails("owl-rl", premise, conclusion, [])
+    entail.graph_entails("owl-rl", premise, conclusion, [], [])
 except ValueError as refusal:
     assert "https://example.org/schema" in str(refusal)
 ```
@@ -519,6 +556,41 @@ store.query(
 )
 ```
 
+三种声明中的任何一种都可以再多带一个末尾位置：`(generation, incompleteness)`，即宿主
+对这些行所来自的索引所知道的情况。这是关系中唯一无法由行本身表达的部分——从正在重建的
+搜索索引中读出的表，与从完整索引中读出的表是同一组行，两次运行之间的查询文本与数据集
+快照也毫无差别。两个成员都会被逐字记录，任一成员为 `None` 都表示没有陈述，绝不表示索引
+是最新的或完整的：
+
+```python
+outcome = store.query_governed(
+    query,
+    relations={
+        f"{EX}rel/memberOf": (
+            1, 1, rows,
+            ("members-index-7", "shard 3 of 4 is still rebuilding"),
+        )
+    },
+)
+outcome.relation_witness[f"{EX}rel/memberOf"]["incompleteness"]
+# ['shard 3 of 4 is still rebuilding']
+```
+
+被声明的不完整性**要么被见证，要么致命**，由入口点自身的返回类型决定，而不是由任何
+关键字决定。受调控的结果有容纳该声明的位置，因此 `query_governed` /
+`query_entailment_governed` 会作答，并在 `relation_witness` 上报告它——
+`{relation_iri: {"invocations": int, "generations": [...], "incompleteness": [...]}}`，
+按 IRI 顺序作键，始终存在，可能为空。`query` 与 `update` 没有地方放它，因此会抛出携带
+`native-sparql-relation-incomplete` 的 `ValueError`，而不是交回一个与完整答案无法区分的
+残缺答案。空的见证、空的 `incompleteness` 列表以及为 `None` 的 generation 都只是缺失——
+它们都不能证明某个索引是完整的。
+
+两份声明列表可以在不同运行之间比较；`invocations` 则不能。它统计的是进入宿主代码的
+次数，这是关于调度而非关于索引的事实——在 `FILTER EXISTS` 之下，关系会对驱动行的每个
+分块各进入一次，而分块数取决于运行时的线程数，因此同一份数据上的同一个查询可能报告不同的
+数字，而旁边的每一项声明都完全相同。把它读作「这个关系到底有没有运行」，绝不要把它当作
+可在两份回执之间比较的值。
+
 注册是按调用进行的且不携带任何可调用对象，因此整个求值仍在释放 GIL 的状态下运行。
 在 Rust 侧是任意宿主闭包的那些属性函数——全文索引、GeoSPARQL 关系、嵌入 k 近邻
 关系——不跨越这一边界；只有这三种数据形态的注册跨越它。
@@ -575,10 +647,21 @@ rows = purrdf.gts_relational_rows_from_bytes(gts_bytes)
 rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs"]
 ```
 
-`gts_relational_rows_from_bytes` 返回一个 `GtsRelationalRows` 字典，含五个行列表；把它们
-写入某个存储是调用方自己的步骤。`gts_to_sqlite`、`gts_to_duckdb` 与 `gts_to_parquet` 这
-三个名字已声明但**未实现**：每一个都抛出 `ValueError` 且不写出任何东西。同样的入口点也
-归组在 `purrdf.gts` 之下以便发现。
+`gts_relational_rows_from_bytes` 返回一个 `GtsRelationalRows` 字典，含五个行列表。
+`gts_to_sqlite(data, path)`、`gts_to_duckdb(data, path)` 与
+`gts_to_parquet(data, out_dir)` 把这五张表——`terms`、`quads`、`reifiers`、
+`annotations`、`blobs`——按投影自身的行顺序写出，因此把同一个容器导出两次会得到相同的
+内容。`gts_to_parquet` 每张表写一个文件，并按表的顺序返回它们的路径。
+
+SQLite 只需要标准库。另外两个在所需的可选依赖缺失时会抛出点名该依赖的
+`ModuleNotFoundError`：
+
+```bash
+pip install 'purrdf[duckdb]'    # gts_to_duckdb
+pip install 'purrdf[parquet]'   # gts_to_parquet
+```
+
+同样的入口点也归组在 `purrdf.gts` 之下以便发现。
 
 ## 进一步了解
 

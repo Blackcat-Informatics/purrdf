@@ -37,7 +37,7 @@ PurRDF 中，具体化节点绑定与注解存放在数据集上专门的**侧�
 
 具体化节点绑定与注解在每一种具 star 能力的编解码器往返中都得以保留；投影到不具 star
 能力的格式时，它们会被*显式*丢弃并报告，实际丢弃的数量交给损失台账（参见
-[切片、映射与溯源](../slices.md)）。对具体化陈述进行验证的 SHACL 支持——草案中的
+[切片、映射与溯源](../slices.md)）。对具体化陈述进行验证的 SHACL 支持——SHACL 1.2 的
 `sh:reifierShape` / `sh:reificationRequired` 接口——见 [SHACL](../validation/shacl.md)。
 
 ## 基础方向字面量
@@ -54,9 +54,9 @@ const rtl = f.directionalLiteral("مرحبا", "ar", "rtl");
 
 ## RDF 1.2 是一个完整的目标，而不是草案借口
 
-PurRDF 把 RDF 1.2 / SPARQL 1.2 规范当作完整的、可实现的目标。凡是某项特性有范围限定
-的地方（例如，SHACL 1.2 的具体化节点形状支持是一项有范围限定的工作草案特性，而非完整的
-SHACL 1.2 一致性），其范围都被明确陈述并由测试把关——绝不留作静默的部分实现。逐特性的
+PurRDF 把 RDF 1.2 / SPARQL 1.2 规范当作完整的、可实现的目标，SHACL 1.2 亦然：W3C
+SHACL 1.2 测试套件（含具体化节点形状）全部通过。凡是某项特性有范围限定的地方，其范围都
+被明确陈述并由测试把关——绝不留作静默的部分实现。逐特性的
 实时状态是
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)
 中的一致性矩阵。
@@ -66,7 +66,7 @@ SHACL 1.2 一致性），其范围都被明确陈述并由测试把关——绝�
 | 特性 | IR | 编解码器 | SPARQL | SHACL | RDF/JS | GTS |
 | --- | --- | --- | --- | --- | --- | --- |
 | 三元组项（宾语位置） | 驻留词项 | 具 star 能力的格式 | `<<( s p o )>>` | 经由路径/值 | `quotedTriple` | 按规范映射 |
-| 具体化节点 / 注解 | 侧表 | 具 star 能力的格式 | 具体化节点支持 | `sh:reifierShape`（草案） | — | `rdf:reifies` 映射 |
+| 具体化节点 / 注解 | 侧表 | 具 star 能力的格式 | 具体化节点支持 | `sh:reifierShape`、`sh:reificationRequired` | — | `rdf:reifies` 映射 |
 | 基础方向字面量 | 字面量种类 | 可往返 | 可匹配/可产出 | 值节点 | `directionalLiteral` | 可承载 |
 
 三元组项与 `rdf:reifies` 的 GTS 映射在

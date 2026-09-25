@@ -424,28 +424,31 @@ triple pattern.
   `PagedQueryLimits` in Rust. The normative charge schedule and the frozen
   50-case governor corpus live in
   [`docs/SPARQL-GOVERNOR-PROFILE.md`](./docs/SPARQL-GOVERNOR-PROFILE.md).
-- **SHACL validation** — a native validator with the complete SHACL Core feature
-  set (all constraint components, full property paths, qualified value shapes,
-  property pairs), SHACL-SPARQL constraints/targets on the native engine, the
-  complete SHACL-AF surface (node expressions, expression constraints,
-  user-defined SPARQL functions and target types, and SHACL Rules materialized
-  as a new dataset), aligned with the SHACL 1.2 Node Expressions
-  (`shnex:`), SPARQL Extensions and SPARQL 1.2 RL Working Drafts — both the AF
-  and the 1.2 spelling of a node expression parse to one representation, and
-  rules run as `sh:order` strata with `once`/`general` partitioning — plus
-  scoped SHACL 1.2 support for reifier shapes. None of that is a claim of full
-  SHACL 1.2 conformance. **129/129 passing** on the vendored W3C test suite,
-  zero ledgered. The answer is the W3C validation report as a frozen RDF
-  dataset (`ValidationReport::to_dataset()`), so any syntax — and the CLI's
+- **SHACL validation** — a native validator and rules engine for SHACL 1.2:
+  Core (every constraint component the SHACL 1.2 vocabulary declares, the
+  SHACL 1.2 targets, severities and conformance-disallow sets), SPARQL
+  Extensions on the native engine, Node Expressions with the order and
+  multiplicity each expression kind defines, Inference Rules, and the SPARQL
+  1.2 RL rule language, with SHACL rules and SPARQL 1.2 RL both running on
+  `purrdf-datalog`. The SHACL-AF 1.0 spellings parse to the same
+  representation, and a shapes graph that merges the W3C SHACL 1.2
+  vocabularies loads with every built-in bound to its native implementation.
+  **547/547 passing** on the vendored W3C SHACL 1.2 test suite and
+  **129/129 passing** on the vendored W3C SHACL 1.0 test suite, zero ledgered
+  in both. The answer is the W3C validation report as a frozen RDF dataset
+  (`ValidationReport::to_dataset()`), so any syntax — and the CLI's
   `validate --format` — is a serialization of that dataset rather than a text
   round-trip, with the report's minted blank nodes kept distinct from every
-  blank node the data graph carries. Where it stops: a shapes graph's
+  blank node the data graph carries. Where it stops: a term the shapes graph
+  uses and the engine does not evaluate is a load error naming it (the SHACL
+  JavaScript Extensions, the deprecated `sh:minus`, `sh:describe` and
+  `sh:update` executables, and `sh:resultAnnotation`). A shapes graph's
   `owl:imports` are never fetched — the caller supplies `--import IRI=FILE`,
   the same shape `entails` and `shex` take, and the closure is followed
   transitively from that table. An import of the shapes document's own IRI,
   or of an ontology already in the shapes graph (`<X> a owl:Ontology`, or an
-  `owl:versionIRI` naming it), needs no pair; any other unresolved import is refused by name rather than
-  validated against a smaller shapes graph.
+  `owl:versionIRI` naming it), needs no pair; any other unresolved import is
+  refused by name rather than validated against a smaller shapes graph.
 - **Schema lanes: SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML /
   TypeScript / GraphQL** (`purrdf-shapes`, **Rust only**) — `compile_schema`
   lowers a shapes graph (ontology-aware on request, with a coverage report)
@@ -682,7 +685,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-sparql-eval`](./crates/sparql-eval/) | Multiset SPARQL evaluator in interned `TermId` space, with the caller-keyed extension seams (scalar functions, property functions — including the path-witness and embedding-kNN relations — custom aggregates, and the per-service `ServiceResolver`) and the execution governors. |
 | [`purrdf-sparql-results`](./crates/sparql-results/) | SPARQL results JSON/XML/CSV/TSV, plus a provenance-carrying extension. |
 | [`purrdf-cdt`](./crates/cdt/) | SEP-0009 SPARQL composite datatypes (`cdt:List`/`cdt:Map`): the value space, an iterative bounded lexical scanner, canonical spelling, and the fifteen-function library. A `no_std` closed leaf over `purrdf-iri` + `purrdf-xsd`; reached through the evaluator, not re-exported by the umbrella. |
-| [`purrdf-shapes`](./crates/shapes/) | SHACL validation engine (full Core + SHACL-SPARQL + SHACL-AF, including SHACL Rules). |
+| [`purrdf-shapes`](./crates/shapes/) | SHACL 1.2 validation and rules engine (Core, SPARQL Extensions, Node Expressions, Inference Rules, SPARQL 1.2 RL). |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1: ShExC/ShExJ schemas and validation. |
 | [`purrdf-entail`](./crates/entail/) | Entailment regimes: the RDF/RDFS/OWL-RL/D chase, an OWL-Direct tableau, and RIF-Core rules — each closure returned with a reasoning report. |
 | [`purrdf-geo`](./crates/geo/) | GeoSPARQL 1.1: exact, float-free WKT and GeoJSON geometry, the `geof:` function family over the scalar seam, and feature-level query rewrite over the property-function seam — all under caller-supplied IRIs. |
@@ -754,6 +757,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,105 / 1,105** attempted, 0 xfail |
 | ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
 | SHACL | W3C data-shapes (`vectors/shacl/`) | **129 / 129**, 0 ledgered |
+| SHACL 1.2 | W3C shacl12-test-suite (`vectors/shacl12/`) | **547 / 547**, 0 ledgered |
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **73 / 73** |
 | SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **19 / 19** |
 | Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |

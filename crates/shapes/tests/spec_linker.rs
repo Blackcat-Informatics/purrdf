@@ -306,7 +306,7 @@ sh:NotABuiltin a sh:NamedParameterExpressionFunction ;
 ";
 
 /// The W3C SHACL 1.2 declaration of `sh:SPARQLExprExpression`, verbatim.
-const ISSUE_SNIPPET: &str = r#"
+const SPARQL_EXPR_DECLARATION: &str = r#"
 sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
   rdfs:label "SPARQL expr expression"@en ;
   rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
@@ -343,7 +343,7 @@ fn a_bodiless_non_builtin_in_the_sh_namespace_is_refused() {
 
 #[test]
 fn the_builtin_sparql_expr_declaration_loads() {
-    let shapes = load(ISSUE_SNIPPET).expect("the W3C declaration binds natively");
+    let shapes = load(SPARQL_EXPR_DECLARATION).expect("the W3C declaration binds natively");
     assert!(
         shapes.node_shapes.is_empty(),
         "a declaration is not a shape"
@@ -438,7 +438,7 @@ fn a_custom_list_function_named_by_a_builtin_key_is_refused() {
 #[test]
 fn a_builtin_function_given_a_body_is_a_duplicate_definition() {
     let error = load_error(&format!(
-        "{ISSUE_SNIPPET}
+        "{SPARQL_EXPR_DECLARATION}
          sh:SPARQLExprExpression sh:bodyExpression [ shnex:var \"focusNode\" ] ."
     ));
     assert!(
@@ -447,7 +447,7 @@ fn a_builtin_function_given_a_body_is_a_duplicate_definition() {
     );
     // The bare declaration binds (see `the_builtin_sparql_expr_declaration_loads`)
     // and — the observing half — indexes nothing.
-    let bare = linked(ISSUE_SNIPPET);
+    let bare = linked(SPARQL_EXPR_DECLARATION);
     assert!(!bare.custom_function("http://www.w3.org/ns/shacl#SPARQLExprExpression"));
 }
 
@@ -547,7 +547,7 @@ fn a_builtin_function_declared_as_a_component_is_a_kind_mismatch() {
 #[test]
 fn a_builtin_declaration_stating_a_foreign_parameter_is_a_signature_mismatch() {
     let error = load_error(&format!(
-        "{ISSUE_SNIPPET}
+        "{SPARQL_EXPR_DECLARATION}
          sh:SPARQLExprExpression sh:parameter [ sh:path ex:extra ] ."
     ));
     assert!(error.contains("signature mismatch"), "{error}");
@@ -568,7 +568,7 @@ fn a_builtin_declaration_keying_a_non_key_parameter_is_a_signature_mismatch() {
     );
     assert!(error.contains("signature mismatch"), "{error}");
     // Neighbour: the W3C spelling states sh:prefixes with no sh:keyParameter.
-    load(ISSUE_SNIPPET).expect("the W3C declaration binds");
+    load(SPARQL_EXPR_DECLARATION).expect("the W3C declaration binds");
 }
 
 #[test]
@@ -725,8 +725,8 @@ fn the_merged_vocabulary_indexes_and_registers_nothing() {
 }
 
 #[test]
-fn the_issue_snippet_indexes_nothing() {
-    let linked = linked(ISSUE_SNIPPET);
+fn the_sparql_expr_declaration_indexes_nothing() {
+    let linked = linked(SPARQL_EXPR_DECLARATION);
     assert!(!linked.custom_function("http://www.w3.org/ns/shacl#SPARQLExprExpression"));
     assert_eq!(
         linked.by_key_parameter("http://www.w3.org/ns/shacl#sparqlExpr"),

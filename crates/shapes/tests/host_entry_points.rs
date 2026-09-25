@@ -25,7 +25,7 @@ use purrdf_shapes::text_ingest::{TurtleDocument, parse_turtle_document, parse_tu
 use purrdf_shapes::{RuleOptions, engine, infer};
 
 /// The W3C SHACL 1.2 declaration of `sh:SPARQLExprExpression`, verbatim.
-const ISSUE_SNIPPET: &str = r#"
+const SPARQL_EXPR_DECLARATION: &str = r#"
 sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
   rdfs:label "SPARQL expr expression"@en ;
   rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
@@ -86,7 +86,7 @@ const DATA: &str = "@prefix ex: <http://example.org/ns#> .\nex:a a ex:Item ; ex:
 const SPARQL_EXPR_EXPRESSION: &str = "http://www.w3.org/ns/shacl#SPARQLExprExpression";
 
 fn document(body: &str) -> TurtleDocument {
-    parse_turtle_document(&format!("{PREFIXES}{ISSUE_SNIPPET}{body}"), None)
+    parse_turtle_document(&format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}{body}"), None)
         .expect("the fixture parses")
 }
 
@@ -102,7 +102,7 @@ fn data() -> Arc<RdfDataset> {
 // ── lint ──────────────────────────────────────────────────────────────────────
 
 #[test]
-fn lint_certifies_the_issue_snippet_clean_and_binds_sparql_expr_natively() {
+fn lint_certifies_the_sparql_expr_declaration_clean_and_binds_it_natively() {
     let report = linted(TOOLS);
     assert_eq!(report.load_error(), None);
     assert!(report.shacl_shacl().is_empty(), "{}", report.render());
@@ -283,7 +283,8 @@ fn a_term_argument_is_an_n_triples_term_or_an_absolute_iri() {
 // ── rules: the inference graph, its proof, and the round limit ─────────────────
 
 fn run_rules(options: &RuleOptions) -> Result<purrdf_shapes::Inference, String> {
-    let shapes = engine::parse_shapes(&format!("{PREFIXES}{ISSUE_SNIPPET}{TOOLS}"), None)?;
+    let shapes =
+        engine::parse_shapes(&format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}{TOOLS}"), None)?;
     let projected = engine::project_dataset(data().as_ref())?;
     let holder = ShaclData::new(Arc::clone(&projected), projected, None);
     infer(&holder, &shapes, options)

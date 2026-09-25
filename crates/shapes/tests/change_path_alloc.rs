@@ -2717,8 +2717,8 @@ fn all_constraint_kind_names() -> Vec<String> {
 /// `PlannedConstraint` variant name above) matches no single [`CASES`] entry,
 /// even though the kind genuinely IS exercised there — split, across entries
 /// named for the sub-constraints it composes, because those names are more
-/// informative than the kind's own. Renaming the existing entries to match is
-/// out of scope here (an existing `CASES` entry must not change), so the
+/// informative than the kind's own. Renaming the existing entries to match
+/// would change existing `CASES` entries, which must stay fixed, so the
 /// mapping is recorded instead.
 ///
 /// `sh:qualifiedValueShape` is the one case: `PlannedConstraint::QualifiedValueShape`

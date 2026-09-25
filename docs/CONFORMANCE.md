@@ -105,6 +105,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** · 0 ledgered |
+| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **547 / 547** · 0 ledgered: 174 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer`, 203 SPARQL 1.2 RL |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **73 / 73** frozen expected reports |
 | SHACL prepared-product equivalence | the three SHACL corpora, `vectors/shacl/` (129) + the `sht:Validate` entries of `vectors/shacl12/tests/` (174) + `crates/shapes/corpus/` (73) | **364 / 364** shapes graphs whose validation report is byte-identical when the shapes graph is parsed from source, packed and admitted, and packed and rebuilt from the dataset the product carries · 0 ledgered refusals. Not a second SHACL grading: the two rows above already decide whether the engine's answer is right, and a case whose answer is wrong is wrong identically in all three lanes. This row decides whether the prepared-product codec CHANGES the answer, which neither of those rows can see because each runs exactly one lane. The comparison surface is the report graph's N-Triples compared as bytes, so `sh:sourceShape` and `sh:resultMessage` are both in it and a restore that attributed a violation to the wrong shape fails here even when every focus node, path and component still matched. The ledger column is the **over-refusal** guard, and an empty ledger is the measurement: every shapes graph any of the three corpora contains that parses at all can be packed and restored, so the product format is not a subset of what the validator accepts. The 12 cases outside the comparison are the 12 entries the two vendored suites mark `sht:Failure` — inputs a validator is required to reject, so there is nothing to pack; no SHACL 1.2 entry's shapes graph is refused at load, and that correspondence is enforced case by case rather than counted |
 | XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **292 / 292** cases · 0 ledgered. The dialect `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified in, graded once at the shared compiler (`purrdf_core::xsd_regex`) instead of three times at the call sites. Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Seven construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, quantifiers (including F&O §5.6.1's reluctant forms), the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the shared compiler's back-reference refusal, trailing-newline differences for both multiline anchors, and case-variant differences under `i`, and [the recognizer boundary and the liberal edges](#xsdxpath-regex-the-recognizer-boundary-and-the-liberal-edges) for what the compiler now rejects outright and what it deliberately accepts more liberally |
@@ -143,6 +144,13 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   `af/rules/` inferred-graph fixtures (DASH `dash:InferencingTestCase` rules plus
   first-party cases) driving the SHACL Rules harness. Each half's README says
   which files are which, and records provenance.
+- `vectors/shacl12/` — the W3C SHACL 1.2 vocabularies (`shacl.ttl`, `shnex.ttl`,
+  `shnex-sparql.ttl`, `shacl-shacl.ttl`) and the whole `shacl12-test-suite`
+  tree, vendored byte-exact from `w3c/data-shapes` at a pinned commit by
+  `scripts/vendor-shacl12.py` and frozen by
+  `scripts/conformance-frozen/vectors-shacl12.sha256`. Run by
+  `crates/shapes/tests/w3c12_conformance.rs`; its `PROVENANCE.md` records the
+  commit.
 - `vectors/sparql-cdt/` — the SEP-0009 Composite Datatypes suite, vendored
   verbatim from `awslabs/SPARQL-CDTs` at commit `e0a7465` by
   `scripts/vendor-sparql-cdt.py` and frozen by
@@ -263,6 +271,7 @@ make conformance                                      # the single matrix (all o
 cargo test -p purrdf-iri                               # IRI + RFC 3986 resolution
 cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
+cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture # W3C SHACL 1.2 scoreboard
 cargo test -p purrdf-shapes --test conformance         # the 73-case frozen corpus
 cargo run -p purrdf-shapes --example schema_reverse --locked        # all five schema readers
 make pydantic-oracle linkml-oracle typescript-oracle graphql-oracle # independent schema runtimes
@@ -569,8 +578,8 @@ way the matrix stays honest:
 - **SHACL** — the harness discovers **129 / 129** `sht:Validate` entries with
   **0 ledgered xfails**: **120** from the W3C `core/` and `sparql/` suites, plus
   **9** under `vectors/shacl/af/`. Of those 9, **6 are vendored** from pySHACL's
-  DASH tests and **3 are first-party** cases authored for PurRDF against the W3C
-  "SHACL 1.2 Node Expressions" draft, which the DASH corpus predates — there is
+  DASH tests and **3 are first-party** cases authored for PurRDF against W3C
+  "SHACL 1.2 Node Expressions", which the DASH corpus predates — there is
   **no W3C SHACL-AF conformance suite**, so no vendored suite grades that surface
   and none is claimed to. Both kinds are written in the same `sht:Validate`
   manifest format and are discovered and gated by
@@ -579,10 +588,11 @@ way the matrix stays honest:
   pre-binding semantics, and user-defined `sh:SPARQLFunction` calls are
   implemented and exercised; `sh:SPARQLTargetType` is implemented.
   **SHACL Rules** (`sh:rule` — both `sh:TripleRule` and
-  `sh:SPARQLRule`, with `sh:condition`, `sh:order`, and `sh:deactivated`) are now
-  implemented: rules fire in an iterative fixpoint and the derivation is
-  materialized as a new dataset (`base ⊎ derived`), leaving the input graph
-  untouched. They are gated by a vendored pySHACL DASH rules corpus plus
+  `sh:SPARQLRule`, with `sh:condition`, `sh:layer`, `sh:order`, `sh:runOnce`
+  and `sh:deactivated`) run as SHACL 1.2 Inference Rules specifies, on the
+  `purrdf-datalog` rules engine that also runs SPARQL 1.2 RL, and the
+  derivation is materialized as a new dataset (`base ⊎ derived`), leaving the
+  input graph untouched. They are gated by a vendored pySHACL DASH rules corpus plus
   first-party fixtures under `vectors/shacl/af/rules/`, discovered by
   `crates/shapes/tests/rules_conformance.rs`, with the derived graph compared to
   the expected inferred graph by RDFC-1.0 isomorphism.
@@ -604,6 +614,30 @@ way the matrix stays honest:
   (`sh:ExpressionConstraintComponent`), and SHACL Rules (`sh:TripleRule` /
   `sh:SPARQLRule`, AND rule sets).
 
+- **SHACL 1.2** — the harness discovers all **547** entries of the vendored W3C
+  `shacl12-test-suite` and passes **547 / 547** with an empty expected-failure
+  ledger: 174 `sht:Validate` (graded like the SHACL 1.0 suite), 143
+  `sht:EvalNodeExpr` (output compared term for term, in order unless the entry
+  sets `sht:ignoreOrder`), 27 `sht:Infer` (inferred graph compared by RDFC-1.0
+  isomorphism) and 203 SPARQL 1.2 RL tests across seven test types, each
+  negative test required to fail at the stage its type names. Discovery
+  refuses to lose a test: an unknown test type, an unreached manifest, an
+  unlisted test node or a duplicate id stops the run. Three approved
+  expectations contradict normative SHACL 1.2 Core text and are graded against
+  the spec-corrected report, each amendment quoting its clause and proven exact
+  against controls: `core/node/xone-003` (§6.7.2.2, the result path of a
+  property shape's result) and `core/property/reifierShape-001` and `-002`
+  (§7.8.5, `sh:value` is the reifier, or the triple term for a missing
+  reification). Six node-expression expectations spell an integer-valued
+  `xsd:decimal` non-canonically and are graded against the XSD 1.1 canonical
+  form (Part 2 §3.3.3.1 and §E.1), which PurRDF emits. SPARQL 1.2 RL grammar
+  rule [2] is implemented as written. Beside the suite,
+  `crates/shapes/tests/vocabulary_import_invariance.rs` proves that merging the
+  W3C SHACL 1.2 vocabularies into a shapes graph changes no report of three
+  corpora, `crates/shapes/tests/spec_linker.rs` pins the gap between what the
+  vocabularies declare and what the engine implements at zero, and
+  `crates/shapes/tests/shacl_shacl_differential.rs` holds the parser's
+  refusals to the verdicts of the specification's own `shacl-shacl.ttl`.
 - **XSD/XPath regex back-references — refused by design, permanently.**
   `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified
   in the XSD/XPath `regExp` dialect (SHACL §4.5.3 → SPARQL 1.1 §17.4.3.14 →

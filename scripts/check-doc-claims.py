@@ -3162,6 +3162,194 @@ def jsonld_lens_claims() -> list[Claim]:
     ]
 
 
+_SHACL12_ROW = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
+_SHACL12_CORPUS = _REPO / "crates" / "shapes" / "tests" / "shacl_corpora" / "shacl12.rs"
+_SHAPES_README = _REPO / "crates" / "shapes" / "README.md"
+_BOOK_SHACL = _REPO / "docs" / "book" / "src" / "validation" / "shacl.md"
+
+
+def load_shacl12_type_counts() -> dict[str, int]:
+    """The W3C SHACL 1.2 suite's size per test family, from the harness's own pins.
+
+    ``W3C12_CASES_BY_TYPE`` and ``W3C12_TOTAL_CASES`` in the SHACL 1.2 discovery
+    module are what the harness asserts discovery found, type by type. The seven
+    ``srlt:`` types are summed into one SPARQL 1.2 RL figure, which is how the prose
+    states it. The per-type pins must sum to the total, or this loader refuses
+    rather than re-basing a claim on a table that disagrees with itself.
+    """
+    text = _read(_SHACL12_CORPUS)
+    rel = _SHACL12_CORPUS.relative_to(_REPO)
+    total_match = re.search(r"pub\(crate\) const W3C12_TOTAL_CASES: usize = (\d+);", text)
+    table_match = re.search(
+        r"pub\(crate\) const W3C12_CASES_BY_TYPE: &\[\(&str, usize\)\] = &\[(.*?)\];",
+        text,
+        re.DOTALL,
+    )
+    if total_match is None or table_match is None:
+        raise SystemExit(
+            f"check-doc-claims: W3C12_TOTAL_CASES / W3C12_CASES_BY_TYPE not found in {rel}"
+        )
+    pairs = re.findall(r'\(\s*"([^"]+)",\s*(\d+)\s*\)', table_match.group(1))
+    by_type = {name: int(count) for name, count in pairs}
+    total = int(total_match.group(1))
+    if len(pairs) != len(by_type) or sum(by_type.values()) != total:
+        raise SystemExit(
+            f"check-doc-claims: {rel}'s W3C12_CASES_BY_TYPE ({sum(by_type.values())} "
+            f"over {len(pairs)} rows) does not sum to W3C12_TOTAL_CASES ({total})"
+        )
+    families = ("sht:Validate", "sht:EvalNodeExpr", "sht:Infer")
+    missing = [name for name in families if name not in by_type]
+    srl = {name: n for name, n in by_type.items() if name.startswith("srlt:")}
+    if missing or len(srl) + len(families) != len(by_type):
+        raise SystemExit(
+            f"check-doc-claims: {rel}'s W3C12_CASES_BY_TYPE lacks {missing} or carries "
+            f"a type outside sht:Validate, sht:EvalNodeExpr, sht:Infer and srlt:*"
+        )
+    return {
+        "total": total,
+        "validate": by_type["sht:Validate"],
+        "evalnodeexpr": by_type["sht:EvalNodeExpr"],
+        "infer": by_type["sht:Infer"],
+        "srl": sum(srl.values()),
+    }
+
+
+def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
+    """Every prose restatement of the W3C SHACL 1.2 suite's size and result.
+
+    The pass and ledger figures come from the generated matrix row; the per-family
+    sizes come from the harness's discovery pins, which the matrix does not carry.
+    A suite total the matrix and the pins disagree on is itself a failure, so the
+    two sources cannot drift apart behind prose that quotes one of them.
+    """
+    passed, ledgered = matrix[_SHACL12_ROW]
+    total = passed + ledgered
+    counts = load_shacl12_type_counts()
+    mat = "the generated conformance-matrix block in docs/CONFORMANCE.md"
+    pins = (
+        "W3C12_TOTAL_CASES / W3C12_CASES_BY_TYPE in "
+        "crates/shapes/tests/shacl_corpora/shacl12.rs"
+    )
+    if counts["total"] != total:
+        raise SystemExit(
+            f"check-doc-claims: the matrix row {_SHACL12_ROW!r} totals {total} but "
+            f"{pins} pin {counts['total']} discovered tests"
+        )
+    families = {k: counts[k] for k in ("validate", "evalnodeexpr", "infer", "srl")}
+    return [
+        Claim(
+            "the W3C SHACL 1.2 count in the book's SHACL chapter",
+            _BOOK_SHACL,
+            _flow(r"the W3C SHACL 1.2 suite \((?P<passed>\d+)/(?P<total>\d+)\)"),
+            {"passed": passed, "total": total},
+            mat,
+        ),
+        Claim(
+            "the SHACL 1.2 suite size by family in the book's SHACL chapter",
+            _BOOK_SHACL,
+            _flow(
+                r"(?P<total>\d+) tests, covering (?P<validate>\d+) `sht:Validate`, "
+                r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr` and (?P<infer>\d+) "
+                r"`sht:Infer` tests, and (?P<srl>\d+) SPARQL 1.2 RL"
+            ),
+            {"total": counts["total"], **families},
+            pins,
+        ),
+        Claim(
+            "the SHACL 1.2 pass count in the book's SHACL chapter",
+            _BOOK_SHACL,
+            _flow(r"All (?P<passed>\d+) pass, and the expected-failure ledger is empty"),
+            {"passed": passed},
+            mat,
+        ),
+        Claim(
+            "the SHACL 1.2 scoreboard line quoted in the book's SHACL chapter",
+            _BOOK_SHACL,
+            r"W3C12 TOTAL: passed (?P<passed>\d+), xfailed (?P<xfailed>\d+), "
+            r"ledger (?P<ledger>\d+)",
+            {"passed": passed, "xfailed": ledgered, "ledger": ledgered},
+            mat,
+        ),
+        Claim(
+            "the SHACL 1.2 suite result in the purrdf-shapes README",
+            _SHAPES_README,
+            _flow(
+                r"\((?P<total>\d+) tests: (?P<validate>\d+) `sht:Validate`, "
+                r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, (?P<infer>\d+) `sht:Infer` "
+                r"and (?P<srl>\d+) SPARQL 1.2 RL tests\) passes, "
+                r"(?P<passed>\d+)/(?P<total2>\d+) with an empty expected-failure ledger"
+            ),
+            {"total": counts["total"], **families, "passed": passed, "total2": total},
+            f"{mat}; {pins}",
+        ),
+        Claim(
+            "the first-party SHACL corpus size in the purrdf-shapes README",
+            _SHAPES_README,
+            _flow(r"a (?P<total>\d+)-case first-party frozen corpus"),
+            {"total": matrix["SHACL (first-party corpus)"][0]},
+            mat,
+        ),
+        Claim(
+            "the root README's SHACL 1.2 headline",
+            _README,
+            _flow(r"\*\*(?P<passed>\d+)/(?P<total>\d+) passing\*\* on the vendored "
+                  r"W3C SHACL 1.2 test suite"),
+            {"passed": passed, "total": total},
+            mat,
+        ),
+        Claim(
+            "the root README's SHACL 1.2 scoreboard row",
+            _README,
+            r"\| SHACL 1\.2 \| W3C shacl12-test-suite \(`vectors/shacl12/`\) \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\*, (?P<ledgered>\d+) ledgered \|",
+            {"passed": passed, "total": total, "ledgered": ledgered},
+            mat,
+        ),
+        Claim(
+            "the SHACL 1.2 per-engine scoreboard row",
+            _CONFORMANCE,
+            r"\| SHACL 1\.2 \| W3C `shacl12-test-suite`, `vectors/shacl12/tests/` \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* · (?P<ledgered>\d+) ledgered: "
+            r"(?P<validate>\d+) `sht:Validate`, (?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, "
+            r"(?P<infer>\d+) `sht:Infer`, (?P<srl>\d+) SPARQL 1\.2 RL \|",
+            {"passed": passed, "total": total, "ledgered": ledgered, **families},
+            f"{mat}; {pins}",
+        ),
+        Claim(
+            "the SHACL 1.2 narrative count",
+            _CONFORMANCE,
+            _flow(
+                r"the harness discovers all \*\*(?P<total>\d+)\*\* entries of the "
+                r"vendored W3C `shacl12-test-suite` and passes "
+                r"\*\*(?P<passed>\d+) / (?P<total2>\d+)\*\* with an empty "
+                r"expected-failure ledger: (?P<validate>\d+) `sht:Validate`"
+            ),
+            {
+                "total": counts["total"],
+                "passed": passed,
+                "total2": total,
+                "validate": counts["validate"],
+            },
+            f"{mat}; {pins}",
+        ),
+        Claim(
+            "the SHACL 1.2 narrative family sizes",
+            _CONFORMANCE,
+            _flow(
+                r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr` \(output compared term for "
+                r"term,[\s\S]*?(?P<infer>\d+) `sht:Infer` \(inferred graph compared by "
+                r"RDFC-1.0 isomorphism\) and (?P<srl>\d+) SPARQL 1.2 RL tests"
+            ),
+            {
+                "evalnodeexpr": counts["evalnodeexpr"],
+                "infer": counts["infer"],
+                "srl": counts["srl"],
+            },
+            pins,
+        ),
+    ]
+
+
 def rdf12_canon_profile_claim(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
     """The root README's `purrdf-rdfc12` row restates the generated matrix row."""
     passed, ledgered = matrix["RDF 1.2 canonicalization profile"]
@@ -6099,7 +6287,7 @@ def build_claims(
             "the root README's SHACL headline",
             _README,
             _flow(r"\*\*(?P<passed>\d+)/(?P<total>\d+) passing\*\* on the vendored "
-                  r"W3C test suite, zero ledgered"),
+                  r"W3C SHACL 1.0 test suite, zero ledgered"),
             {"passed": shacl_pass, "total": shacl_pass},
             mat,
         ),
@@ -6452,6 +6640,7 @@ def main(argv: list[str]) -> int:
         build_claims(inventory, matrix, census, lanes, mechanisms, extend_families)
         + jsonld_lens_claims()
         + rdf12_canon_profile_claim(matrix)
+        + shacl12_claims(matrix)
         + sparql_surface_table_claims(surfaces)
         + sparql_governed_table_claims(governed_surfaces)
         + product_alloc_prose_claims(load_product_alloc_report())

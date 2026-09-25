@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-24T03:28:15-06:00\n"
+"POT-Creation-Date: 2026-09-25T12:18:40-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -34,7 +34,7 @@ msgid "Getting Started"
 msgstr ""
 
 #: src/SUMMARY.md:12 src/concepts/projections.md:449 src/concepts/jsonld.md:36
-#: src/entailment.md:49 src/entailment.md:94
+#: src/validation/shacl.md:517 src/entailment.md:49 src/entailment.md:94
 msgid "Rust"
 msgstr ""
 
@@ -134,8 +134,8 @@ msgstr ""
 msgid "Reasoning & Transport"
 msgstr ""
 
-#: src/SUMMARY.md:44 src/getting-started/python.md:48 src/entailment.md:6
-#: src/project/conformance.md:45
+#: src/SUMMARY.md:44 src/getting-started/python.md:49 src/entailment.md:6
+#: src/project/conformance.md:46
 msgid "Entailment"
 msgstr ""
 
@@ -321,12 +321,12 @@ msgstr ""
 #: src/introduction.md:88
 msgid ""
 "**SHACL and ShEx** — native validators for both shape languages; the SHACL "
-"engine covers Core, SHACL-SPARQL and SHACL-AF, aligned with the SHACL 1.2 "
-"node-expression and rule-layering drafts. See [Validation](validation/"
-"shacl.md)."
-msgstr ""
+"engine implements SHACL 1.2 Core, SPARQL Extensions, Node Expressions and "
+"Inference Rules, and the SPARQL 1.2 RL rule language. See [Validation]"
+"(validation/shacl.md)."
+msgstr "**SHACL 与 ShEx**——两种形状语言的原生验证器；SHACL 引擎实现了 SHACL 1.2 Core、SPARQL 扩展、节点表达式与推理规则，以及 SPARQL 1.2 RL 规则语言。参见[验证](validation/shacl.md)。"
 
-#: src/introduction.md:91
+#: src/introduction.md:92
 msgid ""
 "**Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL "
 "rules implemented — rule-table coverage, distinct from entailment "
@@ -336,24 +336,24 @@ msgid ""
 "(entailment.md), evaluated on the [Datalog fixpoint engine](datalog.md)."
 msgstr ""
 
-#: src/introduction.md:97
+#: src/introduction.md:98
 msgid ""
 "**GTS graph transport** — a single-file, content-addressed, append-only "
 "container for RDF 1.2 graphs and binary payloads. See [GTS Graph Transport]"
 "(gts.md)."
 msgstr ""
 
-#: src/introduction.md:100
+#: src/introduction.md:101
 msgid ""
 "**Slices, mappings, and provenance** — a slice catalog, an explicit RDF↔GTS "
 "loss ledger, SSSOM, and FnO. See [Slices, Mappings & Provenance](slices.md)."
 msgstr ""
 
-#: src/introduction.md:103
+#: src/introduction.md:104
 msgid "One engine instead of three databases"
 msgstr ""
 
-#: src/introduction.md:105
+#: src/introduction.md:106
 msgid ""
 "An RDF project that needs ranked text search, spatial predicates, or nearest-"
 "neighbour search has usually run PostgreSQL beside its triple store for "
@@ -363,59 +363,59 @@ msgid ""
 "it stops."
 msgstr ""
 
-#: src/introduction.md:111
+#: src/introduction.md:112
 msgid "You needed"
 msgstr ""
 
-#: src/introduction.md:111
+#: src/introduction.md:112
 msgid "Usually from"
 msgstr ""
 
-#: src/introduction.md:111
+#: src/introduction.md:112
 msgid "Now inside PurRDF"
 msgstr ""
 
-#: src/introduction.md:111
+#: src/introduction.md:112
 msgid "Where it stops"
 msgstr ""
 
-#: src/introduction.md:113
+#: src/introduction.md:114
 msgid "Ranked full-text search"
 msgstr ""
 
-#: src/introduction.md:113
+#: src/introduction.md:114
 msgid "PostgreSQL `tsvector`/`tsquery`"
 msgstr ""
 
-#: src/introduction.md:113
+#: src/introduction.md:114
 msgid ""
 "[Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index "
 "over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no "
 "floating point in the crate."
 msgstr ""
 
-#: src/introduction.md:113
+#: src/introduction.md:114
 msgid ""
 "BM25 ranking, not a Lucene: no stemming, no stop-word lists, no query "
 "dialect; an in-memory index built once over a frozen dataset."
 msgstr ""
 
-#: src/introduction.md:114
+#: src/introduction.md:115
 msgid "Spatial predicates"
 msgstr ""
 
-#: src/introduction.md:114
+#: src/introduction.md:115
 msgid "PostGIS"
 msgstr ""
 
-#: src/introduction.md:114
+#: src/introduction.md:115
 msgid ""
 "[GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and "
 "GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 "
 "relation over an exact DE-9IM; no GEOS, no PROJ."
 msgstr ""
 
-#: src/introduction.md:114
+#: src/introduction.md:115
 msgid ""
 "Topological predicates, accessors and exactly computable measures over "
 "vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, "
@@ -424,21 +424,21 @@ msgid ""
 "implemented)."
 msgstr ""
 
-#: src/introduction.md:115
+#: src/introduction.md:116
 msgid "Vector similarity"
 msgstr ""
 
-#: src/introduction.md:115
+#: src/introduction.md:116
 msgid "pgvector"
 msgstr ""
 
-#: src/introduction.md:115
+#: src/introduction.md:116
 msgid ""
 "[Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a "
 "PURREMB embedding space, binary64 in a pinned accumulation order."
 msgstr ""
 
-#: src/introduction.md:115
+#: src/introduction.md:116
 msgid ""
 "Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no "
 "approximate index; PurRDF computes no embeddings — the vectors come from a "
@@ -447,7 +447,7 @@ msgid ""
 "closed."
 msgstr ""
 
-#: src/introduction.md:117
+#: src/introduction.md:118
 msgid ""
 "All three are pure functions of their input on every target — fixed point, "
 "exact rationals, or a pinned binary64 order, with canonical tie-breaks — and "
@@ -459,11 +459,11 @@ msgid ""
 "do not yet expose these three relations."
 msgstr ""
 
-#: src/introduction.md:126
+#: src/introduction.md:127
 msgid "Two design rules worth knowing on day one"
 msgstr ""
 
-#: src/introduction.md:128
+#: src/introduction.md:129
 msgid ""
 "**No feature flags — ever.** There are deliberately no Cargo feature flags "
 "anywhere in the workspace, and CI enforces this. A data carrier must not "
@@ -471,7 +471,7 @@ msgid ""
 "consumer gets the same byte-identical semantics instead."
 msgstr ""
 
-#: src/introduction.md:133
+#: src/introduction.md:134
 msgid ""
 "**PurRDF is a toolkit, not an ontology — it mints no vocabulary IRIs.** "
 "Every vocabulary the library reads or writes is caller-supplied "
@@ -480,17 +480,17 @@ msgid ""
 "(Test fixtures use `example.org`.)"
 msgstr ""
 
-#: src/introduction.md:139
+#: src/introduction.md:140
 msgid ""
 "The full invariant list is in [Design Rules & Invariants](project/design-"
 "rules.md)."
 msgstr ""
 
-#: src/introduction.md:142
+#: src/introduction.md:143
 msgid "What the version number commits to"
 msgstr ""
 
-#: src/introduction.md:144
+#: src/introduction.md:145
 msgid ""
 "From 1.0.0 the suite follows semantic versioning in full: a breaking change "
 "bumps the major version, a minor bump is additive, a patch bump is bugfix-"
@@ -500,26 +500,26 @@ msgid ""
 "frozen. See [Versioning & Releases](project/releases.md)."
 msgstr ""
 
-#: src/introduction.md:151
+#: src/introduction.md:152
 msgid "Why RDF 1.2?"
 msgstr ""
 
-#: src/introduction.md:153
+#: src/introduction.md:154
 msgid ""
 "RDF 1.2 (and SPARQL 1.2) add first-class statement-level metadata to the "
 "data model: **triple terms** that can appear in object position, "
 "**reifiers** that name occurrences of a triple, and **base-direction "
 "literals** (`rdf:dirLangString`) for bidirectional text. PurRDF treats these "
 "as core data model, not an extension: they flow through the IR, the codecs, "
-"SPARQL, SHACL (a scoped SHACL 1.2 feature), the RDF/JS surface, and the GTS "
-"transport. See [RDF 1.2 Features](concepts/rdf12.md)."
-msgstr ""
+"SPARQL, SHACL 1.2 (reifier shapes and triple-term node kinds), the RDF/JS "
+"surface, and the GTS transport. See [RDF 1.2 Features](concepts/rdf12.md)."
+msgstr "RDF 1.2（以及 SPARQL 1.2）为数据模型加入了一等的陈述级元数据：可出现在宾语位置的**三元组项**、为三元组的某次出现命名的**具体化节点**，以及用于双向文本的**基础方向字面量**（`rdf:dirLangString`）。PurRDF 把它们当作核心数据模型而非扩展：它们贯穿 IR、编解码器、SPARQL、SHACL 1.2（具体化节点形状与三元组项节点类型）、RDF/JS 接口以及 GTS 传输。参见 [RDF 1.2 特性](concepts/rdf12.md)。"
 
-#: src/introduction.md:161
+#: src/introduction.md:163
 msgid "Where PurRDF sits"
 msgstr ""
 
-#: src/introduction.md:163
+#: src/introduction.md:165
 msgid ""
 "PurRDF is the library layer of a small family of linked-data projects: it is "
 "the data backbone of the [GMEOW](https://github.com/Blackcat-Informatics/"
@@ -527,36 +527,36 @@ msgid ""
 "engine — but it assumes nothing about your ontology or application."
 msgstr ""
 
-#: src/introduction.md:169
+#: src/introduction.md:171
 msgid "How to read this book"
 msgstr ""
 
-#: src/introduction.md:171
+#: src/introduction.md:173
 msgid ""
 "New users: start with [Getting Started](getting-started/rust.md) in your "
 "language, then read the [Concepts](concepts/interned-dataset.md) chapters."
 msgstr ""
 
-#: src/introduction.md:173
+#: src/introduction.md:175
 msgid ""
 "Engine users: jump to [SPARQL](sparql/querying.md), [Validation](validation/"
 "shacl.md), or [Entailment](entailment.md)."
 msgstr ""
 
-#: src/introduction.md:175
+#: src/introduction.md:177
 msgid ""
 "Integrators: see [Interop](interop/rdflib.md) and [GTS Graph Transport]"
 "(gts.md)."
 msgstr ""
 
-#: src/introduction.md:177
+#: src/introduction.md:179
 msgid ""
 "Contributors: read the [Project](project/design-rules.md) chapters, then "
 "[AGENTS.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
 "AGENTS.md) in the repository."
 msgstr ""
 
-#: src/introduction.md:181
+#: src/introduction.md:183
 msgid ""
 "API reference documentation lives on [docs.rs/purrdf](https://docs.rs/"
 "purrdf); the repository is [github.com/Blackcat-Informatics/purrdf](https://"
@@ -583,7 +583,9 @@ msgstr ""
 msgid ""
 "The MSRV is Rust **1.98** (stable toolchain only; the workspace is nightly-"
 "free by policy)."
-msgstr "MSRV 为 Rust **1.98**（仅限 stable 工具链；按政策，工作区不含任何 nightly 特性）。"
+msgstr ""
+"MSRV 为 Rust **1.98**（仅限 stable 工具链；按政策，工作区不含任何 nightly 特"
+"性）。"
 
 #: src/getting-started/rust.md:24
 msgid "Build, freeze, serialize, parse"
@@ -709,7 +711,7 @@ msgid ""
 "Rust code paths work in native and wasm hosts."
 msgstr ""
 
-#: src/getting-started/rust.md:97 src/getting-started/python.md:134
+#: src/getting-started/rust.md:97 src/getting-started/python.md:135
 msgid "Next steps"
 msgstr ""
 
@@ -767,7 +769,7 @@ msgid ""
 "`purrdf_native` extension module directly:"
 msgstr ""
 
-#: src/getting-started/python.md:37 src/validation/shacl.md:367
+#: src/getting-started/python.md:37 src/validation/shacl.md:590
 msgid "\"conforms\""
 msgstr ""
 
@@ -782,12 +784,13 @@ msgstr ""
 #: src/getting-started/python.md:44
 msgid ""
 "SHACL result dicts keep the stable keys `focus`, `path`, `value`, "
-"`severity`, `component`, `source_shape`, and `message`. See [SHACL](../"
+"`severity`, `component`, `source_shape`, and `messages` (every "
+"`sh:resultMessage`, with its language tag and direction). See [SHACL](../"
 "validation/shacl.md) and [ShEx](../validation/shex.md) for what the engines "
 "cover."
-msgstr ""
+msgstr "SHACL 结果字典保留稳定的键 `focus`、`path`、`value`、`severity`、`component`、`source_shape` 与 `messages`（每条 `sh:resultMessage`，连同其语言标签与方向）。两个引擎各自覆盖的范围见 [SHACL](../validation/shacl.md) 与 [ShEx](../validation/shex.md)。"
 
-#: src/getting-started/python.md:50
+#: src/getting-started/python.md:51
 msgid ""
 "`purrdf.entail` closes a dataset under a SPARQL entailment regime. It is not "
 "`purrdf.shapes.entail`, which applies the SHACL-AF `sh:rule`s a _shapes_ "
@@ -795,19 +798,19 @@ msgid ""
 "specification rule table."
 msgstr ""
 
-#: src/getting-started/python.md:60
+#: src/getting-started/python.md:61
 msgid "\"rdfs\""
 msgstr ""
 
-#: src/getting-started/python.md:60
+#: src/getting-started/python.md:61
 msgid "\"\""
 msgstr ""
 
-#: src/getting-started/python.md:62
+#: src/getting-started/python.md:63
 msgid "# what fired, what did not, boundaries, budget, contract hash\n"
 msgstr ""
 
-#: src/getting-started/python.md:65
+#: src/getting-started/python.md:66
 msgid ""
 "The report is the second return value and is never optional — the same "
 "discipline the Rust, WebAssembly, and C surfaces enforce. "
@@ -815,7 +818,7 @@ msgid ""
 "callers holding an N-Triples/N-Quads document."
 msgstr ""
 
-#: src/getting-started/python.md:69
+#: src/getting-started/python.md:70
 msgid ""
 "Coverage is measurable rather than asserted: `entail.rules(regime)` is the "
 "rule table the specification defines the regime by, and "
@@ -827,19 +830,19 @@ msgid ""
 "entailment-rules.md) for the per-rule table."
 msgstr ""
 
-#: src/getting-started/python.md:78
+#: src/getting-started/python.md:79
 msgid "rdflib compatibility"
 msgstr ""
 
-#: src/getting-started/python.md:80
+#: src/getting-started/python.md:81
 msgid "The package ships an rdflib compatibility layer:"
 msgstr ""
 
-#: src/getting-started/python.md:86
+#: src/getting-started/python.md:87
 msgid "For a literal, zero-change `import rdflib`, there is an opt-in extra:"
 msgstr ""
 
-#: src/getting-started/python.md:92 src/interop/rdflib.md:37
+#: src/getting-started/python.md:93 src/interop/rdflib.md:37
 msgid ""
 "This pulls in the separate `purrdf-rdflib` distribution, whose top-level "
 "`rdflib` package re-exports the compat surface, so existing third-party code "
@@ -851,28 +854,28 @@ msgid ""
 "so environments that need the real rdflib simply omit it."
 msgstr ""
 
-#: src/getting-started/python.md:102
+#: src/getting-started/python.md:103
 msgid ""
 "The compat layer is gated in CI against rdflib 7.6's own vendored test suite "
 "plus a first-party differential parity suite — see [rdflib Compatibility](../"
 "interop/rdflib.md) for details and the known, ledgered divergences."
 msgstr ""
 
-#: src/getting-started/python.md:107
+#: src/getting-started/python.md:108
 msgid "GTS relational rows"
 msgstr ""
 
-#: src/getting-started/python.md:109
+#: src/getting-started/python.md:110
 msgid ""
 "The Python package reads a [GTS container](../gts.md) back as in-memory "
 "relational rows:"
 msgstr ""
 
-#: src/getting-started/python.md:115
+#: src/getting-started/python.md:116
 msgid "# terms, quads, reifiers, annotations, blobs\n"
 msgstr ""
 
-#: src/getting-started/python.md:118
+#: src/getting-started/python.md:119
 msgid ""
 "`gts_to_sqlite(data, path)`, `gts_to_duckdb(data, path)` and "
 "`gts_to_parquet(data, out_dir)` write those same five tables out, in the "
@@ -882,11 +885,11 @@ msgid ""
 "(`purrdf[duckdb]`, `purrdf[parquet]`)."
 msgstr ""
 
-#: src/getting-started/python.md:125
+#: src/getting-started/python.md:126
 msgid "Graph, tabular, and research-object archives"
 msgstr ""
 
-#: src/getting-started/python.md:127
+#: src/getting-started/python.md:128
 msgid ""
 "`purrdf.project(data, format=..., profile=..., config=...)` returns "
 "canonical USTAR bytes and structured loss records. `purrdf.lift(archive, "
@@ -896,27 +899,27 @@ msgid ""
 "(../concepts/projections.md) for profiles and a complete example."
 msgstr ""
 
-#: src/getting-started/python.md:136
+#: src/getting-started/python.md:137
 msgid ""
 "[rdflib Compatibility](../interop/rdflib.md) — the drop-in story in depth."
 msgstr ""
 
-#: src/getting-started/python.md:137
+#: src/getting-started/python.md:138
 msgid "[Validation](../validation/shacl.md) — SHACL and ShEx from Python."
 msgstr ""
 
-#: src/getting-started/python.md:138
+#: src/getting-started/python.md:139
 msgid ""
 "[Entailment](../entailment.md) — the regimes, the report, and what each "
 "fires."
 msgstr ""
 
-#: src/getting-started/python.md:139
+#: src/getting-started/python.md:140
 msgid ""
 "[GTS Graph Transport](../gts.md) — the container format the exports read."
 msgstr ""
 
-#: src/getting-started/python.md:140
+#: src/getting-started/python.md:141
 msgid ""
 "[Graph, Tabular & Research-Object Projections](../concepts/projections.md) — "
 "LPG, CSVW, OBO, SKOS, and five research-object carriers."
@@ -954,12 +957,12 @@ msgid ""
 "wasm instantiation:"
 msgstr ""
 
-#: src/getting-started/javascript.md:29 src/validation/shapes-products.md:838
+#: src/getting-started/javascript.md:29 src/validation/shapes-products.md:843
 #: src/interop/rdfjs.md:23 src/interop/rdfjs.md:67
 msgid "\"@blackcatinformatics/purrdf\""
 msgstr ""
 
-#: src/getting-started/javascript.md:31 src/validation/shapes-products.md:840
+#: src/getting-started/javascript.md:31 src/validation/shapes-products.md:845
 msgid "// one-time async wasm instantiation\n"
 msgstr ""
 
@@ -1523,10 +1526,10 @@ msgid ""
 "Reifier bindings and annotations survive every star-capable codec round-"
 "trip; projections into star-incapable formats drop them _loudly_, with the "
 "realized count handed to the loss ledger (see [Slices, Mappings & Provenance]"
-"(../slices.md)). SHACL support for validating reified statements — the draft "
-"`sh:reifierShape` / `sh:reificationRequired` surface — is covered in [SHACL]"
-"(../validation/shacl.md)."
-msgstr ""
+"(../slices.md)). SHACL support for validating reified statements — the SHACL "
+"1.2 `sh:reifierShape` / `sh:reificationRequired` surface — is covered in "
+"[SHACL](../validation/shacl.md)."
+msgstr "具体化节点绑定与注解在每一种具 star 能力的编解码器往返中都得以保留；投影到不具 star 能力的格式时，它们会被*显式*丢弃并报告，实际丢弃的数量交给损失台账（参见[切片、映射与溯源](../slices.md)）。对具体化陈述进行验证的 SHACL 支持——SHACL 1.2 的 `sh:reifierShape` / `sh:reificationRequired` 接口——见 [SHACL](../validation/shacl.md)。"
 
 #: src/concepts/rdf12.md:44 src/concepts/rdf12.md:74
 msgid "Base-direction literals"
@@ -1553,13 +1556,13 @@ msgstr ""
 #: src/concepts/rdf12.md:60
 msgid ""
 "PurRDF treats the RDF 1.2 / SPARQL 1.2 specifications as a complete, "
-"implementable target. Where a feature is scoped (for example, the SHACL 1.2 "
-"reifier-shape support is a scoped Working Draft feature, not full SHACL 1.2 "
-"conformance), the scope is stated explicitly and gated by tests — never left "
-"as a silent partial implementation. The live per-feature status is the "
-"conformance matrix in [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
-"Informatics/purrdf/blob/main/docs/CONFORMANCE.md)."
-msgstr ""
+"implementable target, and so is SHACL 1.2: the W3C SHACL 1.2 test suite, "
+"reifier shapes included, passes in full. Where a feature is scoped, the "
+"scope is stated explicitly and gated by tests — never left as a silent "
+"partial implementation. The live per-feature status is the conformance "
+"matrix in [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/"
+"purrdf/blob/main/docs/CONFORMANCE.md)."
+msgstr "PurRDF 把 RDF 1.2 / SPARQL 1.2 规范视为完整、可实现的目标，SHACL 1.2 亦然：W3C SHACL 1.2 测试套件（含具体化节点形状）全部通过。凡有范围限定的特性，其范围都被明确陈述并由测试把关——绝不留作静默的部分实现。逐特性的实时状态见[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md) 中的一致性矩阵。"
 
 #: src/concepts/rdf12.md:68
 msgid "Where each feature shows up"
@@ -1581,7 +1584,7 @@ msgstr ""
 msgid "RDF/JS"
 msgstr ""
 
-#: src/concepts/rdf12.md:70 src/project/conformance.md:46
+#: src/concepts/rdf12.md:70 src/project/conformance.md:47
 msgid "GTS"
 msgstr ""
 
@@ -1626,7 +1629,7 @@ msgid "reifier surface"
 msgstr ""
 
 #: src/concepts/rdf12.md:73
-msgid "`sh:reifierShape` (draft)"
+msgid "`sh:reifierShape`, `sh:reificationRequired`"
 msgstr ""
 
 #: src/concepts/rdf12.md:73 src/concepts/projections.md:450
@@ -2867,7 +2870,7 @@ msgid "`lift_archive`"
 msgstr ""
 
 #: src/concepts/projections.md:450 src/concepts/jsonld.md:62
-#: src/entailment.md:50 src/entailment.md:95
+#: src/validation/shacl.md:517 src/entailment.md:50 src/entailment.md:95
 msgid "CLI"
 msgstr ""
 
@@ -3425,8 +3428,8 @@ msgid ""
 msgstr ""
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
-#: src/sparql/querying.md:1928 src/validation/shacl.md:419
-#: src/validation/shex.md:64 src/entailment.md:289
+#: src/sparql/querying.md:1928 src/validation/shacl.md:643
+#: src/validation/shex.md:64 src/entailment.md:294
 msgid "Conformance"
 msgstr ""
 
@@ -3440,7 +3443,7 @@ msgid ""
 msgstr ""
 
 #: src/concepts/codecs.md:203 src/sparql/results.md:103
-#: src/validation/shapes-products.md:921 src/gts.md:120 src/slices.md:95
+#: src/validation/shapes-products.md:926 src/gts.md:120 src/slices.md:95
 #: src/interop/rdflib.md:76 src/interop/rdfjs.md:112
 msgid "Related"
 msgstr ""
@@ -3538,7 +3541,7 @@ msgid "the `base` argument to `parse_dataset`, the CLI's `--base`"
 msgstr ""
 
 #: src/concepts/base-iris.md:29 src/sparql/embedding-knn.md:49
-#: src/entailment.md:144 src/entailment-rules.md:61
+#: src/entailment.md:149 src/entailment-rules.md:61
 msgid "3"
 msgstr ""
 
@@ -3656,7 +3659,7 @@ msgstr ""
 msgid "pass a base, or the document must carry one"
 msgstr ""
 
-#: src/concepts/base-iris.md:53
+#: src/concepts/base-iris.md:53 src/validation/shacl.md:517
 msgid "WebAssembly"
 msgstr ""
 
@@ -3665,7 +3668,7 @@ msgstr ""
 msgid "as above"
 msgstr ""
 
-#: src/concepts/base-iris.md:54
+#: src/concepts/base-iris.md:54 src/validation/shacl.md:517
 msgid "C ABI"
 msgstr ""
 
@@ -3852,8 +3855,8 @@ msgstr ""
 msgid "Condition"
 msgstr ""
 
-#: src/concepts/base-iris.md:149 src/validation/shapes-products.md:685
-#: src/validation/shapes-products.md:714
+#: src/concepts/base-iris.md:149 src/validation/shapes-products.md:690
+#: src/validation/shapes-products.md:719
 msgid "What to do"
 msgstr ""
 
@@ -8326,8 +8329,8 @@ msgstr ""
 msgid "role"
 msgstr ""
 
-#: src/sparql/embedding-knn.md:46 src/entailment.md:143 src/entailment.md:148
-#: src/entailment.md:149 src/entailment-rules.md:60 src/entailment-rules.md:64
+#: src/sparql/embedding-knn.md:46 src/entailment.md:148 src/entailment.md:153
+#: src/entailment.md:154 src/entailment-rules.md:60 src/entailment-rules.md:64
 #: src/entailment-rules.md:65
 msgid "0"
 msgstr ""
@@ -8466,7 +8469,14 @@ msgid ""
 "the kNN surface uses `purrdf_core`'s normative norm fold rather than a copy "
 "of it. Fixed point would have introduced a quantization step the format does "
 "not have."
-msgstr "工作区中另一个带排名的检索接口完全禁止浮点数，因为 BM25 需要对数，而 IEEE-754 并不要求 `ln` 正确舍入。这一理由在此并不适用。k 近邻内核不需要任何超越函数——减法、乘法、加法、除法与平方根都是正确舍入的——因此 binary64 在这里给出*同样的*跨目标保证。`docs/PURREMB.md` 以规范性条文固定了工件自身的归约（「binary64，就近舍入、平局取偶，按书写顺序，不使用融合乘加」），L2 范数就是其中之一，因此 k 近邻接口使用 `purrdf_core` 中规范性的范数归约，而不是它的一份副本。定点数会引入一个该格式本身并不具有的量化步骤。"
+msgstr ""
+"工作区中另一个带排名的检索接口完全禁止浮点数，因为 BM25 需要对数，而 "
+"IEEE-754 并不要求 `ln` 正确舍入。这一理由在此并不适用。k 近邻内核不需要任何超"
+"越函数——减法、乘法、加法、除法与平方根都是正确舍入的——因此 binary64 在这里给"
+"出*同样的*跨目标保证。`docs/PURREMB.md` 以规范性条文固定了工件自身的归约"
+"（「binary64，就近舍入、平局取偶，按书写顺序，不使用融合乘加」），L2 范数就是"
+"其中之一，因此 k 近邻接口使用 `purrdf_core` 中规范性的范数归约，而不是它的一"
+"份副本。定点数会引入一个该格式本身并不具有的量化步骤。"
 
 #: src/sparql/embedding-knn.md:126
 msgid ""
@@ -8483,7 +8493,17 @@ msgid ""
 "Distances are emitted as `xsd:double`, whose canonical lexical round-trips "
 "the exact bits — a rounded decimal would print two adjacent doubles alike "
 "and hide exactly the divergence this is about."
-msgstr "两个残余风险在结构上被消除。每一次点积求和与平方欧氏距离求和都遵循同一条固定的法则 `purrdf_core::distance::Exact`（`binary64-lane16-tree-v1`）：在所有完整的十六元素分块上使用十六条 binary64 通道，随后是一棵固定的两两归约树，最后按下标升序处理剩余项，且绝不拆分到多个工作线程。它在每个目标、每条分派路径上都是同一顺序，而正是相互独立的通道让它无需允许任何重新排序就能向量化（一个测试对某个向量做归约：按通道树求和得 `1`，按顺序求和得 `0`，并固定采用哪一种）。每个乘积在被累加之前都先绑定到一个具名局部变量，因此不会形成融合乘加；若某线程的浮点环境会把次正规数冲刷为零，该线程会以具名错误被拒绝。距离以 `xsd:double` 输出，其规范词法形式能往返还原精确的比特——舍入后的十进制表示会把两个相邻的 double 打印成同一个值，恰好掩盖本节所讨论的那种分歧。"
+msgstr ""
+"两个残余风险在结构上被消除。每一次点积求和与平方欧氏距离求和都遵循同一条固定"
+"的法则 `purrdf_core::distance::Exact`（`binary64-lane16-tree-v1`）：在所有完"
+"整的十六元素分块上使用十六条 binary64 通道，随后是一棵固定的两两归约树，最后"
+"按下标升序处理剩余项，且绝不拆分到多个工作线程。它在每个目标、每条分派路径上"
+"都是同一顺序，而正是相互独立的通道让它无需允许任何重新排序就能向量化（一个测"
+"试对某个向量做归约：按通道树求和得 `1`，按顺序求和得 `0`，并固定采用哪一"
+"种）。每个乘积在被累加之前都先绑定到一个具名局部变量，因此不会形成融合乘加；"
+"若某线程的浮点环境会把次正规数冲刷为零，该线程会以具名错误被拒绝。距离以 "
+"`xsd:double` 输出，其规范词法形式能往返还原精确的比特——舍入后的十进制表示会把"
+"两个相邻的 double 打印成同一个值，恰好掩盖本节所讨论的那种分歧。"
 
 #: src/sparql/embedding-knn.md:139
 msgid ""
@@ -8519,68 +8539,111 @@ msgstr ""
 #: src/validation/shacl.md:8
 msgid ""
 "[`purrdf-shapes`](https://docs.rs/purrdf-shapes) (re-exported as "
-"`purrdf::shapes`) is PurRDF's native SHACL validator: the **complete SHACL "
-"Core feature set** — all constraint components, full property paths, "
-"qualified value shapes, property pairs — plus **SHACL-SPARQL** constraints "
-"and targets and the **SHACL-AF** surface, running entirely on PurRDF's own "
+"`purrdf::shapes`) is PurRDF's native SHACL validator and rules engine. It "
+"implements **SHACL 1.2**: Core, SPARQL Extensions, Node Expressions, "
+"Inference Rules and the SPARQL 1.2 RL rule language, plus the SHACL-AF 1.0 "
+"spellings those documents supersede. It runs entirely on PurRDF's own "
 "interned IR and native SPARQL engine (no oxigraph, no PyO3)."
-msgstr ""
+msgstr "[`purrdf-shapes`](https://docs.rs/purrdf-shapes)（重新导出为 `purrdf::shapes`）是 PurRDF 的原生 SHACL 验证器与规则引擎。它实现了 **SHACL 1.2**：Core、SPARQL 扩展、节点表达式、推理规则以及 SPARQL 1.2 RL 规则语言，外加被这些文档取代的 SHACL-AF 1.0 拼写。它完全运行在 PurRDF 自己的驻留 IR 与原生 SPARQL 引擎之上（不含 oxigraph，不含 PyO3）。"
 
 #: src/validation/shacl.md:15
 msgid ""
 "It validates an RDF 1.2 data graph against a SHACL shapes graph with **no "
 "inference** (parity with pySHACL `inference=\"none\"`); combine with "
 "[Entailment](../entailment.md) if you want to validate a materialized "
-"closure."
-msgstr ""
+"closure, or declare `sh:entailment sh:RulesEntailment` to run the shapes "
+"graph's own rules first."
+msgstr "它依据 SHACL 形状图验证 RDF 1.2 数据图，**不做任何推理**（与 pySHACL `inference=\"none\"` 一致）；若要验证物化后的推理闭包，可与[蕴涵](../entailment.md)组合使用，或声明 `sh:entailment sh:RulesEntailment`，先运行形状图自身的规则。"
 
-#: src/validation/shacl.md:19
+#: src/validation/shacl.md:21
 msgid "What it covers"
 msgstr ""
 
-#: src/validation/shacl.md:21
+#: src/validation/shacl.md:23
 msgid ""
-"**SHACL Core** — every constraint component, full property paths, qualified "
-"value shapes, property pairs. The W3C `data-shapes` suite passes clean "
-"(129/129, zero ledgered gaps at the time of writing — the live number is in "
-"[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/"
-"main/docs/CONFORMANCE.md))."
-msgstr ""
+"**SHACL 1.2 Core** — every constraint component the SHACL 1.2 vocabulary "
+"declares is evaluated natively: full property paths, qualified value shapes, "
+"the list components (`sh:minListLength`, `sh:maxListLength`, "
+"`sh:uniqueMembers`, `sh:memberShape`, with `sh:detail` results), list-valued "
+"`sh:class`, `sh:datatype` and `sh:nodeKind` (including `sh:TripleTerm`), "
+"`sh:singleLine`, `sh:rootClass`, `sh:someValue`, path-valued property pairs "
+"and `sh:subsetOf`, `sh:uniqueValuesFor`, `sh:closed sh:ByTypes`, "
+"`sh:reifierShape` and `sh:reificationRequired`, and `sh:uniqueLang` over "
+"language tag and base direction. A property shape's `sh:values` and "
+"`sh:defaultValue` compute value nodes. The targets include implicit class "
+"targets (`sh:ShapeClass` too), `sh:shape` in the data graph, "
+"`sh:targetWhere` and node-expression `sh:targetNode`. A reifier of a "
+"constraint triple can carry `sh:deactivated`, `sh:severity` or `sh:message` "
+"for that one constraint. The severities include `sh:Debug` and `sh:Trace`, "
+"and conformance follows the request's `sh:conformanceDisallows` set. Every "
+"`sh:message` is reported with its language tag and direction."
+msgstr "**SHACL 1.2 Core**——SHACL 1.2 词汇表声明的每个约束组件都以原生方式求值：完整的属性路径、限定值形状、列表组件（`sh:minListLength`、`sh:maxListLength`、`sh:uniqueMembers`、`sh:memberShape`，带 `sh:detail` 结果）、三者均可取列表值的 `sh:class`、`sh:datatype` 与 `sh:nodeKind`（`sh:nodeKind` 还可取 `sh:TripleTerm`）、`sh:singleLine`、`sh:rootClass`、`sh:someValue`、属性对与 `sh:subsetOf`（二者均以路径为值）、`sh:uniqueValuesFor`、`sh:closed sh:ByTypes`、`sh:reifierShape` 与 `sh:reificationRequired`，以及按语言标签与基础方向判定的 `sh:uniqueLang`。属性形状的 `sh:values` 与 `sh:defaultValue` 会计算值节点。目标包括隐式类目标（`sh:ShapeClass` 亦然）、数据图中的 `sh:shape`、`sh:targetWhere`，以及以节点表达式给出的 `sh:targetNode`。约束三元组的具体化节点可以为这一条约束携带 `sh:deactivated`、`sh:severity` 或 `sh:message`。严重级别包括 `sh:Debug` 与 `sh:Trace`，一致性判定遵循请求中的 `sh:conformanceDisallows` 集合。每条 `sh:message` 都连同其语言标签与方向一起报告。"
 
-#: src/validation/shacl.md:25
+#: src/validation/shacl.md:39
 msgid ""
-"**SHACL-SPARQL** — SPARQL-based constraints and targets, custom constraint "
-"components with pre-binding semantics, user-defined `sh:SPARQLFunction` "
-"calls, and `sh:SPARQLTargetType`, evaluated on the native SPARQL engine."
-msgstr ""
+"**SHACL 1.2 SPARQL Extensions** — SPARQL-based constraints and targets, "
+"custom constraint components with pre-binding semantics, user-defined "
+"`sh:SPARQLFunction` calls, `sh:SPARQLTargetType`, `sh:sparqlExpr`, and "
+"`sh:prefixes` resolved as that document specifies (see [below](#prefixes-in-"
+"shacl-sparql-queries)), all on the native SPARQL engine."
+msgstr "**SHACL 1.2 SPARQL 扩展**——基于 SPARQL 的约束与目标、具有预绑定语义的自定义约束组件、用户定义的 `sh:SPARQLFunction` 调用、`sh:SPARQLTargetType`、`sh:sparqlExpr`，以及按该文档规定解析的 `sh:prefixes`（见[下文](#shacl-sparql-查询中的前缀)），全部运行在原生 SPARQL 引擎上。"
 
-#: src/validation/shacl.md:28
+#: src/validation/shacl.md:44
 msgid ""
-"**SHACL-AF** — node expressions (including "
-"`sh:ExpressionConstraintComponent`) and **SHACL Rules** (`sh:TripleRule` and "
-"`sh:SPARQLRule`, with `sh:condition`, `sh:order`, `sh:deactivated`): rules "
-"fire in an iterative fixpoint and the derivation is materialized as a new "
-"dataset (`base ⊎ derived`), leaving the input graph untouched. The surface "
-"is aligned with the SHACL 1.2 Working Drafts: the SHACL 1.2 Node Expressions "
-"vocabulary (`shnex:`, `http://www.w3.org/ns/shacl-node-expr#`) and the older "
-"SHACL-AF spelling of a node expression parse to one representation and run "
-"through one evaluator; `sh:nodeByExpression` is validated; SPARQL-based node "
-"expressions and expression-bodied functions ride the native engine; and "
-"rules execute as `sh:order` strata with the `once`/`general` partition of "
-"the SPARQL 1.2 RL draft, each stratum materialized before the next runs, so "
-"swapping two rules' orders can change the closure. `sh:condition` resolves "
-"at shapes-load, so an unresolvable condition is a load error rather than a "
-"rule that silently never fires. Every one of those IRIs is defined by a W3C "
-"document; PurRDF mints none. Some node-expression conveniences (`sh:if`, "
-"aggregations, ordering wrappers) are DASH/TopBraid conventions with no "
-"normative RDF definition; PurRDF documents its adopted reading and pins it "
-"with a frozen corpus — see the [SHACL-AF section of docs/CONFORMANCE.md]"
-"(https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/"
-"CONFORMANCE.md#shacl-af-node-expressions-normative-surface-vs-owned-"
-"extensions)."
-msgstr ""
+"**SHACL 1.2 Node Expressions** — the `shnex:` vocabulary and the older SHACL-"
+"AF `sh:` spelling of a node expression parse to one representation and run "
+"through one evaluator. Each expression kind keeps the order and multiplicity "
+"its evaluation clause defines: an ordered sequence, a multiset or a set. "
+"`sh:if` takes `sh:then` only when its condition is the list `( true )`. The "
+"`shnex-sparql.ttl` function library is native. `sh:nodeByExpression` and "
+"`sh:ExpressionConstraintComponent` are validated."
+msgstr "**SHACL 1.2 节点表达式**——`shnex:` 词汇表与较早的 SHACL-AF `sh:` 节点表达式拼写解析为同一种表示，并由同一个求值器执行。每种表达式都保持其求值条款所规定的顺序与重数：有序序列、多重集或集合。`sh:if` 仅当其条件为列表 `( true )` 时才取 `sh:then`。`shnex-sparql.ttl` 函数库为原生实现。`sh:nodeByExpression` 与 `sh:ExpressionConstraintComponent` 均参与验证。"
 
-#: src/validation/shacl.md:49
+#: src/validation/shacl.md:51
+msgid ""
+"**SHACL 1.2 Inference Rules** — `sh:TripleRule` and `sh:SPARQLRule`, with "
+"`sh:condition`, `sh:layer`, `sh:order`, `sh:runOnce`, `sh:deactivated`, rule "
+"sets and `sh:RulesGraph`, SPARQL rule templates, temporary triples, "
+"`sh:expectedPredicate` and `sh:ruleProcessor`. Layers run in ascending "
+"order. In each layer the run-once rules run once, then the iterating rules "
+"repeat until an iteration infers nothing. Within an iteration, rules run in "
+"ascending `sh:order`, rules of the same order run together, and each group "
+"sees the inferences of the groups before it, so swapping two rules' orders "
+"can change the inferences. An unresolvable `sh:condition` is a load error, "
+"not a rule that silently never fires."
+msgstr "**SHACL 1.2 推理规则**——`sh:TripleRule` 与 `sh:SPARQLRule`，支持 `sh:condition`、`sh:layer`、`sh:order`、`sh:runOnce`、`sh:deactivated`、规则集与 `sh:RulesGraph`、SPARQL 规则模板、临时三元组、`sh:expectedPredicate` 与 `sh:ruleProcessor`。各层按升序运行。在每一层中，只运行一次的规则先运行一次，随后迭代规则反复执行，直到某次迭代不再推出任何结果。在一次迭代内，规则按 `sh:order` 升序运行，相同次序的规则一起运行，每一组都能看到之前各组的推论，因此交换两条规则的次序可能改变推论。引用无法解析到目标形状的 `sh:condition` 是加载错误，而不是一条静默地永不触发的规则。"
+
+#: src/validation/shacl.md:61
+msgid ""
+"**SPARQL 1.2 RL** — the rule language's text syntax is parsed, checked for "
+"well-formedness, stratified, imported and evaluated (`purrdf_shapes::srl`). "
+"SHACL rules lower to the same rule-set representation, and both run on one "
+"rules engine, `purrdf-datalog`."
+msgstr "**SPARQL 1.2 RL**——该规则语言的文本语法会被解析、检查良构性、分层、处理导入并求值（`purrdf_shapes::srl`）。SHACL 规则降为同一种规则集表示，二者都运行在同一个规则引擎 `purrdf-datalog` 上。"
+
+#: src/validation/shacl.md:66
+msgid ""
+"A shapes graph is either loaded faithfully or refused. An unknown term, an "
+"ill-typed parameter value, or a construct the engine does not evaluate is a "
+"load error that names it, never a constraint that silently drops out. Terms "
+"the SHACL vocabularies define and the engine refuses by name are the SHACL "
+"JavaScript Extensions (not part of SHACL 1.2), the SHACL-AF `sh:minus` node "
+"expression (deprecated by SHACL 1.2 in favour of `shnex:remove`), SPARQL "
+"`sh:describe` and `sh:update` executables, and SHACL-SPARQL result "
+"annotations (`sh:resultAnnotation`). Every IRI the engine implements is "
+"defined by a W3C document; PurRDF mints none."
+msgstr "形状图要么被如实加载，要么被拒绝。未知的术语、类型不符的参数值，或引擎不求值的构造，都是点名指出它的加载错误，绝不会成为一条静默消失的约束。SHACL 词汇表定义、而引擎会点名拒绝的术语有：SHACL JavaScript 扩展（不属于 SHACL 1.2）、SHACL-AF 的 `sh:minus` 节点表达式（SHACL 1.2 已将其弃用，改用 `shnex:remove`）、SPARQL `sh:describe` 与 `sh:update` 可执行体，以及 SHACL-SPARQL 结果注解（`sh:resultAnnotation`）。引擎实现的每个 IRI 都由某份 W3C 文档定义；PurRDF 不生成任何词汇 IRI。"
+
+#: src/validation/shacl.md:76
+msgid ""
+"The W3C SHACL 1.0 `data-shapes` suite passes clean (129/129, zero ledgered "
+"gaps at the time of writing), and so does the W3C SHACL 1.2 suite (547/547); "
+"the live numbers are in [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
+"Informatics/purrdf/blob/main/docs/CONFORMANCE.md), and [SHACL 1.2 "
+"conformance](#shacl-12-conformance) below says how to reproduce them."
+msgstr "W3C SHACL 1.0 `data-shapes` 套件全部通过（129/129，撰写时 0 例入账），W3C SHACL 1.2 套件同样全部通过（547/547）；实时数字见[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)，复现方法见下文的 [SHACL 1.2 一致性](#shacl-12-一致性)。"
+
+#: src/validation/shacl.md:83
 msgid ""
 "A parsed shapes graph can also be compiled once and written out as a "
 "deterministic, authenticated byte artifact, so a later process restores a "
@@ -8588,11 +8651,11 @@ msgid ""
 "Products](shapes-products.md)."
 msgstr ""
 
-#: src/validation/shacl.md:54
+#: src/validation/shacl.md:88
 msgid "`owl:imports` in a shapes graph"
 msgstr ""
 
-#: src/validation/shacl.md:56
+#: src/validation/shacl.md:90
 msgid ""
 "A shapes document may carry an `owl:Ontology` header that `owl:imports` "
 "other documents, and the shapes it constrains with may live entirely in "
@@ -8603,7 +8666,7 @@ msgid ""
 "configuration, exactly as it is for `entails` and `shex`:"
 msgstr ""
 
-#: src/validation/shacl.md:71
+#: src/validation/shacl.md:105
 msgid ""
 "The table is followed **transitively** — an imported document's own "
 "`owl:imports` are resolved from the same table — and a cycle terminates "
@@ -8614,45 +8677,230 @@ msgid ""
 "file declares."
 msgstr ""
 
-#: src/validation/shacl.md:78
+#: src/validation/shacl.md:112
 msgid ""
-"Naming **any** pair makes the closure mandatory: an `owl:imports` no pair "
-"resolves is refused by name rather than folded in as an empty graph, and a "
-"pair the closure never reaches is refused as unused rather than read and "
-"ignored."
-msgstr ""
+"The shapes document parses under its own `file://` retrieval IRI, or under "
+"`--shapes-base IRI` when given. That flag is the same one `shacl pack --"
+"base` is, and it is separate from `validate --base`, which sets only the "
+"DATA graph's base. An `@base` inside the shapes document still wins inside "
+"it, as Turtle specifies."
+msgstr "形状文档在其自身的 `file://` 获取 IRI 下解析，若给出 `--shapes-base IRI` 则在该 IRI 下解析。这个标志与 `shacl pack --base` 相同，并与 `validate --base` 相互独立——后者只设置**数据**图的基准 IRI。按 Turtle 的规定，形状文档内部的 `@base` 在该文档内仍然优先。"
 
-#: src/validation/shacl.md:82
+#: src/validation/shacl.md:118
 msgid ""
-"Naming **no** pair is not a refusal. Each unresolved import is reported on "
-"stderr and the shapes graph validates alone — a shapes document may "
-"legitimately carry an ontology header whose imports are irrelevant to its "
-"shapes, and refusing those would reject input that is valid. What is gone is "
-"the silence: before PurRDF 1.0.1 an unresolved `owl:imports` was ignored "
-"without a word, so a shapes graph whose shapes all lived in an imported "
-"document reported `conforms true` against no shapes at all."
-msgstr ""
+"An import whose document or ontology is **already loaded** needs no pair. It "
+"is resolved when it names a document that was read: the shapes document's "
+"own base (its `file://` retrieval IRI, `--shapes-base`, or `shacl pack --"
+"base`), an in-document `@base`, or an `--import` document's IRI. SHACL "
+"relies on this. `sh:prefixes` collects `sh:declare`s along `owl:imports*`, "
+"and a document often points that path at its own IRI from a node that is not "
+"an `owl:Ontology`. An import is also resolved when the graph holds `<X> a "
+"owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`, and the rule "
+"applies across the whole closure. A shapes document that merges the W3C "
+"SHACL 1.2 vocabularies — `shnex.ttl` imports `sh:`, and `shacl.ttl` beside "
+"it declares `sh:` — is complete as written."
+msgstr "若某个导入的文档或本体**已经加载**，则无需提供对应的配对。当它指向一份已读取的文档时即视为已解析：形状文档自身的基准 IRI（其 `file://` 获取 IRI、`--shapes-base` 或 `shacl pack --base`）、文档内的 `@base`，或某个 `--import` 文档的 IRI。SHACL 依赖这一点：`sh:prefixes` 沿 `owl:imports*` 收集 `sh:declare`，而文档常常让这条路径指向其自身的 IRI，且路径的起点节点并不是 `owl:Ontology`。当图中含有 `<X> a owl:Ontology`，或含有一个 `owl:versionIRI` 为 `<X>` 的本体时，导入同样视为已解析，且该规则适用于整个导入闭包。合并了 W3C SHACL 1.2 词汇表的形状文档——`shnex.ttl` 导入 `sh:`，而与之并列的 `shacl.ttl` 声明了 `sh:` 这一本体——按原样即是完整的。"
 
-#: src/validation/shacl.md:90
-msgid "The SHACL 1.2 reifier-shape draft scope"
-msgstr ""
-
-#: src/validation/shacl.md:92
+#: src/validation/shacl.md:130
 msgid ""
-"The crate implements a **scoped** SHACL 1.2 Working Draft feature: "
-"`sh:reifierShape` and `sh:reificationRequired` for direct IRI property "
-"paths, so shapes can constrain the RDF 1.2 reifier metadata attached to "
-"statements (see [RDF 1.2 Features](../concepts/rdf12.md)). The relevant "
-"SHACL 1.2 Core draft is dated 2026-06-02. **This is not a claim of full "
-"SHACL 1.2 conformance** — it is one draft feature, explicitly scoped and "
-"tested."
-msgstr ""
+"Every **other** `owl:imports` no pair resolves is refused (exit 1). The "
+"refusal names each missing IRI and the `--import IRI=FILE` pair that "
+"resolves it, and suggests `--shapes-base IRI` for a document that imports "
+"its own published IRI — the W3C test vectors are such documents, read here "
+"from a local file. Validating without the imported document would be a "
+"verdict about a smaller shapes graph than the one named, so there is no warn-"
+"and-continue path. A pair the closure never reaches is refused as unused "
+"(exit 2) rather than read and ignored. The prepared-product packer that the "
+"WebAssembly and C-ABI hosts call applies the same rule, so every host agrees "
+"on which shapes graphs are complete."
+msgstr "**其他**任何没有配对能够解析的 `owl:imports` 都会被拒绝（退出码 1）。拒绝信息点名每个缺失的 IRI 以及可解析它的 `--import IRI=FILE` 配对，并对导入自身已发布 IRI 的文档建议使用 `--shapes-base IRI`——W3C 测试向量就是这样的文档，此处从本地文件读取。缺少被导入文档的验证，是对一个比所指名者更小的形状图作出的裁决，因此不存在「警告后继续」的路径。导入闭包从未到达的配对会作为未使用而被拒绝（退出码 2），而不是读入后忽略。WebAssembly 与 C-ABI 宿主所调用的预备产物（prepared product）打包器应用同一规则，因此每个宿主对哪些形状图是完整的判断一致。"
 
-#: src/validation/shacl.md:99
+#: src/validation/shacl.md:141
+msgid "Prefixes in SHACL-SPARQL queries"
+msgstr "SHACL-SPARQL 查询中的前缀"
+
+#: src/validation/shacl.md:143
+msgid ""
+"A SPARQL query in a shapes graph (`sh:select`, `sh:ask`, `sh:construct`, "
+"`sh:sparqlExpr`, a validator, a target or a function body) gets a `PREFIX` "
+"header before it is compiled. The header follows SHACL 1.2 SPARQL "
+"Extensions, \"Prefix Declarations for SPARQL Queries\":"
+msgstr "形状图中的 SPARQL 查询（`sh:select`、`sh:ask`、`sh:construct`、`sh:sparqlExpr`、验证器、目标或函数体）在编译前会获得一个 `PREFIX` 头。该头遵循 SHACL 1.2 SPARQL 扩展中的「Prefix Declarations for SPARQL Queries」："
+
+#: src/validation/shacl.md:148
+msgid ""
+"**A query with `sh:prefixes`** uses the prefix declarations on the path "
+"`sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`. The path is read "
+"from the query node and from the shape or component that carries it."
+msgstr "**带有 `sh:prefixes` 的查询**使用路径 `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare` 上的前缀声明。该路径从查询节点以及携带它的形状或组件读取。"
+
+#: src/validation/shacl.md:151
+msgid ""
+"**A query without `sh:prefixes`** uses every `sh:declare` of every SHACL "
+"instance of `owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or "
+"`sh:RulesGraph` in the shapes graph. A subclass of one of those classes "
+"counts too."
+msgstr "**不带 `sh:prefixes` 的查询**使用形状图中 `owl:Ontology`、`sh:DataGraph`、`sh:ShapesGraph` 或 `sh:RulesGraph` 的每个 SHACL 实例的每个 `sh:declare`。这些类的子类同样计入。"
+
+#: src/validation/shacl.md:155
+msgid ""
+"**Two different namespaces for one prefix** in the declarations a query "
+"reaches make the shapes graph ill-formed. The load fails, and the error "
+"names the prefix and both namespaces. The same prefix declared twice with "
+"the same namespace is fine. Declarations that no query reaches are not "
+"checked."
+msgstr "在查询所能到达的声明中，**同一前缀对应两个不同的命名空间**会使形状图不良构。加载会失败，错误信息点名该前缀与两个命名空间。同一前缀以相同命名空间声明两次则没有问题。没有任何查询到达的声明不会被检查。"
+
+#: src/validation/shacl.md:159
+msgid ""
+"**A malformed declaration** that a query reaches also fails the load. A "
+"declaration needs exactly one `xsd:string` `sh:prefix` and exactly one "
+"`sh:namespace`."
+msgstr "查询所到达的**格式错误的声明**同样会使加载失败。一条声明需要恰好一个 `xsd:string` 类型的 `sh:prefix` 与恰好一个 `sh:namespace`。"
+
+#: src/validation/shacl.md:163
+msgid ""
+"The shapes document's own `@prefix` / `PREFIX` directives are a fallback. "
+"They only supply a prefix the declarations above leave unbound, and they "
+"never replace one the declarations bind. They come from the Turtle parser's "
+"own record of the document, so a `PREFIX` line inside a query's string "
+"literal is never mistaken for a directive. If the document declares a prefix "
+"twice, the fallback uses the last declaration. A `PREFIX` in a query's own "
+"text applies to that query only."
+msgstr "形状文档自身的 `@prefix` / `PREFIX` 指令是后备来源。它们只补充上述声明未绑定的前缀，绝不替换声明已绑定的前缀。它们取自 Turtle 解析器对文档的自身记录，因此查询字符串字面量中的 `PREFIX` 行绝不会被误认为指令。若文档把某个前缀声明了两次，后备来源采用最后一次声明。查询自身文本中的 `PREFIX` 只作用于该查询。"
+
+#: src/validation/shacl.md:171
+msgid "Built-in declarations and the W3C vocabularies"
+msgstr "内置声明与 W3C 词汇表"
+
+#: src/validation/shacl.md:173
+msgid ""
+"The SHACL 1.2 vocabularies (`shacl.ttl`, `shnex.ttl` and `shnex-sparql.ttl`) "
+"declare every built-in constraint component and node-expression function, "
+"for example `sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction`. "
+"None of those declarations has a body or a validator, because the engine "
+"provides the implementation. A shapes graph may merge the vocabularies, and "
+"loading resolves each declaration against the engine's table of what it "
+"implements:"
+msgstr "SHACL 1.2 词汇表（`shacl.ttl`、`shnex.ttl` 与 `shnex-sparql.ttl`）声明了每个内置约束组件与节点表达式函数，例如 `sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction`。这些声明都没有函数体或验证器，因为实现由引擎提供。形状图可以合并这些词汇表，加载时会把每条声明与引擎的「已实现项」表进行解析："
+
+#: src/validation/shacl.md:180
+msgid ""
+"a bare declaration of a built-in binds to the native implementation and adds "
+"nothing to the custom-function index or the component registry;"
+msgstr "对内置项的裸声明绑定到原生实现，不向自定义函数索引或组件注册表添加任何内容；"
+
+#: src/validation/shacl.md:182
+msgid ""
+"a built-in declared again with a body, a validator, `sh:ask` or `sh:select` "
+"is a duplicate definition, and one declared under the wrong class or with a "
+"contradicting signature is a mismatch; both fail the load;"
+msgstr "若内置项被再次声明并带有函数体、验证器、`sh:ask` 或 `sh:select`，即为重复定义；若在错误的类下声明或带有相矛盾的签名，即为不匹配；两者都会使加载失败；"
+
+#: src/validation/shacl.md:185
+msgid ""
+"a function the engine does not implement still needs its body, whatever its "
+"namespace: a bodiless `ex:f` fails the load, and so does a bodiless "
+"`sh:NotABuiltin`;"
+msgstr "引擎未实现的函数无论位于哪个命名空间都仍需函数体：没有函数体的 `ex:f` 会使加载失败，没有函数体的 `sh:NotABuiltin` 同样如此；"
+
+#: src/validation/shacl.md:188
+msgid ""
+"a custom function whose key parameter is a built-in's key parameter fails "
+"the load, because the key parameters of all node expression functions must "
+"be disjoint."
+msgstr "若自定义函数的键参数与某个内置项的键参数相同，加载失败，因为所有节点表达式函数的键参数必须互不相交（任意两个函数都不得共用同一个键参数）。"
+
+#: src/validation/shacl.md:192
+msgid ""
+"So merging the W3C vocabularies into a shapes graph is a no-op. A test holds "
+"this over every shapes graph in three corpora (the first-party corpus, the "
+"W3C SHACL 1.0 suite and the SHACL 1.2 `sht:Validate` entries): the "
+"validation report is byte-identical with and without the merge. "
+"`purrdf_shapes::spec` exposes what the vocabularies declare and what the "
+"engine implements, and a test pins the difference at zero. `purrdf shapes "
+"lint` reports, per function call site, whether the call bound natively, to a "
+"custom body, to a SPARQL registration or to a host extension."
+msgstr "因此，把 W3C 词汇表合并进形状图不会改变任何结果。一项测试在三个语料（第一方语料、W3C SHACL 1.0 套件以及 SHACL 1.2 的 `sht:Validate` 条目）中的每个形状图上验证这一点：无论是否合并，验证报告都逐字节相同。`purrdf_shapes::spec` 公开词汇表声明了什么、引擎实现了什么，一项测试把两者之差固定为零。`purrdf shapes lint` 按每个函数调用点报告该调用绑定到了原生实现、自定义函数体、SPARQL 注册项还是宿主扩展。"
+
+#: src/validation/shacl.md:201
+msgid "SHACL 1.2 conformance"
+msgstr "SHACL 1.2 一致性"
+
+#: src/validation/shacl.md:203
+msgid ""
+"The complete W3C `shacl12-test-suite` is vendored byte-exact under `vectors/"
+"shacl12/` and run through the library API: 547 tests, covering 174 "
+"`sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 203 "
+"SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. "
+"All 547 pass, and the expected-failure ledger is empty. A negative SPARQL "
+"1.2 RL test must fail at the stage its test type names, not at an earlier "
+"one. Reproduce it with:"
+msgstr "完整的 W3C `shacl12-test-suite` 逐字节随库固化在 `vectors/shacl12/` 下，并经由库 API 运行：共 547 个测试，涵盖 174 个 `sht:Validate`、143 个 `sht:EvalNodeExpr` 与 27 个 `sht:Infer` 测试，以及 203 个 SPARQL 1.2 RL 语法、良构性、分层与求值测试。547 个全部通过，预期失败台账为空。SPARQL 1.2 RL 的负例测试必须在其测试类型所指明的阶段失败，而不能更早。复现方式："
+
+#: src/validation/shacl.md:215
+msgid ""
+"The last line of the scoreboard it prints is `W3C12 TOTAL: passed 547, "
+"xfailed 0, ledger 0`."
+msgstr "它打印的记分板最后一行是 `W3C12 TOTAL: passed 547, xfailed 0, ledger 0`。"
+
+#: src/validation/shacl.md:218
+msgid ""
+"Three approved tests expect a report that the normative SHACL 1.2 Core text "
+"does not produce. The harness grades each against the expectation with "
+"exactly one result amended, quotes the clause beside the amendment, and "
+"proves that a report without the amendment, or with a different one, fails:"
+msgstr "有三个已批准的测试所期望的报告，与规范性的 SHACL 1.2 Core 文本所产生的报告不符。测试框架对每个测试都以恰好修正了一条结果的期望进行判分，在修正旁引用相应条款，并证明缺少该修正或采用不同修正的报告都会失败："
+
+#: src/validation/shacl.md:223
+msgid ""
+"`core/node/xone-003` expects a result from a property shape with no "
+"`sh:resultPath`. Section 6.7.2.2 says: \"For results produced by a property "
+"shape, this SHACL property path is equivalent to the value of sh:path of the "
+"shape, unless stated otherwise.\" The graded result carries the shape's "
+"`sh:path`."
+msgstr "`core/node/xone-003` 期望来自某属性形状的一条结果不带 `sh:resultPath`。第 6.7.2.2 节写道：「For results produced by a property shape, this SHACL property path is equivalent to the value of sh:path of the shape, unless stated otherwise.」判分所用的结果携带该形状的 `sh:path`。"
+
+#: src/validation/shacl.md:228
+msgid ""
+"`core/property/reifierShape-001` expects the value node as `sh:value`. "
+"Section 7.8.5 says: \"For each reifier t that does not conform to "
+"$reifierShape, there is a validation result with t as sh:value.\" The graded "
+"result carries the reifier."
+msgstr "`core/property/reifierShape-001` 期望以值节点作为 `sh:value`。第 7.8.5 节写道：「For each reifier t that does not conform to $reifierShape, there is a validation result with t as sh:value.」判分所用的结果携带该具体化节点。"
+
+#: src/validation/shacl.md:232
+msgid ""
+"`core/property/reifierShape-002` expects the value node as `sh:value` for a "
+"missing reification. Section 7.8.5 says: \"If $reificationRequired is set to "
+"true and there is no reified statement for the triple term t in the data "
+"graph, there is a validation result with t as sh:value.\" The graded result "
+"carries the triple term."
+msgstr "`core/property/reifierShape-002` 在缺失具体化时期望以值节点作为 `sh:value`。第 7.8.5 节写道：「If $reificationRequired is set to true and there is no reified statement for the triple term t in the data graph, there is a validation result with t as sh:value.」判分所用的结果携带该三元组项。"
+
+#: src/validation/shacl.md:238
+msgid ""
+"Six node-expression tests expect an integer-valued `xsd:decimal` in a "
+"lexical form that is not canonical, such as `\"4.0\"` or `\"00\"`. XSD 1.1 "
+"Part 2 (section 3.3.3.1 and the `decimalCanonicalMap` of E.1) makes the "
+"canonical form `\"4\"` and `\"0\"`. PurRDF emits canonical forms, and each "
+"of those tests is graded exactly against the canonical form, not by "
+"comparing values."
+msgstr "有六个节点表达式测试期望一个取整数值的 `xsd:decimal` 采用非规范的词法形式，例如 `\"4.0\"` 或 `\"00\"`。XSD 1.1 Part 2（第 3.3.3.1 节以及 E.1 中的 `decimalCanonicalMap`）规定其规范形式为 `\"4\"` 与 `\"0\"`。PurRDF 输出规范形式，上述每个测试都严格按规范形式判分，而不是通过比较值来判分。"
+
+#: src/validation/shacl.md:244
+msgid ""
+"SPARQL 1.2 RL grammar rule \\[2\\], `RuleOrDataBlock ::= Prologue "
+"( RuleOrData+ ( Prologue1 RuleOrData? )* )?`, is implemented as written: "
+"once a declaration follows a rule or data block, at most one rule or data "
+"block may follow it before the next declaration."
+msgstr "SPARQL 1.2 RL 语法规则 \\[2\\] `RuleOrDataBlock ::= Prologue ( RuleOrData+ ( Prologue1 RuleOrData? )* )?` 按原文实现：一旦某条声明出现在规则或数据块之后，在下一条声明之前最多只能再跟一个规则或数据块。"
+
+#: src/validation/shacl.md:249
 msgid "Ontology-complete developer schemas"
 msgstr ""
 
-#: src/validation/shacl.md:101
+#: src/validation/shacl.md:251
 msgid ""
 "The public `compile_schema` boundary accepts a `SchemaCompileRequest` that "
 "binds the parsed shapes, exact ontology dataset, caller-owned `Namespaces`, "
@@ -8665,7 +8913,7 @@ msgid ""
 "Pydantic emitters without a second schema-discovery pass."
 msgstr ""
 
-#: src/validation/shacl.md:111
+#: src/validation/shacl.md:261
 msgid ""
 "The bounded theory catalogs only schema evidence: direct IRI `sh:path`, RDF/"
 "OWL property declarations, domain/range declarations, and both endpoints of "
@@ -8676,7 +8924,7 @@ msgid ""
 "ontology boundary."
 msgstr ""
 
-#: src/validation/shacl.md:118
+#: src/validation/shacl.md:268
 msgid ""
 "Subclass/equivalent-class closure determines domain membership. Multiple "
 "domains are conjunctive; OWL union members are alternatives and intersection "
@@ -8688,7 +8936,7 @@ msgid ""
 "to `anyOf` and `allOf`."
 msgstr ""
 
-#: src/validation/shacl.md:126
+#: src/validation/shacl.md:276
 msgid ""
 "Direct SHACL remains authoritative. Ontology-only fields are optional; "
 "`owl:FunctionalProperty` gives a scalar representation with approximation "
@@ -8699,7 +8947,7 @@ msgid ""
 "chains and axioms outside the fragment do not create fields."
 msgstr ""
 
-#: src/validation/shacl.md:134
+#: src/validation/shacl.md:284
 msgid ""
 "`SchemaCoverageReport` accounts for every catalogued property once, "
 "including exclusions, with sorted per-class outcomes and source-axiom "
@@ -8712,15 +8960,15 @@ msgid ""
 "exhaustion are typed failures."
 msgstr ""
 
-#: src/validation/shacl.md:143
+#: src/validation/shacl.md:293
 msgid "Run the complete two-mode and four-emitter example with:"
 msgstr ""
 
-#: src/validation/shacl.md:149
+#: src/validation/shacl.md:299
 msgid "Schema → SHACL imports"
 msgstr ""
 
-#: src/validation/shacl.md:151
+#: src/validation/shacl.md:301
 msgid ""
 "The schema-projection surface is bidirectional. `SchemaImportConfig` "
 "requires the caller's namespace table and the complete RDF datatype mapping "
@@ -8733,7 +8981,7 @@ msgid ""
 "reverse `LossLedger`."
 msgstr ""
 
-#: src/validation/shacl.md:160
+#: src/validation/shacl.md:310
 msgid ""
 "Malformed values, open or dangling references, identity collisions, "
 "generated artifact/map drift, and resource-limit exhaustion fail closed. "
@@ -8745,17 +8993,17 @@ msgid ""
 "when the validation-bearing SHACL recompiles byte-exactly."
 msgstr ""
 
-#: src/validation/shacl.md:169
+#: src/validation/shacl.md:319
 msgid ""
 "The executable example constructs caller-owned `example.org` configuration "
 "and exercises all five paths:"
 msgstr ""
 
-#: src/validation/shacl.md:176
+#: src/validation/shacl.md:326
 msgid "Pydantic v2 projection"
 msgstr ""
 
-#: src/validation/shacl.md:178
+#: src/validation/shacl.md:328
 msgid ""
 "`purrdf-shapes` can transliterate a compiled SHACL-derived JSON Schema into "
 "a deterministic, typed Pydantic v2 package entirely in memory. The public "
@@ -8764,7 +9012,7 @@ msgid ""
 "the library does not invent a vocabulary, namespace, or downstream brand."
 msgstr ""
 
-#: src/validation/shacl.md:184
+#: src/validation/shacl.md:334
 msgid ""
 "Every `$defs` entry gets a stable import path, JSON property names remain "
 "exact through Pydantic aliases, and generated classes expose the originating "
@@ -8780,7 +9028,7 @@ msgid ""
 "importing SHACL."
 msgstr ""
 
-#: src/validation/shacl.md:196
+#: src/validation/shacl.md:346
 msgid ""
 "The optional caller-owned `PydanticPackageTopology` is a total partition of "
 "`$defs` entries into portable dotted leaf modules. Each route carries the "
@@ -8796,11 +9044,11 @@ msgid ""
 "flat version stamp adds `__about__.py` and updates the `__init__.py` exports."
 msgstr ""
 
-#: src/validation/shacl.md:209
+#: src/validation/shacl.md:359
 msgid "LinkML 1.11 projection"
 msgstr ""
 
-#: src/validation/shacl.md:211
+#: src/validation/shacl.md:361
 msgid ""
 "The same `CompiledSchema` carrier can be projected to canonical LinkML 1.11 "
 "with `emit_linkml`. `LinkmlConfig` requires the caller's schema IRI, name, "
@@ -8811,7 +9059,7 @@ msgid ""
 "ordered, integrity-checked slot rename and skip-diagnostic reports."
 msgstr ""
 
-#: src/validation/shacl.md:219
+#: src/validation/shacl.md:369
 msgid ""
 "Classes and exact property aliases, types, enums, local references, inline "
 "objects, requiredness, homogeneous arrays, patterns, inclusive bounds, and "
@@ -8826,7 +9074,7 @@ msgid ""
 "ordinal collision allocation is bounded and deterministic."
 msgstr ""
 
-#: src/validation/shacl.md:231
+#: src/validation/shacl.md:381
 msgid ""
 "Every unsupported assertion is classified by a closed capability table; "
 "malformed inputs, external/dynamic/dangling references, stale re-home hints, "
@@ -8836,7 +9084,7 @@ msgid ""
 "only tags, duplicate keys, non-string keys, and non-finite numbers."
 msgstr ""
 
-#: src/validation/shacl.md:239
+#: src/validation/shacl.md:389
 msgid ""
 "`import_linkml` consumes that validated native document; the emitted-package "
 "variant `import_linkml_package` first verifies canonical YAML and the "
@@ -8847,7 +9095,7 @@ msgid ""
 "keys is unnecessary."
 msgstr ""
 
-#: src/validation/shacl.md:246
+#: src/validation/shacl.md:396
 msgid ""
 "The Rust production path has no LinkML-toolkit dependency. CI uses the "
 "locked official LinkML 1.11.1 Python packages only as a differential oracle. "
@@ -8855,11 +9103,11 @@ msgid ""
 "`SchemaView`, regenerates JSON Schema, and verifies reverse predicates:"
 msgstr ""
 
-#: src/validation/shacl.md:255
+#: src/validation/shacl.md:405
 msgid "TypeScript 7.0 projection"
 msgstr ""
 
-#: src/validation/shacl.md:257
+#: src/validation/shacl.md:407
 msgid ""
 "`emit_typescript` projects the same `CompiledSchema` into deterministic "
 "TypeScript 7.0 declarations. The caller supplies the package name and all "
@@ -8869,7 +9117,7 @@ msgid ""
 "no consumer identity or vocabulary."
 msgstr ""
 
-#: src/validation/shacl.md:264
+#: src/validation/shacl.md:414
 msgid ""
 "The fixed declaration dialect uses `strict` plus "
 "`exactOptionalPropertyTypes`. Type aliases preserve JSON primitives and "
@@ -8880,7 +9128,7 @@ msgid ""
 "name collisions fail before bytes are emitted."
 msgstr ""
 
-#: src/validation/shacl.md:272
+#: src/validation/shacl.md:422
 msgid ""
 "Runtime assertions outside TypeScript structural assignability are never "
 "silently erased: integer, numeric/string predicate, closure, pattern-"
@@ -8891,7 +9139,7 @@ msgid ""
 "7.0.2 compiler, including fresh-literal and through-variable probes:"
 msgstr ""
 
-#: src/validation/shacl.md:284
+#: src/validation/shacl.md:434
 msgid ""
 "The projection intentionally has no arbitrary TypeScript reader. TypeScript "
 "declarations do not define a unique runtime JSON acceptance relation, and "
@@ -8902,11 +9150,11 @@ msgid ""
 "importer is filesystem-free and wasm-clean."
 msgstr ""
 
-#: src/validation/shacl.md:292
+#: src/validation/shacl.md:442
 msgid "GraphQL September 2025 projection"
 msgstr ""
 
-#: src/validation/shacl.md:294
+#: src/validation/shacl.md:444
 msgid ""
 "`emit_graphql` projects `CompiledSchema` into deterministic GraphQL "
 "September 2025 SDL. `GraphqlConfig` has no defaults: the caller supplies the "
@@ -8917,7 +9165,7 @@ msgid ""
 "codec."
 msgstr ""
 
-#: src/validation/shacl.md:301
+#: src/validation/shacl.md:451
 msgid ""
 "The SDL is deliberately a type-system fragment. PurRDF emits paired output "
 "`type` and input `input` objects, but no query, mutation, or subscription "
@@ -8926,7 +9174,7 @@ msgid ""
 "executable schema."
 msgstr ""
 
-#: src/validation/shacl.md:307
+#: src/validation/shacl.md:457
 msgid ""
 "The exact grammar includes GraphQL booleans, strings, numbers, the signed 32-"
 "bit `Int` domain, explicit nullability, finite JSON `const`/`enum` sets, "
@@ -8938,7 +9186,7 @@ msgid ""
 "and finite JSON values."
 msgstr ""
 
-#: src/validation/shacl.md:316
+#: src/validation/shacl.md:466
 msgid ""
 "`GraphqlPackage::encode_input` maps source JSON keys and finite values to "
 "input field names and enum symbols. `decode_output` performs the inverse for "
@@ -8950,73 +9198,73 @@ msgid ""
 "acceptance relation and is not accepted as an inverse format."
 msgstr ""
 
-#: src/validation/shacl.md:325
+#: src/validation/shacl.md:475
 msgid ""
 "GraphQL variable coercion differs from JSON Schema validation at these "
 "closed boundaries:"
 msgstr ""
 
-#: src/validation/shacl.md:328
+#: src/validation/shacl.md:478
 msgid "Boundary"
 msgstr ""
 
-#: src/validation/shacl.md:328
+#: src/validation/shacl.md:478
 msgid "Located loss families"
 msgstr ""
 
-#: src/validation/shacl.md:330
+#: src/validation/shacl.md:480
 msgid "object fields and names"
 msgstr ""
 
-#: src/validation/shacl.md:330
+#: src/validation/shacl.md:480
 msgid "additional properties, pattern properties, property names/counts"
 msgstr ""
 
-#: src/validation/shacl.md:331
+#: src/validation/shacl.md:481
 msgid "requiredness and recursion"
 msgstr ""
 
-#: src/validation/shacl.md:331
+#: src/validation/shacl.md:481
 msgid ""
 "nullable-presence widening, one deterministic recursive-input nullability "
 "relaxation"
 msgstr ""
 
-#: src/validation/shacl.md:332
+#: src/validation/shacl.md:482
 msgid "lists"
 msgstr ""
 
-#: src/validation/shacl.md:332
+#: src/validation/shacl.md:482
 msgid ""
 "singleton coercion, cardinality, contains, uniqueness, tuples, unevaluated "
 "items"
 msgstr ""
 
-#: src/validation/shacl.md:333
+#: src/validation/shacl.md:483
 msgid "scalar assertions"
 msgstr ""
 
-#: src/validation/shacl.md:333
+#: src/validation/shacl.md:483
 msgid "integer domain delegation, numeric predicates, string predicates"
 msgstr ""
 
-#: src/validation/shacl.md:334
+#: src/validation/shacl.md:484
 msgid "applicators"
 msgstr ""
 
-#: src/validation/shacl.md:334
+#: src/validation/shacl.md:484
 msgid "conditionals, dependencies, intersections, unions, `oneOf`, negation"
 msgstr ""
 
-#: src/validation/shacl.md:335
+#: src/validation/shacl.md:485
 msgid "runtime boundary"
 msgstr ""
 
-#: src/validation/shacl.md:335
+#: src/validation/shacl.md:485
 msgid "custom-scalar and unknown-keyword validation delegation"
 msgstr ""
 
-#: src/validation/shacl.md:337
+#: src/validation/shacl.md:487
 msgid ""
 "The caller-named fallback scalar is declared but PurRDF does not invent its "
 "`parseValue`, `parseLiteral`, or serialization semantics. Every delegated "
@@ -9024,7 +9272,7 @@ msgid ""
 "Pointer locations; an exact package has an empty ledger."
 msgstr ""
 
-#: src/validation/shacl.md:342
+#: src/validation/shacl.md:492
 msgid ""
 "Emission fails before returning bytes for invalid caller configuration, "
 "malformed schema keywords, `$id` rebasing, external/indirect/dangling "
@@ -9035,7 +9283,7 @@ msgid ""
 "per GraphQL name."
 msgstr ""
 
-#: src/validation/shacl.md:349
+#: src/validation/shacl.md:499
 msgid ""
 "The independent dev oracle classifies source values with `boon`, builds the "
 "SDL with locked official GraphQL.js 16.14.0, and executes real variable "
@@ -9044,43 +9292,245 @@ msgid ""
 "failures:"
 msgstr ""
 
-#: src/validation/shacl.md:358
+#: src/validation/shacl.md:508
 msgid ""
 "GraphQL.js is dev-only. Emission and value translation remain filesystem-"
 "free, wasm-clean Rust."
 msgstr ""
 
-#: src/validation/shacl.md:361 src/validation/shapes-products.md:764
+#: src/validation/shacl.md:511
+msgid "Rules, node expressions and certifying a shapes graph"
+msgstr "规则、节点表达式与形状图认证"
+
+#: src/validation/shacl.md:513
+msgid ""
+"Three tools sit beside validation. Every host reaches the same library entry "
+"point, so the command line, Python, WebAssembly and C cannot disagree about "
+"the answer."
+msgstr "验证之外还有三个工具。每个宿主都到达同一个库入口点，因此命令行、Python、WebAssembly 与 C 在答案上不可能出现分歧。"
+
+#: src/validation/shacl.md:517
+msgid "Tool"
+msgstr "工具"
+
+#: src/validation/shacl.md:517
+msgid "Python (`purrdf.shapes`)"
+msgstr "Python（`purrdf.shapes`）"
+
+#: src/validation/shacl.md:519
+msgid "Run rules, write the inference graph"
+msgstr "运行规则，写出推理图"
+
+#: src/validation/shacl.md:519
+msgid "`purrdf_shapes::infer`, `srl::infer`"
+msgstr ""
+
+#: src/validation/shacl.md:519
+msgid "`purrdf rules`"
+msgstr ""
+
+#: src/validation/shacl.md:519
+msgid "`apply_rules`"
+msgstr ""
+
+#: src/validation/shacl.md:519
+msgid "`shaclApplyRules`"
+msgstr ""
+
+#: src/validation/shacl.md:519
+msgid "`purrdf_shacl_apply_rules`"
+msgstr ""
+
+#: src/validation/shacl.md:520
+msgid "Evaluate one node expression"
+msgstr "对单个节点表达式求值"
+
+#: src/validation/shacl.md:520
+msgid "`free_expression::evaluate`"
+msgstr ""
+
+#: src/validation/shacl.md:520
+msgid "`purrdf node-expr`"
+msgstr ""
+
+#: src/validation/shacl.md:520
+msgid "`eval_node_expr`"
+msgstr ""
+
+#: src/validation/shacl.md:520
+msgid "`shaclEvalNodeExpr`"
+msgstr ""
+
+#: src/validation/shacl.md:520
+msgid "`purrdf_shacl_eval_node_expr`"
+msgstr ""
+
+#: src/validation/shacl.md:521
+msgid "Certify a shapes graph"
+msgstr "认证形状图"
+
+#: src/validation/shacl.md:521
+msgid "`lint::lint`"
+msgstr ""
+
+#: src/validation/shacl.md:521
+msgid "`purrdf shapes lint`"
+msgstr ""
+
+#: src/validation/shacl.md:521
+msgid "`lint_shapes`"
+msgstr ""
+
+#: src/validation/shacl.md:521
+msgid "`shaclLintShapes`"
+msgstr ""
+
+#: src/validation/shacl.md:521
+msgid "`purrdf_shacl_lint_shapes`"
+msgstr ""
+
+#: src/validation/shacl.md:523
+msgid ""
+"**Rules.** The rule source is either a shapes graph, whose SHACL 1.2 rules "
+"run (its default rule set), or a SPARQL 1.2 RL rule set, but not both. The "
+"result is the **inference graph**: the inferred triples only, never the data "
+"graph, as N-Triples 1.2 in one canonical order. On request, each host also "
+"returns the proof of every inferred triple. The proof is one block per "
+"triple: `derived S P O .`, then `  rule R` and one `  premise S P O .` line "
+"for each fact the rule's body matched. A SPARQL 1.2 RL data-block triple has "
+"`  data-block` instead."
+msgstr "**规则。** 规则来源要么是形状图（运行其 SHACL 1.2 规则，即其默认规则集），要么是 SPARQL 1.2 RL 规则集，但不能两者兼有。结果是**推理图**：只包含推出的三元组，绝不包含数据图，以 N-Triples 1.2 按唯一的规范顺序给出。应请求，每个宿主还会返回每个推出三元组的证明。证明对每个三元组给出一个块：`derived S P O .`，随后是 `  rule R`，以及规则体所匹配的每个事实各一行 `  premise S P O .`。SPARQL 1.2 RL 数据块中的三元组则改为 `  data-block`。"
+
+#: src/validation/shacl.md:531
+msgid ""
+"Every host takes the same **term-generating round limit**. This bounds the "
+"evaluation rounds that infer a term the graph did not already hold, and one "
+"more round fails the run naming the limit. The default is 65,536 rounds. **A "
+"host running untrusted rule sets should lower it**: a rule set whose term "
+"generation diverges (an exponential one in particular) reaches the engine's "
+"fixed arena and join ceilings only slowly under the default."
+msgstr "每个宿主都接受同一个**生成新项的轮数上限**。它限制那些推出图中原本没有的项的求值轮数，再多一轮就会以点名该上限的方式使运行失败。默认值为 65,536 轮。**运行不受信任规则集的宿主应当调低它**：生成新项发散的规则集（尤其是指数式发散的规则集）在默认值下只会很缓慢地触及引擎固定的项存储区与连接上限。"
+
+#: src/validation/shacl.md:543
+msgid "\"inferred\""
+msgstr ""
+
+#: src/validation/shacl.md:543
+msgid "# the inference graph, N-Triples\n"
+msgstr "# 推理图，N-Triples\n"
+
+#: src/validation/shacl.md:544
+msgid "\"proof\""
+msgstr ""
+
+#: src/validation/shacl.md:544
+msgid "# the proof text\n"
+msgstr "# 证明文本\n"
+
+#: src/validation/shacl.md:545
+msgid "# SPARQL 1.2 RL\n"
+msgstr ""
+
+#: src/validation/shacl.md:548
+msgid ""
+"**Node expressions.** One node expression of a shapes graph is evaluated "
+"against a focus node of a data graph, as SHACL 1.2 Node Expressions' "
+"`evalExpr(expr, focusGraph, focusNode, scope)`. The expression is parsed by "
+"the shapes parser itself, so custom functions, shape references and "
+"`sh:prefixes` bind as they do inside a shape. The expression is named by "
+"IRI, or by `_:label` for a blank node the shapes document labels. Scope "
+"variables are bound by name and read by `shnex:var`. The output nodes come "
+"back as N-Triples terms in the order the expression's sequence semantics "
+"define."
+msgstr "**节点表达式。** 形状图中的单个节点表达式针对数据图的某个焦点节点求值，即 SHACL 1.2 节点表达式中的 `evalExpr(expr, focusGraph, focusNode, scope)`。表达式由形状解析器本身解析，因此自定义函数、形状引用与 `sh:prefixes` 的绑定方式与在形状内部完全相同。表达式以 IRI 指名，或以 `_:label` 指名形状文档中带标签的空节点。作用域变量按名称绑定，并由 `shnex:var` 读取。输出节点以 N-Triples 项的形式返回，顺序由表达式的序列语义决定。"
+
+#: src/validation/shacl.md:558
+msgid "\"_:suffix\""
+msgstr ""
+
+#: src/validation/shacl.md:559
+msgid "\"http://example.org/a\""
+msgstr ""
+
+#: src/validation/shacl.md:559
+msgid "\"suffix\""
+msgstr ""
+
+#: src/validation/shacl.md:559
+msgid "'\"!\"'"
+msgstr ""
+
+#: src/validation/shacl.md:562
+msgid ""
+"**Certifying a shapes graph.** Loading a shapes graph is the hot path: it "
+"refuses the first construct it cannot evaluate faithfully, and does not pay "
+"for validating the graph against the W3C `shacl-shacl.ttl`. Linting pays "
+"that cost once, on request, and reports three sections:"
+msgstr "**形状图认证。** 加载形状图是热路径：它拒绝遇到的第一个无法如实求值的构造，且不为依据 W3C `shacl-shacl.ttl` 验证该图付出代价。lint 按需付出这一代价一次，并报告三个部分："
+
+#: src/validation/shacl.md:567
+msgid "`load`: the loader's verdict, accepted or the refusal it raised."
+msgstr "`load`：加载器的裁决，即接受，或它抛出的拒绝。"
+
+#: src/validation/shacl.md:568
+msgid ""
+"`shacl-shacl`: every result of validating the shapes graph against the "
+"vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core "
+"relaxations (`sh:closed sh:ByTypes`, a list-valued `sh:nodeKind`, a path-"
+"valued `sh:equals`, a node-expression `sh:targetNode`). A result SHACL 1.2 "
+"Core makes well-formed is marked `superseded` and is not a finding, but only "
+"when the loader accepted the graph."
+msgstr "`shacl-shacl`：依据随库固化的 `shacl-shacl.ttl` 验证形状图所得的每条结果。该文件早于SHACL 1.2 Core 的部分放宽（`sh:closed sh:ByTypes`、取列表值的 `sh:nodeKind`、以路径为值的 `sh:equals`、以节点表达式给出的 `sh:targetNode`）。若某条结果所指出的构造在 SHACL 1.2 Core 中是良构的，该结果会被标记为 `superseded`，不算作问题，但仅在加载器接受了该图时如此。"
+
+#: src/validation/shacl.md:574
+msgid ""
+"`functions`: which implementation every node-expression function call binds "
+"to — `native`, `custom`, `sparql-registered` or `host-extension`. For a "
+"shapes graph that merges the W3C SHACL 1.2 vocabularies, a `sh:sparqlExpr` "
+"call binds `native` even though the graph declares `sh:SPARQLExprExpression`."
+msgstr "`functions`：每个节点表达式函数调用绑定到哪个实现——`native`、`custom`、`sparql-registered` 或 `host-extension`。对于合并了 W3C SHACL 1.2 词汇表的形状图，即使图中声明了 `sh:SPARQLExprExpression`，`sh:sparqlExpr` 调用仍绑定为 `native`。"
+
+#: src/validation/shacl.md:579
+msgid ""
+"A report is clean when the loader accepted the graph and every `shacl-shacl` "
+"result is superseded. Every host renders the same deterministic text; the "
+"[CLI reference](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
+"crates/cli/README.md#shapes-lint) shows it."
+msgstr "当加载器接受了该图、且每条 `shacl-shacl` 结果都已被取代时，报告即为干净。每个宿主渲染同一份确定性的文本；[CLI 参考](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/cli/README.md#shapes-lint)给出了示例。"
+
+#: src/validation/shacl.md:584 src/validation/shapes-products.md:769
 msgid "From Python"
 msgstr ""
 
-#: src/validation/shacl.md:366
+#: src/validation/shacl.md:589
 msgid "\"...\""
 msgstr ""
 
-#: src/validation/shacl.md:367
+#: src/validation/shacl.md:590
 msgid "# True / False\n"
 msgstr ""
 
-#: src/validation/shacl.md:368
+#: src/validation/shacl.md:591
 msgid "\"results\""
 msgstr ""
 
-#: src/validation/shacl.md:368
+#: src/validation/shacl.md:591
 msgid "# list of violation dicts\n"
 msgstr ""
 
-#: src/validation/shacl.md:371
+#: src/validation/shacl.md:594
 msgid ""
 "Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`, "
-"`component`, `source_shape`, and `message`."
-msgstr ""
+"`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each "
+"a dict with `text` and its `language` / `direction` / `datatype` when "
+"present)."
+msgstr "每个结果字典保留稳定的键 `focus`、`path`、`value`、`severity`、`component`、`source_shape` 与 `messages`（每条 `sh:resultMessage`，各为一个字典，含 `text`，存在时还含其 `language` / `direction` / `datatype`）。"
 
-#: src/validation/shacl.md:374
+#: src/validation/shacl.md:598
 msgid "The report is a dataset"
 msgstr ""
 
-#: src/validation/shacl.md:376
+#: src/validation/shacl.md:600
 msgid ""
 "`ValidationReport::to_dataset()` materializes the W3C validation report — "
 "the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen "
@@ -9095,11 +9545,11 @@ msgid ""
 "validate --format` does."
 msgstr ""
 
-#: src/validation/shacl.md:387
+#: src/validation/shacl.md:611
 msgid "SARIF output"
 msgstr ""
 
-#: src/validation/shacl.md:389
+#: src/validation/shacl.md:613
 msgid ""
 "Validation reports stay structured in the engine; the SARIF 2.1.0 boundary "
 "is the separate [`purrdf-validate`](https://docs.rs/purrdf-validate) crate "
@@ -9108,7 +9558,7 @@ msgid ""
 "scanning dashboards:"
 msgstr ""
 
-#: src/validation/shacl.md:398
+#: src/validation/shacl.md:622
 msgid ""
 "r#\"\n"
 "    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
@@ -9120,7 +9570,7 @@ msgid ""
 "\"#"
 msgstr ""
 
-#: src/validation/shacl.md:406
+#: src/validation/shacl.md:630
 msgid ""
 "r#\"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-"
 "ns#type> <http://example.org/Person> .\n"
@@ -9128,29 +9578,33 @@ msgid ""
 "\"#"
 msgstr ""
 
-#: src/validation/shacl.md:411
+#: src/validation/shacl.md:635
 msgid "\"sarif produced\""
 msgstr ""
 
-#: src/validation/shacl.md:412
+#: src/validation/shacl.md:636
 msgid "\"\\\"version\\\": \\\"2.1.0\\\"\""
 msgstr ""
 
-#: src/validation/shacl.md:415
+#: src/validation/shacl.md:639
 msgid ""
 "Lower-level entry points (`build_report_sarif`, `build_diagnostics_sarif`) "
 "build a `SarifLog` value instead of a string, so a host can merge runs "
 "before serializing."
 msgstr ""
 
-#: src/validation/shacl.md:421
+#: src/validation/shacl.md:645
 msgid ""
-"The validator is gated by the vendored W3C `data-shapes` suite, a vendored "
-"DASH SHACL-AF/rules corpus, and a first-party frozen corpus of 71 cases with "
-"byte-frozen expected reports; SHACL Rules output is compared to expected "
-"inferred graphs by RDFC-1.0 isomorphism. See [Conformance & Testing](../"
-"project/conformance.md)."
-msgstr ""
+"The validator is gated by the vendored W3C SHACL 1.0 `data-shapes` suite, "
+"the vendored W3C SHACL 1.2 suite, a vendored DASH SHACL-AF/rules corpus, and "
+"a first-party frozen corpus of 73 cases with byte-frozen expected reports; "
+"SHACL Rules output is compared to expected inferred graphs by RDFC-1.0 "
+"isomorphism. The parser is also held to the SHACL 1.2 specification's own "
+"SHACL-for-SHACL shapes graph: over every first-party and W3C shapes graph "
+"and a set of generated mutants, it refuses a graph exactly when `shacl-"
+"shacl.ttl` reports a violation, apart from named cases. See [Conformance & "
+"Testing](../project/conformance.md)."
+msgstr "该验证器由随库固化的 W3C SHACL 1.0 `data-shapes` 套件、随库固化的 W3C SHACL 1.2 套件、随库固化的 DASH SHACL-AF/规则语料，以及一个含 73 个用例、预期报告逐字节冻结的第一方冻结语料把关；SHACL Rules 的输出按 RDFC-1.0 同构与预期推理图比较。解析器还受 SHACL 1.2 规范自带的 SHACL-for-SHACL 形状图约束：在每个第一方与 W3C 形状图以及一组生成的变异体上，除已点名的用例外，它恰好在 `shacl-shacl.ttl` 报告违规时拒绝该图。参见[一致性与测试](../project/conformance.md)。"
 
 #: src/validation/shapes-products.md:8
 msgid ""
@@ -9236,16 +9690,16 @@ msgstr ""
 
 #: src/validation/shapes-products.md:78
 msgid ""
-"Naming **no** `--import` at all is not a refusal: each unresolved "
-"`owl:imports` is reported on stderr as a `shacl warning` line and the "
-"product is packed from the root graph alone — a shapes document may "
-"legitimately carry an ontology header whose imports are irrelevant to its "
-"shapes. Naming **any** pair makes the closure mandatory, exactly as it does "
-"for `validate --shapes`: an `owl:imports` no pair resolves is refused by "
-"name, and a pair the closure never reaches is refused as unused."
-msgstr ""
+"An import of the shapes document's own IRI (`--base`, its `file://` "
+"retrieval IRI, or an in-document `@base`), or of an ontology already in the "
+"shapes graph (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is "
+"`<X>`), needs no pair. Every other `owl:imports` no pair resolves is refused "
+"by name, exactly as it is for `validate --shapes`, and a pair the closure "
+"never reaches is refused as unused. The product is never packed from a "
+"smaller shapes graph than the one named."
+msgstr "对形状文档自身 IRI（`--base`、其 `file://` 获取 IRI，或文档内的 `@base`）的导入，或对形状图中已有本体（`<X> a owl:Ontology`，或 `owl:versionIRI` 为 `<X>` 的本体）的导入，都无需配对。其他任何没有配对能够解析的 `owl:imports` 都会被点名拒绝，与 `validate --shapes` 完全一致；导入闭包从未到达的配对会作为未使用而被拒绝。产物绝不会从比所指名者更小的形状图打包而成。"
 
-#: src/validation/shapes-products.md:86
+#: src/validation/shapes-products.md:87
 msgid ""
 "This did not always hold. `shacl pack` used to read the shapes document "
 "through a route with no import table and no diagnostic channel at all, so an "
@@ -9257,21 +9711,23 @@ msgid ""
 "the closure through the same function."
 msgstr ""
 
-#: src/validation/shapes-products.md:95
+#: src/validation/shapes-products.md:96
 msgid ""
 "The Python, C-ABI and WebAssembly bindings call a lower-level, text-only "
-"pack entry point that has no `--import` table at all, and refuse rather than "
-"fold — see [What a product carries, and what it does not](#what-a-product-"
-"carries-and-what-it-does-not)."
-msgstr ""
+"pack entry point that has no `--import` table at all. It applies the same "
+"rule — an import of the document's own IRI (the base the host passes, or an "
+"`@base`), or of an ontology already in the shapes graph, packs — and refuses "
+"any other rather than fold — see [What a product carries, and what it does "
+"not](#what-a-product-carries-and-what-it-does-not)."
+msgstr "Python、C-ABI 与 WebAssembly 绑定调用的是一个更底层、仅接受文本的打包入口点，它完全没有 `--import` 表。它应用同一规则——对文档自身 IRI（宿主传入的基准 IRI，或 `@base`）的导入，或对形状图中已有本体的导入，可以打包——其他导入一律拒绝，而不是折叠进来——参见[产物携带什么、不携带什么](#what-a-product-carries-and-what-it-does-not)。"
 
-#: src/validation/shapes-products.md:99
+#: src/validation/shapes-products.md:101
 msgid ""
 "`--shapes-graph` is resolved and recorded at pack time, the same way "
 "`validate --shapes` resolves it"
 msgstr ""
 
-#: src/validation/shapes-products.md:101
+#: src/validation/shapes-products.md:103
 msgid ""
 "SHACL-SPARQL exposes the shapes graph itself as a named graph — a "
 "`sh:select` body may read `GRAPH $shapesGraph { … }` — and `--shapes-graph "
@@ -9279,7 +9735,7 @@ msgid ""
 "document declares:"
 msgstr ""
 
-#: src/validation/shapes-products.md:112
+#: src/validation/shapes-products.md:114
 msgid ""
 "A relative value resolves against the SAME base the shapes document parses "
 "under — the one `--base` names, or the document's own `file://` retrieval "
@@ -9294,20 +9750,20 @@ msgid ""
 "able to close the gap."
 msgstr ""
 
-#: src/validation/shapes-products.md:124
+#: src/validation/shapes-products.md:126
 msgid ""
 "Omitting `--shapes-graph` packs exactly as it always has: the product "
 "records whatever `sh:shapesGraph` the shapes graph itself declares, or none "
 "at all."
 msgstr ""
 
-#: src/validation/shapes-products.md:127
+#: src/validation/shapes-products.md:129
 msgid ""
 "`--box-role-vocab` is resolved and recorded at pack time, the same way "
 "`validate --shapes` resolves it"
 msgstr ""
 
-#: src/validation/shapes-products.md:129
+#: src/validation/shapes-products.md:131
 msgid ""
 "The graph-box role annotation feature takes a caller-supplied vocabulary — "
 "six term IRIs derived by concatenation from one namespace — and PurRDF mints "
@@ -9315,7 +9771,7 @@ msgid ""
 "vocab` the feature is simply **inactive**, exactly as it always has been."
 msgstr ""
 
-#: src/validation/shapes-products.md:141
+#: src/validation/shapes-products.md:143
 msgid ""
 "`--box-role-vocab NS` derives `NSgraphBoxRole`, `NSboxABox`, `NSboxTBox`, "
 "`NSboxRBox`, `NSboxCBox` and `NSboxConfigBox`, records the namespace into "
@@ -9329,7 +9785,7 @@ msgid ""
 "stamped."
 msgstr ""
 
-#: src/validation/shapes-products.md:151
+#: src/validation/shapes-products.md:153
 msgid ""
 "The writer is **byte-deterministic**. No wall clock, no randomness and no "
 "hash-iteration order reach it, so two runs over the same document, base and "
@@ -9337,16 +9793,16 @@ msgid ""
 "a product is stable."
 msgstr ""
 
-#: src/validation/shapes-products.md:156
+#: src/validation/shapes-products.md:158
 msgid "From Rust:"
 msgstr ""
 
-#: src/validation/shapes-products.md:163 src/validation/shapes-products.md:769
-#: src/validation/shapes-products.md:842
+#: src/validation/shapes-products.md:165 src/validation/shapes-products.md:774
+#: src/validation/shapes-products.md:847
 msgid "\"https://example.org/shapes\""
 msgstr ""
 
-#: src/validation/shapes-products.md:168
+#: src/validation/shapes-products.md:170
 msgid ""
 "`ShapesProfile::CORE` is named explicitly and there is no default. It is the "
 "one profile this build implements — SHACL Core plus SHACL-SPARQL plus SHACL-"
@@ -9355,7 +9811,7 @@ msgid ""
 "product rather than a fact about it."
 msgstr ""
 
-#: src/validation/shapes-products.md:174
+#: src/validation/shapes-products.md:176
 msgid ""
 "\"Zero host-injected dependencies\" is a statement about what a product "
 "_needs_, not a ban on host wiring. A Rust host that injects native SPARQL "
@@ -9365,52 +9821,52 @@ msgid ""
 "plain path above."
 msgstr ""
 
-#: src/validation/shapes-products.md:180
+#: src/validation/shapes-products.md:182
 msgid "What a product carries, and what it does not"
 msgstr ""
 
-#: src/validation/shapes-products.md:182
+#: src/validation/shapes-products.md:184
 msgid "A product carries three sections, always all three:"
 msgstr ""
 
-#: src/validation/shapes-products.md:184
+#: src/validation/shapes-products.md:186
 msgid "Section"
 msgstr ""
 
-#: src/validation/shapes-products.md:184
+#: src/validation/shapes-products.md:186
 msgid "Carries"
 msgstr ""
 
-#: src/validation/shapes-products.md:186
+#: src/validation/shapes-products.md:188
 msgid "identity"
 msgstr ""
 
-#: src/validation/shapes-products.md:186
+#: src/validation/shapes-products.md:188
 msgid ""
 "the preparation stage id, the profile id, and the parse inputs (base, prefix "
 "map, `sh:shapesGraph` IRI, box-role vocabulary)"
 msgstr ""
 
-#: src/validation/shapes-products.md:187
+#: src/validation/shapes-products.md:189
 msgid "dataset"
 msgstr ""
 
-#: src/validation/shapes-products.md:187
+#: src/validation/shapes-products.md:189
 msgid "the shapes dataset itself, in PurRDF's succinct pack container"
 msgstr ""
 
-#: src/validation/shapes-products.md:188
+#: src/validation/shapes-products.md:190
 msgid "model"
 msgstr ""
 
-#: src/validation/shapes-products.md:188
+#: src/validation/shapes-products.md:190
 msgid ""
 "the declarative SHACL model — node shapes, constraints, paths, node "
 "expressions, SHACL-AF rules, `sh:SPARQLTargetType` declarations — and, as "
 "its last field, the reusable class analysis derived from it"
 msgstr ""
 
-#: src/validation/shapes-products.md:190
+#: src/validation/shapes-products.md:192
 msgid ""
 "Each section carries its own SHA-256; the envelope adds an identity-region "
 "digest and a whole-container digest in a sealed trailer that also restates "
@@ -9418,7 +9874,7 @@ msgid ""
 "refused."
 msgstr ""
 
-#: src/validation/shapes-products.md:195
+#: src/validation/shapes-products.md:197
 msgid ""
 "The shapes **dataset** travels inside the product for two independent "
 "reasons. SHACL-SPARQL exposes the shapes graph as a named graph — "
@@ -9429,7 +9885,7 @@ msgid ""
 "product](#restoring-a-product)."
 msgstr ""
 
-#: src/validation/shapes-products.md:202
+#: src/validation/shapes-products.md:204
 msgid ""
 "**Targets are not carried, and there is no section for them.** Target "
 "resolution is a property of a _data graph_: a product that cached resolved "
@@ -9441,7 +9897,7 @@ msgid ""
 "preparation and per-dataset binding are different lines in the budget."
 msgstr ""
 
-#: src/validation/shapes-products.md:211
+#: src/validation/shapes-products.md:213
 msgid ""
 "**The shape analysis really is removed, not merely checked.** The class "
 "analysis — a cycle-safe walk collecting every reachable `sh:class`, "
@@ -9457,7 +9913,7 @@ msgid ""
 "and `rebuild` re-derives instead."
 msgstr ""
 
-#: src/validation/shapes-products.md:223
+#: src/validation/shapes-products.md:225
 msgid ""
 "It shares the model section rather than taking a fourth section of its own "
 "so that the section directory and the container format version did not have "
@@ -9466,7 +9922,7 @@ msgid ""
 "rescue."
 msgstr ""
 
-#: src/validation/shapes-products.md:228
+#: src/validation/shapes-products.md:230
 msgid ""
 "**Nor is the provenance of a restore carried, for the same kind of reason.** "
 "A product records the inputs that decided what its shapes _mean_; how a "
@@ -9479,7 +9935,7 @@ msgid ""
 "[Which shapes produced this verdict](#which-shapes-produced-this-verdict)."
 msgstr ""
 
-#: src/validation/shapes-products.md:238
+#: src/validation/shapes-products.md:240
 msgid ""
 "RDF 1.2 term identity survives the round trip intact, including quoted "
 "triples, reifier bindings, statement annotations, and `rdf:dirLangString` "
@@ -9487,7 +9943,7 @@ msgid ""
 "`\"x\"@en--rtl` are two distinct terms)."
 msgstr ""
 
-#: src/validation/shapes-products.md:243
+#: src/validation/shapes-products.md:245
 msgid ""
 "**SPARQL functions the shapes graph declares are carried, and they are "
 "carried by the dataset.** A SHACL-AF §5 `sh:SPARQLFunction` is an IRI, an "
@@ -9501,13 +9957,13 @@ msgid ""
 "from the model, because their bodies _are_ node expressions."
 msgstr ""
 
-#: src/validation/shapes-products.md:254
+#: src/validation/shapes-products.md:256
 msgid ""
 "Two capabilities are refused at pack time rather than lost at restore, both "
 "on `unsupported-capability`:"
 msgstr ""
 
-#: src/validation/shapes-products.md:257
+#: src/validation/shapes-products.md:259
 msgid ""
 "a declared function that nothing in the model reaches — an expression-bodied "
 "declaration called only from `sh:sparql` query text, say. The model is what "
@@ -9516,22 +9972,25 @@ msgid ""
 "validate green. Call the function from the shapes model and it packs;"
 msgstr ""
 
-#: src/validation/shapes-products.md:262
+#: src/validation/shapes-products.md:264
 msgid ""
-"an `owl:imports` this pack call has no way to resolve — but ONLY through the "
-"Python, C-ABI and WebAssembly bindings' lower-level, text-only entry point, "
-"which carries no `--import` table and no place to print a warning. The CLI's "
-"`purrdf shacl pack --import` is different: it folds the closure or reports "
-"each unresolved import on stderr exactly as `validate --shapes` does, and "
-"only refuses when an `--import` pair itself is unusable — see [`owl:imports` "
-"in a shapes graph](shacl.md#owlimports-in-a-shapes-graph)."
-msgstr ""
+"an `owl:imports` that names neither the shapes document itself (the base "
+"passed in, or an `@base`) nor an ontology already in the shapes graph (`<X> "
+"a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), through "
+"the Python, C-ABI and WebAssembly bindings' lower-level, text-only entry "
+"point, which carries no `--import` table to resolve it from. An import whose "
+"ontology IS in the graph packs. The CLI's `purrdf shacl pack --import` can "
+"also fold the closure from local files; an import neither in the graph nor "
+"resolved by a pair is refused there too, exactly as `validate --shapes` "
+"refuses it — see [`owl:imports` in a shapes graph](shacl.md#owlimports-in-a-"
+"shapes-graph)."
+msgstr "一条既不指向形状文档自身（传入的基准 IRI，或 `@base`）、也不指向形状图中已有本体（`<X> a owl:Ontology`，或 `owl:versionIRI` 为 `<X>` 的本体）的 `owl:imports`，经由 Python、C-ABI 与 WebAssembly 绑定那个更底层、仅接受文本的入口点传入——该入口点没有可用来解析它的 `--import` 表。本体**确实**在图中的导入可以打包。CLI 的 `purrdf shacl pack --import` 还可以从本地文件折叠导入闭包；既不在图中、也未被配对解析的导入在那里同样会被拒绝，与 `validate --shapes` 的拒绝完全一致——参见[形状图中的 `owl:imports`](shacl.md#owlimports-in-a-shapes-graph)。"
 
-#: src/validation/shapes-products.md:270
+#: src/validation/shapes-products.md:275
 msgid "Shipping a product"
 msgstr ""
 
-#: src/validation/shapes-products.md:272
+#: src/validation/shapes-products.md:277
 msgid ""
 "A product is an artifact of the PurRDF build that wrote it, not a stable "
 "interchange format. Ship it beside the binary that will restore it — in the "
@@ -9539,17 +9998,17 @@ msgid ""
 "and treat its bytes as a cache key rather than as a document."
 msgstr ""
 
-#: src/validation/shapes-products.md:277
+#: src/validation/shapes-products.md:282
 msgid "Two version facts govern whether a restore succeeds:"
 msgstr ""
 
-#: src/validation/shapes-products.md:279
+#: src/validation/shapes-products.md:284
 msgid ""
 "The **container format version** is refused outright when it is not the one "
 "this build decodes. Re-pack with the build that will execute the product."
 msgstr ""
 
-#: src/validation/shapes-products.md:281
+#: src/validation/shapes-products.md:286
 msgid ""
 "The **preparation stage id** is a content-derived digest over the "
 "declarative model and the tables its meaning depends on. It is never hand-"
@@ -9558,7 +10017,7 @@ msgid ""
 "`rebuild` restores it."
 msgstr ""
 
-#: src/validation/shapes-products.md:286
+#: src/validation/shapes-products.md:291
 msgid ""
 "Because the writer is deterministic, a build system can address products by "
 "content: pack, hash the bytes, and skip the work when the hash is already "
@@ -9567,88 +10026,88 @@ msgid ""
 "product for this configuration?\" before deciding to restore it."
 msgstr ""
 
-#: src/validation/shapes-products.md:292
+#: src/validation/shapes-products.md:297
 msgid "Restoring a product"
 msgstr ""
 
-#: src/validation/shapes-products.md:298
+#: src/validation/shapes-products.md:303
 msgid ""
 "`--shapes` and `--shapes-product` are mutually exclusive, and exactly one is "
 "required. The verdict is the identical one `--shapes shapes.ttl` reaches: "
 "the same engine entry point runs, over the same restored shapes."
 msgstr ""
 
-#: src/validation/shapes-products.md:302
+#: src/validation/shapes-products.md:307
 msgid ""
 "Four flags that describe a shapes **parse** are refused by name against a "
 "product rather than accepted and ignored, because that parse does not happen "
 "here:"
 msgstr ""
 
-#: src/validation/shapes-products.md:306
+#: src/validation/shapes-products.md:311
 msgid "Flag"
 msgstr ""
 
-#: src/validation/shapes-products.md:306
+#: src/validation/shapes-products.md:311
 msgid "Why it is refused"
 msgstr ""
 
-#: src/validation/shapes-products.md:306
+#: src/validation/shapes-products.md:311
 msgid "Where it belongs"
 msgstr ""
 
-#: src/validation/shapes-products.md:308
+#: src/validation/shapes-products.md:313
 msgid "`--shapes-from`"
 msgstr ""
 
-#: src/validation/shapes-products.md:308
+#: src/validation/shapes-products.md:313
 msgid ""
 "names the syntax a shapes document is read as, and a product is not a "
 "document"
 msgstr ""
 
-#: src/validation/shapes-products.md:308
+#: src/validation/shapes-products.md:313
 msgid "not applicable"
 msgstr ""
 
-#: src/validation/shapes-products.md:309
+#: src/validation/shapes-products.md:314
 msgid "`--shapes-graph`"
 msgstr ""
 
-#: src/validation/shapes-products.md:309
+#: src/validation/shapes-products.md:314
 msgid "the product records its own `sh:shapesGraph` IRI"
 msgstr ""
 
-#: src/validation/shapes-products.md:309
+#: src/validation/shapes-products.md:314
 msgid "pass `--shapes-graph IRI` to `purrdf shacl pack` and re-pack"
 msgstr ""
 
-#: src/validation/shapes-products.md:310
+#: src/validation/shapes-products.md:315
 msgid "`--import`"
 msgstr ""
 
-#: src/validation/shapes-products.md:310
+#: src/validation/shapes-products.md:315
 msgid "the `owl:imports` closure is folded at pack time"
 msgstr ""
 
-#: src/validation/shapes-products.md:310
+#: src/validation/shapes-products.md:315
 msgid "pass `--import IRI=FILE` to `purrdf shacl pack`"
 msgstr ""
 
-#: src/validation/shapes-products.md:311
+#: src/validation/shapes-products.md:316
 msgid "`--box-role-vocab`"
 msgstr ""
 
-#: src/validation/shapes-products.md:311
+#: src/validation/shapes-products.md:316
 msgid ""
 "the product records its own box-role vocabulary (or its deliberate absence)"
 msgstr ""
 
-#: src/validation/shapes-products.md:311
+#: src/validation/shapes-products.md:316
 msgid "pass `--box-role-vocab NS` to `purrdf shacl pack` and re-pack"
 msgstr ""
 
-#: src/validation/shapes-products.md:313
+#: src/validation/shapes-products.md:318
 msgid ""
 "Everything describing the **data** graph stays live: `--from`, `--base`, `--"
 "format`, the governor flags (`--fuel`, `--deadline`, `--max-intermediate-"
@@ -9656,17 +10115,17 @@ msgid ""
 "`IN`/`OUT`."
 msgstr ""
 
-#: src/validation/shapes-products.md:318
+#: src/validation/shapes-products.md:323
 msgid "Which shapes produced this verdict"
 msgstr ""
 
-#: src/validation/shapes-products.md:320
+#: src/validation/shapes-products.md:325
 msgid ""
 "Every `validate` run writes one `shacl shapes-provenance` line to stderr, "
 "before the verdict, naming where its shapes came from:"
 msgstr ""
 
-#: src/validation/shapes-products.md:337
+#: src/validation/shapes-products.md:342
 msgid ""
 "The token is total — there is always one, and none of them means "
 "\"unknown\". A restored product renders the artifact's own **input "
@@ -9675,15 +10134,15 @@ msgid ""
 "on one spelling:"
 msgstr ""
 
-#: src/validation/shapes-products.md:344
+#: src/validation/shapes-products.md:349
 msgid "'/^shacl shapes-provenance restored-/{print $3}'"
 msgstr ""
 
-#: src/validation/shapes-products.md:344
+#: src/validation/shapes-products.md:349
 msgid "# the artifact\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:347
+#: src/validation/shapes-products.md:352
 msgid ""
 "The three tokens are `parsed`, `restored-admitted <digest>` and `restored-"
 "rebuilt <digest>`. The two restore tokens stay distinct because the digest "
@@ -9695,7 +10154,7 @@ msgid ""
 "products that path rescues."
 msgstr ""
 
-#: src/validation/shapes-products.md:356
+#: src/validation/shapes-products.md:361
 msgid ""
 "This answers the half of the question authentication does not. Admission "
 "asks _may this process execute these bytes?_; the provenance line answers "
@@ -9703,11 +10162,11 @@ msgid ""
 "consumer has afterwards, looking at a verdict in a log."
 msgstr ""
 
-#: src/validation/shapes-products.md:361
+#: src/validation/shapes-products.md:366
 msgid "Binding a restore to the product you meant"
 msgstr ""
 
-#: src/validation/shapes-products.md:363
+#: src/validation/shapes-products.md:368
 msgid ""
 "Every check above asks about **this process** — is this the build that wrote "
 "the memo, are these the registries the product was prepared against, is the "
@@ -9717,14 +10176,14 @@ msgid ""
 "naming the wrong one is not an error:"
 msgstr ""
 
-#: src/validation/shapes-products.md:375
+#: src/validation/shapes-products.md:380
 msgid ""
 "That is a decided, well-formed, authenticated verdict about a shapes graph "
 "nobody asked about, and it exits `0`. `--expect-identity HEX` is how you say "
 "which product you meant:"
 msgstr ""
 
-#: src/validation/shapes-products.md:388
+#: src/validation/shapes-products.md:393
 msgid ""
 "`HEX` is the product's **input binding**: the 64 hexadecimal digits of the "
 "identity that covers the shapes dataset, the `sh:shapesGraph` IRI, the "
@@ -9734,16 +10193,16 @@ msgid ""
 "or `shacl verify`'s stdout — and pass it back unchanged:"
 msgstr ""
 
-#: src/validation/shapes-products.md:396
+#: src/validation/shapes-products.md:401
 msgid ""
 "$(purrdf shacl explain shapes.purrshp | awk '/^identity-digest /{print $2}')"
 msgstr ""
 
-#: src/validation/shapes-products.md:397
+#: src/validation/shapes-products.md:402
 msgid "\"$WANT\""
 msgstr ""
 
-#: src/validation/shapes-products.md:400
+#: src/validation/shapes-products.md:405
 msgid ""
 "The check is the **first** thing the restore does, ahead of the profile and "
 "the stage id: a caller who named the wrong artifact is told that, rather "
@@ -9752,14 +10211,14 @@ msgid ""
 "time the bytes have opened."
 msgstr ""
 
-#: src/validation/shapes-products.md:406
+#: src/validation/shapes-products.md:411
 msgid ""
 "A satisfied expectation changes nothing else. `--expect-identity` with the "
 "product's own digest produces the report byte-identical to the run without "
 "the flag — the flag changes the door, not the answer."
 msgstr ""
 
-#: src/validation/shapes-products.md:410
+#: src/validation/shapes-products.md:415
 msgid ""
 "Two spellings are refused as usage errors (exit `2`) rather than accepted: "
 "`--expect-identity` against `--shapes`, because a shapes document has no "
@@ -9769,7 +10228,7 @@ msgid ""
 "CI variable in upper case still names its product."
 msgstr ""
 
-#: src/validation/shapes-products.md:417
+#: src/validation/shapes-products.md:422
 msgid ""
 "The writer is byte-deterministic, so the binding is a property of the shapes "
 "graph and its parse inputs, not of a particular pack run: re-packing the "
@@ -9778,13 +10237,13 @@ msgid ""
 "beside the product it names."
 msgstr ""
 
-#: src/validation/shapes-products.md:423
+#: src/validation/shapes-products.md:428
 msgid ""
 "Under the hood there are two ways a product becomes a validator again, and "
 "they are two entry points at one boundary rather than a flag on one:"
 msgstr ""
 
-#: src/validation/shapes-products.md:426
+#: src/validation/shapes-products.md:431
 msgid ""
 "**`admit`** — the common path. It re-derives nothing expensive: verify the "
 "profile, verify the stage id, check the host-supplied registries, restore "
@@ -9792,7 +10251,7 @@ msgid ""
 "it, and check the complete input binding — the carried analysis included."
 msgstr ""
 
-#: src/validation/shapes-products.md:430
+#: src/validation/shapes-products.md:435
 msgid ""
 "**`rebuild`** — the forward-compatibility path, taken when the stage id is "
 "one this build does not know. It ignores the model section entirely — the "
@@ -9803,7 +10262,7 @@ msgid ""
 "reachability rule."
 msgstr ""
 
-#: src/validation/shapes-products.md:437
+#: src/validation/shapes-products.md:442
 msgid ""
 "Every binding reaches both paths, not only Rust: the CLI's `validate --"
 "shapes-product --rebuild`, Python's `ShapesProduct.rebuild()`, the C ABI's "
@@ -9819,7 +10278,7 @@ msgid ""
 "the dataset never bypasses the binding a caller required."
 msgstr ""
 
-#: src/validation/shapes-products.md:450
+#: src/validation/shapes-products.md:455
 msgid ""
 "**`rebuild` is not a Turtle fallback.** No RDF text is parsed and no file is "
 "read; the dataset travels inside the product under the envelope's digests. "
@@ -9829,15 +10288,15 @@ msgid ""
 "authenticate."
 msgstr ""
 
-#: src/validation/shapes-products.md:458
+#: src/validation/shapes-products.md:463
 msgid "// Ask what the bytes are, without admitting them.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:461
+#: src/validation/shapes-products.md:466
 msgid "// Both restore seams consume the view, so re-open to take one.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:469
+#: src/validation/shapes-products.md:474
 msgid ""
 "// Or state WHICH product you meant, and fail closed when it is not that "
 "one.\n"
@@ -9851,7 +10310,7 @@ msgid ""
 "binding.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:481
+#: src/validation/shapes-products.md:486
 msgid ""
 "`ShapesProduct::open` runs the container's cheap integrity tier — magic, "
 "format version, section directory, canonical offsets, zero padding, every "
@@ -9861,11 +10320,11 @@ msgid ""
 "product's declared identity useful."
 msgstr ""
 
-#: src/validation/shapes-products.md:488
+#: src/validation/shapes-products.md:493
 msgid "Host-injected implementations"
 msgstr ""
 
-#: src/validation/shapes-products.md:490
+#: src/validation/shapes-products.md:495
 msgid ""
 "Everything above passes `HostBindings::empty()`, which is what a product of "
 "`ShapesProfile::CORE` needs: every capability such a product exercises is "
@@ -9874,21 +10333,21 @@ msgid ""
 "product binds **two** facts about that host rather than one:"
 msgstr ""
 
-#: src/validation/shapes-products.md:496
+#: src/validation/shapes-products.md:501
 msgid ""
 "the registries' **declarations** — each injected entry's IRI, arity and "
 "volatility — which is all a fingerprint reproducible in another process can "
 "ever cover; and"
 msgstr ""
 
-#: src/validation/shapes-products.md:499
+#: src/validation/shapes-products.md:504
 msgid ""
 "an **implementation identity**: an opaque byte string the caller uses to "
 "name the build those declarations resolve to, such as a release version or a "
 "commit digest."
 msgstr ""
 
-#: src/validation/shapes-products.md:503
+#: src/validation/shapes-products.md:508
 msgid ""
 "The second is not belt-and-braces. Two builds of one host can register the "
 "same IRI to two different closures that declare identical arity and "
@@ -9898,7 +10357,7 @@ msgid ""
 "green, which is the silent wrong answer this codec exists to rule out."
 msgstr ""
 
-#: src/validation/shapes-products.md:510
+#: src/validation/shapes-products.md:515
 msgid ""
 "So a preparation whose injected population is not empty **cannot be packed "
 "without an identity at all**: the writer refuses on `unsupported-capability` "
@@ -9907,27 +10366,27 @@ msgid ""
 "refused on the registry dimension that carries it."
 msgstr ""
 
-#: src/validation/shapes-products.md:520
+#: src/validation/shapes-products.md:525
 msgid ""
 "// The byte string that tells this build of the host's natives apart from "
 "every\n"
 "// other build of them. PurRDF never interprets it.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:523
+#: src/validation/shapes-products.md:528
 msgid "b\"example.org/host@1\""
 msgstr ""
 
-#: src/validation/shapes-products.md:524
+#: src/validation/shapes-products.md:529
 msgid "// `prepared` carries the host's natives in `Shapes::functions`.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:527
+#: src/validation/shapes-products.md:532
 msgid ""
 "// ...and the restore names the same build, beside the registries it wires.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:538
+#: src/validation/shapes-products.md:543
 msgid ""
 "What the mechanism does not do is verify the identity. PurRDF cannot read a "
 "host's machine code and confirm the bytes name it; the identity is the "
@@ -9937,7 +10396,7 @@ msgid ""
 "same build."
 msgstr ""
 
-#: src/validation/shapes-products.md:544
+#: src/validation/shapes-products.md:549
 msgid ""
 "An absent identity is the empty byte string, and it encodes as nothing at "
 "all: the three host rows stay the bare declaration fingerprints. That is why "
@@ -9946,11 +10405,11 @@ msgid ""
 "implementation identities would produce."
 msgstr ""
 
-#: src/validation/shapes-products.md:550
+#: src/validation/shapes-products.md:555
 msgid "Corroborating a product"
 msgstr ""
 
-#: src/validation/shapes-products.md:557
+#: src/validation/shapes-products.md:562
 msgid ""
 "`verify` is the codec's **cold** path and is deliberately not reachable from "
 "a restore. It re-canonicalizes the shapes graph's blank nodes and compares "
@@ -9960,7 +10419,7 @@ msgid ""
 "conformance harness; never before every validation."
 msgstr ""
 
-#: src/validation/shapes-products.md:564
+#: src/validation/shapes-products.md:569
 msgid ""
 "What `admit` establishes about the dataset is that the section is the one "
 "the container sealed — the per-section SHA-256 and the whole-container "
@@ -9971,17 +10430,17 @@ msgid ""
 "test and is not an accident of layering."
 msgstr ""
 
-#: src/validation/shapes-products.md:572
+#: src/validation/shapes-products.md:577
 msgid ""
 "It prints the product's 64-character lowercase-hex identity digest on stdout "
 "and exits `0`. A refusal names its dimension on stderr and exits `1`."
 msgstr ""
 
-#: src/validation/shapes-products.md:575
+#: src/validation/shapes-products.md:580
 msgid "Reading a product without admitting it"
 msgstr ""
 
-#: src/validation/shapes-products.md:577
+#: src/validation/shapes-products.md:582
 msgid ""
 "```console\n"
 "$ purrdf shacl explain shapes.purrshp\n"
@@ -10010,7 +10469,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/validation/shapes-products.md:603
+#: src/validation/shapes-products.md:608
 msgid ""
 "Deterministic `key value` lines in a fixed order, terminated by a newline, "
 "so a consumer can split on whitespace without a parser. An identity "
@@ -10018,13 +10477,13 @@ msgid ""
 "`0x…` lowercase hex otherwise."
 msgstr ""
 
-#: src/validation/shapes-products.md:608
+#: src/validation/shapes-products.md:613
 msgid ""
 "`stage-known` is the fact to act on: `false` says this build's `admit` will "
 "refuse these bytes and `rebuild` is the path that still restores them."
 msgstr ""
 
-#: src/validation/shapes-products.md:611
+#: src/validation/shapes-products.md:616
 msgid ""
 "`identity box-role-vocab 0x00` above is the encoding of **absent** — the "
 "product this example packed with no `--box-role-vocab`. A product packed "
@@ -10034,7 +10493,7 @@ msgid ""
 "with \"the feature is active over a vocabulary of empty IRIs\"."
 msgstr ""
 
-#: src/validation/shapes-products.md:618
+#: src/validation/shapes-products.md:623
 msgid ""
 "This is what makes a named refusal actionable rather than a log line. A "
 "restore refused on `prefixes` is answered by reading which prefix map the "
@@ -10045,11 +10504,11 @@ msgid ""
 "by eye."
 msgstr ""
 
-#: src/validation/shapes-products.md:625
+#: src/validation/shapes-products.md:630
 msgid "Comparing two products"
 msgstr ""
 
-#: src/validation/shapes-products.md:633
+#: src/validation/shapes-products.md:638
 msgid ""
 "`shacl diff` opens **both** products WITHOUT admitting either — the same "
 "framing-and-integrity-only tier `shacl explain` reads through — and prints "
@@ -10058,7 +10517,7 @@ msgid ""
 "0` and no `diff` lines means the two products declared identical identities."
 msgstr ""
 
-#: src/validation/shapes-products.md:639
+#: src/validation/shapes-products.md:644
 msgid ""
 "This is what makes a NAMED refusal actionable between two artifacts rather "
 "than just one. `shacl explain` answers \"what does THIS product say it was "
@@ -10070,7 +10529,7 @@ msgid ""
 "disagree about what a component's value is."
 msgstr ""
 
-#: src/validation/shapes-products.md:648
+#: src/validation/shapes-products.md:653
 msgid ""
 "Exit codes mirror `shacl verify`'s certified/refused split rather than "
 "`validate`'s conforms/non-conforms one, because a `diff` that finds a "
@@ -10080,7 +10539,7 @@ msgid ""
 "`2` for a usage error."
 msgstr ""
 
-#: src/validation/shapes-products.md:655
+#: src/validation/shapes-products.md:660
 msgid ""
 "`diff` never admits either side, so it works on a product whose preparation "
 "stage id this build does not recognize — the stage id lives in the product's "
@@ -10090,25 +10549,25 @@ msgid ""
 "would change if I re-packed it?\""
 msgstr ""
 
-#: src/validation/shapes-products.md:662
+#: src/validation/shapes-products.md:667
 msgid "The refusal dimensions"
 msgstr ""
 
-#: src/validation/shapes-products.md:664
+#: src/validation/shapes-products.md:669
 msgid ""
 "Every refusal carries one of twenty stable kebab-case labels, printed to "
 "stderr as `shacl dimension <label>`. **The dimension is what you branch on; "
 "the message is what you read.** Matching on message text is not supported."
 msgstr ""
 
-#: src/validation/shapes-products.md:668
+#: src/validation/shapes-products.md:673
 msgid ""
 "The dimensions are checked from the outside of the container inward, and the "
 "first one that fails is the one reported — so the label always names the "
 "outermost unmet precondition rather than a downstream symptom of it."
 msgstr ""
 
-#: src/validation/shapes-products.md:672
+#: src/validation/shapes-products.md:677
 msgid ""
 "The twenty split into two groups by **which verb can report them**, and the "
 "split is not a taxonomy: it is the cost decision this codec is built around. "
@@ -10118,283 +10577,283 @@ msgid ""
 "statement that verb never makes."
 msgstr ""
 
-#: src/validation/shapes-products.md:679
+#: src/validation/shapes-products.md:684
 msgid "Admit-time dimensions"
 msgstr ""
 
-#: src/validation/shapes-products.md:681
+#: src/validation/shapes-products.md:686
 msgid ""
 "Reported by `validate --shapes-product` on every restore, by `shacl explain` "
 "for the structural rows it reaches while opening the bytes, and by `shacl "
 "verify`, which opens the product before it certifies anything."
 msgstr ""
 
-#: src/validation/shapes-products.md:685 src/validation/shapes-products.md:714
+#: src/validation/shapes-products.md:690 src/validation/shapes-products.md:719
 msgid "Dimension"
 msgstr ""
 
-#: src/validation/shapes-products.md:685 src/validation/shapes-products.md:714
+#: src/validation/shapes-products.md:690 src/validation/shapes-products.md:719
 msgid "What it means"
 msgstr ""
 
-#: src/validation/shapes-products.md:687
+#: src/validation/shapes-products.md:692
 msgid "`magic`"
 msgstr ""
 
-#: src/validation/shapes-products.md:687
+#: src/validation/shapes-products.md:692
 msgid "these bytes never were a prepared shapes product"
 msgstr ""
 
-#: src/validation/shapes-products.md:687
+#: src/validation/shapes-products.md:692
 msgid "hand the loader a file written by `purrdf shacl pack`"
 msgstr ""
 
-#: src/validation/shapes-products.md:688
+#: src/validation/shapes-products.md:693
 msgid "`format-version`"
 msgstr ""
 
-#: src/validation/shapes-products.md:688
+#: src/validation/shapes-products.md:693
 msgid "the container format is not the one this build decodes"
 msgstr ""
 
-#: src/validation/shapes-products.md:688
+#: src/validation/shapes-products.md:693
 msgid "re-pack with the PurRDF build that will execute it"
 msgstr ""
 
-#: src/validation/shapes-products.md:689
+#: src/validation/shapes-products.md:694
 msgid "`stage-id`"
 msgstr ""
 
-#: src/validation/shapes-products.md:689
+#: src/validation/shapes-products.md:694
 msgid "the model memo was written against a model this build no longer has"
 msgstr ""
 
-#: src/validation/shapes-products.md:689
+#: src/validation/shapes-products.md:694
 msgid "restore with `rebuild`, or re-pack"
 msgstr ""
 
-#: src/validation/shapes-products.md:690
+#: src/validation/shapes-products.md:695
 msgid "`profile`"
 msgstr ""
 
-#: src/validation/shapes-products.md:690
+#: src/validation/shapes-products.md:695
 msgid "prepared under a different preparation profile"
 msgstr ""
 
-#: src/validation/shapes-products.md:690
+#: src/validation/shapes-products.md:695
 msgid "re-pack with the build that will execute it"
 msgstr ""
 
-#: src/validation/shapes-products.md:691
+#: src/validation/shapes-products.md:696
 msgid "`truncated`"
 msgstr ""
 
-#: src/validation/shapes-products.md:691
+#: src/validation/shapes-products.md:696
 msgid "the bytes end inside a structure they declared"
 msgstr ""
 
-#: src/validation/shapes-products.md:691
+#: src/validation/shapes-products.md:696
 msgid "re-pack — this is an interrupted write, not corruption in place"
 msgstr ""
 
-#: src/validation/shapes-products.md:692
+#: src/validation/shapes-products.md:697
 msgid "`trailer`"
 msgstr ""
 
-#: src/validation/shapes-products.md:692
+#: src/validation/shapes-products.md:697
 msgid "the trailer is absent or inconsistent with the bytes ahead of it"
 msgstr ""
 
-#: src/validation/shapes-products.md:692 src/validation/shapes-products.md:705
+#: src/validation/shapes-products.md:697 src/validation/shapes-products.md:710
 msgid "discard and re-pack"
 msgstr ""
 
-#: src/validation/shapes-products.md:693
+#: src/validation/shapes-products.md:698
 msgid "`section-digest`"
 msgstr ""
 
-#: src/validation/shapes-products.md:693
+#: src/validation/shapes-products.md:698
 msgid "a section no longer matches its recorded digest"
 msgstr ""
 
-#: src/validation/shapes-products.md:693
+#: src/validation/shapes-products.md:698
 msgid "discard and re-pack — the product is corrupt in place"
 msgstr ""
 
-#: src/validation/shapes-products.md:694
+#: src/validation/shapes-products.md:699
 msgid "`container-digest`"
 msgstr ""
 
-#: src/validation/shapes-products.md:694
+#: src/validation/shapes-products.md:699
 msgid "the whole-container digest disagrees with the bytes"
 msgstr ""
 
-#: src/validation/shapes-products.md:694
+#: src/validation/shapes-products.md:699
 msgid "discard and re-pack — something outside the section bodies moved"
 msgstr ""
 
-#: src/validation/shapes-products.md:695
+#: src/validation/shapes-products.md:700
 msgid "`shapes-graph`"
 msgstr ""
 
-#: src/validation/shapes-products.md:695
+#: src/validation/shapes-products.md:700
 msgid ""
 "prepared under a different `sh:shapesGraph` IRI — or, under [`--expect-"
 "identity`](#binding-a-restore-to-the-product-you-meant), carrying an input "
 "binding that is not the one you required"
 msgstr ""
 
-#: src/validation/shapes-products.md:695
+#: src/validation/shapes-products.md:700
 msgid ""
 "expose the shapes under the same named graph and re-pack with that IRI, or "
 "point the expectation at the product you meant"
 msgstr ""
 
-#: src/validation/shapes-products.md:696
+#: src/validation/shapes-products.md:701
 msgid "`prefixes`"
 msgstr ""
 
-#: src/validation/shapes-products.md:696
+#: src/validation/shapes-products.md:701
 msgid "prepared against a different prefix map"
 msgstr ""
 
-#: src/validation/shapes-products.md:696
+#: src/validation/shapes-products.md:701
 msgid ""
 "pack and execute under the same prefixes — the map decides which IRI a "
 "prefixed name denotes"
 msgstr ""
 
-#: src/validation/shapes-products.md:697
+#: src/validation/shapes-products.md:702
 msgid "`base`"
 msgstr ""
 
-#: src/validation/shapes-products.md:697
+#: src/validation/shapes-products.md:702
 msgid "prepared against a different base IRI"
 msgstr ""
 
-#: src/validation/shapes-products.md:697
+#: src/validation/shapes-products.md:702
 msgid ""
 "pack and execute under the same base — relative references resolve against it"
 msgstr ""
 
-#: src/validation/shapes-products.md:698
+#: src/validation/shapes-products.md:703
 msgid "`vocabulary`"
 msgstr ""
 
-#: src/validation/shapes-products.md:698
+#: src/validation/shapes-products.md:703
 msgid "prepared under a different box-role vocabulary"
 msgstr ""
 
-#: src/validation/shapes-products.md:698
+#: src/validation/shapes-products.md:703
 msgid ""
 "pass the SAME `--box-role-vocab NS` (or none) to both `purrdf shacl pack` "
 "and the executing side; PurRDF mints no vocabulary IRIs and there is no "
 "default to fall back on"
 msgstr ""
 
-#: src/validation/shapes-products.md:699
+#: src/validation/shapes-products.md:704
 msgid "`function-registry`"
 msgstr ""
 
-#: src/validation/shapes-products.md:699
+#: src/validation/shapes-products.md:704
 msgid ""
 "prepared against a different SPARQL function registry, or against a "
 "different build of the host implementations behind it"
 msgstr ""
 
-#: src/validation/shapes-products.md:699
+#: src/validation/shapes-products.md:704
 msgid ""
 "wire the same functions into the executing host, under the same "
 "implementation identity"
 msgstr ""
 
-#: src/validation/shapes-products.md:700
+#: src/validation/shapes-products.md:705
 msgid "`aggregate-registry`"
 msgstr ""
 
-#: src/validation/shapes-products.md:700
+#: src/validation/shapes-products.md:705
 msgid ""
 "prepared against a different custom-aggregate registry, or against a "
 "different build of the host implementations behind it"
 msgstr ""
 
-#: src/validation/shapes-products.md:700
+#: src/validation/shapes-products.md:705
 msgid ""
 "wire the same aggregates into the executing host, under the same "
 "implementation identity"
 msgstr ""
 
-#: src/validation/shapes-products.md:701
+#: src/validation/shapes-products.md:706
 msgid "`property-function-registry`"
 msgstr ""
 
-#: src/validation/shapes-products.md:701
+#: src/validation/shapes-products.md:706
 msgid ""
 "prepared against a different property-function registry, or against a "
 "different build of the host implementations behind it"
 msgstr ""
 
-#: src/validation/shapes-products.md:701
+#: src/validation/shapes-products.md:706
 msgid ""
 "wire the same relations into the executing host, under the same "
 "implementation identity"
 msgstr ""
 
-#: src/validation/shapes-products.md:702
+#: src/validation/shapes-products.md:707
 msgid "`class-catalog`"
 msgstr ""
 
-#: src/validation/shapes-products.md:702
+#: src/validation/shapes-products.md:707
 msgid ""
 "the class analysis the product carries is not the one its own identity pins"
 msgstr ""
 
-#: src/validation/shapes-products.md:702
+#: src/validation/shapes-products.md:707
 msgid ""
 "discard and re-pack from the shapes graph — the section and the binding over "
 "it no longer describe one analysis"
 msgstr ""
 
-#: src/validation/shapes-products.md:703
+#: src/validation/shapes-products.md:708
 msgid "`unsupported-capability`"
 msgstr ""
 
-#: src/validation/shapes-products.md:703
+#: src/validation/shapes-products.md:708
 msgid ""
 "well-formed bytes asking for something this build cannot honour, or a "
 "preparation this build will not write a product for"
 msgstr ""
 
-#: src/validation/shapes-products.md:703
+#: src/validation/shapes-products.md:708
 msgid ""
 "see the message — a declared function nothing in the model reaches, a decode "
 "larger than the scratch ceiling in force, or host implementations the packer "
 "was given no identity for"
 msgstr ""
 
-#: src/validation/shapes-products.md:704
+#: src/validation/shapes-products.md:709
 msgid "`depth-limit`"
 msgstr ""
 
-#: src/validation/shapes-products.md:704
+#: src/validation/shapes-products.md:709
 msgid "a structure nests past the decoder's fixed ceiling"
 msgstr ""
 
-#: src/validation/shapes-products.md:704
+#: src/validation/shapes-products.md:709
 msgid ""
 "re-pack from a shapes graph this build parses; the ceiling is a stack guard, "
 "not a semantic limit"
 msgstr ""
 
-#: src/validation/shapes-products.md:705
+#: src/validation/shapes-products.md:710
 msgid "`malformed`"
 msgstr ""
 
-#: src/validation/shapes-products.md:705
+#: src/validation/shapes-products.md:710
 msgid "structurally invalid in a way no other dimension names"
 msgstr ""
 
-#: src/validation/shapes-products.md:707
+#: src/validation/shapes-products.md:712
 msgid ""
 "Three of those are three genuinely different actions and that is the point "
 "of naming them: `malformed` is a corrupt cache to discard, `format-version` "
@@ -10402,27 +10861,27 @@ msgid ""
 "error in your own process that re-packing will not fix."
 msgstr ""
 
-#: src/validation/shapes-products.md:712
+#: src/validation/shapes-products.md:717
 msgid "The certify-time dimension"
 msgstr ""
 
-#: src/validation/shapes-products.md:716
+#: src/validation/shapes-products.md:721
 msgid "`dataset-identity`"
 msgstr ""
 
-#: src/validation/shapes-products.md:716
+#: src/validation/shapes-products.md:721
 msgid ""
 "the shapes dataset the product carries does not _canonicalize_ to the digest "
 "its own binding claims"
 msgstr ""
 
-#: src/validation/shapes-products.md:716
+#: src/validation/shapes-products.md:721
 msgid ""
 "discard and re-pack from the shapes graph — the section and the binding over "
 "it no longer describe one dataset"
 msgstr ""
 
-#: src/validation/shapes-products.md:718
+#: src/validation/shapes-products.md:723
 msgid ""
 "Only `shacl verify` reports this one. A restore does **not** re-canonicalize "
 "the shapes dataset: it takes that component from the product's own binding, "
@@ -10434,7 +10893,7 @@ msgid ""
 "is that the bytes canonicalize to what the binding claims."
 msgstr ""
 
-#: src/validation/shapes-products.md:727
+#: src/validation/shapes-products.md:732
 msgid ""
 "So a product whose stored canonical digest has been tampered with **will "
 "open, will admit, and will fail `shacl verify`.** That is a documented split "
@@ -10443,7 +10902,7 @@ msgid ""
 "validation."
 msgstr ""
 
-#: src/validation/shapes-products.md:732
+#: src/validation/shapes-products.md:737
 msgid ""
 "One failure carries **no** dimension: a shapes or data _document_ that does "
 "not parse never reached the admission boundary, so nothing was inspected and "
@@ -10452,141 +10911,141 @@ msgid ""
 "`None`; in JavaScript `dimension` is `undefined`."
 msgstr ""
 
-#: src/validation/shapes-products.md:738
+#: src/validation/shapes-products.md:743
 msgid "The command-line verbs"
 msgstr ""
 
-#: src/validation/shapes-products.md:740
+#: src/validation/shapes-products.md:745
 msgid "Command"
 msgstr ""
 
-#: src/validation/shapes-products.md:740
+#: src/validation/shapes-products.md:745
 msgid "Does"
 msgstr ""
 
-#: src/validation/shapes-products.md:740
+#: src/validation/shapes-products.md:745
 msgid "Exit `0`"
 msgstr ""
 
-#: src/validation/shapes-products.md:740
+#: src/validation/shapes-products.md:745
 msgid "Exit `1`"
 msgstr ""
 
-#: src/validation/shapes-products.md:740
+#: src/validation/shapes-products.md:745
 msgid "Exit `2`"
 msgstr ""
 
-#: src/validation/shapes-products.md:742
+#: src/validation/shapes-products.md:747
 msgid ""
 "`purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] "
 "[--import IRI=FILE] [--box-role-vocab NS]`"
 msgstr ""
 
-#: src/validation/shapes-products.md:742
+#: src/validation/shapes-products.md:747
 msgid "parse, prepare, write the product"
 msgstr ""
 
-#: src/validation/shapes-products.md:742
+#: src/validation/shapes-products.md:747
 msgid "product written"
 msgstr ""
 
-#: src/validation/shapes-products.md:742
+#: src/validation/shapes-products.md:747
 msgid ""
-"the shapes did not parse, or the graph declares something a product cannot "
-"carry"
-msgstr ""
+"the shapes did not parse, the graph declares something a product cannot "
+"carry, or an `owl:imports` is unresolved"
+msgstr "形状未能解析、图中声明了产物无法携带的内容，或某条 `owl:imports` 未解析"
 
-#: src/validation/shapes-products.md:742
+#: src/validation/shapes-products.md:747
 msgid ""
 "bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph "
 "cannot resolve"
 msgstr ""
 
-#: src/validation/shapes-products.md:743
+#: src/validation/shapes-products.md:748
 msgid "`purrdf shacl verify [IN]`"
 msgstr ""
 
-#: src/validation/shapes-products.md:743
+#: src/validation/shapes-products.md:748
 msgid "corroborate the carried dataset against the claimed identity"
 msgstr ""
 
-#: src/validation/shapes-products.md:743
+#: src/validation/shapes-products.md:748
 msgid "prints the identity digest"
 msgstr ""
 
-#: src/validation/shapes-products.md:743
+#: src/validation/shapes-products.md:748
 msgid "refused, with `shacl dimension <label>` on stderr"
 msgstr ""
 
-#: src/validation/shapes-products.md:743 src/validation/shapes-products.md:744
+#: src/validation/shapes-products.md:748 src/validation/shapes-products.md:749
 msgid "bad flags"
 msgstr ""
 
-#: src/validation/shapes-products.md:744
+#: src/validation/shapes-products.md:749
 msgid "`purrdf shacl explain [IN]`"
 msgstr ""
 
-#: src/validation/shapes-products.md:744
+#: src/validation/shapes-products.md:749
 msgid "print what the product says it was compiled from"
 msgstr ""
 
-#: src/validation/shapes-products.md:744
+#: src/validation/shapes-products.md:749
 msgid "prints the `key value` rendering"
 msgstr ""
 
-#: src/validation/shapes-products.md:744
+#: src/validation/shapes-products.md:749
 msgid "the bytes are not a well-formed product"
 msgstr ""
 
-#: src/validation/shapes-products.md:745
+#: src/validation/shapes-products.md:750
 msgid "`purrdf shacl diff A B`"
 msgstr ""
 
-#: src/validation/shapes-products.md:745
+#: src/validation/shapes-products.md:750
 msgid "compare two products' declared identities, without admitting either"
 msgstr ""
 
-#: src/validation/shapes-products.md:745
+#: src/validation/shapes-products.md:750
 msgid "the two identities are identical"
 msgstr ""
 
-#: src/validation/shapes-products.md:745
+#: src/validation/shapes-products.md:750
 msgid ""
 "the two identities differ (the `diff` lines are still printed, on stdout)"
 msgstr ""
 
-#: src/validation/shapes-products.md:745
+#: src/validation/shapes-products.md:750
 msgid "bad flags, or both `A` and `B` naming standard input"
 msgstr ""
 
-#: src/validation/shapes-products.md:746
+#: src/validation/shapes-products.md:751
 msgid ""
 "`purrdf validate --shapes-product FILE [--rebuild] [--expect-identity HEX] "
 "[IN]`"
 msgstr ""
 
-#: src/validation/shapes-products.md:746
+#: src/validation/shapes-products.md:751
 msgid ""
 "restore and validate — `--rebuild` re-derives from the carried dataset "
 "instead of admitting the memo"
 msgstr ""
 
-#: src/validation/shapes-products.md:746
+#: src/validation/shapes-products.md:751
 msgid "validation ran"
 msgstr ""
 
-#: src/validation/shapes-products.md:746
+#: src/validation/shapes-products.md:751
 msgid "product refused"
 msgstr ""
 
-#: src/validation/shapes-products.md:746
+#: src/validation/shapes-products.md:751
 msgid ""
 "bad flags, a parse flag passed against a product, `--rebuild` or `--expect-"
 "identity` without a product, or an `--expect-identity` that is not 64 "
 "hexadecimal digits"
 msgstr ""
 
-#: src/validation/shapes-products.md:748
+#: src/validation/shapes-products.md:753
 msgid ""
 "`IN` defaults to `-` (standard input) for `verify` and `explain`. For "
 "`validate`, `--shapes-product -` collides with the data graph's own default "
@@ -10596,14 +11055,14 @@ msgid ""
 "each product part of one byte stream."
 msgstr ""
 
-#: src/validation/shapes-products.md:755
+#: src/validation/shapes-products.md:760
 msgid ""
 "`validate --shapes FILE [--box-role-vocab NS]` accepts the identical flag on "
 "the parse lane — see [Producing a product](#producing-a-product) above — and "
 "refuses it by name against `--shapes-product`, in the four-flag table above."
 msgstr ""
 
-#: src/validation/shapes-products.md:759
+#: src/validation/shapes-products.md:764
 msgid ""
 "`validate` additionally exits `3` when a governor budget trips, and always "
 "writes `shacl shapes-provenance <token>` before the run and `shacl conforms "
@@ -10611,27 +11070,27 @@ msgid ""
 "stderr — including when the shapes came from a product."
 msgstr ""
 
-#: src/validation/shapes-products.md:770
+#: src/validation/shapes-products.md:775
 msgid "# bytes, byte-deterministic\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:772
+#: src/validation/shapes-products.md:777
 msgid "# framing and integrity only\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:773
+#: src/validation/shapes-products.md:778
 msgid "# 1\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:774
+#: src/validation/shapes-products.md:779
 msgid "# True\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:775
+#: src/validation/shapes-products.md:780
 msgid "# 64 lowercase hex characters\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:782
+#: src/validation/shapes-products.md:787
 msgid ""
 "# Which artifact did that verdict come out of? Total — always an answer, "
 "never\n"
@@ -10639,27 +11098,27 @@ msgid ""
 "rebuilt <digest>\".\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:785
+#: src/validation/shapes-products.md:790
 msgid "# restored-admitted 9f2c…1b\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:786
+#: src/validation/shapes-products.md:791
 msgid ""
 "# …or say which product you meant, and fail closed when it is not that one.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:788 src/validation/shapes-products.md:792
+#: src/validation/shapes-products.md:793 src/validation/shapes-products.md:797
 msgid "\"9f2c…64 lowercase hex…1b\""
 msgstr ""
 
-#: src/validation/shapes-products.md:789
+#: src/validation/shapes-products.md:794
 msgid ""
 "# The same binding, over the rebuild seam: the expectation is checked "
 "FIRST,\n"
 "# ahead of the re-derivation, so choosing to rebuild never bypasses it.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:795
+#: src/validation/shapes-products.md:800
 msgid ""
 "`PreparedShapes.provenance()` is the Python spelling of the CLI's `shacl "
 "shapes-provenance` receipt, and renders the identical token — the digest in "
@@ -10669,14 +11128,14 @@ msgid ""
 "may be invented for it."
 msgstr ""
 
-#: src/validation/shapes-products.md:802
+#: src/validation/shapes-products.md:807
 msgid ""
 "`ShapesProduct.certify()` is the cold path; call it from a build step or a "
 "test. Refusals raise `shapes.ShapesProductError`, whose `.dimension` carries "
 "the label string (or `None` when no product was ever inspected)."
 msgstr ""
 
-#: src/validation/shapes-products.md:806
+#: src/validation/shapes-products.md:811
 msgid ""
 "The submodule is `purrdf.shapes`. `purrdf.shacl` is a back-compatible alias "
 "for the same object and keeps working, but new code should spell the "
@@ -10685,7 +11144,7 @@ msgid ""
 "APIs to someone learning it."
 msgstr ""
 
-#: src/validation/shapes-products.md:811
+#: src/validation/shapes-products.md:816
 msgid ""
 "`admit_expecting(expected_identity)` is `admit()` bound to the product you "
 "meant: it takes the 64 hexadecimal digits `identity_digest()` reports, and "
@@ -10695,7 +11154,7 @@ msgid ""
 "blamed on one."
 msgstr ""
 
-#: src/validation/shapes-products.md:817
+#: src/validation/shapes-products.md:822
 msgid ""
 "`rebuild()` re-derives from the SAME carried dataset `admit()` restores a "
 "memo of, so calling it on a CURRENT product (`stage_known() == True`) "
@@ -10707,11 +11166,11 @@ msgid ""
 "compatibility rescue never loses the binding."
 msgstr ""
 
-#: src/validation/shapes-products.md:826
+#: src/validation/shapes-products.md:831
 msgid "From JavaScript / WebAssembly"
 msgstr ""
 
-#: src/validation/shapes-products.md:848
+#: src/validation/shapes-products.md:853
 msgid ""
 "// …or, for a stage id this guest does not know, re-derive from the carried\n"
 "  // dataset instead of admitting the memo — the remedy the `stage-id` "
@@ -10719,27 +11178,27 @@ msgid ""
 "  // above would name.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:853
+#: src/validation/shapes-products.md:858
 msgid ""
 "// …or say which product you meant, and fail closed when it is not that "
 "one.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:856
+#: src/validation/shapes-products.md:861
 msgid ""
 "// …or both: rebuild AND fail closed when it is not the product you meant.\n"
 "  // The expectation is checked FIRST, ahead of the re-derivation, so the\n"
 "  // rescue never bypasses the binding.\n"
 msgstr ""
 
-#: src/validation/shapes-products.md:870
+#: src/validation/shapes-products.md:875
 msgid ""
 "A wasm guest has no retrieval IRI to derive a base from, so the host "
 "supplies `shapesBase` explicitly; it is recorded in the product, and a "
 "restore resolves the same relative references without the document."
 msgstr ""
 
-#: src/validation/shapes-products.md:874
+#: src/validation/shapes-products.md:879
 msgid ""
 "`shaclProductValidateToSarifRebuild` re-derives from the SAME carried "
 "dataset `shaclProductValidateToSarif` restores a memo of, so calling it on a "
@@ -10752,7 +11211,7 @@ msgid ""
 "forward-compatibility rescue never loses the binding."
 msgstr ""
 
-#: src/validation/shapes-products.md:884
+#: src/validation/shapes-products.md:889
 msgid ""
 "`shaclProductValidateToSarifExpecting` takes the 64 hexadecimal digits "
 "`shaclProductExplain` prints on its `identity-digest` line. A product "
@@ -10763,11 +11222,11 @@ msgid ""
 "and the identical refusal shape."
 msgstr ""
 
-#: src/validation/shapes-products.md:891
+#: src/validation/shapes-products.md:896
 msgid "From C"
 msgstr ""
 
-#: src/validation/shapes-products.md:893
+#: src/validation/shapes-products.md:898
 msgid ""
 "The C ABI exposes `purrdf_shapes_product_encode`, "
 "`purrdf_shapes_product_open`, `purrdf_shapes_product_admit`, "
@@ -10778,7 +11237,7 @@ msgid ""
 "(or `NULL` when the shapes document simply did not parse)."
 msgstr ""
 
-#: src/validation/shapes-products.md:900
+#: src/validation/shapes-products.md:905
 msgid ""
 "`purrdf_shapes_product_rebuild` is the forward-compatibility twin of "
 "`purrdf_shapes_product_admit`: it re-derives the preparation from the shapes "
@@ -10791,7 +11250,7 @@ msgid ""
 "the forward-compatibility rescue never loses the binding."
 msgstr ""
 
-#: src/validation/shapes-products.md:910
+#: src/validation/shapes-products.md:915
 msgid ""
 "`purrdf_shapes_product_admit_expecting` is `purrdf_shapes_product_admit` "
 "bound to the product you meant: it takes the `identity-digest` value "
@@ -10805,12 +11264,12 @@ msgid ""
 "rdf-capi/include/purrdf.h) and [Getting Started: C](../getting-started/c.md)."
 msgstr ""
 
-#: src/validation/shapes-products.md:923
+#: src/validation/shapes-products.md:928
 msgid ""
 "[SHACL](shacl.md) — the validator itself, its coverage, and the report model."
 msgstr ""
 
-#: src/validation/shapes-products.md:924
+#: src/validation/shapes-products.md:929
 msgid ""
 "[`docs/design/purrdf-prepared-products.md`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/design/purrdf-prepared-products.md) — the "
@@ -10818,19 +11277,19 @@ msgid ""
 "derived stage identity, the census closure, and the bounded guarantee."
 msgstr ""
 
-#: src/validation/shapes-products.md:927
+#: src/validation/shapes-products.md:932
 msgid ""
 "[Codecs & Determinism](../concepts/codecs.md) — the byte-determinism rules "
 "every PurRDF writer follows, including this one."
 msgstr ""
 
-#: src/validation/shapes-products.md:929
+#: src/validation/shapes-products.md:934
 msgid ""
 "[Base IRIs & Relative References](../concepts/base-iris.md) — what `--base` "
 "records and why a product refuses to guess it."
 msgstr ""
 
-#: src/validation/shapes-products.md:931
+#: src/validation/shapes-products.md:936
 msgid ""
 "[Performance](../project/performance.md) — the report-only benches that "
 "decompose the pack and restore phases."
@@ -10987,7 +11446,7 @@ msgid ""
 "Materialization::OwlDirect(bgp))`"
 msgstr ""
 
-#: src/entailment.md:20 src/entailment.md:148
+#: src/entailment.md:20 src/entailment.md:153
 msgid "`OWL-Direct`"
 msgstr ""
 
@@ -11002,7 +11461,7 @@ msgstr ""
 msgid "`materialize_rif(...)`"
 msgstr ""
 
-#: src/entailment.md:21 src/entailment.md:22 src/entailment.md:149
+#: src/entailment.md:21 src/entailment.md:22 src/entailment.md:154
 msgid "`RIF`"
 msgstr ""
 
@@ -11233,7 +11692,7 @@ msgid "`… --pattern BGP`"
 msgstr ""
 
 #: src/entailment.md:96
-msgid "`purrdf.entail.graph_entails(\"owl-rl\", p, c, imports)`"
+msgid "`purrdf.entail.graph_entails(\"owl-rl\", p, c, imports, premise_iris)`"
 msgstr ""
 
 #: src/entailment.md:96
@@ -11241,11 +11700,12 @@ msgid "`purrdf.entail.verify_entailment(...)`"
 msgstr ""
 
 #: src/entailment.md:96
-msgid "`purrdf.entail.certain_answers(\"owl-rl\", p, bgp, imports)`"
+msgid ""
+"`purrdf.entail.certain_answers(\"owl-rl\", p, bgp, imports, premise_iris)`"
 msgstr ""
 
 #: src/entailment.md:97
-msgid "`entailGraphEntails(\"owl-rl\", p, c, iris, docs)`"
+msgid "`entailGraphEntails(\"owl-rl\", p, c, iris, docs, premiseIris)`"
 msgstr ""
 
 #: src/entailment.md:97
@@ -11290,11 +11750,16 @@ msgid ""
 "was not handed is a different premise. PurRDF fetches nothing, so the "
 "closure arrives as caller-supplied configuration: an ordered list of "
 "`(ontology IRI, document)` pairs, spelled `--import IRI=FILE` on the command "
-"line. An unresolved import is a refusal naming the document, never a "
-"silently truncated premise."
-msgstr ""
+"line. An import needs no pair when it names the premise document itself — "
+"the CLI's `file://` retrieval IRI or `--base`, and on the Python, "
+"WebAssembly and C hosts the `premise_iris` argument (`premiseIris` in "
+"JavaScript), the IRIs the caller read the premise from, `[]` for bare text — "
+"or an ontology the premise already holds (`<X> a owl:Ontology`, or an "
+"`owl:versionIRI` naming it). Any other unresolved import is a refusal naming "
+"the document, never a silently truncated premise."
+msgstr "**导入表在每个宿主上都是参数。** 本体的导入闭包*就是*该本体，因此，若前提携带了一条调用方没有交给本次调用的 `owl:imports`，它就已是另一个前提。PurRDF 不获取任何内容，因此导入闭包以调用方提供的配置形式到达：一个有序的 `(本体 IRI, 文档)` 配对列表，在命令行上写作 `--import IRI=FILE`。当某个导入指向前提文档本身时无需配对——在 CLI 上是 `file://` 获取 IRI 或 `--base`，在 Python、WebAssembly 与 C 宿主上是 `premise_iris` 参数（JavaScript 中为 `premiseIris`），即调用方读取前提所用的 IRI，裸文本则为 `[]`——或指向前提中已有的本体（`<X> a owl:Ontology`，或某个 `owl:versionIRI` 指名它）时，同样无需配对。其他任何未解析的导入都会以点名该文档的方式被拒绝，绝不会成为一个被静默截断的前提。"
 
-#: src/entailment.md:115
+#: src/entailment.md:120
 msgid ""
 "A pattern is N-Triples with `?name` (or `$name`) in any position, the "
 "**predicate** included. RDF reserves that position for an IRI, so the "
@@ -11313,18 +11778,18 @@ msgid ""
 "table decide, for which the closure the rows are drawn from holds nothing."
 msgstr ""
 
-#: src/entailment.md:130
+#: src/entailment.md:135
 msgid ""
 "Every answer arrives with the certificate of the run underneath it — the "
 "same `purrdf-reasoning-report` block a materialization renders, plus a "
 "`mechanism` line naming which of the six reached the verdict."
 msgstr ""
 
-#: src/entailment.md:134
+#: src/entailment.md:139
 msgid "Rule coverage"
 msgstr ""
 
-#: src/entailment.md:136
+#: src/entailment.md:141
 msgid ""
 "`rules(regime)` is the rule table the specification defines the regime by; "
 "`implemented(regime)` is the subset the evaluator fires. Both are `&'static` "
@@ -11332,96 +11797,96 @@ msgid ""
 "instead of a sentence:"
 msgstr ""
 
-#: src/entailment.md:141 src/entailment-rules.md:58 src/entailment-rules.md:86
+#: src/entailment.md:146 src/entailment-rules.md:58 src/entailment-rules.md:86
 msgid "Regime"
 msgstr ""
 
-#: src/entailment.md:141
+#: src/entailment.md:146
 msgid "Rule table"
 msgstr ""
 
-#: src/entailment.md:141 src/entailment-rules.md:58
+#: src/entailment.md:146 src/entailment-rules.md:58
 msgid "Defined"
 msgstr ""
 
-#: src/entailment.md:141 src/entailment-rules.md:58 src/entailment-rules.md:92
+#: src/entailment.md:146 src/entailment-rules.md:58 src/entailment-rules.md:92
 #: src/entailment-rules.md:100 src/entailment-rules.md:123
 #: src/entailment-rules.md:206
 msgid "Implemented"
 msgstr ""
 
-#: src/entailment.md:143
+#: src/entailment.md:148
 msgid "`Simple`"
 msgstr ""
 
-#: src/entailment.md:143
+#: src/entailment.md:148
 msgid "— (identity closure)"
 msgstr ""
 
-#: src/entailment.md:144
+#: src/entailment.md:149
 msgid "`RDF`"
 msgstr ""
 
-#: src/entailment.md:144
+#: src/entailment.md:149
 msgid "RDF 1.2 Semantics §8.1.1"
 msgstr ""
 
-#: src/entailment.md:145
+#: src/entailment.md:150
 msgid "`RDFS`"
 msgstr ""
 
-#: src/entailment.md:145
+#: src/entailment.md:150
 msgid "RDF 1.2 Semantics §8.1.1 + §9.2.1"
 msgstr ""
 
-#: src/entailment.md:145 src/entailment-rules.md:62
+#: src/entailment.md:150 src/entailment-rules.md:62
 msgid "18"
 msgstr ""
 
-#: src/entailment.md:146
+#: src/entailment.md:151
 msgid "`OWL-RL`"
 msgstr ""
 
-#: src/entailment.md:146
+#: src/entailment.md:151
 msgid "OWL 2 Profiles §4.3 Tables 4–9"
 msgstr ""
 
-#: src/entailment.md:146 src/entailment-rules.md:63
+#: src/entailment.md:151 src/entailment-rules.md:63
 msgid "78"
 msgstr ""
 
-#: src/entailment.md:147
+#: src/entailment.md:152
 msgid "`D`"
 msgstr ""
 
-#: src/entailment.md:147
+#: src/entailment.md:152
 msgid "OWL 2 Profiles §4.3 Table 8"
 msgstr ""
 
-#: src/entailment.md:147 src/entailment-rules.md:66
+#: src/entailment.md:152 src/entailment-rules.md:66
 msgid "5"
 msgstr ""
 
-#: src/entailment.md:148
+#: src/entailment.md:153
 msgid "— (SHOIQ(D) tableau, not a fixed table)"
 msgstr ""
 
-#: src/entailment.md:149
+#: src/entailment.md:154
 msgid "— (caller-supplied rule set)"
 msgstr ""
 
-#: src/entailment.md:151
+#: src/entailment.md:156
 msgid ""
 "The per-rule breakdown — every rule id, its specification citation, and "
 "whether it is fired — is [generated from that API](entailment-rules.md) and "
 "drift-guarded, so it cannot fall behind the code."
 msgstr ""
 
-#: src/entailment.md:155
+#: src/entailment.md:160
 msgid "Where the numbers stop:"
 msgstr ""
 
-#: src/entailment.md:157
+#: src/entailment.md:162
 msgid ""
 "**The four existential rules fire, but their conclusions are withheld.** "
 "`rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` each conclude about a _fresh_ "
@@ -11434,7 +11899,7 @@ msgid ""
 "with a fresh blank node only weakens a triple."
 msgstr ""
 
-#: src/entailment.md:166
+#: src/entailment.md:171
 msgid ""
 "**A complete rule table is not a complete closure.** `OWL-RL` fires all 78 "
 "rules, and a run that met a boundary still reports "
@@ -11455,7 +11920,7 @@ msgid ""
 "all: see the conformance section below."
 msgstr ""
 
-#: src/entailment.md:183
+#: src/entailment.md:188
 msgid ""
 "**Seventeen OWL 2 RL rules conclude `false`.** \"Implemented\" for those "
 "means _decided_: a body match becomes `EntailError::Inconsistent` carrying a "
@@ -11463,11 +11928,11 @@ msgid ""
 "is the only thing a rule with no conclusion can do."
 msgstr ""
 
-#: src/entailment.md:188
+#: src/entailment.md:193
 msgid "The chase (Simple / RDF / RDFS / OWL-RL / D)"
 msgstr ""
 
-#: src/entailment.md:190
+#: src/entailment.md:195
 msgid ""
 "`materialize` runs a forward-materialization chase: a fixed rule set for the "
 "selected regime, applied by a semi-naive fixpoint until no new quads appear. "
@@ -11476,14 +11941,14 @@ msgid ""
 "space, no term is ever re-parsed or re-serialized along the way."
 msgstr ""
 
-#: src/entailment.md:196
+#: src/entailment.md:201
 msgid ""
 "Typical use: materialize first, then query with the plain [SPARQL engine]"
 "(sparql/querying.md) or validate the closure with [SHACL](validation/"
 "shacl.md) (the SHACL validator itself performs no inference)."
 msgstr ""
 
-#: src/entailment.md:201
+#: src/entailment.md:206
 msgid ""
 "The rule set is not written twice. `calculus_program(regime)` renders it as "
 "DL clauses and `materialize` evaluates exactly those clauses through "
@@ -11491,11 +11956,11 @@ msgid ""
 "a report carries identifies the clauses that actually ran."
 msgstr ""
 
-#: src/entailment.md:206
+#: src/entailment.md:211
 msgid "Every run says what it did"
 msgstr ""
 
-#: src/entailment.md:208
+#: src/entailment.md:213
 msgid ""
 "`materialize` returns `(closure, ReasoningReport)`. There is deliberately no "
 "report-free variant, because the alternative — two entry points, one of "
@@ -11503,46 +11968,46 @@ msgid ""
 "described as a complete one. The report carries:"
 msgstr ""
 
-#: src/entailment.md:213
+#: src/entailment.md:218
 msgid ""
 "**`Completeness`** — derived from `rules(regime)` minus "
 "`implemented(regime)`, so it improves by itself as rules are added, and it "
 "names the `missing` rules rather than merely counting them;"
 msgstr ""
 
-#: src/entailment.md:216
+#: src/entailment.md:221
 msgid ""
 "**per-rule firing counts** — which rules fired and how many conclusions each "
 "contributed;"
 msgstr ""
 
-#: src/entailment.md:218
+#: src/entailment.md:223
 msgid ""
 "**`Boundary`s** — the constructs the run met and could not close over, each "
 "with its reason;"
 msgstr ""
 
-#: src/entailment.md:220
+#: src/entailment.md:225
 msgid ""
 "**the evaluation budget** — what the run consumed of the evaluator's fixed "
 "ceilings;"
 msgstr ""
 
-#: src/entailment.md:222
+#: src/entailment.md:227
 msgid ""
 "**a contract hash** — `purrdf-datalog`'s digest of the clause program, so a "
 "cached closure minted under a different calculus can be _refused_ rather "
 "than trusted;"
 msgstr ""
 
-#: src/entailment.md:225
+#: src/entailment.md:230
 msgid ""
 "**an inconsistency witness**, when a rule that concludes `false` matched: "
 "the rule id, the asserted triples that satisfied its premises in premise "
 "order, and the graph they were read from."
 msgstr ""
 
-#: src/entailment.md:229
+#: src/entailment.md:234
 msgid ""
 "A report cannot claim `Exact` while naming a boundary. `ReasoningReport` "
 "stores no completeness field at all: `completeness()` derives the value from "
@@ -11552,17 +12017,17 @@ msgid ""
 "vacuous by construction and could never fail."
 msgstr ""
 
-#: src/entailment.md:236
+#: src/entailment.md:241
 msgid ""
 "The rendering is byte-stable, so the Python, WebAssembly, and C hosts hand "
 "back the same report text as Rust for the same input."
 msgstr ""
 
-#: src/entailment.md:239
+#: src/entailment.md:244
 msgid "OWL-Direct: the tableau"
 msgstr ""
 
-#: src/entailment.md:241
+#: src/entailment.md:246
 msgid ""
 "`OWL-Direct` semantics is open-world Description Logic, which a forward "
 "chase cannot answer. `materialize_dl_reported` runs an **SHOIQ(D) tableau** "
@@ -11573,21 +12038,21 @@ msgid ""
 "`Materialization::OwlDirect` rather than restating it."
 msgstr ""
 
-#: src/entailment.md:249 src/entailment-rules.md:65
+#: src/entailment.md:254 src/entailment-rules.md:65
 msgid "RIF"
 msgstr ""
 
-#: src/entailment.md:251
+#: src/entailment.md:256
 msgid ""
 "`materialize_rif` evaluates **RIF-Core** rules over a parsed `RuleSet`, "
 "covering the SPARQL RIF entailment regime."
 msgstr ""
 
-#: src/entailment.md:254
+#: src/entailment.md:259
 msgid "D (datatype) entailment"
 msgstr ""
 
-#: src/entailment.md:256
+#: src/entailment.md:261
 msgid ""
 "`D` is materialized, not refused. PurRDF realizes it as Simple entailment "
 "plus the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8 — the fixed rule "
@@ -11595,7 +12060,7 @@ msgid ""
 "space by `purrdf-xsd` rather than by comparing lexical forms."
 msgstr ""
 
-#: src/entailment.md:261
+#: src/entailment.md:266
 msgid ""
 "What Table 8 does not cover is the infinite value spaces themselves, and "
 "that is reported as a `Construct::DatatypeValueSpace` boundary on the run "
@@ -11603,11 +12068,11 @@ msgid ""
 "boundary_, and the report is where the boundary is stated."
 msgstr ""
 
-#: src/entailment.md:266
+#: src/entailment.md:271
 msgid "Every host materializes `d`, the command-line tool included."
 msgstr ""
 
-#: src/entailment.md:268
+#: src/entailment.md:273
 msgid ""
 "There is **no unsupported-regime error**. `materialize` takes a "
 "`Materialization`, which carries each regime's own input — a basic graph "
@@ -11618,11 +12083,11 @@ msgid ""
 "`implemented()` and `Regime::from_iri` speak in."
 msgstr ""
 
-#: src/entailment.md:275
+#: src/entailment.md:280
 msgid "Invariants"
 msgstr ""
 
-#: src/entailment.md:277
+#: src/entailment.md:282
 msgid ""
 "**No minted vocabulary.** Every constant in the crate's `vocab` module is a "
 "standard `rdf:`/`rdfs:`/`owl:` IRI drawn from the entailment specs "
@@ -11630,7 +12095,7 @@ msgid ""
 "(project/design-rules.md)."
 msgstr ""
 
-#: src/entailment.md:281
+#: src/entailment.md:286
 msgid ""
 "**Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`, "
 "[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `blake3`, and two "
@@ -11639,17 +12104,17 @@ msgid ""
 "unchanged, with no threads, filesystem, or RNG dependency."
 msgstr ""
 
-#: src/entailment.md:286
+#: src/entailment.md:291
 msgid ""
 "**Deterministic.** Same input + regime → same closure, always — and the same "
 "report, byte for byte."
 msgstr ""
 
-#: src/entailment.md:291
+#: src/entailment.md:296
 msgid "Two corpora measure two different things, and the distinction matters:"
 msgstr ""
 
-#: src/entailment.md:293
+#: src/entailment.md:298
 msgid ""
 "**W3C SPARQL 1.1 entailment-regime group — 70 of 70 cases pass**, with zero "
 "ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, "
@@ -11657,7 +12122,7 @@ msgid ""
 "through the SPARQL conformance harness."
 msgstr ""
 
-#: src/entailment.md:297
+#: src/entailment.md:302
 msgid ""
 "**W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero "
 "unledgered. This corpus is _consistency_\\-shaped: all 262 vendored cases "
@@ -11668,7 +12133,7 @@ msgid ""
 "has started agreeing, are both hard failures."
 msgstr ""
 
-#: src/entailment.md:305
+#: src/entailment.md:310
 msgid ""
 "Two things this row does **not** say. First, the upstream material is not "
 "free of entailment tests — the W3C manifest holds **206 positive and 23 "
@@ -11684,7 +12149,7 @@ msgid ""
 "over a corpus rather than over what W3C published."
 msgstr ""
 
-#: src/entailment.md:318
+#: src/entailment.md:323
 msgid ""
 "Those five figures are a **dated measurement**, recorded in `census.tsv`'s "
 "`dl_probe` column and described in that suite's `PROVENANCE.md`. The harness "
@@ -11694,7 +12159,7 @@ msgid ""
 "rather than part of the gate."
 msgstr ""
 
-#: src/entailment.md:324
+#: src/entailment.md:329
 msgid ""
 "**W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero "
 "unledgered. This is the independent oracle for the rule table: W3C's own "
@@ -11703,7 +12168,7 @@ msgid ""
 "reported separately."
 msgstr ""
 
-#: src/entailment.md:330
+#: src/entailment.md:335
 msgid ""
 "**The negative lane is 23 of 23: no unsoundness.** The chase never derived a "
 "triple W3C publishes as _not_ entailed. That is the safety result, and it "
@@ -11711,13 +12176,13 @@ msgid ""
 "none were filtered by profile."
 msgstr ""
 
-#: src/entailment.md:335
+#: src/entailment.md:340
 msgid ""
 "**Those 23 agreements are two different results, and the harness prints the "
 "split** on a scoreboard line of its own:"
 msgstr ""
 
-#: src/entailment.md:342
+#: src/entailment.md:347
 msgid ""
 "Three are _decided_ non-entailments — both halves of Theorem PR1's "
 "hypothesis hold, so the closure's failure to contain the non-conclusion is a "
@@ -11729,7 +12194,7 @@ msgid ""
 "unsoundness found\", never as \"23 non-entailments proved\"."
 msgstr ""
 
-#: src/entailment.md:351
+#: src/entailment.md:356
 msgid ""
 "The positive lane is **27 of 27** — the 27 positive entailments W3C itself "
 "places inside the RL profile under RDF-Based semantics — and the typed "
@@ -11738,14 +12203,14 @@ msgid ""
 "`imports-unresolved`, and **0 are actionable** (0 `missing-rule`)."
 msgstr ""
 
-#: src/entailment.md:358
+#: src/entailment.md:363
 msgid ""
 "Every class it used to hold is closed, and the rule table did not change "
 "once to close any of them. `entails()` reaches a conclusion six ways, and "
 "five of the six are not matching:"
 msgstr ""
 
-#: src/entailment.md:362
+#: src/entailment.md:367
 msgid ""
 "**refutation.** A negative fact still has no head anywhere in Tables 4–9 — "
 "no rule concludes `owl:differentFrom`, and none concludes membership in an "
@@ -11760,7 +12225,7 @@ msgid ""
 "the `schema-conclusion` class with them."
 msgstr ""
 
-#: src/entailment.md:373
+#: src/entailment.md:378
 msgid ""
 "**freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a "
 "universally quantified Horn implication, and an implication is decided by "
@@ -11772,7 +12237,7 @@ msgid ""
 "half would claim conclusions the semantics does not license."
 msgstr ""
 
-#: src/entailment.md:381
+#: src/entailment.md:386
 msgid ""
 "**comprehension.** A conclusion may assert that a CLASS EXISTS — an "
 "anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the RDF-"
@@ -11781,7 +12246,7 @@ msgid ""
 "minted, over blank nodes checked absent from both documents."
 msgstr ""
 
-#: src/entailment.md:386
+#: src/entailment.md:391
 msgid ""
 "**reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the "
 "profile states no rule for it — and a rule that did would range over every "
@@ -11790,7 +12255,7 @@ msgid ""
 "instead."
 msgstr ""
 
-#: src/entailment.md:391
+#: src/entailment.md:396
 msgid ""
 "**datatype containment.** A property's declared `rdfs:range` datatypes "
 "intersect, and the intersection may be contained in one the premise never "
@@ -11800,7 +12265,7 @@ msgid ""
 "the counterexample range being exactly decided."
 msgstr ""
 
-#: src/entailment.md:398
+#: src/entailment.md:403
 msgid ""
 "The last case needed no mechanism at all, only the document its premise "
 "names: `webont-imports-011` `owl:imports` a support ontology the upstream "
@@ -11809,7 +12274,7 @@ msgid ""
 "still fetches nothing."
 msgstr ""
 
-#: src/entailment.md:404
+#: src/entailment.md:409
 msgid ""
 "Nothing about the inventory moves: `rules(Regime::OwlRl)` and "
 "`implemented(Regime::OwlRl)` are still exactly the same 78, "
@@ -11822,7 +12287,7 @@ msgid ""
 "checker that re-decides the whole thing without running a reasoner."
 msgstr ""
 
-#: src/entailment.md:414
+#: src/entailment.md:419
 msgid ""
 "The one case that used to be actionable is closed by an **extension**, and "
 "the extension is labelled rather than absorbed. `a owl:differentFrom b` "
@@ -11839,7 +12304,7 @@ msgid ""
 "and `OWL-RL 78 / 78` remains a claim about Tables 4–9 and nothing else."
 msgstr ""
 
-#: src/entailment.md:428
+#: src/entailment.md:433
 msgid ""
 "The live scoreboard is [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/CONFORMANCE.md)."
@@ -13421,7 +13886,12 @@ msgid ""
 "that compiler. Contributors and the CI gates run a _floating_ nightly named "
 "in `rust-toolchain.toml` for its sharper clippy and rustdoc lints and its "
 "stronger default borrow checker; release artifacts are built on stable."
-msgstr "**源码不含 nightly 特性，MSRV 基于 stable**——工作区中任何地方都没有 `#![feature(...)]` 属性，MSRV 下限（当前为 1.98，位于 stable 通道）由专门的 CI 作业强制执行，该作业恰好在这一版本的编译器上构建。贡献者与 CI 门禁使用 `rust-toolchain.toml` 中指定的*浮动* nightly，以获得更锐利的 clippy 与 rustdoc lint 以及更强的默认借用检查器；发布工件在 stable 上构建。"
+msgstr ""
+"**源码不含 nightly 特性，MSRV 基于 stable**——工作区中任何地方都没有 `#!"
+"[feature(...)]` 属性，MSRV 下限（当前为 1.98，位于 stable 通道）由专门的 CI "
+"作业强制执行，该作业恰好在这一版本的编译器上构建。贡献者与 CI 门禁使用 `rust-"
+"toolchain.toml` 中指定的*浮动* nightly，以获得更锐利的 clippy 与 rustdoc "
+"lint 以及更强的默认借用检查器；发布工件在 stable 上构建。"
 
 #: src/project/design-rules.md:106
 msgid ""
@@ -13545,36 +14015,46 @@ msgid "W3C data-shapes + DASH SHACL-AF/rules + a first-party frozen corpus"
 msgstr ""
 
 #: src/project/conformance.md:44
-msgid "ShEx 2.1"
+msgid "SHACL 1.2"
 msgstr ""
 
 #: src/project/conformance.md:44
-msgid "shexTest v2.1.0 (validation, schemas, negative syntax/structure)"
+msgid ""
+"the whole vendored W3C `shacl12-test-suite`: validation, node expressions, "
+"inference rules and SPARQL 1.2 RL"
+msgstr "随库固化的整套 W3C `shacl12-test-suite`：验证、节点表达式、推理规则与 SPARQL 1.2 RL"
+
+#: src/project/conformance.md:45
+msgid "ShEx 2.1"
 msgstr ""
 
 #: src/project/conformance.md:45
+msgid "shexTest v2.1.0 (validation, schemas, negative syntax/structure)"
+msgstr ""
+
+#: src/project/conformance.md:46
 msgid ""
 "the W3C SPARQL entailment-regime cases (via the SPARQL harness), the "
 "vendored W3C OWL 2 suite (DL consistency, ledgered), and W3C's own OWL 2 RL "
 "entailment tests (the independent oracle for the rule table, ledgered)"
 msgstr ""
 
-#: src/project/conformance.md:46
+#: src/project/conformance.md:47
 msgid ""
 "frozen cross-language vectors — 38 of the 39 fold byte-exactly into their "
 "committed expectation, with the 39th a ledgered divergence from an upstream "
 "expectation this reader contradicts"
 msgstr ""
 
-#: src/project/conformance.md:47
+#: src/project/conformance.md:48
 msgid "rdflib drop-in"
 msgstr ""
 
-#: src/project/conformance.md:47
+#: src/project/conformance.md:48
 msgid "rdflib 7.6's own vendored tests + first-party parity"
 msgstr ""
 
-#: src/project/conformance.md:49
+#: src/project/conformance.md:50
 msgid ""
 "At the time of writing every suite is green — for example 1,105/1,105 "
 "attempted shexTest validation cases, 129/129 W3C SHACL, 264/264 codec round-"
@@ -13591,35 +14071,35 @@ msgid ""
 "Informatics/purrdf/blob/main/docs/CONFORMANCE.md) rather than this snapshot."
 msgstr ""
 
-#: src/project/conformance.md:64
+#: src/project/conformance.md:65
 msgid "Ledger discipline"
 msgstr ""
 
-#: src/project/conformance.md:66
+#: src/project/conformance.md:67
 msgid ""
 "A harness never skips silently. Four mechanisms keep the scoreboard honest:"
 msgstr ""
 
-#: src/project/conformance.md:68
+#: src/project/conformance.md:69
 msgid ""
 "**Exact totals** — each harness asserts the number of discovered tests, so "
 "corpus drift fails loudly."
 msgstr ""
 
-#: src/project/conformance.md:70
+#: src/project/conformance.md:71
 msgid ""
 "**XFAIL ledgers** — every known gap is listed with a reason string, and the "
 "harness asserts it _still fails_. Fixing a gap without removing its ledger "
 "entry breaks the build (XPASS discipline), so the ledgers double as roadmaps."
 msgstr ""
 
-#: src/project/conformance.md:74
+#: src/project/conformance.md:75
 msgid ""
 "**Trait skips (ShEx only)** — whole spec features can be skipped by manifest "
 "trait tags, counted exactly. The list is currently **empty**."
 msgstr ""
 
-#: src/project/conformance.md:76
+#: src/project/conformance.md:77
 msgid ""
 "**A monotone budget (ratchet)** — a committed baseline records the exact "
 "allowed count of ledgered gaps per suite. A larger live count fails RED "
@@ -13629,49 +14109,53 @@ msgid ""
 "convention."
 msgstr ""
 
-#: src/project/conformance.md:83
+#: src/project/conformance.md:84
 msgid "Running the suites locally"
 msgstr ""
 
-#: src/project/conformance.md:86
+#: src/project/conformance.md:87
 msgid "# the single matrix\n"
 msgstr ""
 
-#: src/project/conformance.md:87
+#: src/project/conformance.md:88
 msgid "# all four ShEx suites\n"
 msgstr ""
 
-#: src/project/conformance.md:88
+#: src/project/conformance.md:89
 msgid "# W3C SHACL scoreboard\n"
 msgstr ""
 
-#: src/project/conformance.md:89
+#: src/project/conformance.md:90
+msgid "# W3C SHACL 1.2 scoreboard\n"
+msgstr "# W3C SHACL 1.2 记分板\n"
+
+#: src/project/conformance.md:91
 msgid "# W3C SPARQL\n"
 msgstr ""
 
-#: src/project/conformance.md:90
+#: src/project/conformance.md:92
 msgid "# RDFC-1.0 + codec goldens\n"
 msgstr ""
 
-#: src/project/conformance.md:91
+#: src/project/conformance.md:93
 msgid "# W3C CSVW + independent CSVW/OBO checks\n"
 msgstr ""
 
-#: src/project/conformance.md:92
+#: src/project/conformance.md:94
 msgid "# GTS vectors\n"
 msgstr ""
 
-#: src/project/conformance.md:95
+#: src/project/conformance.md:97
 msgid ""
 "`make check` — the full local gate (fmt, clippy, build, tests, hygiene) — "
 "runs the Rust suites as part of the workspace gate."
 msgstr ""
 
-#: src/project/conformance.md:98
+#: src/project/conformance.md:100
 msgid "Frozen means frozen"
 msgstr ""
 
-#: src/project/conformance.md:100
+#: src/project/conformance.md:102
 msgid ""
 "The GTS vectors in `vectors/` are shared byte-exact with the sibling GTS "
 "engines in other languages and are **never** regenerated in this repository; "
@@ -13882,7 +14366,11 @@ msgid ""
 "MSRV job that sets `RUSTUP_TOOLCHAIN` explicitly and asserts the compiler it "
 "measured really is 1.98. Raising the MSRV is a notable change recorded in "
 "the changelog; it rides a **minor** bump and never ships in a patch release."
-msgstr "支持的最低 Rust 版本是根 `Cargo.toml` 中的 `rust-version`——当前为 **1.98**——位于 **stable** 通道，由专门的 CI MSRV 作业强制执行：该作业显式设置 `RUSTUP_TOOLCHAIN`，并断言它所度量的编译器确实是 1.98。提高 MSRV 是一项记入变更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。"
+msgstr ""
+"支持的最低 Rust 版本是根 `Cargo.toml` 中的 `rust-version`——当前为 **1.98**——"
+"位于 **stable** 通道，由专门的 CI MSRV 作业强制执行：该作业显式设置 "
+"`RUSTUP_TOOLCHAIN`，并断言它所度量的编译器确实是 1.98。提高 MSRV 是一项记入变"
+"更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。"
 
 #: src/project/releases.md:39
 msgid ""
