@@ -152,6 +152,49 @@ function fakeCache() {
   };
 }
 
+/** A Cache API double whose `match` always rejects (e.g. workerd with no Cache configured). */
+function rejectingMatchCache(error = new Error("No Cache was configured")) {
+  const store = new Map();
+  const calls = [];
+  return {
+    store,
+    calls,
+    async match(request) {
+      calls.push(["match", request.url]);
+      throw error;
+    },
+    async put(request, response) {
+      calls.push(["put", request.url, response.headers.get("Cache-Control")]);
+      store.set(request.url, response);
+    },
+  };
+}
+
+/** A Cache API double whose `put` always rejects (e.g. workerd with no Cache configured). */
+function rejectingPutCache(error = new Error("No Cache was configured")) {
+  const store = new Map();
+  const calls = [];
+  return {
+    store,
+    calls,
+    async match(request) {
+      calls.push(["match", request.url]);
+      return store.get(request.url)?.clone();
+    },
+    async put(request) {
+      calls.push(["put", request.url]);
+      throw error;
+    },
+  };
+}
+
+/** An `onCacheError` double that records every `(error, context)` it was handed. */
+function recordingCacheErrors() {
+  const errors = [];
+  const onCacheError = (error, context) => errors.push({ error, ...context });
+  return { errors, onCacheError };
+}
+
 function syncThrow(fn) {
   try {
     fn();
@@ -383,12 +426,23 @@ test("refusal pair: cache options are all-or-nothing", () => {
     syncThrow(() => createFetchServiceResolver({ ...base, cache: {}, cacheTtlSeconds: 60 })).message,
     /cache must be a Cache/,
   );
+  assert.match(
+    syncThrow(() => createFetchServiceResolver({ ...base, onCacheError: () => {} })).message,
+    /onCacheError reports cache failures and needs cache/,
+  );
+  assert.match(
+    syncThrow(() =>
+      createFetchServiceResolver({ ...base, cache: fakeCache(), cacheTtlSeconds: 60, onCacheError: "nope" }),
+    ).message,
+    /onCacheError must be a function/,
+  );
   assert.equal(
     typeof createFetchServiceResolver({
       ...base,
       cache: fakeCache(),
       cacheTtlSeconds: 60,
       waitUntil: () => {},
+      onCacheError: () => {},
     }),
     "function",
   );
@@ -756,6 +810,153 @@ test("a credentialed request through the cache is a job fault, even under SILENT
     }),
   );
   assert.match(error.message, /shared cache/);
+});
+
+// ---------------------------------------------------------------------------
+// A cache failure is an optimisation-layer fault, never the query's answer (gap G10)
+// ---------------------------------------------------------------------------
+
+test("a cache whose match rejects is treated as a miss: the query still answers with the remote rows, and the hook observes exactly one match error", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const cache = rejectingMatchCache();
+  const { errors, onCacheError } = recordingCacheErrors();
+  const { calls, fetch } = recordingFetch(() => srjResponse());
+  const resolve = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch,
+    cache,
+    cacheTtlSeconds: 60,
+    onCacheError,
+  });
+  const answer = await resolve(serviceRequest(), liveCtx());
+  assert.equal(calls.length, 1, "a rejecting match still lets the request reach the remote");
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].operation, "match");
+  assert.equal(errors[0].endpoint, REMOTE);
+  assert.ok(errors[0].error instanceof Error);
+
+  // The oracle: byte-for-byte the same rows a resolver with no cache at all would answer.
+  const noCache = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: async () => srjResponse() });
+  const plain = await noCache(serviceRequest(), liveCtx());
+  assert.deepEqual(rowsOf(decoder.decode(answer)), rowsOf(decoder.decode(plain)));
+});
+
+test("a cache whose put rejects never discards the answer, with waitUntil: the hook observes the put error", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const cache = rejectingPutCache();
+  const { errors, onCacheError } = recordingCacheErrors();
+  const deferred = [];
+  const resolve = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch: async () => srjResponse(),
+    cache,
+    cacheTtlSeconds: 60,
+    waitUntil: (promise) => deferred.push(promise),
+    onCacheError,
+  });
+  const answer = await resolve(serviceRequest(), liveCtx());
+  assert.deepEqual(rowsOf(decoder.decode(answer)), rowsOf(REMOTE_OX));
+  assert.equal(deferred.length, 1, "the rejecting put is still handed to waitUntil");
+  await Promise.all(deferred); // never rejects: the resolver attaches its own handler first
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].operation, "put");
+  assert.equal(errors[0].endpoint, REMOTE);
+});
+
+test("a cache whose put rejects never discards the answer, without waitUntil: the hook observes the put error", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const cache = rejectingPutCache();
+  const { errors, onCacheError } = recordingCacheErrors();
+  const resolve = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch: async () => srjResponse(),
+    cache,
+    cacheTtlSeconds: 60,
+    onCacheError,
+  });
+  const answer = await resolve(serviceRequest(), liveCtx());
+  assert.deepEqual(rowsOf(decoder.decode(answer)), rowsOf(REMOTE_OX));
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].operation, "put");
+  assert.equal(errors[0].endpoint, REMOTE);
+});
+
+test("valid neighbour: a healthy cache still answers the second identical request from cache, with no reported error", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const cache = fakeCache();
+  const { errors, onCacheError } = recordingCacheErrors();
+  const { calls, fetch } = recordingFetch(() => srjResponse());
+  const resolve = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch,
+    cache,
+    cacheTtlSeconds: 60,
+    onCacheError,
+  });
+  await resolve(serviceRequest(), liveCtx());
+  await resolve(serviceRequest(), liveCtx());
+  assert.equal(calls.length, 1, "the second identical request was served from the cache, not the remote");
+  assert.equal(errors.length, 0, "a healthy cache never reports a cache error");
+});
+
+test("the default onCacheError writes one console.warn line naming the operation and endpoint", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const cache = rejectingMatchCache();
+  const resolve = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch: async () => srjResponse(),
+    cache,
+    cacheTtlSeconds: 60,
+  });
+  const calls = [];
+  const original = console.warn;
+  console.warn = (...args) => calls.push(args.join(" "));
+  try {
+    await resolve(serviceRequest(), liveCtx());
+  } finally {
+    console.warn = original;
+  }
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /match/);
+  assert.match(calls[0], new RegExp(REMOTE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("SERVICE SILENT with the remote down and a rejecting cache yields the join identity, not a fault", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const down = async () => new Response("down", { status: 502 });
+  const resolveRejectingCache = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch: down,
+    cache: rejectingMatchCache(),
+    cacheTtlSeconds: 60,
+  });
+  const resolveNoCache = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: down });
+  const engine = new QueryEngine();
+  const silentRejectingCache = await engine.selectAsync(
+    dataset(),
+    FEDERATED().replace("SERVICE <", "SERVICE SILENT <"),
+    { resolveService: resolveRejectingCache, catalog },
+  );
+  const silentNoCache = await engine.selectAsync(
+    dataset(),
+    FEDERATED().replace("SERVICE <", "SERVICE SILENT <"),
+    { resolveService: resolveNoCache, catalog },
+  );
+  assert.equal(silentRejectingCache.rowCount, silentNoCache.rowCount);
+  assert.deepEqual(summarizeRows(silentRejectingCache.rows), summarizeRows(silentNoCache.rows));
+
+  // The neighbour: without SILENT, the same setup still fails the query on the remote's own
+  // failure — the cache's rejection never turns into the query's error, nor hides the real one.
+  const error = await rejection(
+    engine.queryAsync(dataset(), FEDERATED(), { resolveService: resolveRejectingCache, catalog }),
+  );
+  assert.match(error.message, /HTTP 502/);
 });
 
 // ---------------------------------------------------------------------------

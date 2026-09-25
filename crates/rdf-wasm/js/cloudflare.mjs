@@ -158,14 +158,27 @@ function bindingsOption(value, caller) {
   return bindings;
 }
 
+/**
+ * The default `onCacheError`: the cache is an optimisation, so its own failure is never
+ * the query's answer, but it must never be silent either. One `console.warn` line names
+ * the operation and the endpoint whose answer was still served (or fetched fresh);
+ * Workers routes `console.warn` to its logs, so this is visible without any host wiring.
+ */
+function defaultCacheErrorReporter(error, { operation, endpoint }) {
+  console.warn(`createFetchServiceResolver: cache ${operation} failed for <${endpoint}>: ${errorText(error)}`);
+}
+
 function cacheOptions(source, caller) {
-  const { cache, cacheTtlSeconds, waitUntil } = source;
+  const { cache, cacheTtlSeconds, waitUntil, onCacheError } = source;
   if (!isPresent(cache)) {
     if (isPresent(cacheTtlSeconds)) {
       throw new TypeError(`${caller}: cacheTtlSeconds needs cache; without one it caches nothing`);
     }
     if (isPresent(waitUntil)) {
       throw new TypeError(`${caller}: waitUntil defers cache writes and needs cache`);
+    }
+    if (isPresent(onCacheError)) {
+      throw new TypeError(`${caller}: onCacheError reports cache failures and needs cache`);
     }
     return undefined;
   }
@@ -181,10 +194,16 @@ function cacheOptions(source, caller) {
   if (isPresent(waitUntil) && typeof waitUntil !== "function") {
     throw new TypeError(`${caller}: waitUntil must be a function, e.g. (p) => ctx.waitUntil(p)`);
   }
+  if (isPresent(onCacheError) && typeof onCacheError !== "function") {
+    throw new TypeError(
+      `${caller}: onCacheError must be a function, (error, { operation, endpoint }) => void`,
+    );
+  }
   return {
     cache,
     ttl: positiveInteger(cacheTtlSeconds, "cacheTtlSeconds", caller),
     waitUntil: isPresent(waitUntil) ? waitUntil : undefined,
+    onCacheError: isPresent(onCacheError) ? onCacheError : defaultCacheErrorReporter,
   };
 }
 
@@ -365,13 +384,21 @@ async function cacheKey(request) {
  * `Authorization`, `Cookie` or `Proxy-Authorization` header, or any credential the
  * catalog profile sets — is refused with a `TypeError` rather than answered from or
  * written to a shared cache.
+ *
+ * The cache is an optimisation and never decides the answer: a `cache.match` rejection
+ * is treated as a miss (the request still goes to the remote), and a `cache.put` failure
+ * never discards an answer the remote already returned — with `waitUntil` the rejected
+ * put is still handed to it, and without one the put is awaited inside a `try`, so either
+ * way the answer is returned regardless. Every cache failure is reported through
+ * `onCacheError(error, { operation: "match" | "put", endpoint })`, which defaults to one
+ * `console.warn` line (Workers routes it to logs) so a failure is visible, never silent.
  */
 export function createFetchServiceResolver(options) {
   const caller = "createFetchServiceResolver";
   const source = plainObject(options, `${caller} options`);
   refuseUnknownKeys(
     source,
-    ["catalog", "fetch", "bindings", "timeoutMs", "cache", "cacheTtlSeconds", "waitUntil"],
+    ["catalog", "fetch", "bindings", "timeoutMs", "cache", "cacheTtlSeconds", "waitUntil", "onCacheError"],
     caller,
   );
   const catalog = requireCatalog(source.catalog, caller);
@@ -395,7 +422,13 @@ export function createFetchServiceResolver(options) {
         );
       }
       key = await cacheKey(request);
-      const hit = await caching.cache.match(key);
+      let hit;
+      try {
+        hit = await caching.cache.match(key);
+      } catch (error) {
+        caching.onCacheError(error, { operation: "match", endpoint: request.endpoint });
+        hit = undefined;
+      }
       if (hit) return new Uint8Array(await hit.arrayBuffer());
     }
     const answer = await exchange({
@@ -422,9 +455,19 @@ export function createFetchServiceResolver(options) {
           ["Cache-Control", `max-age=${caching.ttl}`],
         ],
       });
-      const put = caching.cache.put(key, stored);
-      if (caching.waitUntil !== undefined) caching.waitUntil(put);
-      else await put;
+      // `cache.put` never decides the answer: a failure — sync throw or rejection — is
+      // reported, never discards `answer.bytes`, which the remote already returned.
+      let put;
+      try {
+        put = Promise.resolve(caching.cache.put(key, stored));
+      } catch (error) {
+        put = Promise.reject(error);
+      }
+      const reportedPut = put.catch((error) => {
+        caching.onCacheError(error, { operation: "put", endpoint: request.endpoint });
+      });
+      if (caching.waitUntil !== undefined) caching.waitUntil(reportedPut);
+      else await reportedPut;
     }
     return answer.bytes;
   };

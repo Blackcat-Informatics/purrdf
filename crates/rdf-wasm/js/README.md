@@ -478,7 +478,7 @@ until the module is instantiated again in a fresh page, Worker isolate or proces
 `@blackcatinformatics/purrdf/cloudflare` builds a SPARQL 1.1 Protocol endpoint from these
 pieces:
 
-- `createFetchServiceResolver({ catalog, timeoutMs, fetch?, bindings?, cache?, cacheTtlSeconds?, waitUntil? })`
+- `createFetchServiceResolver({ catalog, timeoutMs, fetch?, bindings?, cache?, cacheTtlSeconds?, waitUntil?, onCacheError? })`
   returns a `resolveService` that POSTs each request with `fetch`, or through the
   service binding registered for the endpoint's origin, always with `redirect: "manual"`.
   A network error, a timeout or a non-2xx status is reported as `{ kind: "transport" }`,
@@ -487,7 +487,14 @@ pieces:
   never reach an origin the catalog did not authorize. With `cache` and `cacheTtlSeconds`
   it reuses answers through the Cache API, and it refuses a request that carries a
   credential with a `TypeError` (a fault) rather than read it from or write it to a shared
-  cache.
+  cache. The cache is an optimisation and never decides the answer: a `cache.match`
+  rejection (e.g. a workerd Worker with no Cache configured) is treated as a miss, and a
+  `cache.put` failure never discards an answer the remote already returned — with
+  `waitUntil` the failed put is still handed to it, and without one it is awaited inside a
+  `try`. Every cache failure is reported through `onCacheError(error, { operation, endpoint })`,
+  which defaults to one `console.warn` line, so a failure is visible, never silent —
+  including under `SERVICE SILENT`, which still yields the join identity when the remote
+  itself fails, not a fault, regardless of the cache's own health.
 - `createFetchLoadResolver({ catalog, timeoutMs, fetch?, bindings?, maxRedirects? })`
   returns a `resolveLoad` that authorizes each IRI against the catalog and then GETs it,
   also with `redirect: "manual"`. A redirect is followed by hand, up to `maxRedirects`
@@ -555,7 +562,9 @@ exact control for that limit. Every `SERVICE` request and every `LOAD` is charge
 it before it reaches the handler, including one the cache then answers, so a request
 never makes more subrequests than the ceiling. Set it to the subrequests you allow one
 query. The Cache API does nothing on `workers.dev` hostnames, so the `cache` option takes
-effect only on a Worker served from a custom domain.
+effect only on a Worker served from a custom domain — there `cache.match` and `cache.put`
+reject with "No Cache was configured", which is exactly the failure `onCacheError` reports
+while the query still answers from the remote.
 
 ## Scope
 

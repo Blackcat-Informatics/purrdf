@@ -33,6 +33,21 @@ export interface ExecutionContextLike {
   waitUntil(promise: Promise<unknown>): void;
 }
 
+/** Which Cache API call failed, and the `SERVICE` endpoint whose answer it was for. */
+export interface CacheErrorContext {
+  readonly operation: "match" | "put";
+  readonly endpoint: string;
+}
+
+/**
+ * Reports a Cache API failure. The cache is an optimisation: a `match` rejection is
+ * treated as a miss (the request still goes to the remote) and a `put` failure never
+ * discards an answer the remote already returned — this is called either way, so a
+ * failure is never silent. Defaults to one `console.warn` line (Workers routes it to
+ * logs).
+ */
+export type CacheErrorReporter = (error: unknown, context: CacheErrorContext) => void;
+
 /** Service bindings by origin (`"https://example.org"`, no path, no trailing slash). */
 export type ServiceBindings = Readonly<Record<string, ServiceBindingLike>>;
 
@@ -51,6 +66,11 @@ export interface FetchServiceResolverOptions {
   readonly cacheTtlSeconds?: number;
   /** Defers cache writes past the response, e.g. `(p) => ctx.waitUntil(p)`. Needs `cache`. */
   readonly waitUntil?: ExecutionContextLike["waitUntil"];
+  /**
+   * Reports a `cache.match` or `cache.put` failure. Needs `cache`. Defaults to one
+   * `console.warn` line; a cache failure never fails the request or discards an answer.
+   */
+  readonly onCacheError?: CacheErrorReporter;
 }
 
 export interface FetchLoadResolverOptions {
