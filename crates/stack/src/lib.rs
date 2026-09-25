@@ -38,7 +38,7 @@
 //!   whenever it switches onto it and puts the previous context back whenever it switches
 //!   away (see [Switching contexts](#switching-contexts)).
 //! * **native**: the floor is the current thread's stack limit, as the operating system
-//!   reports it — [`platform::stack_floor`] reads `pthread_getattr_np`,
+//!   reports it — `platform::stack_floor` reads `pthread_getattr_np`,
 //!   `pthread_attr_get_np`, `pthread_stackseg_np`, `pthread_get_stackaddr_np` /
 //!   `pthread_get_stacksize_np`, or `GetCurrentThreadStackLimits`, per platform; see that
 //!   module for which targets read which call, and which read nothing. It is read once per

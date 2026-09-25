@@ -340,9 +340,9 @@ jobs:
 
   # Four independent jobs, split from one 30-minute `wasm` job that was being
   # cancelled mid-run (`gh run view --json jobs`, step startedAt/completedAt,
-  # both on this branch and on main). Each of the four groups below was
-  # ALREADY a self-contained build in the old single job -- none of them read
-  # another group's output:
+  # consistently showed the 30-minute timeout hit before every step
+  # finished). Each of the four groups below was ALREADY a self-contained
+  # build in the old single job -- none of them read another group's output:
   #   * `make geo-determinism` / `make hnsw-determinism` build their own
   #     workspace-excluded `cdylib` helper (`crates/geo/determinism`,
   #     `crates/hnsw/determinism`) into a scratch `--target-dir` of their own
