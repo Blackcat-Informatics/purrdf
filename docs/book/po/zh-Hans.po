@@ -622,8 +622,7 @@ msgid ""
 "The MSRV is Rust **1.98** (stable toolchain only; the workspace is nightly-"
 "free by policy)."
 msgstr ""
-"MSRV 为 Rust **1.98**（仅限 stable 工具链；按政策，工作区不含任何 nightly 特"
-"性）。"
+"MSRV 为 Rust **1.98**（仅限 stable 工具链；按政策，工作区不依赖 nightly）。"
 
 #: src/getting-started/rust.md:24
 msgid "Build, freeze, serialize, parse"
@@ -1422,7 +1421,7 @@ msgid ""
 "`crates/rdf-capi/tests/abi.rs`, pins the restored dataset's quoted triple "
 "and reifier binding so a regression in either layer fails there."
 msgstr ""
-"GTS **star 层**往返（对包含引用三元组 / 具体化节点（reifier）绑定的数据集执行 `purrdf_to_gts` → `purrdf_from_gts`）以 `PURRDF_STATUS_OK` 成功，与不含 star 内容的往返相同。C ABI 调用规范的内核路径（`to_gts` → `read_graph` → `import_gts_graph`）；一个特征化测试，即 `crates/rdf-capi/tests/abi.rs` 中的 `gts_star_roundtrip_preserves_the_statement_layer`，固定了恢复后数据集中的引用三元组与具体化节点绑定，因此任一层出现回归都会在那里失败。"
+"GTS **star 层**往返（对包含引用三元组 / 具体化节点（reifier）绑定的数据集执行 `purrdf_to_gts` → `purrdf_from_gts`）以 `PURRDF_STATUS_OK` 成功，与不含 star 内容的往返相同。C ABI 调用的是内核的标准路径（`to_gts` → `read_graph` → `import_gts_graph`）；一个特征化测试，即 `crates/rdf-capi/tests/abi.rs` 中的 `gts_star_roundtrip_preserves_the_statement_layer`，固定了恢复后数据集中的引用三元组与具体化节点绑定，因此任一层出现回归都会在那里失败。"
 
 #: src/getting-started/c.md:125
 msgid ""
@@ -1628,7 +1627,7 @@ msgid ""
 "evaluated natively — the W3C SPARQL 1.2 triple-term surface passes in the "
 "conformance harness ([Conformance & Testing](../project/conformance.md))."
 msgstr ""
-"SPARQL 1.2 的引用三元组语法由 `purrdf-sparql-algebra` 解析并原生求值——W3C SPARQL 1.2 的三元组项接口在一致性测试框架中通过（[一致性与测试](../project/conformance.md)）。"
+"SPARQL 1.2 的引用三元组语法由 `purrdf-sparql-algebra` 解析，求值则以原生方式进行——W3C SPARQL 1.2 的三元组项接口在一致性测试框架中通过（[一致性与测试](../project/conformance.md)）。"
 
 #: src/concepts/rdf12.md:26
 msgid ""
@@ -2526,7 +2525,7 @@ msgid ""
 "datatype, language, and RDF 1.2 direction facets, plus requiredness and an "
 "explicit one-or-many cardinality;"
 msgstr ""
-"谓词列接受精确的 IRI 宾语，或带有精确数据类型、语言与 RDF 1.2 方向刻面的字面量，另加是否必需以及显式的一对一或一对多基数；"
+"谓词列接受精确的 IRI 宾语，或带有精确数据类型、语言与 RDF 1.2 方向刻面的字面量，另加是否必需以及显式的单值或多值基数；"
 
 #: src/concepts/projections.md:145
 msgid ""
@@ -3607,7 +3606,7 @@ msgid ""
 "triple terms use `RdfTermTarget::Triple`; they do not enter a separate "
 "identity system."
 msgstr ""
-"构建遵循唯一一条证据路径。首先，通过构建或独立校验确切的源 pack 获得一个 `CertifiedPurrpckSource`；任意的摘要声明都无法构造该类型。对于语料库，推导出 `CorpusTarget`、`DocumentTarget::from_content` 与 `TextChunkTarget::from_document` 记录，添加所需的层级关系，并为嵌入族矩阵中的每个文档或分块添加一个 `TokenSpan`。对于 RDF，从那个经过校验的 RDF 1.2 数据集推导出数据集、图、陈述、具体化节点、注解与项目标。RDF-star 三元组项使用 `RdfTermTarget::Triple`；它们不进入单独的标识体系。"
+"构建遵循唯一一条证据路径。首先，通过构建或独立校验确切的源 pack 获得一个 `CertifiedPurrpckSource`；任意的摘要声明都无法构造该类型。对于语料库，推导出 `CorpusTarget`、`DocumentTarget::from_content` 与 `TextChunkTarget::from_document` 记录，添加所需的层级关系，并为嵌入族矩阵中的每个文档或分块添加一个 `TokenSpan`。对于 RDF，从那个经过校验的 RDF 1.2 数据集推导出数据集、图、陈述、具体化节点、注解与项的目标。RDF-star 三元组项使用 `RdfTermTarget::Triple`；它们不进入单独的标识体系。"
 
 #: src/concepts/codecs.md:153
 msgid ""
@@ -4133,7 +4132,7 @@ msgstr "情况"
 #: src/concepts/base-iris.md:149 src/validation/shapes-products.md:690
 #: src/validation/shapes-products.md:719
 msgid "What to do"
-msgstr "操作方法"
+msgstr "处理方法"
 
 #: src/concepts/base-iris.md:151
 msgid "a relative reference in a syntax that admits one, with no base in scope"
@@ -4244,7 +4243,7 @@ msgid ""
 "document base emits one when a base is supplied, and relativizes its IRIs "
 "against it:"
 msgstr ""
-"解析在序列化一侧有其镜像。能够表达文档基准的语法，在提供了基准时会输出它，并相对于它对其中的 IRI 进行相对化："
+"IRI 解析（resolution）在序列化一侧有其镜像。能够表达文档基准的语法，在提供了基准时会输出它，并相对于它对其中的 IRI 进行相对化："
 
 #: src/concepts/base-iris.md:185
 msgid "Syntax"
@@ -4374,7 +4373,7 @@ msgid ""
 "`shex`'s shape map and `describe --iri` are deliberately exempt: each has a "
 "command-line-text IRI surface with no document of its own, so `--base` is "
 "never inert there whatever the format rows say."
-msgstr "这一裁决取自格式注册表的 `admits_relative_iri` 与 `emits_base` 两列，因此新注册的语法由它自己的那一行来分类，而不是靠一份手工清单。它适用于 `convert`、`validate`、`reason`、`entails`、`consistency` 与 `project`。`query`、`update`、`shex` 的形状映射以及 `describe --iri` 被有意豁免：它们各自都有一个来自命令行文本、没有自身文档的 IRI 接口，因此无论格式行怎么说，`--base` 在那里都不会是无效的。"
+msgstr "这一裁决取自格式注册表的 `admits_relative_iri` 与 `emits_base` 两列，因此新注册的语法由它自己的那一行来分类，而不是靠一份手工清单。它适用于 `convert`、`validate`、`reason`、`entails`、`consistency` 与 `project`。`query`、`update`、`shex` 的形状映射以及 `describe --iri` 被有意豁免：它们各自都有一个来自命令行文本、没有自身文档的 IRI 接口，因此无论格式行怎么说，`--base` 在那里都绝不会不起作用。"
 
 #: src/concepts/base-iris.md:237
 msgid ""
@@ -4415,7 +4414,7 @@ msgid ""
 "real document, plus bases with trailing slashes, file paths, empty segments "
 "and colon-bearing segments — are vendored under `crates/rdf/tests/corpus/w3c/"
 "{turtle,trig}/iri/` and graded on every run."
-msgstr "RFC 3986 §5.4 的规范性解析表在 `crates/iri/tests/` 中直接针对解析器进行断言。在端到端层面，W3C `rdf-tests` 的 `IRI-resolution-01/02/07/08` 用例——即在真实文档中经由 `@base` 驱动的同一张表，外加带尾部斜杠的基准、文件路径、空段以及含冒号的段——随库固化于 `crates/rdf/tests/corpus/w3c/{turtle,trig}/iri/` 之下，并在每次运行时评分。"
+msgstr "RFC 3986 §5.4 的规范性解析表在 `crates/iri/tests/` 中直接针对 IRI 解析器（resolver）进行断言。在端到端层面，W3C `rdf-tests` 的 `IRI-resolution-01/02/07/08` 用例——即在真实文档中经由 `@base` 驱动的同一张表，外加带尾部斜杠的基准、文件路径、空段以及含冒号的段——随库固化于 `crates/rdf/tests/corpus/w3c/{turtle,trig}/iri/` 之下，并在每次运行时评分。"
 
 #: src/concepts/jsonld.md:8
 msgid "PurRDF has three explicit JSON-LD/YAML-LD serialization modes:"
@@ -7670,7 +7669,7 @@ msgid ""
 "`purrdf-sparql-eval`'s `agg_fn` module docs for the full trust-boundary and "
 "determinism contract, including `into_any`'s role in merging structural "
 "state a fold's finished answer alone cannot reconstruct)."
-msgstr "对未注册 IRI 的 `AGG(<iri>, …)` 调用、参数个数错误的调用，或带有无效 `; NAME=value` scalarval 子句的调用（名称无法识别、名称重复、缺少必需名称或值的类型错误——见下文），都会在查询**预备**时被拒绝——早于任何预算单位的开销——并且预备好的计划携带注册表的指纹，因此在一个注册表下获准的计划，永远不会静默地在另一个注册表下运行（完整的信任边界与确定性契约，包括 `into_any` 在合并折叠最终答案本身无法重建的结构化状态时所起的作用，见 `purrdf-sparql-eval` 的 `agg_fn` 模块文档）。"
+msgstr "对未注册 IRI 的 `AGG(<iri>, …)` 调用、参数个数错误的调用，或带有无效 `; NAME=value` scalarval 子句的调用（名称无法识别、名称重复、缺少必需的名称，或值的类型错误——见下文），都会在查询**预备**时被拒绝——早于任何预算单位的开销——并且预备好的计划携带注册表的指纹，因此在一个注册表下获准的计划，永远不会静默地在另一个注册表下运行（完整的信任边界与确定性契约，包括 `into_any` 在合并折叠最终答案本身无法重建的结构化状态时所起的作用，见 `purrdf-sparql-eval` 的 `agg_fn` 模块文档）。"
 
 #: src/sparql/querying.md:1550
 msgid "Named scalar-value parameters"
@@ -8461,7 +8460,7 @@ msgid ""
 "TSV), the provenance is dropped loudly regardless of `namespace`, per the "
 "loss discipline described in [Slices, Mappings & Provenance](../slices.md)."
 msgstr ""
-"当 `namespace: None` 时，无论 `ResultProvenance` 填充了多少内容，JSON/XML 都完全不输出溯源元素/成员——这与 CSV/TSV 一贯采用的「丢弃并标记」契约相同。在格式完全没有扩展点的地方（CSV/TSV），无论 `namespace` 如何，溯源都会被显式报错丢弃，遵循[切片、映射与溯源](../slices.md)中描述的损失纪律。"
+"当 `namespace: None` 时，无论 `ResultProvenance` 填充了多少内容，JSON/XML 都完全不输出溯源元素/成员——这与 CSV/TSV 一贯采用的「丢弃并标记」契约相同。在格式完全没有扩展点的地方（CSV/TSV），无论 `namespace` 如何，溯源都会被丢弃并显式告知，遵循[切片、映射与溯源](../slices.md)中描述的损失纪律。"
 
 #: src/sparql/results.md:96
 msgid "One term-syntax authority"
@@ -9445,14 +9444,7 @@ msgid ""
 "can change the inferences. An unresolvable `sh:condition` is a load error, "
 "not a rule that silently never fires."
 msgstr ""
-"**SHACL 1.2 推理规则**——`sh:TripleRule` 与 `sh:SPARQLRule`，支持 "
-"`sh:condition`、`sh:layer`、`sh:order`、`sh:runOnce`、`sh:deactivated`、规则"
-"集与 `sh:RulesGraph`、SPARQL 规则模板、临时三元组、`sh:expectedPredicate` 与 "
-"`sh:ruleProcessor`。各层按升序运行。在每一层中，只运行一次的规则先运行一次，"
-"随后迭代规则反复执行，直到某次迭代不再推出任何结果。在一次迭代内，规则按 "
-"`sh:order` 升序运行，相同次序的规则一起运行，每一组都能看到之前各组的推论，因"
-"此交换两条规则的次序可能改变推论。引用无法解析到目标形状的 `sh:condition` 是"
-"加载错误，而不是一条静默地永不触发的规则。"
+"**SHACL 1.2 推理规则**——`sh:TripleRule` 与 `sh:SPARQLRule`，支持 `sh:condition`、`sh:layer`、`sh:order`、`sh:runOnce`、`sh:deactivated`、规则集与 `sh:RulesGraph`、SPARQL 规则模板、临时三元组、`sh:expectedPredicate` 与 `sh:ruleProcessor`。各层按升序运行。在每一层中，只运行一次的规则先运行一次，随后迭代规则反复执行，直到某次迭代不再推出任何结果。在一次迭代内，规则按 `sh:order` 升序运行，相同次序的规则一起运行，每一组都能看到之前各组的推论，因此交换两条规则的次序可能改变推论。无法解析的 `sh:condition` 是加载错误，而不是一条静默地永不触发的规则。"
 
 #: src/validation/shacl.md:61
 msgid ""
@@ -9496,7 +9488,7 @@ msgid ""
 "`sh:SPARQLUpdateExecutable`, but no SHACL specification executes either "
 "class, so in those positions they would otherwise be silently ignored. A "
 "resource that is only such an executable, and that no shape reads, loads."
-msgstr "出现在形状、节点表达式、基于 SPARQL 的约束、验证器或规则上的 `sh:describe` 与 `sh:update`。SHACL 1.2 词汇表把它们声明为 `sh:SPARQLDescribeExecutable` 与 `sh:SPARQLUpdateExecutable` 的查询，但没有任何 SHACL 规范执行这两个类，因此在这些位置上，它们否则会被静默忽略。仅作为此类可执行体、且没有任何形状读取的资源可以加载。"
+msgstr "出现在形状、节点表达式、基于 SPARQL 的约束、验证器或规则上的 `sh:describe` 与 `sh:update`。SHACL 1.2 词汇表把它们声明为 `sh:SPARQLDescribeExecutable` 与 `sh:SPARQLUpdateExecutable` 的查询，但没有任何 SHACL 规范执行这两个类，因此在这些位置上，它们否则会被静默忽略。若某个资源仅仅是此类可执行体，且没有任何形状读取它，则它可以加载。"
 
 #: src/validation/shacl.md:86
 msgid "Two terms the engine used to refuse are now evaluated:"
@@ -9632,14 +9624,7 @@ msgid ""
 "WebAssembly and C-ABI hosts call applies the same rule, so every host agrees "
 "on which shapes graphs are complete."
 msgstr ""
-"**其他**任何没有配对能够解析的 `owl:imports` 都会被拒绝（退出码 1）。拒绝信息"
-"点名每个缺失的 IRI 以及可解析它的 `--import IRI=FILE` 配对，并对导入自身已发"
-"布 IRI 的文档建议使用 `--shapes-base IRI`——W3C 测试向量就是这样的文档，此处从"
-"本地文件读取。缺少被导入文档的验证，是对一个比所指名者更小的形状图作出的裁"
-"决，因此不存在「警告后继续」的路径。导入闭包从未到达的配对会作为未使用而被拒"
-"绝（退出码 2），而不是读入后忽略。WebAssembly 与 C-ABI 宿主所调用的预备产物"
-"（prepared product）打包器应用同一规则，因此每个宿主对哪些形状图是完整的判断"
-"一致。"
+"**其他**任何没有配对能够解析的 `owl:imports` 都会被拒绝（退出码 1）。拒绝信息点名每个缺失的 IRI 以及可解析它的 `--import IRI=FILE` 配对，并对导入自身已发布 IRI 的文档建议使用 `--shapes-base IRI`——W3C 测试向量就是这样的文档，此处从本地文件读取。在缺少被导入文档的情况下进行验证，得出的将是针对一个比所指名者更小的形状图的裁决，因此不存在「警告后继续」的路径。导入闭包从未到达的配对会作为未使用而被拒绝（退出码 2），而不是读入后忽略。WebAssembly 与 C-ABI 宿主所调用的预备产物（prepared product）打包器应用同一规则，因此每个宿主对哪些形状图是完整的判断一致。"
 
 #: src/validation/shacl.md:173
 msgid "Prefixes in SHACL-SPARQL queries"
@@ -9887,7 +9872,7 @@ msgstr ""
 
 #: src/validation/shacl.md:281
 msgid "Ontology-complete developer schemas"
-msgstr "本体完整的开发者模式"
+msgstr "本体完整的开发者模式（schema）"
 
 #: src/validation/shacl.md:283
 msgid ""
@@ -9952,7 +9937,7 @@ msgid ""
 "lists, contradictory property kinds/ranges, key collisions, and limit "
 "exhaustion are typed failures."
 msgstr ""
-"`SchemaCoverageReport` 对每个收录的属性恰好计入一次（包括被排除的属性），并附有排序后的逐类结果与源公理溯源。`SchemaCompileRequest::coverage_report` 可以在输出之前生成它。请求缓存键绑定形状图与本体图的 RDFC-1.0 标识、调用方命名空间、模式、值词汇标记、编译器/策略盐值，以及固定上限：65,536 个属性、65,536 个类、1,048,576 个关系或覆盖单元格，以及表达式深度 64。格式错误的 OWL 列表、相互矛盾的属性种类/值域、键冲突以及上限耗尽，都是带类型的失败。"
+"`SchemaCoverageReport` 对每个收录的属性恰好计入一次（包括被排除的属性），并附有排序后的逐类结果与源公理溯源。`SchemaCompileRequest::coverage_report` 可以在输出之前生成它。请求缓存键绑定形状图与本体图的 RDFC-1.0 标识、调用方命名空间、模式（mode）、值词汇标记、编译器/策略盐值，以及固定上限：65,536 个属性、65,536 个类、1,048,576 个关系或覆盖单元格，以及表达式深度 64。格式错误的 OWL 列表、相互矛盾的属性种类/值域、键冲突以及上限耗尽，都是带类型的失败。"
 
 #: src/validation/shacl.md:325
 msgid "Run the complete two-mode and four-emitter example with:"
@@ -10516,11 +10501,7 @@ msgid ""
 "Core makes well-formed is marked `superseded` and is not a finding, but only "
 "when the loader accepted the graph."
 msgstr ""
-"`shacl-shacl`：依据随库固化的 `shacl-shacl.ttl` 验证形状图所得的每条结果。该"
-"文件早于SHACL 1.2 Core 的部分放宽（`sh:closed sh:ByTypes`、取列表值的 "
-"`sh:nodeKind`、以路径为值的 `sh:equals`、以节点表达式给出的 "
-"`sh:targetNode`）。若某条结果所指出的构造在 SHACL 1.2 Core 中是良构的，该结果"
-"会被标记为 `superseded`，不算作问题，但仅在加载器接受了该图时如此。"
+"`shacl-shacl`：依据随库固化的 `shacl-shacl.ttl` 验证形状图所得的每条结果。该文件早于 SHACL 1.2 Core 的部分放宽（`sh:closed sh:ByTypes`、取列表值的 `sh:nodeKind`、以路径为值的 `sh:equals`、以节点表达式给出的 `sh:targetNode`）。若某条结果所指出的构造在 SHACL 1.2 Core 中是良构的，该结果会被标记为 `superseded`，不算作问题，但仅在加载器接受了该图时如此。"
 
 #: src/validation/shacl.md:606
 msgid ""
@@ -11553,7 +11534,7 @@ msgid ""
 "write — is byte-identical to what a build that had never heard of "
 "implementation identities would produce."
 msgstr ""
-"缺失的身份是空字节串，并且编码后不占任何内容：三个宿主行仍然只是单纯的声明指纹。正因如此，没有任何注入的产物——也就是上述路径写出的每个产物——与一个从未听说过实现身份的构建所产生的结果逐字节相同。"
+"缺失的身份是空字节串，并且编码后不占任何内容：三个宿主行仍然只是单纯的声明指纹。正因如此，未注入任何内容的产物——也就是上述路径写出的每个产物——与一个从未听说过实现身份的构建所产生的结果逐字节相同。"
 
 #: src/validation/shapes-products.md:555
 msgid "Corroborating a product"
@@ -12910,7 +12891,7 @@ msgid ""
 "which is what the five mechanisms beyond the rule table exist for (see "
 "[Conformance](#conformance))."
 msgstr ""
-"物化回答的是「这个前提蕴涵什么？」。下面三个服务回答的是「这个前提是否蕴涵*那个*？」，这是另一个问题，而不是它看起来那样在推理闭包中做成员测试：结论中的空节点是必须被*映射*的存在量词，不相容的前提蕴涵一切，找不到映射并不说明任何问题，除非规则集对其所运行的前提是完备的——而且一个结论可以被蕴涵，却根本不出现在闭包中，这正是规则表之外那五种机制存在的原因（参见[一致性](#一致性)）。"
+"物化回答的是「这个前提蕴涵什么？」。下面三个服务回答的是「这个前提是否蕴涵*那个*？」，这是另一个问题，而不是它看起来那样在推理闭包中做成员测试：结论中的空节点是必须被*映射*的存在量词，不相容的前提蕴涵一切，找不到映射并不说明任何问题，除非规则集对其所运行的前提是完备的——而且一个结论可以被蕴涵，却根本不出现在闭包中，这正是规则表之外那五种判定手段（mechanism）存在的原因（参见[一致性](#一致性)）。"
 
 #: src/entailment.md:83
 msgid ""
@@ -13061,14 +13042,14 @@ msgid ""
 "not `scm-*` derives one — and over the constructs the mechanisms beyond the "
 "table decide, for which the closure the rows are drawn from holds nothing."
 msgstr ""
-"模式是在任意位置（包括**谓词**位置）带有 `?name`（或 `$name`）的 N-Triples。RDF 把该位置保留给 IRI，因此边界的做法是：把每个变量改写为取自某个命名空间的项——该命名空间已从调用方自己的文本中清扫排除——之后再把每次出现映射回来；该命名空间的任何内容都不会出现在结果行、绑定或报告中。唯一不接受变量的位置是字面量的**数据类型**：`\"5\"^^?d` 要求在一个存放 IRI 而非项的位置上进行绑定，它会被点名拒绝——替身绝不能留在那里，否则它匹配的是边界自己的命名空间，而不是调用方的数据。谓词变量与其他变量一样被投影；在 `owl-rl` 下，它还会产生一个 `limit`：它的取值范围是整个谓词词汇表，因此也涵盖定理 PR1 的结论假设所排除的模式谓词——无论 `scm-*` 是否推出了某个结论，规则表都不对它们声称完备性——并涵盖由规则表之外的机制所判定的构造，而结果行所取自的推理闭包对这些构造不含任何内容。"
+"模式是在任意位置（包括**谓词**位置）带有 `?name`（或 `$name`）的 N-Triples。RDF 把该位置保留给 IRI，因此边界的做法是：把每个变量改写为取自某个命名空间的项（该命名空间由边界扫描调用方自己的文本后划出），之后再把每次出现映射回来；该命名空间的任何内容都不会出现在结果行、绑定或报告中。唯一不接受变量的位置是字面量的**数据类型**：`\"5\"^^?d` 要求在一个存放 IRI 而非项的位置上进行绑定，它会被点名拒绝——替身绝不能留在那里，否则它匹配的是边界自己的命名空间，而不是调用方的数据。谓词变量与其他变量一样被投影；在 `owl-rl` 下，它还会产生一个 `limit`：它的取值范围是整个谓词词汇表，因此也涵盖定理 PR1 的结论假设所排除的 schema 谓词——无论 `scm-*` 是否推出了某个结论，规则表都不对它们声称完备性——并涵盖由规则表之外的判定手段所判定的构造，而结果行所取自的推理闭包对这些构造不含任何内容。"
 
 #: src/entailment.md:135
 msgid ""
 "Every answer arrives with the certificate of the run underneath it — the "
 "same `purrdf-reasoning-report` block a materialization renders, plus a "
 "`mechanism` line naming which of the six reached the verdict."
-msgstr "每个答案都附带其背后那次运行的证书——与物化所输出的相同的 `purrdf-reasoning-report` 块，外加一行 `mechanism`，指明是六种机制中的哪一种得出了裁决。"
+msgstr "每个答案都附带其背后那次运行的证书——与物化所输出的相同的 `purrdf-reasoning-report` 块，外加一行 `mechanism`，指明是六种判定手段中的哪一种得出了裁决。"
 
 #: src/entailment.md:139
 msgid "Rule coverage"
@@ -13441,7 +13422,7 @@ msgid ""
 "nothing about the OWL 2 RL rule table. Every one of the 4 divergences is "
 "named in a typed ledger; an unledgered divergence, and a ledgered case that "
 "has started agreeing, are both hard failures."
-msgstr "**W3C OWL 2 测试套件——262 个用例中 258 个一致，4 例入台账**，未入台账者为零。这份语料是*相容性*（consistency）形态的：全部 262 个随库固化的用例都是 `otest:ConsistencyTest`（226 个）或 `otest:InconsistencyTest`（36 个）。因此它评判的是 DL/tableau 通道的可满足性裁决，对 OWL 2 RL 规则表则什么也没有说明。4 个分歧中的每一个都在一个带类型的台账中点名列出；未入台账的分歧，以及已入台账却开始一致的用例，都是硬失败。"
+msgstr "**W3C OWL 2 测试套件——262 个用例中 258 个裁决一致，4 例入台账**，未入台账者为零。这份语料是*相容性*（consistency）形态的：全部 262 个随库固化的用例都是 `otest:ConsistencyTest`（226 个）或 `otest:InconsistencyTest`（36 个）。因此它评判的是 DL/tableau 通道的可满足性裁决，对 OWL 2 RL 规则表则什么也没有说明。4 个分歧中的每一个都在一个带类型的台账中点名列出；未入台账的分歧，以及已入台账却开始一致的用例，都是硬失败。"
 
 #: src/entailment.md:310
 msgid ""
@@ -13594,7 +13575,7 @@ msgid ""
 "manifest does not inline, so it is vendored beside the cases from W3C's own "
 "URL and supplied to `entails()` as caller-owned configuration. The library "
 "still fetches nothing."
-msgstr "最后一个用例根本不需要任何机制，只需要其前提所点名的那份文档：`webont-imports-011` 通过 `owl:imports` 导入了一个上游清单未内联的支持本体，因此它从 W3C 自己的 URL 获取后随库固化在这些用例旁边，并作为调用方持有的配置提供给 `entails()`。该库仍然不获取任何内容。"
+msgstr "最后一个用例根本不需要任何判定手段，只需要其前提所点名的那份文档：`webont-imports-011` 通过 `owl:imports` 导入了一个上游清单未内联的支持本体，因此它从 W3C 自己的 URL 获取后随库固化在这些用例旁边，并作为调用方持有的配置提供给 `entails()`。该库仍然不获取任何内容。"
 
 #: src/entailment.md:409
 msgid ""
@@ -13608,7 +13589,7 @@ msgid ""
 "minted triples and the closure triples that license them) and its own "
 "checker that re-decides the whole thing without running a reasoner."
 msgstr ""
-"清单本身没有任何变动：`rules(Regime::OwlRl)` 与 `implemented(Regime::OwlRl)` 仍然恰好是同样的 78 条，`extensions(Regime::OwlRl)` 仍然只有那一条 `ext-eq-diff-sym`，严格的 `Materialization::OwlRl` 输出也与原来逐字节相同。变动的是证据——每种机制都带有自己的 `EntailmentWarrant` 分支，携带它实际使用的内容（触发的那条以 `false`\\-concluding（以其为结论）的规则及一个最小的蕴涵前提子集；被冻结的常量、规则体与规则头；生成的三元组以及许可它们的推理闭包三元组），以及它自己的检查器，无需运行推理机即可重新判定全部内容。"
+"清单本身没有任何变动：`rules(Regime::OwlRl)` 与 `implemented(Regime::OwlRl)` 仍然恰好是同样的 78 条，`extensions(Regime::OwlRl)` 仍然只有那一条 `ext-eq-diff-sym`，严格的 `Materialization::OwlRl` 输出也与原来逐字节相同。变动的是证据——每种判定手段都带有自己的 `EntailmentWarrant` 分支，携带它实际使用的内容（触发的那条以 `false` 为结论的规则，以及一个能蕴涵该结论的最小前提子集；被冻结的常量、规则体与规则头；生成的三元组以及许可它们的推理闭包三元组），以及它自己的检查器，无需运行推理机即可重新判定全部内容。"
 
 #: src/entailment.md:419
 msgid ""
@@ -13698,7 +13679,7 @@ msgid ""
 "change how many times the table is run and what its `false` is read as, not "
 "what the table states."
 msgstr ""
-"这 50 个中有 15 个，是通过某种机制到达的；这些机制之所以存在，是因为规则表无法**判定**任何该形态的结论：反驳、冻结后 chase、概括（comprehension）、自反性以及数据类型包含，每一种都在 `purrdf_entail::EntailmentMechanism` 上有文档说明。它们**都不**增加规则，这就是本清单与它们出现之前逐字节相同的原因——它们改变的是规则表被运行多少次以及其 `false` 被如何解读，而不是规则表陈述了什么。"
+"这 50 个中有 15 个，是通过某种判定手段到达的；这些判定手段之所以存在，是因为规则表无法**判定**任何该形态的结论：反驳、冻结后 chase、概括（comprehension）、自反性以及数据类型包含，每一种都在 `purrdf_entail::EntailmentMechanism` 上有文档说明。它们**都不**增加规则，这就是本清单与它们出现之前逐字节相同的原因——它们改变的是规则表被运行多少次以及其 `false` 被如何解读，而不是规则表陈述了什么。"
 
 #: src/entailment-rules.md:47
 msgid ""
@@ -13832,7 +13813,7 @@ msgstr "`rdfD1`"
 #: src/entailment-rules.md:96 src/entailment-rules.md:102
 #: src/entailment-rules.md:103 src/entailment-rules.md:104
 msgid "RDF 1.2 Semantics §8.1.1 (RDF patterns)"
-msgstr "RDF 1.2 Semantics §8.1.1（RDF 模式）"
+msgstr "RDF 1.2 Semantics §8.1.1（RDF patterns）"
 
 #: src/entailment-rules.md:95 src/entailment-rules.md:103
 msgid "`rdfD1a`"
@@ -13859,7 +13840,7 @@ msgstr "`rdfs1`"
 #: src/entailment-rules.md:117 src/entailment-rules.md:118
 #: src/entailment-rules.md:119
 msgid "RDF 1.2 Semantics §9.2.1 (RDFS patterns)"
-msgstr "RDF 1.2 Semantics §9.2.1（RDFS 模式）"
+msgstr "RDF 1.2 Semantics §9.2.1（RDFS patterns）"
 
 #: src/entailment-rules.md:106
 msgid "`rdfs2`"
@@ -14369,7 +14350,7 @@ msgid ""
 "Per-key rows keep insertion order; the arrangement is sorted; no map "
 "iteration order reaches an output path."
 msgstr ""
-"每个键下的行保持插入顺序；排列是有序的；任何映射的迭代顺序都不会到达输出路径。"
+"每个键下的行保持插入顺序；arrangement（排布）是已排序的；任何映射的迭代顺序都不会到达输出路径。"
 
 #: src/datalog.md:53
 msgid ""
@@ -15073,7 +15054,7 @@ msgid ""
 "consumed once; call `result.free()` when abandoning a result before "
 "exhaustion."
 msgstr ""
-"SELECT 行在 wasm 边界两侧是单一所有者且惰性的。可以迭代 `result.rows`，调用 `result.rows.take(index)` 按索引消费，或调用 `result.rows.toArray()` 物化剩余的行。一行只能被消费一次；在耗尽之前放弃某个结果时，应调用 `result.free()`。"
+"SELECT 行在跨越 wasm 边界时是单一所有者且惰性的。可以迭代 `result.rows`，调用 `result.rows.take(index)` 按索引消费，或调用 `result.rows.toArray()` 物化剩余的行。一行只能被消费一次；在耗尽之前放弃某个结果时，应调用 `result.free()`。"
 
 #: src/interop/rdfjs.md:87
 msgid ""
@@ -16383,7 +16364,7 @@ msgstr ""
 
 #: src/project/diagnostic-codes.md:59
 msgid "The producing stream is inconsistent; regenerate it."
-msgstr "生成该流的一方不一致；请重新生成该流。"
+msgstr "产生这些事件的流不一致；请重新生成该流。"
 
 #: src/project/diagnostic-codes.md:60
 msgid "`native-codec-unbound-triple-term`"
@@ -16490,7 +16471,7 @@ msgid ""
 "The deterministic dataset-IRI `derived` mode could not derive a prefix (an "
 "invalid IRI, or a null mapping)."
 msgstr ""
-"确定性的数据集 IRI `derived` 模式无法推导出前缀（无效的 IRI，或空映射）。"
+"确定性的数据集 IRI `derived` 模式无法推导出前缀（无效的 IRI，或 null 映射）。"
 
 #: src/project/diagnostic-codes.md:75
 msgid "Correct the IRI the prefix would be derived from."
@@ -17123,7 +17104,7 @@ msgid ""
 "witnesses: a relation walking the closure could return a minted blank node "
 "the regime's scoping graph does not contain."
 msgstr ""
-"从推理闭包派生的属性函数关系，不能与一次 OWL Direct-Semantics 运行组合使用——若该运行的受限 chase 生成了存在性见证：遍历闭包的关系可能返回一个生成的空节点，而该机制的作用域图并不包含它。"
+"从推理闭包派生的属性函数关系，不能与其受限 chase 生成了存在性见证的 OWL Direct-Semantics 运行组合使用：遍历闭包的关系可能返回一个生成的空节点，而该机制的作用域图并不包含它。"
 
 #: src/project/diagnostic-codes.md:159
 msgid ""
