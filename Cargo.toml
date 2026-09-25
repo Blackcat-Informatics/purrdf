@@ -197,7 +197,6 @@ structured-zstd = "0.0.49"
 # are byte-reproducible. wasm32-unknown-unknown-clean.
 fastrand = "2"
 tempfile = "3"
-time = { version = "0.3", features = ["formatting", "parsing"] }
 # Unicode normalization (Unicode Annex UAX 15). The text index normalizes every
 # literal BEFORE it segments it: a decomposed combining mark is its own scalar,
 # and the word-boundary rules of UAX 29 would otherwise split it off the base
