@@ -53,6 +53,7 @@ const HANDLER_KEYS = [
   "yieldEveryPolls",
   "stackBytes",
   "maxRequestBytes",
+  "onInternalError",
 ];
 
 // RFC 9110 §15 reason phrases: an `about:blank` problem's `title` is its status's phrase
@@ -140,6 +141,22 @@ function fetchOption(value, caller) {
   return fetchImpl;
 }
 
+/**
+ * `onInternalError(error, { correlationId, request })`, defaulting to
+ * `defaultInternalErrorReporter`. It is the one place this module ever writes an internal
+ * error's real message (or a broken `resolveService`/`resolveLoad`'s own exception) —
+ * never the HTTP response, which gets a generic detail and the same `correlationId`.
+ */
+function internalErrorOption(value, caller) {
+  if (!isPresent(value)) return defaultInternalErrorReporter;
+  if (typeof value !== "function") {
+    throw new TypeError(
+      `${caller}: onInternalError must be a function, (error, { correlationId, request }) => void`,
+    );
+  }
+  return value;
+}
+
 /** `bindings`: an object mapping an origin (`https://host[:port]`) to a service binding. */
 function bindingsOption(value, caller) {
   const bindings = new Map();
@@ -177,6 +194,18 @@ function bindingsOption(value, caller) {
  */
 function defaultCacheErrorReporter(error, { operation, endpoint }) {
   console.warn(`createFetchServiceResolver: cache ${operation} failed for <${endpoint}>: ${errorText(error)}`);
+}
+
+/**
+ * The default `onInternalError`: every error this module refuses to describe to an HTTP
+ * client — a bug in a host-supplied `resolveService`/`resolveLoad`, or any exception
+ * `handleSparqlRequest` did not otherwise classify — is still never silent. One
+ * `console.error` line carries the error itself (so its stack prints, exactly as an
+ * uncaught exception's would) and the `correlationId` the response body also carries, so
+ * the two are joinable from a Worker's own logs.
+ */
+function defaultInternalErrorReporter(error, { correlationId }) {
+  console.error(error, correlationId);
 }
 
 function cacheOptions(source, caller) {
@@ -649,12 +678,14 @@ function handlerOptions(options) {
   for (const key of ["resolveService", "resolveLoad", "catalog", "localServices", "yieldEveryPolls", "stackBytes"]) {
     if (isPresent(source[key])) host[key] = source[key];
   }
+  const onInternalError = internalErrorOption(source.onInternalError, caller);
   return {
     engine: source.engine,
     dataset: source.dataset,
     governors: { ...governors },
     cors,
     maxRequestBytes,
+    onInternalError,
     host,
   };
 }
@@ -794,6 +825,69 @@ function failure(error, signal, headers) {
   );
 }
 
+/**
+ * Report `error` through `onInternalError` with a fresh correlation id, and return the
+ * id: the one thing the response is allowed to carry back to the client, so an operator
+ * can join what the client saw to what the log actually says.
+ */
+function reportInternalError(error, onInternalError, request) {
+  const correlationId = crypto.randomUUID();
+  onInternalError(error, { correlationId, request });
+  return correlationId;
+}
+
+/**
+ * The `500` problem for an error this module never puts in front of a client: a fixed
+ * detail plus `correlationId`, never `error.message` or `error.stack` — those went to
+ * `onInternalError` alone (see `reportInternalError`), which is the only place a fault's
+ * real words, or an unexpected exception's, are ever written.
+ */
+function internalErrorProblem(correlationId, headers) {
+  return problem(
+    500,
+    `internal error; see the Worker log for correlation id ${correlationId}`,
+    { code: "InternalError", correlationId },
+    headers,
+  );
+}
+
+/**
+ * Wrap a host-supplied `resolveService`/`resolveLoad` so that a bug in *it* — a throw, a
+ * rejection — never reaches the client as its own words, while still reaching the engine
+ * as exactly the fault it always was. `./pkg/purrdf_jspi.mjs` already treats a throwing or
+ * rejecting resolver as a fault, latched on the job: a fault is about this endpoint's own
+ * correctness, never the remote's, so `SERVICE SILENT`/`LOAD SILENT` — a promise about the
+ * *remote*, "it may be unreachable" — does not, and must not, swallow it. That invariant
+ * has to survive this wrapper, so it never *answers* the effect with a value (a
+ * `{ kind: "transport" }` failure is exactly the shape `SILENT` swallows, which would turn
+ * a host bug into a quietly incomplete `200`). Instead the real error goes to
+ * `onInternalError` with a fresh correlation id, and a sanitized `Error` carrying only
+ * that id is re-thrown — the same throw the host's own bug would have produced, so it
+ * becomes the same non-silenceable fault it always did, just with the host's words
+ * replaced before they ever reach Rust. `sawFault` reports whether this ever fired, and
+ * with which id, so the catch around the twin call — which a fault always reaches,
+ * `SILENT` or not, because a fault rejects the whole job — can answer `500` with that same
+ * id rather than whatever text the engine built around the sanitized message.
+ *
+ * A `handler` that is not a function (the option was never given) passes through
+ * unchanged: `undefined` must stay `undefined`, or the engine would believe a handler was
+ * configured when none was.
+ */
+function wrapHostHandler(handler, onInternalError, request) {
+  if (typeof handler !== "function") return { handler, sawFault: () => undefined };
+  let fault;
+  const wrapped = async (effectRequest, ctx) => {
+    try {
+      return await handler(effectRequest, ctx);
+    } catch (error) {
+      const correlationId = reportInternalError(error, onInternalError, request);
+      fault = { correlationId };
+      throw new Error(`internal error; see the Worker log for correlation id ${correlationId}`);
+    }
+  };
+  return { handler: wrapped, sawFault: () => fault };
+}
+
 /** The `413` problem for a request body over `maxRequestBytes`, in the adapter's own shape. */
 function bodyTooLarge(maxRequestBytes, headers) {
   return problem(
@@ -861,11 +955,17 @@ async function boundedRequestBody(request, maxRequestBytes, headers) {
  * format that can carry the result; `413` when the body exceeds `maxRequestBytes`; `422`
  * when a deterministic ceiling (fuel, answers, intermediate cells, scratch bytes, remote
  * requests) stopped it; `503` when the deadline or a cancellation did (with no
- * `Retry-After`: the same request would stop again); `500` when evaluation failed. Never a
- * `200` with a partial body. Every error is an RFC 9457 `application/problem+json`
- * document (`type: "about:blank"`, `title`, `status`, `detail`, and `code` — the refusal's
- * stable name — plus `parameter`, `dimension`, `limit`, `consumed`, `estimate` where they
- * apply). Every evaluated response carries `Server-Timing` from the job's `evidence.async`.
+ * `Retry-After`: the same request would stop again); `500` when evaluation failed — with
+ * the engine's own words in `detail`, exactly as a SPARQL client is owed the reason its
+ * query failed — or, for an error this module cannot attribute to the query itself (a bug
+ * in a host-supplied `resolveService`/`resolveLoad`, or an unexpected exception anywhere
+ * in this adapter), a fixed generic `detail` and a `correlationId` instead: the real error
+ * goes to `onInternalError(error, { correlationId, request })` (one `console.error` line
+ * by default) and never into the response. Never a `200` with a partial body. Every error
+ * is an RFC 9457 `application/problem+json` document (`type: "about:blank"`, `title`,
+ * `status`, `detail`, and `code` — the refusal's stable name — plus `parameter`,
+ * `dimension`, `limit`, `consumed`, `estimate`, `correlationId` where they apply). Every
+ * evaluated response carries `Server-Timing` from the job's `evidence.async`.
  *
  * The operation text is parsed exactly once on the success path: without dataset
  * parameters it goes to the engine exactly as the request carried it (the engine takes
@@ -896,86 +996,132 @@ export async function handleSparqlRequest(request, options) {
     return new Response(null, { status: 204, headers: preflight });
   }
   const headers = [...cors, ...vary];
-  const url = new URL(request.url);
-  const bounded = await boundedRequestBody(request, o.maxRequestBytes, headers);
-  if (bounded.response !== undefined) return bounded.response;
-  const body = bounded.value;
-  const parsed = protocolStep(
-    () =>
-      SparqlProtocolRequest.parse(
-        request.method,
-        request.headers.get("Content-Type") ?? undefined,
-        url.search === "" ? undefined : url.search.slice(1),
-        body,
-      ),
-    headers,
-    o.cors,
-  );
-  if (parsed.response !== undefined) return parsed.response;
-  const operation = parsed.value;
+  // Everything below is either an already-classified refusal (`protocolStep`,
+  // `reclassifiedFailure`, `trippedProblem`) or a `500`: nothing past this point may ever
+  // let an exception escape as anything but a problem response. An error this catch
+  // reaches unclassified — a bug in this adapter, or `protocolStep` re-throwing something
+  // that was never a protocol refusal — is exactly `handleSparqlRequest`'s own version of
+  // "a host bug", so it gets the same generic detail and correlation id as one.
   try {
-    // Parsed exactly once on the success path (see the docstring above): without dataset
-    // parameters `operation.text` already IS the effective text — Rust never splices when
-    // there is nothing to splice — so it is handed to the engine unparsed by this module,
-    // and the engine's own parse is the only one that ever runs. With dataset parameters
-    // the splice needs its own parse first, to rewrite the `FROM`/`USING` clause.
-    let text;
-    if (operation.hasDatasetParameters) {
-      const spliced = protocolStep(() => operation.effectiveText(), headers, o.cors);
-      if (spliced.response !== undefined) return spliced.response;
-      text = spliced.value;
-    } else {
-      text = operation.text;
-    }
-    const host = { ...o.host, signal: request.signal };
-    if (operation.kind === "update") {
-      const { maxAnswers: _queryOnly, ...governors } = o.governors;
+    const url = new URL(request.url);
+    const bounded = await boundedRequestBody(request, o.maxRequestBytes, headers);
+    if (bounded.response !== undefined) return bounded.response;
+    const body = bounded.value;
+    const parsed = protocolStep(
+      () =>
+        SparqlProtocolRequest.parse(
+          request.method,
+          request.headers.get("Content-Type") ?? undefined,
+          url.search === "" ? undefined : url.search.slice(1),
+          body,
+        ),
+      headers,
+      o.cors,
+    );
+    if (parsed.response !== undefined) return parsed.response;
+    const operation = parsed.value;
+    try {
+      // Parsed exactly once on the success path (see the docstring above): without dataset
+      // parameters `operation.text` already IS the effective text — Rust never splices when
+      // there is nothing to splice — so it is handed to the engine unparsed by this module,
+      // and the engine's own parse is the only one that ever runs. With dataset parameters
+      // the splice needs its own parse first, to rewrite the `FROM`/`USING` clause.
+      let text;
+      if (operation.hasDatasetParameters) {
+        const spliced = protocolStep(() => operation.effectiveText(), headers, o.cors);
+        if (spliced.response !== undefined) return spliced.response;
+        text = spliced.value;
+      } else {
+        text = operation.text;
+      }
+      // `resolveService`/`resolveLoad` are host code, not this engine's: a bug in either
+      // is wrapped so its own words never reach the client, while it still reaches the
+      // engine as the same non-silenceable fault an unwrapped throw always was — `SILENT`
+      // swallows a remote's failure, never a host bug (see `wrapHostHandler`). So a fault
+      // always rejects the twin call below, `SILENT` or not, and `hostFault()` reports its
+      // correlation id for as long as this request runs, for the catch to answer with.
+      const resolveService = wrapHostHandler(o.host.resolveService, o.onInternalError, request);
+      const resolveLoad = wrapHostHandler(o.host.resolveLoad, o.onInternalError, request);
+      const hostFault = () => resolveService.sawFault() ?? resolveLoad.sawFault();
+      const host = {
+        ...o.host,
+        resolveService: resolveService.handler,
+        resolveLoad: resolveLoad.handler,
+        signal: request.signal,
+      };
+      if (operation.kind === "update") {
+        const { maxAnswers: _queryOnly, ...governors } = o.governors;
+        let outcome;
+        try {
+          outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...host });
+        } catch (error) {
+          const fault = hostFault();
+          if (fault !== undefined) return internalErrorProblem(fault.correlationId, headers);
+          return reclassifiedFailure(operation, error, request.signal, headers, o.cors);
+        }
+        // Defensive: a fault always rejects (see `wrapHostHandler`), so `outcome` here
+        // should never coexist with a recorded fault — but a `200`-adjacent response is
+        // exactly the outcome a fault must never produce, so this is checked anyway.
+        {
+          const fault = hostFault();
+          if (fault !== undefined) return internalErrorProblem(fault.correlationId, headers);
+        }
+        const timing = serverTiming(outcome.evidence.async);
+        if (!outcome.isApplied) return trippedProblem(outcome.tripped, [...timing, ...headers]);
+        return new Response(null, { status: 204, headers: [...timing, ...headers] });
+      }
+      const accept = request.headers.get("Accept") ?? undefined;
+      const negotiated = protocolStep(() => operation.negotiate(accept), headers, o.cors);
+      if (negotiated.response !== undefined) return negotiated.response;
+      if (negotiated.value === undefined) {
+        const kind = operation.resultKind;
+        return problem(
+          406,
+          SparqlProtocolRequest.notAcceptableDetail(kind),
+          { code: "NotAcceptable", offered: SparqlProtocolRequest.offeredMediaTypes(kind) },
+          [["Vary", "Accept"], ...headers],
+        );
+      }
       let outcome;
       try {
-        outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...host });
+        outcome = await o.engine.queryGovernedNegotiatedAsync(o.dataset, text, {
+          ...o.governors,
+          ...host,
+          accept,
+        });
       } catch (error) {
-        return reclassifiedFailure(operation, error, request.signal, headers, o.cors);
+        const fault = hostFault();
+        if (fault !== undefined) {
+          return internalErrorProblem(fault.correlationId, [["Vary", "Accept"], ...headers]);
+        }
+        return reclassifiedFailure(operation, error, request.signal, [["Vary", "Accept"], ...headers], o.cors);
+      }
+      // Defensive: see the update branch above — `outcome` here should never coexist
+      // with a recorded fault, since a fault always rejects.
+      {
+        const fault = hostFault();
+        if (fault !== undefined) {
+          return internalErrorProblem(fault.correlationId, [["Vary", "Accept"], ...headers]);
+        }
       }
       const timing = serverTiming(outcome.evidence.async);
-      if (!outcome.isApplied) return trippedProblem(outcome.tripped, [...timing, ...headers]);
-      return new Response(null, { status: 204, headers: [...timing, ...headers] });
-    }
-    const accept = request.headers.get("Accept") ?? undefined;
-    const negotiated = protocolStep(() => operation.negotiate(accept), headers, o.cors);
-    if (negotiated.response !== undefined) return negotiated.response;
-    if (negotiated.value === undefined) {
-      const kind = operation.resultKind;
-      return problem(
-        406,
-        SparqlProtocolRequest.notAcceptableDetail(kind),
-        { code: "NotAcceptable", offered: SparqlProtocolRequest.offeredMediaTypes(kind) },
-        [["Vary", "Accept"], ...headers],
-      );
-    }
-    let outcome;
-    try {
-      outcome = await o.engine.queryGovernedNegotiatedAsync(o.dataset, text, {
-        ...o.governors,
-        ...host,
-        accept,
+      if (!outcome.isComplete) {
+        return trippedProblem(outcome.tripped, [...timing, ["Vary", "Accept"], ...headers]);
+      }
+      return new Response(outcome.body.bytes, {
+        status: 200,
+        headers: [
+          ["Content-Type", outcome.body.mediaType],
+          ...timing,
+          ["Vary", "Accept"],
+          ...headers,
+        ],
       });
-    } catch (error) {
-      return reclassifiedFailure(operation, error, request.signal, [["Vary", "Accept"], ...headers], o.cors);
+    } finally {
+      operation.free();
     }
-    const timing = serverTiming(outcome.evidence.async);
-    if (!outcome.isComplete) {
-      return trippedProblem(outcome.tripped, [...timing, ["Vary", "Accept"], ...headers]);
-    }
-    return new Response(outcome.body.bytes, {
-      status: 200,
-      headers: [
-        ["Content-Type", outcome.body.mediaType],
-        ...timing,
-        ["Vary", "Accept"],
-        ...headers,
-      ],
-    });
-  } finally {
-    operation.free();
+  } catch (error) {
+    const correlationId = reportInternalError(error, o.onInternalError, request);
+    return internalErrorProblem(correlationId, headers);
   }
 }

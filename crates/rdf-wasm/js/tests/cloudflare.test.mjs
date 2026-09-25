@@ -195,6 +195,13 @@ function recordingCacheErrors() {
   return { errors, onCacheError };
 }
 
+/** An `onInternalError` double that records every `(error, context)` it was handed. */
+function recordingInternalErrors() {
+  const errors = [];
+  const onInternalError = (error, context) => errors.push({ error, ...context });
+  return { errors, onInternalError };
+}
+
 function syncThrow(fn) {
   try {
     fn();
@@ -1631,6 +1638,154 @@ test("an evaluation failure is a 500 problem", async () => {
   const body = await problemOf(response);
   assert.equal(body.title, "Internal Server Error");
   assert.match(body.detail, /no remote query source configured/);
+});
+
+// ---------------------------------------------------------------------------
+// A host bug — a resolveService/resolveLoad exception, or any other unclassified
+// exception — never reaches the client as its own words (gap G4, information exposure
+// through a stack trace). A typed engine error (the case above, and a tripped governor)
+// is the oracle this is a neighbour of: it still gets its own real detail.
+// ---------------------------------------------------------------------------
+
+test("refusal pair: a resolveService that throws is a 500 with a correlation id, never the exception's own words; a healthy resolver is the 200 neighbour and the hook is never called for it", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const { errors, onInternalError } = recordingInternalErrors();
+  const buggyResolver = async () => {
+    throw new Error("secret-token-abc at /internal/path");
+  };
+  const response = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    resolveService: buggyResolver,
+    catalog,
+    onInternalError,
+  });
+  assert.equal(response.status, 500);
+  const raw = await response.clone().text();
+  assert.doesNotMatch(raw, /secret-token-abc/);
+  assert.doesNotMatch(raw, /internal\/path/);
+  assert.doesNotMatch(raw, /\bat [A-Za-z]/, "no V8 stack frame ever reaches the body");
+  const body = await problemOf(response);
+  assert.equal(body.code, "InternalError");
+  assert.equal(typeof body.correlationId, "string");
+  assert.match(body.detail, new RegExp(body.correlationId));
+  assert.equal(errors.length, 1, "the hook observed exactly one internal error");
+  assert.equal(errors[0].error.message, "secret-token-abc at /internal/path", "the hook got the real error");
+  assert.equal(errors[0].correlationId, body.correlationId, "the client and the log share one id");
+
+  // The valid neighbour: the identical federated query, answered by a healthy resolver,
+  // is a plain 200 — and never calls the hook at all.
+  const healthy = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    resolveService: async () => REMOTE_OX,
+    catalog,
+    onInternalError,
+  });
+  assert.equal(healthy.status, 200);
+  assert.equal(errors.length, 1, "the healthy neighbour never touches onInternalError");
+});
+
+test("SERVICE SILENT does not hide a resolveService bug: still a 500 with a correlation id, never a quietly incomplete 200; the valid neighbour is a genuine typed transport failure, which SILENT still swallows to the join identity", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const { errors, onInternalError } = recordingInternalErrors();
+  const silentQuery = q(FEDERATED().replace("SERVICE <", "SERVICE SILENT <"));
+
+  // A host bug is about this endpoint's own correctness, never the remote's, so SILENT —
+  // a promise about the remote, "it may be unreachable" — must not swallow it: the query
+  // still rejects, exactly as it would without SILENT, just with the secret replaced.
+  const buggy = await handleSparqlRequest(httpRequest({ query: silentQuery }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    resolveService: async () => {
+      throw new Error("secret-token-abc at /internal/path");
+    },
+    catalog,
+    onInternalError,
+  });
+  assert.equal(buggy.status, 500);
+  assert.doesNotMatch(await buggy.clone().text(), /secret-token-abc/);
+  const body = await problemOf(buggy);
+  assert.equal(body.code, "InternalError");
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].error.message, "secret-token-abc at /internal/path");
+  assert.equal(errors[0].correlationId, body.correlationId);
+
+  // The valid neighbour: a genuine, deliberately typed transport failure under the same
+  // SILENT clause is exactly what SILENT promises — the join identity, a plain 200 — and
+  // never touches onInternalError, which is for host bugs, not remote ones.
+  const genuine = await handleSparqlRequest(httpRequest({ query: silentQuery }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    resolveService: async () => ({ kind: "transport", message: "the endpoint is down" }),
+    catalog,
+    onInternalError,
+  });
+  assert.equal(genuine.status, 200);
+  assert.deepEqual(rowsOf(await genuine.text()), [`s=${EX}a`, `s=${EX}b`]);
+  assert.equal(errors.length, 1, "a genuine transport failure never touches onInternalError");
+});
+
+test("the default onInternalError hook writes one console.error line carrying the original error and the correlation id", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const calls = [];
+  const original = console.error;
+  console.error = (...args) => calls.push(args);
+  try {
+    const response = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+      engine: new QueryEngine(),
+      dataset: dataset(),
+      governors: GOVERNORS,
+      resolveService: async () => {
+        throw new Error("boom");
+      },
+      catalog,
+    });
+    const body = await problemOf(response);
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0][0] instanceof Error);
+    assert.equal(calls[0][0].message, "boom");
+    assert.equal(calls[0][1], body.correlationId);
+  } finally {
+    console.error = original;
+  }
+});
+
+test("an unexpected exception anywhere else in the adapter is also a 500 with a correlation id, never a bare rejection", async () => {
+  const original = SparqlProtocolRequest.prototype.negotiate;
+  SparqlProtocolRequest.prototype.negotiate = function negotiate() {
+    throw new Error("a bug in this adapter, not a protocol refusal");
+  };
+  const { errors, onInternalError } = recordingInternalErrors();
+  try {
+    const response = await handleSparqlRequest(httpRequest({ query: q(SELECT_S) }), {
+      engine: new QueryEngine(),
+      dataset: dataset(),
+      governors: GOVERNORS,
+      onInternalError,
+    });
+    assert.equal(response.status, 500);
+    const body = await problemOf(response);
+    assert.equal(body.code, "InternalError");
+    assert.doesNotMatch(body.detail, /bug in this adapter/);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].error.message, "a bug in this adapter, not a protocol refusal");
+    assert.equal(errors[0].correlationId, body.correlationId);
+  } finally {
+    SparqlProtocolRequest.prototype.negotiate = original;
+  }
+
+  // The valid neighbour: with `negotiate` restored, the identical request answers 200.
+  const restored = await handleSparqlRequest(httpRequest({ query: q(SELECT_S) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+  });
+  assert.equal(restored.status, 200);
 });
 
 test("the catalog denies an unlisted endpoint before any fetch; a listed one is fetched", async () => {

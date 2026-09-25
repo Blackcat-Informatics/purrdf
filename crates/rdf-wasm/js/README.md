@@ -519,7 +519,15 @@ pieces:
   comfortably covers even a large one) bounds the request body — a `Content-Length`
   above it is refused before anything is read, and a missing or understated one is still
   caught by counting bytes as the body streams in, so a lying header never buys a larger
-  body than an honest one would.
+  body than an honest one would. A `500`'s `detail` is the engine's own words only when
+  the failure is the query's — a parse, an evaluation, a tripped governor: a SPARQL
+  client is owed the reason its request failed. A bug this endpoint cannot attribute to
+  the query itself — `resolveService`/`resolveLoad` throwing or rejecting, or any other
+  exception this adapter did not otherwise classify — never puts its own message or stack
+  in the response: it gets a fixed generic `detail`, `code: "InternalError"` and a fresh
+  `correlationId`, while the real error goes to exactly one place, `onInternalError(error,
+  { correlationId, request })` (one `console.error(error, correlationId)` line by
+  default), so an operator can always join what the client saw to what actually broke.
 
 A complete Worker:
 

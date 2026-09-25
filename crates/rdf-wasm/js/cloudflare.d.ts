@@ -48,6 +48,22 @@ export interface CacheErrorContext {
  */
 export type CacheErrorReporter = (error: unknown, context: CacheErrorContext) => void;
 
+/** The correlation id a `500` response carries, and the request it was answering. */
+export interface InternalErrorContext {
+  readonly correlationId: string;
+  readonly request: Request;
+}
+
+/**
+ * Reports an error `handleSparqlRequest` never puts in front of the client: a bug in a
+ * host-supplied `resolveService`/`resolveLoad` (a throw, a rejection — never a SPARQL
+ * client's own concern), or any other exception this adapter did not otherwise classify.
+ * The response gets a fixed generic `detail` and `correlationId` instead of `error`'s own
+ * words; this is the only place `error` (and, for an `Error`, its `stack`) is ever
+ * written. Defaults to one `console.error(error, correlationId)` line.
+ */
+export type InternalErrorReporter = (error: unknown, context: InternalErrorContext) => void;
+
 /** Service bindings by origin (`"https://example.org"`, no path, no trailing slash). */
 export type ServiceBindings = Readonly<Record<string, ServiceBindingLike>>;
 
@@ -142,14 +158,22 @@ export interface SparqlEndpointOptions {
    * bounding what an unauthenticated request can make the host buffer.
    */
   readonly maxRequestBytes?: number | null;
+  /**
+   * Reports an error this endpoint never describes to the client: a bug in
+   * `resolveService`/`resolveLoad`, or any other exception this adapter did not otherwise
+   * classify. Defaults to one `console.error(error, correlationId)` line; the response
+   * still gets a `500` with a fixed generic `detail` and the same `correlationId`.
+   */
+  readonly onInternalError?: InternalErrorReporter | null;
 }
 
 /**
  * The `application/problem+json` body of every error response (RFC 9457). `code` is the
  * refusal's stable name: a protocol error's name (`"MissingOperation"`, …), a tripped
  * governor's label (`"fuel-exhausted"`, `"deadline-exceeded"`, …), `"NotAcceptable"`,
- * `"ContentTooLarge"` (the body exceeded `maxRequestBytes`), or the evaluation error's
- * name.
+ * `"ContentTooLarge"` (the body exceeded `maxRequestBytes`), `"InternalError"` (a host bug
+ * or an unexpected exception; `detail` is generic and `correlationId` is the only lead,
+ * shared with the matching `onInternalError` call), or the evaluation error's own name.
  */
 export interface SparqlProblem {
   readonly type: "about:blank";
@@ -164,6 +188,8 @@ export interface SparqlProblem {
   readonly estimate?: number;
   readonly cause?: string;
   readonly offered?: string[];
+  /** Only on `code: "InternalError"`: the id `onInternalError` was also handed. */
+  readonly correlationId?: string;
 }
 
 /** Answer one SPARQL 1.1 Protocol request. */

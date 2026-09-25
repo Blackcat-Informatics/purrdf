@@ -222,7 +222,14 @@ network error, which the handler above reports as a transport failure. Write
 `maxRequestBytes` (1 MiB by default — a query or update's text is a program,
 not a payload), `422` or `503` when a governor stopped it (never a `200` with
 a partial body), `application/problem+json` errors, `Server-Timing` from the
-job's evidence, and CORS when asked for. A `Content-Length` over the bound is
+job's evidence, and CORS when asked for. A `500`'s `detail` is the engine's
+own words for the query's own failures (a parse, an evaluation, a tripped
+governor); a bug this endpoint cannot attribute to the query — a
+`resolveService`/`resolveLoad` that throws, or any other exception the
+adapter did not otherwise classify — never reaches the response as its own
+message or stack: the client gets a fixed generic `detail` and a
+`correlationId`, and the real error goes to `onInternalError` (one
+`console.error` line by default) alone. A `Content-Length` over the bound is
 refused before anything is read; a missing or understated one is still caught
 by counting bytes as the body streams in, so a lying header never buys a
 larger body than an honest one would. Both resolvers fetch with
