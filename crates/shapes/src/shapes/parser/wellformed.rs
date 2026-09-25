@@ -202,7 +202,7 @@ impl Parser<'_> {
         statements.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
         for (predicate, object) in &statements {
             let p = predicate.as_str();
-            self.check_statement_annotations(shape, predicate, object)?;
+            self.check_statement_annotations(shape, predicate, object, is_parameter)?;
             if p == rdf::TYPE {
                 self.check_shape_type(shape, object)?;
                 continue;
@@ -271,64 +271,78 @@ impl Parser<'_> {
         Ok(())
     }
 
-    /// The RDF 1.2 reifiers of the shape statement `(shape, predicate, object)`:
-    /// a SHACL term on one is a per-constraint annotation (SHACL 1.2 Core §3.7.1:
-    /// "A triple that has a shape as subject, a parameter (such as sh:minCount) as
-    /// predicate can have at most one reifier with a value for the property
-    /// sh:deactivated"; likewise `sh:severity` and `sh:message`), which this engine
-    /// does not evaluate, so it is refused rather than leaving the constraint
-    /// unannotated. A non-validating annotation (`sh:formalized` on an
-    /// `sh:intent`) changes no answer and loads.
+    /// The RDF 1.2 reifiers of the shape statement `(shape, predicate, object)`.
+    ///
+    /// `sh:deactivated`, `sh:severity` and `sh:message` on one are the
+    /// per-constraint annotations of SHACL 1.2 Core ("A triple that has a shape as
+    /// subject, a parameter (such as sh:minCount) as predicate can have at most
+    /// one reifier with a value for the property sh:deactivated"; likewise
+    /// `sh:severity` and `sh:message` "on a reifier for a triple where the shape
+    /// is the subject and one of the parameters of the constraint is the
+    /// predicate"). Each value is checked here, and every disagreement between
+    /// reifiers refused ([`Parser::statement_annotation`]); the parser applies
+    /// them ([`super::annotations`]).
+    ///
+    /// Refused, because no constraint could honour them:
+    ///
+    /// * one of the three on a statement whose predicate is not a constraint
+    ///   parameter (`sh:targetClass`, `sh:path`, `sh:name`, `rdf:type`, …) —
+    ///   SHACL defines the annotation only on a constraint's triples, and it would
+    ///   otherwise deactivate or re-grade nothing;
+    /// * one of the three on a PARAMETER DECLARATION's statement, which declares a
+    ///   component's parameter rather than a constraint that validates anything;
+    /// * any other SHACL term on a reifier of a shape statement.
+    ///
+    /// A non-validating annotation (`sh:formalized` on an `sh:intent`) changes no
+    /// answer and loads.
     fn check_statement_annotations(
         &self,
         shape: &Term,
         predicate: &NamedNode,
         object: &Term,
+        is_parameter: bool,
     ) -> Result<(), String> {
-        // The statement's triple term exists only when something reifies it.
-        let (Some(s), Some(p), Some(o)) = (
-            crate::data::resolve_id(self.data, shape),
-            self.data.term_id_by_iri(predicate.as_str()),
-            crate::data::resolve_id(self.data, object),
-        ) else {
-            return Ok(());
-        };
-        let Some(statement) = self.data.term_id_by_triple(s, p, o) else {
-            return Ok(());
-        };
-        for reifier in self
-            .data
-            .reifier_quads()
-            .filter(|quad| quad.o == statement)
-            .map(|quad| quad.s)
-        {
-            for annotation in self
-                .data
-                .annotation_quads()
-                .filter(|quad| quad.s == reifier)
-                .map(|quad| quad.p)
-            {
-                let ::purrdf::TermRef::Iri(a) = self.data.resolve(annotation) else {
-                    return Err(format!(
-                        "the reifier of shape {shape}'s <{}> statement carries a non-IRI \
-                         predicate",
-                        predicate.as_str()
-                    ));
-                };
-                if !census::is_census_namespace(a)
-                    || census::classify(a).is_some_and(|row| row.class == TermClass::NonValidating)
-                {
-                    continue;
-                }
-                return Err(format!(
-                    "shape {shape} annotates its <{}> statement with <{a}> on a reifier; a \
-                     per-constraint reifier annotation is not evaluated by this engine, so the \
-                     shape is refused rather than validated without it",
-                    predicate.as_str()
-                ));
+        let p = predicate.as_str();
+        let mut constraint_annotation: Option<String> = None;
+        for (annotation, _) in self.reifier_rows(shape, p, object).into_iter().flatten() {
+            let a = annotation.as_str();
+            if super::annotations::CONSTRAINT_ANNOTATIONS.contains(&a) {
+                constraint_annotation.get_or_insert_with(|| a.to_owned());
+                continue;
             }
+            if !census::is_census_namespace(a)
+                || census::classify(a).is_some_and(|row| row.class == TermClass::NonValidating)
+            {
+                continue;
+            }
+            return Err(format!(
+                "shape {shape} annotates its <{p}> statement with <{a}> on a reifier; only \
+                 sh:deactivated, sh:severity and sh:message annotate a constraint there, so the \
+                 shape is refused rather than validated without it"
+            ));
         }
-        Ok(())
+        let Some(annotation) = constraint_annotation else {
+            return Ok(());
+        };
+        if is_parameter {
+            return Err(format!(
+                "parameter declaration {shape} annotates its <{p}> statement with <{annotation}> \
+                 on a reifier; a parameter declaration declares a component's parameter, not a \
+                 constraint, so there is no constraint for the annotation to apply to"
+            ));
+        }
+        let is_constraint_parameter = self.component_registry.by_parameter_path.contains_key(p)
+            || census::classify(p)
+                .is_some_and(|row| matches!(row.class, TermClass::ConstraintParameter { .. }));
+        if !is_constraint_parameter {
+            return Err(format!(
+                "shape {shape} annotates its <{p}> statement with <{annotation}> on a reifier, but \
+                 <{p}> is not a constraint parameter: SHACL defines sh:deactivated, sh:severity \
+                 and sh:message on a reifier only for a triple whose predicate is a parameter of a \
+                 constraint, so the annotation would apply to nothing"
+            ));
+        }
+        self.statement_annotation(shape, p, object).map(|_| ())
     }
 
     /// A shape's `rdf:type`: an unimplemented SHACL class is refused, and so is a
@@ -518,10 +532,10 @@ impl Parser<'_> {
                 }
             }
             sh::MESSAGE => {
-                if !is_text_literal(value, false) {
+                if !is_text_literal(value, true) {
                     return Err(format!(
-                        "sh:message on shape {shape} must be an xsd:string, rdf:langString or \
-                         rdf:dirLangString literal, got {value}"
+                        "sh:message on shape {shape} must be an xsd:string, rdf:langString, \
+                         rdf:dirLangString or rdf:HTML literal, got {value}"
                     ));
                 }
             }
@@ -571,7 +585,7 @@ fn check_non_validating_value(shape: &Term, predicate: &str, value: &Term) -> Re
 
 /// Whether `value` is an `xsd:string` / `rdf:langString` / `rdf:dirLangString`
 /// literal (or, when `html`, also an `rdf:HTML` one).
-fn is_text_literal(value: &Term, html: bool) -> bool {
+pub(crate) fn is_text_literal(value: &Term, html: bool) -> bool {
     matches!(value, Term::Literal(lit) if matches!(
         lit.datatype_str(),
         xsd::STRING | RDF_LANG_STRING | RDF_DIR_LANG_STRING

@@ -736,7 +736,7 @@ impl Fixture {
             "case {name}: the conforming population must conform, or the allocation figure \
              describes a workload that never reached the constraint ({} result(s), first: {:?})",
             report.results.len(),
-            report.results.first().map(|r| r.message.clone()),
+            report.results.first().map(|r| r.messages.clone()),
         );
         report
     }
@@ -1146,7 +1146,7 @@ impl GovernedFixture {
             "case {name}: the governed population must conform, or the allocation figure \
              describes a workload that never reached the constraint ({} result(s), first: {:?})",
             report.results.len(),
-            report.results.first().map(|r| r.message.clone()),
+            report.results.first().map(|r| r.messages.clone()),
         );
         report
     }
@@ -1448,7 +1448,7 @@ impl FallbackFixture {
             "fallback lane: the conforming population must conform, or the allocation figure \
              describes a workload that never reached the constraint ({} result(s), first: {:?})",
             report.results.len(),
-            report.results.first().map(|r| r.message.clone()),
+            report.results.first().map(|r| r.messages.clone()),
         );
         report
     }

@@ -163,8 +163,6 @@ const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
         "w3c12/sparql/functions/instanceCount-example",
         R_INSTANCES_OF_EXPR,
     ),
-    ("w3c12/core/misc/severity-004", R_DEBUG_TRACE),
-    ("w3c12/core/misc/severity-005", R_DEBUG_TRACE),
     ("w3c12/core/targets/targetClassImplicit-002", R_SHAPE_CLASS),
     ("w3c12/core/targets/targetWhere-001", R_TARGET_WHERE),
     (
@@ -177,16 +175,7 @@ const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
         "w3c12/sparql/targets/targetNode-select-001",
         R_TARGET_NODE_EXPR,
     ),
-    ("w3c12/core/misc/deactivated-003", R_REIFIER_ANNOTATION),
-    ("w3c12/core/misc/severity-003", R_REIFIER_ANNOTATION),
-    ("w3c12/core/misc/message-002", R_REIFIER_ANNOTATION),
 ];
-
-const R_REIFIER_ANNOTATION: &str = "annotates a (shape, parameter, value) statement's reifier with \
-     sh:deactivated / sh:severity / sh:message, which the engine refuses at load as unevaluated";
-
-const R_DEBUG_TRACE: &str = "gives a shape the sh:Debug / sh:Trace severity, which the engine \
-     refuses at load as unevaluated rather than treating as blocking";
 
 const R_SHAPE_CLASS: &str =
     "types a shape sh:ShapeClass, whose implicit class target the engine refuses at load";
@@ -276,7 +265,13 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// Moved from 349 to 351 when `sh:closed sh:ByTypes` became evaluated:
 /// `closed-003` and `closed-004` now load and agree on a report (+2), and
 /// [`W3C12_REFUSED_AT_LOAD`] went from 14 entries to 12.
-const AGREED_ON_REPORT_CASES: usize = 351;
+///
+/// Moved from 351 to 356 when per-constraint reifier annotations and the
+/// `sh:Debug` / `sh:Trace` severities became evaluated: `deactivated-003`,
+/// `severity-003`, `severity-004`, `severity-005` and `message-002` now load and
+/// agree on a report (+5) — the annotation list and the two new severities travel
+/// in the product — and [`W3C12_REFUSED_AT_LOAD`] went from 12 entries to 7.
+const AGREED_ON_REPORT_CASES: usize = 356;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -342,7 +337,15 @@ const AGREED_ON_REPORT_CASES: usize = 351;
 ///
 /// `closed-003` and `closed-004` load now that `sh:closed sh:ByTypes` is
 /// evaluated, and each expects — and reports — a violation (+2).
-const AGREED_WITH_RESULTS_CASES: usize = 331;
+///
+/// # Why it moved from 331 to 335
+///
+/// `severity-003` (a `sh:Warning` result from a reifier `sh:severity`),
+/// `severity-004` (a `sh:Debug` result), `severity-005` (a `sh:Trace` result) and
+/// `message-002` (a violation carrying the reifier `sh:message`) load now and each
+/// reports its result (+4); `deactivated-003`, whose only constraints a reifier
+/// deactivates, is agreed on as an empty report.
+const AGREED_WITH_RESULTS_CASES: usize = 335;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

@@ -35,7 +35,8 @@ use crate::py_store::PyStore;
 /// - `"conforms"` — bool
 /// - `"results"` — list of dicts, each with keys:
 ///   `"focus"`, `"path"`, `"value"`, `"severity"`, `"component"`,
-///   `"source_shape"`, `"message"`.
+///   `"source_shape"`, `"messages"` (every `sh:resultMessage`, each a dict with
+///   `"text"` and its `"language"` / `"direction"` / `"datatype"` when present).
 ///
 /// `shapes_base` is the base IRI the SHAPES document's relative IRI references resolve
 /// against. This binding is handed a string and so has no retrieval IRI of its own;
@@ -44,22 +45,40 @@ use crate::py_store::PyStore;
 /// a relative reference is a hard `ValueError` naming the remedy — never a validation
 /// that quietly conforms because the constraint term was never resolved. `data_nt` needs
 /// no counterpart: N-Triples admits no relative IRI by grammar.
+///
+/// `conformance_disallows` is the conformance-disallow set the report is judged
+/// against: severity IRIs, a result whose severity is among them making the data
+/// non-conforming (the report's `"conforms"` and every nested `sh:node` / `sh:not` /
+/// `sh:and` / `sh:or` / `sh:xone` check alike). `None` is SHACL's default set,
+/// `sh:Violation`, `sh:Warning` and `sh:Info`; an empty sequence or a value that is
+/// not an absolute IRI raises `ValueError`. The dict's `"conformance_disallows"` key
+/// lists the set the report was judged against. A result's `"severity"` is its IRI,
+/// `sh:Debug` and `sh:Trace` included.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None))]
 fn validate(
     py: Python<'_>,
     shapes_ttl: &str,
     data_nt: &str,
     shapes_base: Option<&str>,
+    conformance_disallows: Option<Vec<String>>,
 ) -> PyResult<Py<PyAny>> {
+    let options = match conformance_disallows {
+        None => engine::ValidationOptions::default(),
+        Some(iris) => engine::ValidationOptions::default().with_conformance_disallows(
+            purrdf_shapes::report::ConformanceDisallows::from_iris(&iris)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?,
+        ),
+    };
     // Parse + validation run detached (GIL released); the result dicts are
     // built after the GIL is reacquired.
     let report = py
-        .detach(|| engine::validate_graphs(data_nt, shapes_ttl, shapes_base))
+        .detach(|| engine::validate_graphs_with_options(data_nt, shapes_ttl, shapes_base, &options))
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     let out = PyDict::new(py);
     out.set_item("conforms", report.conforms)?;
+    out.set_item("conformance_disallows", report.conformance_disallows.iris())?;
 
     let results = PyList::empty(py);
     for r in &report.results {
@@ -70,7 +89,7 @@ fn validate(
         d.set_item("severity", r.severity.iri())?;
         d.set_item("component", r.source_constraint_component.as_str())?;
         d.set_item("source_shape", r.source_shape.to_string())?;
-        d.set_item("message", r.message.clone())?;
+        d.set_item("messages", messages_list(py, &r.messages)?)?;
         if !r.source_box_roles.is_empty() {
             let roles: Vec<&str> = r
                 .source_box_roles
@@ -100,6 +119,41 @@ fn validate(
     out.set_item("results", results)?;
 
     Ok(out.into_any().unbind())
+}
+
+/// A result's messages as Python: one dict per `sh:resultMessage` literal, in the
+/// report's canonical order, with `"text"` and — when the literal has them —
+/// `"language"`, `"direction"` (`"ltr"`/`"rtl"`) and `"datatype"` (given only for
+/// a datatype other than `xsd:string` and the language-string types). Every
+/// message is kept: SHACL copies all of a shape's messages into each result.
+fn messages_list<'py>(
+    py: Python<'py>,
+    messages: &[purrdf_shapes::term::Literal],
+) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    for message in messages {
+        let entry = PyDict::new(py);
+        entry.set_item("text", message.value())?;
+        if let Some(language) = message.language() {
+            entry.set_item("language", language)?;
+        }
+        if let Some(direction) = message.direction() {
+            entry.set_item(
+                "direction",
+                match direction {
+                    ::purrdf::RdfTextDirection::Ltr => "ltr",
+                    ::purrdf::RdfTextDirection::Rtl => "rtl",
+                },
+            )?;
+        }
+        if message.language().is_none()
+            && message.datatype_str() != "http://www.w3.org/2001/XMLSchema#string"
+        {
+            entry.set_item("datatype", message.datatype_str())?;
+        }
+        list.append(entry)?;
+    }
+    Ok(list)
 }
 
 /// Entail a data graph (N-Triples) under a shapes graph (Turtle), returning the
@@ -358,7 +412,7 @@ impl PyValidationReport {
             d.set_item("severity", r.severity.iri())?;
             d.set_item("component", r.source_constraint_component.as_str())?;
             d.set_item("source_shape", r.source_shape.to_string())?;
-            d.set_item("message", r.message.clone())?;
+            d.set_item("messages", messages_list(py, &r.messages)?)?;
             if !r.source_box_roles.is_empty() {
                 let roles: Vec<&str> = r
                     .source_box_roles

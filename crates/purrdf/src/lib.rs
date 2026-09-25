@@ -353,10 +353,10 @@ mod tests {
         let _ = RdfDatasetBuilder::new();
         let _ = slice::rdf_query::DatasetAccumulator::new();
         let _ = shapes::SanitizePolicy::Rename;
-        let _ = shapes::report::ValidationReport {
-            conforms: true,
-            results: Vec::new(),
-        };
+        let _ = shapes::report::ValidationReport::from_results(
+            Vec::new(),
+            shapes::report::ConformanceDisallows::default(),
+        );
         let _ = shex::parse_shexc("PREFIX ex: <https://example.org/>\nex:S { ex:p . }", None)
             .expect("shex facade parses");
     }

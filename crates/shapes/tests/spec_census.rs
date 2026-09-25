@@ -178,7 +178,11 @@ fn census_counts_per_class_are_pinned() {
 /// the last declared component — when its did: 46 + 1 and 44 − 1. No
 /// component parameter is unimplemented any more. `sh:ByTypes`, the IRI value of
 /// `sh:closed`, moved to the vocabulary when `sh:closed sh:ByTypes` became
-/// evaluated: 19 + 1 and 43 − 1; the 42 that remain are terms of other kinds.
+/// evaluated: 19 + 1 and 43 − 1. `sh:Debug` and `sh:Trace` moved to the
+/// vocabulary when they became evaluated severities (the spec table's severity
+/// rows), and `sh:conformanceDisallows` to the report vocabulary when the
+/// conformance-disallow set became a validation option the report echoes: 20 + 2,
+/// 20 + 1 and 42 − 3; the 39 that remain are terms of other kinds.
 const EXPECTED_COUNTS: [(&str, usize); 11] = [
     ("constraint-parameter", 47),
     ("non-validating", 10),
@@ -186,11 +190,11 @@ const EXPECTED_COUNTS: [(&str, usize); 11] = [
     ("structural/builtin", 68),
     ("structural/declaration", 32),
     ("structural/node-expression", 47),
-    ("structural/report", 20),
+    ("structural/report", 21),
     ("structural/shape-path-prefix-graph", 16),
-    ("structural/vocabulary", 20),
+    ("structural/vocabulary", 22),
     ("target", 7),
-    ("unimplemented", 42),
+    ("unimplemented", 39),
 ];
 
 /// Where a term may appear is part of its class: a constraint parameter and a

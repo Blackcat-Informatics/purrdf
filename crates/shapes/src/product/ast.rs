@@ -219,8 +219,9 @@ use crate::plan::ClassCatalog;
 use crate::report::Severity;
 use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
 use crate::shapes::{
-    ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint, NodeKindValue, Path,
-    PropertyShape, Shape, Shapes, SparqlTargetType, Target, TargetTypeParam,
+    AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
+    ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
+    Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
@@ -305,7 +306,9 @@ const WRITE_BUFFER_HINT: usize = 4096;
 /// The number of [`Term`] tags.
 const TAGS_TERM: u8 = 4;
 /// The number of [`Severity`] tags.
-const TAGS_SEVERITY: u8 = 4;
+const TAGS_SEVERITY: u8 = 6;
+/// The number of [`AnnotatedConstraint`] tags.
+const TAGS_ANNOTATED_CONSTRAINT: u8 = 2;
 /// The number of [`NodeKindValue`] tags.
 const TAGS_NODE_KIND: u8 = 7;
 /// The number of [`Path`] tags.
@@ -624,10 +627,38 @@ impl AstWriter {
             Severity::Violation => self.tag(0),
             Severity::Warning => self.tag(1),
             Severity::Info => self.tag(2),
+            Severity::Debug => self.tag(3),
+            Severity::Trace => self.tag(4),
             Severity::Other(iri) => {
-                self.tag(3);
+                self.tag(5);
                 self.named_node(iri);
             }
+        }
+    }
+
+    /// Write a message set: its count, then each literal in the canonical order
+    /// [`crate::report::canonical_messages`] keeps.
+    fn messages(&mut self, messages: &[Literal]) {
+        self.count(messages.len());
+        for message in messages {
+            self.literal(message);
+        }
+    }
+
+    /// Write a shape's per-constraint reifier annotations, in the canonical order
+    /// the parser keeps them (by constraint).
+    fn constraint_annotations(&mut self, annotations: &[ConstraintAnnotation]) {
+        self.count(annotations.len());
+        for annotation in annotations {
+            match annotation.constraint {
+                AnnotatedConstraint::Constraint(index) => {
+                    self.tag(0);
+                    self.count(index);
+                }
+                AnnotatedConstraint::Reifier => self.tag(1),
+            }
+            self.opt_severity(annotation.severity.as_ref());
+            self.messages(&annotation.messages);
         }
     }
 
@@ -1148,12 +1179,12 @@ impl AstWriter {
             }
             Constraint::Sparql {
                 select,
-                message,
+                messages,
                 severity,
             } => {
                 self.tag(22);
                 self.text(select);
-                self.opt_text(message.as_deref());
+                self.messages(messages);
                 self.opt_severity(severity.as_ref());
             }
             Constraint::Equals(path) => {
@@ -1188,24 +1219,24 @@ impl AstWriter {
             }
             Constraint::Expression {
                 expr,
-                message,
+                messages,
                 severity,
             } => {
                 self.tag(28);
                 self.node_expr(expr)?;
-                self.opt_text(message.as_deref());
+                self.messages(messages);
                 self.opt_severity(severity.as_ref());
             }
             // `shapes` is the SHARED index; see the coverage table.
             Constraint::NodeByExpression {
                 expr,
                 shapes: _,
-                message,
+                messages,
                 severity,
             } => {
                 self.tag(29);
                 self.node_expr(expr)?;
-                self.opt_text(message.as_deref());
+                self.messages(messages);
                 self.opt_severity(severity.as_ref());
             }
             Constraint::Component {
@@ -1213,7 +1244,7 @@ impl AstWriter {
                 source_shape,
                 bindings,
                 validator,
-                message,
+                messages,
                 severity,
             } => {
                 self.tag(30);
@@ -1225,7 +1256,7 @@ impl AstWriter {
                     self.term(value)?;
                 }
                 self.component_validator(validator);
-                self.opt_text(message.as_deref());
+                self.messages(messages);
                 self.opt_severity(severity.as_ref());
             }
             Constraint::MinListLength(length) => {
@@ -1298,7 +1329,8 @@ impl AstWriter {
         self.shapes_seq(&shape.reifier_shapes)?;
         self.flag(shape.reification_required);
         self.severity(&shape.severity);
-        self.opt_text(shape.message.as_deref());
+        self.messages(&shape.messages);
+        self.constraint_annotations(&shape.constraint_annotations);
         self.flag(shape.deactivated);
         self.count(shape.box_roles.len());
         for role in &shape.box_roles {
@@ -1325,7 +1357,8 @@ impl AstWriter {
             self.property_shape(property)?;
         }
         self.severity(&shape.severity);
-        self.opt_text(shape.message.as_deref());
+        self.messages(&shape.messages);
+        self.constraint_annotations(&shape.constraint_annotations);
         self.flag(shape.deactivated);
         self.count(shape.box_roles.len());
         for role in &shape.box_roles {
@@ -1728,8 +1761,71 @@ impl<'a> AstReader<'a> {
             0 => Severity::Violation,
             1 => Severity::Warning,
             2 => Severity::Info,
+            3 => Severity::Debug,
+            4 => Severity::Trace,
             _ => Severity::Other(self.named_node()?),
         })
+    }
+
+    /// Read a message set, refusing one the parser could not have produced: out of
+    /// canonical order, repeating a literal, or holding a literal SHACL does not
+    /// permit as an `sh:message`.
+    fn messages(&mut self) -> Result<Vec<Literal>, ShapesProductError> {
+        let messages = self.seq(Self::literal)?;
+        let canonical = crate::report::canonical_messages(messages.clone());
+        let permitted = messages
+            .iter()
+            .all(|message| crate::shapes::parser_is_text_literal(&Term::Literal(message.clone())));
+        if canonical != messages || !permitted {
+            return Err(malformed(
+                "this product carries a message set the shapes parser could not have written \
+                 (out of canonical order, repeated, or not a message literal); re-prepare the \
+                 product from its shapes graph",
+            ));
+        }
+        Ok(messages)
+    }
+
+    /// Read a shape's per-constraint reifier annotations, refusing a list the
+    /// parser could not have produced: out of canonical order, naming a
+    /// constraint past the `constraints` the shape holds, naming the reifier
+    /// constraint on a node shape, or overriding nothing.
+    fn constraint_annotations(
+        &mut self,
+        constraints: usize,
+        property_shape: bool,
+    ) -> Result<Vec<ConstraintAnnotation>, ShapesProductError> {
+        let annotations = self.seq(|reader| {
+            let constraint = match reader.tag("AnnotatedConstraint", TAGS_ANNOTATED_CONSTRAINT)? {
+                0 => AnnotatedConstraint::Constraint(reader.count()?),
+                _ => AnnotatedConstraint::Reifier,
+            };
+            Ok(ConstraintAnnotation {
+                constraint,
+                severity: reader.opt_severity()?,
+                messages: reader.messages()?,
+            })
+        })?;
+        for (position, annotation) in annotations.iter().enumerate() {
+            let in_range = match annotation.constraint {
+                AnnotatedConstraint::Constraint(index) => index < constraints,
+                AnnotatedConstraint::Reifier => property_shape,
+            };
+            let ordered =
+                position == 0 || annotations[position - 1].constraint < annotation.constraint;
+            if !in_range
+                || !ordered
+                || (annotation.severity.is_none() && annotation.messages.is_empty())
+            {
+                return Err(malformed(format!(
+                    "this product carries a per-constraint annotation for {:?} that the shapes \
+                     parser could not have written (out of range, out of order, or overriding \
+                     nothing); re-prepare the product from its shapes graph",
+                    annotation.constraint
+                )));
+            }
+        }
+        Ok(annotations)
     }
 
     /// Read an optional severity override.
@@ -2027,7 +2123,7 @@ impl<'a> AstReader<'a> {
             21 => Constraint::Node(Box::new(self.shape()?)),
             22 => Constraint::Sparql {
                 select: self.text()?,
-                message: self.opt_text()?,
+                messages: self.messages()?,
                 severity: self.opt_severity()?,
             },
             23 => Constraint::Equals(self.path()?),
@@ -2043,13 +2139,13 @@ impl<'a> AstReader<'a> {
             },
             28 => Constraint::Expression {
                 expr: self.node_expr()?,
-                message: self.opt_text()?,
+                messages: self.messages()?,
                 severity: self.opt_severity()?,
             },
             29 => Constraint::NodeByExpression {
                 expr: self.node_expr()?,
                 shapes: Arc::clone(&self.shape_index),
-                message: self.opt_text()?,
+                messages: self.messages()?,
                 severity: self.opt_severity()?,
             },
             30 => Constraint::Component {
@@ -2061,7 +2157,7 @@ impl<'a> AstReader<'a> {
                     Ok((name, value))
                 })?,
                 validator: self.component_validator()?,
-                message: self.opt_text()?,
+                messages: self.messages()?,
                 severity: self.opt_severity()?,
             },
             31 => Constraint::MinListLength(self.uint()?),
@@ -2084,15 +2180,19 @@ impl<'a> AstReader<'a> {
     /// Read a property shape.
     fn property_shape(&mut self) -> Result<PropertyShape, ShapesProductError> {
         self.enter()?;
+        let id = self.term()?;
+        let path = self.path()?;
+        let constraints = self.seq(Self::constraint)?;
         let shape = PropertyShape {
-            id: self.term()?,
-            path: self.path()?,
-            constraints: self.seq(Self::constraint)?,
+            id,
+            path,
             property_shapes: self.seq(Self::property_shape)?,
             reifier_shapes: self.seq(Self::shape)?,
             reification_required: self.flag()?,
             severity: self.severity()?,
-            message: self.opt_text()?,
+            messages: self.messages()?,
+            constraint_annotations: self.constraint_annotations(constraints.len(), true)?,
+            constraints,
             deactivated: self.flag()?,
             box_roles: self.seq(Self::named_node)?,
         };
@@ -2103,13 +2203,17 @@ impl<'a> AstReader<'a> {
     /// Read a node shape.
     fn shape(&mut self) -> Result<Shape, ShapesProductError> {
         self.enter()?;
+        let id = self.term()?;
+        let targets = self.seq(Self::target)?;
+        let constraints = self.seq(Self::constraint)?;
         let shape = Shape {
-            id: self.term()?,
-            targets: self.seq(Self::target)?,
-            constraints: self.seq(Self::constraint)?,
+            id,
+            targets,
             property_shapes: self.seq(Self::property_shape)?,
             severity: self.severity()?,
-            message: self.opt_text()?,
+            messages: self.messages()?,
+            constraint_annotations: self.constraint_annotations(constraints.len(), false)?,
+            constraints,
             deactivated: self.flag()?,
             box_roles: self.seq(Self::named_node)?,
             rules: self.seq(Self::rule)?,

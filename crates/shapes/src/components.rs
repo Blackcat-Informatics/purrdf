@@ -27,7 +27,7 @@ use crate::path;
 use crate::report::{Severity, ValidationResult};
 use crate::shapes::{ComponentValidator, Path, build_prefix_header};
 use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_prebinding_view};
-use crate::term::{NamedNode, Term, term_value_to_native};
+use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 
 /// Discriminator for a SPARQL validator's query form.
 #[derive(Debug, Clone)]
@@ -45,8 +45,8 @@ pub(crate) struct Validator {
     pub kind: ValidatorKind,
     /// Full query text with any `PREFIX` header already prepended.
     pub query_text: String,
-    /// Optional human-readable message declared on the validator node.
-    pub message: Option<String>,
+    /// The `sh:message` values declared on the validator node.
+    pub messages: Vec<Literal>,
     /// Optional severity declared on the validator node.
     pub severity: Option<Severity>,
 }
@@ -75,8 +75,8 @@ pub(crate) struct Component {
     pub property_validators: Vec<Validator>,
     /// Generic validators (`sh:validator`).
     pub validators: Vec<Validator>,
-    /// Optional human-readable message declared on the component node.
-    pub message: Option<String>,
+    /// The `sh:message` values declared on the component node.
+    pub messages: Vec<Literal>,
     /// Optional severity declared on the component node.
     pub severity: Option<Severity>,
 }
@@ -176,14 +176,12 @@ impl ComponentRegistry {
     }
 }
 
-/// Map an `sh:severity` object term to a [`Severity`]: the three built-in
+/// Map an `sh:severity` object term to a [`Severity`]: the five built-in
 /// `sh:` severities map to their variants, any OTHER IRI is preserved verbatim
 /// (SHACL allows custom severity IRIs), and a non-IRI object yields `None`.
 pub(crate) fn severity_from_term(t: &Term) -> Option<Severity> {
     match t {
-        Term::NamedNode(n) => {
-            Some(Severity::from_iri(n.as_str()).unwrap_or_else(|| Severity::Other(n.clone())))
-        }
+        Term::NamedNode(n) => Some(Severity::from_iri_open(n.as_str())),
         _ => None,
     }
 }
@@ -217,6 +215,22 @@ pub(crate) fn substitute_message_templates(msg: &str, bindings: &[(String, Term)
     .into_owned()
 }
 
+/// Render every message of a result against `bindings` (SHACL-SPARQL §5.3.3),
+/// each keeping its datatype, language tag and base direction, in canonical order.
+pub(crate) fn render_message_templates(
+    messages: &[Literal],
+    bindings: &[(String, Term)],
+) -> Vec<Literal> {
+    crate::report::canonical_messages(
+        messages
+            .iter()
+            .map(|message| {
+                message.with_value(substitute_message_templates(message.value(), bindings))
+            })
+            .collect(),
+    )
+}
+
 /// Evaluate an ASK validator for a custom constraint component.
 ///
 /// Each value node is substituted as `$value` / `?value` alongside `$this` and the
@@ -234,7 +248,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     source_shape: &Term,
     path: Option<&Path>,
     severity: &Severity,
-    message: Option<&String>,
+    messages: &[Literal],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -304,7 +318,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     // The violating branch's template buffer, hoisted for the same reason: its
     // parameter half does not vary, so it is filled once and only the trailing
     // `value` entry is replaced.
-    let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+    let mut template_bindings: Vec<(String, Term)> = if !messages.is_empty() {
         let mut buffer = Vec::with_capacity(bindings.len() + 1);
         buffer.extend_from_slice(bindings);
         buffer.push(("value".to_owned(), focus.clone()));
@@ -315,13 +329,15 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     // One reporting step, called from whichever door computed the verdict, so the two
     // doors cannot grow two different notions of what a violation looks like.
     let mut report = |v: &Term, results: &mut Vec<ValidationResult>| {
-        let message = message.map(|m| {
+        let messages = if messages.is_empty() {
+            Vec::new()
+        } else {
             let slot = template_bindings
                 .last_mut()
                 .expect("the template buffer is non-empty whenever a message is present");
             slot.1 = v.clone();
-            substitute_message_templates(m, &template_bindings)
-        });
+            render_message_templates(messages, &template_bindings)
+        };
         results.push(ValidationResult {
             focus_node: focus.clone(),
             result_path: path.map(path::path_to_term),
@@ -330,7 +346,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
             source_constraint_component: component.clone(),
             source_shape: source_shape.clone(),
             severity: severity.clone(),
-            message,
+            messages,
             source_box_roles: vec![],
             path_box_roles: vec![],
             result_box_roles: vec![],
@@ -407,7 +423,7 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
     source_shape: &Term,
     path: Option<&Path>,
     severity: &Severity,
-    message: Option<&String>,
+    messages: &[Literal],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -438,7 +454,7 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
         // so the buffer is allocated — and the columns are converted — only when
         // there is a message to render. A validator with none reads exactly the
         // three columns it maps onto the result.
-        let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+        let mut template_bindings: Vec<(String, Term)> = if !messages.is_empty() {
             Vec::with_capacity(solutions.variables().len() + bindings.len())
         } else {
             Vec::new()
@@ -460,7 +476,9 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                 .as_ref()
                 .map(term_value_to_native);
 
-            let message = message.map(|m| {
+            let messages = if messages.is_empty() {
+                Vec::new()
+            } else {
                 // The row's own bindings first, so a projected variable outranks a
                 // parameter of the same name — the precedence this has always had.
                 template_bindings.clear();
@@ -475,8 +493,8 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                         template_bindings.push((name.clone(), value.clone()));
                     }
                 }
-                substitute_message_templates(m, &template_bindings)
-            });
+                render_message_templates(messages, &template_bindings)
+            };
 
             results.push(ValidationResult {
                 focus_node,
@@ -486,7 +504,7 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                 source_constraint_component: component.clone(),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message,
+                messages,
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
@@ -766,22 +784,14 @@ fn parse_validator(
         )
     })?;
 
-    let mut messages: Vec<String> = objects_of(data, validator, sh::MESSAGE)
-        .into_iter()
-        .filter_map(|t| match t {
-            Term::Literal(lit) => Some(lit.value().to_owned()),
-            _ => None,
-        })
-        .collect();
-    messages.sort();
-    let message = messages.into_iter().next();
+    let messages = declared_messages(data, validator)?;
     let severity =
         first_object_of(data, validator, sh::SEVERITY).and_then(|t| severity_from_term(&t));
 
     Ok(Validator {
         kind,
         query_text,
-        message,
+        messages,
         severity,
     })
 }
@@ -879,15 +889,7 @@ fn parse_component(
         }
     }
 
-    let mut component_messages: Vec<String> = objects_of(data, component, sh::MESSAGE)
-        .into_iter()
-        .filter_map(|t| match t {
-            Term::Literal(lit) => Some(lit.value().to_owned()),
-            _ => None,
-        })
-        .collect();
-    component_messages.sort();
-    let message = component_messages.into_iter().next();
+    let messages = declared_messages(data, component)?;
     let severity =
         first_object_of(data, component, sh::SEVERITY).and_then(|t| severity_from_term(&t));
 
@@ -897,9 +899,30 @@ fn parse_component(
         node_validators,
         property_validators,
         validators,
-        message,
+        messages,
         severity,
     })
+}
+
+/// Every `sh:message` of a validator or component node, as literals in canonical
+/// order. A value that is not an `xsd:string`, `rdf:langString`,
+/// `rdf:dirLangString` or `rdf:HTML` literal is refused rather than skipped.
+fn declared_messages(data: &RdfDataset, node: &Term) -> Result<Vec<Literal>, String> {
+    let mut messages = Vec::new();
+    for value in objects_of(data, node, sh::MESSAGE) {
+        match &value {
+            Term::Literal(lit) if crate::shapes::parser_is_text_literal(&value) => {
+                messages.push(lit.clone());
+            }
+            other => {
+                return Err(format!(
+                    "sh:message on {node} must be an xsd:string, rdf:langString, \
+                     rdf:dirLangString or rdf:HTML literal, got {other}"
+                ));
+            }
+        }
+    }
+    Ok(crate::report::canonical_messages(messages))
 }
 
 #[cfg(test)]
@@ -945,12 +968,12 @@ mod tests {
             node_validators: vec![Validator {
                 kind: ValidatorKind::Ask,
                 query_text: "ASK { ?this a ex:Thing }".to_owned(),
-                message: None,
+                messages: vec![],
                 severity: None,
             }],
             property_validators: vec![],
             validators: vec![],
-            message: None,
+            messages: vec![],
             severity: None,
         };
         let id = component.id.as_str().to_owned();
@@ -1183,8 +1206,9 @@ mod tests {
             &"http://datashapes.org/sh/tests/sparql/component/propertyValidator-select-001.test#germanLabel"));
         for r in &report.results {
             assert!(
-                r.message
-                    .as_ref()
+                r.messages
+                    .first()
+                    .map(Literal::value)
                     .expect("message present")
                     .contains("Values are literals with language"),
                 "message template should be substituted"

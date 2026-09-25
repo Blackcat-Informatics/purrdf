@@ -62,8 +62,8 @@
 use std::os::raw::c_char;
 
 use purrdf_validate::{
-    ChangeScope, SarifOptions, ShapesProductRefusal, entail_to_ntriples_string,
-    validate_changes_to_sarif_string, validate_to_sarif_string,
+    ChangeScope, ConformanceDisallows, SarifOptions, ShapesProductRefusal, ValidationOptions,
+    entail_to_ntriples_string, validate_changes_to_sarif_string, validate_to_sarif_string,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -76,15 +76,61 @@ use crate::{cstr_to_str, opt_cstr_to_str};
 ///
 /// The validate→SARIF sequence lives in [`validate_to_sarif_string`]; this only
 /// adds the C-ABI byte framing.
+///
+/// `conformance_disallows` is the request's conformance-disallow set as severity
+/// IRIs; empty is SHACL's default set.
 fn validate_to_sarif_bytes(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
+    conformance_disallows: &[&str],
 ) -> Result<Vec<u8>, String> {
-    Ok(
-        validate_to_sarif_string(shapes_ttl, shapes_base, data_nt, &SarifOptions::default())?
-            .into_bytes(),
-    )
+    let validation = if conformance_disallows.is_empty() {
+        ValidationOptions::default()
+    } else {
+        ValidationOptions::default()
+            .with_conformance_disallows(ConformanceDisallows::from_iris(conformance_disallows)?)
+    };
+    let options = SarifOptions {
+        validation,
+        ..SarifOptions::default()
+    };
+    Ok(validate_to_sarif_string(shapes_ttl, shapes_base, data_nt, &options)?.into_bytes())
+}
+
+/// The `count` C strings at `array`, borrowed.
+///
+/// `count == 0` is accepted with a NULL array — there is nothing to dereference.
+/// A NULL array with a non-zero count, or a NULL element, is refused before any
+/// dereference.
+///
+/// # Safety
+/// When `count` is non-zero, `array` must address at least `count` readable
+/// `*const c_char`, each null (refused here) or a NUL-terminated C string that
+/// outlives the returned borrows.
+unsafe fn cstr_array<'a>(
+    array: *const *const c_char,
+    count: usize,
+    entry: &str,
+) -> Result<Vec<&'a str>, PurrdfError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if array.is_null() {
+        return Err(PurrdfError::new(
+            PurrdfStatus::NullPointer,
+            format!("null array with a non-zero count ({count}) passed to {entry}"),
+        ));
+    }
+    let mut out = Vec::with_capacity(count);
+    for index in 0..count {
+        // SAFETY: the caller's contract above — the array is non-null (checked) and
+        // holds at least `count` readable elements, so `index < count` is in bounds.
+        // Each element is handed to `cstr_to_str`, which refuses a null pointer rather
+        // than dereferencing it.
+        out.push(unsafe { cstr_to_str(*array.add(index))? });
+    }
+    Ok(out)
 }
 
 /// Validate a data graph (N-Triples) against a shapes graph (Turtle) and write
@@ -97,15 +143,34 @@ fn validate_to_sarif_bytes(
 /// mis-parse. `data_nt` needs no counterpart — N-Triples admits no relative IRI by
 /// grammar, so a base there could only be ignored.
 ///
+/// `conformance_disallows` / `conformance_disallows_count` name the
+/// conformance-disallow set: the severity IRIs whose results make the data
+/// non-conforming — the report's verdict and every nested `sh:node` / `sh:not` /
+/// `sh:and` / `sh:or` / `sh:xone` check alike. `count == 0` (the array may then be
+/// NULL) is SHACL's default set, `sh:Violation`, `sh:Warning` and `sh:Info`; a
+/// value that is not an absolute IRI is a `ParseError`. The SARIF run carries
+/// `properties.shaclConforms` and `properties.shaclConformanceDisallows`, because the
+/// results alone cannot say whether the data conforms: an `sh:Debug` / `sh:Trace`
+/// result (SARIF `kind` `informational`, `level` `none`) appears in the log of a
+/// conforming report. A result's `message.text` is its untagged `sh:resultMessage`
+/// when it has one, else the first in canonical order; whenever that text alone
+/// would lose something (several messages, a language tag, a direction, an
+/// `rdf:HTML` message) the result's `properties.shaclMessages` lists every message
+/// as `{"text", "language"?, "direction"?, "datatype"?}`.
+///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
-/// `shapes_base_iri` must be null or a NUL-terminated C string;
-/// `out_buffer` must be a writable pointer; `out_error` must be null or writable.
+/// `shapes_base_iri` must be null or a NUL-terminated C string; when
+/// `conformance_disallows_count` is non-zero, `conformance_disallows` must address
+/// that many NUL-terminated C strings; `out_buffer` must be a writable pointer;
+/// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
     shapes_ttl: *const c_char,
     shapes_base_iri: *const c_char,
     data_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
@@ -120,7 +185,12 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
             let shapes = cstr_to_str(shapes_ttl)?;
             let base = opt_cstr_to_str(shapes_base_iri)?;
             let data = cstr_to_str(data_nt)?;
-            let bytes = validate_to_sarif_bytes(shapes, base, data)
+            let disallows = cstr_array(
+                conformance_disallows,
+                conformance_disallows_count,
+                "purrdf_shacl_validate_to_sarif",
+            )?;
+            let bytes = validate_to_sarif_bytes(shapes, base, data, &disallows)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_buffer = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)
@@ -835,7 +905,7 @@ mod tests {
 
     #[test]
     fn validate_emits_sarif_bytes() {
-        let bytes = validate_to_sarif_bytes(SHAPES, None, DATA).expect("sarif produced");
+        let bytes = validate_to_sarif_bytes(SHAPES, None, DATA, &[]).expect("sarif produced");
         let text = String::from_utf8(bytes).expect("utf8");
         assert!(text.contains("\"version\": \"2.1.0\""));
         assert!(text.contains("\"level\": \"error\""));
@@ -843,7 +913,103 @@ mod tests {
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(validate_to_sarif_bytes("@@@ not turtle", None, DATA).is_err());
+        assert!(validate_to_sarif_bytes("@@@ not turtle", None, DATA, &[]).is_err());
+    }
+
+    /// The conformance-disallow set crosses the boundary as a C string array and
+    /// reaches the validation: a Warning-graded violation does not conform under the
+    /// default set (count 0, NULL array) and conforms under `sh:Violation` alone; a
+    /// non-IRI level is a `ParseError`, and a NULL array with a non-zero count a
+    /// `NullPointer`, each refused before anything is validated.
+    #[test]
+    fn capi_validate_conformance_disallows() {
+        use std::ffi::CString;
+
+        use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+
+        let shapes = CString::new(SHAPES.replace(
+            "sh:path ex:age ;",
+            "sh:path ex:age ; sh:severity sh:Warning ;",
+        ))
+        .expect("no NUL");
+        let data = CString::new(DATA).expect("no NUL");
+        let conforms = |levels: &[&str]| -> (i32, Option<serde_json::Value>) {
+            let owned: Vec<CString> = levels
+                .iter()
+                .map(|level| CString::new(*level).expect("no NUL"))
+                .collect();
+            let pointers: Vec<*const c_char> = owned.iter().map(|level| level.as_ptr()).collect();
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString or a writable local; the array
+            // holds exactly `pointers.len()` elements.
+            let status = unsafe {
+                purrdf_shacl_validate_to_sarif(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    if pointers.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        pointers.as_ptr()
+                    },
+                    pointers.len(),
+                    &raw mut buffer,
+                    &raw mut error,
+                )
+            };
+            if status != PurrdfStatus::Ok as i32 {
+                // SAFETY: the error handle was written by the call above.
+                unsafe { purrdf_error_free(error) };
+                return (status, None);
+            }
+            // SAFETY: a successful call wrote a live buffer.
+            let text = unsafe {
+                let mut ptr: *const u8 = std::ptr::null();
+                let mut len = 0usize;
+                assert_eq!(
+                    purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
+                    PurrdfStatus::Ok as i32
+                );
+                let text = std::str::from_utf8(std::slice::from_raw_parts(ptr, len))
+                    .expect("utf8")
+                    .to_owned();
+                purrdf_buffer_free(buffer);
+                text
+            };
+            let log: serde_json::Value = serde_json::from_str(&text).expect("json");
+            (
+                status,
+                Some(log["runs"][0]["properties"]["shaclConforms"].clone()),
+            )
+        };
+        assert_eq!(
+            conforms(&[]),
+            (PurrdfStatus::Ok as i32, Some(serde_json::json!(false)))
+        );
+        assert_eq!(
+            conforms(&["http://www.w3.org/ns/shacl#Violation"]),
+            (PurrdfStatus::Ok as i32, Some(serde_json::json!(true)))
+        );
+        assert_eq!(conforms(&["Violation"]).0, PurrdfStatus::ParseError as i32);
+
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: a NULL array with a non-zero count is refused before any read.
+        let status = unsafe {
+            purrdf_shacl_validate_to_sarif(
+                shapes.as_ptr(),
+                std::ptr::null(),
+                data.as_ptr(),
+                std::ptr::null(),
+                1,
+                &raw mut buffer,
+                &raw mut error,
+            )
+        };
+        assert_eq!(status, PurrdfStatus::NullPointer as i32);
+        // SAFETY: the error handle was written by the call above.
+        unsafe { purrdf_error_free(error) };
     }
 
     /// A conforming base, so every violation a change test sees is the change's.
@@ -1039,7 +1205,8 @@ mod tests {
         // Admitting the product and parsing the shapes graph are two routes to ONE
         // verdict, which is the property a cache is only allowed to have.
         let via_product = admit_product_bytes(&product, DATA).expect("validated via product");
-        let via_document = validate_to_sarif_bytes(SHAPES, None, DATA).expect("validated directly");
+        let via_document =
+            validate_to_sarif_bytes(SHAPES, None, DATA, &[]).expect("validated directly");
         assert_eq!(via_product, via_document);
 
         // Rebuilding a CURRENT product reaches the byte-identical verdict too: the

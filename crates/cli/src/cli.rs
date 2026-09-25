@@ -926,6 +926,19 @@ pub(crate) enum Command {
         /// `--box-role-vocab` to `purrdf shacl pack` instead, and re-pack.
         #[arg(long = "box-role-vocab", value_name = "NS")]
         box_role_vocab: Option<String>,
+        /// A severity IRI in the conformance-disallow set: a result whose severity is in
+        /// the set makes the data non-conforming — the report's `sh:conforms` and every
+        /// nested `sh:node` / `sh:not` / `sh:and` / `sh:or` / `sh:xone` /
+        /// `sh:qualifiedValueShape` check alike — and a result whose severity is not in it
+        /// is reported without blocking. Repeatable; the set is exactly the IRIs named.
+        /// Omitted, the set is SHACL's default, `sh:Violation`, `sh:Warning` and
+        /// `sh:Info` (`sh:Debug` and `sh:Trace` are "not a constraint violation"). A
+        /// non-default set is echoed in the report as `sh:conformanceDisallows`. Each
+        /// value must be an absolute IRI, for example
+        /// `http://www.w3.org/ns/shacl#Violation`; any IRI is a severity, so a custom
+        /// one blocks exactly when it is named here.
+        #[arg(long = "conformance-disallows", value_name = "IRI")]
+        conformance_disallows: Vec<String>,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,

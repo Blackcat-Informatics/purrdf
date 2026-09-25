@@ -18,8 +18,11 @@ use crate::spec::{ExprKind, non_function_keys, primary_keys};
 use crate::term::{NamedNode, Term};
 
 use crate::shapes::{
-    ClosedMode, ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Path, Shape,
+    AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
+    InFlight, NodeKindValue, Parser, Path, Shape,
 };
+
+use super::annotations::Annotated;
 
 impl Parser<'_> {
     /// Parse all constraints declared directly on a shape node.
@@ -32,7 +35,7 @@ impl Parser<'_> {
         &mut self,
         id: &Term,
         is_property_shape: bool,
-    ) -> Result<Vec<Constraint>, String> {
+    ) -> Result<ParsedConstraints, String> {
         // Remember which shape these constraints belong to, so a `sh:select` node
         // expression resolves shape-level `sh:prefixes` exactly as `sh:sparql`
         // does. Saved and restored rather than cleared: an inline shape parsed
@@ -48,36 +51,44 @@ impl Parser<'_> {
         &mut self,
         id: &Term,
         is_property_shape: bool,
-    ) -> Result<Vec<Constraint>, String> {
-        let mut constraints: Vec<Constraint> = Vec::new();
+    ) -> Result<ParsedConstraints, String> {
+        // Every constraint is pushed with the reifier annotations of the
+        // statements that represent it (its T), so a deactivated one is never
+        // emitted and an overridden one carries its override. See
+        // `parser::annotations`.
+        let mut out = ParsedConstraints::default();
 
         // sh:class — each value is one constraint: a class IRI, or a SHACL list of
         // class IRIs read as a disjunction (SHACL 1.2 Core §4.1.1). Sorted for
         // determinism.
-        let mut classes: Vec<Vec<NamedNode>> = Vec::new();
+        let mut classes: Vec<(Vec<NamedNode>, Term)> = Vec::new();
         for value in self.objects_of(id, sh::CLASS) {
-            classes.push(self.iri_or_iri_list(&value, id, sh::CLASS)?);
+            classes.push((self.iri_or_iri_list(&value, id, sh::CLASS)?, value));
         }
-        classes.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
-        for members in classes {
-            constraints.push(Constraint::Class(members));
+        classes.sort_by(|a, b| iri_list_key(&a.0).cmp(&iri_list_key(&b.0)));
+        for (members, value) in classes {
+            let annotated = self.constraint_annotation(id, &[(sh::CLASS, &value)])?;
+            out.push(Constraint::Class(members), annotated);
         }
 
         // sh:datatype — an IRI or a SHACL list of IRIs (SHACL 1.2 Core §4.1.2);
         // at most one value, which the cardinality check has already enforced.
-        let mut datatypes: Vec<Vec<NamedNode>> = Vec::new();
+        let mut datatypes: Vec<(Vec<NamedNode>, Term)> = Vec::new();
         for value in self.objects_of(id, sh::DATATYPE) {
-            datatypes.push(self.iri_or_iri_list(&value, id, sh::DATATYPE)?);
+            datatypes.push((self.iri_or_iri_list(&value, id, sh::DATATYPE)?, value));
         }
-        datatypes.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
-        for members in datatypes {
-            constraints.push(Constraint::Datatype(members));
+        datatypes.sort_by(|a, b| iri_list_key(&a.0).cmp(&iri_list_key(&b.0)));
+        for (members, value) in datatypes {
+            let annotated = self.constraint_annotation(id, &[(sh::DATATYPE, &value)])?;
+            out.push(Constraint::Datatype(members), annotated);
         }
 
         // sh:nodeKind — one of the seven sh:NodeKind IRIs, or a SHACL list of the
         // four basic kinds (SHACL 1.2 Core §4.1.3).
         for value in self.objects_of(id, sh::NODE_KIND) {
-            constraints.push(Constraint::NodeKind(self.node_kinds(&value, id)?));
+            let kinds = self.node_kinds(&value, id)?;
+            let annotated = self.constraint_annotation(id, &[(sh::NODE_KIND, &value)])?;
+            out.push(Constraint::NodeKind(kinds), annotated);
         }
 
         // sh:minCount
@@ -85,7 +96,8 @@ impl Parser<'_> {
             let v = crate::shapes::parse_u64(&t).ok_or_else(|| {
                 format!("sh:minCount value is not a non-negative integer on {id}")
             })?;
-            constraints.push(Constraint::MinCount(v));
+            let annotated = self.constraint_annotation(id, &[(sh::MIN_COUNT, &t)])?;
+            out.push(Constraint::MinCount(v), annotated);
         }
 
         // sh:maxCount
@@ -93,7 +105,8 @@ impl Parser<'_> {
             let v = crate::shapes::parse_u64(&t).ok_or_else(|| {
                 format!("sh:maxCount value is not a non-negative integer on {id}")
             })?;
-            constraints.push(Constraint::MaxCount(v));
+            let annotated = self.constraint_annotation(id, &[(sh::MAX_COUNT, &t)])?;
+            out.push(Constraint::MaxCount(v), annotated);
         }
 
         // sh:minLength
@@ -101,7 +114,8 @@ impl Parser<'_> {
             let v = crate::shapes::parse_u64(&t).ok_or_else(|| {
                 format!("sh:minLength value is not a non-negative integer on {id}")
             })?;
-            constraints.push(Constraint::MinLength(v));
+            let annotated = self.constraint_annotation(id, &[(sh::MIN_LENGTH, &t)])?;
+            out.push(Constraint::MinLength(v), annotated);
         }
 
         // sh:maxLength
@@ -109,7 +123,8 @@ impl Parser<'_> {
             let v = crate::shapes::parse_u64(&t).ok_or_else(|| {
                 format!("sh:maxLength value is not a non-negative integer on {id}")
             })?;
-            constraints.push(Constraint::MaxLength(v));
+            let annotated = self.constraint_annotation(id, &[(sh::MAX_LENGTH, &t)])?;
+            out.push(Constraint::MaxLength(v), annotated);
         }
 
         // sh:languageIn — an RDF list of language-tag string literals
@@ -128,7 +143,8 @@ impl Parser<'_> {
                     }
                 }
             }
-            constraints.push(Constraint::LanguageIn(tags));
+            let annotated = self.constraint_annotation(id, &[(sh::LANGUAGE_IN, &list_head)])?;
+            out.push(Constraint::LanguageIn(tags), annotated);
         }
 
         // sh:not — a single nested shape (mirrors sh:node).
@@ -143,8 +159,9 @@ impl Parser<'_> {
         let mut not_refs: Vec<Term> = self.objects_of(id, sh::NOT);
         crate::term::sort_terms_canonical(&mut not_refs);
         for not_ref in not_refs {
+            let annotated = self.constraint_annotation(id, &[(sh::NOT, &not_ref)])?;
             let inner = self.parse_inline_shape(not_ref)?;
-            constraints.push(Constraint::Not(Box::new(inner)));
+            out.push(Constraint::Not(Box::new(inner)), annotated);
         }
 
         // sh:closed (+ sh:ignoredProperties) — node-shape-level closed-world check.
@@ -153,7 +170,8 @@ impl Parser<'_> {
         // refused; `false` emits no constraint (see `boolean_value`), `true`
         // closes the shape over its own property shapes and `sh:ByTypes` over the
         // properties the value node's types collect.
-        let closed_mode = match self.first_object_of(id, sh::CLOSED) {
+        let closed_value = self.first_object_of(id, sh::CLOSED);
+        let closed_mode = match closed_value.clone() {
             None => None,
             Some(Term::NamedNode(n)) if n.as_str() == sh::BY_TYPES => {
                 Some(ClosedMode::ByTypes(self.closed_type_index()?))
@@ -169,6 +187,25 @@ impl Parser<'_> {
         };
         let mut ignored_lists: Vec<Term> = self.objects_of(id, sh::IGNORED_PROPERTIES);
         crate::term::sort_terms_canonical(&mut ignored_lists);
+        // The closed constraint's T: its `sh:closed` statement and every
+        // `sh:ignoredProperties` statement beside it.
+        let mut closed_triples: Vec<(&str, &Term)> = Vec::new();
+        if let Some(value) = &closed_value {
+            closed_triples.push((sh::CLOSED, value));
+        }
+        for list_head in &ignored_lists {
+            closed_triples.push((sh::IGNORED_PROPERTIES, list_head));
+        }
+        let closed_annotation = if closed_mode.is_some() {
+            self.constraint_annotation(id, &closed_triples)?
+        } else {
+            // `sh:closed false`, or `sh:ignoredProperties` with no `sh:closed`:
+            // the component is inactive, and its statements represent nothing.
+            for &(predicate, value) in &closed_triples {
+                self.apply_to_nothing(id, predicate, value)?;
+            }
+            Annotated::Plain
+        };
         if let Some(mode) = closed_mode {
             let mut ignored: Vec<NamedNode> = Vec::new();
             for list_head in ignored_lists {
@@ -188,7 +225,7 @@ impl Parser<'_> {
             }
             ignored.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             ignored.dedup();
-            constraints.push(Constraint::Closed { ignored, mode });
+            out.push(Constraint::Closed { ignored, mode }, closed_annotation);
         }
 
         // sh:uniqueLang — a well-typed xsd:boolean; only the term `true` activates it.
@@ -196,40 +233,46 @@ impl Parser<'_> {
             let flag = boolean_value(&t).ok_or_else(|| {
                 format!("sh:uniqueLang on shape {id} must be an xsd:boolean literal, got {t}")
             })?;
-            constraints.push(Constraint::UniqueLang(flag));
+            let annotated = self.constraint_annotation(id, &[(sh::UNIQUE_LANG, &t)])?;
+            out.push(Constraint::UniqueLang(flag), annotated);
         }
 
         // sh:minInclusive / sh:maxInclusive
         let mut min_inc: Vec<Term> = self.objects_of(id, sh::MIN_INCLUSIVE);
         crate::term::sort_terms_canonical(&mut min_inc);
         for t in min_inc {
-            constraints.push(Constraint::MinInclusive(t));
+            let annotated = self.constraint_annotation(id, &[(sh::MIN_INCLUSIVE, &t)])?;
+            out.push(Constraint::MinInclusive(t), annotated);
         }
 
         let mut max_inc: Vec<Term> = self.objects_of(id, sh::MAX_INCLUSIVE);
         crate::term::sort_terms_canonical(&mut max_inc);
         for t in max_inc {
-            constraints.push(Constraint::MaxInclusive(t));
+            let annotated = self.constraint_annotation(id, &[(sh::MAX_INCLUSIVE, &t)])?;
+            out.push(Constraint::MaxInclusive(t), annotated);
         }
 
         // sh:minExclusive / sh:maxExclusive
         let mut min_exc: Vec<Term> = self.objects_of(id, sh::MIN_EXCLUSIVE);
         crate::term::sort_terms_canonical(&mut min_exc);
         for t in min_exc {
-            constraints.push(Constraint::MinExclusive(t));
+            let annotated = self.constraint_annotation(id, &[(sh::MIN_EXCLUSIVE, &t)])?;
+            out.push(Constraint::MinExclusive(t), annotated);
         }
 
         let mut max_exc: Vec<Term> = self.objects_of(id, sh::MAX_EXCLUSIVE);
         crate::term::sort_terms_canonical(&mut max_exc);
         for t in max_exc {
-            constraints.push(Constraint::MaxExclusive(t));
+            let annotated = self.constraint_annotation(id, &[(sh::MAX_EXCLUSIVE, &t)])?;
+            out.push(Constraint::MaxExclusive(t), annotated);
         }
 
         // sh:hasValue
         let mut hv: Vec<Term> = self.objects_of(id, sh::HAS_VALUE);
         crate::term::sort_terms_canonical(&mut hv);
         for t in hv {
-            constraints.push(Constraint::HasValue(t));
+            let annotated = self.constraint_annotation(id, &[(sh::HAS_VALUE, &t)])?;
+            out.push(Constraint::HasValue(t), annotated);
         }
 
         // sh:in
@@ -237,21 +280,24 @@ impl Parser<'_> {
         crate::term::sort_terms_canonical(&mut in_lists);
         for list_head in in_lists {
             let items = self.walk_rdf_list(&list_head, id)?;
-            constraints.push(Constraint::In(items));
+            let annotated = self.constraint_annotation(id, &[(sh::IN, &list_head)])?;
+            out.push(Constraint::In(items), annotated);
         }
 
         // sh:pattern + optional sh:flags — both xsd:string literals, at most one
         // of each (the cardinality check has already refused a second value).
-        let mut patterns: Vec<String> = Vec::new();
+        let mut patterns: Vec<(String, Term)> = Vec::new();
         for t in self.objects_of(id, sh::PATTERN) {
-            patterns.push(string_value(&t).ok_or_else(|| {
+            let regex = string_value(&t).ok_or_else(|| {
                 format!("sh:pattern on shape {id} must be an xsd:string literal, got {t}")
-            })?);
+            })?;
+            patterns.push((regex, t));
         }
-        patterns.sort();
+        patterns.sort_by(|a, b| a.0.cmp(&b.0));
         let mut flags_values: Vec<String> = Vec::new();
-        for t in self.objects_of(id, sh::FLAGS) {
-            flags_values.push(string_value(&t).ok_or_else(|| {
+        let flags_terms = self.objects_of(id, sh::FLAGS);
+        for t in &flags_terms {
+            flags_values.push(string_value(t).ok_or_else(|| {
                 format!("sh:flags on shape {id} must be an xsd:string literal, got {t}")
             })?);
         }
@@ -262,12 +308,26 @@ impl Parser<'_> {
             ));
         }
         let flags_val: Option<String> = flags_values.pop();
-        for regex in patterns {
-            constraints.push(Constraint::Pattern {
-                regex,
-                flags: flags_val.clone(),
-                compiled: Arc::new(OnceLock::new()),
-            });
+        if patterns.is_empty() {
+            // `sh:flags` with no `sh:pattern` is an inactive component.
+            for t in &flags_terms {
+                self.apply_to_nothing(id, sh::FLAGS, t)?;
+            }
+        }
+        for (regex, pattern_term) in patterns {
+            // The pattern constraint's T: its `sh:pattern` statement and the
+            // shape's `sh:flags` statement, which every pattern on it shares.
+            let mut triples: Vec<(&str, &Term)> = vec![(sh::PATTERN, &pattern_term)];
+            triples.extend(flags_terms.iter().map(|t| (sh::FLAGS, t)));
+            let annotated = self.constraint_annotation(id, &triples)?;
+            out.push(
+                Constraint::Pattern {
+                    regex,
+                    flags: flags_val.clone(),
+                    compiled: Arc::new(OnceLock::new()),
+                },
+                annotated,
+            );
         }
 
         // The SHACL 1.2 Core list components (§4.9). Each value node must be a
@@ -278,7 +338,8 @@ impl Parser<'_> {
                     "sh:minListLength on shape {id} must be a non-negative xsd:integer, got {t}"
                 )
             })?;
-            constraints.push(Constraint::MinListLength(n));
+            let annotated = self.constraint_annotation(id, &[(sh::MIN_LIST_LENGTH, &t)])?;
+            out.push(Constraint::MinListLength(n), annotated);
         }
         for t in self.objects_of(id, sh::MAX_LIST_LENGTH) {
             let n = crate::shapes::parse_u64(&t).ok_or_else(|| {
@@ -286,13 +347,15 @@ impl Parser<'_> {
                     "sh:maxListLength on shape {id} must be a non-negative xsd:integer, got {t}"
                 )
             })?;
-            constraints.push(Constraint::MaxListLength(n));
+            let annotated = self.constraint_annotation(id, &[(sh::MAX_LIST_LENGTH, &t)])?;
+            out.push(Constraint::MaxListLength(n), annotated);
         }
         for t in self.objects_of(id, sh::UNIQUE_MEMBERS) {
             let flag = boolean_value(&t).ok_or_else(|| {
                 format!("sh:uniqueMembers on shape {id} must be an xsd:boolean literal, got {t}")
             })?;
-            constraints.push(Constraint::UniqueMembers(flag));
+            let annotated = self.constraint_annotation(id, &[(sh::UNIQUE_MEMBERS, &t)])?;
+            out.push(Constraint::UniqueMembers(flag), annotated);
         }
         let mut member_shapes: Vec<Term> = self.objects_of(id, sh::MEMBER_SHAPE);
         crate::term::sort_terms_canonical(&mut member_shapes);
@@ -306,8 +369,9 @@ impl Parser<'_> {
                      values of sh:memberShape must be node shapes"
                 ));
             }
+            let annotated = self.constraint_annotation(id, &[(sh::MEMBER_SHAPE, &member_ref)])?;
             let inner = self.parse_inline_shape(member_ref)?;
-            constraints.push(Constraint::MemberShape(Box::new(inner)));
+            out.push(Constraint::MemberShape(Box::new(inner)), annotated);
         }
 
         // sh:singleLine — SHACL 1.2 Core §7.4.4: "The values of sh:singleLine in a
@@ -317,20 +381,22 @@ impl Parser<'_> {
             let flag = boolean_value(&t).ok_or_else(|| {
                 format!("sh:singleLine on shape {id} must be an xsd:boolean literal, got {t}")
             })?;
-            constraints.push(Constraint::SingleLine(flag));
+            let annotated = self.constraint_annotation(id, &[(sh::SINGLE_LINE, &t)])?;
+            out.push(Constraint::SingleLine(flag), annotated);
         }
 
         // sh:rootClass — SHACL 1.2 Core §7.9.4: "The values of sh:rootClass in a
         // shape are either IRIs or blank nodes that are well-formed SHACL lists
         // where all members are IRIs." Each value is one constraint, sorted for
         // determinism.
-        let mut root_classes: Vec<Vec<NamedNode>> = Vec::new();
+        let mut root_classes: Vec<(Vec<NamedNode>, Term)> = Vec::new();
         for value in self.objects_of(id, sh::ROOT_CLASS) {
-            root_classes.push(self.iri_or_iri_list(&value, id, sh::ROOT_CLASS)?);
+            root_classes.push((self.iri_or_iri_list(&value, id, sh::ROOT_CLASS)?, value));
         }
-        root_classes.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
-        for roots in root_classes {
-            constraints.push(Constraint::RootClass(roots));
+        root_classes.sort_by(|a, b| iri_list_key(&a.0).cmp(&iri_list_key(&b.0)));
+        for (roots, value) in root_classes {
+            let annotated = self.constraint_annotation(id, &[(sh::ROOT_CLASS, &value)])?;
+            out.push(Constraint::RootClass(roots), annotated);
         }
 
         // sh:uniqueValuesFor — SHACL 1.2 Core §7.9.5: its values are "An IRI of a
@@ -340,21 +406,26 @@ impl Parser<'_> {
         // the constraint carries the target declarations of THIS shape node,
         // which is what they are however the evaluation arrives here. Each value
         // is one constraint, sorted for determinism.
-        let mut unique_values_for: Vec<Vec<NamedNode>> = Vec::new();
+        let mut unique_values_for: Vec<(Vec<NamedNode>, Term)> = Vec::new();
         for value in self.objects_of(id, sh::UNIQUE_VALUES_FOR) {
             let mut properties = self.iri_or_iri_list(&value, id, sh::UNIQUE_VALUES_FOR)?;
             properties.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             properties.dedup();
-            unique_values_for.push(properties);
+            unique_values_for.push((properties, value));
         }
         if !unique_values_for.is_empty() {
-            unique_values_for.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
+            unique_values_for.sort_by(|a, b| iri_list_key(&a.0).cmp(&iri_list_key(&b.0)));
             let targets = self.parse_targets(id)?;
-            for properties in unique_values_for {
-                constraints.push(Constraint::UniqueValuesFor {
-                    properties,
-                    targets: targets.clone(),
-                });
+            for (properties, value) in unique_values_for {
+                let annotated =
+                    self.constraint_annotation(id, &[(sh::UNIQUE_VALUES_FOR, &value)])?;
+                out.push(
+                    Constraint::UniqueValuesFor {
+                        properties,
+                        targets: targets.clone(),
+                    },
+                    annotated,
+                );
             }
         }
 
@@ -364,30 +435,34 @@ impl Parser<'_> {
         let mut some_value_refs: Vec<Term> = self.objects_of(id, sh::SOME_VALUE);
         crate::term::sort_terms_canonical(&mut some_value_refs);
         for some_value_ref in some_value_refs {
+            let annotated = self.constraint_annotation(id, &[(sh::SOME_VALUE, &some_value_ref)])?;
             let inner = self.parse_inline_shape(some_value_ref)?;
-            constraints.push(Constraint::SomeValue(Box::new(inner)));
+            out.push(Constraint::SomeValue(Box::new(inner)), annotated);
         }
 
         // sh:and / sh:or / sh:xone — each is an RDF list of shape nodes
         let mut and_lists: Vec<Term> = self.objects_of(id, sh::AND);
         crate::term::sort_terms_canonical(&mut and_lists);
         for list_head in and_lists {
+            let annotated = self.constraint_annotation(id, &[(sh::AND, &list_head)])?;
             let members = self.parse_shape_list(&list_head, id)?;
-            constraints.push(Constraint::And(members));
+            out.push(Constraint::And(members), annotated);
         }
 
         let mut or_lists: Vec<Term> = self.objects_of(id, sh::OR);
         crate::term::sort_terms_canonical(&mut or_lists);
         for list_head in or_lists {
+            let annotated = self.constraint_annotation(id, &[(sh::OR, &list_head)])?;
             let members = self.parse_shape_list(&list_head, id)?;
-            constraints.push(Constraint::Or(members));
+            out.push(Constraint::Or(members), annotated);
         }
 
         let mut xone_lists: Vec<Term> = self.objects_of(id, sh::XONE);
         crate::term::sort_terms_canonical(&mut xone_lists);
         for list_head in xone_lists {
+            let annotated = self.constraint_annotation(id, &[(sh::XONE, &list_head)])?;
             let members = self.parse_shape_list(&list_head, id)?;
-            constraints.push(Constraint::Xone(members));
+            out.push(Constraint::Xone(members), annotated);
         }
 
         // sh:node — the positive form of sh:not, and parsed the same way: a shape
@@ -396,8 +471,9 @@ impl Parser<'_> {
         let mut node_refs: Vec<Term> = self.objects_of(id, sh::NODE);
         crate::term::sort_terms_canonical(&mut node_refs);
         for node_ref in node_refs {
+            let annotated = self.constraint_annotation(id, &[(sh::NODE, &node_ref)])?;
             let inner = self.parse_inline_shape(node_ref)?;
-            constraints.push(Constraint::Node(Box::new(inner)));
+            out.push(Constraint::Node(Box::new(inner)), annotated);
         }
 
         // sh:sparql — SHACL-AF SPARQL constraint components.
@@ -448,14 +524,26 @@ impl Parser<'_> {
             }
 
             // Optional per-constraint sh:message / sh:severity overrides.
-            let message = self.message_of(&c_node)?;
+            let messages = self.messages_of(&c_node)?;
             let severity = self.severity_of(&c_node)?;
 
-            constraints.push(Constraint::Sparql {
-                select,
-                message,
-                severity,
-            });
+            // SHACL 1.2 SPARQL Extensions, "Validation with SPARQL-based
+            // Constraints": "There are no validation results if the SPARQL-based
+            // constraint has true as a value for the property sh:deactivated." A
+            // reifier `sh:deactivated true` on the `sh:sparql` statement
+            // deactivates it the same way.
+            let annotated = self.constraint_annotation(id, &[(sh::SPARQL, &c_node)])?;
+            if self.deactivated_of(&c_node)? {
+                continue;
+            }
+            out.push(
+                Constraint::Sparql {
+                    select,
+                    messages,
+                    severity,
+                },
+                annotated,
+            );
         }
 
         // sh:expression — SHACL-AF §5.7 expression constraint component. Each
@@ -467,14 +555,26 @@ impl Parser<'_> {
         for expr_node in expr_nodes {
             let expr = self.parse_node_expr(&expr_node)?;
 
-            let message = self.message_of(&expr_node)?;
+            let messages = self.messages_of(&expr_node)?;
             let severity = self.severity_of(&expr_node)?;
 
-            constraints.push(Constraint::Expression {
-                expr,
-                message,
-                severity,
-            });
+            // A structured expression node carries its constraint's `sh:message` /
+            // `sh:severity`, and its `sh:deactivated` exactly as a SPARQL-based
+            // constraint node does: `true` means the constraint produces nothing.
+            // (A constant — an IRI or a literal — is a term, not a node carrying
+            // expression properties.)
+            let annotated = self.constraint_annotation(id, &[(sh::EXPRESSION, &expr_node)])?;
+            if matches!(expr_node, Term::BlankNode(_)) && self.deactivated_of(&expr_node)? {
+                continue;
+            }
+            out.push(
+                Constraint::Expression {
+                    expr,
+                    messages,
+                    severity,
+                },
+                annotated,
+            );
         }
 
         // sh:nodeByExpression — SHACL 1.2 Node Expressions §7.2. The expression
@@ -490,15 +590,20 @@ impl Parser<'_> {
             // reach the constraint. See `Parser::node_by_expr_constants`.
             self.record_node_by_expr_constants(id, &expr);
 
-            let message = self.message_of(&expr_node)?;
+            let messages = self.messages_of(&expr_node)?;
             let severity = self.severity_of(&expr_node)?;
 
-            constraints.push(Constraint::NodeByExpression {
-                expr,
-                shapes: self.share_node_shape_index(),
-                message,
-                severity,
-            });
+            let annotated =
+                self.constraint_annotation(id, &[(sh::NODE_BY_EXPRESSION, &expr_node)])?;
+            out.push(
+                Constraint::NodeByExpression {
+                    expr,
+                    shapes: self.share_node_shape_index(),
+                    messages,
+                    severity,
+                },
+                annotated,
+            );
         }
 
         // sh:equals / sh:disjoint / sh:subsetOf / sh:lessThan /
@@ -519,7 +624,7 @@ impl Parser<'_> {
                 Constraint::LessThanOrEquals as fn(_) -> _,
             ),
         ] {
-            let mut paths: Vec<Path> = Vec::new();
+            let mut paths: Vec<(Path, Term)> = Vec::new();
             for value in self.objects_of(id, pred) {
                 let path = self
                     .parse_path(&value, id, &mut FastSet::default())
@@ -529,24 +634,25 @@ impl Parser<'_> {
                              got {value}: {e}"
                         )
                     })?;
-                paths.push(path);
+                paths.push((path, value));
             }
             // One deterministic order whatever the blank-node labels: IRI paths
             // first, by IRI (the order these constraints always had), then every
             // other path by its SPARQL rendering.
-            paths.sort_by_cached_key(|path| match path {
+            paths.sort_by_cached_key(|(path, _)| match path {
                 Path::Predicate(n) => (false, n.as_str().to_owned()),
                 other => (true, crate::path::path_to_sparql(other)),
             });
-            for path in paths {
-                constraints.push(make(path));
+            for (path, value) in paths {
+                let annotated = self.constraint_annotation(id, &[(pred, &value)])?;
+                out.push(make(path), annotated);
             }
         }
 
         // sh:qualifiedValueShape + sh:qualifiedMinCount / sh:qualifiedMaxCount
         // (§4.5.4–4.5.5). The counts require the shape and vice versa — a
         // dangling half of the pair is malformed and hard-fails.
-        constraints.extend(self.parse_qualified_value_shapes(id)?);
+        self.parse_qualified_value_shapes(id, &mut out)?;
 
         // Custom SHACL-SPARQL constraint components. A shape that carries values
         // for all required parameters of a declared component is treated as a
@@ -556,13 +662,37 @@ impl Parser<'_> {
         // validators take precedence over generic validators; if none apply,
         // SHACL-SPARQL requires that the component be ignored.
         let shape_severity = self.severity_of(id)?;
-        let shape_message = self.message_of(id)?;
+        let shape_messages = self.messages_of(id)?;
 
+        // Each emitted usage is held with its T — the `(parameter path, value)`
+        // statements that represent it — until the registry borrow ends, and then
+        // pushed with its reifier annotations. Statements of a usage SHACL-SPARQL
+        // says to ignore (no validator for this shape kind), or of a component
+        // missing a required parameter, represent no constraint.
+        let mut usages: Vec<(Constraint, Vec<(String, Term)>)> = Vec::new();
+        let mut inert: Vec<(String, Term)> = Vec::new();
         let mut components: Vec<&Component> = self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
         for component in components {
             let instances = component.instantiate(id, |path| self.objects_of(id, path))?;
+            let triples_of = |bindings: &[(String, Term)]| -> Vec<(String, Term)> {
+                bindings
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        component
+                            .parameters
+                            .iter()
+                            .find(|parameter| &parameter.name == name)
+                            .map(|parameter| (parameter.path.as_str().to_owned(), value.clone()))
+                    })
+                    .collect()
+            };
             if instances.is_empty() {
+                for parameter in &component.parameters {
+                    for value in self.objects_of(id, parameter.path.as_str()) {
+                        inert.push((parameter.path.as_str().to_owned(), value));
+                    }
+                }
                 continue;
             }
 
@@ -579,6 +709,9 @@ impl Parser<'_> {
                 scoped
             };
             let Some(validator) = matching.first() else {
+                for bindings in &instances {
+                    inert.extend(triples_of(bindings));
+                }
                 continue;
             };
 
@@ -596,45 +729,79 @@ impl Parser<'_> {
                     .clone()
                     .or_else(|| validator.severity.clone())
                     .or_else(|| component.severity.clone());
-                let message = shape_message
-                    .clone()
-                    .or_else(|| validator.message.clone())
-                    .or_else(|| component.message.clone());
+                // The first of shape, validator, component that declares any
+                // message supplies ALL of its messages.
+                let messages = [&shape_messages, &validator.messages, &component.messages]
+                    .into_iter()
+                    .find(|messages| !messages.is_empty())
+                    .cloned()
+                    .unwrap_or_default();
 
-                constraints.push(Constraint::Component {
-                    component: component.id.clone(),
-                    source_shape: id.clone(),
-                    bindings,
-                    validator: component_validator,
-                    message,
-                    severity,
-                });
+                let triples = triples_of(&bindings);
+                usages.push((
+                    Constraint::Component {
+                        component: component.id.clone(),
+                        source_shape: id.clone(),
+                        bindings,
+                        validator: component_validator,
+                        messages,
+                        severity,
+                    },
+                    triples,
+                ));
             }
         }
+        for (predicate, value) in &inert {
+            self.apply_to_nothing(id, predicate, value)?;
+        }
+        for (constraint, triples) in usages {
+            let triples: Vec<(&str, &Term)> = triples
+                .iter()
+                .map(|(predicate, value)| (predicate.as_str(), value))
+                .collect();
+            let annotated = self.constraint_annotation(id, &triples)?;
+            out.push(constraint, annotated);
+        }
 
-        Ok(constraints)
+        Ok(out)
     }
 
-    /// Parse the qualified-value-shape constraint(s) declared on `id`.
+    /// Parse the qualified-value-shape constraint(s) declared on `id` into `out`.
     ///
-    /// Returns one [`Constraint::QualifiedValueShape`] per `sh:qualifiedValueShape`
+    /// Emits one [`Constraint::QualifiedValueShape`] per `sh:qualifiedValueShape`
     /// object (sorted for determinism). The declared `sh:qualifiedMinCount` /
     /// `sh:qualifiedMaxCount` apply to each. When
     /// `sh:qualifiedValueShapesDisjoint true` is set, the sibling qualified value
     /// shapes (§4.5.5: the values of `sh:property/sh:qualifiedValueShape` on the
     /// parents of `id`, minus the constraint's own shape) are parsed and stored.
-    fn parse_qualified_value_shapes(&mut self, id: &Term) -> Result<Vec<Constraint>, String> {
+    ///
+    /// The min and the max are two constraints of two components
+    /// (`sh:QualifiedMinCountConstraintComponent`,
+    /// `sh:QualifiedMaxCountConstraintComponent`) that share the
+    /// `sh:qualifiedValueShape` statement, so each has its own T: the shared
+    /// statements plus its own count. When their reifier annotations resolve
+    /// alike they stay one [`Constraint::QualifiedValueShape`] carrying both
+    /// bounds; when they differ, each bound becomes its own constraint carrying
+    /// its own annotation, and a deactivated bound is dropped alone.
+    fn parse_qualified_value_shapes(
+        &mut self,
+        id: &Term,
+        out: &mut ParsedConstraints,
+    ) -> Result<(), String> {
         let mut qvs_nodes: Vec<Term> = self.objects_of(id, sh::QUALIFIED_VALUE_SHAPE);
         crate::term::sort_terms_canonical(&mut qvs_nodes);
 
-        let min_count = match self.first_object_of(id, sh::QUALIFIED_MIN_COUNT) {
-            Some(t) => Some(crate::shapes::parse_u64(&t).ok_or_else(|| {
+        let min_term = self.first_object_of(id, sh::QUALIFIED_MIN_COUNT);
+        let max_term = self.first_object_of(id, sh::QUALIFIED_MAX_COUNT);
+        let disjoint_term = self.first_object_of(id, sh::QUALIFIED_VALUE_SHAPES_DISJOINT);
+        let min_count = match &min_term {
+            Some(t) => Some(crate::shapes::parse_u64(t).ok_or_else(|| {
                 format!("sh:qualifiedMinCount value is not a non-negative integer on {id}")
             })?),
             None => None,
         };
-        let max_count = match self.first_object_of(id, sh::QUALIFIED_MAX_COUNT) {
-            Some(t) => Some(crate::shapes::parse_u64(&t).ok_or_else(|| {
+        let max_count = match &max_term {
+            Some(t) => Some(crate::shapes::parse_u64(t).ok_or_else(|| {
                 format!("sh:qualifiedMaxCount value is not a non-negative integer on {id}")
             })?),
             None => None,
@@ -645,7 +812,16 @@ impl Parser<'_> {
             // sh:qualifiedValueShape leaves the constraint component INACTIVE
             // (its mandatory parameter is absent — W3C core/node/qualified-001
             // expects the dangling counts to be ignored, not a hard failure).
-            return Ok(vec![]);
+            for (predicate, term) in [
+                (sh::QUALIFIED_MIN_COUNT, &min_term),
+                (sh::QUALIFIED_MAX_COUNT, &max_term),
+                (sh::QUALIFIED_VALUE_SHAPES_DISJOINT, &disjoint_term),
+            ] {
+                if let Some(term) = term {
+                    self.apply_to_nothing(id, predicate, term)?;
+                }
+            }
+            return Ok(());
         }
         if min_count.is_none() && max_count.is_none() {
             return Err(format!(
@@ -654,27 +830,58 @@ impl Parser<'_> {
             ));
         }
 
-        let disjoint = self
-            .first_object_of(id, sh::QUALIFIED_VALUE_SHAPES_DISJOINT)
-            .is_some_and(|t| matches!(&t, Term::Literal(lit) if lit.value() == "true"));
+        let disjoint = disjoint_term
+            .as_ref()
+            .is_some_and(|t| matches!(t, Term::Literal(lit) if lit.value() == "true"));
 
-        let mut out = Vec::with_capacity(qvs_nodes.len());
         for qvs_node in &qvs_nodes {
+            // Each bound's T: the shared statements, then its own count.
+            let mut shared: Vec<(&str, &Term)> = vec![(sh::QUALIFIED_VALUE_SHAPE, qvs_node)];
+            if let Some(term) = &disjoint_term {
+                shared.push((sh::QUALIFIED_VALUE_SHAPES_DISJOINT, term));
+            }
+            let bound_annotation = |parser: &mut Self,
+                                    predicate: &'static str,
+                                    term: &Option<Term>|
+             -> Result<Option<Annotated>, String> {
+                let Some(term) = term else {
+                    return Ok(None);
+                };
+                let mut triples = shared.clone();
+                triples.push((predicate, term));
+                parser.constraint_annotation(id, &triples).map(Some)
+            };
+            let min_annotation = bound_annotation(self, sh::QUALIFIED_MIN_COUNT, &min_term)?;
+            let max_annotation = bound_annotation(self, sh::QUALIFIED_MAX_COUNT, &max_term)?;
+
             let shape = self.parse_inline_shape(qvs_node.clone())?;
             let siblings = if disjoint {
                 self.parse_sibling_qualified_shapes(id, qvs_node)?
             } else {
                 vec![]
             };
-            out.push(Constraint::QualifiedValueShape {
-                shape: Box::new(shape),
-                siblings,
+            let constraint = |min_count, max_count| Constraint::QualifiedValueShape {
+                shape: Box::new(shape.clone()),
+                siblings: siblings.clone(),
                 min_count,
                 max_count,
                 disjoint,
-            });
+            };
+            match (min_annotation, max_annotation) {
+                (Some(min), Some(max)) if min == max => {
+                    out.push(constraint(min_count, max_count), min);
+                }
+                (min, max) => {
+                    if let Some(min) = min {
+                        out.push(constraint(min_count, None), min);
+                    }
+                    if let Some(max) = max {
+                        out.push(constraint(None, max_count), max);
+                    }
+                }
+            }
         }
-        Ok(out)
+        Ok(())
     }
 
     /// Collect and parse the sibling qualified value shapes of `own_qvs` (§4.5.5):
@@ -1873,6 +2080,35 @@ pub(crate) fn boolean_value(term: &Term) -> Option<bool> {
     match purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()) {
         Ok(Some(purrdf_xsd::XsdValue::Boolean(_))) => Some(lit.value() == "true"),
         _ => None,
+    }
+}
+
+/// A shape's constraints with the per-constraint reifier annotations that apply
+/// to them, in the order the parser emits them.
+#[derive(Debug, Default)]
+pub(crate) struct ParsedConstraints {
+    /// The constraints the shape declares, less every deactivated one.
+    pub(crate) constraints: Vec<Constraint>,
+    /// The overrides, by index into [`Self::constraints`], in index order.
+    pub(crate) annotations: Vec<ConstraintAnnotation>,
+}
+
+impl ParsedConstraints {
+    /// Emit `constraint` as its annotations resolved: dropped when deactivated,
+    /// recorded with its override when overridden.
+    pub(crate) fn push(&mut self, constraint: Constraint, annotated: Annotated) {
+        match annotated {
+            Annotated::Deactivated => {}
+            Annotated::Plain => self.constraints.push(constraint),
+            Annotated::Override { severity, messages } => {
+                self.annotations.push(ConstraintAnnotation {
+                    constraint: AnnotatedConstraint::Constraint(self.constraints.len()),
+                    severity,
+                    messages,
+                });
+                self.constraints.push(constraint);
+            }
+        }
     }
 }
 

@@ -69,7 +69,7 @@ pub use build::{
     build_report_sarif_with, diagnostics_to_sarif_string, report_to_sarif_string,
 };
 pub use entail::entail_to_ntriples_string;
-pub use model::{Level, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
+pub use model::{Level, ResultKind, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
 pub use product::{
     IdentityComponentDiff, ShapesProductDiff, ShapesProductRefusal, admit_shapes_product,
     admit_shapes_product_expecting, admit_shapes_product_with_implementations,
@@ -96,4 +96,9 @@ pub use regime::{
 // name the type it is handed would have to re-spell it, and two spellings of one
 // answer is how the two arms end up collapsed.
 pub use purrdf_shapes::engine::ChangeScope;
+/// The validation-request options and the conformance-disallow set they carry,
+/// re-exported so a host binding names them without depending on the engine
+/// crate — [`SarifOptions::validation`] is where they travel.
+pub use purrdf_shapes::engine::ValidationOptions;
+pub use purrdf_shapes::report::ConformanceDisallows;
 pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};

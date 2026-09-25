@@ -49,6 +49,32 @@ pub enum Level {
     None,
 }
 
+/// A SARIF result `kind` (SARIF 2.1.0 §3.27.9): what the result says about the
+/// artifact, as distinct from how severe it is.
+///
+/// Absent means `fail` ("If kind is absent, it SHALL default to 'fail'"). A
+/// SHACL `sh:Debug` or `sh:Trace` result — "a debug message that is not a
+/// constraint violation", "a trace message that is not a constraint violation" —
+/// is [`ResultKind::Informational`] ("The tool is reporting an item of
+/// information that does not imply a problem"), and SARIF then requires its
+/// `level` to be `none`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResultKind {
+    /// The rule was evaluated and the result is not applicable.
+    NotApplicable,
+    /// The rule was evaluated and no problem was found.
+    Pass,
+    /// The rule was evaluated and a problem was found.
+    Fail,
+    /// The result requires human review.
+    Review,
+    /// The tool could not determine the result.
+    Open,
+    /// An item of information that does not imply a problem.
+    Informational,
+}
+
 /// The top-level SARIF log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SarifLog {
@@ -91,6 +117,10 @@ pub struct Run {
     /// entirely when empty (the default, no-base-URI behavior).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub original_uri_base_ids: BTreeMap<String, ArtifactLocation>,
+    /// A sorted-key property bag for run-level facts outside the core schema — for
+    /// a SHACL report log, `shaclConforms` and `shaclConformanceDisallows`.
+    #[serde(skip_serializing_if = "PropertyBag::is_empty")]
+    pub properties: PropertyBag,
 }
 
 /// The analysis tool wrapper.
@@ -176,6 +206,9 @@ pub struct SarifResult {
     /// The index of `rule_id` in `driver.rules`, if the rule is registered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_index: Option<usize>,
+    /// What the result says about the artifact; absent means `fail`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ResultKind>,
     /// The severity level.
     pub level: Level,
     /// The result message.
@@ -363,6 +396,7 @@ mod tests {
             results: vec![SarifResult {
                 rule_id: "sh:DatatypeConstraintComponent".to_owned(),
                 rule_index: Some(0),
+                kind: None,
                 level: Level::Error,
                 message: Message::text("Value \"foo\" fails sh:datatype xsd:integer"),
                 locations: vec![Location {
@@ -389,6 +423,7 @@ mod tests {
             }],
             invocations: vec![],
             original_uri_base_ids: BTreeMap::new(),
+            properties: PropertyBag::new(),
         })
     }
 

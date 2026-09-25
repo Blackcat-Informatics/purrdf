@@ -48,6 +48,7 @@ use crate::data::{ShaclData, resolve_id};
 use crate::data_view::ShaclRead;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
+use crate::report::ConformanceDisallows;
 use crate::shapes::{
     ClosedMode, ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
 };
@@ -350,6 +351,7 @@ impl LoweredShapes {
             indexes,
             unique_values,
             closed_types,
+            conformance_disallows: ConformanceDisallows::default(),
         }
     }
 
@@ -715,9 +717,29 @@ pub(crate) struct DatasetBinding {
     /// identity of every type this data graph interns, with the identities of the
     /// properties it permits.
     closed_types: Box<[FastMap<TermId, FastSet<TermId>>]>,
+    /// The validation request's conformance-disallow set, which every
+    /// conformance check a plan over this binding performs — nested `sh:node`,
+    /// `sh:not`, `sh:and`, `sh:or`, `sh:xone`, `sh:qualifiedValueShape`,
+    /// `sh:someValue`, `sh:memberShape`, `sh:reifierShape`, `sh:filterShape` —
+    /// judges a result's severity against. The default set unless the binding was
+    /// made for a request that named another; it lives here, beside the
+    /// dataset's identities, because a binding is one request's view and every
+    /// plan descending from it reaches it with no argument to forget.
+    conformance_disallows: ConformanceDisallows,
 }
 
 impl DatasetBinding {
+    /// Judge conformance over this binding against `disallows`.
+    pub(crate) fn set_conformance_disallows(&mut self, disallows: &ConformanceDisallows) {
+        self.conformance_disallows.clone_from(disallows);
+    }
+
+    /// The conformance-disallow set this binding judges against.
+    #[inline]
+    pub(crate) fn conformance_disallows(&self) -> &ConformanceDisallows {
+        &self.conformance_disallows
+    }
+
     /// The dataset identity of a planned class, by IRI.
     ///
     /// The two negative answers are DIFFERENT conditions and are deliberately
@@ -1270,8 +1292,8 @@ pub(crate) enum PlannedConstraint<'a> {
     Sparql {
         /// The SPARQL SELECT query text.
         select: &'a str,
-        /// The per-constraint message override.
-        message: &'a Option<String>,
+        /// The per-constraint message overrides (empty for none).
+        messages: &'a [crate::term::Literal],
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
     },
@@ -1304,8 +1326,8 @@ pub(crate) enum PlannedConstraint<'a> {
         expr: &'a NodeExpr,
         /// Its lowering.
         lowered: &'a LoweredExpr,
-        /// The per-constraint message override.
-        message: &'a Option<String>,
+        /// The per-constraint message overrides (empty for none).
+        messages: &'a [crate::term::Literal],
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
     },
@@ -1319,8 +1341,8 @@ pub(crate) enum PlannedConstraint<'a> {
         shapes: &'a Arc<OnceLock<FastMap<Term, Shape>>>,
         /// The position of that index's lowering.
         index: u32,
-        /// The per-constraint message override.
-        message: &'a Option<String>,
+        /// The per-constraint message overrides (empty for none).
+        messages: &'a [crate::term::Literal],
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
     },
@@ -1358,8 +1380,8 @@ pub(crate) enum PlannedConstraint<'a> {
         bindings: &'a [(String, Term)],
         /// The selected validator.
         validator: &'a ComponentValidator,
-        /// The message override.
-        message: &'a Option<String>,
+        /// The message overrides (empty for none).
+        messages: &'a [crate::term::Literal],
         /// The severity override.
         severity: &'a Option<crate::report::Severity>,
     },
@@ -1522,13 +1544,13 @@ impl<'a> ShapePlan<'a> {
             (
                 Constraint::Sparql {
                     select,
-                    message,
+                    messages,
                     severity,
                 },
                 LoweredConstraint::Sparql,
             ) => PlannedConstraint::Sparql {
                 select,
-                message,
+                messages,
                 severity,
             },
             (Constraint::Equals(_), LoweredConstraint::Equals(path)) => {
@@ -1568,21 +1590,21 @@ impl<'a> ShapePlan<'a> {
             (
                 Constraint::Expression {
                     expr,
-                    message,
+                    messages,
                     severity,
                 },
                 LoweredConstraint::Expression(lowered),
             ) => PlannedConstraint::Expression {
                 expr,
                 lowered,
-                message,
+                messages,
                 severity,
             },
             (
                 Constraint::NodeByExpression {
                     expr,
                     shapes,
-                    message,
+                    messages,
                     severity,
                 },
                 LoweredConstraint::NodeByExpression {
@@ -1594,7 +1616,7 @@ impl<'a> ShapePlan<'a> {
                 lowered,
                 shapes,
                 index: *index,
-                message,
+                messages,
                 severity,
             },
             (
@@ -1603,7 +1625,7 @@ impl<'a> ShapePlan<'a> {
                     source_shape,
                     bindings,
                     validator,
-                    message,
+                    messages,
                     severity,
                 },
                 LoweredConstraint::Component,
@@ -1612,7 +1634,7 @@ impl<'a> ShapePlan<'a> {
                 source_shape,
                 bindings,
                 validator,
-                message,
+                messages,
                 severity,
             },
             (constraint, lowered) => {
@@ -2182,7 +2204,8 @@ fn standalone_root() -> Shape {
         constraints: Vec::new(),
         property_shapes: Vec::new(),
         severity: crate::report::Severity::Violation,
-        message: None,
+        messages: Vec::new(),
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
         rules: Vec::new(),

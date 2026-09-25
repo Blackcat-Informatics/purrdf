@@ -1307,15 +1307,22 @@ pub(crate) fn eval_planned_node_expr_in_scope(
 /// Neither exists before evaluation begins, so neither can have been lowered
 /// before it. This is also what the PUBLIC entry points use, because a caller
 /// holding only a parsed `NodeExpr` has no preparation to have lowered it against.
+///
+/// `disallows` is the conformance-disallow set of the run this evaluation belongs
+/// to, so a shape-bearing expression reached through an argument or a dynamic body
+/// judges conformance exactly as the rest of the run does; a public entry point
+/// that is not part of a validation run passes the default set.
 fn eval_unlowered(
     store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
+    disallows: &crate::report::ConformanceDisallows,
 ) -> Result<Vec<Term>, String> {
     let lowering = crate::plan::lower_standalone_expression(expr);
-    let binding = lowering.bind(store.core_view());
+    let mut binding = lowering.bind(store.core_view());
+    binding.set_conformance_disallows(disallows);
     eval_planned_node_expr_in_scope(
         store,
         focus,
@@ -1344,7 +1351,14 @@ pub fn eval_node_expr_in_scope(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, String> {
-    eval_unlowered(store, focus, expr, guard, scope)
+    eval_unlowered(
+        store,
+        focus,
+        expr,
+        guard,
+        scope,
+        &crate::report::ConformanceDisallows::default(),
+    )
 }
 
 /// The instances of a class, canonically ordered and deduplicated.
@@ -1911,7 +1925,14 @@ fn eval_node_expr_at_depth(
             // the query a different answer than the author wrote.
             for (arg_key, arg_expr) in scope.args() {
                 let name = arg_key.variable_name();
-                let values = eval_unlowered(store, focus, arg_expr, guard, Scope::EMPTY)?;
+                let values = eval_unlowered(
+                    store,
+                    focus,
+                    arg_expr,
+                    guard,
+                    Scope::EMPTY,
+                    plan.binding().conformance_disallows(),
+                )?;
                 match values.as_slice() {
                     [] => {}
                     [only] => bindings.push((name, only.clone())),
@@ -1934,7 +1955,14 @@ fn eval_node_expr_at_depth(
         NodeExpr::Arg(key) => match scope.lookup_arg(key) {
             None => Ok(Vec::new()),
             Some(arg) => {
-                let out = eval_unlowered(store, focus, arg, guard, Scope::EMPTY)?;
+                let out = eval_unlowered(
+                    store,
+                    focus,
+                    arg,
+                    guard,
+                    Scope::EMPTY,
+                    plan.binding().conformance_disallows(),
+                )?;
                 // §6.2 says of a custom LIST parameter function that "each argument
                 // produces at most one output node", and that "an evaluation failure
                 // occurs if any output produces more than one node". That restriction
@@ -1982,7 +2010,14 @@ fn eval_node_expr_at_depth(
                         guard,
                         Scope::with_args(args),
                     ),
-                    None => eval_unlowered(store, focus, body, guard, Scope::with_args(args)),
+                    None => eval_unlowered(
+                        store,
+                        focus,
+                        body,
+                        guard,
+                        Scope::with_args(args),
+                        plan.binding().conformance_disallows(),
+                    ),
                 }
             };
             guard.exit_call();
@@ -2295,7 +2330,8 @@ mod tests {
             constraints: vec![],
             property_shapes: vec![],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -3216,7 +3252,8 @@ mod tests {
                     constraints,
                     property_shapes: vec![],
                     severity: Severity::Violation,
-                    message: None,
+                    messages: vec![],
+                    constraint_annotations: vec![],
                     deactivated: false,
                     box_roles: vec![],
                     rules: vec![],
@@ -3235,7 +3272,7 @@ mod tests {
                         ex(&format!("s{i}")),
                         vec![Constraint::Expression {
                             expr,
-                            message: None,
+                            messages: vec![],
                             severity: None,
                         }],
                     );

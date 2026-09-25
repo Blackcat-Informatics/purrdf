@@ -59,23 +59,44 @@ use purrdf_validate::ShapesProductRefusal;
 /// Returns a plain `String` error (NOT a `JsError`) so it is unit-testable on the
 /// native build — constructing a `JsError` calls a wasm-only import that panics
 /// off wasm. The `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
+///
+/// `conformance_disallows` is the request's conformance-disallow set as severity
+/// IRIs; `None` is SHACL's default set, and an empty list or a non-IRI is an error.
 pub(crate) fn validate_to_sarif_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
+    conformance_disallows: Option<&[String]>,
 ) -> Result<String, String> {
+    let validation = match conformance_disallows {
+        None => purrdf_validate::ValidationOptions::default(),
+        Some(iris) => purrdf_validate::ValidationOptions::default()
+            .with_conformance_disallows(purrdf_validate::ConformanceDisallows::from_iris(iris)?),
+    };
     purrdf_validate::validate_to_sarif_string(
         shapes_ttl,
         shapes_base,
         data_nt,
-        &purrdf_validate::SarifOptions::default(),
+        &purrdf_validate::SarifOptions {
+            validation,
+            ..purrdf_validate::SarifOptions::default()
+        },
     )
 }
 
-/// `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)` → a SARIF 2.1.0 JSON string.
+/// `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?, conformanceDisallows?)` → a SARIF
+/// 2.1.0 JSON string.
 ///
 /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
 /// Throws (rejects) if either graph fails to parse.
+///
+/// `conformanceDisallows` is the conformance-disallow set: severity IRIs whose results make
+/// the data non-conforming. Omitted, it is SHACL's default set (`sh:Violation`,
+/// `sh:Warning`, `sh:Info`); an empty array or a non-IRI throws. The log's run carries
+/// `properties.shaclConforms` and `properties.shaclConformanceDisallows` (the set the
+/// report was judged against), because the results alone cannot say whether the data
+/// conforms: an `sh:Debug` / `sh:Trace` result — SARIF `kind` `informational`, `level`
+/// `none` — appears in the log of a conforming report.
 ///
 /// `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
 /// against. A browser or Node host has no retrieval IRI of its own — it was handed a
@@ -89,9 +110,15 @@ pub fn shacl_validate_to_sarif(
     shapes_ttl: &str,
     data_nt: &str,
     shapes_base: Option<String>,
+    conformance_disallows: Option<Vec<String>>,
 ) -> Result<String, JsError> {
-    validate_to_sarif_impl(shapes_ttl, shapes_base.as_deref(), data_nt)
-        .map_err(|e| JsError::new(&e))
+    validate_to_sarif_impl(
+        shapes_ttl,
+        shapes_base.as_deref(),
+        data_nt,
+        conformance_disallows.as_deref(),
+    )
+    .map_err(|e| JsError::new(&e))
 }
 
 /// The outcome of `shaclValidateChangesToSarif`: the SARIF log, and the SCOPE that
@@ -634,14 +661,38 @@ mod tests {
 
     #[test]
     fn validate_emits_sarif_2_1_0() {
-        let sarif = validate_to_sarif_impl(SHAPES, None, DATA).expect("sarif produced");
+        let sarif = validate_to_sarif_impl(SHAPES, None, DATA, None).expect("sarif produced");
         assert!(sarif.contains("\"version\": \"2.1.0\""));
         assert!(sarif.contains("\"level\": \"error\""));
     }
 
+    /// The conformance-disallow set reaches the validation: a Warning-only
+    /// graph does not conform under the default set, conforms under
+    /// {sh:Violation}, and an empty set or a non-IRI is an error.
+    #[test]
+    fn wasm_validate_conformance_disallows() {
+        let shapes = SHAPES.replace(
+            "sh:path ex:age ;",
+            "sh:path ex:age ; sh:severity sh:Warning ;",
+        );
+        let conforms = |disallows: Option<&[String]>| -> serde_json::Value {
+            let sarif =
+                validate_to_sarif_impl(&shapes, None, DATA, disallows).expect("sarif produced");
+            let log: serde_json::Value = serde_json::from_str(&sarif).expect("json");
+            log["runs"][0]["properties"]["shaclConforms"].clone()
+        };
+        assert_eq!(conforms(None), serde_json::json!(false));
+        let violation = ["http://www.w3.org/ns/shacl#Violation".to_owned()];
+        assert_eq!(conforms(Some(&violation)), serde_json::json!(true));
+        assert!(validate_to_sarif_impl(&shapes, None, DATA, Some(&[])).is_err());
+        assert!(
+            validate_to_sarif_impl(&shapes, None, DATA, Some(&["Violation".to_owned()])).is_err()
+        );
+    }
+
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(validate_to_sarif_impl("@@@ not turtle", None, DATA).is_err());
+        assert!(validate_to_sarif_impl("@@@ not turtle", None, DATA, None).is_err());
     }
 
     /// A conforming base, so every violation a change test sees is the change's.
@@ -663,7 +714,7 @@ mod tests {
         assert!(scope.is_bounded());
         assert_eq!(
             sarif,
-            validate_to_sarif_impl(SHAPES, None, &format!("{CHANGE_BASE}{BAD_AGE}"))
+            validate_to_sarif_impl(SHAPES, None, &format!("{CHANGE_BASE}{BAD_AGE}"), None)
                 .expect("full validation"),
         );
 
@@ -777,7 +828,8 @@ mod tests {
         // Restoring the product and parsing the shapes graph are two routes to ONE
         // verdict, which is the property a cache is only allowed to have.
         let via_product = product_validate_impl(&product, DATA).expect("validated via product");
-        let via_document = validate_to_sarif_impl(SHAPES, None, DATA).expect("validated directly");
+        let via_document =
+            validate_to_sarif_impl(SHAPES, None, DATA, None).expect("validated directly");
         assert_eq!(via_product, via_document);
 
         // Rebuilding a CURRENT product reaches the byte-identical verdict too: the

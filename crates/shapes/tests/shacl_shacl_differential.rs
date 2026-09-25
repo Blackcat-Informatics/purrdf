@@ -67,7 +67,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        230,
+        231,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -83,11 +83,12 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unimplemented-term",
         "which is not evaluated by this engine",
-        6,
+        4,
         "a well-formed use of a SHACL 1.2 term this engine does not evaluate \
-         (sh:ShapeClass, sh:targetWhere, sh:values, sh:Debug / sh:Trace, a structured \
-         node-expression sh:targetNode) is refused rather than validated as if it were \
-         absent",
+         (sh:ShapeClass, sh:targetWhere, sh:values, a structured node-expression \
+         sh:targetNode) is refused rather than validated as if it were absent; 6 until \
+         sh:Debug and sh:Trace became evaluated severities, when severity-004 and \
+         severity-005 stopped being refused",
     ),
     (
         "unsupported-entailment",
@@ -98,12 +99,16 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
          the given data graph then the processor MUST signal a failure.\"",
     ),
     (
-        "reifier-annotation",
-        "per-constraint reifier annotation is not evaluated",
-        3,
-        "a {| sh:deactivated … |} / {| sh:severity … |} reifier annotation on a (shape, \
-         parameter, value) statement is a SHACL 1.2 Core form this engine does not evaluate; \
-         shacl-shacl.ttl never looks at reifiers",
+        "reifier-annotation-value",
+        "on the reifiers of shape",
+        2,
+        "a per-constraint reifier annotation's value has the rule its shape-level form has — \
+         SHACL 1.2 Core: \"In SHACL Core, the only valid values for sh:deactivated are the \
+         constant literal node expressions true and false\", \"Each value of sh:severity is an \
+         IRI\" — and PurRDF refuses a reifier {| sh:deactivated \"yes\" |} or \
+         {| sh:severity \"not an IRI\" |} as it refuses the same value on a shape; \
+         shacl-shacl.ttl never looks at reifiers, so the mutants that rewrite the W3C suite's \
+         own annotated cases (deactivated-003, severity-003) pass it",
     ),
     (
         "reification-required-datatype",
@@ -570,8 +575,8 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
 const BASE_INPUTS: usize = 375;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 185 literal-for-IRI, 99
-/// non-integer counts, 149 lists-for-single-values, 34 non-boolean flags and 230
+/// mutation kind that finds a statement to rewrite): 188 literal-for-IRI, 100
+/// non-integer counts, 154 lists-for-single-values, 35 non-boolean flags and 231
 /// misspelled predicates.
 ///
 /// Moved from 683 to 690 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
@@ -596,7 +601,18 @@ const BASE_INPUTS: usize = 375;
 /// The literal-for-IRI kind rewrites each one's `sh:targetClass` or
 /// `sh:targetSubjectsOf`, the first matching statement in canonical order (+5).
 /// None has a property shape, so none gains a misspelled predicate.
-const MUTANT_INPUTS: usize = 697;
+///
+/// Moved from 697 to 708 when per-constraint reifier annotations and the
+/// `sh:Debug` / `sh:Trace` severities became evaluated: `deactivated-003`,
+/// `severity-003`, `severity-004`, `severity-005` and `message-002` now load, so
+/// each is a base both sides accept. `deactivated-003`, whose property shape
+/// carries `sh:minCount`, gains a non-integer count, a list-for-single-value, a
+/// non-boolean flag (its reifier `sh:deactivated`, refused under
+/// `reifier-annotation-value`) and a misspelled predicate (+4); `severity-003`,
+/// `-004` and `-005` each gain a literal-for-IRI (for `severity-003` its reifier
+/// `sh:severity`, refused under `reifier-annotation-value`) and a
+/// list-for-single-value (+6); `message-002` gains a list-for-single-value (+1).
+const MUTANT_INPUTS: usize = 708;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -692,11 +708,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 185),
-        ("non-integer-count", 99),
-        ("list-where-a-single-value-is-required", 149),
-        ("non-boolean-flag", 34),
-        (UNKNOWN_TERM, 230),
+        ("literal-where-an-IRI-is-required", 188),
+        ("non-integer-count", 100),
+        ("list-where-a-single-value-is-required", 154),
+        ("non-boolean-flag", 35),
+        (UNKNOWN_TERM, 231),
     ]
     .into_iter()
     .collect();

@@ -45,7 +45,8 @@ fn leaf_shape(id: &str) -> Shape {
         constraints: Vec::new(),
         property_shapes: Vec::new(),
         severity: Severity::Violation,
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
         rules: Vec::new(),
@@ -57,7 +58,7 @@ fn node_by_expression(index: &ShapeIndex) -> Constraint {
     Constraint::NodeByExpression {
         expr: NodeExpr::This,
         shapes: Arc::clone(index),
-        message: None,
+        messages: vec![],
         severity: None,
     }
 }
@@ -72,7 +73,7 @@ fn conforms_to_computed(index: &ShapeIndex) -> Constraint {
                 shapes: Arc::clone(index),
             },
         },
-        message: None,
+        messages: vec![],
         severity: None,
     }
 }

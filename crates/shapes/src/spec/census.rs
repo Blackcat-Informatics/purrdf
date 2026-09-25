@@ -267,10 +267,7 @@ static EXPLICIT: &[CensusRow] = &[
     structural(sh_iri!("ProcessorConfiguration"), Role::Report),
     structural(sh::CONFORMS, Role::Report),
     structural(sh_iri!("conformsToShapesGraph"), Role::Report),
-    unimplemented(
-        sh_iri!("conformanceDisallows"),
-        "sh:conformanceDisallows is not honoured; every result blocks conformance",
-    ),
+    structural(sh::CONFORMANCE_DISALLOWS, Role::Report),
     structural(sh::RESULT, Role::Report),
     structural(sh_iri!("shapesGraphWellFormed"), Role::Report),
     structural(sh_iri!("usedShapesGraph"), Role::Report),
@@ -289,14 +286,6 @@ static EXPLICIT: &[CensusRow] = &[
     structural(sh::VALUE, Role::Report),
     // ── Severities (§3.6.2.4) ──
     vocabulary(sh_iri!("Severity")),
-    unimplemented(
-        sh_iri!("Trace"),
-        "the sh:Trace severity is not recognised as non-blocking",
-    ),
-    unimplemented(
-        sh_iri!("Debug"),
-        "the sh:Debug severity is not recognised as non-blocking",
-    ),
     // ── Property paths (§2.3.1) ──
     structural(sh::INVERSE_PATH, Role::Path),
     structural(sh::ALTERNATIVE_PATH, Role::Path),
