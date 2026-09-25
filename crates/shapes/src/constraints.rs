@@ -12,7 +12,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, IdSet, TermId, TermRef};
+use ::purrdf::{FastMap, FastSet, IdSet, RdfTextDirection, TermId, TermRef};
 use smallvec::SmallVec;
 
 use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
@@ -147,6 +147,33 @@ impl ValueNode {
                 TermRef::Iri(_) | TermRef::Blank { .. } | TermRef::Triple { .. } => None,
             },
             Self::Foreign(Term::Literal(literal)) => literal.language(),
+            Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
+        }
+    }
+
+    /// Borrow the `(language tag, base direction)` pair of a language-tagged
+    /// literal value node without materializing an interned id; `None` for any
+    /// other node. The direction is `None` for an `rdf:langString`, and
+    /// `Some` for an RDF 1.2 `rdf:dirLangString`.
+    fn language_and_direction<'a>(
+        &'a self,
+        ds: &'a impl ShaclRead,
+    ) -> Option<(&'a str, Option<RdfTextDirection>)> {
+        match self {
+            Self::Interned(id) => match ds.resolve(*id) {
+                TermRef::Literal {
+                    language: Some(language),
+                    direction,
+                    ..
+                } => Some((language, direction)),
+                TermRef::Literal { language: None, .. }
+                | TermRef::Iri(_)
+                | TermRef::Blank { .. }
+                | TermRef::Triple { .. } => None,
+            },
+            Self::Foreign(Term::Literal(literal)) => literal
+                .language()
+                .map(|language| (language, literal.direction())),
             Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
         }
     }
@@ -1528,6 +1555,10 @@ fn eval_reifier_shapes<S: ResultSink>(
             _ => false,
         };
         if !reified && ps.reification_required {
+            // "If $reificationRequired is set to true and there is no reified
+            // statement for the triple term t in the data graph, there is a
+            // validation result with t as sh:value" — `t` here is the triple term
+            // (focus node, $path, value node), since there is no reifier to name.
             let flow = sink.violation(source.severity, || {
                 let mut result = ValidationResult {
                     focus_node: focus.to_term(ds),
@@ -1581,15 +1612,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                         } else {
                             first_messages(&[&reifier_shape.messages, &ps.messages])
                         };
-                        reifier_result(
-                            &ctx,
-                            predicate,
-                            value,
-                            &source_roles,
-                            &source,
-                            messages,
-                            &[],
-                        )
+                        reifier_result(&ctx, reifier, &source_roles, &source, messages, &[])
                     });
                     if flow.stopped() {
                         return Ok(Flow::Stop);
@@ -1597,36 +1620,40 @@ fn eval_reifier_shapes<S: ResultSink>(
                     continue;
                 }
                 // Only an inner result the run's conformance-disallow set holds
-                // makes the reifier non-conforming, so only such a result is
-                // reported here — the same judgement the probe above makes, and so
-                // a report and a conformance check over this arm cannot disagree.
-                for inner in collect_shape(reifier_context, &reifier_focus)?
-                    .into_iter()
-                    .filter(|inner| disallows.contains(&inner.severity))
-                {
-                    let flow = sink.violation(source.severity, || {
-                        let messages = if source.pinned_messages {
-                            source.messages.to_vec()
-                        } else {
-                            first_messages(&[
-                                &inner.messages,
-                                &reifier_shape.messages,
-                                &ps.messages,
-                            ])
-                        };
-                        reifier_result(
-                            &ctx,
-                            predicate,
-                            value,
-                            &source_roles,
-                            &source,
-                            messages,
-                            &inner.source_box_roles,
-                        )
+                // makes the reifier non-conforming — the same judgement the probe
+                // above makes, and so a report and a conformance check over this
+                // arm cannot disagree. A non-conforming reifier is ONE result
+                // however many inner results made it so: "For each reifier t that
+                // does not conform to $reifierShape, there is a validation result".
+                let mut inner = collect_shape(reifier_context, &reifier_focus)?;
+                inner.retain(|inner| disallows.contains(&inner.severity));
+                if inner.is_empty() {
+                    continue;
+                }
+                let flow = sink.violation(source.severity, || {
+                    let messages = if source.pinned_messages {
+                        source.messages.to_vec()
+                    } else {
+                        let mut candidates: Vec<&Vec<Literal>> =
+                            inner.iter().map(|inner| &inner.messages).collect();
+                        candidates.push(&reifier_shape.messages);
+                        candidates.push(&ps.messages);
+                        first_messages(&candidates)
+                    };
+                    let inner_roles = inner.iter().fold(Vec::new(), |roles, inner| {
+                        merge_box_roles(&roles, &inner.source_box_roles)
                     });
-                    if flow.stopped() {
-                        return Ok(Flow::Stop);
-                    }
+                    reifier_result(
+                        &ctx,
+                        reifier,
+                        &source_roles,
+                        &source,
+                        messages,
+                        &inner_roles,
+                    )
+                });
+                if flow.stopped() {
+                    return Ok(Flow::Stop);
                 }
             }
         }
@@ -1644,13 +1671,37 @@ fn first_messages(candidates: &[&Vec<Literal>]) -> Vec<Literal> {
         .unwrap_or_default()
 }
 
-/// One `sh:reifierShape` result: the enclosing property shape's focus node, path
-/// and quoted triple term, carrying `messages` and the roles the inner result
-/// contributed.
+/// One `sh:reifierShape` result: the enclosing property shape's focus node and
+/// path, the non-conforming REIFIER as `sh:value`, carrying `messages` and the
+/// roles the inner results contributed.
+///
+/// SHACL 1.2 Core §7.8.5 defines the component over two variables that share a
+/// name. It opens "Let t be the triple term (focus node, $path, value node)",
+/// and the reporting sentence then binds a new one: "For each reifier t that does
+/// not conform to $reifierShape, there is a validation result with t as
+/// sh:value." "For each reifier t" is the binding form every Core textual
+/// definition uses ("for each value node v … with v as sh:value"), so the
+/// sentence's own `t` — the reifier — is the value; reading it as "each reifier
+/// OF t" would need a word the text does not have. The Working Group's review of
+/// the definition asked for exactly this per-reifier form, replacing "if the
+/// reifiers of t do not conform … with t as sh:value", whose `t` was the triple
+/// term. §6.7.2.3 leaves the choice to the definition: "The textual definitions of
+/// the validators of the SHACL Core components specify how this value is
+/// constructed". So one result per non-conforming reifier per reifier shape, with
+/// that reifier as `sh:value`.
+///
+/// `sh:reificationRequired` is the other variable: "there is no reified statement
+/// for the triple term t in the data graph, there is a validation result with t
+/// as sh:value" — there is no reifier to name, and its `t` is the triple term, so
+/// its result carries [`reified_triple_term`] instead (see
+/// [`eval_reifier_shapes`]).
+///
+/// The approved suite entries for both expect the VALUE NODE (`sh:value
+/// "invalid"`), which neither sentence produces; the conformance harness grades
+/// them against the normative text and records the delta.
 fn reifier_result(
     ctx: &ReifierEvalContext<'_, '_, '_>,
-    predicate: &NamedNode,
-    value: &ValueNode,
+    reifier: TermId,
     source_roles: &[NamedNode],
     source: &ConstraintSource<'_>,
     messages: Vec<Literal>,
@@ -1661,7 +1712,7 @@ fn reifier_result(
         focus_node: ctx.focus.to_term(ds),
         result_path: Some(ctx.path_term().clone()),
         path_structure: None,
-        value: Some(reified_triple_term(ds, ctx.focus, predicate, value)),
+        value: Some(ValueNode::Interned(reifier).to_term(ds)),
         source_constraint_component: NamedNode::from(sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT),
         source_shape: ctx.ps.id.clone(),
         severity: source.severity.clone(),
@@ -1677,13 +1728,14 @@ fn reifier_result(
     result
 }
 
-/// The quoted triple term `<< focus predicate value >>` as a report value.
+/// The quoted triple term `<< focus predicate value >>` as a report value — the
+/// `sh:value` of a `sh:reificationRequired` result (SHACL 1.2 Core §7.8.5: "there
+/// is a validation result with t as sh:value", `t` being the triple term).
 ///
-/// **A materialization boundary, and the only one this arm has.** It is called
-/// from inside a result builder and nowhere else, so a statement that is reified
-/// as its shape requires never builds one — which is the whole difference between
-/// this and the owned triple the arm used to construct for every value node before
-/// anything was known about it.
+/// **A materialization boundary.** It is called from inside a result builder and
+/// nowhere else, so a statement that is reified as its shape requires never builds
+/// one — which is the whole difference between this and the owned triple the arm
+/// used to construct for every value node before anything was known about it.
 ///
 /// It is built rather than looked up because it must exist even when the data
 /// graph interns no such term: a `sh:reificationRequired` violation REPORTS the
@@ -2516,38 +2568,45 @@ fn eval_constraint<'a, S: ResultSink>(
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
         PlannedConstraint::UniqueLang(true) => {
+            // SHACL 1.2 Core §7.4.6: "for each non-empty language tag that is
+            // used by at least two value nodes, there is a validation result. For
+            // value nodes of datatype rdf:dirLangString, the base direction is
+            // included in the uniqueness condition, e.g., "1"@ar--rtl and
+            // "1"@ar-ltr are different, as is the pair "1"@ar--rtl and "1"@ar."
+            // So the group key is the PAIR (language tag, base direction): `@ar`,
+            // `@ar--ltr` and `@ar--rtl` are three groups, and two `@ar--ltr`
+            // values are one group with two members.
+            //
             // Tallied over BORROWED tags in an inline buffer, and the buffer is
-            // indexed by DISTINCT language rather than by value node — a focus
-            // node carries a handful of languages however many labels it has, so
-            // the scan is over a few entries and the whole tally allocates
-            // nothing. The two things this replaced both cost one allocation per
-            // conforming focus node: the map's table on its first insert, and an
-            // owned lowercased key per value node. Case folding is now a
-            // comparison rather than a new string, which is the same relation
-            // BCP 47 tags are compared under (they are ASCII).
-            let mut seen_langs: SmallVec<[(&str, usize); UNIQUE_LANG_INLINE]> = SmallVec::new();
+            // indexed by DISTINCT (language, direction) rather than by value node
+            // — a focus node carries a handful of languages however many labels
+            // it has, so the scan is over a few entries and the whole tally
+            // allocates nothing. The language tag compares ASCII
+            // case-insensitively, the relation BCP 47 tags are compared under
+            // (RDF 1.2 Concepts: the value space of a language tag is lower
+            // case); the direction is one of two tokens and compares exactly.
+            let mut seen_langs: SmallVec<
+                [(&str, Option<RdfTextDirection>, usize); UNIQUE_LANG_INLINE],
+            > = SmallVec::new();
             for value in value_nodes {
-                // Content arm on the BORROWED language tag: `ValueNode::language`
-                // is `None` for every node that is not a language-tagged literal,
-                // which is exactly the set the owned-term match skipped, so the
-                // counted population is unchanged and no value node is
-                // materialized to be counted.
-                if let Some(lang) = value.language(ds) {
-                    if let Some(entry) = seen_langs
-                        .iter_mut()
-                        .find(|(seen, _)| seen.eq_ignore_ascii_case(lang))
-                    {
-                        entry.1 += 1;
+                // `language_and_direction` is `None` for every node that is not a
+                // language-tagged literal, which is exactly the population the
+                // constraint does not count, so no value node is materialized to
+                // be counted.
+                if let Some((lang, direction)) = value.language_and_direction(ds) {
+                    if let Some(entry) = seen_langs.iter_mut().find(|(seen, seen_dir, _)| {
+                        *seen_dir == direction && seen.eq_ignore_ascii_case(lang)
+                    }) {
+                        entry.2 += 1;
                     } else {
-                        seen_langs.push((lang, 1));
+                        seen_langs.push((lang, direction, 1));
                     }
                 }
             }
-            // First-seen order, where the map this replaced iterated in hash
-            // order. Both are re-sorted by `finish_report` on the full serialized
-            // result identity, so the report bytes are unchanged — and this one
-            // does not depend on the hasher.
-            for (lang, count) in &seen_langs {
+            // First-seen order, re-sorted by `finish_report` on the full
+            // serialized result identity, so the report bytes do not depend on
+            // the order value nodes arrived in.
+            for (lang, direction, count) in &seen_langs {
                 if *count > 1 {
                     emit!(ValidationResult {
                         focus_node: focus_node.to_term(ds),
@@ -2560,9 +2619,8 @@ fn eval_constraint<'a, S: ResultSink>(
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
                         messages: if messages.is_empty() {
-                            vec![Literal::new_simple_literal(format!(
-                                "duplicate language tag: {}",
-                                lang.to_lowercase()
+                            vec![Literal::new_simple_literal(duplicate_language_message(
+                                lang, *direction,
                             ))]
                         } else {
                             messages.to_vec()
@@ -3852,13 +3910,26 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
     a == b
 }
 
-/// Distinct language tags one `sh:uniqueLang` tally holds before spilling.
+/// Distinct `(language tag, base direction)` groups one `sh:uniqueLang` tally
+/// holds before spilling.
 ///
-/// The tally is indexed by DISTINCT tag, not by value node, so this is a bound
+/// The tally is indexed by DISTINCT group, not by value node, so this is a bound
 /// on how many languages one focus node labels itself in — not on how many
 /// labels it has. A focus node past this bound spills the buffer once and keeps
 /// working; nothing about the verdict or the reported messages changes.
 const UNIQUE_LANG_INLINE: usize = 8;
+
+/// The default message of a `sh:uniqueLang` result: the duplicated language tag,
+/// lower-cased, with its base direction in the RDF 1.2 `--dir` spelling when the
+/// duplicated values are `rdf:dirLangString`s (`ar--ltr`), so the message names
+/// exactly the group the result is about.
+fn duplicate_language_message(lang: &str, direction: Option<RdfTextDirection>) -> String {
+    let lang = lang.to_ascii_lowercase();
+    match direction {
+        Some(direction) => format!("duplicate language tag: {lang}--{}", direction.as_str()),
+        None => format!("duplicate language tag: {lang}"),
+    }
+}
 
 /// Distinct comparands a [`PairComparands`] holds inline before it allocates.
 ///
@@ -4588,6 +4659,115 @@ mod tests {
             "ex:alpha sorts before ex:zeta canonically and interns after it, so this order is \
              the canonical one and its reverse is the insertion one"
         );
+        // Each result names the reifier it judged, so the order is observable in
+        // `sh:value` as well as in the message.
+        let values: Vec<Option<&Term>> =
+            results.iter().map(|result| result.value.as_ref()).collect();
+        assert_eq!(values, vec![Some(&ex("alpha")), Some(&ex("zeta"))]);
+    }
+
+    /// The reifier-shape fixture: `ex:Shape` requires every `ex:knows` reifier to
+    /// carry an `ex:source` and an `ex:date`, and `sh:reificationRequired` when
+    /// `required`.
+    fn reifier_shapes(required: bool) -> crate::shapes::Shapes {
+        crate::engine::parse_shapes(
+            &format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix ex: <http://example.org/ns#> .\n\
+                 ex:Shape a sh:NodeShape ;\n\
+                     sh:property [ sh:path ex:knows ; sh:reifierShape ex:ReifierShape ; \
+                     sh:reificationRequired {required} ] .\n\
+                 ex:ReifierShape a sh:NodeShape ;\n\
+                     sh:property [ sh:path ex:source ; sh:minCount 1 ] ;\n\
+                     sh:property [ sh:path ex:date ; sh:minCount 1 ] .\n"
+            ),
+            None,
+        )
+        .expect("the reifier shapes graph must parse")
+    }
+
+    fn triple_term(s: &str, p: &str, o: &str) -> Term {
+        let iri = |local: &str| NamedNode::new_unchecked(format!("{EX}{local}"));
+        Term::Triple(Box::new(Triple::new(ex(s), iri(p), ex(o))))
+    }
+
+    /// **SHACL 1.2 Core §7.8.5: "For each reifier t that does not conform to
+    /// $reifierShape, there is a validation result with t as sh:value."**
+    ///
+    /// `ex:bad` breaks BOTH halves of the reifier shape, and still yields exactly
+    /// one result — one per non-conforming reifier, not one per inner result —
+    /// whose `sh:value` is the reifier itself, not the triple term and not the
+    /// value node. The conforming reifier `ex:good` of the same statement yields
+    /// nothing, and neither does a statement whose only reifier conforms.
+    #[test]
+    fn reifier_shape_result_names_the_non_conforming_reifier() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:bad rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:good rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:good ex:source ex:doc ; ex:date \"2026-01-01\" .\n\
+             ex:carol ex:knows ex:dave .\n\
+             ex:fine rdf:reifies <<( ex:carol ex:knows ex:dave )>> .\n\
+             ex:fine ex:source ex:doc ; ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = reifier_shapes(false);
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        assert_eq!(
+            results.len(),
+            1,
+            "one non-conforming reifier, one result: {results:?}"
+        );
+        assert_eq!(results[0].value.as_ref(), Some(&ex("bad")));
+        assert_ne!(
+            results[0].value.as_ref(),
+            Some(&triple_term("alice", "knows", "bob")),
+            "the reifier, not the triple term it reifies"
+        );
+        assert!(component_iri(&results)[0].ends_with("#ReifierShapeConstraintComponent"));
+
+        // Valid neighbour: the statement's only reifier conforms.
+        assert!(validate_shape(&store, &ex("carol"), shape).is_empty());
+    }
+
+    /// **SHACL 1.2 Core §7.8.5: "If $reificationRequired is set to true and there
+    /// is no reified statement for the triple term t in the data graph, there is
+    /// a validation result with t as sh:value."** There is no reifier to name,
+    /// so `sh:value` is the triple term; the valid neighbour, a statement with a
+    /// conforming reifier, yields nothing.
+    #[test]
+    fn reification_required_result_names_the_triple_term() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:carol ex:knows ex:dave .\n\
+             ex:fine rdf:reifies <<( ex:carol ex:knows ex:dave )>> .\n\
+             ex:fine ex:source ex:doc ; ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = reifier_shapes(true);
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(
+            results[0].value.as_ref(),
+            Some(&triple_term("alice", "knows", "bob"))
+        );
+        assert!(component_iri(&results)[0].ends_with("#ReifierShapeConstraintComponent"));
+
+        assert!(validate_shape(&store, &ex("carol"), shape).is_empty());
     }
 
     /// **`sh:nodeByExpression` resolves every shape node its expression can
@@ -5665,6 +5845,71 @@ mod tests {
         let results = validate_shape(&store, &ex("a"), &shape);
         assert!(!results.is_empty());
         assert!(component_iri(&results)[0].contains("UniqueLang"));
+    }
+
+    /// The number of `sh:uniqueLang` results for `ex:a`'s `ex:label` values,
+    /// each given as a Turtle literal suffix (`"@en"`, `"@ar--ltr"`); every value
+    /// has its own lexical form, so the store keeps them all.
+    fn unique_lang_results(tags: &[&str]) -> Vec<ValidationResult> {
+        let labels: Vec<String> = tags
+            .iter()
+            .enumerate()
+            .map(|(index, tag)| format!("\"v{index}\"{tag}"))
+            .collect();
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:label {} .",
+            labels.join(", ")
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}label"),
+            vec![Constraint::UniqueLang(true)],
+        );
+        validate_shape(&store, &ex("a"), &shape)
+    }
+
+    /// **SHACL 1.2 Core §7.4.6: "For value nodes of datatype rdf:dirLangString,
+    /// the base direction is included in the uniqueness condition, e.g.,
+    /// "1"@ar--rtl and "1"@ar-ltr are different, as is the pair "1"@ar--rtl and
+    /// "1"@ar."** The group key is (language tag, base direction).
+    #[test]
+    fn unique_lang_groups_by_language_and_direction() {
+        // `@ar`, `@ar--ltr` and `@ar--rtl` are three groups of one.
+        assert!(unique_lang_results(&["@ar", "@ar--ltr", "@ar--rtl"]).is_empty());
+        // `@en` and `@en--ltr` are two groups of one.
+        assert!(unique_lang_results(&["@en", "@en--ltr"]).is_empty());
+        // A plain string is in no group at all.
+        assert!(unique_lang_results(&["", "@en--ltr"]).is_empty());
+
+        // Two `@en--ltr` are one group of two: one result, naming the group.
+        let results = unique_lang_results(&["@en--ltr", "@en--ltr", "@en"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("duplicate language tag: en--ltr")
+        );
+        // Two `@en` without a direction are still one group of two.
+        let results = unique_lang_results(&["@en", "@en", "@en--rtl"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("duplicate language tag: en")
+        );
+        // Two duplicated groups, two results.
+        assert_eq!(
+            unique_lang_results(&["@ar--rtl", "@ar--rtl", "@ar", "@ar"]).len(),
+            2
+        );
+    }
+
+    /// Language tags compare case-insensitively (BCP 47; RDF 1.2 Concepts gives a
+    /// language tag a lower-case value space), and the direction still splits the
+    /// group: `@EN-GB` and `@en-gb` are one group, `@EN-GB--rtl` another.
+    #[test]
+    fn unique_lang_tag_case_is_not_a_distinction() {
+        let results = unique_lang_results(&["@EN-GB", "@en-gb"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert!(unique_lang_results(&["@EN-GB", "@en-gb--rtl"]).is_empty());
     }
 
     // ── minInclusive ───────────────────────────────────────────────────────────

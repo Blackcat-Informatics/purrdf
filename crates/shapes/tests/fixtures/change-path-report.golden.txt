@@ -655,14 +655,14 @@ _:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-p
 _:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
 _:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#ReifierShapeConstraintComponent> .
 _:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
-_:r0 <http://www.w3.org/ns/shacl#value> <<( <http://example.org/purrdf/change-path#v0> <http://example.org/purrdf/change-path#ref> <http://example.org/purrdf/change-path#v0-target> )>> .
+_:r0 <http://www.w3.org/ns/shacl#value> <http://example.org/purrdf/change-path#v0-stmt> .
 _:r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
 _:r1 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v1> .
 _:r1 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#ref> .
 _:r1 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
 _:r1 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#ReifierShapeConstraintComponent> .
 _:r1 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
-_:r1 <http://www.w3.org/ns/shacl#value> <<( <http://example.org/purrdf/change-path#v1> <http://example.org/purrdf/change-path#ref> <http://example.org/purrdf/change-path#v1-target> )>> .
+_:r1 <http://www.w3.org/ns/shacl#value> <http://example.org/purrdf/change-path#v1-stmt> .
 _:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
 _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
