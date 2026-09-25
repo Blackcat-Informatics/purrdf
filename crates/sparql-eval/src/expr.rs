@@ -64,6 +64,10 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    // Every operator is one level of this recursion, and an operator chain's height is
+    // bounded by the parser's expression budget, not by the stack it takes: see
+    // `crate::stack`.
+    crate::stack::check("expression")?;
     match expr {
         // ---- atoms ---------------------------------------------------------
         Expression::NamedNode(n) => Ok(const_atom(ctx, expr, || {
@@ -1458,7 +1462,10 @@ fn exists<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<bool, EvalError> {
-    let prepared = ctx.prepared_exists(pattern);
+    // Before the site is prepared: preparing it walks its whole inner pattern, and
+    // evaluating it recurses into that pattern. See `crate::stack`.
+    crate::stack::check("EXISTS")?;
+    let prepared = ctx.prepared_exists(pattern)?;
     let (normalized, witness_wrapped, analysis, free_vars, stateful, ledger_source) =
         match prepared.as_ref() {
             // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
@@ -1529,9 +1536,12 @@ fn exists<D: DatasetView + Sync>(
                 }
             })
             .collect();
-        if let Some((var, intro)) =
+        // A walk over the whole inner pattern, from an `EXISTS` that may be deep: inside
+        // a `crate::stack::walk` scope, so a level that runs out of stack refuses rather
+        // than answering "no collision" for a pattern it never finished reading.
+        if let Some((var, intro)) = crate::stack::walk(|| {
             crate::governor::soundness::exists_row_collision(normalized, &outer_bound)
-        {
+        })? {
             return Err(EvalError::exists_scope_collision(
                 var.as_str().to_owned(),
                 intro.as_str(),
@@ -1923,12 +1933,20 @@ impl SubstitutionRow {
               lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
               32-bit targets such as wasm32, where the same box is still the field's type"
 )]
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] when the walk ran out of stack: it runs once per outer
+/// row, from a correlated evaluation that may already be deep, inside a
+/// [`crate::stack::walk`] scope that discards the partial copy.
 pub(crate) fn substitute_pattern(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
-) -> Box<GraphPattern> {
-    let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
-    substitute_pattern_impl(pattern, row, &mut tracking)
+) -> Result<Box<GraphPattern>, EvalError> {
+    crate::stack::walk(|| {
+        let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
+        substitute_pattern_impl(pattern, row, &mut tracking)
+    })
 }
 
 /// One [`SubstitutionSourceMap`] entry: which real plan node a substituted-tree node is
@@ -2053,6 +2071,11 @@ struct SubstitutionTracking<'a> {
 /// site, BEFORE this call's own map is pushed — or `None` when `pattern` is not itself
 /// inside an already-substituted subtree. See [`SubstitutionSource`]'s doc for why a
 /// nested `LATERAL` needs it.
+///
+/// # Errors
+///
+/// As [`substitute_pattern`]; `tracked` then holds entries for a discarded copy, and the
+/// caller drops it with the error.
 #[allow(
     clippy::unnecessary_box_returns,
     reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
@@ -2064,15 +2087,17 @@ pub(crate) fn substitute_pattern_tracked(
     row: &SubstitutionRow,
     tracked: &mut SubstitutionSourceMap,
     enclosing: Option<&SubstitutionSourceMap>,
-) -> Box<GraphPattern> {
-    let mut claimed = DetHashSet::default();
-    let mut tracking = SubstitutionTracking {
-        map: tracked,
-        enclosing,
-        claimed: &mut claimed,
-    };
-    let mut tracking = Some(&mut tracking);
-    substitute_pattern_impl(pattern, row, &mut tracking)
+) -> Result<Box<GraphPattern>, EvalError> {
+    crate::stack::walk(|| {
+        let mut claimed = DetHashSet::default();
+        let mut tracking = SubstitutionTracking {
+            map: tracked,
+            enclosing,
+            claimed: &mut claimed,
+        };
+        let mut tracking = Some(&mut tracking);
+        substitute_pattern_impl(pattern, row, &mut tracking)
+    })
 }
 
 /// The substitution walk itself. Every arm ends by boxing the node it built and — through
@@ -2097,6 +2122,13 @@ fn substitute_pattern_impl(
     row: &SubstitutionRow,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
 ) -> Box<GraphPattern> {
+    // One level of a copy of the whole correlated subtree, made once per outer row: see
+    // `crate::stack::walk`, whose scope discards this placeholder.
+    if crate::stack::walk_is_low("correlated substitution") {
+        return Box::new(GraphPattern::Bgp {
+            patterns: Vec::new(),
+        });
+    }
     match pattern {
         GraphPattern::Bgp { patterns } => {
             let mut vars = DetHashSet::default();
@@ -2127,7 +2159,7 @@ fn substitute_pattern_impl(
             let leaf = boxed_and_mapped(
                 GraphPattern::Path {
                     subject: subject.clone(),
-                    path: path.clone(),
+                    path: crate::stack::clone::path(path),
                     object: object.clone(),
                 },
                 pattern,
@@ -2887,6 +2919,10 @@ fn substitute_expr(
     row: &SubstitutionRow,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
 ) -> Expression {
+    // See `substitute_pattern_impl`: the same copy, one expression level at a time.
+    if crate::stack::walk_is_low("correlated substitution") {
+        return Expression::NamedNode(purrdf_sparql_algebra::NamedNode::new_unchecked(XSD_BOOLEAN));
+    }
     let bindings = &row.expr;
     match expr {
         Expression::Variable(v) => {
@@ -8492,7 +8528,7 @@ mod tests {
         };
         let row = row_binding_iri("s", "alice");
 
-        let substituted = *substitute_pattern(&bgp, &row);
+        let substituted = *substitute_pattern(&bgp, &row).expect("the test stack is not exhausted");
         let GraphPattern::Join { left, right } = substituted else {
             panic!("expected a Join, got {bgp:?} -> not a Join");
         };
@@ -8537,7 +8573,8 @@ mod tests {
         };
         let row = row_binding_iri("s", "a");
 
-        let substituted = *substitute_pattern(&minus, &row);
+        let substituted =
+            *substitute_pattern(&minus, &row).expect("the test stack is not exhausted");
         let GraphPattern::Minus { left, right } = substituted else {
             panic!("Minus wrapper preserved");
         };
@@ -8610,7 +8647,8 @@ mod tests {
         };
         let row = row_binding_iri("s", "x1");
 
-        let substituted = *substitute_pattern(&subselect, &row);
+        let substituted =
+            *substitute_pattern(&subselect, &row).expect("the test stack is not exhausted");
         let GraphPattern::Project { inner, variables } = substituted else {
             panic!("Project wrapper preserved");
         };
@@ -8644,7 +8682,8 @@ mod tests {
             )],
         };
 
-        let substituted = *substitute_pattern(&call, &row);
+        let substituted =
+            *substitute_pattern(&call, &row).expect("the test stack is not exhausted");
         let GraphPattern::PropertyFunction(c) = substituted else {
             panic!("a written value needs no driver, so the call stays a bare call");
         };
@@ -8682,7 +8721,8 @@ mod tests {
             term: vec![(Variable::new("w"), blank.clone())],
         };
 
-        let substituted = *substitute_pattern(&call, &row);
+        let substituted =
+            *substitute_pattern(&call, &row).expect("the test stack is not exhausted");
         assert_eq!(
             substituted,
             GraphPattern::Lateral {

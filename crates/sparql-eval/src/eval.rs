@@ -271,6 +271,14 @@ thread_local! {
 }
 
 impl PreparedExists {
+    /// [`Self::build`] inside a [`crate::stack::walk`] scope: preparing a site walks its
+    /// whole inner pattern (normalization, the source map, the structural analysis), and
+    /// the site may be reached deep in the evaluation, so every level of those walks may
+    /// refuse and the half-built preparation is discarded.
+    fn build_guarded(pattern: &GraphPattern) -> Result<Self, EvalError> {
+        crate::stack::walk(|| Self::build(pattern))
+    }
+
     /// Build a [`PreparedExists`] for `pattern` — the walk `crate::expr::exists` calls
     /// through [`EvalCtx::prepared_exists`], never directly (that method owns the
     /// per-evaluation cache and the substituted-temporary ABA guard).
@@ -300,7 +308,7 @@ impl PreparedExists {
                 // location, and `witness_inner` is boxed BEFORE its address is taken, so
                 // both walks key every entry by the address the node actually ends up at.
                 let mut ledger_source = crate::enf::ledger_source_map(pattern, &normalized);
-                let witness_inner = Box::new((*normalized).clone());
+                let witness_inner = Box::new(crate::stack::clone::pattern(&normalized));
                 let witness_inner_map = crate::enf::ledger_source_map(pattern, &witness_inner);
                 let root_source = ledger_source
                     .get(&(std::ptr::from_ref(normalized.as_ref()) as usize))
@@ -2241,7 +2249,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// the un-substituted fast path below. Only when no window's map covers `pattern` at
     /// all — a node the substitution walk genuinely synthesized, with no AST identity of
     /// its own — does this fall back to the old build-fresh-and-discard behavior.
-    pub(crate) fn prepared_exists(&mut self, pattern: &GraphPattern) -> Arc<PreparedExists> {
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::StackExhausted`] when the walks that prepare the site ran out of stack
+    /// (see [`crate::stack::walk`]); nothing is cached then.
+    pub(crate) fn prepared_exists(
+        &mut self,
+        pattern: &GraphPattern,
+    ) -> Result<Arc<PreparedExists>, EvalError> {
         let key = std::ptr::from_ref(pattern) as usize;
         if self.in_substituted_exists {
             let Some(resolved) = self
@@ -2250,21 +2266,21 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                 .and_then(|map| map.get(&key))
                 .map(|entry| entry.source)
             else {
-                return Arc::new(PreparedExists::build(pattern));
+                return Ok(Arc::new(PreparedExists::build_guarded(pattern)?));
             };
             if let Some(existing) = self.exists_prepared_cache.get(&resolved) {
-                return existing.clone();
+                return Ok(existing.clone());
             }
-            let built = Arc::new(PreparedExists::build(pattern));
+            let built = Arc::new(PreparedExists::build_guarded(pattern)?);
             self.exists_prepared_cache.insert(resolved, built.clone());
-            return built;
+            return Ok(built);
         }
         if let Some(existing) = self.exists_prepared_cache.get(&key) {
-            return existing.clone();
+            return Ok(existing.clone());
         }
-        let built = Arc::new(PreparedExists::build(pattern));
+        let built = Arc::new(PreparedExists::build_guarded(pattern)?);
         self.exists_prepared_cache.insert(key, built.clone());
-        built
+        Ok(built)
     }
 }
 
@@ -2285,6 +2301,14 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    // Every algebra node is one level of this recursion, and the parser's nesting budget
+    // bounds how many levels a request has, not how much stack they take: see
+    // `crate::stack`. The construct is named only on the refusal.
+    if crate::stack::is_low() {
+        return Err(EvalError::StackExhausted {
+            construct: pattern_construct(pattern),
+        });
+    }
     // A semantic LIMIT is local to its Slice. Install its producer ceiling only while
     // that subtree is active, so a LIMIT-free ordinary query does not walk the plan at
     // all and two independent subquery slices do not overwrite one another.
@@ -2294,6 +2318,33 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
         ctx.cap_pushdown = None;
     }
     evaluated
+}
+
+/// The name a stack refusal at `pattern` reports: the construct a request writes to get
+/// this algebra node.
+const fn pattern_construct(pattern: &GraphPattern) -> &'static str {
+    match pattern {
+        GraphPattern::Bgp { .. } => "basic graph pattern",
+        GraphPattern::Path { .. } => "property path",
+        GraphPattern::Join { .. } => "group graph pattern",
+        GraphPattern::LeftJoin { .. } => "OPTIONAL",
+        GraphPattern::Lateral { .. } => "LATERAL",
+        GraphPattern::Filter { .. } => "FILTER",
+        GraphPattern::Union { .. } => "UNION",
+        GraphPattern::Graph { .. } => "GRAPH",
+        GraphPattern::Extend { .. } => "BIND",
+        GraphPattern::Unfold { .. } => "UNFOLD",
+        GraphPattern::Minus { .. } => "MINUS",
+        GraphPattern::Values { .. } => "VALUES",
+        GraphPattern::OrderBy { .. } => "ORDER BY",
+        GraphPattern::Project { .. } => "SELECT",
+        GraphPattern::Distinct { .. } => "DISTINCT",
+        GraphPattern::Reduced { .. } => "REDUCED",
+        GraphPattern::Slice { .. } => "LIMIT/OFFSET",
+        GraphPattern::Group { .. } => "GROUP BY",
+        GraphPattern::Service { .. } => "SERVICE",
+        GraphPattern::PropertyFunction(_) => "property function",
+    }
 }
 
 /// The evaluator recursion after any local semantic-Slice ceiling has been installed.

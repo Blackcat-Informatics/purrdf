@@ -90,6 +90,10 @@ hashbrown = { workspace = true }
 # OS entropy for the RAND()/UUID()/STRUUID() seed on native targets. Target-gated
 # so the wasm build (make wasm) never pulls it.
 getrandom = { workspace = true }
+# The thread's stack limit for the evaluator's stack-headroom guard (`src/stack.rs`),
+# read once per thread from the operating system. Target-gated because wasm32
+# measures its shadow stack against the linker's `__stack_low` instead.
+stacker = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Browser wall clock + entropy for NOW()/RAND() on wasm. Target-gated so native

@@ -194,6 +194,13 @@ sha3 = { version = "0.10", default-features = false }
 # ONLY: `union` (adds unsafe) and `serde` stay OFF; wasm-clean, no runtime deps.
 smallvec = "1"
 structured-zstd = "0.0.49"
+# The current thread's stack limit, as the operating system reports it, for the
+# SPARQL evaluator's stack-headroom guard (`crates/sparql-eval/src/stack.rs`):
+# `pthread_getattr_np`, `pthread_get_stackaddr_np` or `GetCurrentThreadStackLimits`
+# per platform, read once per thread. Native-only — target-gated in that crate's
+# manifest, because wasm32 measures its shadow stack against the linker's own
+# `__stack_low` instead — so it never reaches the wasm build.
+stacker = "0.1"
 # pure-Rust PRNG; used ONLY to deterministically seed structured-zstd's ambient
 # FastCOVER reservoir sampling (which has no seed parameter) so pack dictionaries
 # are byte-reproducible. wasm32-unknown-unknown-clean.

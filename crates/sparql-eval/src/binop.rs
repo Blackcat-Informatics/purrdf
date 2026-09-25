@@ -120,6 +120,9 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    // Before the substitution walk copies `pattern` for this row, and before the copy is
+    // evaluated: both recurse over the whole correlated subtree. See `crate::stack`.
+    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
     let row = crate::expr::outer_bindings_for_substitution(mu, schema, ctx);
     // `pattern` is a real PLAN node exactly when it (or, for a `LATERAL` nested inside
     // another `LATERAL`'s substituted RHS, its already-installed enclosing map) resolves
@@ -141,10 +144,10 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
         let enclosing = ctx.correlated_node_maps.last().map(Arc::as_ref);
         let mut map = crate::expr::SubstitutionSourceMap::default();
         let substituted =
-            crate::expr::substitute_pattern_tracked(pattern, &row, &mut map, enclosing);
+            crate::expr::substitute_pattern_tracked(pattern, &row, &mut map, enclosing)?;
         (substituted, Some(map))
     } else {
-        (crate::expr::substitute_pattern(pattern, &row), None)
+        (crate::expr::substitute_pattern(pattern, &row)?, None)
     };
     // `substituted` is a per-row heap temporary whose node addresses do not
     // outlive this call; the guard flags the window so address-keyed

@@ -74,6 +74,13 @@
 //! - `r_path_reverse_star` — `(^ex:reportsTo)*` from the tree root: the `Reverse`
 //!   arm of `path.rs::reach_cached` on the closure's hot path (shares `inner`'s memo
 //!   `Rc` instead of deep-cloning the set per frontier node).
+//! - `s_guarded_recursion` — the evaluator's stack guard (`crate::stack`) on the paths
+//!   that pass it most often per row: a 32-operator `FILTER` chain (one expression
+//!   check per operator per row) and a correlated `EXISTS` and `NOT EXISTS` (one
+//!   `EXISTS` check each per row), over the 30k-row `age` relation. The guard's hot path is one thread-local load and one comparison per
+//!   recursive entry; this case is where that cost would show, and it is reported, not
+//!   asserted. The per-row correlated evaluation `LATERAL` guards is
+//!   `lateral_substitution`'s subject.
 //!
 //! A second, separate criterion group — `value_dispatch` — isolates the value-space
 //! operator dispatch (`value_add`/`value_sub`) from operand extraction, at ns
@@ -377,6 +384,21 @@ const Q_R: &str = "\
 PREFIX ex: <https://example.org/>
 SELECT ?m WHERE { ex:person0 (^ex:reportsTo)* ?m }";
 
+/// (s) The stack guard's busiest entries, per row: every operator of the 32-term chain
+/// is one guarded expression entry, and each of the two correlated `EXISTS` a guarded
+/// `EXISTS` entry. The 27k rows without an `email` pass. The per-row correlated
+/// evaluation and its substitution copy — `LATERAL`'s guarded path — is the
+/// `lateral_substitution` bench.
+const Q_S: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p WHERE {
+  ?p ex:age ?a .
+  FILTER(?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a
+       + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a >= 0)
+  FILTER EXISTS { ?p ex:name ?n }
+  FILTER NOT EXISTS { ?p ex:email ?e }
+}";
+
 /// The namespace the benchmark host configures for its one relation.
 const REL_NS: &str = "https://example.org/rel/";
 
@@ -419,6 +441,7 @@ const CASES: &[(&str, &str, usize)] = &[
     ("p_langmatches_filter", Q_P, PEOPLE / 2),
     ("q_construct_blank_coref", Q_Q, 2 * PEOPLE),
     ("r_path_reverse_star", Q_R, PEOPLE),
+    ("s_guarded_recursion", Q_S, PEOPLE - PEOPLE / 10),
 ];
 
 /// Run one query end-to-end through the engine, returning its solution count.

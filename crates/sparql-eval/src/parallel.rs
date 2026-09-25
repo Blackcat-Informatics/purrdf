@@ -405,6 +405,12 @@ pub(crate) fn is_parallel_safe(expr: &Expression, registries: SafetyRegistries<'
 /// parallelism (it charges nothing from a worker), and the narrow remainder runs
 /// sequentially — where the charge order is the row order by construction.
 pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
+    // Out of stack for the walk (see `crate::stack`): answer "re-enters", the
+    // conservative side — the row loop then runs sequentially, which is always correct,
+    // and the evaluation that follows refuses at its own next check.
+    if crate::stack::is_low() {
+        return true;
+    }
     let mut found = false;
     visit_expression_parts(expr, &mut |part| {
         found |= match part {
@@ -443,6 +449,12 @@ pub(crate) fn is_parallel_safe_pattern(
 /// `||` chain this replaces, including for expressions whose later arms would
 /// have been skipped.
 fn expr_reaches_unsafe_builtin(expr: &Expression, registries: SafetyRegistries<'_>) -> bool {
+    // Out of stack for the walk (see `crate::stack`): answer "unsafe", the conservative
+    // side — a sequential fallback is always correct, and the evaluation that follows
+    // refuses at its own next check.
+    if crate::stack::is_low() {
+        return true;
+    }
     let mut found = false;
     visit_expression_parts(expr, &mut |part| {
         found |= match part {
@@ -658,6 +670,10 @@ fn pattern_reaches_unsafe_builtin(
     // before the walk.
     if let GraphPattern::PropertyFunction(call) = pattern {
         return property_function_is_unsafe(&call.iri, registries.relations);
+    }
+    // See `expr_reaches_unsafe_builtin`: out of stack, "unsafe" is the conservative side.
+    if crate::stack::is_low() {
+        return true;
     }
     let mut found = false;
     visit_pattern_parts(pattern, &mut |part| {

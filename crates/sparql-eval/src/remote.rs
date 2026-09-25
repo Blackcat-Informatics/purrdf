@@ -134,6 +134,14 @@ pub enum RemoteError {
     /// response removes the positional-prefix/resumption claim even though the lower
     /// answer bound remains sound. `SERVICE SILENT` may not swallow either variant.
     GovernedAfterCompletion(TrippedGovernor),
+    /// An in-process source ran out of stack evaluating the forwarded body: the
+    /// [`EvalError::StackExhausted`] of that evaluation, naming its construct.
+    ///
+    /// **Not silenceable**, for the reason [`Self::Denied`] is not: no endpoint failed.
+    /// The body nests deeper than the stack of the thread evaluating it can hold, which
+    /// is a fact about this host, and swallowing it to the join identity would make the
+    /// surrounding join a no-op on exactly the requests that nest deepest.
+    StackExhausted(&'static str),
 }
 
 impl core::fmt::Display for RemoteError {
@@ -146,6 +154,9 @@ impl core::fmt::Display for RemoteError {
             Self::Governed(governor) => write!(f, "governed: {governor}"),
             Self::GovernedAfterCompletion(governor) => {
                 write!(f, "governed after completed exchange: {governor}")
+            }
+            Self::StackExhausted(construct) => {
+                write!(f, "{}", EvalError::StackExhausted { construct })
             }
         }
     }
@@ -347,6 +358,12 @@ pub trait ServiceResolver {
 /// deeply nested) are both still searched, which is what closes the bypass
 /// where a written `LATERAL` sits inside a `SERVICE ?g { … }` auto-wrap.
 fn pattern_reaches_lateral(pattern: &GraphPattern) -> bool {
+    // A walk over the whole forwarded body, from a `SERVICE` that may be deep. Neither
+    // answer is conservative (one refuses with a reason that would be false), so the
+    // walk runs in [`eval_service`]'s `crate::stack::walk` scope, which discards this.
+    if crate::stack::walk_is_low("SERVICE body") {
+        return false;
+    }
     if let GraphPattern::Lateral { left, right } = pattern {
         let parser_reconstructs_it = matches!(
             right.as_ref(),
@@ -380,6 +397,10 @@ fn pattern_reaches_lateral(pattern: &GraphPattern) -> bool {
 /// [`pattern_reaches_lateral`] through an expression's embedded patterns
 /// (an `EXISTS`'s inner pattern, recursively).
 fn expression_reaches_lateral(expr: &purrdf_sparql_algebra::Expression) -> bool {
+    // See `pattern_reaches_lateral`.
+    if crate::stack::walk_is_low("SERVICE body") {
+        return false;
+    }
     let mut found = false;
     crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
         found |= match part {
@@ -456,6 +477,13 @@ fn expression_reaches_lateral(expr: &purrdf_sparql_algebra::Expression) -> bool 
 /// transitively: a ground quoted triple containing a blank node ANYWHERE in its
 /// subject/object tree is stripped exactly like a bare blank-node cell.
 fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
+    // A copy of the whole forwarded body: see `pattern_reaches_lateral`. The placeholder
+    // is discarded by [`eval_service`]'s `crate::stack::walk` scope.
+    if crate::stack::walk_is_low("SERVICE body") {
+        return GraphPattern::Bgp {
+            patterns: Vec::new(),
+        };
+    }
     match pattern {
         // Leaves with no child pattern and no `Values` cells to inspect.
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
@@ -467,7 +495,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             object,
         } => GraphPattern::Path {
             subject: subject.clone(),
-            path: path.clone(),
+            path: crate::stack::clone::path(path),
             object: object.clone(),
         },
         GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
@@ -499,14 +527,14 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::LeftJoin {
             left: Box::new(sanitize_forwarded_body(left)),
             right: Box::new(sanitize_forwarded_body(right)),
-            expression: expression.clone(),
+            expression: expression.as_ref().map(crate::stack::clone::expression),
         },
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
             left: Box::new(sanitize_forwarded_body(left)),
             right: Box::new(sanitize_forwarded_body(right)),
         },
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr: expr.clone(),
+            expr: crate::stack::clone::expression(expr),
             inner: Box::new(sanitize_forwarded_body(inner)),
         },
         GraphPattern::Union { left, right } => GraphPattern::Union {
@@ -524,7 +552,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::Extend {
             inner: Box::new(sanitize_forwarded_body(inner)),
             variable: variable.clone(),
-            expression: expression.clone(),
+            expression: crate::stack::clone::expression(expression),
         },
         GraphPattern::Unfold {
             inner,
@@ -533,7 +561,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             companion,
         } => GraphPattern::Unfold {
             inner: Box::new(sanitize_forwarded_body(inner)),
-            expression: expression.clone(),
+            expression: crate::stack::clone::expression(expression),
             element: element.clone(),
             companion: companion.clone(),
         },
@@ -552,7 +580,7 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         },
         GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
             inner: Box::new(sanitize_forwarded_body(inner)),
-            expression: expression.clone(),
+            expression: expression.iter().map(crate::stack::clone::order).collect(),
         },
         GraphPattern::Project { inner, variables } => GraphPattern::Project {
             inner: Box::new(sanitize_forwarded_body(inner)),
@@ -580,7 +608,10 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         } => GraphPattern::Group {
             inner: Box::new(sanitize_forwarded_body(inner)),
             variables: variables.clone(),
-            aggregates: aggregates.clone(),
+            aggregates: aggregates
+                .iter()
+                .map(|(variable, call)| (variable.clone(), crate::stack::clone::aggregate(call)))
+                .collect(),
         },
     }
 }
@@ -712,7 +743,7 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // `EvalError::Remote` from one that rejects it — surfaces exactly as it does
     // for any other forwarded construct the remote might not support, so the body
     // (including its `LATERAL { … }` text) is forwarded rather than refused.
-    if silent && pattern_reaches_lateral(inner) {
+    if silent && crate::stack::walk(|| pattern_reaches_lateral(inner))? {
         return Err(EvalError::unsupported(
             "a LATERAL clause inside a SERVICE SILENT body: LATERAL is a SEP-0006/Jena syntax \
              extension most remote SPARQL endpoints do not implement, and SILENT would swallow \
@@ -846,8 +877,11 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // dropping it (never refusing, never emitting the illegal `_:` cell) is the sound,
     // maximal-utility fix. Local evaluation never runs this: it walks `inner` fresh, not
     // the sanitized copy.
-    let sanitized = sanitize_forwarded_body(inner);
-    let query_text = purrdf_sparql_algebra::pattern_to_select_query(&sanitized);
+    // Copying and serializing the body both walk all of it; see `sanitize_forwarded_body`.
+    let query_text = crate::stack::walk(|| {
+        let sanitized = sanitize_forwarded_body(inner);
+        purrdf_sparql_algebra::pattern_to_select_query(&sanitized)
+    })?;
     // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
     // else is in a position to poll.
     let stop = ctx.stop_signal().map(Arc::clone);
@@ -912,6 +946,13 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         // swallow it to the join identity.
         Err(RemoteError::Denied(denial)) => {
             return Err(EvalError::ServiceDenied(denial));
+        }
+        // The forwarded body ran out of stack inside an in-process source: not the
+        // endpoint's failure, so — like a denial — never swallowed under `SILENT`, and
+        // re-raised as the same typed refusal it was, however deep the nesting of
+        // in-process sources that carried it out.
+        Err(RemoteError::StackExhausted(construct)) => {
+            return Err(EvalError::StackExhausted { construct });
         }
         Err(e) => {
             // A real endpoint failure outranks a simultaneous stop. Under SILENT the
@@ -1031,6 +1072,7 @@ fn ingest<D: DatasetView + Sync>(
 fn remote_error_for(error: EvalError) -> RemoteError {
     match error {
         EvalError::ServiceDenied(denial) => RemoteError::Denied(denial),
+        EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
         other => RemoteError::Decode(other.to_string()),
     }
 }
@@ -1059,7 +1101,10 @@ pub(crate) fn evaluate_in_memory(
     // Evaluated here without the engine's admission, so the one rewrite admission
     // makes that changes answers rather than refusing — a blank node label shared by
     // two pieces of one basic graph pattern is one variable — is applied here too.
-    let parsed = crate::blank_scope::join_shared_blanks_in_query(&parsed).unwrap_or(parsed);
+    // A walk over the whole forwarded body, at whatever depth the `SERVICE` sits.
+    let parsed = crate::stack::walk(|| crate::blank_scope::join_shared_blanks_in_query(&parsed))
+        .map_err(remote_error_for)?
+        .unwrap_or(parsed);
     let mut ctx = EvalCtx::new(dataset).with_remote(nested);
     if stop.is_some() || max_intermediate_cells.is_some() {
         let mut governors = QueryGovernors::UNBOUNDED;

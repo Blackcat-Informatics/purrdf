@@ -1516,6 +1516,12 @@ pub(crate) fn analyze_pattern(
     pattern: &GraphPattern,
     table: &mut NodeAnalysisTable,
 ) -> NodeAnalysis {
+    // A walk over a whole subtree, run at evaluation time from a caller that may already
+    // be deep (an `EXISTS` preparing its site): see `crate::stack::walk`, whose scope
+    // discards this placeholder with the table it was written into.
+    if crate::stack::walk_is_low("EXISTS analysis") {
+        return NodeAnalysis::default();
+    }
     let addr = std::ptr::from_ref(pattern) as usize;
     if let Some(existing) = table.get(&addr) {
         return existing.clone();
@@ -1843,6 +1849,10 @@ pub(crate) fn analyze_expr(
     expr: &Expression,
     table: &mut NodeAnalysisTable,
 ) -> (DetHashSet<Variable>, bool, bool) {
+    // See `analyze_pattern`: the same walk, one expression level at a time.
+    if crate::stack::walk_is_low("EXISTS analysis") {
+        return (DetHashSet::default(), false, false);
+    }
     match expr {
         Expression::NamedNode(_) | Expression::Literal(_) => (DetHashSet::default(), false, false),
         Expression::Variable(v) | Expression::Bound(v) => {
@@ -2083,6 +2093,12 @@ fn admissible_rec(
     current_row_vars: &DetHashSet<Variable>,
     table: &NodeAnalysisTable,
 ) -> bool {
+    // Out of stack for the walk (see `crate::stack`): "not admissible" is the
+    // conservative side — the per-row definition path is always correct, and the
+    // evaluation it runs refuses at its own next check.
+    if crate::stack::is_low() {
+        return false;
+    }
     match pattern {
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => true,
         GraphPattern::Values { variables, .. } => {
@@ -2254,6 +2270,11 @@ pub(crate) fn exists_row_collision<'a>(
     pattern: &'a GraphPattern,
     row_scope: &DetHashSet<Variable>,
 ) -> Option<(&'a Variable, RowCollisionIntro)> {
+    // Neither answer is conservative here, so the walk runs in its caller's
+    // `crate::stack::walk` scope, which discards this placeholder.
+    if crate::stack::walk_is_low("EXISTS scope check") {
+        return None;
+    }
     match pattern {
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
@@ -2367,6 +2388,10 @@ fn find_group_extend_row_collision<'a>(
     variables: &[Variable],
     row_scope: &DetHashSet<Variable>,
 ) -> Option<(&'a Variable, RowCollisionIntro)> {
+    // See `exists_row_collision`.
+    if crate::stack::walk_is_low("EXISTS scope check") {
+        return None;
+    }
     match inner {
         GraphPattern::Extend {
             inner: next,
@@ -2433,6 +2458,10 @@ fn expr_probe_admissible(
     inner_certainly_bound: &DetHashSet<Variable>,
     table: &NodeAnalysisTable,
 ) -> bool {
+    // See `admissible_rec`: out of stack, "not admissible" is the conservative side.
+    if crate::stack::is_low() {
+        return false;
+    }
     match expr {
         Expression::NamedNode(_) | Expression::Literal(_) => true,
         Expression::Variable(v) | Expression::Bound(v) => {

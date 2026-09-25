@@ -203,6 +203,9 @@ fn check_ground_term(t: &GroundTerm) -> Result<(), EvalError> {
 }
 
 fn check_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
+    // One level per algebra node, and a user-defined function's body is admitted wherever
+    // the call is evaluated: see `crate::stack`.
+    crate::stack::check("basic-profile admission")?;
     match pattern {
         GraphPattern::Bgp { patterns } => {
             for t in patterns {
@@ -311,6 +314,8 @@ fn check_property_function(call: &PropertyFunctionCall) -> Result<(), EvalError>
 }
 
 fn check_expression(expr: &Expression) -> Result<(), EvalError> {
+    // See `check_pattern`.
+    crate::stack::check("basic-profile admission")?;
     match expr {
         Expression::NamedNode(_)
         | Expression::Literal(_)

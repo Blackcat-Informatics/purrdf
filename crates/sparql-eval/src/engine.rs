@@ -2099,8 +2099,12 @@ impl NativeSparqlEngine {
         if let Some(source) = remote {
             ctx = ctx.with_remote(source);
         }
-        evaluate_query_evaluated(&prepared.query, &mut ctx)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
+        evaluate_query_evaluated(&prepared.query, &mut ctx).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-query-explain"),
+                e.to_string(),
+            )
+        })?;
         // `describe()` is IRI-sorted, so the receipt's relation list is a function of what
         // was registered and not of the order it was registered in. The full descriptor
         // travels, not just the IRI: arity, declared modes, and volatility are all part of
@@ -2149,7 +2153,12 @@ impl NativeSparqlEngine {
             relations,
             &mut survey,
         )
-        .map_err(|e| RdfDiagnostic::error("native-sparql-query-explain", e.to_string()))?;
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-query-explain"),
+                e.to_string(),
+            )
+        })?;
         Ok(survey)
     }
 

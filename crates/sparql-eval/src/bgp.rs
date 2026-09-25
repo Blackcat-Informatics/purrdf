@@ -1419,6 +1419,9 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
     relations: &crate::property_fn::PropertyFunctionRegistry,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
+    // One level per algebra node, and a governed evaluation surveys its whole plan
+    // before the first operator runs: see `crate::stack`.
+    crate::stack::check("plan survey")?;
     match pattern {
         GraphPattern::Bgp { patterns } => {
             if patterns.is_empty() {

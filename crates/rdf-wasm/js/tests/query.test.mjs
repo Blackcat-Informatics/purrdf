@@ -465,3 +465,55 @@ test("the deepest parenthesised FILTER the parser admits answers, and one parent
   assert.equal(deepest.rowCount, 3, "every default-graph triple passes the deepest admitted FILTER");
   assert.throws(() => engine.select(ds, parenthesizedFilter(NESTING_LIMIT)), PARENTHESIZED_REFUSAL);
 });
+
+// Nesting the parser admits can still be more than the stack can EVALUATE: one written
+// level of `FILTER NOT EXISTS` costs the evaluator about 16 KB of shadow stack and one of
+// `LATERAL` about 9 KB, so 63 of the one or 126 of the other ran the synchronous lane's
+// 1 MiB shadow stack below its floor — the call trapped ("memory access out of bounds")
+// and left the instance's memory in an unknown state. The evaluator now measures the
+// stack it has left at every recursive entry and refuses, typed, before it runs out.
+const STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*evaluation stack exhausted/;
+const NEST_DATA = [1, 2, 3, 4]
+  .map((n) => `<https://e/s${n}> <https://e/p> <https://e/o${n}> .`)
+  .concat(["<https://e/s1> <https://e/q> <https://e/o1> ."])
+  .join("\n");
+/** `open` written `depth` times around `?s <q> ?z`, closed as often. */
+const nestedAround = (open, depth) =>
+  `SELECT ?s WHERE { ${open.repeat(depth)}?s <https://e/q> ?z${" }".repeat(depth)} }`;
+const nestedNotExists = (depth) => nestedAround("?s <https://e/p> ?o FILTER NOT EXISTS { ", depth);
+const nestedLateral = (depth) => nestedAround("?s <https://e/p> ?o LATERAL { ", depth);
+const subjectsOf = (result) =>
+  result.rows
+    .toArray()
+    .map((row) => row.s.value.replace("https://e/", ""))
+    .sort();
+
+for (const [what, deep, shallow, expected] of [
+  // An odd number of negations of "`?s` has a `<q>`": every subject but `s1`.
+  ["63 nested FILTER NOT EXISTS", nestedNotExists(63), nestedNotExists(31), ["s2", "s3", "s4"]],
+  // Only `s1` has a `<q>`, at every level.
+  ["126 nested LATERAL", nestedLateral(126), nestedLateral(40), ["s1"]],
+]) {
+  test(`${what} is a typed refusal on the synchronous lane, and the engine answers afterwards`, () => {
+    const ds = Dataset.parse(NEST_DATA, "nquads");
+    const engine = new QueryEngine();
+    const before = ds.canonicalize();
+    // Twice: a trap would have left the instance unusable, so the second call would not
+    // reach the evaluator to refuse it the same way.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      assert.throws(() => engine.select(ds, deep), STACK_REFUSAL);
+    }
+    // No memory was overwritten: the dataset's canonical form is byte-identical, and
+    // queries over it and over a freshly parsed one answer exactly.
+    assert.equal(ds.canonicalize(), before);
+    assert.deepEqual(subjectsOf(engine.select(ds, "SELECT ?s WHERE { ?s <https://e/q> ?o }")), ["s1"]);
+    const names = engine
+      .select(Dataset.parse(TRIG, "trig"), "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
+      .rows.toArray()
+      .map((row) => row.name.value);
+    assert.deepEqual(names, ["Ann", "Bob"]);
+    // The valid neighbour: the same form, nested as deep as the stack evaluates, answers
+    // with the rows the deep one has on a larger stack (asynchronous tests).
+    assert.deepEqual(subjectsOf(engine.select(ds, shallow)), expected);
+  });
+}

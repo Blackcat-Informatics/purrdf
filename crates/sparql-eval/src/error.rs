@@ -286,6 +286,23 @@ pub enum EvalError {
     /// environment. Ranking under the flushed one would return different distances
     /// with nothing to say so, which is a silent divergence rather than an answer.
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
+
+    /// The request nests deeper than the stack of the thread evaluating it can hold:
+    /// `construct` was about to be evaluated with less than
+    /// [`crate::stack::MARGIN_BYTES`] of stack left.
+    ///
+    /// Its own variant because nothing about the request is malformed and nothing about
+    /// the data is wrong: the parser admitted the request, and the same request answers
+    /// on a thread with a larger stack (a native thread spawned with more, or a wasm
+    /// asynchronous job given a larger `stackBytes`). Refusing is what stands between an
+    /// admitted request and a crash — natively an aborted process, on wasm32 a trapped
+    /// instance whose memory can no longer be trusted — so this is never a partial
+    /// answer and never retried shallower: the request as written does not fit.
+    StackExhausted {
+        /// What was about to be evaluated — an algebra node, an expression, an `EXISTS`,
+        /// a correlated evaluation, a property path, a template term.
+        construct: &'static str,
+    },
 }
 
 impl EvalError {
@@ -332,6 +349,7 @@ impl EvalError {
             | Self::CompositeBound(_)
             | Self::FloatEnvironment(_) => None,
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
+            Self::StackExhausted { .. } => Some(Self::STACK_EXHAUSTED_CODE),
         }
     }
 
@@ -346,6 +364,12 @@ impl EvalError {
     /// `native-sparql-…` family as [`UnsupportedKind::code`]'s entries, so the whole
     /// code space stays one vocabulary.
     pub const RELATION_INCOMPLETE_CODE: &'static str = "native-sparql-relation-incomplete";
+
+    /// The stable, machine-readable diagnostic code [`Self::StackExhausted`] maps to at
+    /// the `SparqlEngine` boundary — the string a host compares against to tell "this
+    /// request nests deeper than this thread's stack" from every other evaluation
+    /// failure, and to know that a larger stack (not a different request) answers it.
+    pub const STACK_EXHAUSTED_CODE: &'static str = "native-sparql-evaluation-stack-exhausted";
 
     /// Construct an [`Self::RelationIncomplete`] naming the relation and quoting its
     /// own reason.
@@ -434,6 +458,13 @@ impl core::fmt::Display for EvalError {
                 "the thread's floating-point environment cannot run the distance \
                  arithmetic: {error}"
             ),
+            Self::StackExhausted { construct } => write!(
+                f,
+                "evaluation stack exhausted: the request's nesting exceeds what this host's \
+                 stack can evaluate ({construct} was reached with less than {} bytes of \
+                 stack left); run it on a thread with a larger stack",
+                crate::stack::MARGIN_BYTES
+            ),
         }
     }
 }
@@ -496,5 +527,19 @@ mod tests {
         assert_eq!(EvalError::function("x").diagnostic_code(), None);
         assert_eq!(EvalError::config("x").diagnostic_code(), None);
         assert_eq!(EvalError::Parse("x".to_owned()).diagnostic_code(), None);
+    }
+
+    /// A stack refusal carries its own code and names the construct it stopped at.
+    #[test]
+    fn stack_exhausted_carries_its_code_and_names_the_construct() {
+        let e = EvalError::StackExhausted {
+            construct: "FILTER EXISTS",
+        };
+        assert_eq!(
+            e.diagnostic_code(),
+            Some("native-sparql-evaluation-stack-exhausted")
+        );
+        assert!(e.to_string().contains("FILTER EXISTS"), "{e}");
+        assert!(e.to_string().contains("evaluation stack exhausted"), "{e}");
     }
 }

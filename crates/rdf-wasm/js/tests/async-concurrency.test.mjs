@@ -171,6 +171,8 @@ test("an async job started from inside a sync callback runs and returns", async 
 const EXHAUSTING_DEPTH = 100;
 const SMALL_REGION = 524288;
 const GUARD_BAND = 128 * 1024;
+/** The evaluator's own stack refusal, as a job's error carries it. */
+const EVALUATION_STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*evaluation stack exhausted/;
 
 test("stack region exhaustion is a typed error, not corruption", async () => {
   const engine = new QueryEngine();
@@ -201,16 +203,20 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   assert.equal((await engine.queryAsync(chain, nestedOptional(8))).rowCount, 200);
 
   // Frames that never poll: expression evaluation recurses once per operator without
-  // polling, so an operator chain run beneath a few EXISTS levels (which poll) goes far
-  // past a 512 KiB region's base before the next poll — into the overrun zone beneath it,
-  // never into another allocation. The request is the deepest the parser admits of its
-  // shape: sixteen EXISTS levels around a chain of 477 additions, one short of the
-  // expression-height budget. Measured on the shipped artifact by painting the region:
-  // it reaches about 631 000 bytes below the region's top, about 107 000 past a 512 KiB
-  // region's base, while its deepest poll is about 271 000 bytes down — so the canary,
-  // not the guard band, is what stops it. The synchronous lane runs it on its own 1 MiB
-  // stack (about 638 000 bytes deep). The job fails with the same typed error, and the
-  // instance stays intact.
+  // polling, so an operator chain run beneath a few EXISTS levels (which poll) would go
+  // far past a 512 KiB region's base before the next poll. The request is the deepest the
+  // parser admits of its shape: sixteen EXISTS levels around a chain of 477 additions,
+  // one short of the expression-height budget. Measured on the shipped artifact by
+  // painting the region, it needs about 631 000 bytes below the region's top — about
+  // 107 000 past a 512 KiB region's base — while its deepest poll is about 271 000 bytes
+  // down, so the guard band never sees it. What stops it is the evaluator's own stack
+  // guard, which checks every operator against the stack left above the region's base
+  // (the job installs that base as its stack floor) and refuses with 64 KiB still to
+  // spare. The overrun zone beneath the base is therefore never touched: had any frame
+  // reached it, the run's zone inspection would have latched the region's exhaustion,
+  // which outranks every other error, so the evaluator's refusal arriving as the job's
+  // error is the proof. The synchronous lane runs the chain on its own 1 MiB stack (about
+  // 638 000 bytes deep), and a 4 MiB region answers it.
   const deepChain = `SELECT ?s WHERE { ?s <${EX}p> ?o ${`FILTER EXISTS { ?s <${EX}p> ?o `.repeat(16)}BIND(1 AS ?one) FILTER(${"?one + ".repeat(477)}?one > 0)${" }".repeat(16)} }`;
   // A separate engine answers it synchronously: the engine caches a parsed plan per
   // query text, and a cached plan would spare the asynchronous run its parse.
@@ -222,12 +228,27 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
     overran = error;
   }
   assert.ok(overran instanceof Error, "the small region refuses the deep chain");
-  assert.equal(overran.message, "asynchronous job stack region exhausted (524288 bytes); raise stackBytes");
+  assert.match(overran.message, EVALUATION_STACK_REFUSAL);
+  assert.match(overran.message, /expression was reached with less than 65536 bytes of stack left/);
   const overranPollDepth = overran.evidence.async.stackHighWaterBytes;
   assert.ok(
     overranPollDepth < SMALL_REGION - GUARD_BAND,
-    `no poll reached the guard band (${overranPollDepth} bytes deep): the canary stopped the job`,
+    `no poll reached the guard band (${overranPollDepth} bytes deep): the evaluator's guard stopped the job`,
   );
+  assert.equal(stackPointer(), IDLE);
+  // The same refusal when the job gives the event loop back at every poll: the region's
+  // floor is put back on every resumption, so the guard still measures against the
+  // region and not against the synchronous stack's floor — which, far below every heap
+  // region, would leave the chain unguarded until it reached the overrun zone.
+  let yielding;
+  try {
+    await engine.queryGovernedAsync(chain, deepChain, { stackBytes: SMALL_REGION, yieldEveryPolls: 0 });
+  } catch (error) {
+    yielding = error;
+  }
+  assert.ok(yielding instanceof Error, "the small region refuses the deep chain between yields too");
+  assert.match(yielding.message, EVALUATION_STACK_REFUSAL);
+  assert.ok(yielding.evidence.async.yields > 16, `${yielding.evidence.async.yields} yields`);
   assert.equal(stackPointer(), IDLE);
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
   assert.equal((await engine.queryAsync(chain, nestedOptional(8))).rowCount, 200);
@@ -246,6 +267,59 @@ test("stack region exhaustion is a typed error, not corruption", async () => {
   assert.ok(answeredDepth > SMALL_REGION - GUARD_BAND, `${answeredDepth} bytes deep`);
   assert.ok(answeredDepth < 4 * 1024 * 1024 - GUARD_BAND);
   assert.equal(stackPointer(), IDLE);
+});
+
+// Nesting the parser admits can need more stack than a region holds: 63 nested
+// `FILTER NOT EXISTS` or 126 nested `LATERAL` trapped the synchronous lane's 1 MiB stack
+// before the evaluator guarded its own recursion. On the smallest region both are the
+// region's typed exhaustion — their frames poll at every algebra node, so the guard band
+// stops them before the evaluator's own check would — and the instance is not poisoned;
+// on a 16 MiB region both answer, with the rows their semantics give.
+const NEST_DATA = [1, 2, 3, 4]
+  .map((n) => `<${EX}s${n}> <${EX}p> <${EX}o${n}> .`)
+  .concat([`<${EX}s1> <${EX}q> <${EX}o1> .`])
+  .join("\n");
+const nestedAround = (open, depth) =>
+  `SELECT ?s WHERE { ${open.repeat(depth)}?s <${EX}q> ?z${" }".repeat(depth)} }`;
+const subjectsOf = (result) =>
+  result.rows
+    .toArray()
+    .map((row) => row.s.value.replace(EX, ""))
+    .sort();
+
+test("admitted nesting too deep for the smallest region is a typed error there, the instance is not poisoned, and a 16 MiB region answers it", async () => {
+  const engine = new QueryEngine();
+  const data = Dataset.parse(NEST_DATA, "nquads");
+  const before = data.canonicalize();
+  for (const [what, query, expected] of [
+    // An odd number of negations of "`?s` has a `<q>`": every subject but `s1`.
+    ["63 nested FILTER NOT EXISTS", nestedAround(`?s <${EX}p> ?o FILTER NOT EXISTS { `, 63), ["s2", "s3", "s4"]],
+    // Only `s1` has a `<q>`, at every level.
+    ["126 nested LATERAL", nestedAround(`?s <${EX}p> ?o LATERAL { `, 126), ["s1"]],
+  ]) {
+    // Twice: a trap or an overrun of the region's zone would poison the instance, and the
+    // second job would reject with the poison instead of the same typed error.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(
+        engine.queryAsync(data, query, { stackBytes: SMALL_REGION }),
+        { message: "asynchronous job stack region exhausted (524288 bytes); raise stackBytes" },
+        `${what} on the smallest region`,
+      );
+      assert.equal(stackPointer(), IDLE);
+    }
+    // Not poisoned: both lanes answer exactly, over a dataset whose canonical form is
+    // byte-identical to what it was before.
+    assert.equal(data.canonicalize(), before);
+    assert.deepEqual(subjectsOf(engine.select(data, `SELECT ?s WHERE { ?s <${EX}q> ?o }`)), ["s1"]);
+    assert.deepEqual(
+      subjectsOf(await engine.queryAsync(data, `SELECT ?s WHERE { ?s <${EX}q> ?o }`, { stackBytes: SMALL_REGION })),
+      ["s1"],
+    );
+    // The valid neighbour: a 16 MiB region evaluates it.
+    const answered = await engine.queryAsync(data, query, { stackBytes: 16 * 1024 * 1024 });
+    assert.deepEqual(subjectsOf(answered), expected, `${what} on a 16 MiB region`);
+    assert.equal(stackPointer(), IDLE);
+  }
 });
 
 // Nesting is bounded by the parser, not by the region. A FILTER nested 10 000

@@ -160,6 +160,11 @@ fn collect_negated<D: DatasetView + Sync>(
     dataset: &D,
     cache: &mut NegatedCache<D::Id>,
 ) {
+    // Every walk over the path expression in this module runs inside `eval_path`'s
+    // `crate::stack::walk` scope, which discards the traversal when a level refuses.
+    if crate::stack::walk_is_low("property path") {
+        return;
+    }
     use PropertyPathExpression as P;
     match path {
         P::NegatedPropertySet(elems) => {
@@ -213,6 +218,19 @@ fn collect_negated<D: DatasetView + Sync>(
 /// basic graph pattern, it is where a truncation ORIGINATES rather than somewhere one
 /// passes through, and the dispatch in [`crate::eval::eval`] wraps its result directly.
 pub(crate) fn eval_path<D: DatasetView + Sync>(
+    subject: &TermPattern,
+    path: &PropertyPathExpression,
+    object: &TermPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    // Every traversal below recurses over the path expression, whose height the parser
+    // bounds by count, not by stack, and the path may be reached deep in the evaluation:
+    // each level may refuse, and this scope discards the whole traversal when one does.
+    crate::stack::walk(|| eval_path_traversal(subject, path, object, ctx))?
+}
+
+/// [`eval_path`]'s body, run inside its [`crate::stack::walk`] scope.
+fn eval_path_traversal<D: DatasetView + Sync>(
     subject: &TermPattern,
     path: &PropertyPathExpression,
     object: &TermPattern,
@@ -566,7 +584,10 @@ fn reach_cached<D: DatasetView + Sync>(
     forward: bool,
     ctx: &PathCtx<'_, D>,
 ) -> Rc<BTreeSet<D::Id>> {
-    if ctx.stopped() {
+    // The recursion over the path expression every set-semantics traversal goes through.
+    // The placeholder may be memoized, but only in this traversal's own `PathCtx`, which
+    // the enclosing `crate::stack::walk` scope in `eval_path` drops with it.
+    if ctx.stopped() || crate::stack::walk_is_low("property path") {
         return Rc::new(BTreeSet::new());
     }
     // `^inner` only flips the direction flag: its reach set IS `inner`'s set for the
@@ -654,6 +675,9 @@ fn reach_uncached<D: DatasetView + Sync>(
 ///   non-reflexive: `OneOrMore` returns `closure` only (node is included iff it cycles
 ///   back to itself, which is not a static guarantee).
 fn path_is_reflexive(path: &PropertyPathExpression) -> bool {
+    if crate::stack::walk_is_low("property path") {
+        return false;
+    }
     use PropertyPathExpression as P;
     match path {
         P::ZeroOrMore(_) | P::ZeroOrOne(_) => true,
@@ -679,6 +703,9 @@ fn path_is_reflexive(path: &PropertyPathExpression) -> bool {
 ///   cyclic/infinite graphs, and mandated even when the repetition is nested
 ///   under a combinator (e.g. `(:p/:q)+`).
 fn path_has_repetition(path: &PropertyPathExpression) -> bool {
+    if crate::stack::walk_is_low("property path") {
+        return false;
+    }
     use PropertyPathExpression as P;
     match path {
         P::ZeroOrMore(_) | P::OneOrMore(_) | P::ZeroOrOne(_) | P::Range { .. } => true,
@@ -705,6 +732,10 @@ fn simple_reach_multiset<D: DatasetView + Sync>(
     forward: bool,
     ctx: &PathCtx<'_, D>,
 ) -> Vec<D::Id> {
+    // The bag-semantics twin of `reach_cached`'s recursion.
+    if crate::stack::walk_is_low("property path") {
+        return Vec::new();
+    }
     use PropertyPathExpression as P;
     match path {
         P::NamedNode(p) => step_predicate(p, node, forward, ctx).into_iter().collect(),

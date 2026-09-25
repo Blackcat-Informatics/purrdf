@@ -55,14 +55,24 @@
 //! first stack-pointer instruction after every call of the import is its restore), never
 //! by counting call sites.
 //!
-//! Inside the region the [`JspiStopWatch`] guards against overflow: every poll compares
-//! the address of a local against `base + 128 KiB` and, inside that guard band, latches a
-//! fault ("asynchronous job stack region exhausted …; raise stackBytes") and stops the
-//! job cleanly — before a deeper frame could run off the region into the heap. It also
-//! records the low-water mark, reported as [`AsyncEvidence::stack_high_water_bytes`].
+//! Inside the region two guards read one measurement. The run installs the region's base
+//! as the evaluator's stack floor (`purrdf_sparql_eval::stack::replace_floor`), puts the
+//! context's own floor back before every suspension, reinstalls the base on every
+//! resumption (recording the resuming context's floor as the one to put back next), and
+//! puts the context's floor back when the run returns — so every stack measurement on
+//! the job is against its own region, and every one made while it is suspended is
+//! against the stack actually running. The [`JspiStopWatch`] guards polling frames:
+//! every poll measures the stack left above the base and, inside a guard band of
+//! 128 KiB, latches a fault ("asynchronous job stack region exhausted …; raise
+//! stackBytes") and stops the job cleanly — before a deeper frame could run off the
+//! region into the heap. It also records the low-water mark, reported as
+//! [`AsyncEvidence::stack_high_water_bytes`]. The evaluator guards the frames that never
+//! poll — an operator chain, a nested `EXISTS` walk — by checking the same measurement at
+//! every recursive step and refusing with its own typed error
+//! (`native-sparql-evaluation-stack-exhausted`) while 64 KiB are still left.
 //!
-//! Work that never polls — parsing, planning, serializing — can still recurse past the
-//! base between two polls. Beneath every base lies an overrun zone
+//! Work that neither polls nor is the evaluator's — parsing, serializing — can still
+//! recurse past the base between two polls. Beneath every base lies an overrun zone
 //! ([`STACK_OVERRUN_ZONE_BYTES`], filled with a known byte) that absorbs such frames
 //! inside the job's own allocation. The first poll after one sees the canary it
 //! overwrote and stops the job with the same typed exhaustion error; when the run
@@ -224,8 +234,9 @@ const STACK_GUARD_BYTES: usize = 128 * 1024;
 
 /// The overrun zone below every region's base: 1 MiB.
 ///
-/// The guard band only stops frames that *poll*. Work that never polls — parsing the
-/// request, planning it, serializing its answer — can recurse past the region's base, and
+/// The guard band only stops frames that *poll*, and the evaluator's own stack guard
+/// only frames that evaluate. Work that is neither — parsing the request, serializing its
+/// answer — can recurse past the region's base, and
 /// below the base lies other heap memory: an overrun there would corrupt it silently. So
 /// every region is allocated with this many bytes beneath its base, filled with
 /// [`STACK_ZONE_FILL`], and inspected when the run returns (see [`StackRegion::overrun`]):
@@ -843,9 +854,13 @@ struct StackBounds {
 }
 
 impl StackBounds {
-    /// Whether a frame at `sp` may keep running: inside the region and above its guard
-    /// band. The error is the fault to latch.
-    fn check(self, sp: usize) -> Result<(), String> {
+    /// Whether a frame at `sp`, with `left` bytes of stack below it, may keep running:
+    /// inside the region and above its guard band. The error is the fault to latch.
+    ///
+    /// `left` is [`purrdf_sparql_eval::stack::remaining`], measured against the floor
+    /// [`JobInner::run`] installs — this region's base — so the guard band and the
+    /// evaluator's own stack guard read one measurement rather than two.
+    fn check(self, sp: usize, left: usize) -> Result<(), String> {
         if sp < self.base || sp > self.top {
             return Err(format!(
                 "asynchronous job is not running on its stack region (stack pointer {sp:#x} \
@@ -853,7 +868,7 @@ impl StackBounds {
                 self.base, self.top
             ));
         }
-        if sp < self.base.saturating_add(STACK_GUARD_BYTES) {
+        if left < STACK_GUARD_BYTES {
             return Err(self.exhausted());
         }
         Ok(())
@@ -885,6 +900,11 @@ struct JobSlots {
     /// the job runs on its region, which is only ever on `wasm32`.
     region_armed: AtomicBool,
     bounds: StackBounds,
+    /// The stack floor ([`purrdf_sparql_eval::stack::replace_floor`]) of the context the
+    /// job was started or last resumed from, put back whenever the job leaves its region:
+    /// at every suspension and when the run returns. Only ever written on `wasm32`, where
+    /// the job runs on its region.
+    outer_floor: AtomicUsize,
     counters: AsyncCounters,
 }
 
@@ -899,6 +919,7 @@ impl JobSlots {
             finished: AtomicBool::new(false),
             region_armed: AtomicBool::new(false),
             bounds,
+            outer_floor: AtomicUsize::new(0),
             counters: AsyncCounters::default(),
         }
     }
@@ -1088,22 +1109,29 @@ impl JspiStopWatch {
         if canary != STACK_CANARY {
             return Err(self.slots.bounds.exhausted());
         }
-        // An address-taken local lives on the shadow stack; its address is this frame's
-        // depth. `black_box` keeps the slot a real, escaping one.
-        let mut marker = 0u8;
-        let sp = core::hint::black_box(&raw mut marker) as usize;
+        // The evaluator's own measurement of this frame's depth and of the stack left
+        // below it, against the region's base (see `JobInner::run`).
+        let sp = purrdf_sparql_eval::stack::stack_pointer();
         self.slots
             .counters
             .stack_low_water
             .fetch_min(sp, Ordering::Relaxed);
-        self.slots.bounds.check(sp)
+        self.slots
+            .bounds
+            .check(sp, purrdf_sparql_eval::stack::remaining())
     }
 
     /// Suspend on the already-issued effect `seq`, count it, and return the host's
     /// status (an unknown status is latched as a fault and reported as one).
     fn suspend_on(&self, seq: u32, kind: AsyncEffectKind) -> u32 {
         let started = now_ms();
+        // Leaving the region: whatever runs while the job is suspended runs on the
+        // context's own stack, so it gets that stack's floor back — and the job gets its
+        // region's back on resumption, from whichever context resumed it (that context's
+        // floor is the one to put back at the next suspension).
+        let region_floor = self.leave_region();
         let status = suspend(self.slots.job, seq);
+        self.enter_region(region_floor);
         self.slots
             .counters
             .record_suspension(kind, now_ms() - started);
@@ -1118,6 +1146,26 @@ impl JspiStopWatch {
                 SUSPEND_FAULT
             }
         }
+    }
+
+    /// Put the outer context's stack floor back before the job leaves its region, and
+    /// return the region's floor to reinstall on the way back in. A no-op off `wasm32`,
+    /// where the job never runs on its region.
+    fn leave_region(&self) -> usize {
+        if !cfg!(target_arch = "wasm32") {
+            return 0;
+        }
+        purrdf_sparql_eval::stack::replace_floor(self.slots.outer_floor.load(Ordering::Relaxed))
+    }
+
+    /// Reinstall the region's stack floor on resumption, recording the floor of the
+    /// context that resumed the job as the one to put back next. A no-op off `wasm32`.
+    fn enter_region(&self, region_floor: usize) {
+        if !cfg!(target_arch = "wasm32") {
+            return;
+        }
+        let outer = purrdf_sparql_eval::stack::replace_floor(region_floor);
+        self.slots.outer_floor.store(outer, Ordering::Relaxed);
     }
 
     /// Give the event loop back once.
@@ -1832,6 +1880,13 @@ impl JobInner {
         slots
             .region_armed
             .store(cfg!(target_arch = "wasm32"), Ordering::Relaxed);
+        // The region's base is the floor every stack measurement on this job reads — the
+        // poll-time guard band and the evaluator's own guard alike — until the job
+        // suspends or returns (see `JspiStopWatch::leave_region`).
+        if cfg!(target_arch = "wasm32") {
+            let outer = purrdf_sparql_eval::stack::replace_floor(self.region.bounds.base);
+            slots.outer_floor.store(outer, Ordering::Relaxed);
+        }
         let outcome = match (operation, self.watch.stack_check()) {
             (_, Err(fault)) => {
                 slots.latch_fault(fault);
@@ -1844,6 +1899,9 @@ impl JobInner {
             }
         };
         slots.region_armed.store(false, Ordering::Relaxed);
+        if cfg!(target_arch = "wasm32") {
+            purrdf_sparql_eval::stack::replace_floor(slots.outer_floor.load(Ordering::Relaxed));
+        }
         match self.region.overrun() {
             Overrun::None => {}
             // Frames that never polled ran past the base into the zone: nothing outside
@@ -3963,21 +4021,22 @@ mod tests {
             base: 0x10_0000,
             top: 0x18_0000,
         };
-        assert!(bounds.check(bounds.top - 64).is_ok());
+        // What `purrdf_sparql_eval::stack::remaining` reports on the region, whose base
+        // `JobInner::run` installs as the floor.
+        let check = |sp: usize| bounds.check(sp, sp.saturating_sub(bounds.base));
+        assert!(check(bounds.top - 64).is_ok());
         assert!(
-            bounds.check(bounds.base + STACK_GUARD_BYTES).is_ok(),
+            check(bounds.base + STACK_GUARD_BYTES).is_ok(),
             "the first byte above the guard band is usable"
         );
-        let exhausted = bounds
-            .check(bounds.base + STACK_GUARD_BYTES - 1)
-            .expect_err("inside the guard band");
+        let exhausted =
+            check(bounds.base + STACK_GUARD_BYTES - 1).expect_err("inside the guard band");
         assert_eq!(
             exhausted,
             "asynchronous job stack region exhausted (524288 bytes); raise stackBytes"
         );
         assert!(
-            bounds
-                .check(bounds.top + 16)
+            check(bounds.top + 16)
                 .expect_err("outside the region")
                 .contains("not running on its stack region")
         );

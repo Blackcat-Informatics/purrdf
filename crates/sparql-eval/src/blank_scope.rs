@@ -167,6 +167,12 @@ fn is_spine(pattern: &GraphPattern) -> bool {
 
 /// The leaves under the spine rooted at `pattern`, in written order.
 fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
+    // A walk over the whole query. From an in-process `SERVICE`, which may sit deep in
+    // an evaluation, it runs inside a `crate::stack::walk` scope that discards the
+    // placeholder; everywhere else no scope is open and this never refuses.
+    if crate::stack::walk_is_low("blank node scope") {
+        return;
+    }
     match pattern {
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
             if is_spine(pattern) =>
@@ -180,6 +186,10 @@ fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) 
 
 /// [`spine_leaves`], mutably.
 fn spine_leaves_mut<'a>(pattern: &'a mut GraphPattern, out: &mut Vec<&'a mut GraphPattern>) {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return;
+    }
     if !is_spine(pattern) {
         out.push(pattern);
         return;
@@ -270,6 +280,10 @@ fn shared_labels(leaves: &[&GraphPattern]) -> Vec<String> {
 /// spine walked in place, so a pattern with nothing to rename allocates nothing
 /// (this walk runs on every admission, prepared re-runs included).
 fn any_spine_leaf(pattern: &GraphPattern, test: &mut impl FnMut(&GraphPattern) -> bool) -> bool {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return false;
+    }
     match pattern {
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
             if is_spine(pattern) =>
@@ -305,6 +319,10 @@ fn leaf_has_blank(leaf: &GraphPattern) -> bool {
 }
 
 fn pattern_needs(pattern: &GraphPattern) -> bool {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return false;
+    }
     if is_spine(pattern) {
         // Only a spine with blanks in two of its leaves can share a label, and only
         // that one pays for collecting them.
@@ -379,6 +397,10 @@ fn aggregate_needs(aggregate: &AggregateExpression) -> bool {
 }
 
 fn expression_needs(expr: &Expression) -> bool {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return false;
+    }
     match expr {
         Expression::Exists(pattern) => pattern_needs(pattern),
         Expression::Or(a, b)
@@ -417,6 +439,10 @@ fn expression_needs(expr: &Expression) -> bool {
 // ---------------------------------------------------------------------------
 
 fn rewrite_pattern(pattern: &mut GraphPattern, next_spine: &mut usize) {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return;
+    }
     if is_spine(pattern) {
         let shared = {
             let mut leaves = Vec::new();
@@ -533,6 +559,10 @@ fn rewrite_aggregate(
 }
 
 fn rewrite_expression(expr: &mut Expression, next_spine: &mut usize) {
+    // See `spine_leaves`.
+    if crate::stack::walk_is_low("blank node scope") {
+        return;
+    }
     match expr {
         Expression::Exists(pattern) => rewrite_pattern(pattern, next_spine),
         Expression::Or(a, b)

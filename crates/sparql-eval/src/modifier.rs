@@ -412,6 +412,12 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
 /// this predicate declines to answer — it reports only what it can prove, and an
 /// unproven path is simply evaluated.
 fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
+    // Out of stack for the walk (see `crate::stack`): "not proven" is the conservative
+    // answer — every combinator below is monotone in it — and the evaluation that then
+    // runs refuses at its own next check.
+    if crate::stack::is_low() {
+        return false;
+    }
     match path {
         // One hop over a named predicate, over ANY predicate, or over any predicate
         // outside a named set: each reads exactly one row.
@@ -475,6 +481,10 @@ fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
 /// * `Values` carries its rows inline and `PropertyFunction` invokes a registered
 ///   relation, neither of which touches the active graph's rows at all.
 fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bool {
+    // See `path_needs_an_edge`: out of stack, "not proven" is the conservative answer.
+    if crate::stack::is_low() {
+        return false;
+    }
     match pattern {
         GraphPattern::Bgp { patterns } => !patterns.is_empty(),
         GraphPattern::Path {
