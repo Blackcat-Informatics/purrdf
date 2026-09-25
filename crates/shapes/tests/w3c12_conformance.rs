@@ -13,7 +13,8 @@
 //!   "the report agrees": `sh:conforms` plus the multiset of
 //!   `(focusNode, resultPath, value, sourceConstraintComponent, severity)`
 //!   tuples, blank nodes normalized. `sht:Failure` expects an error at load or
-//!   validation.
+//!   validation. The only departure from the approved expectation is
+//!   [`EXPECTATION_DEFECTS`].
 //! * **`sht:EvalNodeExpr`** — the `sht:nodeExpr` node is parsed by the shapes
 //!   parser itself ([`purrdf_shapes::shapes::from_dataset_with_node_expressions`],
 //!   so custom functions and shape references bind exactly as they do in a
@@ -60,11 +61,11 @@ use purrdf_shapes::expression::{
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::{apply_rules, engine, shapes, sparql, text_ingest};
 
-use shacl_corpora::report_grading::{no_panic, run_validate_case};
+use shacl_corpora::report_grading::{grade, no_panic, produce};
 use shacl_corpora::shacl12::{
     Body, Case12, InferCase, InferExpected, NodeExprCase, SrlCase, W3C12_TOTAL_CASES, shacl12_cases,
 };
-use shacl_corpora::{file_iri, parse_turtle_file};
+use shacl_corpora::{Expected, Multiset, W3cCase, file_iri, parse_turtle_file};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
@@ -77,15 +78,6 @@ const R_UNIQUE_VALUES_FOR: &str = "sh:uniqueValuesFor is not implemented, so a s
 
 const R_SUBSET_OF: &str =
     "sh:subsetOf is not implemented, so a shapes graph using it is refused at load";
-
-const R_SOME_VALUE: &str =
-    "sh:someValue is not implemented, so a shapes graph using it is refused at load";
-
-const R_ROOT_CLASS: &str =
-    "sh:rootClass is not implemented, so a shapes graph using it is refused at load";
-
-const R_SINGLE_LINE: &str =
-    "sh:singleLine is not implemented, so a shapes graph using it is refused at load";
 
 const R_CLOSED_BY_TYPES: &str =
     "sh:closed sh:ByTypes is not evaluated, so a shape using it is refused at load";
@@ -108,10 +100,6 @@ const R_CONFORMANCE_DISALLOWS: &str =
 const R_REIFIER_MESSAGE: &str = "a {| sh:message … |} reifier annotation on a (shape, parameter, value) statement \
      is not evaluated, so the shapes graph is refused at load (the report comparison does not \
      grade sh:resultMessage, which is how the former silent drop of the message passed)";
-
-const R_XONE_003_EXPECTATION: &str = "the approved expected report omits sh:resultPath for the result of \
-     shsh:xoneSubjectsShapeXonePropertyShape, a property shape whose sh:path is sh:xone; SHACL \
-     1.2 Core §3.6.2.2 gives a property shape's results sh:resultPath, and PurRDF emits it";
 
 const R_SHAPE_CLASS_SUBJECT: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
      evaluated); the rule also omits sh:subject, which SHACL 1.2 Rules defaults to the focus \
@@ -201,12 +189,6 @@ const XFAIL: &[(&str, &str)] = &[
     ("core/node/uniqueValuesFor-005", R_UNIQUE_VALUES_FOR),
     ("core/property/subsetOf-001", R_SUBSET_OF),
     ("core/property/subsetOf-002", R_SUBSET_OF),
-    ("core/property/someValue-001", R_SOME_VALUE),
-    ("core/property/rootClass-001", R_ROOT_CLASS),
-    ("core/property/singleLine-001", R_SINGLE_LINE),
-    // ── List-valued parameters ──
-    // ── Expectation defects ──
-    ("core/node/xone-003", R_XONE_003_EXPECTATION),
     // ── Closed shapes ──
     ("core/node/closed-003", R_CLOSED_BY_TYPES),
     ("core/node/closed-004", R_CLOSED_BY_TYPES),
@@ -611,6 +593,126 @@ fn canonical_expectation(id: &str, expected: &[Term]) -> Result<Vec<Term>, Strin
     Ok(out)
 }
 
+// ── Expectation defects ───────────────────────────────────────────────────────
+
+/// One amendment of one approved expected result: the result identified by its
+/// `(focus node, value, source constraint component, severity)` — the compared
+/// tuple with NO `sh:resultPath` — carries `result_path` as its `sh:resultPath`.
+/// Every term is spelled as the comparison tuple spells it (see
+/// `shacl_corpora::norm`): an IRI in angle brackets, a literal in N-Triples form.
+#[derive(Clone, Copy, Debug)]
+struct AddResultPath {
+    focus: &'static str,
+    value: Option<&'static str>,
+    component: &'static str,
+    severity: &'static str,
+    result_path: &'static str,
+}
+
+/// Approved W3C SHACL 1.2 expectations that contradict normative SHACL 1.2 Core
+/// text: `(test id, the normative sentence quoted with its section, the exact
+/// delta)`.
+///
+/// An entry is not an expected failure. The harness grades the engine's report
+/// against the approved expected report WITH the delta applied, and against
+/// nothing else: a report that lacks the delta, carries a different one, or
+/// differs anywhere else fails exactly as an unamended comparison would. Each
+/// delta must apply to a result the approved report really contains, or the
+/// entry is stale and the harness says so. [`expectation_defects_are_exact`]
+/// proves both directions on the engine's real report, and pins the table by
+/// count.
+///
+/// * `core/node/xone-003` — the result is produced by
+///   `shsh:xoneSubjectsShapeXonePropertyShape`, a property shape whose `sh:path`
+///   is `sh:xone`, through `sh:minListLength`, whose definition states no
+///   exception to §6.7.2.2. The approved report omits `sh:resultPath`; the
+///   quoted sentence makes it the shape's `sh:path`.
+const EXPECTATION_DEFECTS: &[(&str, &str, &[AddResultPath])] = &[(
+    "core/node/xone-003",
+    "SHACL 1.2 Core §6.7.2.2: \"For results produced by a property shape, this SHACL \
+     property path is equivalent to the value of sh:path of the shape, unless stated \
+     otherwise.\"",
+    &[AddResultPath {
+        focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
+        value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
+        component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
+        severity: "<http://www.w3.org/ns/shacl#Warning>",
+        result_path: "<http://www.w3.org/ns/shacl#xone>",
+    }],
+)];
+
+/// [`EXPECTATION_DEFECTS`] pinned by count, so an entry cannot be added or
+/// dropped without this number moving with it.
+const EXPECTATION_DEFECTS_COUNT: usize = 1;
+
+/// The approved expected results of `id` with `deltas` applied. A delta whose
+/// path-less result the approved report does not contain is a stale entry and an
+/// error, so an entry can never amend a result into existence.
+fn amend(id: &str, results: &Multiset, deltas: &[AddResultPath]) -> Result<Multiset, String> {
+    let mut amended = results.clone();
+    for delta in deltas {
+        let without = (
+            delta.focus.to_owned(),
+            None,
+            delta.value.map(ToOwned::to_owned),
+            delta.component.to_owned(),
+            delta.severity.to_owned(),
+        );
+        match amended.get_mut(&without) {
+            Some(count) if *count > 1 => *count -= 1,
+            Some(_) => {
+                amended.remove(&without);
+            }
+            None => {
+                return Err(format!(
+                    "EXPECTATION_DEFECTS amends {id} at {without:?}, which is not among its \
+                     approved expected results without a sh:resultPath — stale entry"
+                ));
+            }
+        }
+        let (focus, _, value, component, severity) = without;
+        *amended
+            .entry((
+                focus,
+                Some(delta.result_path.to_owned()),
+                value,
+                component,
+                severity,
+            ))
+            .or_insert(0) += 1;
+    }
+    Ok(amended)
+}
+
+/// The expectation a validation case is graded against: the approved one, or the
+/// approved one amended by its [`EXPECTATION_DEFECTS`] entry.
+fn graded_expectation(id: &str, tc: &W3cCase) -> Result<Expected, String> {
+    let Some((_, _, deltas)) = EXPECTATION_DEFECTS.iter().find(|(entry, ..)| *entry == id) else {
+        return Ok(match &tc.expected {
+            Expected::Failure => Expected::Failure,
+            Expected::Report { conforms, results } => Expected::Report {
+                conforms: *conforms,
+                results: results.clone(),
+            },
+        });
+    };
+    let Expected::Report { conforms, results } = &tc.expected else {
+        return Err(format!(
+            "EXPECTATION_DEFECTS names {id}, whose approved result is sht:Failure — a result \
+             delta cannot amend it"
+        ));
+    };
+    Ok(Expected::Report {
+        conforms: *conforms,
+        results: amend(id, results, deltas)?,
+    })
+}
+
+/// Grade one `sht:Validate` entry against its graded expectation.
+fn run_validate(id: &str, tc: &W3cCase) -> Result<(), String> {
+    grade(&graded_expectation(id, tc)?, produce(tc))
+}
+
 // ── Term-level comparison ─────────────────────────────────────────────────────
 
 /// Compare produced node-expression output against the expected list: exact RDF
@@ -850,7 +952,7 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
 /// Grade one entry.
 fn run(case: &Case12) -> Result<(), String> {
     match &case.body {
-        Body::Validate(tc) => run_validate_case(tc),
+        Body::Validate(tc) => run_validate(&case.id, tc),
         Body::NodeExpr(tc) => run_node_expr(&case.id, tc),
         Body::Infer(tc) => run_infer(tc),
         Body::Srl(tc) => run_srl(tc),
@@ -999,6 +1101,165 @@ fn non_canonical_expectations_are_really_non_canonical() {
             literal.datatype_str()
         );
     }
+}
+
+// ── The expectation-defect table ──────────────────────────────────────────────
+
+/// Both directions of [`EXPECTATION_DEFECTS`], plus its count pin.
+///
+/// For every entry: the test exists, is an `sht:Validate` entry with an
+/// approved expected report, is not also ledgered in [`XFAIL`], and the clause
+/// quotes SHACL 1.2 Core. Then, on the ENGINE'S REAL REPORT:
+///
+/// * it agrees with the amended expectation (the delta is exactly what the
+///   engine does differently);
+/// * it disagrees with the approved expectation (the delta is not vacuous);
+///
+/// and, as controls over the comparison itself, with the engine's `sh:conforms`
+/// held fixed:
+///
+/// * a report MISSING the delta — the approved results verbatim — fails;
+/// * a report carrying a DIFFERENT delta — the same result amended with another
+///   `sh:resultPath` — fails;
+/// * a report carrying the delta PLUS an extra, different amendment of another
+///   result fails.
+#[test]
+fn expectation_defects_are_exact() {
+    assert_eq!(
+        EXPECTATION_DEFECTS.len(),
+        EXPECTATION_DEFECTS_COUNT,
+        "EXPECTATION_DEFECTS count pin"
+    );
+    let cases = shacl12_cases();
+    for (id, clause, deltas) in EXPECTATION_DEFECTS {
+        assert!(
+            clause.starts_with("SHACL 1.2 Core §") && clause.contains('"'),
+            "{id}: the clause must quote SHACL 1.2 Core, got {clause:?}"
+        );
+        assert!(!deltas.is_empty(), "{id}: an entry must carry a delta");
+        assert!(
+            !XFAIL.iter().any(|(entry, _)| entry == id),
+            "{id}: an expectation defect is graded, never also an expected failure"
+        );
+        let case = cases
+            .iter()
+            .find(|c| c.id == *id)
+            .unwrap_or_else(|| panic!("{id}: no such test"));
+        let Body::Validate(tc) = &case.body else {
+            panic!("{id}: not an sht:Validate test");
+        };
+        let Expected::Report { conforms, results } = &tc.expected else {
+            panic!("{id}: the approved result is sht:Failure");
+        };
+        let amended = amend(id, results, deltas).unwrap_or_else(|e| panic!("{e}"));
+        assert_ne!(
+            &amended, results,
+            "{id}: the delta must change the expectation"
+        );
+
+        let (produced_conforms, produced) =
+            produce(tc).unwrap_or_else(|e| panic!("{id}: the engine must validate: {e}"));
+        let amended_expectation = Expected::Report {
+            conforms: *conforms,
+            results: amended.clone(),
+        };
+        let approved_expectation = Expected::Report {
+            conforms: *conforms,
+            results: results.clone(),
+        };
+        grade(
+            &amended_expectation,
+            Ok((produced_conforms, produced.clone())),
+        )
+        .unwrap_or_else(|e| panic!("{id}: the engine must equal the amended report: {e}"));
+        assert!(
+            grade(&approved_expectation, Ok((produced_conforms, produced))).is_err(),
+            "{id}: the engine must differ from the approved report, or the entry is vacuous"
+        );
+
+        // A report missing the delta.
+        assert!(
+            grade(
+                &amended_expectation,
+                Ok((produced_conforms, results.clone()))
+            )
+            .is_err(),
+            "{id}: a report missing the delta must fail"
+        );
+
+        // A report with a different delta in its place.
+        let other_path: Vec<AddResultPath> = deltas
+            .iter()
+            .map(|delta| AddResultPath {
+                result_path: "<http://example.org/ns#another-path>",
+                ..*delta
+            })
+            .collect();
+        let differently_amended = amend(id, results, &other_path).expect("the same result");
+        assert!(
+            grade(
+                &amended_expectation,
+                Ok((produced_conforms, differently_amended))
+            )
+            .is_err(),
+            "{id}: a report carrying a different delta must fail"
+        );
+
+        // A report with the delta plus an extra, different result.
+        let mut extra = amended;
+        *extra
+            .entry((
+                "<http://example.org/ns#extra-focus>".to_owned(),
+                Some("<http://example.org/ns#extra-path>".to_owned()),
+                None,
+                "<http://www.w3.org/ns/shacl#MinCountConstraintComponent>".to_owned(),
+                "<http://www.w3.org/ns/shacl#Violation>".to_owned(),
+            ))
+            .or_insert(0) += 1;
+        assert!(
+            grade(&amended_expectation, Ok((produced_conforms, extra))).is_err(),
+            "{id}: a report carrying the delta plus another difference must fail"
+        );
+    }
+}
+
+/// A delta naming a result the approved report does not hold is refused as a
+/// stale entry rather than amending a result into existence; the neighbouring
+/// delta that names a real result applies.
+#[test]
+fn a_stale_expectation_defect_is_refused() {
+    let focus = "<http://example.org/ns#focus>";
+    let component = "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>";
+    let severity = "<http://www.w3.org/ns/shacl#Violation>";
+    let mut results = Multiset::new();
+    results.insert(
+        (
+            focus.to_owned(),
+            None,
+            None,
+            component.to_owned(),
+            severity.to_owned(),
+        ),
+        1,
+    );
+    let real = AddResultPath {
+        focus,
+        value: None,
+        component,
+        severity,
+        result_path: "<http://example.org/ns#p>",
+    };
+    let stale = AddResultPath {
+        focus: "<http://example.org/ns#elsewhere>",
+        ..real
+    };
+    let amended = amend("control", &results, &[real]).expect("a real result is amended");
+    assert_eq!(
+        amended.keys().next().and_then(|tuple| tuple.1.as_deref()),
+        Some("<http://example.org/ns#p>")
+    );
+    let error = amend("control", &results, &[stale]).expect_err("a stale delta is refused");
+    assert!(error.contains("stale entry"), "{error}");
 }
 
 // ── Comparator controls ───────────────────────────────────────────────────────

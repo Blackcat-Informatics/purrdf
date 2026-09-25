@@ -2221,6 +2221,11 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             Constraint::Node(inner) => {
                 all_of.push(compile_object_schema(inner, ctx));
             }
+            // SHACL 1.2 Core §7.8.3: "In node shapes, sh:someValue is equivalent
+            // to using sh:node" — the one value node is the focus node itself.
+            Constraint::SomeValue(inner) => {
+                all_of.push(compile_object_schema(inner, ctx));
+            }
             Constraint::Not(inner) => match compile_negand(inner, ctx) {
                 // The inner is losslessly expressible as the conjunction
                 // `A ∧ B ∧ …` of its parts. SHACL's `sh:not` conforms iff a node
@@ -2684,6 +2689,43 @@ fn compile_property(
             }
             Constraint::MemberShape(_) => {
                 record_list_loss(ctx, &mut comments, "sh:memberShape", shape_iri, key);
+            }
+            Constraint::SingleLine(false) => {}
+            Constraint::SingleLine(true) => {
+                ctx.record(
+                    "sh:singleLine",
+                    shape_iri,
+                    "a line-break prohibition over literal lexical forms has no projection in \
+                     this emitter",
+                );
+                comments.push(format!(
+                    "a sh:singleLine constraint on property {key} was dropped (no projection in \
+                     this emitter)"
+                ));
+            }
+            Constraint::RootClass(_) => {
+                ctx.record(
+                    "sh:rootClass",
+                    shape_iri,
+                    "an rdfs:subClassOf* bound on class-valued values has no JSON Schema \
+                     equivalent",
+                );
+                comments.push(format!(
+                    "a sh:rootClass constraint on property {key} was dropped (no JSON Schema \
+                     equivalent)"
+                ));
+            }
+            Constraint::SomeValue(_) => {
+                ctx.record(
+                    "sh:someValue",
+                    shape_iri,
+                    "an at-least-one-value-conforms condition over a property's values has no \
+                     projection in this emitter",
+                );
+                comments.push(format!(
+                    "a sh:someValue constraint on property {key} was dropped (no projection in \
+                     this emitter)"
+                ));
             }
             Constraint::In(terms) => {
                 for t in terms {

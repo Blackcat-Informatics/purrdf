@@ -164,11 +164,8 @@ const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
     ("w3c12/core/node/uniqueValuesFor-003", R_UNIQUE_VALUES_FOR),
     ("w3c12/core/node/uniqueValuesFor-004", R_UNIQUE_VALUES_FOR),
     ("w3c12/core/node/uniqueValuesFor-005", R_UNIQUE_VALUES_FOR),
-    ("w3c12/core/property/rootClass-001", R_OTHER_COMPONENTS),
-    ("w3c12/core/property/singleLine-001", R_OTHER_COMPONENTS),
-    ("w3c12/core/property/someValue-001", R_OTHER_COMPONENTS),
-    ("w3c12/core/property/subsetOf-001", R_OTHER_COMPONENTS),
-    ("w3c12/core/property/subsetOf-002", R_OTHER_COMPONENTS),
+    ("w3c12/core/property/subsetOf-001", R_SUBSET_OF),
+    ("w3c12/core/property/subsetOf-002", R_SUBSET_OF),
     ("w3c12/core/property/equals-002", R_PATH_PAIRS),
     ("w3c12/core/property/disjoint-002", R_PATH_PAIRS),
     ("w3c12/core/property/lessThan-003", R_PATH_PAIRS),
@@ -225,8 +222,7 @@ const R_TARGET_NODE_EXPR: &str = "gives sh:targetNode a structured node expressi
 const R_UNIQUE_VALUES_FOR: &str =
     "uses sh:uniqueValuesFor, which the engine refuses at load as unimplemented";
 
-const R_OTHER_COMPONENTS: &str = "uses sh:rootClass / sh:singleLine / sh:someValue / sh:subsetOf, \
-     which the engine refuses at load as unimplemented";
+const R_SUBSET_OF: &str = "uses sh:subsetOf, which the engine refuses at load as unimplemented";
 
 const R_PATH_PAIRS: &str = "a path-valued sh:equals / sh:disjoint / sh:lessThan / \
      sh:lessThanOrEquals, which the parser refuses because it requires an IRI";
@@ -285,7 +281,12 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// SHACL 1.2 list-component cases now load and agree (+10), and thirteen cases now
 /// stop at load on a term the engine does not evaluate (−13), so
 /// [`W3C12_REFUSED_AT_LOAD`] went from 25 entries to 28.
-const AGREED_ON_REPORT_CASES: usize = 335;
+///
+/// Moved from 335 to 338 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
+/// became evaluated components: `singleLine-001`, `rootClass-001` and
+/// `someValue-001` now load and agree on a report (+3), and
+/// [`W3C12_REFUSED_AT_LOAD`] went from 28 entries to 25.
+const AGREED_ON_REPORT_CASES: usize = 338;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -328,7 +329,12 @@ const AGREED_ON_REPORT_CASES: usize = 335;
 /// (+10); thirteen other cases now stop at load on a term the engine does not
 /// evaluate (see [`W3C12_REFUSED_AT_LOAD`]), and four of those had agreed on a
 /// report carrying a result (−4).
-const AGREED_WITH_RESULTS_CASES: usize = 316;
+///
+/// # Why it moved from 316 to 319
+///
+/// `singleLine-001`, `rootClass-001` and `someValue-001` load now that their
+/// components are evaluated, and each expects — and reports — violations (+3).
+const AGREED_WITH_RESULTS_CASES: usize = 319;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

@@ -112,6 +112,64 @@ fn sound_green_for_real_compile_output() {
     assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
 }
 
+/// The SHACL 1.2 constraints the value-schema projection drops — the list
+/// components, `sh:rootClass`, `sh:singleLine true`, a property-level
+/// `sh:someValue` and a `sh:TripleTerm` node kind — each record their own code,
+/// and every one of those codes is inside the declared profile.
+///
+/// The neighbours record nothing: `sh:singleLine false` checks nothing, and a
+/// node-level `sh:someValue` is projected as `sh:node` is.
+#[test]
+fn shacl12_constraints_record_declared_codes() {
+    let compiled = compile_ttl(
+        r"
+        ex:ListShape a sh:NodeShape ;
+            sh:targetClass ex:Listed ;
+            sh:property [ sh:path ex:items ; sh:minListLength 1 ; sh:maxListLength 3 ;
+                          sh:uniqueMembers true ; sh:memberShape [ sh:nodeKind sh:IRI ] ] ;
+            sh:property [ sh:path ex:kind ; sh:rootClass ex:Root ] ;
+            sh:property [ sh:path ex:label ; sh:singleLine true ] ;
+            sh:property [ sh:path ex:ref ; sh:someValue [ sh:nodeKind sh:IRI ] ] ;
+            sh:property [ sh:path ex:quoted ; sh:nodeKind ( sh:IRI sh:TripleTerm ) ] .
+        ",
+    );
+    let mut codes = recorded_codes(&compiled);
+    codes.sort_unstable();
+    assert_eq!(
+        codes,
+        vec![
+            "sh:maxListLength",
+            "sh:memberShape",
+            "sh:minListLength",
+            "sh:nodeKind",
+            "sh:rootClass",
+            "sh:singleLine",
+            "sh:someValue",
+            "sh:uniqueMembers",
+        ]
+    );
+    assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
+
+    let neighbours = compile_ttl(
+        r"
+        ex:QuietShape a sh:NodeShape ;
+            sh:targetClass ex:Quiet ;
+            sh:someValue [ sh:property [ sh:path ex:name ; sh:minCount 1 ] ] ;
+            sh:property [ sh:path ex:label ; sh:singleLine false ] .
+        ",
+    );
+    assert!(
+        neighbours.losses.is_empty(),
+        "{:?}",
+        recorded_codes(&neighbours)
+    );
+    assert!(
+        neighbours.schema_json.contains("\"required\""),
+        "the node-level sh:someValue shape is projected: {}",
+        neighbours.schema_json
+    );
+}
+
 #[test]
 fn lossless_shape_compiles_with_empty_ledger() {
     let compiled = compile_ttl(

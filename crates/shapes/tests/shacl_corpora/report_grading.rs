@@ -95,21 +95,35 @@ pub(crate) fn no_panic<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, St
 
 /// Grade one `sht:Validate` case to a pass (`Ok`) / fail-with-reason (`Err`).
 pub(crate) fn run_validate_case(tc: &W3cCase) -> Result<(), String> {
-    let outcome = no_panic(|| validate_case(tc));
-    match (&tc.expected, outcome) {
+    grade(&tc.expected, produce(tc))
+}
+
+/// Run the engine over one case and reduce its report to what [`grade`]
+/// compares: `sh:conforms` and the result multiset. `Err` is a load or
+/// validation error (or an engine panic).
+pub(crate) fn produce(tc: &W3cCase) -> Result<(bool, Multiset), String> {
+    no_panic(|| validate_case(tc)).map(|report| (report.conforms, produced_multiset(&report)))
+}
+
+/// Grade an engine outcome against an expectation — the one comparison both
+/// harnesses use, split from [`produce`] so a harness that must grade against an
+/// AMENDED expectation compares with exactly the same rule.
+pub(crate) fn grade(
+    expected: &Expected,
+    outcome: Result<(bool, Multiset), String>,
+) -> Result<(), String> {
+    match (expected, outcome) {
         (Expected::Failure, Err(_)) => Ok(()),
         (Expected::Failure, Ok(_)) => {
             Err("suite expects sht:Failure but the engine validated successfully".to_owned())
         }
         (Expected::Report { .. }, Err(e)) => Err(e),
-        (Expected::Report { conforms, results }, Ok(report)) => {
-            if report.conforms != *conforms {
+        (Expected::Report { conforms, results }, Ok((produced_conforms, produced))) => {
+            if produced_conforms != *conforms {
                 return Err(format!(
-                    "conforms mismatch: produced={}, expected={conforms}",
-                    report.conforms
+                    "conforms mismatch: produced={produced_conforms}, expected={conforms}"
                 ));
             }
-            let produced = produced_multiset(&report);
             if &produced != results {
                 return Err(multiset_diff(results, &produced));
             }

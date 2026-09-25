@@ -196,6 +196,9 @@ fn constraint_name(constraint: &Constraint) -> &'static str {
         Constraint::MaxListLength(_) => "max-list-length",
         Constraint::UniqueMembers(_) => "unique-members",
         Constraint::MemberShape(_) => "member-shape",
+        Constraint::SingleLine(_) => "single-line",
+        Constraint::RootClass(_) => "root-class",
+        Constraint::SomeValue(_) => "some-value",
         Constraint::Component { .. } => "component",
     }
 }

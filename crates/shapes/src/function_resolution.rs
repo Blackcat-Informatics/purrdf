@@ -175,7 +175,8 @@ impl Walk<'_> {
                 }
                 Constraint::Not(shape)
                 | Constraint::Node(shape)
-                | Constraint::MemberShape(shape) => {
+                | Constraint::MemberShape(shape)
+                | Constraint::SomeValue(shape) => {
                     self.shape(shape);
                 }
                 Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
@@ -217,6 +218,8 @@ impl Walk<'_> {
                 | Constraint::MinListLength(_)
                 | Constraint::MaxListLength(_)
                 | Constraint::UniqueMembers(_)
+                | Constraint::SingleLine(_)
+                | Constraint::RootClass(_)
                 | Constraint::Component { .. } => {}
             }
         }

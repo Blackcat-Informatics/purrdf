@@ -939,17 +939,20 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
         status: ComponentStatus::Native,
         carrier: Carrier::ShapeField("reifier_shapes"),
     },
-    unimplemented(
+    native(
         sh::ROOT_CLASS_CONSTRAINT_COMPONENT,
         &[param(sh::ROOT_CLASS, ValueRule::IriOrIriList)],
+        &["RootClass"],
     ),
-    unimplemented(
+    native(
         sh::SINGLE_LINE_CONSTRAINT_COMPONENT,
         &[param(sh::SINGLE_LINE, ValueRule::Boolean).single()],
+        &["SingleLine"],
     ),
-    unimplemented(
+    native(
         sh::SOME_VALUE_CONSTRAINT_COMPONENT,
         &[param(sh::SOME_VALUE, ValueRule::Shape)],
+        &["SomeValue"],
     ),
     unimplemented(
         sh::SUBSET_OF_CONSTRAINT_COMPONENT,

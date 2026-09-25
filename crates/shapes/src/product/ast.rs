@@ -314,7 +314,7 @@ const TAGS_TARGET: u8 = 6;
 /// The number of [`ComponentValidator`] tags.
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
-const TAGS_CONSTRAINT: u8 = 35;
+const TAGS_CONSTRAINT: u8 = 38;
 /// The number of [`NodeExpr`] tags.
 const TAGS_NODE_EXPR: u8 = 32;
 /// The number of [`ShapeArg`] tags.
@@ -1220,6 +1220,21 @@ impl AstWriter {
                 self.tag(34);
                 self.shape(shape)?;
             }
+            Constraint::SingleLine(flag) => {
+                self.tag(35);
+                self.flag(*flag);
+            }
+            Constraint::RootClass(roots) => {
+                self.tag(36);
+                self.count(roots.len());
+                for root in roots {
+                    self.named_node(root);
+                }
+            }
+            Constraint::SomeValue(shape) => {
+                self.tag(37);
+                self.shape(shape)?;
+            }
         }
         self.leave();
         Ok(())
@@ -1979,7 +1994,10 @@ impl<'a> AstReader<'a> {
             31 => Constraint::MinListLength(self.uint()?),
             32 => Constraint::MaxListLength(self.uint()?),
             33 => Constraint::UniqueMembers(self.flag()?),
-            _ => Constraint::MemberShape(Box::new(self.shape()?)),
+            34 => Constraint::MemberShape(Box::new(self.shape()?)),
+            35 => Constraint::SingleLine(self.flag()?),
+            36 => Constraint::RootClass(self.seq(Self::named_node)?),
+            _ => Constraint::SomeValue(Box::new(self.shape()?)),
         };
         self.leave();
         Ok(constraint)
@@ -2285,8 +2303,13 @@ impl FnTable {
             | Constraint::MinListLength(_)
             | Constraint::MaxListLength(_)
             | Constraint::UniqueMembers(_)
+            | Constraint::SingleLine(_)
+            | Constraint::RootClass(_)
             | Constraint::Component { .. } => {}
-            Constraint::Not(shape) | Constraint::Node(shape) | Constraint::MemberShape(shape) => {
+            Constraint::Not(shape)
+            | Constraint::Node(shape)
+            | Constraint::MemberShape(shape)
+            | Constraint::SomeValue(shape) => {
                 self.shape(shape)?;
             }
             Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
