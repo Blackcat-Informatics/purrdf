@@ -446,6 +446,8 @@ NEIGHBOURS: dict[str, str] = {
     "铸造": "青铜器由铸造而成。",  # bronze casting
     "抵达": "列车准时抵达车站。",  # a train arriving
     "大声": "请勿大声喧哗。",  # loudly
+    "/显式报错(?!失败)/": "表单填写有误时，页面会显式报错。",  # a web form flagging an error
+    "/(?<!丢弃并)显式告知/": "合同条款的变更须向客户显式告知。",  # telling a customer about a contract change
     "全文搜索": "本站提供全文搜索功能。",  # a website's search box
     "校验报告": "文件校验报告显示哈希一致。",  # a checksum verification report
     "/基础\\s*IRI/": "入门课程先讲基础 IRI 语法，再讲进阶内容。",  # basic IRI syntax
