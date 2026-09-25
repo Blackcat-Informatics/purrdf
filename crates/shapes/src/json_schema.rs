@@ -2305,6 +2305,28 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                         .to_owned(),
                 );
             }
+            Constraint::Equals(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:equals", path, &shape_iri, None);
+            }
+            Constraint::Disjoint(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:disjoint", path, &shape_iri, None);
+            }
+            Constraint::SubsetOf(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:subsetOf", path, &shape_iri, None);
+            }
+            Constraint::LessThan(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:lessThan", path, &shape_iri, None);
+            }
+            Constraint::LessThanOrEquals(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:lessThanOrEquals",
+                    path,
+                    &shape_iri,
+                    None,
+                );
+            }
             // Node-level value constraints (sh:class, sh:nodeKind, …) shape the
             // node identity rather than an object's JSON properties; for the
             // object-schema projection they are not expressed here.
@@ -2533,6 +2555,42 @@ fn record_list_loss(
     comments.push(format!(
         "a {term} constraint on property {key} was dropped (no projection in this emitter)"
     ));
+}
+
+/// Record the loss of a property-pair constraint (SHACL 1.2 Core §7.6).
+///
+/// Every pair relates a property's values to the nodes a second property path
+/// reaches from the same focus node — one IRI or any other path — and a JSON
+/// Schema constrains each property on its own, so no pair has a projection here.
+/// Each records the component's own code and a `$comment` naming what was
+/// dropped, rather than vanishing from the schema.
+fn record_pair_loss(
+    ctx: &mut Ctx<'_>,
+    comments: &mut Vec<String>,
+    term: &str,
+    path: &Path,
+    shape_iri: &str,
+    key: Option<&str>,
+) {
+    let path_text = crate::path::path_to_sparql(path);
+    ctx.record(
+        term,
+        shape_iri,
+        &format!(
+            "a comparison of the values against the nodes the path {path_text} reaches from the \
+             focus node has no projection in this emitter"
+        ),
+    );
+    comments.push(match key {
+        Some(key) => format!(
+            "a {term} {path_text} constraint on property {key} was dropped (no projection in \
+             this emitter)"
+        ),
+        None => format!(
+            "a node-level {term} {path_text} constraint was dropped (no projection in this \
+             emitter)"
+        ),
+    });
 }
 
 /// Compile one property shape's constraints into `(value_schema, is_required)`.
@@ -2816,6 +2874,49 @@ fn compile_property(
                 comments.push(format!(
                     "a sh:not constraint on property {key} was dropped (no lossless value-schema projection)"
                 ));
+            }
+            Constraint::Equals(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:equals", path, shape_iri, Some(key));
+            }
+            Constraint::Disjoint(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:disjoint",
+                    path,
+                    shape_iri,
+                    Some(key),
+                );
+            }
+            Constraint::SubsetOf(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:subsetOf",
+                    path,
+                    shape_iri,
+                    Some(key),
+                );
+            }
+            Constraint::LessThan(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:lessThan",
+                    path,
+                    shape_iri,
+                    Some(key),
+                );
+            }
+            Constraint::LessThanOrEquals(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:lessThanOrEquals",
+                    path,
+                    shape_iri,
+                    Some(key),
+                );
             }
             // Counts handled above; node-shape-only constraints (Closed/And/…)
             // do not appear on a property shape's value schema.

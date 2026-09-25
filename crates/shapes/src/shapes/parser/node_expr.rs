@@ -17,7 +17,7 @@ use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::spec::{ExprKind, non_function_keys, primary_keys};
 use crate::term::{NamedNode, Term};
 
-use crate::shapes::{ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Shape};
+use crate::shapes::{ComponentValidator, Constraint, InFlight, NodeKindValue, Parser, Path, Shape};
 
 impl Parser<'_> {
     /// Parse all constraints declared directly on a shape node.
@@ -494,35 +494,45 @@ impl Parser<'_> {
             });
         }
 
-        // sh:equals / sh:disjoint / sh:lessThan / sh:lessThanOrEquals — the
-        // property-pair constraint components (§4.3). Each object must be an IRI;
-        // a non-IRI object is malformed and hard-fails (no silent drop).
+        // sh:equals / sh:disjoint / sh:subsetOf / sh:lessThan /
+        // sh:lessThanOrEquals — the property-pair constraint components (SHACL
+        // 1.2 Core §7.6). "The values of sh:equals in a shape are well-formed
+        // SHACL property paths", and likewise for the other four: an IRI is the
+        // predicate path of that IRI, and any other value must parse as a path or
+        // the shape hard-fails (no silent drop). Where the two scopes differ is
+        // the census's business: sh:lessThan and sh:lessThanOrEquals are refused
+        // on node shapes by the well-formedness pass, before this runs.
         for (pred, make) in [
-            (
-                sh::EQUALS,
-                Constraint::Equals as fn(NamedNode) -> Constraint,
-            ),
+            (sh::EQUALS, Constraint::Equals as fn(Path) -> Constraint),
             (sh::DISJOINT, Constraint::Disjoint as fn(_) -> _),
+            (sh::SUBSET_OF, Constraint::SubsetOf as fn(_) -> _),
             (sh::LESS_THAN, Constraint::LessThan as fn(_) -> _),
             (
                 sh::LESS_THAN_OR_EQUALS,
                 Constraint::LessThanOrEquals as fn(_) -> _,
             ),
         ] {
-            let mut props: Vec<NamedNode> = Vec::new();
-            for t in self.objects_of(id, pred) {
-                match t {
-                    Term::NamedNode(n) => props.push(n),
-                    other => {
-                        return Err(format!(
-                            "<{pred}> on shape {id} must be an IRI, got {other}"
-                        ));
-                    }
-                }
+            let mut paths: Vec<Path> = Vec::new();
+            for value in self.objects_of(id, pred) {
+                let path = self
+                    .parse_path(&value, id, &mut FastSet::default())
+                    .map_err(|e| {
+                        format!(
+                            "<{pred}> on shape {id} must be a well-formed SHACL property path, \
+                             got {value}: {e}"
+                        )
+                    })?;
+                paths.push(path);
             }
-            props.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-            for n in props {
-                constraints.push(make(n));
+            // One deterministic order whatever the blank-node labels: IRI paths
+            // first, by IRI (the order these constraints always had), then every
+            // other path by its SPARQL rendering.
+            paths.sort_by_cached_key(|path| match path {
+                Path::Predicate(n) => (false, n.as_str().to_owned()),
+                other => (true, crate::path::path_to_sparql(other)),
+            });
+            for path in paths {
+                constraints.push(make(path));
             }
         }
 

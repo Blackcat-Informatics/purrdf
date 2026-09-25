@@ -428,7 +428,13 @@ impl Parser<'_> {
                 Term::Literal(_) | Term::Triple(_) => false,
             },
             ValueRule::Path => {
-                self.parse_path(value, shape, &mut FastSet::default())?;
+                self.parse_path(value, shape, &mut FastSet::default())
+                    .map_err(|e| {
+                        format!(
+                            "<{predicate}> on shape {shape} must be {}, got {value}: {e}",
+                            rule.describe()
+                        )
+                    })?;
                 true
             }
             ValueRule::ClosedValue => match value {

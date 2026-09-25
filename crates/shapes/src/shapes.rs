@@ -304,18 +304,25 @@ pub enum Constraint {
         /// constraint blank node).
         severity: Option<Severity>,
     },
-    /// `sh:equals ex:p` — the value node set must equal the objects of `ex:p`
-    /// from the same focus node (spec §4.3.1).
-    Equals(NamedNode),
-    /// `sh:disjoint ex:p` — no value node may also be an object of `ex:p` from
-    /// the same focus node (spec §4.3.2).
-    Disjoint(NamedNode),
-    /// `sh:lessThan ex:p` — every value node must be `<` every object of `ex:p`
-    /// from the same focus node, under SPARQL `<` semantics (spec §4.3.3).
-    LessThan(NamedNode),
-    /// `sh:lessThanOrEquals ex:p` — every value node must be `<=` every object
-    /// of `ex:p` from the same focus node (spec §4.3.4).
-    LessThanOrEquals(NamedNode),
+    /// `sh:equals <path>` (SHACL 1.2 Core §7.6.1) — the value node set must equal
+    /// the set of nodes reachable from the same focus node along the path. An IRI
+    /// value is the predicate path of that IRI; "The values of sh:equals in a
+    /// shape are well-formed SHACL property paths."
+    Equals(Path),
+    /// `sh:disjoint <path>` (SHACL 1.2 Core §7.6.2) — no value node may also be
+    /// reachable from the same focus node along the path.
+    Disjoint(Path),
+    /// `sh:subsetOf <path>` (SHACL 1.2 Core §7.6.3) — every value node must also
+    /// be reachable from the same focus node along the path.
+    SubsetOf(Path),
+    /// `sh:lessThan <path>` (SHACL 1.2 Core §7.6.4) — every value node must be
+    /// `<` every node reachable from the same focus node along the path, under
+    /// SPARQL `<` semantics. Property shapes only.
+    LessThan(Path),
+    /// `sh:lessThanOrEquals <path>` (SHACL 1.2 Core §7.6.5) — every value node
+    /// must be `<=` every node reachable from the same focus node along the path.
+    /// Property shapes only.
+    LessThanOrEquals(Path),
     /// `sh:qualifiedValueShape` + `sh:qualifiedMinCount`/`sh:qualifiedMaxCount`
     /// (spec §4.5.4–4.5.5).
     QualifiedValueShape {
@@ -2649,23 +2656,20 @@ mod tests {
             .iter()
             .flat_map(|ps| ps.constraints.iter())
             .collect();
-        assert!(
-            all.iter()
-                .any(|c| matches!(c, Constraint::LessThan(n) if n.as_str().ends_with("end")))
-        );
+        assert!(all.iter().any(
+            |c| matches!(c, Constraint::LessThan(Path::Predicate(n)) if n.as_str().ends_with("end"))
+        ));
         assert!(
             all.iter().any(
-                |c| matches!(c, Constraint::LessThanOrEquals(n) if n.as_str().ends_with("last"))
+                |c| matches!(c, Constraint::LessThanOrEquals(Path::Predicate(n)) if n.as_str().ends_with("last"))
             )
         );
-        assert!(
-            all.iter()
-                .any(|c| matches!(c, Constraint::Equals(n) if n.as_str().ends_with('b')))
-        );
-        assert!(
-            all.iter()
-                .any(|c| matches!(c, Constraint::Disjoint(n) if n.as_str().ends_with('d')))
-        );
+        assert!(all.iter().any(
+            |c| matches!(c, Constraint::Equals(Path::Predicate(n)) if n.as_str().ends_with('b'))
+        ));
+        assert!(all.iter().any(
+            |c| matches!(c, Constraint::Disjoint(Path::Predicate(n)) if n.as_str().ends_with('d'))
+        ));
     }
 
     #[test]

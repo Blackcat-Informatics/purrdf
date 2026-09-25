@@ -513,14 +513,16 @@ pub(crate) enum LoweredConstraint {
     Node(Box<LoweredShape>),
     /// `sh:sparql` — the query text is executed by the SPARQL engine.
     Sparql,
-    /// `sh:equals` — the slot holding the compared predicate's dataset identity.
-    Equals(TermSlot),
-    /// `sh:disjoint` — the slot holding the compared predicate's dataset identity.
-    Disjoint(TermSlot),
-    /// `sh:lessThan` — the slot holding the compared predicate's dataset identity.
-    LessThan(TermSlot),
-    /// `sh:lessThanOrEquals` — the slot holding the compared predicate's identity.
-    LessThanOrEquals(TermSlot),
+    /// `sh:equals` — the lowering of the compared path.
+    Equals(LoweredPath),
+    /// `sh:disjoint` — the lowering of the compared path.
+    Disjoint(LoweredPath),
+    /// `sh:subsetOf` — the lowering of the compared path.
+    SubsetOf(LoweredPath),
+    /// `sh:lessThan` — the lowering of the compared path.
+    LessThan(LoweredPath),
+    /// `sh:lessThanOrEquals` — the lowering of the compared path.
+    LessThanOrEquals(LoweredPath),
     /// `sh:qualifiedValueShape` — the lowered qualified shape and its siblings.
     QualifiedValueShape {
         /// The lowering of the qualified value shape.
@@ -813,6 +815,19 @@ impl<'a> ShapePlan<'a> {
         .map(move |(property, lowered)| (property, PropertyPlan { plan, lowered })))
     }
 
+    /// The compared side of a property-pair constraint: an IRI path keeps the
+    /// one-hop read by its predicate's dataset identity, resolved here at bind,
+    /// and every other path is walked from the focus node by the path evaluator.
+    ///
+    /// # Errors
+    /// Returns an error when the lowering names a slot the walk never handed out.
+    fn pair_path(&self, lowered: &'a LoweredPath) -> Result<PairPath<'a>, String> {
+        Ok(match lowered {
+            LoweredPath::Predicate(slot) => PairPath::Predicate(self.binding.term(*slot)?),
+            path => PairPath::Path(path),
+        })
+    }
+
     /// The plan for a shape reached through one of this shape's constraints.
     #[inline]
     pub(crate) fn nested(&self, shape: &'a Shape, lowered: &'a LoweredShape) -> Self {
@@ -986,6 +1001,17 @@ impl<'a> RangeBound<'a> {
     }
 }
 
+/// The compared side of a property-pair constraint (SHACL 1.2 Core §7.6):
+/// "the set of nodes that can be reached from the focus node via $path".
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PairPath<'a> {
+    /// A predicate path: the IRI's dataset identity, resolved at bind. `None`
+    /// means this data graph interns no such IRI, so the path reaches nothing.
+    Predicate(Option<TermId>),
+    /// Any other well-formed SHACL property path, evaluated from the focus node.
+    Path(&'a LoweredPath),
+}
+
 /// ONE constraint, with every derivation it needs that does not depend on the
 /// focus node already resolved.
 ///
@@ -1085,14 +1111,16 @@ pub(crate) enum PlannedConstraint<'a> {
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
     },
-    /// `sh:equals` — the compared predicate's dataset identity.
-    Equals(Option<TermId>),
-    /// `sh:disjoint` — the compared predicate's dataset identity.
-    Disjoint(Option<TermId>),
-    /// `sh:lessThan` — the compared predicate's dataset identity.
-    LessThan(Option<TermId>),
-    /// `sh:lessThanOrEquals` — the compared predicate's dataset identity.
-    LessThanOrEquals(Option<TermId>),
+    /// `sh:equals` — the compared path.
+    Equals(PairPath<'a>),
+    /// `sh:disjoint` — the compared path.
+    Disjoint(PairPath<'a>),
+    /// `sh:subsetOf` — the compared path.
+    SubsetOf(PairPath<'a>),
+    /// `sh:lessThan` — the compared path.
+    LessThan(PairPath<'a>),
+    /// `sh:lessThanOrEquals` — the compared path.
+    LessThanOrEquals(PairPath<'a>),
     /// `sh:qualifiedValueShape` — the qualified shape's plan and its counts.
     QualifiedValueShape {
         /// The plan of the qualified value shape.
@@ -1322,17 +1350,20 @@ impl<'a> ShapePlan<'a> {
                 message,
                 severity,
             },
-            (Constraint::Equals(_), LoweredConstraint::Equals(slot)) => {
-                PlannedConstraint::Equals(self.binding.term(*slot)?)
+            (Constraint::Equals(_), LoweredConstraint::Equals(path)) => {
+                PlannedConstraint::Equals(self.pair_path(path)?)
             }
-            (Constraint::Disjoint(_), LoweredConstraint::Disjoint(slot)) => {
-                PlannedConstraint::Disjoint(self.binding.term(*slot)?)
+            (Constraint::Disjoint(_), LoweredConstraint::Disjoint(path)) => {
+                PlannedConstraint::Disjoint(self.pair_path(path)?)
             }
-            (Constraint::LessThan(_), LoweredConstraint::LessThan(slot)) => {
-                PlannedConstraint::LessThan(self.binding.term(*slot)?)
+            (Constraint::SubsetOf(_), LoweredConstraint::SubsetOf(path)) => {
+                PlannedConstraint::SubsetOf(self.pair_path(path)?)
             }
-            (Constraint::LessThanOrEquals(_), LoweredConstraint::LessThanOrEquals(slot)) => {
-                PlannedConstraint::LessThanOrEquals(self.binding.term(*slot)?)
+            (Constraint::LessThan(_), LoweredConstraint::LessThan(path)) => {
+                PlannedConstraint::LessThan(self.pair_path(path)?)
+            }
+            (Constraint::LessThanOrEquals(_), LoweredConstraint::LessThanOrEquals(path)) => {
+                PlannedConstraint::LessThanOrEquals(self.pair_path(path)?)
             }
             (
                 Constraint::QualifiedValueShape {
@@ -1458,6 +1489,7 @@ fn constraint_kind(constraint: &Constraint) -> &'static str {
         Constraint::Sparql { .. } => "sh:sparql",
         Constraint::Equals(_) => "sh:equals",
         Constraint::Disjoint(_) => "sh:disjoint",
+        Constraint::SubsetOf(_) => "sh:subsetOf",
         Constraint::LessThan(_) => "sh:lessThan",
         Constraint::LessThanOrEquals(_) => "sh:lessThanOrEquals",
         Constraint::QualifiedValueShape { .. } => "sh:qualifiedValueShape",
@@ -2130,17 +2162,14 @@ fn lower_constraint(
         Constraint::Xone(shapes) => LoweredConstraint::Xone(lower_shape_list(shapes, walk)),
         Constraint::Node(shape) => LoweredConstraint::Node(Box::new(lower_shape(shape, walk))),
         Constraint::Sparql { .. } => LoweredConstraint::Sparql,
-        Constraint::Equals(predicate) => {
-            LoweredConstraint::Equals(walk.slot(Term::NamedNode(predicate.clone())))
-        }
-        Constraint::Disjoint(predicate) => {
-            LoweredConstraint::Disjoint(walk.slot(Term::NamedNode(predicate.clone())))
-        }
-        Constraint::LessThan(predicate) => {
-            LoweredConstraint::LessThan(walk.slot(Term::NamedNode(predicate.clone())))
-        }
-        Constraint::LessThanOrEquals(predicate) => {
-            LoweredConstraint::LessThanOrEquals(walk.slot(Term::NamedNode(predicate.clone())))
+        // An IRI value lowers to `LoweredPath::Predicate` over one slot for the
+        // IRI — the one slot these constraints always took.
+        Constraint::Equals(path) => LoweredConstraint::Equals(lower_path(path, walk)),
+        Constraint::Disjoint(path) => LoweredConstraint::Disjoint(lower_path(path, walk)),
+        Constraint::SubsetOf(path) => LoweredConstraint::SubsetOf(lower_path(path, walk)),
+        Constraint::LessThan(path) => LoweredConstraint::LessThan(lower_path(path, walk)),
+        Constraint::LessThanOrEquals(path) => {
+            LoweredConstraint::LessThanOrEquals(lower_path(path, walk))
         }
         Constraint::QualifiedValueShape {
             shape, siblings, ..
@@ -2761,6 +2790,7 @@ ex:FlagShape a sh:NodeShape ;
             | LoweredConstraint::Sparql
             | LoweredConstraint::Equals(_)
             | LoweredConstraint::Disjoint(_)
+            | LoweredConstraint::SubsetOf(_)
             | LoweredConstraint::LessThan(_)
             | LoweredConstraint::LessThanOrEquals(_)
             | LoweredConstraint::Component => {}
@@ -3091,6 +3121,7 @@ ex:Inner a sh:NodeShape ;
         PlannedConstraint::Sparql { .. } => "sparql",
         PlannedConstraint::Equals(_) => "equals",
         PlannedConstraint::Disjoint(_) => "disjoint",
+        PlannedConstraint::SubsetOf(_) => "subset_of",
         PlannedConstraint::LessThan(_) => "less_than",
         PlannedConstraint::LessThanOrEquals(_) => "less_than_or_equals",
         PlannedConstraint::QualifiedValueShape { .. } => "qualified_value_shape",
@@ -3152,6 +3183,7 @@ ex:Inner a sh:NodeShape ;
         "single_line",
         "some_value",
         "sparql",
+        "subset_of",
         "unique_lang",
         "unique_members",
         "xone",

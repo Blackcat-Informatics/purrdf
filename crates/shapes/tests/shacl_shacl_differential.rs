@@ -67,7 +67,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        228,
+        230,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -75,10 +75,9 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unimplemented-component",
         "which is a SHACL 1.2 Core component this engine does not implement",
-        7,
+        5,
         "a well-formed use of a declared SHACL 1.2 Core component this engine does not \
-         evaluate (sh:uniqueValuesFor, sh:subsetOf) is refused rather than silently \
-         conforming",
+         evaluate (sh:uniqueValuesFor) is refused rather than silently conforming",
     ),
     (
         "root-class-value",
@@ -168,6 +167,38 @@ const SHACL_SHACL_BEHIND_THE_SPEC: &[BehindTheSpec] = &[
         "SHACL 1.2 Core §4.1.3: \"The value of sh:nodeKind in a shape is either an IRI or a \
          blank node that is a well-formed SHACL list where all members are IRIs.\" — \
          shacl-shacl.ttl still requires one of the six SHACL 1.0 node-kind IRIs",
+    ),
+    (
+        "path-valued-property-pair",
+        &[
+            (
+                "NodeKindConstraintComponent",
+                "<http://www.w3.org/ns/shacl#equals>",
+                "",
+            ),
+            (
+                "NodeKindConstraintComponent",
+                "<http://www.w3.org/ns/shacl#disjoint>",
+                "",
+            ),
+            (
+                "NodeKindConstraintComponent",
+                "<http://www.w3.org/ns/shacl#lessThan>",
+                "",
+            ),
+            (
+                "NodeKindConstraintComponent",
+                "<http://www.w3.org/ns/shacl#lessThanOrEquals>",
+                "",
+            ),
+        ],
+        4,
+        "SHACL 1.2 Core §7.6.1: \"The values of sh:equals in a shape are well-formed SHACL \
+         property paths.\" — and §7.6.2, §7.6.4 and §7.6.5 say the same of sh:disjoint, \
+         sh:lessThan and sh:lessThanOrEquals. shacl-shacl.ttl still requires an IRI for all \
+         four (equals-nodeKind, disjoint-nodeKind, lessThan-nodeKind, \
+         lessThanOrEquals-nodeKind), so the W3C suite's own equals-002, disjoint-002, \
+         lessThan-003 and lessThanOrEquals-002 fail it",
     ),
     (
         "node-expression-target-node",
@@ -533,8 +564,8 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
 const BASE_INPUTS: usize = 375;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 178 literal-for-IRI, 99
-/// non-integer counts, 148 lists-for-single-values, 33 non-boolean flags and 225
+/// mutation kind that finds a statement to rewrite): 180 literal-for-IRI, 99
+/// non-integer counts, 149 lists-for-single-values, 34 non-boolean flags and 230
 /// misspelled predicates.
 ///
 /// Moved from 683 to 690 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
@@ -545,7 +576,15 @@ const BASE_INPUTS: usize = 375;
 /// `someValue-001`'s `sh:someValue` shape (+2). The list-for-single-value kind
 /// rewrites `singleLine-001`'s `sh:datatype` (+1), and the non-boolean-flag kind,
 /// which now also rewrites `sh:singleLine`, rewrites its `sh:singleLine` (+1).
-const MUTANT_INPUTS: usize = 690;
+///
+/// Moved from 690 to 692 when `sh:subsetOf` became evaluated: `subsetOf-001` and
+/// `subsetOf-002` now load, so each is a base both sides accept, and each gains a
+/// misspelled predicate (+2). No other kind finds a statement to rewrite in
+/// either. The path-valued `equals-002`, `disjoint-002`, `lessThan-003` and
+/// `lessThanOrEquals-002` also load now, but `shacl-shacl.ttl` still flags each
+/// (see `path-valued-property-pair`), so none is a base both sides accept and
+/// none is mutated.
+const MUTANT_INPUTS: usize = 692;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -645,7 +684,7 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
         ("non-integer-count", 99),
         ("list-where-a-single-value-is-required", 149),
         ("non-boolean-flag", 34),
-        (UNKNOWN_TERM, 228),
+        (UNKNOWN_TERM, 230),
     ]
     .into_iter()
     .collect();

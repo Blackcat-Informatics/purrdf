@@ -367,14 +367,16 @@ impl FootprintWalk {
     /// from the focus node and a read of `ex:b` from the node one `ex:a` hop away.
     /// The match carries no wildcard: a new path form must decide what it reads.
     fn record_path_steps(&mut self, path: &Path, prefix: &[Path]) {
+        self.record_path_steps_at(Root::Node, path, prefix);
+    }
+
+    /// [`Self::record_path_steps`] from the node at `root` rather than the node
+    /// being walked — the property-pair constraints walk their compared path from
+    /// the DECLARING node.
+    fn record_path_steps_at(&mut self, root: Root, path: &Path, prefix: &[Path]) {
         match path {
             Path::Predicate(predicate) => {
-                self.emit(
-                    Root::Node,
-                    prefix,
-                    Some(predicate.clone()),
-                    Endpoint::Subject,
-                );
+                self.emit(root, prefix, Some(predicate.clone()), Endpoint::Subject);
             }
             // `^p` reads `(?, p, node)`, so the anchored node is the OBJECT. An
             // inverse over a COMPOSITE is pushed inward first, by the same rewrite
@@ -391,25 +393,22 @@ impl FootprintWalk {
             // and lowered once, on the way out of the lowering walk.
             Path::Inverse(inner) => match inner.as_ref() {
                 Path::Predicate(predicate) => {
-                    self.emit(
-                        Root::Node,
-                        prefix,
-                        Some(predicate.clone()),
-                        Endpoint::Object,
-                    );
+                    self.emit(root, prefix, Some(predicate.clone()), Endpoint::Object);
                 }
-                composite => self.record_path_steps(&crate::path::invert(composite), prefix),
+                composite => {
+                    self.record_path_steps_at(root, &crate::path::invert(composite), prefix);
+                }
             },
             Path::Sequence(parts) => {
                 let mut prefix = prefix.to_vec();
                 for part in parts {
-                    self.record_path_steps(part, &prefix);
+                    self.record_path_steps_at(root, part, &prefix);
                     prefix.push(part.clone());
                 }
             }
             Path::Alternative(parts) => {
                 for part in parts {
-                    self.record_path_steps(part, prefix);
+                    self.record_path_steps_at(root, part, prefix);
                 }
             }
             // A closure reads its inner path from every node the closure has
@@ -420,9 +419,9 @@ impl FootprintWalk {
             Path::ZeroOrMore(inner) | Path::OneOrMore(inner) => {
                 let mut prefix = prefix.to_vec();
                 prefix.push(Path::ZeroOrMore(inner.clone()));
-                self.record_path_steps(inner, &prefix);
+                self.record_path_steps_at(root, inner, &prefix);
             }
-            Path::ZeroOrOne(inner) => self.record_path_steps(inner, prefix),
+            Path::ZeroOrOne(inner) => self.record_path_steps_at(root, inner, prefix),
         }
     }
 
@@ -523,17 +522,18 @@ impl FootprintWalk {
             // no predicate — bounded all the same, because it still binds the
             // subject to a node the chain reaches.
             Constraint::Closed { .. } => self.emit(Root::Node, &[], None, Endpoint::Subject),
-            // SHACL §4.3: the comparand is read from the node that DECLARED the
-            // property shape, never from its value nodes.
-            Constraint::Equals(predicate)
-            | Constraint::Disjoint(predicate)
-            | Constraint::LessThan(predicate)
-            | Constraint::LessThanOrEquals(predicate) => self.emit(
-                Root::Declaring,
-                &[],
-                Some(predicate.clone()),
-                Endpoint::Subject,
-            ),
+            // SHACL 1.2 Core §7.6: `$otherNodes` is reached from the node that
+            // DECLARED the property shape, never from its value nodes — every
+            // step of the compared path is a read anchored there, exactly as
+            // `sh:path`'s steps are anchored at the focus node. An IRI is the
+            // one-step path, so it records the single `(declaring, p, ?)` read.
+            Constraint::Equals(path)
+            | Constraint::Disjoint(path)
+            | Constraint::SubsetOf(path)
+            | Constraint::LessThan(path)
+            | Constraint::LessThanOrEquals(path) => {
+                self.record_path_steps_at(Root::Declaring, path, &[]);
+            }
             // LIST-STRUCTURAL (SHACL 1.2 Core §4.9): the list components walk the
             // value node's SHACL list, reading `rdf:first` and `rdf:rest` on every
             // cell `rdf:rest*` reaches — the reads `rdf:rest*/rdf:first` and

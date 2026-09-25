@@ -507,6 +507,7 @@ impl ShapeIndexWalk<'_> {
             | Constraint::Sparql { .. }
             | Constraint::Equals(_)
             | Constraint::Disjoint(_)
+            | Constraint::SubsetOf(_)
             | Constraint::LessThan(_)
             | Constraint::LessThanOrEquals(_)
             | Constraint::MinListLength(_)

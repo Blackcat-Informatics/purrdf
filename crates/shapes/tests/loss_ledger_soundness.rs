@@ -170,6 +170,107 @@ fn shacl12_constraints_record_declared_codes() {
     );
 }
 
+/// Every property pair — `sh:equals`, `sh:disjoint`, `sh:subsetOf`,
+/// `sh:lessThan`, `sh:lessThanOrEquals`, over one IRI or any other path — records
+/// its own declared code, on a property shape and on a node shape, and the
+/// `$comment` names what was dropped.
+#[test]
+fn path_valued_pairs_and_subset_of_record_declared_codes() {
+    let compiled = compile_ttl(
+        r"
+        ex:PairShape a sh:NodeShape ;
+            sh:targetClass ex:Paired ;
+            sh:equals ( ex:self ex:self ) ;
+            sh:subsetOf ex:self ;
+            sh:property [ sh:path ex:a ; sh:equals [ sh:inversePath ex:b ] ;
+                          sh:disjoint ( ex:c ex:d ) ; sh:subsetOf ex:e ] ;
+            sh:property [ sh:path ex:start ; sh:lessThan ( ex:next ex:start ) ;
+                          sh:lessThanOrEquals [ sh:zeroOrOnePath ex:stop ] ] .
+        ",
+    );
+    let mut codes = recorded_codes(&compiled);
+    codes.sort_unstable();
+    assert_eq!(
+        codes,
+        vec![
+            "sh:disjoint",
+            "sh:equals",
+            "sh:equals",
+            "sh:lessThan",
+            "sh:lessThanOrEquals",
+            "sh:subsetOf",
+            "sh:subsetOf",
+        ]
+    );
+    assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
+    assert!(
+        compiled
+            .schema_json
+            .contains("a sh:subsetOf <https://example.org/e> constraint on property"),
+        "{}",
+        compiled.schema_json
+    );
+}
+
+/// The IRI form of each pair is no more expressible than a path form: JSON Schema
+/// cannot relate one property's values to another's. Each records exactly its
+/// own code against its shape and leaves a `$comment`, rather than vanishing from
+/// the schema; the same shapes without the pairs record nothing.
+#[test]
+fn iri_valued_pairs_record_their_declared_codes() {
+    let with_pairs = compile_ttl(
+        r"
+        ex:PairShape a sh:NodeShape ;
+            sh:targetClass ex:Paired ;
+            sh:property [ sh:path ex:a ; sh:minCount 1 ; sh:equals ex:b ; sh:disjoint ex:c ] ;
+            sh:property [ sh:path ex:start ; sh:datatype xsd:integer ;
+                          sh:lessThan ex:end ; sh:lessThanOrEquals ex:stop ] .
+        ",
+    );
+    let mut codes = recorded_codes(&with_pairs);
+    codes.sort_unstable();
+    assert_eq!(
+        codes,
+        vec![
+            "sh:disjoint",
+            "sh:equals",
+            "sh:lessThan",
+            "sh:lessThanOrEquals"
+        ]
+    );
+    assert_eq!(
+        with_pairs
+            .losses
+            .render_json()
+            .matches("https://example.org/PairShape")
+            .count(),
+        4,
+        "each pair's loss is recorded against its shape: {}",
+        with_pairs.losses.render_json()
+    );
+    assert_ledger_sound(&with_pairs.losses, "shacl", "json-schema");
+    assert!(
+        with_pairs
+            .schema_json
+            .contains("a sh:equals <https://example.org/b> constraint on property"),
+        "{}",
+        with_pairs.schema_json
+    );
+    let without_pairs = compile_ttl(
+        r"
+        ex:PairShape a sh:NodeShape ;
+            sh:targetClass ex:Paired ;
+            sh:property [ sh:path ex:a ; sh:minCount 1 ] ;
+            sh:property [ sh:path ex:start ; sh:datatype xsd:integer ] .
+        ",
+    );
+    assert!(
+        without_pairs.losses.is_empty(),
+        "{:?}",
+        recorded_codes(&without_pairs)
+    );
+}
+
 #[test]
 fn lossless_shape_compiles_with_empty_ledger() {
     let compiled = compile_ttl(

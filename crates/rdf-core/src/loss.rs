@@ -996,7 +996,9 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// `Ctx::record`, as are the property-level SHACL 1.2 list components
 /// (`sh:minListLength`, `sh:maxListLength`, `sh:uniqueMembers`,
 /// `sh:memberShape`), `sh:rootClass`, `sh:singleLine true`, property-level
-/// `sh:someValue` and a `sh:TripleTerm` alternative of `sh:nodeKind`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
+/// `sh:someValue`, a `sh:TripleTerm` alternative of `sh:nodeKind`, and every
+/// property pair (`sh:equals`, `sh:disjoint`, `sh:subsetOf`, `sh:lessThan`,
+/// `sh:lessThanOrEquals`), whatever its path; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
 /// `crates/shapes/src/shapes.rs`) have no `$def` equivalent — the emitter has
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
@@ -1027,9 +1029,37 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          excluded from the compiled $defs.",
     ),
     (
+        "sh:disjoint",
+        "A SHACL sh:disjoint constraint keeps the values apart from the nodes a property path (an \
+         IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains \
+         each property on its own and cannot relate one property's values to another path's, so \
+         the constraint is dropped.",
+    ),
+    (
+        "sh:equals",
+        "A SHACL sh:equals constraint requires the values to be exactly the nodes a property path \
+         (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains \
+         each property on its own and cannot relate one property's values to another path's, so \
+         the constraint is dropped.",
+    ),
+    (
         "sh:expression",
         "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is \
          dropped.",
+    ),
+    (
+        "sh:lessThan",
+        "A SHACL sh:lessThan constraint orders the values below every node a property path (an \
+         IRI or any other SHACL 1.2 path) reaches from the focus node; JSON Schema constrains \
+         each property on its own and cannot relate one property's values to another path's, so \
+         the constraint is dropped.",
+    ),
+    (
+        "sh:lessThanOrEquals",
+        "A SHACL sh:lessThanOrEquals constraint orders the values at or below every node a \
+         property path (an IRI or any other SHACL 1.2 path) reaches from the focus node; JSON \
+         Schema constrains each property on its own and cannot relate one property's values to \
+         another path's, so the constraint is dropped.",
     ),
     (
         "sh:maxListLength",
@@ -1091,6 +1121,12 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
         "sh:sparql",
         "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is \
          dropped.",
+    ),
+    (
+        "sh:subsetOf",
+        "A SHACL 1.2 sh:subsetOf constraint requires every value to be among the nodes a property \
+         path reaches from the focus node; JSON Schema constrains each property on its own and \
+         cannot relate one property's values to another path's, so the constraint is dropped.",
     ),
     (
         "sh:targetNode",

@@ -991,6 +991,148 @@ _:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/
 _:report <http://www.w3.org/ns/shacl#result> _:r0 .
 _:report <http://www.w3.org/ns/shacl#result> _:r1 .
 
+### case subset_of
+### results 2
+_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v0> .
+_:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#name> .
+_:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#SubsetOfConstraintComponent> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r0 <http://www.w3.org/ns/shacl#value> "item-0" .
+_:r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r1 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v1> .
+_:r1 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#name> .
+_:r1 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r1 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#SubsetOfConstraintComponent> .
+_:r1 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r1 <http://www.w3.org/ns/shacl#value> "item-1" .
+_:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
+_:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+_:report <http://www.w3.org/ns/shacl#result> _:r0 .
+_:report <http://www.w3.org/ns/shacl#result> _:r1 .
+
+### case equals_path
+### results 4
+_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v0> .
+_:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#owner> .
+_:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#EqualsConstraintComponent> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r0 <http://www.w3.org/ns/shacl#value> <http://example.org/purrdf/change-path#v0-other> .
+_:r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r1 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v0> .
+_:r1 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#owner> .
+_:r1 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r1 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#EqualsConstraintComponent> .
+_:r1 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r1 <http://www.w3.org/ns/shacl#value> <http://example.org/purrdf/change-path#v0-owner> .
+_:r2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r2 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v1> .
+_:r2 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#owner> .
+_:r2 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r2 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#EqualsConstraintComponent> .
+_:r2 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r2 <http://www.w3.org/ns/shacl#value> <http://example.org/purrdf/change-path#v1-other> .
+_:r3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r3 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v1> .
+_:r3 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#owner> .
+_:r3 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r3 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#EqualsConstraintComponent> .
+_:r3 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r3 <http://www.w3.org/ns/shacl#value> <http://example.org/purrdf/change-path#v1-owner> .
+_:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
+_:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+_:report <http://www.w3.org/ns/shacl#result> _:r0 .
+_:report <http://www.w3.org/ns/shacl#result> _:r1 .
+_:report <http://www.w3.org/ns/shacl#result> _:r2 .
+_:report <http://www.w3.org/ns/shacl#result> _:r3 .
+
+### case disjoint_path
+### results 2
+_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v0> .
+_:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#name> .
+_:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#DisjointConstraintComponent> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r0 <http://www.w3.org/ns/shacl#value> "item-0" .
+_:r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r1 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v1> .
+_:r1 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#name> .
+_:r1 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r1 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#DisjointConstraintComponent> .
+_:r1 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r1 <http://www.w3.org/ns/shacl#value> "item-1" .
+_:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
+_:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+_:report <http://www.w3.org/ns/shacl#result> _:r0 .
+_:report <http://www.w3.org/ns/shacl#result> _:r1 .
+
+### case subset_of_path
+### results 2
+_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v0> .
+_:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#name> .
+_:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#SubsetOfConstraintComponent> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r0 <http://www.w3.org/ns/shacl#value> "item-0" .
+_:r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r1 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v1> .
+_:r1 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#name> .
+_:r1 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r1 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#SubsetOfConstraintComponent> .
+_:r1 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r1 <http://www.w3.org/ns/shacl#value> "item-1" .
+_:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
+_:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+_:report <http://www.w3.org/ns/shacl#result> _:r0 .
+_:report <http://www.w3.org/ns/shacl#result> _:r1 .
+
+### case less_than_path
+### results 2
+_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v0> .
+_:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#count> .
+_:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#LessThanConstraintComponent> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r0 <http://www.w3.org/ns/shacl#value> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r1 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v1> .
+_:r1 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#count> .
+_:r1 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r1 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#LessThanConstraintComponent> .
+_:r1 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r1 <http://www.w3.org/ns/shacl#value> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
+_:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+_:report <http://www.w3.org/ns/shacl#result> _:r0 .
+_:report <http://www.w3.org/ns/shacl#result> _:r1 .
+
+### case less_than_or_equals_path
+### results 2
+_:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v0> .
+_:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#count> .
+_:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#LessThanOrEqualsConstraintComponent> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r0 <http://www.w3.org/ns/shacl#value> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:r1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .
+_:r1 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/purrdf/change-path#v1> .
+_:r1 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/purrdf/change-path#count> .
+_:r1 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
+_:r1 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#LessThanOrEqualsConstraintComponent> .
+_:r1 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
+_:r1 <http://www.w3.org/ns/shacl#value> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+_:report <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationReport> .
+_:report <http://www.w3.org/ns/shacl#conforms> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+_:report <http://www.w3.org/ns/shacl#result> _:r0 .
+_:report <http://www.w3.org/ns/shacl#result> _:r1 .
+
 ### case class/validate_focus_nodes
 ### results 2
 _:r0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/shacl#ValidationResult> .

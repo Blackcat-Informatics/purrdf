@@ -777,12 +777,12 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ),
     native(
         sh::DISJOINT_CONSTRAINT_COMPONENT,
-        &[param(sh::DISJOINT, ValueRule::Iri)],
+        &[param(sh::DISJOINT, ValueRule::Path)],
         &["Disjoint"],
     ),
     native(
         sh::EQUALS_CONSTRAINT_COMPONENT,
-        &[param(sh::EQUALS, ValueRule::Iri)],
+        &[param(sh::EQUALS, ValueRule::Path)],
         &["Equals"],
     ),
     native(
@@ -802,12 +802,12 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ),
     native(
         sh::LESS_THAN_CONSTRAINT_COMPONENT,
-        &[param(sh::LESS_THAN, ValueRule::Iri).property_only()],
+        &[param(sh::LESS_THAN, ValueRule::Path).property_only()],
         &["LessThan"],
     ),
     native(
         sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
-        &[param(sh::LESS_THAN_OR_EQUALS, ValueRule::Iri).property_only()],
+        &[param(sh::LESS_THAN_OR_EQUALS, ValueRule::Path).property_only()],
         &["LessThanOrEquals"],
     ),
     native(
@@ -954,9 +954,10 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
         &[param(sh::SOME_VALUE, ValueRule::Shape)],
         &["SomeValue"],
     ),
-    unimplemented(
+    native(
         sh::SUBSET_OF_CONSTRAINT_COMPONENT,
         &[param(sh::SUBSET_OF, ValueRule::Path)],
+        &["SubsetOf"],
     ),
     native(
         sh::UNIQUE_LANG_CONSTRAINT_COMPONENT,

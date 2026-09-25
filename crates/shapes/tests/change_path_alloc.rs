@@ -852,18 +852,13 @@ const CASES: &[ConstraintCase] = &[
     },
     ConstraintCase {
         name: "not",
-        // The negated shape is spelled as a NODE shape wrapping a property
-        // shape. Measured on this build, the anonymous PROPERTY-shape spelling
-        // — `sh:not [ sh:path ex:flag ; sh:minCount 1 ]`, with or without an
-        // explicit `a sh:PropertyShape` — reports a violation for EVERY focus
-        // node, including nodes carrying no `ex:flag` at all, which is the
-        // opposite of what SHACL states for `sh:not`. That behaviour is a
-        // question about the engine, not about allocation, so the fixture uses
-        // the spelling whose conforming and violating branches really are what
-        // their names say; a case that reported every node as violating would
-        // make the conforming half of this file untestable.
+        // The negated shape is an anonymous PROPERTY shape, the natural
+        // spelling: a focus node with no `ex:flag` fails its `sh:minCount 1`, so
+        // `sh:not` holds for it, and only a flagged focus node is reported.
+        // `tests/logical_shape_arguments.rs` pins that answer on this same
+        // prepared change path.
         shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
-            sh:not [ a sh:NodeShape ; sh:property [ sh:path ex:flag ; sh:minCount 1 ] ] .",
+            sh:not [ sh:path ex:flag ; sh:minCount 1 ] .",
         emit: |emit, violating| {
             if violating {
                 emit.text("flag", "present");
@@ -1251,6 +1246,96 @@ const CASES: &[ConstraintCase] = &[
             if !violating {
                 emit.target("ref");
             }
+        },
+    },
+    ConstraintCase {
+        name: "subset_of",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:name ; sh:subsetOf ex:alias ] .",
+        emit: |emit, violating| {
+            let index = emit.index;
+            emit.text("name", &format!("item-{index}"));
+            if violating {
+                emit.text("alias", &format!("other-{index}"));
+            } else {
+                emit.text("alias", &format!("item-{index}"));
+                emit.text("alias", &format!("more-{index}"));
+            }
+        },
+    },
+    // The property pairs over a path other than one IRI: `$otherNodes` is walked
+    // from the focus node by the path evaluator, not read off one predicate.
+    ConstraintCase {
+        name: "equals_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:owner ; sh:equals [ sh:inversePath ex:owns ] ] .",
+        emit: |emit, violating| {
+            let owner = emit.scoped("owner");
+            emit.prop("owner", owner);
+            let focus = emit.focus;
+            if violating {
+                let other = emit.scoped("other");
+                emit.quad(other, "owns", focus);
+            } else {
+                emit.quad(owner, "owns", focus);
+            }
+        },
+    },
+    ConstraintCase {
+        name: "disjoint_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:name ; sh:disjoint ( ex:ref ex:key ) ] .",
+        emit: |emit, violating| {
+            let index = emit.index;
+            emit.text("name", &format!("item-{index}"));
+            let target = emit.target("ref");
+            let key = if violating {
+                format!("item-{index}")
+            } else {
+                format!("other-{index}")
+            };
+            let key = emit.lit(RdfLiteral::simple(&key));
+            emit.quad(target, "key", key);
+        },
+    },
+    ConstraintCase {
+        name: "subset_of_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:name ;
+                          sh:subsetOf [ sh:alternativePath ( ex:alias ex:nick ) ] ] .",
+        emit: |emit, violating| {
+            let index = emit.index;
+            emit.text("name", &format!("item-{index}"));
+            emit.text("alias", &format!("other-{index}"));
+            if !violating {
+                emit.text("nick", &format!("item-{index}"));
+            }
+        },
+    },
+    ConstraintCase {
+        name: "less_than_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:count ; sh:lessThan ( ex:ref ex:limit ) ] .",
+        emit: |emit, violating| {
+            let index = i64::try_from(emit.index).expect("fixture indices fit in i64");
+            emit.integer("count", index);
+            let target = emit.target("ref");
+            let limit = if violating { index } else { index + 1 };
+            let limit = emit.lit(RdfLiteral::typed(limit.to_string(), XSD_INTEGER));
+            emit.quad(target, "limit", limit);
+        },
+    },
+    ConstraintCase {
+        name: "less_than_or_equals_path",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:count ; sh:lessThanOrEquals ( ex:ref ex:limit ) ] .",
+        emit: |emit, violating| {
+            let index = i64::try_from(emit.index).expect("fixture indices fit in i64");
+            emit.integer("count", index);
+            let target = emit.target("ref");
+            let limit = if violating { index - 1 } else { index };
+            let limit = emit.lit(RdfLiteral::typed(limit.to_string(), XSD_INTEGER));
+            emit.quad(target, "limit", limit);
         },
     },
 ];
