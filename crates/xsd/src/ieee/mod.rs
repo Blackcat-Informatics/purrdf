@@ -324,20 +324,6 @@ impl Binary64<'_> {
         /// `√a`, correctly rounded.
         sqrt(a): f64 => x87::sqrt64, a.sqrt()
     }
-    op! {
-        /// `a + b` under the reassociation licence (`f64::algebraic_add`), which permits
-        /// the compiler to reassociate and contract and requires neither; on the x87,
-        /// [`Binary64::add`], in written order.
-        algebraic_add(a, b): f64 => x87::add64, a.algebraic_add(b)
-    }
-    op! {
-        /// `a − b` under the reassociation licence; on the x87, [`Binary64::sub`].
-        algebraic_sub(a, b): f64 => x87::sub64, a.algebraic_sub(b)
-    }
-    op! {
-        /// `a × b` under the reassociation licence; on the x87, [`Binary64::mul`].
-        algebraic_mul(a, b): f64 => x87::mul64, a.algebraic_mul(b)
-    }
 }
 
 /// Each method is the language operator on every target but the x87, where it is the

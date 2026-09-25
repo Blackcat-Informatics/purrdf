@@ -16,7 +16,7 @@
 
 use core::hint::black_box;
 
-use super::binary64::Precision;
+use super::binary64::{Algebraic, Precision};
 use super::tests::{Stream, reference_distance};
 use super::*;
 

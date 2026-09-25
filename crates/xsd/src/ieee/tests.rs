@@ -360,9 +360,6 @@ fn binary64_operations_equal_the_software_reference() {
             ("*", ops.mul(x, y), soft::mul(a, b)),
             ("/", ops.div(x, y), soft::div(a, b)),
             ("sqrt", ops.sqrt(x.abs()), soft::sqrt(a.abs())),
-            ("algebraic +", ops.algebraic_add(x, y), soft::add(a, b)),
-            ("algebraic -", ops.algebraic_sub(x, y), soft::sub(a, b)),
-            ("algebraic *", ops.algebraic_mul(x, y), soft::mul(a, b)),
             // The one-off functions enter a nested scope of their own.
             ("f64_add", f64_add(x, y), soft::add(a, b)),
             ("f64_sub", f64_sub(x, y), soft::sub(a, b)),
@@ -383,7 +380,7 @@ fn binary64_operations_equal_the_software_reference() {
             compared += 1;
         }
     }
-    assert!(compared >= 780_000, "{compared} comparisons");
+    assert!(compared >= 600_000, "{compared} comparisons");
 }
 
 #[test]

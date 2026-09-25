@@ -52,7 +52,7 @@
 //! it keeps the evidence's claim of binary64 arithmetic true there too -- every value the
 //! fold holds is a binary64 value, rounded once, rather than an 80-bit register's.
 
-use super::binary64::{Binary64, Precision};
+use super::binary64::{Algebraic, Binary64, Precision};
 use super::exact::{cosine, finite};
 use super::sealed::{Stored, Width};
 use super::{Bound, Bounded, Measure, Path, PathUnavailable, RowsRef, Scalar};
@@ -293,7 +293,7 @@ pub(crate) fn recorded(path: Path) -> Result<Path, PathUnavailable> {
 
 /// The one body every compilation inlines.
 mod body {
-    use super::{BLOCK, Binary64, Bound, Bounded, Scalar};
+    use super::{Algebraic, BLOCK, Binary64, Bound, Bounded, Scalar};
 
     /// `sum(a[i] · b[i])` over one block, under the reassociation licence.
     #[allow(

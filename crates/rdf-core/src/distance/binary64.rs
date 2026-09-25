@@ -23,16 +23,63 @@
 //! # The reassociated arithmetic
 //!
 //! [`Reassociated`](super::Reassociated)'s evidence claims binary64 arithmetic, and it
-//! runs under the same guard. Its `algebraic_*` operations license the compiler to
-//! reassociate and contract; the licence permits that and requires nothing, so on the
-//! x87 they are these same correctly rounded operations, in written order, and every
-//! value the fold holds is a binary64 value. On every other target they are the
+//! runs under the same guard. Its `algebraic_*` operations ([`Algebraic`]) license the
+//! compiler to reassociate and contract; the licence permits that and requires nothing,
+//! so on the x87 they are these same correctly rounded operations, in written order, and
+//! every value the fold holds is a binary64 value. On every other target they are the
 //! `algebraic_*` operations unchanged.
+//!
+//! The licence is defined here, not in [`purrdf_xsd::ieee`]: that layer is exact by
+//! contract, and the licence to reassociate belongs to the ranked-distance modules alone.
 
 pub(crate) use purrdf_xsd::ieee::Binary64;
 use purrdf_xsd::ieee::Binary64Scope;
 #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
 pub(crate) use purrdf_xsd::ieee::x87;
+
+/// The binary64 operations under the reassociation licence, on the [`Binary64`] token.
+///
+/// On every target but the x87 each is the `f64` method of the same name, inlined, which
+/// permits the compiler to reassociate and contract and requires neither. On the x87 each
+/// is the token's correctly rounded operation, in written order: one of the results the
+/// licence admits, and a binary64 value rather than an 80-bit register's.
+pub(crate) trait Algebraic: Copy {
+    /// `a + b` under the reassociation licence; on the x87, [`Binary64::add`].
+    fn algebraic_add(self, a: f64, b: f64) -> f64;
+    /// `a − b` under the reassociation licence; on the x87, [`Binary64::sub`].
+    fn algebraic_sub(self, a: f64, b: f64) -> f64;
+    /// `a × b` under the reassociation licence; on the x87, [`Binary64::mul`].
+    fn algebraic_mul(self, a: f64, b: f64) -> f64;
+}
+
+/// Defines one licensed operation: the `f64` method everywhere, the token's correctly
+/// rounded operation on the x87.
+macro_rules! algebraic {
+    ($name:ident => $exact:ident) => {
+        #[inline(always)]
+        fn $name(self, a: f64, b: f64) -> f64 {
+            #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
+            {
+                self.$exact(a, b)
+            }
+            #[cfg(not(all(target_arch = "x86", not(target_feature = "sse2"))))]
+            {
+                a.$name(b)
+            }
+        }
+    };
+}
+
+#[allow(
+    clippy::inline_always,
+    reason = "each method is one arithmetic instruction inside a kernel's inner loop, and \
+              must compile into every dispatch wrapper under that wrapper's features"
+)]
+impl Algebraic for Binary64<'_> {
+    algebraic!(algebraic_add => add);
+    algebraic!(algebraic_sub => sub);
+    algebraic!(algebraic_mul => mul);
+}
 
 /// The scope inside which [`Binary64`] operations return the IEEE-754 result on this
 /// thread: a [`Binary64Scope`].
