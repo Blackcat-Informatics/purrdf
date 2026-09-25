@@ -164,6 +164,32 @@ pub(crate) struct PendingTrigger {
     pub(crate) chain: Option<Path>,
 }
 
+/// One CROSS-FOCUS read: a changed triple with this predicate, anywhere in the
+/// graph, can move the verdict of EVERY focus node of one top-level shape.
+///
+/// A [`Trigger`] ties a read to the focus nodes that reached it by a path, and
+/// that is the right description of every Core constraint but one.
+/// `sh:uniqueValuesFor` (SHACL 1.2 Core §7.9.5) compares each value node against
+/// "another node in $targetNodes" — the declaring shape's WHOLE target set — so a
+/// change to a listed property on any target node, or to which nodes are targets
+/// at all, moves verdicts on focus nodes that reach neither the changed node nor
+/// each other by any path. No reversed path describes that; this does, soundly:
+/// the expansion re-validates every focus node of the top-level shape whose walk
+/// reached the constraint.
+#[derive(Debug, Clone)]
+pub(crate) struct Broadcast {
+    /// The predicate whose change fires this broadcast.
+    pub(crate) predicate: NamedNode,
+    /// The position, in the shapes graph's top-level shape list, of the shape
+    /// every focus node of which the change can move.
+    pub(crate) shape: usize,
+}
+
+/// Why a cross-focus constraint could not be tied to a top-level shape: it sits
+/// in a subtree evaluated at nodes no top-level shape's focus nodes name.
+pub(crate) const OPAQUE_CROSS_FOCUS: &str = "a sh:uniqueValuesFor constraint is reached where no top-level shape's focus \
+     nodes can be named, and it compares values across a whole target set";
+
 /// The complete dependency footprint of one shapes graph.
 ///
 /// Derived once, at stage 0, from the shapes graph alone — so it is shared by every
@@ -171,6 +197,7 @@ pub(crate) struct PendingTrigger {
 #[derive(Debug, Default)]
 pub(crate) struct Footprint {
     triggers: Vec<Trigger>,
+    broadcasts: Vec<Broadcast>,
     opaque: Option<&'static str>,
 }
 
@@ -183,6 +210,11 @@ impl Footprint {
     /// Every reversed read, in walk order.
     pub(crate) fn triggers(&self) -> &[Trigger] {
         &self.triggers
+    }
+
+    /// Every cross-focus read, in walk order.
+    pub(crate) fn broadcasts(&self) -> &[Broadcast] {
+        &self.broadcasts
     }
 }
 
@@ -239,6 +271,11 @@ pub(crate) struct FootprintWalk {
     chain: Option<Vec<Path>>,
     /// The same, for the node that declared the constraints being walked.
     declaring: Option<Vec<Path>>,
+    /// Every cross-focus read recorded so far.
+    broadcasts: Vec<Broadcast>,
+    /// The position of the top-level shape the walk is currently inside, or
+    /// `None` outside every top-level shape (a standalone expression or path).
+    root: Option<usize>,
 }
 
 impl Default for FootprintWalk {
@@ -248,6 +285,8 @@ impl Default for FootprintWalk {
             opaque: None,
             chain: Some(Vec::new()),
             declaring: Some(Vec::new()),
+            broadcasts: Vec::new(),
+            root: None,
         }
     }
 }
@@ -267,8 +306,14 @@ impl FootprintWalk {
     pub(crate) fn finish(self, triggers: Vec<Trigger>) -> Footprint {
         Footprint {
             triggers,
+            broadcasts: self.broadcasts,
             opaque: self.opaque,
         }
+    }
+
+    /// Record that the walk is entering the `position`-th top-level shape.
+    pub(crate) fn enter_root(&mut self, position: usize) {
+        self.root = Some(position);
     }
 
     /// Record the FIRST reason this footprint went TOP.
@@ -552,6 +597,11 @@ impl FootprintWalk {
                 )))),
                 &[],
             ),
+            // CROSS-FOCUS (SHACL 1.2 Core §7.9.5): see `Self::record_cross_focus`.
+            Constraint::UniqueValuesFor {
+                properties,
+                targets,
+            } => self.record_cross_focus(properties, targets),
             Constraint::Sparql { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
             Constraint::Component { .. } => self.mark_opaque(OPAQUE_COMPONENT),
             // Value-local: each of these judges a value node's own identity —
@@ -586,6 +636,53 @@ impl FootprintWalk {
             | Constraint::Expression { .. }
             | Constraint::NodeByExpression { .. } => {}
         }
+    }
+
+    /// Record the reads of one `sh:uniqueValuesFor` constraint: every listed
+    /// property on every node, and every read that decides the declaring shape's
+    /// target set, each as a [`Broadcast`] to the enclosing top-level shape.
+    ///
+    /// A change to a listed property on ANY target node can make it collide with,
+    /// or stop colliding with, any other target node; a change to the target set
+    /// can add or remove the node another one collides with. Both move verdicts on
+    /// focus nodes no path connects, so both broadcast.
+    ///
+    /// A declaring shape with no targets has an empty `$targetNodes`: the
+    /// constraint can produce no result, whatever the data says, so it reads
+    /// nothing that could move a verdict and records nothing.
+    fn record_cross_focus(&mut self, properties: &[NamedNode], targets: &[Target]) {
+        if targets.is_empty() {
+            return;
+        }
+        let (Some(shape), Some(_)) = (self.root, &self.chain) else {
+            self.mark_opaque(OPAQUE_CROSS_FOCUS);
+            return;
+        };
+        let mut predicates: Vec<NamedNode> = properties.to_vec();
+        for target in targets {
+            match target {
+                Target::Class(_) | Target::ImplicitClass(_) => {
+                    predicates.push(NamedNode::new_unchecked(rdf::TYPE));
+                    predicates.push(NamedNode::new_unchecked(rdfs::SUB_CLASS_OF));
+                }
+                Target::SubjectsOf(predicate) | Target::ObjectsOf(predicate) => {
+                    predicates.push(predicate.clone());
+                }
+                // A constant target node reads nothing to BE one.
+                Target::Node(_) => {}
+                Target::Sparql { .. } => {
+                    self.mark_opaque(OPAQUE_QUERY_TEXT);
+                    return;
+                }
+            }
+        }
+        predicates.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        predicates.dedup();
+        self.broadcasts.extend(
+            predicates
+                .into_iter()
+                .map(|predicate| Broadcast { predicate, shape }),
+        );
     }
 
     /// Record what ONE node expression reads, at the node the lowering walk

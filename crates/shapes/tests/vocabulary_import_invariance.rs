@@ -72,7 +72,7 @@ const TOTAL_CASES: usize = 375;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
-/// the three corpora except the 12 declared `sht:Failure` inputs and the 19 SHACL
+/// the three corpora except the 12 declared `sht:Failure` inputs and the 14 SHACL
 /// 1.2 entries this engine refuses at load (the same partition the product
 /// equivalence harness pins).
 ///
@@ -86,7 +86,11 @@ const TOTAL_CASES: usize = 375;
 /// `disjoint-002`, `lessThan-003`, `lessThanOrEquals-002`, `subsetOf-001` and
 /// `subsetOf-002` now load, so their reports are compared too, and the
 /// refused-at-load entries went from 25 to 19.
-const COMPARED_ON_REPORT: usize = 344;
+///
+/// Moved from 344 to 349 when `sh:uniqueValuesFor` became evaluated:
+/// `uniqueValuesFor-001` to `-005` now load, so their reports are compared too,
+/// and the refused-at-load entries went from 19 to 14.
+const COMPARED_ON_REPORT: usize = 349;
 
 /// One case, reduced to what both parses need.
 struct Input {

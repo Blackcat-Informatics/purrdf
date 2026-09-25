@@ -996,9 +996,9 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// `Ctx::record`, as are the property-level SHACL 1.2 list components
 /// (`sh:minListLength`, `sh:maxListLength`, `sh:uniqueMembers`,
 /// `sh:memberShape`), `sh:rootClass`, `sh:singleLine true`, property-level
-/// `sh:someValue`, a `sh:TripleTerm` alternative of `sh:nodeKind`, and every
+/// `sh:someValue`, a `sh:TripleTerm` alternative of `sh:nodeKind`, every
 /// property pair (`sh:equals`, `sh:disjoint`, `sh:subsetOf`, `sh:lessThan`,
-/// `sh:lessThanOrEquals`), whatever its path; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
+/// `sh:lessThanOrEquals`), whatever its path, and `sh:uniqueValuesFor`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
 /// `crates/shapes/src/shapes.rs`) have no `$def` equivalent — the emitter has
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
@@ -1150,6 +1150,13 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
         "sh:uniqueMembers",
         "A SHACL 1.2 sh:uniqueMembers constraint forbids a repeated member in a value that is \
          an RDF list; the emitted value schema has no projection of an RDF list's members, so \
+         the constraint is dropped.",
+    ),
+    (
+        "sh:uniqueValuesFor",
+        "A SHACL 1.2 sh:uniqueValuesFor constraint forbids two target nodes of a shape from \
+         having exactly the same values for the listed properties; a JSON Schema judges one \
+         instance alone (uniqueItems is uniqueness within one array, not across instances), so \
          the constraint is dropped.",
     ),
     (

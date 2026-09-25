@@ -1692,14 +1692,18 @@ fn stage_id_changes_when_the_spec_table_changes() {
     alias.1 = alias.1.replace("Infix(\"+\")", "Infix(\"-\")");
     assert_ne!(real, stage_id(&types, &builtins, &realiased, &analysis));
 
-    // A component flipped from unimplemented to native.
-    let mut flipped = components;
-    let row = flipped
+    // A component re-pointed at another parsed-model carrier.
+    let mut recarried = components;
+    let row = recarried
         .iter_mut()
-        .find(|(_, line)| line.contains("UniqueValuesForConstraintComponent unimplemented"))
-        .expect("the unimplemented uniqueValuesFor row is a table fact");
-    row.1 = row.1.replace("unimplemented", "native");
-    assert_ne!(real, stage_id(&types, &builtins, &flipped, &analysis));
+        .find(|(_, line)| {
+            line.contains("UniqueValuesForConstraintComponent constraint UniqueValuesFor")
+        })
+        .expect("the uniqueValuesFor row's carrier is a table fact");
+    row.1 = row
+        .1
+        .replace("constraint UniqueValuesFor", "constraint SubsetOf");
+    assert_ne!(real, stage_id(&types, &builtins, &recarried, &analysis));
 }
 
 /// Every `Constraint` variant — the model a prepared product carries — is claimed by
@@ -1708,7 +1712,7 @@ fn stage_id_changes_when_the_spec_table_changes() {
 /// by definition are not spec rows.
 #[test]
 fn constraint_variants_are_the_spec_table_component_rows() {
-    use purrdf_shapes::spec::{Carrier, ComponentStatus};
+    use purrdf_shapes::spec::Carrier;
     let rows = census();
     let constraint = rows
         .iter()
@@ -1722,14 +1726,9 @@ fn constraint_variants_are_the_spec_table_component_rows() {
         .collect();
     let mut claimed: BTreeSet<&str> = BTreeSet::new();
     for row in purrdf_shapes::spec::implemented().components() {
-        match (row.status(), row.carrier()) {
-            (ComponentStatus::Native, Carrier::Constraint(names)) => claimed.extend(names),
-            (ComponentStatus::Native, Carrier::ShapeField(_))
-            | (ComponentStatus::Unimplemented, Carrier::None) => {}
-            (status, carrier) => panic!(
-                "<{}> pairs status {status:?} with carrier {carrier:?}",
-                row.iri()
-            ),
+        match row.carrier() {
+            Carrier::Constraint(names) => claimed.extend(names),
+            Carrier::ShapeField(_) => {}
         }
     }
     assert_eq!(

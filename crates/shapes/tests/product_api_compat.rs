@@ -188,6 +188,7 @@ fn constraint_name(constraint: &Constraint) -> &'static str {
         Constraint::Equals(_) => "equals",
         Constraint::Disjoint(_) => "disjoint",
         Constraint::SubsetOf(_) => "subset-of",
+        Constraint::UniqueValuesFor { .. } => "unique-values-for",
         Constraint::LessThan(_) => "less-than",
         Constraint::LessThanOrEquals(_) => "less-than-or-equals",
         Constraint::QualifiedValueShape { .. } => "qualified-value-shape",

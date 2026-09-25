@@ -515,6 +515,7 @@ impl ShapeIndexWalk<'_> {
             | Constraint::UniqueMembers(_)
             | Constraint::SingleLine(_)
             | Constraint::RootClass(_)
+            | Constraint::UniqueValuesFor { .. }
             | Constraint::Component { .. } => {}
             Constraint::Not(shape)
             | Constraint::Node(shape)

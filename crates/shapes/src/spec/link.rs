@@ -171,24 +171,13 @@ pub(crate) fn bind_native_function(
 
 /// Link one `sh:ConstraintComponent` declaration of spec component `row`.
 ///
-/// Returns whether the declaration is a USER implementation of a component the
-/// engine does not evaluate — a validator-bearing declaration of an unimplemented
-/// row, which the custom-component registry then evaluates like any other.
-pub(crate) fn bind_spec_component(data: &RdfDataset, row: &ComponentRow) -> Result<bool, String> {
+/// Every spec component row is evaluated natively, so the declaration is a
+/// SIGNATURE: it must state the native parameter set, and one carrying a
+/// validator is a duplicate definition.
+pub(crate) fn bind_spec_component(data: &RdfDataset, row: &ComponentRow) -> Result<(), String> {
     let signature: Vec<(&'static str, bool)> = row.params.iter().map(|p| (p.path, false)).collect();
     check_signature(data, row.iri, "constraint component", &signature)?;
-    match row.status {
-        super::ComponentStatus::Native => {
-            refuse_material(data, row.iri, "constraint component")?;
-            Ok(false)
-        }
-        super::ComponentStatus::Unimplemented => {
-            let id = Term::NamedNode(NamedNode::from(row.iri));
-            Ok([sh::VALIDATOR, sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR]
-                .into_iter()
-                .any(|predicate| !objects(data, &id, predicate).is_empty()))
-        }
-    }
+    refuse_material(data, row.iri, "constraint component")
 }
 
 /// Refuse a component declaration of an IRI the table knows as a FUNCTION.

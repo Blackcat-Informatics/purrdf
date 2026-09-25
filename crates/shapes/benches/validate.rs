@@ -18,6 +18,12 @@
 //! now read the interned value node's borrowed surface (length, kind, language)
 //! and the closed-permitted set's borrowed keys instead of materializing terms.
 //!
+//! `shacl_focus_unique_values_for` is the one cross-focus Core component,
+//! `sh:uniqueValuesFor`, over a growing conforming target set: each focus node's
+//! verdict depends on every other target node, and the grouping of the target set
+//! by value tuple is built once per validation, so the per-focus-node cost is
+//! expected to stay flat across the sweep rather than grow with it.
+//!
 //! `shacl_change_path_contrast` is the conforming-versus-violating pair over ONE
 //! dataset and ONE binding: the change path materializes a focus node only where a
 //! result is built, so a conforming request should cost a constant whatever the
@@ -93,6 +99,7 @@ const LINKML_EMIT_SIZES: &[usize] = &[32, 1_024, 60_000];
 const CORE_FOCUS_SIZES: &[usize] = &[512, 1_024, 2_048, 3_000, 100_000, 1_000_000];
 const CLOSED_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
+const UNIQUE_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const REALTIME_FOCUS_SIZES: &[usize] = &[1, 8, 64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -378,6 +385,57 @@ ex:ClosedBundleShape a sh:NodeShape ;
     }
 }
 
+/// A `sh:uniqueValuesFor ( ex:notation ex:scheme )` node shape over
+/// `focus_nodes` conforming subjects, each with its own notation in one of 16
+/// schemes — the cross-focus component, whose verdict for a focus node depends on
+/// every other target node. The grouping of the target set is built once per
+/// validation, so the cost should grow linearly in the focus count, not
+/// quadratically.
+fn unique_values_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let concept = builder.intern_iri(&format!("{BENCH_EX}Concept"));
+    let notation_predicate = builder.intern_iri(&format!("{BENCH_EX}notation"));
+    let scheme_predicate = builder.intern_iri(&format!("{BENCH_EX}scheme"));
+    let schemes: Vec<TermId> = (0..16)
+        .map(|scheme| builder.intern_iri(&format!("{BENCH_EX}scheme{scheme}")))
+        .collect();
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}unique-item{index}"));
+        let notation = builder.intern_literal(RdfLiteral::simple(format!("N-{index}")));
+        builder.push_quad(focus, rdf_type, concept, None);
+        builder.push_quad(focus, notation_predicate, notation, None);
+        builder.push_quad(
+            focus,
+            scheme_predicate,
+            schemes[index % schemes.len()],
+            None,
+        );
+    }
+    let dataset = builder
+        .freeze()
+        .expect("uniqueValuesFor focus fixture must freeze");
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:UniqueNotationShape a sh:NodeShape ;
+    sh:targetClass ex:Concept ;
+    sh:uniqueValuesFor ( ex:notation ex:scheme ) .
+"
+        ),
+        None,
+    )
+    .expect("uniqueValuesFor focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
 fn sparql_focus_fixture(focus_nodes: usize) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
@@ -586,6 +644,27 @@ fn bench_focus_sparql(c: &mut Criterion) {
             &fixture,
             move |bencher, fixture| {
                 probe.call_once(|| print_validation_probe("sparql_function", fixture));
+                bencher.iter(|| validate_fixture(black_box(fixture)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_focus_unique_values(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_unique_values_for");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in UNIQUE_VALUES_FOCUS_SIZES {
+        let fixture = unique_values_focus_fixture(focus_nodes);
+        let probe = Once::new();
+        group.throughput(Throughput::Elements(focus_nodes as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(focus_nodes),
+            &fixture,
+            move |bencher, fixture| {
+                probe.call_once(|| print_validation_probe("unique_values_for", fixture));
                 bencher.iter(|| validate_fixture(black_box(fixture)));
             },
         );
@@ -1438,6 +1517,7 @@ criterion_group!(
     bench_focus_core,
     bench_focus_closed,
     bench_focus_sparql,
+    bench_focus_unique_values,
     bench_focus_realtime,
     bench_change_path_contrast,
     bench_subclass_membership,

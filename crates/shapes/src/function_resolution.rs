@@ -221,6 +221,7 @@ impl Walk<'_> {
                 | Constraint::UniqueMembers(_)
                 | Constraint::SingleLine(_)
                 | Constraint::RootClass(_)
+                | Constraint::UniqueValuesFor { .. }
                 | Constraint::Component { .. } => {}
             }
         }

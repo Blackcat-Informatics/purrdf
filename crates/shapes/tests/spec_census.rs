@@ -174,9 +174,12 @@ fn census_counts_per_class_are_pinned() {
 /// `sh:singleLine`, `sh:rootClass` and `sh:someValue` are constraint parameters
 /// of components the engine evaluates, so they count there and not among the
 /// unimplemented terms: 42 + 3 and 48 − 3. `sh:subsetOf` followed when its
-/// component became evaluated: 45 + 1 and 45 − 1.
+/// component became evaluated: 45 + 1 and 45 − 1, and `sh:uniqueValuesFor` —
+/// the last declared component — when its did: 46 + 1 and 44 − 1. No
+/// component parameter is unimplemented any more; the 43 that remain are terms
+/// of other kinds.
 const EXPECTED_COUNTS: [(&str, usize); 11] = [
-    ("constraint-parameter", 46),
+    ("constraint-parameter", 47),
     ("non-validating", 10),
     ("rule", 9),
     ("structural/builtin", 68),
@@ -186,7 +189,7 @@ const EXPECTED_COUNTS: [(&str, usize); 11] = [
     ("structural/shape-path-prefix-graph", 16),
     ("structural/vocabulary", 19),
     ("target", 7),
-    ("unimplemented", 44),
+    ("unimplemented", 43),
 ];
 
 /// Where a term may appear is part of its class: a constraint parameter and a

@@ -2702,6 +2702,13 @@
     "note": "A SHACL 1.2 sh:uniqueMembers constraint forbids a repeated member in a value that is an RDF list; the emitted value schema has no projection of an RDF list's members, so the constraint is dropped."
   },
   {
+    "code": "sh:uniqueValuesFor",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:uniqueValuesFor constraint forbids two target nodes of a shape from having exactly the same values for the listed properties; a JSON Schema judges one instance alone (uniqueItems is uniqueness within one array, not across instances), so the constraint is dropped."
+  },
+  {
     "code": "value-vocabulary",
     "from": "shacl",
     "to": "json-schema",

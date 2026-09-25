@@ -216,18 +216,6 @@ impl Parser<'_> {
             if self.component_registry.by_parameter_path.contains_key(p) {
                 continue;
             }
-            // A parameter of a declared component this engine does not evaluate:
-            // named with its component, so the author knows which feature it is.
-            if let Some((_, component)) =
-                crate::spec::unimplemented_component_params().find(|(param, _)| *param == p)
-            {
-                return Err(format!(
-                    "shape {shape} uses <{p}>, a parameter of <{}>, which is a SHACL 1.2 Core \
-                     component this engine does not implement; the shape is refused rather than \
-                     silently conforming",
-                    component.iri()
-                ));
-            }
             let Some(row) = census::classify(p) else {
                 return Err(format!(
                     "shape {shape} carries <{p}>, which is not a term of SHACL 1.2, SHACL \

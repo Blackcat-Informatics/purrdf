@@ -143,13 +143,11 @@ impl ComponentRegistry {
             // registered as a custom component. A native component's bare
             // declaration binds and registers nothing; one carrying a validator is
             // a duplicate definition; a declaration of a built-in FUNCTION IRI is a
-            // kind mismatch. Only a validator-bearing declaration of a component
-            // the engine does not evaluate is a user implementation, registered
-            // like any custom component.
+            // kind mismatch. Every spec component is evaluated natively, so none is
+            // registered as a custom component.
             crate::spec::refuse_component_declared_function(component.as_str())?;
-            if let Some(row) = crate::spec::component(component.as_str())
-                && !crate::spec::bind_spec_component(data, row)?
-            {
+            if let Some(row) = crate::spec::component(component.as_str()) {
+                crate::spec::bind_spec_component(data, row)?;
                 continue;
             }
             component_iris.push(component.as_str().to_owned());

@@ -2314,6 +2314,9 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
             Constraint::SubsetOf(path) => {
                 record_pair_loss(ctx, &mut comments, "sh:subsetOf", path, &shape_iri, None);
             }
+            Constraint::UniqueValuesFor { properties, .. } => {
+                record_unique_values_loss(ctx, &mut comments, properties, &shape_iri, None);
+            }
             Constraint::LessThan(path) => {
                 record_pair_loss(ctx, &mut comments, "sh:lessThan", path, &shape_iri, None);
             }
@@ -2589,6 +2592,44 @@ fn record_pair_loss(
         None => format!(
             "a node-level {term} {path_text} constraint was dropped (no projection in this \
              emitter)"
+        ),
+    });
+}
+
+/// Record the loss of one `sh:uniqueValuesFor` constraint, with a `$comment` naming
+/// it.
+///
+/// SHACL 1.2 Core §7.9.5 compares a node's values against every OTHER target node
+/// of the shape, and a JSON Schema judges one instance alone — `uniqueItems` is
+/// uniqueness within one array, not across instances — so nothing is projected.
+fn record_unique_values_loss(
+    ctx: &mut Ctx<'_>,
+    comments: &mut Vec<String>,
+    properties: &[NamedNode],
+    shape_iri: &str,
+    key: Option<&str>,
+) {
+    let listed = properties
+        .iter()
+        .map(|property| format!("<{}>", property.as_str()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    ctx.record(
+        "sh:uniqueValuesFor",
+        shape_iri,
+        &format!(
+            "a uniqueness condition on the values of ({listed}) across every target node of the \
+             shape has no projection in a schema that judges one instance alone"
+        ),
+    );
+    comments.push(match key {
+        Some(key) => format!(
+            "a sh:uniqueValuesFor ({listed}) constraint on property {key} was dropped (no \
+             projection in this emitter)"
+        ),
+        None => format!(
+            "a node-level sh:uniqueValuesFor ({listed}) constraint was dropped (no projection in \
+             this emitter)"
         ),
     });
 }
@@ -2897,6 +2938,9 @@ fn compile_property(
                     shape_iri,
                     Some(key),
                 );
+            }
+            Constraint::UniqueValuesFor { properties, .. } => {
+                record_unique_values_loss(ctx, &mut comments, properties, shape_iri, Some(key));
             }
             Constraint::LessThan(path) => {
                 record_pair_loss(

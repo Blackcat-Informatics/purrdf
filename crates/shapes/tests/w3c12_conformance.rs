@@ -72,10 +72,6 @@ use shacl_corpora::{Expected, Multiset, W3cCase, file_iri, parse_turtle_file};
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
-const R_UNIQUE_VALUES_FOR: &str = "sh:uniqueValuesFor is not implemented, so a shapes graph using it is refused at \
-     load as naming an unimplemented SHACL 1.2 Core component (uniqueValuesFor-004 expects \
-     conformance, which the former silent drop produced by coincidence)";
-
 const R_CLOSED_BY_TYPES: &str =
     "sh:closed sh:ByTypes is not evaluated, so a shape using it is refused at load";
 
@@ -175,12 +171,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// A ledgered entry MUST fail; when engine work fixes it the harness errors with
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
-    // ── Core components ──
-    ("core/node/uniqueValuesFor-001", R_UNIQUE_VALUES_FOR),
-    ("core/node/uniqueValuesFor-002", R_UNIQUE_VALUES_FOR),
-    ("core/node/uniqueValuesFor-003", R_UNIQUE_VALUES_FOR),
-    ("core/node/uniqueValuesFor-004", R_UNIQUE_VALUES_FOR),
-    ("core/node/uniqueValuesFor-005", R_UNIQUE_VALUES_FOR),
     // ── Closed shapes ──
     ("core/node/closed-003", R_CLOSED_BY_TYPES),
     ("core/node/closed-004", R_CLOSED_BY_TYPES),

@@ -159,11 +159,6 @@ const W3C12_DECLARED_FAILURES: usize = 5;
 /// about them. The ledger runs both ways: an entry whose shapes graph starts
 /// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
 const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
-    ("w3c12/core/node/uniqueValuesFor-001", R_UNIQUE_VALUES_FOR),
-    ("w3c12/core/node/uniqueValuesFor-002", R_UNIQUE_VALUES_FOR),
-    ("w3c12/core/node/uniqueValuesFor-003", R_UNIQUE_VALUES_FOR),
-    ("w3c12/core/node/uniqueValuesFor-004", R_UNIQUE_VALUES_FOR),
-    ("w3c12/core/node/uniqueValuesFor-005", R_UNIQUE_VALUES_FOR),
     (
         "w3c12/sparql/functions/instanceCount-example",
         R_INSTANCES_OF_EXPR,
@@ -212,9 +207,6 @@ const R_VALUES: &str = "uses sh:values on a property shape, which the engine ref
 
 const R_TARGET_NODE_EXPR: &str = "gives sh:targetNode a structured node expression, which the \
      engine refuses at load as unevaluated";
-
-const R_UNIQUE_VALUES_FOR: &str =
-    "uses sh:uniqueValuesFor, which the engine refuses at load as unimplemented";
 
 const R_INSTANCES_OF_EXPR: &str = "a custom function body passes a node-expression argument to \
      shnex:instancesOf, which the parser refuses because it requires an IRI";
@@ -281,7 +273,11 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// `disjoint-002`, `lessThan-003`, `lessThanOrEquals-002`, `subsetOf-001` and
 /// `subsetOf-002` now load and agree on a report (+6), and
 /// [`W3C12_REFUSED_AT_LOAD`] went from 25 entries to 19.
-const AGREED_ON_REPORT_CASES: usize = 344;
+///
+/// Moved from 344 to 349 when `sh:uniqueValuesFor` became evaluated:
+/// `uniqueValuesFor-001` to `-005` now load and agree on a report (+5), and
+/// [`W3C12_REFUSED_AT_LOAD`] went from 19 entries to 14.
+const AGREED_ON_REPORT_CASES: usize = 349;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -336,7 +332,13 @@ const AGREED_ON_REPORT_CASES: usize = 344;
 /// `subsetOf-001` and `subsetOf-002` load now that a property pair takes any
 /// SHACL property path and `sh:subsetOf` is evaluated, and each expects — and
 /// reports — violations (+6).
-const AGREED_WITH_RESULTS_CASES: usize = 325;
+///
+/// # Why it moved from 325 to 329
+///
+/// `uniqueValuesFor-001`, `-002`, `-003` and `-005` load now that the component
+/// is evaluated, and each expects — and reports — violations (+4);
+/// `uniqueValuesFor-004` expects conformance and is agreed on as an empty report.
+const AGREED_WITH_RESULTS_CASES: usize = 329;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

@@ -344,20 +344,6 @@ pub enum Carrier {
     /// This field of a node or property shape (the component's argument is a
     /// shape that is carried structurally, not as a constraint).
     ShapeField(&'static str),
-    /// Nothing: the engine does not implement the component
-    /// ([`ComponentStatus::Unimplemented`]).
-    None,
-}
-
-/// Whether the engine evaluates a declared component.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ComponentStatus {
-    /// The engine parses and evaluates the component natively.
-    Native,
-    /// The vocabulary declares the component and this engine does not evaluate
-    /// it: a shape using one of its parameters is a load error rather than a
-    /// silent conformance.
-    Unimplemented,
 }
 
 /// One constraint-component row.
@@ -365,7 +351,6 @@ pub enum ComponentStatus {
 pub struct ComponentRow {
     pub(crate) iri: &'static str,
     pub(crate) params: &'static [ComponentParam],
-    pub(crate) status: ComponentStatus,
     pub(crate) carrier: Carrier,
 }
 
@@ -380,12 +365,6 @@ impl ComponentRow {
     #[must_use]
     pub const fn params(&self) -> &'static [ComponentParam] {
         self.params
-    }
-
-    /// Whether the engine evaluates it.
-    #[must_use]
-    pub const fn status(&self) -> ComponentStatus {
-        self.status
     }
 
     /// Where the parsed model carries its instances.
@@ -536,17 +515,7 @@ const fn native(
     ComponentRow {
         iri,
         params,
-        status: ComponentStatus::Native,
         carrier: Carrier::Constraint(variants),
-    }
-}
-
-const fn unimplemented(iri: &'static str, params: &'static [ComponentParam]) -> ComponentRow {
-    ComponentRow {
-        iri,
-        params,
-        status: ComponentStatus::Unimplemented,
-        carrier: Carrier::None,
     }
 }
 
@@ -905,7 +874,6 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ComponentRow {
         iri: sh::PROPERTY_CONSTRAINT_COMPONENT,
         params: &[param(sh::PROPERTY, ValueRule::Shape)],
-        status: ComponentStatus::Native,
         carrier: Carrier::ShapeField("property_shapes"),
     },
     native(
@@ -936,7 +904,6 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
             param(sh::REIFIER_SHAPE, ValueRule::Shape).single(),
             optional_param(sh::REIFICATION_REQUIRED, ValueRule::Boolean).single(),
         ],
-        status: ComponentStatus::Native,
         carrier: Carrier::ShapeField("reifier_shapes"),
     },
     native(
@@ -966,9 +933,10 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
             .property_only()],
         &["UniqueLang"],
     ),
-    unimplemented(
+    native(
         sh::UNIQUE_VALUES_FOR_CONSTRAINT_COMPONENT,
         &[param(sh::UNIQUE_VALUES_FOR, ValueRule::IriOrIriList)],
+        &["UniqueValuesFor"],
     ),
     native(
         sh::XONE_CONSTRAINT_COMPONENT,
@@ -1112,16 +1080,11 @@ pub(crate) fn canonical_lines() -> Vec<String> {
         out.push(format!("spec-text-optional {function} {path}"));
     }
     for row in COMPONENTS {
-        let status = match row.status {
-            ComponentStatus::Native => "native",
-            ComponentStatus::Unimplemented => "unimplemented",
-        };
         let carrier = match row.carrier {
             Carrier::Constraint(variants) => format!("constraint {}", variants.join(",")),
             Carrier::ShapeField(field) => format!("field {field}"),
-            Carrier::None => "none".to_owned(),
         };
-        out.push(format!("component {} {status} {carrier}", row.iri));
+        out.push(format!("component {} {carrier}", row.iri));
         for p in row.params {
             out.push(format!(
                 "  param {} optional={} value={} single={} property-only={}",
