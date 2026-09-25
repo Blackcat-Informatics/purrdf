@@ -59,7 +59,7 @@ use crate::model::{rdf, rdfs};
 use crate::schema_surface::{
     OntologyExpression, OntologyPropertyKind, SchemaSurface, SurfaceClass, SurfaceProperty,
 };
-use crate::shapes::{Constraint, NodeKindValue, Path, Shape, Shapes, Target};
+use crate::shapes::{ClosedMode, Constraint, NodeKindValue, Path, Shape, Shapes, Target};
 use crate::term::{NamedNode, Term};
 
 const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -2265,11 +2265,35 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                     );
                 }
             },
-            Constraint::Closed { ignored } => {
+            Constraint::Closed {
+                ignored,
+                mode: ClosedMode::Declared,
+            } => {
                 additional_properties_false = true;
                 for n in ignored {
                     closed_ignored.push(ctx.ns.compact_iri(n.as_str()));
                 }
+            }
+            // SHACL 1.2 Core §7.9.1: under `sh:ByTypes` the permitted properties are
+            // those the value node's own `rdf:type` values collect, so which keys an
+            // object may carry depends on the types each instance declares — a
+            // closed key set no single object schema states. The object stays open,
+            // and the widening is recorded.
+            Constraint::Closed {
+                mode: ClosedMode::ByTypes(_),
+                ..
+            } => {
+                ctx.record(
+                    "sh:closed sh:ByTypes",
+                    &shape_iri,
+                    "a set of permitted properties chosen by each instance's own rdf:type \
+                     values has no projection in an object schema's fixed key set",
+                );
+                comments.push(
+                    "a node-level sh:closed sh:ByTypes constraint was dropped (the permitted \
+                     properties depend on each instance's types)"
+                        .to_owned(),
+                );
             }
             Constraint::Sparql { .. } => {
                 ctx.record(

@@ -565,7 +565,11 @@ impl FootprintWalk {
             Constraint::Class(_) => self.record_class_membership(Root::Node),
             // `sh:closed` inspects EVERY outgoing triple of its node, so it binds
             // no predicate — bounded all the same, because it still binds the
-            // subject to a node the chain reaches.
+            // subject to a node the chain reaches. Under `sh:ByTypes` the one
+            // further data-graph read is the node's own `rdf:type` values, which
+            // are outgoing triples of the node and so are already this read;
+            // `rdfs:subClassOf`, `sh:targetClass` and `sh:node` are followed in
+            // the SHAPES graph (SHACL 1.2 Core §7.9.1), which no data change moves.
             Constraint::Closed { .. } => self.emit(Root::Node, &[], None, Endpoint::Subject),
             // SHACL 1.2 Core §7.6: `$otherNodes` is reached from the node that
             // DECLARED the property shape, never from its value nodes — every

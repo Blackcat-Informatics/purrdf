@@ -897,8 +897,11 @@ fn walk_shape<S: ResultSink>(
     // same predicate attribution that property-shape results do — violations
     // must not drop their predicate role.
     for (constraint, lowered) in plan.constraints()? {
-        if let PlannedConstraint::Closed { permitted } = plan.planned(constraint, lowered)?
-            && eval_closed(context, focus, shape, permitted, sink).stopped()
+        if let PlannedConstraint::Closed {
+            permitted,
+            by_types,
+        } = plan.planned(constraint, lowered)?
+            && eval_closed(context, focus, shape, permitted, by_types, sink).stopped()
         {
             return Ok(Flow::Stop);
         }
@@ -907,19 +910,27 @@ fn walk_shape<S: ResultSink>(
     Ok(Flow::Continue)
 }
 
-/// Evaluate `sh:closed` against a focus node (SHACL §4.8.1).
+/// Evaluate `sh:closed` against a focus node (SHACL 1.2 Core §7.9.1).
 ///
-/// The permitted predicate set is the union of:
+/// Under `sh:closed true` the permitted predicate set is the union of:
 /// - every simple-predicate `sh:path` of the shape's property shapes (an inverse
 ///   path constrains incoming, not outgoing, triples and so does not permit an
 ///   outgoing predicate); and
 /// - the `sh:ignoredProperties` list.
 ///
-/// `rdf:type` is NOT implicitly permitted: per the spec (and W3C
+/// `rdf:type` is NOT implicitly permitted there: per the spec (and W3C
 /// `core/node/closed-001`), a closed shape reports EVERY predicate not
 /// declared by `sh:property` or listed in `sh:ignoredProperties` — shapes that
 /// want to allow `rdf:type` must list it in `sh:ignoredProperties`
 /// (`core/node/closed-002` does exactly that).
+///
+/// Under `sh:closed sh:ByTypes` (`by_types` is `Some`), `permitted` holds
+/// `rdf:type` and `sh:ignoredProperties`, and a predicate outside it is still
+/// permitted when `collectProperties(T)` reaches it for some `rdf:type` value `T`
+/// of the focus node in the data graph. Those types are read from the focus
+/// node's own `rdf:type` quads only for a predicate the type-independent set does
+/// not already permit, and looked up by identity in the bound index, so a
+/// conforming focus node allocates nothing.
 ///
 /// One result per focus-node outgoing triple whose predicate is not permitted.
 ///
@@ -944,6 +955,7 @@ fn eval_closed<S: ResultSink>(
     focus: &FocusNode,
     shape: &Shape,
     permitted: &FastSet<TermId>,
+    by_types: Option<crate::plan::ClosedByTypes<'_>>,
     sink: &mut S,
 ) -> Flow {
     // A focus node this data graph does not intern has no outgoing quads at all,
@@ -956,7 +968,9 @@ fn eval_closed<S: ResultSink>(
         return Flow::Continue;
     };
     for quad in quads_for_pattern_ids(ds, Some(focus_id), None, None, GraphFilter::AnyGraph) {
-        if permitted.contains(&quad.p) {
+        if permitted.contains(&quad.p)
+            || by_types.is_some_and(|by_types| permitted_by_types(ds, focus_id, quad.p, by_types))
+        {
             continue;
         }
         // Past the permitted probe this quad IS a violation, so materializing its
@@ -997,6 +1011,27 @@ fn eval_closed<S: ResultSink>(
         }
     }
     Flow::Continue
+}
+
+/// Whether some `rdf:type` value `T` of the focus node permits `predicate` under
+/// `sh:closed sh:ByTypes` — whether `collectProperties(T)` reaches it.
+fn permitted_by_types(
+    ds: &impl ShaclRead,
+    focus: TermId,
+    predicate: TermId,
+    by_types: crate::plan::ClosedByTypes<'_>,
+) -> bool {
+    let Some(rdf_type) = by_types.rdf_type else {
+        return false;
+    };
+    quads_for_pattern_ids(ds, Some(focus), Some(rdf_type), None, GraphFilter::AnyGraph).any(
+        |quad| {
+            by_types
+                .types
+                .get(&quad.o)
+                .is_some_and(|properties| properties.contains(&predicate))
+        },
+    )
 }
 
 /// Returns `true` iff the focus node produces zero validation results against
@@ -6241,7 +6276,10 @@ mod tests {
         Shape {
             id: ex("S"),
             targets: vec![],
-            constraints: vec![Constraint::Closed { ignored }],
+            constraints: vec![Constraint::Closed {
+                ignored,
+                mode: crate::shapes::ClosedMode::Declared,
+            }],
             property_shapes,
             severity: Severity::Violation,
             message: None,

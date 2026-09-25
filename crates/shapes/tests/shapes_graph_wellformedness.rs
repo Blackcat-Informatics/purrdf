@@ -229,22 +229,43 @@ fn an_entailment_regime_is_refused_and_the_graph_without_it_loads() {
     loads("ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:IRI .");
 }
 
+/// `sh:closed` takes an `xsd:boolean` or the IRI `sh:ByTypes` (SHACL 1.2 Core
+/// §7.9.1): any other IRI is refused, and `sh:ByTypes` loads AND evaluates — the
+/// same focus node reports a different set under `sh:ByTypes` than under `true`,
+/// so the neighbour cannot pass by being ignored.
 #[test]
-fn by_types_is_refused_and_closed_true_loads() {
+fn an_other_iri_closed_value_is_refused_and_by_types_evaluates() {
     refused(
-        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:closed sh:ByTypes .",
-        "sh:ByTypes",
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:closed ex:ByTypes .",
+        "shacl#closed",
     );
-    let report = validate(
-        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:closed true ; sh:property [ sh:path ex:p ] .",
-        "ex:a ex:p 1 ; ex:q 2 .",
-    );
+    let shapes = |mode: &str| {
+        format!(
+            "ex:C a rdfs:Class, sh:NodeShape ; sh:closed {mode} ; sh:property [ sh:path ex:p ] ."
+        )
+    };
+    let data = "ex:a a ex:C ; ex:p 1 ; ex:q 2 .";
+    // `rdf:type` is permitted under `sh:ByTypes`, so only `ex:q` is reported …
     assert_eq!(
-        results(&report),
+        results(&validate(&shapes("sh:ByTypes"), data)),
         vec![(
             "<http://example.org/ns#a>".to_owned(),
             "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned()
         )]
+    );
+    // … and under `true` it is reported beside `ex:q`.
+    assert_eq!(
+        results(&validate(&shapes("true"), data)),
+        vec![
+            (
+                "<http://example.org/ns#a>".to_owned(),
+                "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned()
+            ),
+            (
+                "<http://example.org/ns#a>".to_owned(),
+                "<http://example.org/ns#C>".to_owned()
+            ),
+        ]
     );
 }
 

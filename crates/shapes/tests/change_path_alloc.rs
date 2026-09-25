@@ -986,6 +986,25 @@ const CASES: &[ConstraintCase] = &[
         },
     },
     ConstraintCase {
+        name: "closed_by_types",
+        // SHACL 1.2 Core §7.9.1: `ex:name` is permitted because the focus node's
+        // type `ex:Focus` is a subclass, IN THE SHAPES GRAPH, of the class another
+        // shape declares it on — so every outgoing predicate but `rdf:type` is
+        // looked up through the focus node's types, on the conforming path too.
+        shapes: "ex:Named a <http://www.w3.org/2000/01/rdf-schema#Class> .
+            ex:Focus a <http://www.w3.org/2000/01/rdf-schema#Class> ;
+                <http://www.w3.org/2000/01/rdf-schema#subClassOf> ex:Named .
+            ex:NamedShape a sh:NodeShape ; sh:targetClass ex:Named ;
+                sh:property [ sh:path ex:name ] .
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ; sh:closed sh:ByTypes .",
+        emit: |emit, violating| {
+            emit.text("name", "present");
+            if violating {
+                emit.text("stray", "not permitted by the closed shape");
+            }
+        },
+    },
+    ConstraintCase {
         name: "has_value",
         shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
             sh:property [ sh:path ex:tag ; sh:hasValue \"alpha\" ] .",

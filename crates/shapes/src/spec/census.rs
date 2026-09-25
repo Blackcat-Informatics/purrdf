@@ -232,10 +232,8 @@ static EXPLICIT: &[CensusRow] = &[
         "sh:defaultValue computes a property shape's value nodes when no other value exists \
          (SHACL 1.2 Core §2.3), and this engine does not evaluate it",
     ),
-    unimplemented(
-        sh::BY_TYPES,
-        "sh:closed sh:ByTypes is not evaluated by this engine",
-    ),
+    // The IRI value of `sh:closed` (§7.9.1), never a predicate.
+    vocabulary(sh::BY_TYPES),
     // ── Node kinds (§4.1.3) ──
     vocabulary(sh_iri!("NodeKind")),
     vocabulary(sh::BLANK_NODE),

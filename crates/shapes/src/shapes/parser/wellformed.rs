@@ -426,12 +426,7 @@ impl Parser<'_> {
                 true
             }
             ValueRule::ClosedValue => match value {
-                Term::NamedNode(n) if n.as_str() == sh::BY_TYPES => {
-                    return Err(format!(
-                        "shape {shape} uses sh:closed sh:ByTypes, which is not evaluated by this \
-                         engine; the shape is refused rather than validated as if it were open"
-                    ));
-                }
+                Term::NamedNode(n) => n.as_str() == sh::BY_TYPES,
                 other => super::node_expr::boolean_value(other).is_some(),
             },
         };

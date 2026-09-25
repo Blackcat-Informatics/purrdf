@@ -84,10 +84,10 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
         "unimplemented-term",
         "which is not evaluated by this engine",
         6,
-        "a well-formed use of a SHACL 1.2 term this engine does not evaluate (sh:closed \
-         sh:ByTypes, sh:ShapeClass, sh:targetWhere, sh:values, sh:Debug / sh:Trace, a \
-         structured node-expression sh:targetNode) is refused rather than validated as if \
-         it were absent",
+        "a well-formed use of a SHACL 1.2 term this engine does not evaluate \
+         (sh:ShapeClass, sh:targetWhere, sh:values, sh:Debug / sh:Trace, a structured \
+         node-expression sh:targetNode) is refused rather than validated as if it were \
+         absent",
     ),
     (
         "unsupported-entailment",
@@ -149,6 +149,19 @@ type BehindTheSpec = (
 );
 
 const SHACL_SHACL_BEHIND_THE_SPEC: &[BehindTheSpec] = &[
+    (
+        "closed-by-types",
+        &[(
+            "DatatypeConstraintComponent",
+            "<http://www.w3.org/ns/shacl#closed>",
+            "",
+        )],
+        2,
+        "SHACL 1.2 Core §7.9.1: \"The values of sh:closed in a shape are literals with \
+         datatype xsd:boolean or the IRI sh:ByTypes.\" — shacl-shacl.ttl still requires an \
+         xsd:boolean (closed-datatype), so the W3C suite's own closed-003 and closed-004 fail \
+         it",
+    ),
     (
         "list-valued-node-kind",
         &[(

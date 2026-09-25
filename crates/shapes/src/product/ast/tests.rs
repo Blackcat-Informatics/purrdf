@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use super::{
-    AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ARG_KEY,
+    AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ARG_KEY, TAGS_CLOSED_MODE,
     TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND, TAGS_FN_CALL, TAGS_NODE_EXPR,
     TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_RULE_SCHEDULE, TAGS_SEVERITY, TAGS_SHAPE_ARG,
     TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast_derived, speculative_capacity, write_varint,
@@ -30,8 +30,8 @@ use crate::product::{ProductDimension, ShapesProductError};
 use crate::report::Severity;
 use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
 use crate::shapes::{
-    ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Shapes,
-    SparqlTargetType, Target, TargetTypeParam,
+    ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint, NodeKindValue, Path,
+    PropertyShape, Shape, Shapes, SparqlTargetType, Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
@@ -342,6 +342,25 @@ fn sample_node_exprs(func: &Arc<CustomFunction>) -> Vec<NodeExpr> {
 }
 
 /// One [`Constraint`] per tag, in tag order.
+/// A two-type `sh:closed sh:ByTypes` index, built out of canonical order.
+fn sample_type_index() -> Arc<ClosedTypeIndex> {
+    Arc::new(
+        ClosedTypeIndex::from_entries(vec![
+            (ex_term("Sub"), vec![ex("sub"), ex("root")]),
+            (ex_term("Root"), vec![ex("root")]),
+        ])
+        .expect("distinct types"),
+    )
+}
+
+/// One [`ClosedMode`] per tag.
+fn sample_closed_modes() -> Vec<ClosedMode> {
+    vec![
+        ClosedMode::Declared,
+        ClosedMode::ByTypes(sample_type_index()),
+    ]
+}
+
 fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
     vec![
         Constraint::Class(vec![ex("Person"), ex("Agent")]),
@@ -363,6 +382,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         Constraint::Not(Box::new(leaf_shape("NotShape"))),
         Constraint::Closed {
             ignored: vec![ex("ignored")],
+            mode: ClosedMode::ByTypes(sample_type_index()),
         },
         Constraint::MinInclusive(ex_term("zero")),
         Constraint::MaxInclusive(ex_term("hundred")),
@@ -875,6 +895,13 @@ fn every_known_tag_decodes() {
         AstWriter::constraint,
         reader_fn!(constraint),
     );
+    roundtrip_tags(
+        "ClosedMode",
+        TAGS_CLOSED_MODE,
+        &sample_closed_modes(),
+        AstWriter::closed_mode,
+        reader_fn!(closed_mode),
+    );
 }
 
 /// The invalid neighbour of every case above, stated on its own so the refusal is
@@ -891,6 +918,7 @@ fn unknown_variant_tag_is_unsupported_capability() {
         ("Path", TAGS_PATH, reader_probe!(path)),
         ("Target", TAGS_TARGET, reader_probe!(target)),
         ("Constraint", TAGS_CONSTRAINT, reader_probe!(constraint)),
+        ("ClosedMode", TAGS_CLOSED_MODE, reader_probe!(closed_mode)),
         ("NodeExpr", TAGS_NODE_EXPR, reader_probe!(node_expr)),
         ("FnCall", TAGS_FN_CALL, reader_probe!(fn_call)),
         ("ShapeArg", TAGS_SHAPE_ARG, reader_probe!(shape_arg)),
@@ -1824,4 +1852,73 @@ fn an_empty_shapes_graph_round_trips() {
         ..Shapes::default()
     };
     assert_eq!(encode_ast_derived(&rebuilt).expect("re-encodes"), bytes);
+}
+
+// ── `sh:closed sh:ByTypes` ──────────────────────────────────────────────────────
+
+/// Two `sh:closed sh:ByTypes` constraints carrying one index decode to ONE shared
+/// index, as the parse that wrote them shared one; a different index stays apart.
+#[test]
+fn equal_type_indexes_decode_to_one_shared_index() {
+    let shared = sample_type_index();
+    let other = Arc::new(
+        ClosedTypeIndex::from_entries(vec![(ex_term("Other"), vec![ex("other")])])
+            .expect("one type"),
+    );
+    let mut writer = test_writer();
+    for index in [&shared, &shared, &other] {
+        writer
+            .closed_mode(&ClosedMode::ByTypes(Arc::clone(index)))
+            .expect("encodes");
+    }
+    let bytes = writer.out;
+    let mut reader = test_reader(&bytes);
+    let decoded: Vec<Arc<ClosedTypeIndex>> = (0..3)
+        .map(|_| match reader.closed_mode().expect("decodes") {
+            ClosedMode::ByTypes(index) => index,
+            ClosedMode::Declared => panic!("a ByTypes mode decodes as ByTypes"),
+        })
+        .collect();
+    assert!(Arc::ptr_eq(&decoded[0], &decoded[1]));
+    assert!(!Arc::ptr_eq(&decoded[1], &decoded[2]));
+    assert_eq!(*decoded[0], *shared);
+    assert_eq!(*decoded[2], *other);
+}
+
+/// A type index out of canonical order is refused as malformed rather than
+/// re-sorted, so a product's bytes stay the canonical form of what they decode
+/// to; the same entries in canonical order decode.
+#[test]
+fn a_non_canonical_type_index_is_malformed_and_the_canonical_one_decodes() {
+    let encode = |entries: &[(&str, &[&str])]| {
+        let mut writer = test_writer();
+        writer.tag(1);
+        writer.count(entries.len());
+        for (ty, properties) in entries {
+            writer.term(&ex_term(ty)).expect("an IRI encodes");
+            writer.count(properties.len());
+            for property in *properties {
+                writer.named_node(&ex(property));
+            }
+        }
+        writer.out
+    };
+    let unsorted = encode(&[("Sub", &["sub"]), ("Root", &["root"])]);
+    let error = test_reader(&unsorted)
+        .closed_mode()
+        .expect_err("out-of-order types are refused");
+    assert_eq!(error.dimension(), ProductDimension::Malformed);
+    let empty = encode(&[("Root", &[])]);
+    assert_eq!(
+        test_reader(&empty)
+            .closed_mode()
+            .expect_err("an empty property list is refused")
+            .dimension(),
+        ProductDimension::Malformed
+    );
+    let canonical = encode(&[("Root", &["root"]), ("Sub", &["root", "sub"])]);
+    assert!(matches!(
+        test_reader(&canonical).closed_mode(),
+        Ok(ClosedMode::ByTypes(_))
+    ));
 }

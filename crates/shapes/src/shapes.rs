@@ -193,6 +193,127 @@ pub enum ComponentValidator {
     },
 }
 
+/// How `sh:closed` decides the properties a value node may carry (SHACL 1.2
+/// Core §7.9.1).
+#[derive(Debug, Clone)]
+pub enum ClosedMode {
+    /// `sh:closed true`: "P is the set of IRI properties that can be reached from
+    /// the current shape via the SPARQL path `sh:property/sh:path`." `rdf:type`
+    /// is permitted only when `sh:ignoredProperties` lists it.
+    Declared,
+    /// `sh:closed sh:ByTypes`: "P is the set of IRI properties that can be
+    /// reached from the value node via the following algorithm, plus `rdf:type`"
+    /// — `collectProperties(T)` for each `rdf:type` `T` of the value node in the
+    /// data graph. Everything that algorithm reads besides the value node's own
+    /// types is in the shapes graph, so the whole of it is resolved at load into
+    /// the shared [`ClosedTypeIndex`]; validation only reads the value node's
+    /// types and looks them up.
+    ByTypes(Arc<ClosedTypeIndex>),
+}
+
+/// The `sh:closed sh:ByTypes` index of one shapes graph: for every node `T` for
+/// which SHACL 1.2 Core §7.9.1's `collectProperties(T)` is non-empty, the IRI
+/// properties it collects.
+///
+/// The algorithm, verbatim from the specification:
+///
+/// ```text
+/// function collectProperties(S)
+///     add all IRI properties that can be reached from S via the SPARQL path
+///             sh:property/sh:path
+///     if S is a SHACL instance of rdfs:Class in the shapes graph {
+///         for each triple in the shapes graph matching (S rdfs:subClassOf ?o)
+///             collectProperties(?o)
+///         for each triple in the shapes graph matching (?s sh:targetClass S)
+///             collectProperties(?s)
+///     }
+///     if S is a SHACL instance of sh:NodeShape in the shapes graph
+///         for each triple in the shapes graph matching (S sh:node ?o)
+///             collectProperties(?o)
+/// for each rdf:type T of the value node in the data graph
+///     collectProperties(T)
+/// ```
+///
+/// Every read inside `collectProperties` is a read of the SHAPES graph, so the
+/// result for each `T` is a function of the shapes graph alone and is computed
+/// once, at load, visiting each node at most once per `T` as the specification
+/// requires. A `T` whose collection is empty has no entry: it permits nothing, and
+/// [`Self::properties`] answers it with the empty slice.
+///
+/// Held by `Arc` so every `sh:closed sh:ByTypes` constraint of a shapes graph
+/// shares one index.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClosedTypeIndex {
+    /// `(T, properties)`, sorted by `T` in canonical term order; each property
+    /// list is sorted by IRI, deduplicated and non-empty.
+    entries: Vec<(Term, Vec<NamedNode>)>,
+}
+
+impl ClosedTypeIndex {
+    /// Build the index from `(T, properties)` pairs in any order, canonicalizing
+    /// it: keys sorted in canonical term order, each property list sorted by IRI
+    /// and deduplicated, and empty entries dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when one `T` appears twice, because two entries for one
+    /// node would make [`Self::properties`] answer with only one of them.
+    pub(crate) fn from_entries(mut entries: Vec<(Term, Vec<NamedNode>)>) -> Result<Self, String> {
+        entries.retain(|(_, properties)| !properties.is_empty());
+        for (_, properties) in &mut entries {
+            properties.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            properties.dedup();
+        }
+        entries.sort_by(|(a, _), (b, _)| crate::term::canonical_cmp(a, b));
+        if let Some(pair) = entries.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+            return Err(format!(
+                "the sh:closed sh:ByTypes index names {} twice",
+                pair[0].0
+            ));
+        }
+        Ok(Self { entries })
+    }
+
+    /// The index `entries` spell, or `None` when they are not already in the
+    /// canonical form [`Self::from_entries`] produces — the prepared-product
+    /// reader's gate, which refuses rather than re-sorts, so a product's bytes
+    /// stay the canonical form of the value they decode to.
+    pub(crate) fn from_canonical_entries(entries: Vec<(Term, Vec<NamedNode>)>) -> Option<Self> {
+        let types_ascend = entries.windows(2).all(|pair| {
+            crate::term::canonical_cmp(&pair[0].0, &pair[1].0) == std::cmp::Ordering::Less
+        });
+        let properties_ascend = entries.iter().all(|(_, properties)| {
+            !properties.is_empty()
+                && properties
+                    .windows(2)
+                    .all(|pair| pair[0].as_str() < pair[1].as_str())
+        });
+        (types_ascend && properties_ascend).then_some(Self { entries })
+    }
+
+    /// The IRI properties `collectProperties(ty)` reaches, sorted by IRI; empty
+    /// when it reaches none.
+    #[must_use]
+    pub fn properties(&self, ty: &Term) -> &[NamedNode] {
+        self.entries
+            .binary_search_by(|(key, _)| crate::term::canonical_cmp(key, ty))
+            .map_or(&[], |position| self.entries[position].1.as_slice())
+    }
+
+    /// Every `(T, properties)` entry, in canonical term order of `T`.
+    pub fn entries(&self) -> impl ExactSizeIterator<Item = (&Term, &[NamedNode])> {
+        self.entries
+            .iter()
+            .map(|(ty, properties)| (ty, properties.as_slice()))
+    }
+
+    /// Whether no node collects any property.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// A single SHACL constraint on a shape or property shape.
 #[derive(Debug, Clone)]
 pub enum Constraint {
@@ -258,16 +379,20 @@ pub enum Constraint {
     LanguageIn(Vec<String>),
     /// `sh:not <shape>` — the focus/value node must NOT conform to the shape.
     Not(Box<Shape>),
-    /// `sh:closed true` (with optional `sh:ignoredProperties`).
+    /// `sh:closed true` or `sh:closed sh:ByTypes` (with optional
+    /// `sh:ignoredProperties`), SHACL 1.2 Core §7.9.1.
     ///
     /// A node-shape-level constraint: every predicate used on the focus node must
-    /// be declared by one of the shape's `sh:property` simple-predicate paths or
-    /// be listed in `ignored`. `rdf:type` is not implicitly permitted (SHACL Core
-    /// §4.8.1). Only emitted when `sh:closed true`.
+    /// be in the permitted set `mode` defines or be listed in `ignored`. Under
+    /// [`ClosedMode::Declared`] `rdf:type` is not implicitly permitted; under
+    /// [`ClosedMode::ByTypes`] it is. Only emitted when `sh:closed` is `true` or
+    /// `sh:ByTypes`.
     Closed {
         /// Predicates explicitly exempted from the closed-world check
-        /// (`sh:ignoredProperties`), in addition to the implicit `rdf:type`.
+        /// (`sh:ignoredProperties`).
         ignored: Vec<NamedNode>,
+        /// Which set of properties the shape permits besides `ignored`.
+        mode: ClosedMode,
     },
     /// `sh:minInclusive "0"^^xsd:integer`
     MinInclusive(Term),
@@ -940,6 +1065,10 @@ pub(crate) struct Parser<'s> {
     /// cleared), so an inline shape nested inside an expression cannot strip the
     /// enclosing shape's prefixes from the expressions that follow it.
     current_shape: Option<Term>,
+    /// The shapes graph's `sh:closed sh:ByTypes` index, built on the first
+    /// `sh:closed sh:ByTypes` the parse meets and shared by every later one — a
+    /// shapes graph without one never pays for it.
+    closed_type_index: Option<Arc<ClosedTypeIndex>>,
 }
 
 /// `rdf:langString`, a permitted datatype of `sh:message`.
@@ -1047,6 +1176,7 @@ impl<'s> Parser<'s> {
             parse_rules_enabled: true,
             node_by_expr_constants: Vec::new(),
             current_shape: None,
+            closed_type_index: None,
         }
     }
 
@@ -3157,7 +3287,10 @@ mod tests {
         let shapes = from_store(&store).expect("sh:closed must parse");
         let shape = &shapes.node_shapes[0];
         let ignored = shape.constraints.iter().find_map(|c| match c {
-            Constraint::Closed { ignored } => Some(ignored),
+            Constraint::Closed {
+                ignored,
+                mode: ClosedMode::Declared,
+            } => Some(ignored),
             _ => None,
         });
         assert!(

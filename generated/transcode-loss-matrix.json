@@ -2562,6 +2562,13 @@
     "note": "A shape targeted only via SHACL-AF sh:target/sh:SPARQLTarget (an arbitrary SPARQL SELECT, not a class extension) has no closed-world JSON Schema equivalent; the shape is excluded from the compiled $defs."
   },
   {
+    "code": "sh:closed sh:ByTypes",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:closed sh:ByTypes constraint permits the properties each value node's own rdf:type values collect through the shapes graph; an object schema states one fixed key set for every instance, so the object is left open and the constraint is dropped."
+  },
+  {
     "code": "sh:disjoint",
     "from": "shacl",
     "to": "json-schema",

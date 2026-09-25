@@ -998,7 +998,8 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// `sh:memberShape`), `sh:rootClass`, `sh:singleLine true`, property-level
 /// `sh:someValue`, a `sh:TripleTerm` alternative of `sh:nodeKind`, every
 /// property pair (`sh:equals`, `sh:disjoint`, `sh:subsetOf`, `sh:lessThan`,
-/// `sh:lessThanOrEquals`), whatever its path, and `sh:uniqueValuesFor`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
+/// `sh:lessThanOrEquals`), whatever its path, `sh:uniqueValuesFor` and
+/// `sh:closed sh:ByTypes`; `sh:SPARQLTarget`-targeted shapes (`Target::Sparql` in
 /// `crates/shapes/src/shapes.rs`) have no `$def` equivalent — the emitter has
 /// no class extension to key a `$def` by — and are excluded from the compiled
 /// schema, but (unlike a bare exclusion) each one records a `sh:SPARQLTarget`
@@ -1078,6 +1079,12 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
         "A SHACL 1.2 sh:minListLength constraint bounds the member count of a value that is an \
          RDF list; the emitted value schema has no projection of an RDF list's members, so the \
          constraint is dropped.",
+    ),
+    (
+        "sh:closed sh:ByTypes",
+        "A SHACL 1.2 sh:closed sh:ByTypes constraint permits the properties each value node's \
+         own rdf:type values collect through the shapes graph; an object schema states one fixed \
+         key set for every instance, so the object is left open and the constraint is dropped.",
     ),
     (
         "sh:nodeKind",
