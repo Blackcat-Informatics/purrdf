@@ -338,7 +338,8 @@ const _: () = {
     assert!(f64::from_bits(ONE_LESS_HALF_ULP) == 1.0 - f64::EPSILON / 2.0);
     assert!(
         f64::from_bits(SUBNORMAL_PRODUCT_LHS)
-            == (1.0 + 4.0 * f64::EPSILON) * f64::from_bits(TWO_POW_MINUS_512)
+            == (1.0 + (f64::EPSILON + f64::EPSILON + f64::EPSILON + f64::EPSILON))
+                * f64::from_bits(TWO_POW_MINUS_512)
     );
     assert!(
         f64::from_bits(SUBNORMAL_PRODUCT_RHS)
