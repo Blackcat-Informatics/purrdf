@@ -399,6 +399,23 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
             select: "SELECT $this WHERE { $this ?p ?o }".to_owned(),
             messages: vec![Literal::new_simple_literal("no")],
             severity: Some(Severity::Warning),
+            // Two annotations in canonical order, one with a variable and defaults,
+            // so the result-annotation codec is exercised past the empty list.
+            annotations: vec![
+                crate::shapes::ResultAnnotation {
+                    property: ex("seen"),
+                    variable: Some("seen".to_owned()),
+                    default_values: vec![
+                        Term::Literal(Literal::new_simple_literal("unknown")),
+                        ex_term("never"),
+                    ],
+                },
+                crate::shapes::ResultAnnotation {
+                    property: ex("time"),
+                    variable: Some("when".to_owned()),
+                    default_values: vec![],
+                },
+            ],
         },
         // A composite path, so the pair tags are exercised past the IRI form.
         Constraint::Equals(Path::Sequence(vec![
@@ -438,6 +455,12 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
             },
             messages: vec![],
             severity: None,
+            // No variable: only the default applies.
+            annotations: vec![crate::shapes::ResultAnnotation {
+                property: ex("origin"),
+                variable: None,
+                default_values: vec![ex_term("component")],
+            }],
         },
         Constraint::MinListLength(1),
         Constraint::MaxListLength(4),
@@ -702,6 +725,7 @@ fn full_fixture() -> Shapes {
             validator,
             messages: vec![],
             severity: None,
+            annotations: vec![],
         })
         .collect();
 
@@ -711,6 +735,7 @@ fn full_fixture() -> Shapes {
             select: "SELECT $this WHERE { $this ?p ?o }".to_owned(),
             messages: vec![],
             severity: Some(severity),
+            annotations: vec![],
         })
         .collect();
 

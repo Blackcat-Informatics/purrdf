@@ -336,6 +336,14 @@ pub struct ValidationResult {
     /// `sh:uniqueMembers`, one result per duplicated member. Empty for every
     /// other component.
     pub details: Vec<Self>,
+    /// The result's SHACL-SPARQL result annotations: `(annotation property,
+    /// value)` pairs the SPARQL-based constraint or validator that produced it
+    /// declares with `sh:resultAnnotation`, copied from the solution's binding of
+    /// the annotation's variable or, when it is unbound, from its
+    /// `sh:annotationValue` defaults (SHACL 1.2 SPARQL Extensions, "Annotation
+    /// Properties"). Sorted by property IRI, then by the value's N-Triples
+    /// rendering, without duplicates; empty for every other result.
+    pub annotations: Vec<(NamedNode, Term)>,
 }
 
 impl ValidationResult {
@@ -412,6 +420,16 @@ pub(crate) fn messages_sort_key(messages: &[Literal]) -> String {
     messages
         .iter()
         .map(|m| Term::Literal(m.clone()).to_string())
+        .collect::<Vec<_>>()
+        .join("\u{1f}")
+}
+
+/// A deterministic textual key for a result's annotations, for total sort orders.
+/// Allocates nothing for the common result, which has none.
+pub(crate) fn annotations_sort_key(annotations: &[(NamedNode, Term)]) -> String {
+    annotations
+        .iter()
+        .map(|(property, value)| format!("{property}\u{1e}{value}"))
         .collect::<Vec<_>>()
         .join("\u{1f}")
 }
@@ -708,6 +726,10 @@ fn collect_result_blank_labels<'a>(r: &'a ValidationResult, labels: &mut FastSet
     if let (Some(path), None) = (&r.result_path, &r.path_structure) {
         collect_blank_labels(path, labels);
     }
+    // An annotation value is a solution binding, so it may be a data blank node.
+    for (_, value) in &r.annotations {
+        collect_blank_labels(value, labels);
+    }
     for detail in &r.details {
         collect_result_blank_labels(detail, labels);
     }
@@ -864,6 +886,17 @@ fn emit_result(
             result_subj.clone(),
             sh::RESULT_MESSAGE,
             Term::Literal(msg.clone()).to_rdf_term(),
+        );
+    }
+
+    // SHACL-SPARQL result annotations: each `(property, value)` the constraint's
+    // `sh:resultAnnotation`s produced for this result, in canonical order.
+    for (property, value) in &r.annotations {
+        push_triple(
+            builder,
+            result_subj.clone(),
+            property.as_str(),
+            value.to_rdf_term(),
         );
     }
 
@@ -1207,6 +1240,7 @@ mod tests {
             result_box_roles: vec![],
             attributions: vec![],
             details: vec![],
+            annotations: vec![],
         }
     }
 
@@ -1344,6 +1378,7 @@ mod tests {
             result_box_roles: vec![],
             attributions: vec![],
             details: vec![],
+            annotations: vec![],
         };
 
         let mut results = Vec::new();
@@ -1804,6 +1839,7 @@ mod tests {
                 },
             ],
             details: vec![],
+            annotations: vec![],
         };
 
         // No value (absence-based) — this is the critical invariant.

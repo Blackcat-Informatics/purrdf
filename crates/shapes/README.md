@@ -60,8 +60,13 @@ A shapes graph is loaded faithfully or refused. An unknown term, an ill-typed
 parameter value, or a term the engine does not evaluate fails the load with
 its name, rather than dropping the constraint. The terms the SHACL
 vocabularies define and the engine refuses by name are the SHACL JavaScript
-Extensions, the deprecated `sh:minus` node expression, `sh:describe` and
-`sh:update` executables, and `sh:resultAnnotation`.
+Extensions, which are not part of SHACL 1.2, and `sh:describe` and `sh:update`
+on a shape, node expression, SPARQL-based constraint, validator or rule. No
+SHACL specification executes the DESCRIBE or UPDATE executable classes they
+belong to, so those terms would otherwise be silently ignored. SHACL-SPARQL
+result annotations (`sh:resultAnnotation`) are copied into every result their
+query produces (`ValidationResult::annotations`), and the SHACL-AF 1.1
+`sh:minus` node expression evaluates as `shnex:remove`.
 
 **Built-in declarations.** The W3C vocabularies `shacl.ttl`, `shnex.ttl` and
 `shnex-sparql.ttl` declare every built-in component and function without a

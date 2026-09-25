@@ -16,8 +16,9 @@
 //! The entailment twin of [`crate::shacl::validate_to_sarif_string`]: where the
 //! validation boundary runs the SHACL engine and renders a
 //! [`ValidationReport`](purrdf_shapes::report::ValidationReport) to SARIF, this
-//! boundary applies every active `sh:rule` to a fixpoint (via
-//! [`engine::entail_graphs`]) and serializes the MATERIALIZED dataset — the base
+//! boundary runs the shapes graph's rules as SHACL 1.2 Inference Rules executes
+//! them — layer by layer, run-once rules once and iterating rules until an
+//! iteration infers nothing new (via [`engine::entail_graphs`]) — and serializes the MATERIALIZED dataset — the base
 //! graph plus every inferred triple — to a canonical, byte-deterministic
 //! N-Triples string. Hoisting the sequence here keeps each binding to its
 //! platform-specific wrapping (buffer, `JsValue`, `str`).
@@ -34,7 +35,9 @@ use purrdf_shapes::engine;
 /// canonical N-Triples string.
 ///
 /// This is the single entry point every language binding shares: it parses the
-/// two graphs, applies every active `sh:rule` to a fixpoint, and renders the
+/// two graphs, runs the shapes graph's rules layer by layer as SHACL 1.2 Inference
+/// Rules executes them (run-once rules once, iterating rules until an iteration
+/// infers nothing new, in `sh:order` groups), and renders the
 /// resulting dataset via the native RDFC-1.0 flat serializer (deterministic,
 /// blank-node-canonical), returning a `String` error (the engine's own
 /// parse/rule error) so callers can map it to whatever their platform expects.
@@ -60,7 +63,8 @@ use purrdf_shapes::engine;
 ///
 /// Returns the SHACL engine's error string if either graph fails to parse or if
 /// rule application fails (an illegal head term, an unresolvable `sh:condition`,
-/// or a rule set that does not reach a fixpoint); or a diagnostic naming the
+/// an unregistered `sh:ruleProcessor`, or a rule set that passes the engine's
+/// term-generating round limit or another fixed ceiling); or a diagnostic naming the
 /// refusal if the materialized dataset carries a reserved-vocabulary IRI or
 /// exhausts the RDFC-1.0 n-degree search budget.
 ///

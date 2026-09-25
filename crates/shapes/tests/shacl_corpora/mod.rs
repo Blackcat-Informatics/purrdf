@@ -156,6 +156,12 @@ pub(crate) struct W3cCase {
     /// graph" (W3C `core/misc/message-001`), so these are graded beside the tuple
     /// multiset.
     pub(crate) expected_messages: Vec<(Tuple, BTreeSet<String>)>,
+    /// Every expected result that carries a SHACL-SPARQL result annotation — a
+    /// predicate outside `rdf:type` and the SHACL namespaces (SHACL 1.2 SPARQL
+    /// Extensions, "Annotation Properties": the processor "copies the binding …
+    /// into the validation result") — with its `(property, value)` pairs,
+    /// compared EXACTLY as a set, the way messages are.
+    pub(crate) expected_annotations: Vec<(Tuple, BTreeSet<(String, String)>)>,
 }
 
 /// One numbered case directory from the first-party corpus.
@@ -442,9 +448,9 @@ pub(crate) fn parse_entry(
 
     let result = object(g, entry, mf::RESULT)
         .unwrap_or_else(|| panic!("{id}: sht:Validate entry has no mf:result"));
-    let (expected, conformance_disallows, expected_messages) = match &result {
+    let (expected, conformance_disallows, expected_messages, expected_annotations) = match &result {
         Term::NamedNode(n) if n.as_str() == sht::FAILURE => {
-            (Expected::Failure, Vec::new(), Vec::new())
+            (Expected::Failure, Vec::new(), Vec::new(), Vec::new())
         }
         report_node => (
             Expected::Report {
@@ -459,6 +465,7 @@ pub(crate) fn parse_entry(
                 })
                 .collect(),
             expected_result_messages(g, report_node),
+            expected_result_annotations(g, report_node),
         ),
     };
 
@@ -471,6 +478,7 @@ pub(crate) fn parse_entry(
         expected,
         conformance_disallows,
         expected_messages,
+        expected_annotations,
     })
 }
 
@@ -516,6 +524,36 @@ fn expected_result_messages(g: &RdfDataset, report_node: &Term) -> Vec<(Tuple, B
                 .map(|message| message_key(&message))
                 .collect();
             (!messages.is_empty()).then(|| (expected_tuple(g, &result), messages))
+        })
+        .collect()
+}
+
+/// Whether `predicate` is a result-annotation property on an expected result:
+/// neither `rdf:type` nor a term of the SHACL or SHACL node-expression namespace.
+pub(crate) fn is_annotation_property(predicate: &str) -> bool {
+    predicate != "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+        && !predicate.starts_with("http://www.w3.org/ns/shacl#")
+        && !predicate.starts_with("http://www.w3.org/ns/shacl-node-expr#")
+}
+
+/// Every expected result carrying result annotations, with its `(property,
+/// value)` pairs, each value [`norm`]alized.
+fn expected_result_annotations(
+    g: &RdfDataset,
+    report_node: &Term,
+) -> Vec<(Tuple, BTreeSet<(String, String)>)> {
+    objects(g, report_node, sh::RESULT)
+        .into_iter()
+        .filter_map(|result| {
+            let pairs: BTreeSet<(String, String)> =
+                native_quads(g, Some(&result), None, None, GraphFilter::AnyGraph)
+                    .into_iter()
+                    .filter(|(_, predicate, _)| is_annotation_property(predicate.as_str()))
+                    .map(|(_, predicate, value)| {
+                        (format!("<{}>", predicate.as_str()), norm(&value))
+                    })
+                    .collect();
+            (!pairs.is_empty()).then(|| (expected_tuple(g, &result), pairs))
         })
         .collect()
 }

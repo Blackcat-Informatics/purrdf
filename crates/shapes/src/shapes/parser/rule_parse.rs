@@ -308,8 +308,9 @@ impl Parser<'_> {
             }
             if !allowed.contains(&p) && row.class != TermClass::NonValidating {
                 return Err(format!(
-                    "{kind} {node} carries <{p}>, which is not a property of a {kind}; it is \
-                     refused rather than silently ignored"
+                    "{kind} {node} carries <{p}>, which is not a property of a {kind}{}; it is \
+                     refused rather than silently ignored",
+                    census::no_processing_note(p)
                 ));
             }
         }

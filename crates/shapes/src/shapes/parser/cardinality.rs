@@ -110,6 +110,7 @@ impl<'a> MetadataSubjects<'a> {
                 sh::BODY_EXPRESSION,
                 sh::FILTER_SHAPE,
                 sh::NODES,
+                sh::MINUS,
                 sh::IF,
                 sh::THEN,
                 sh::ELSE,

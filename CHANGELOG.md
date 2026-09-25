@@ -477,6 +477,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   rules engine as SHACL rules, with `parse`, `parse_and_check` and `infer` and one
   typed error per stage. Grammar rule [2] is implemented as written.
 
+- **shapes:** SHACL-SPARQL result annotations. A `sh:resultAnnotation` on a
+  SPARQL-based constraint or on a validator of a SPARQL-based constraint component
+  copies the solution's binding of its `sh:annotationVarName` into every result as
+  a value of its `sh:annotationProperty`. With no `sh:annotationVarName`, the local
+  name of the property is the variable. When the variable is unbound, the
+  `sh:annotationValue` defaults are used. An ASK validator's annotations read `this`,
+  `value` and the component's parameters. `shapes::ResultAnnotation` is new,
+  `ValidationResult::annotations` carries the pairs, and the report graph, prepared
+  products, the SARIF result property `shaclResultAnnotations`
+  (`build::PROP_SHACL_RESULT_ANNOTATIONS`) and the Python result dicts'
+  `"annotations"` key all carry them. The shared W3C grader grades any annotation an
+  expected report states.
+
+- **shapes:** the SHACL Advanced Features 1.1 `sh:minus` node expression,
+  `[ sh:nodes N ; sh:minus M ]`, evaluates as SHACL 1.2's `shnex:remove`: the nodes
+  of N that are not in M, in N's order. `sh:nodes` is required.
+
+- **sparql-algebra:** `lexer::is_varname`, the grammar's `VARNAME` test, is public.
+
 - **shapes:** the spec symbol table. `purrdf_shapes::spec` reads what the vendored
   SHACL 1.2 vocabularies declare (`declared`, `declared_terms`, `Vocabulary`) and
   lists what the engine implements (`implemented`, with `ComponentRow`,
@@ -1386,6 +1405,28 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   unknown term or an ill-typed value on a shape or node-expression node is now
   refused at load, each refusal tested beside a valid neighbour. `sh:deactivated` on
   a SPARQL or expression constraint node was ignored and is now honoured.
+
+- **shapes:** the nodes of SHACL-SPARQL were not checked at all. A SPARQL-based
+  constraint, a validator and a `sh:SPARQLTarget` loaded whatever else they carried:
+  a `sh:resultAnnotation` was dropped, and so were an `sh:ask` beside a constraint's
+  `sh:select`, an `sh:update` and a misspelled `sh:mesage`. The annotations are now
+  evaluated. Any other term such a node carries, beyond what its specification
+  gives it, is refused at load, and an ASK validator that also carries an
+  `sh:select` (or a SELECT validator an `sh:ask`) is refused. `sh:describe` and
+  `sh:update`, which no SHACL specification executes, are refused wherever the
+  loader reads, with that reason, and a resource that is only such an executable
+  loads.
+
+- **python:** the type stub declared `MutableDataset.__init__` as returning the
+  prefix list that only `load` and `bulk_load` return; it returns `None`. The
+  `shapes.entail` documentation, in the stub and the binding, said rules run "to a
+  fixpoint"; it now describes the layered SHACL 1.2 Inference Rules execution the
+  engine performs.
+
+- **shapes:** a custom component parameter whose local name is a SPARQL variable
+  name outside ASCII (`ex:größe`) or starting with a digit (`ex:2d`) was refused as
+  an invalid variable name. The test is now the SPARQL grammar's `VARNAME`
+  production.
 
 - **shapes:** all but one `sh:message` was dropped and the language tag of the one
   kept was lost. Every message is reported, each keeping its language tag, direction
@@ -2896,7 +2937,8 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `Disjoint`, `LessThan` and `LessThanOrEquals` hold a `Path` instead of a
   `NamedNode`; `Closed` gains `mode: ClosedMode`; `Sparql`, `Expression`,
   `NodeByExpression` and `Component` replace `message: Option<String>` with
-  `messages: Vec<Literal>`; and the variants listed under Added are new, so an
+  `messages: Vec<Literal>`; `Sparql` and `Component` gain `annotations:
+  Vec<ResultAnnotation>`; and the variants listed under Added are new, so an
   exhaustive match must handle them.
 
 - **BREAKING** **shapes:** `Target` (not `#[non_exhaustive]`) gains `NodeExpression`
@@ -2906,8 +2948,10 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 - **BREAKING** **shapes:** the report types, none `#[non_exhaustive]`, all with
   public fields. `ValidationResult` replaces `message: Option<String>` with
-  `messages: Vec<Literal>` and gains `details`; `ValidationReport` gains
-  `conformance_disallows`, so build one with `ValidationReport::from_results`.
+  `messages: Vec<Literal>` and gains `details` and `annotations`;
+  `ValidationReport` gains `conformance_disallows`, so build one with
+  `ValidationReport::from_results`. `sparql::eval_sparql_constraint` takes the
+  constraint's result annotations (`&[ResultAnnotation]`) after its messages.
 
 - **BREAKING** **shapes:** the shapes model, none `#[non_exhaustive]`. `Shape` and
   `PropertyShape` replace `message` with `messages: Vec<Literal>` and gain
@@ -2930,7 +2974,9 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `sh:ruleProcessor` fails.
 
 - **BREAKING** **shapes:** validation answers change. A shapes graph that relied on a
-  silently dropped term is refused at load; `sh:reifierShape` results carry the
+  silently dropped term is refused at load, on a SHACL-SPARQL constraint, validator
+  or target node as on a shape; results of a SPARQL-based constraint or validator
+  that declares `sh:resultAnnotation` carry its annotations; `sh:reifierShape` results carry the
   reifier as `sh:value`, one per non-conforming reifier; `sh:uniqueLang` no longer
   reports values that differ only in base direction; `sh:defaultValue` on a property
   shape now changes results; a node typed `rdfs:Class` only through its parameters no

@@ -564,9 +564,9 @@ fn sh_and_shnex_spellings_produce_identical_results() {
     // One pair per DUAL-SPELLED kind. The set is not a judgement call: the unit
     // test `the_dual_spelled_kinds_are_exactly_these` (in
     // `crates/shapes/src/shapes/parser/node_expr.rs`) reads `PRIMARY_KEYS` and
-    // pins the ten names below EXACTLY, so an eleventh kind fails there rather
+    // pins the eleven names below EXACTLY, so a twelfth kind fails there rather
     // than quietly going uncovered here.
-    let pairs: [(&str, &str); 10] = [
+    let pairs: [(&str, &str); 11] = [
         ("[ sh:path ex:p ]", "[ shnex:pathValues ex:p ]"),
         (
             "[ sh:min [ sh:path ex:n ] ]",
@@ -600,6 +600,13 @@ fn sh_and_shnex_spellings_produce_identical_results() {
         (
             "[ sh:intersection ( [ sh:path ex:p ] ( ex:b ex:c ) ) ]",
             "[ shnex:intersection ( [ shnex:pathValues ex:p ] ( ex:b ex:c ) ) ]",
+        ),
+        // SHACL-AF 1.1 `sh:minus` + `sh:nodes` against SHACL 1.2 `shnex:remove` +
+        // `shnex:nodes`: `ex:p`'s values minus `( ex:c )` — `( ex:b ex:d )`, in
+        // path order.
+        (
+            "[ sh:minus ( ex:c ) ; sh:nodes [ sh:path ex:p ] ]",
+            "[ shnex:remove ( ex:c ) ; shnex:nodes [ shnex:pathValues ex:p ] ]",
         ),
         (
             "[ sh:if [ sh:exists [ sh:path ex:p ] ] ; sh:then ex:yes ; sh:else ex:no ]",

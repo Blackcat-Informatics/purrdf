@@ -316,6 +316,30 @@ pub mod sh {
     /// `sh:ask` — the ASK query of a SHACL-SPARQL validator.
     pub const ASK: &str = "http://www.w3.org/ns/shacl#ask";
 
+    /// `sh:describe` — the DESCRIBE query of a `sh:SPARQLDescribeExecutable`.
+    pub const DESCRIBE: &str = "http://www.w3.org/ns/shacl#describe";
+
+    /// `sh:update` — the UPDATE request of a `sh:SPARQLUpdateExecutable`.
+    pub const UPDATE: &str = "http://www.w3.org/ns/shacl#update";
+
+    // ── SHACL-SPARQL result annotations ────────────────────────────────────────
+
+    /// `sh:resultAnnotation` — links a SPARQL-based constraint or validator to a
+    /// result annotation.
+    pub const RESULT_ANNOTATION: &str = "http://www.w3.org/ns/shacl#resultAnnotation";
+
+    /// `sh:ResultAnnotation` — the class of result annotations.
+    pub const RESULT_ANNOTATION_CLASS: &str = "http://www.w3.org/ns/shacl#ResultAnnotation";
+
+    /// `sh:annotationProperty` — the property a result annotation sets.
+    pub const ANNOTATION_PROPERTY: &str = "http://www.w3.org/ns/shacl#annotationProperty";
+
+    /// `sh:annotationVarName` — the SPARQL variable a result annotation reads.
+    pub const ANNOTATION_VAR_NAME: &str = "http://www.w3.org/ns/shacl#annotationVarName";
+
+    /// `sh:annotationValue` — a result annotation's default values.
+    pub const ANNOTATION_VALUE: &str = "http://www.w3.org/ns/shacl#annotationValue";
+
     /// `sh:sparqlExpr` — the SPARQL expression of a SPARQL expr expression
     /// (SHACL 1.2 SPARQL Extensions §6.2, function name `sh:SPARQLExprExpression`).
     pub const SPARQL_EXPR: &str = "http://www.w3.org/ns/shacl#sparqlExpr";
@@ -385,6 +409,11 @@ pub mod sh {
 
     /// `sh:distinct` — a distinct node expression (deduplicates its input).
     pub const DISTINCT: &str = "http://www.w3.org/ns/shacl#distinct";
+
+    /// `sh:minus` — the removed-nodes operand of a SHACL Advanced Features 1.1
+    /// minus expression, whose input is its `sh:nodes`; SHACL 1.2 Node Expressions
+    /// spells the same expression `shnex:remove`.
+    pub const MINUS: &str = "http://www.w3.org/ns/shacl#minus";
 
     /// `sh:min` — a minimum aggregation node expression.
     pub const MIN: &str = "http://www.w3.org/ns/shacl#min";

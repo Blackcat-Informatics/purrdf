@@ -50,6 +50,8 @@ pub(crate) struct Validator {
     pub messages: Vec<Literal>,
     /// Optional severity declared on the validator node.
     pub severity: Option<Severity>,
+    /// The result annotations declared on the validator node.
+    pub annotations: Vec<crate::shapes::ResultAnnotation>,
 }
 
 /// Declaration of a single `sh:Parameter` for a constraint component.
@@ -247,6 +249,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     path: Option<&Path>,
     severity: &Severity,
     messages: &[Literal],
+    annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -336,6 +339,19 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
             slot.1 = v.clone();
             render_message_templates(messages, &template_bindings)
         };
+        // SHACL 1.2 SPARQL Extensions, "Validation with SPARQL-based Constraint
+        // Components": an ASK validator's solution for a failing value node "consists
+        // of the bindings ($this, focus node) and ($value, v)", and the result is
+        // produced from it as from a SELECT solution — so its annotations read
+        // `this`, `value` and, pre-bound beside them, the component's parameters.
+        let annotations = crate::result_annotations::annotate(annotations, |name| match name {
+            "this" => Some(focus.clone()),
+            "value" => Some(v.clone()),
+            _ => bindings
+                .iter()
+                .find(|(parameter, _)| parameter == name)
+                .map(|(_, value)| value.clone()),
+        });
         results.push(ValidationResult {
             focus_node: focus.clone(),
             result_path: path.map(path::path_to_term),
@@ -350,6 +366,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
             result_box_roles: vec![],
             attributions: vec![],
             details: vec![],
+            annotations,
         });
     };
 
@@ -422,6 +439,7 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
     path: Option<&Path>,
     severity: &Severity,
     messages: &[Literal],
+    annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -446,6 +464,8 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
         let this_index = solutions.column("this");
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
+        let annotation_columns =
+            crate::sparql::annotation_columns(annotations, |name| solutions.column(name));
 
         let mut results = Vec::with_capacity(solutions.len());
         // §5.3.3 message templating is the ONLY reader of the row's other columns,
@@ -493,6 +513,24 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                 }
                 render_message_templates(messages, &template_bindings)
             };
+            // SHACL 1.2 SPARQL Extensions, "Annotation Properties": the solution's
+            // binding of each annotation's variable — the pre-bound `$this` and
+            // parameters included, as for message templates — or else its defaults.
+            let annotations = crate::result_annotations::annotate(annotations, |name| {
+                annotation_columns
+                    .iter()
+                    .find(|(variable, _)| *variable == name)
+                    .and_then(|(_, column)| column.and_then(|i| solutions.cell(row, i)))
+                    .as_ref()
+                    .map(term_value_to_native)
+                    .or_else(|| (name == "this").then(|| focus.clone()))
+                    .or_else(|| {
+                        bindings
+                            .iter()
+                            .find(|(parameter, _)| parameter == name)
+                            .map(|(_, value)| value.clone())
+                    })
+            });
 
             results.push(ValidationResult {
                 focus_node,
@@ -508,6 +546,7 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                 result_box_roles: vec![],
                 attributions: vec![],
                 details: vec![],
+                annotations,
             });
         }
         Ok(results)
@@ -686,21 +725,14 @@ fn validator_kind(
     ))
 }
 
-/// Whether `name` is a legal SPARQL VARNAME and not one of the reserved names
-/// banned for SHACL-SPARQL parameter bindings.
+/// Whether `name` is a SPARQL `VARNAME` and not one of the reserved names banned
+/// for SHACL-SPARQL parameter bindings.
+///
+/// `VARNAME` is the grammar's production, Unicode included — `ex:größe` binds
+/// `?größe` and `ex:2d` binds `?2d` — so the answer is the SPARQL lexer's own.
 fn is_valid_varname(name: &str) -> bool {
     const BANNED: &[&str] = &["this", "path", "PATH", "value"];
-    if BANNED.contains(&name) {
-        return false;
-    }
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    !BANNED.contains(&name) && purrdf_sparql_algebra::lexer::is_varname(name)
 }
 
 /// Parse a single SPARQL validator node attached to a component.
@@ -723,6 +755,18 @@ fn parse_validator(
         ValidatorKind::Ask => sh::ASK,
         ValidatorKind::Select => sh::SELECT,
     };
+    // A validator typed for one query form and carrying the other's query would
+    // have that query silently ignored.
+    let other_pred = match kind {
+        ValidatorKind::Ask => sh::SELECT,
+        ValidatorKind::Select => sh::ASK,
+    };
+    if !objects_of(data, validator, other_pred).is_empty() {
+        return Err(format!(
+            "component {component_iri} validator {validator} is declared as {kind:?} but also \
+             carries <{other_pred}>, which a {kind:?} validator never runs"
+        ));
+    }
     let raw_queries = objects_of(data, validator, query_pred);
     let raw_query = match raw_queries.as_slice() {
         [Term::Literal(literal)] if literal.datatype_str() == xsd::STRING => literal.value(),
@@ -785,12 +829,16 @@ fn parse_validator(
     let messages = declared_messages(data, validator)?;
     let severity =
         first_object_of(data, validator, sh::SEVERITY).and_then(|t| severity_from_term(&t));
+    // SHACL 1.2 SPARQL Extensions: result annotations are declared "at the subject
+    // of the sh:select or sh:ask triple", which is this validator node.
+    let annotations = crate::result_annotations::parse(data, validator)?;
 
     Ok(Validator {
         kind,
         query_text,
         messages,
         severity,
+        annotations,
     })
 }
 
@@ -937,6 +985,7 @@ mod tests {
                 query_text: "ASK { ?this a ex:Thing }".to_owned(),
                 messages: vec![],
                 severity: None,
+                annotations: vec![],
             }],
             property_validators: vec![],
             validators: vec![],

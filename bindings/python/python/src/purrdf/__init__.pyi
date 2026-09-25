@@ -916,7 +916,7 @@ class Store:
     def _store_capsule(self) -> CapsuleType: ...
 
 class MutableDataset:
-    def __init__(self) -> list[tuple[str, str]]: ...
+    def __init__(self) -> None: ...
     def __iter__(self) -> QuadIter: ...
     # Returns the document's prefix map exactly as `Store.load` does.
     def load(
@@ -1737,7 +1737,9 @@ class shapes:
     # report was judged against) and "results", each result's "severity" being its
     # IRI — sh:Debug and sh:Trace included, which the default set does not block —
     # and its "messages" EVERY sh:resultMessage, each {"text", and "language" /
-    # "direction" / "datatype" when present}.
+    # "direction" / "datatype" when present}; a result carrying SHACL-SPARQL result
+    # annotations (sh:resultAnnotation) also has "annotations", a list of
+    # (property IRI, value in N-Triples syntax) tuples.
     @staticmethod
     def validate(
         shapes_ttl: str,
@@ -1746,9 +1748,14 @@ class shapes:
         shapes_base: str | None = None,
         conformance_disallows: Sequence[str] | None = None,
     ) -> dict[str, builtins.object]: ...
-    # Entail a data graph (N-Triples) under a shapes graph (Turtle): apply every
-    # SHACL-AF sh:rule to a fixpoint, returning the materialized dataset (base
-    # graph plus every inferred triple) as a canonical N-Triples string.
+    # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
+    # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by
+    # layer in ascending sh:layer order; within a layer the sh:runOnce rules once,
+    # then the iterating rules repeatedly while an iteration infers a new triple,
+    # each iteration running the rules in sh:order groups (one group's inferences
+    # visible to the next, same-order rules concurrent); derived and temporary
+    # triples deleted at the end of their layer — and return the base graph plus
+    # every inferred triple as a canonical N-Triples string.
     @staticmethod
     def entail(
         shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None

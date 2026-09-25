@@ -44,11 +44,23 @@ LICENSE_URL = "http://www.w3.org/Consortium/Legal/copyright-software"
 
 TARBALL_URL = f"https://api.github.com/repos/{REPO}/tarball/{COMMIT}"
 
-# The vocabularies the declared-vs-implemented ratchet and the census parse. `shacl-ui.ttl` and `profiles/cd1.ttl` also live under
-# `shacl12-vocabularies/` upstream but are out of scope: SHACL 1.2 Core, its
-# node-expression extension (`shnex`), the `shnex` SPARQL function bindings and
-# the `shacl-shacl.ttl` self-description are the whole surface this repository
-# implements against.
+# The vocabularies the declared-vs-implemented ratchet and the census parse.
+# Upstream `shacl12-vocabularies/` holds two further files, and neither declares
+# anything the validation engine evaluates:
+#
+# * `shacl-ui.ttl` is the SHACL UI vocabulary, "terms used in SHACL UI, the W3C
+#   specification for rendering SHACL shapes as user interfaces": 27 `shui:`
+#   terms (widgets, editors, viewers, widget matchers and scores, form
+#   configuration) plus one axiom making `sh:Graph` a subclass of
+#   `shui:Configuration`. It declares no constraint component, function, target
+#   or rule, and a `shui:` term on a shape is outside the `sh:`/`shnex:` census
+#   universe, so it passes the loader untouched like any application vocabulary.
+# * `profiles/cd1.ttl` is `shpt:cd1`, a `prof:Profile` of SHACL 1.2 ("excludes
+#   shapes found to be computationally intensive") whose `rdfs:member` list
+#   names the SHACL 1.2 terms an implementation claiming that profile may use.
+#   It declares no term of its own, and every member is already a term of
+#   `shacl.ttl`; this engine implements all of SHACL 1.2, of which the profile is
+#   a subset.
 VOCAB_FILES = ("shacl.ttl", "shnex.ttl", "shnex-sparql.ttl", "shacl-shacl.ttl")
 VOCAB_PREFIX = "shacl12-vocabularies/"
 TESTS_PREFIX = "shacl12-test-suite/tests/"

@@ -128,16 +128,63 @@ fn shacl_js_is_refused_and_shacl_sparql_loads() {
     );
 }
 
+/// SHACL Advanced Features 1.1's minus expression — "exactly one value for the
+/// property sh:minus … and exactly one value for the property sh:nodes", "the input
+/// nodes except those that are in another 'minus' list" — is SHACL 1.2's
+/// `shnex:remove`, and the two spellings answer identically. The oracle observes the
+/// removal: the computed values of `ex:q` must be `sh:in ( ex:b )`, and the control
+/// without any removal reports `ex:c` and `ex:d` where both spellings report only
+/// `ex:d`.
 #[test]
-fn the_af_minus_expression_is_refused_and_shnex_remove_loads() {
+fn the_af_minus_expression_and_shnex_remove_answer_identically() {
+    let data_ttl = "ex:a ex:p ex:b, ex:c, ex:d .";
+    let with = |values: &str| {
+        results(&validate(
+            &format!(
+                "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+                   sh:property [ sh:path ex:q ; sh:values {values} ; sh:in ( ex:b ) ] ."
+            ),
+            data_ttl,
+        ))
+    };
+    let minus = with("[ sh:minus ( ex:c ) ; sh:nodes [ sh:path ex:p ] ]");
+    let remove = with("[ shnex:remove ( ex:c ) ; shnex:nodes [ shnex:pathValues ex:p ] ]");
+    let control = with("[ sh:path ex:p ]");
+    let a = "<http://example.org/ns#a>".to_owned();
+    assert_eq!(
+        minus,
+        vec![(a.clone(), "<http://example.org/ns#d>".to_owned())]
+    );
+    assert_eq!(minus, remove, "sh:minus and shnex:remove must agree");
+    assert_eq!(
+        control,
+        vec![
+            (a.clone(), "<http://example.org/ns#c>".to_owned()),
+            (a, "<http://example.org/ns#d>".to_owned()),
+        ],
+        "the control removes nothing"
+    );
+}
+
+/// The minus expression's `sh:nodes` is mandatory ("exactly one value for the
+/// property sh:nodes"), and its operand follows its spelling: a `sh:minus` without
+/// `sh:nodes`, or with the `shnex:nodes` of the other spelling, is refused, while the
+/// neighbour with `sh:nodes` loads (and is evaluated by the test above).
+#[test]
+fn a_minus_expression_without_sh_nodes_is_refused() {
     refused(
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-           sh:nodeByExpression [ sh:minus ( ex:S ) ] .",
-        "sh:minus",
+           sh:expression [ sh:exists [ sh:minus ( ex:x ) ] ] .",
+        "requires sh:nodes",
+    );
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+           sh:expression [ sh:exists [ sh:minus ( ex:x ) ; shnex:nodes ( ex:x ex:y ) ] ] .",
+        "shacl-node-expr#nodes",
     );
     loads(
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-           sh:expression [ shnex:exists [ shnex:remove ( ex:x ) ; shnex:nodes ( ex:x ex:y ) ] ] .",
+           sh:expression [ sh:exists [ sh:minus ( ex:x ) ; sh:nodes ( ex:x ex:y ) ] ] .",
     );
 }
 

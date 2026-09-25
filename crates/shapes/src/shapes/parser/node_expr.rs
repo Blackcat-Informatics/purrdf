@@ -527,6 +527,8 @@ impl Parser<'_> {
             // Optional per-constraint sh:message / sh:severity overrides.
             let messages = self.messages_of(&c_node)?;
             let severity = self.severity_of(&c_node)?;
+            // SHACL-SPARQL result annotations "at the subject of the sh:select … triple".
+            let annotations = crate::result_annotations::parse(self.data, &c_node)?;
 
             // SHACL 1.2 SPARQL Extensions, "Validation with SPARQL-based
             // Constraints": "There are no validation results if the SPARQL-based
@@ -542,6 +544,7 @@ impl Parser<'_> {
                     select,
                     messages,
                     severity,
+                    annotations,
                 },
                 annotated,
             );
@@ -747,6 +750,7 @@ impl Parser<'_> {
                         validator: component_validator,
                         messages,
                         severity,
+                        annotations: validator.annotations.clone(),
                     },
                     triples,
                 ));
@@ -1265,8 +1269,14 @@ impl Parser<'_> {
                 }
             }
             ExprKind::List => accepted.push(rdf::REST),
-            ExprKind::Remove
-            | ExprKind::Limit
+            // The SHACL-AF 1.1 `sh:minus` spelling of a remove expression takes its
+            // input from `sh:nodes`, the `shnex:remove` spelling from `shnex:nodes`.
+            ExprKind::Remove => accepted.push(if iri == sh::MINUS {
+                sh::NODES
+            } else {
+                shnex::NODES
+            }),
+            ExprKind::Limit
             | ExprKind::Offset
             | ExprKind::FlatMap
             | ExprKind::FindFirst
@@ -1349,7 +1359,8 @@ impl Parser<'_> {
                 _ if row.on_node_expression() => Ok(()),
                 _ => Err(format!(
                     "node expression on {node} carries <{p}>, which is not node-expression \
-                     vocabulary"
+                     vocabulary{}",
+                    crate::spec::census::no_processing_note(p)
                 )),
             },
         }
@@ -1540,10 +1551,21 @@ impl Parser<'_> {
                 Ok(NodeExpr::List(members))
             }
             // §4.2.4 Remove expression: `shnex:remove` names the removed nodes and
-            // `shnex:nodes` the input; both are mandatory.
+            // `shnex:nodes` the input; both are mandatory. The SHACL-AF 1.1 minus
+            // expression is the same expression spelled `sh:minus` with its input in
+            // `sh:nodes` (see the `sh:minus` row of `spec::table::KEY_ALIASES`), and
+            // "exactly one value for the property sh:nodes" makes that operand
+            // mandatory too.
             ExprKind::Remove => {
                 let remove = self.parse_node_expr(&object)?;
-                let nodes = self.parse_shnex_nodes_required(node, "shnex:remove")?;
+                let nodes = if iri == sh::MINUS {
+                    let input = self.first_object_of(node, sh::NODES).ok_or_else(|| {
+                        format!("sh:minus node expression on {node} requires sh:nodes")
+                    })?;
+                    self.parse_node_expr(&input)?
+                } else {
+                    self.parse_shnex_nodes_required(node, "shnex:remove")?
+                };
                 Ok(NodeExpr::Remove {
                     nodes: Box::new(nodes),
                     remove: Box::new(remove),
@@ -2278,6 +2300,7 @@ mod tests {
             "max",
             "min",
             "pathValues",
+            "remove",
             "sum",
         ]
         .into_iter()

@@ -1163,8 +1163,8 @@ fn finish_report(
     disallows: &ConformanceDisallows,
 ) -> ValidationReport {
     // Deterministic sort key: (focus_node, component, source_shape, path, value,
-    // message, severity). The message and severity tiebreakers make the ordering
-    // TOTAL: two results that agree on the first five components (e.g. several
+    // message, severity, result annotations). The message, severity and annotation
+    // tiebreakers make the ordering TOTAL: two results that agree on the first five components (e.g. several
     // `sh:uniqueLang` violations on one focus, which differ only in their message
     // text) would otherwise keep their push order, which is a `FastMap`/`FastSet`
     // iteration order and thus not guaranteed stable across ahash versions or
@@ -1182,6 +1182,7 @@ fn finish_report(
             result.value.as_ref().map_or_default(ToString::to_string),
             crate::report::messages_sort_key(&result.messages),
             result.severity.clone(),
+            crate::report::annotations_sort_key(&result.annotations),
         )
     };
     results.sort_by_cached_key(sort_key);

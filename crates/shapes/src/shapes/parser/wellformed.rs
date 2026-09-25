@@ -47,16 +47,36 @@ const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#di
 /// `rdf:HTML`.
 const RDF_HTML: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#HTML";
 
-/// The terms a SPARQL-based constraint or target node carries (SHACL 1.2 SPARQL
-/// Extensions §3 and §5): its query and the prefixes, message, severity and
-/// deactivation it may declare.
-const SPARQL_EXECUTABLE_TERMS: [&str; 5] = [
+/// The terms a SPARQL-based constraint node carries (SHACL 1.2 SPARQL
+/// Extensions, "SPARQL-based Constraints" and "Annotation Properties"): its query
+/// and the prefixes, message, severity, deactivation and result annotations it may
+/// declare.
+const SPARQL_EXECUTABLE_TERMS: [&str; 6] = [
     sh::SELECT,
     sh::PREFIXES,
     sh::MESSAGE,
     sh::SEVERITY,
     sh::DEACTIVATED,
+    sh::RESULT_ANNOTATION,
 ];
+
+/// The terms a validator of a SPARQL-based constraint component carries (SHACL 1.2
+/// SPARQL Extensions, "Validators" and "Annotation Properties"): its ASK or SELECT
+/// query (the one its type does not name is refused where the validator is
+/// parsed), its prefixes, the message and severity it contributes, and its result
+/// annotations.
+const SPARQL_VALIDATOR_TERMS: [&str; 6] = [
+    sh::ASK,
+    sh::SELECT,
+    sh::PREFIXES,
+    sh::MESSAGE,
+    sh::SEVERITY,
+    sh::RESULT_ANNOTATION,
+];
+
+/// The terms a `sh:SPARQLTarget` node carries (SHACL 1.2 SPARQL Extensions,
+/// "SPARQL-based Targets"): its SELECT query and its prefixes.
+const SPARQL_TARGET_TERMS: [&str; 2] = [sh::SELECT, sh::PREFIXES];
 
 impl Parser<'_> {
     /// Check every shape of the shapes graph against the census. See the
@@ -77,10 +97,85 @@ impl Parser<'_> {
             .map(|(_, _, object)| object)
             .collect();
         let mut instances = ShaclInstances::new(self.data);
-        for shape in self.spec_shapes() {
-            let is_parameter = parameter_declarations.contains(&shape);
-            self.check_shape_node(&shape, is_parameter)?;
-            self.check_implicit_class_shape(&shape, &mut instances)?;
+        let shapes = self.spec_shapes();
+        for shape in &shapes {
+            let is_parameter = parameter_declarations.contains(shape);
+            self.check_shape_node(shape, is_parameter)?;
+            self.check_implicit_class_shape(shape, &mut instances)?;
+        }
+        let shapes: FastSet<Term> = shapes.into_iter().collect();
+        self.check_sparql_executables(&shapes)
+    }
+
+    /// Check every SPARQL executable the loader reads — the SPARQL-based
+    /// constraints (objects of `sh:sparql`), the validators of SPARQL-based
+    /// constraint components (objects of `sh:validator`, `sh:nodeValidator` and
+    /// `sh:propertyValidator`) and the `sh:SPARQLTarget`s — against the census, in
+    /// canonical term order.
+    ///
+    /// Each reads a fixed set of terms and would walk past any other: a
+    /// `sh:update` beside a constraint's `sh:select`, an `sh:ask` on a SPARQL-based
+    /// constraint, a misspelled `sh:mesage`. Each of those is refused here, naming
+    /// the term and the node. A non-validating term and any term outside the `sh:`
+    /// and `shnex:` namespaces pass. A node that is also a shape of the shapes
+    /// graph (`ex:S sh:sparql ex:S`) may also carry what a shape carries, which
+    /// [`Self::check_shape_node`] has already checked.
+    fn check_sparql_executables(&self, shapes: &FastSet<Term>) -> Result<(), String> {
+        let mut executables: Vec<(Term, &'static str, &'static [&'static str])> = Vec::new();
+        for (_, _, node) in self.quads_with(None, Some(sh::SPARQL), None) {
+            executables.push((node, "SPARQL-based constraint", &SPARQL_EXECUTABLE_TERMS));
+        }
+        for attachment in [sh::VALIDATOR, sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR] {
+            for (_, _, node) in self.quads_with(None, Some(attachment), None) {
+                executables.push((node, "SPARQL validator", &SPARQL_VALIDATOR_TERMS));
+            }
+        }
+        for (_, _, node) in self.quads_with(None, Some(sh::TARGET), None) {
+            if self.has_type(&node, sh::SPARQL_TARGET) {
+                executables.push((node, "SPARQL-based target", &SPARQL_TARGET_TERMS));
+            }
+        }
+        executables.sort_by(|a, b| crate::term::canonical_cmp(&a.0, &b.0).then(a.1.cmp(b.1)));
+        executables.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+        for (node, kind, allowed) in &executables {
+            if !matches!(node, Term::NamedNode(_) | Term::BlankNode(_)) {
+                continue;
+            }
+            let is_shape = shapes.contains(node);
+            let mut predicates: Vec<NamedNode> =
+                native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph)
+                    .into_iter()
+                    .map(|(_, predicate, _)| predicate)
+                    .collect();
+            predicates.sort();
+            predicates.dedup();
+            for predicate in &predicates {
+                let p = predicate.as_str();
+                if !census::is_census_namespace(p) || allowed.contains(&p) {
+                    continue;
+                }
+                let Some(row) = census::classify(p) else {
+                    return Err(format!(
+                        "{kind} {node} carries <{p}>, which is not a term of SHACL 1.2, SHACL \
+                         Advanced Features or SHACL-SPARQL; it is refused rather than silently \
+                         ignored"
+                    ));
+                };
+                if let TermClass::Unimplemented(why) = row.class {
+                    return Err(format!(
+                        "{kind} {node} uses <{p}>, which is not evaluated by this engine: {why}"
+                    ));
+                }
+                if row.class == TermClass::NonValidating || (is_shape && row.on_shape()) {
+                    continue;
+                }
+                return Err(format!(
+                    "{kind} {node} carries <{p}>, which is {} and not read on a {kind}{}; it is \
+                     refused rather than silently ignored",
+                    describe_class(row.class),
+                    census::no_processing_note(p)
+                ));
+            }
         }
         Ok(())
     }
@@ -303,8 +398,9 @@ impl Parser<'_> {
             } || (is_sparql_executable && SPARQL_EXECUTABLE_TERMS.contains(&p));
             if !allowed {
                 return Err(format!(
-                    "shape {shape} carries <{p}>, which is {} and not a property of a shape",
-                    describe_class(row.class)
+                    "shape {shape} carries <{p}>, which is {} and not a property of a shape{}",
+                    describe_class(row.class),
+                    census::no_processing_note(p)
                 ));
             }
             match row.class {

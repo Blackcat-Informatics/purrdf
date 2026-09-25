@@ -1155,6 +1155,7 @@ fn eval_closed<S: ResultSink>(
                 result_box_roles: vec![],
                 attributions: vec![],
                 details: vec![],
+                annotations: vec![],
             };
             result.apply_box_roles(&shape.box_roles, &path_roles);
             result
@@ -1686,6 +1687,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                     result_box_roles: vec![],
                     attributions: vec![],
                     details: vec![],
+                    annotations: vec![],
                 };
                 result.apply_box_roles(&source_roles, path_roles);
                 result
@@ -1832,6 +1834,7 @@ fn reifier_result(
         result_box_roles: vec![],
         attributions: vec![],
         details: vec![],
+        annotations: vec![],
     };
     let merged = merge_box_roles(source_roles, inner_source_roles);
     result.apply_box_roles(&merged, ctx.path_roles);
@@ -2029,6 +2032,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 result_box_roles: vec![],
                 attributions: vec![],
                 details: vec![],
+                annotations: vec![],
             }
         };
         ($component:expr, $focus:expr, $value:expr) => {
@@ -2046,6 +2050,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 result_box_roles: vec![],
                 attributions: vec![],
                 details: vec![],
+                annotations: vec![],
             }
         };
     }
@@ -2582,6 +2587,7 @@ fn eval_constraint<'a, S: ResultSink>(
                         result_box_roles: vec![],
                         attributions: vec![],
                         details: vec![],
+                        annotations: vec![],
                     });
                 }
             }
@@ -2738,6 +2744,7 @@ fn eval_constraint<'a, S: ResultSink>(
                         result_box_roles: vec![],
                         attributions: vec![],
                         details: vec![],
+                        annotations: vec![],
                     });
                 }
             }
@@ -3102,6 +3109,7 @@ fn eval_constraint<'a, S: ResultSink>(
             select,
             messages: cmsg,
             severity: csev,
+            annotations,
         } => {
             let sev = source.severity_over(csev.as_ref());
             let msg = source.messages_over(cmsg);
@@ -3130,6 +3138,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 source_shape,
                 &sev,
                 msg,
+                annotations,
                 shapes_graph_iri,
                 Some(source_shape),
             )
@@ -3362,6 +3371,7 @@ fn eval_constraint<'a, S: ResultSink>(
             validator,
             messages: cmsg,
             severity: csev,
+            annotations,
         } => {
             let sev = source.severity_over(csev.as_ref());
             let msg = source.messages_over(cmsg);
@@ -3391,6 +3401,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     path,
                     &sev,
                     msg,
+                    annotations,
                     shapes_graph_iri,
                     Some(source_shape),
                 ),
@@ -3405,6 +3416,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     path,
                     &sev,
                     msg,
+                    annotations,
                     shapes_graph_iri,
                     Some(source_shape),
                 ),
