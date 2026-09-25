@@ -131,7 +131,7 @@ way.
 | 43 | seam (extension seam) | seam | 扩展点 | E | — | 接缝 is acceptable but 扩展点 reads naturally to the audience |
 | 44 | mint (an IRI, a witness, a blank node) | mint | 生成 | E | 铸造 | technical, not literary: 铸造 ("cast, coin") is the English project idiom carried over; as bronze casting it is untouched |
 | 45 | reach (a host, a surface) | reach | 到达 | E | 抵达 | technical, not literary: 抵达 is the literary "arrive" |
-| 46 | dropped loudly | loudly | 显式报错丢弃 | E | 大声 | "loudly" is idiom: the drop is reported explicitly; 大声地丢弃 is nonsense in Chinese |
+| 46 | dropped loudly (a reported drop) | dropped loudly、`/drop\w*\s+(?:\w+\s+){0,2}[_*]?loud/`、`/lossy\b[^.]*loud/` | 丢弃并显式告知 | E | 大声、`/显式报错(?!失败)/` | "loudly" is idiom. For a DROP it means the loss is reported, not raised: the realized count goes to the loss ledger or an outcome flag (`provenance_dropped`) and the call succeeds, so 显式报错丢弃 ("dropped with an error") overstates it; 大声地丢弃 is nonsense in Chinese. A failure that raises is row 62 |
 | 47 | full-text search | full-text | 全文检索 | E | 全文搜索 | the audience's core vocabulary |
 | 48 | validation report | validation report | 验证报告 | E | 校验报告 | SHACL Chinese usage; bare 校验 is not gated (校验和 is a checksum) |
 | 49 | specification and product names | GMEOW、GTS、RDF、SPARQL、SHACL、ShEx、OWL、JSON-LD、Turtle、TriG、N-Triples、N-Quads、RDFC、PostgreSQL、Rust、Python、WebAssembly、JavaScript、TypeScript | as written | K | — | invariant: each survives verbatim, case-sensitively, into the msgstr of any msgid that carries it (吉猫协议 for GMEOW or 波斯特格雷 for PostgreSQL is refused) |
@@ -147,6 +147,7 @@ way.
 | 59 | writer (serializer, GTS writer) | writer | 写出器 | E | 写入器 | pairs with 读取器 (reader) and 写出 (emit). The engine's writers emit bytes; 写入器 for a hardware writer (光盘写入器) is untouched |
 | 60 | sink (event / package sink) | sink | 接收器（sink） | E | — | `Sink` (the RDF/JS interface) is invariant in code. Not gated: the obvious wrong form 汇 is inside 词汇 and 汇总器, both correct and both common in this book |
 | 61 | divergence (from a specification, from another engine) | divergen | 分歧 | E | — | a ledgered divergence is 分歧 everywhere, including the SPARQL chapter heading 与其他实现的分歧. Not gated: 差异 is the ordinary "difference" (数据集差异, a dataset diff), which shares paragraphs with divergence |
+| 62 | fails loudly (raises an error) | fails loudly、fail loudly、failing loudly、failed loudly、loud and immediate | 显式报错失败 | E | 大声、`/(?<!丢弃并)显式告知/` | "loudly" is idiom. For a FAILURE it means the caller gets an error (a parse error, a failing assertion), so 显式告知 ("explicitly notified") understates it. A drop that is only reported is row 46 |
 
 Add a row when a translation coins or settles a term; give it an Anchor,
 add a **Rejected** entry only for a rendering that is wrong *for that term*,

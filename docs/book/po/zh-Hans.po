@@ -3501,7 +3501,7 @@ msgstr ""
 
 #: src/concepts/codecs.md:82
 msgid "Lossy projections are loud"
-msgstr "有损投影会显式报错"
+msgstr "有损投影会显式告知"
 
 #: src/concepts/codecs.md:84
 msgid ""
@@ -3514,7 +3514,7 @@ msgid ""
 "disappearing. The same discipline applies at the SPARQL results boundary "
 "([Result Formats](../sparql/results.md)) and the RDF↔GTS boundary."
 msgstr ""
-"RDF 1.2 陈述级数据（三元组项、具体化节点绑定、注解）在每一次支持 star 的往返（转换）中都得以保留。序列化到不支持 star 的投影时，这一层会被*显式报错丢弃*：实际丢弃的数量交给机器可读的损失台账（[`generated/transcode-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/transcode-loss-matrix.json)，代码 `rdf12-star-unrepresentable`），而不是凭空消失。同样的纪律也适用于 SPARQL 结果边界（[结果格式](../sparql/results.md)）与 RDF↔GTS 边界。"
+"RDF 1.2 陈述级数据（三元组项、具体化节点绑定、注解）在每一次支持 star 的往返（转换）中都得以保留。序列化到不支持 star 的投影时，这一层会被*丢弃并显式告知*：实际丢弃的数量交给机器可读的损失台账（[`generated/transcode-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/transcode-loss-matrix.json)，代码 `rdf12-star-unrepresentable`），而不是凭空消失。同样的纪律也适用于 SPARQL 结果边界（[结果格式](../sparql/results.md)）与 RDF↔GTS 边界。"
 
 #: src/concepts/codecs.md:92
 msgid "The succinct pack codec"
@@ -14774,7 +14774,7 @@ msgid ""
 "[Codecs & Determinism](concepts/codecs.md#lossy-projections-are-loud) and "
 "[Result Formats](sparql/results.md)."
 msgstr ""
-"PurRDF 的投影允许有损——但绝不静默。内核带有一个机器可读的 **RDF↔GTS 损失矩阵**（[`generated/rdf-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/rdf-loss-matrix.json)，一个生成的工件）以及一个 `LossLedger` API：当不具 star 能力的编解码器丢弃具体化节点（reifier）绑定，或 CSV 结果丢弃溯源信息时，实际丢弃的数量会被记录下来并呈报给调用方。参见[编解码器与确定性](concepts/codecs.md#有损投影会显式报错)以及[结果格式](sparql/results.md)。"
+"PurRDF 的投影允许有损——但绝不静默。内核带有一个机器可读的 **RDF↔GTS 损失矩阵**（[`generated/rdf-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/rdf-loss-matrix.json)，一个生成的工件）以及一个 `LossLedger` API：当不具 star 能力的编解码器丢弃具体化节点（reifier）绑定，或 CSV 结果丢弃溯源信息时，实际丢弃的数量会被记录下来并呈报给调用方。参见[编解码器与确定性](concepts/codecs.md#有损投影会显式告知)以及[结果格式](sparql/results.md)。"
 
 #: src/slices.md:64
 msgid "Provenance"
