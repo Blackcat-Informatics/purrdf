@@ -36,6 +36,10 @@ name = "purrdf_sparql_eval"
 purrdf-core = { workspace = true }
 # The query algebra this crate evaluates (parser + GraphPattern/Expression AST).
 purrdf-sparql-algebra = { workspace = true }
+# How much stack is left: the measurement the evaluator's stack-headroom guard
+# (`src/stack.rs`) refuses against, shared with the parser and with the hosts that
+# install the floors of the stacks they switch onto.
+purrdf-stack = { workspace = true }
 # The SEP-0009 composite value space (`cdt:List` / `cdt:Map`): the lexical
 # scanner, the canonical form, the fifteen spec functions, and the two comparison
 # relations. `crate::cdt_fn` is the bridge between it and the evaluator's terms,
@@ -90,10 +94,6 @@ hashbrown = { workspace = true }
 # OS entropy for the RAND()/UUID()/STRUUID() seed on native targets. Target-gated
 # so the wasm build (make wasm) never pulls it.
 getrandom = { workspace = true }
-# The thread's stack limit for the evaluator's stack-headroom guard (`src/stack.rs`),
-# read once per thread from the operating system. Target-gated because wasm32
-# measures its shadow stack against the linker's `__stack_low` instead.
-stacker = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Browser wall clock + entropy for NOW()/RAND() on wasm. Target-gated so native

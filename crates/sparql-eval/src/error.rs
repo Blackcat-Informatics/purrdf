@@ -288,11 +288,12 @@ pub enum EvalError {
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
 
     /// The request nests deeper than the stack of the thread evaluating it can hold:
-    /// `construct` was about to be evaluated with less than
-    /// [`crate::stack::MARGIN_BYTES`] of stack left.
+    /// `construct` was about to be evaluated — or parsed a level deeper, when the parse
+    /// is the one that ran out ([`ParseError::StackExhausted`]) — with less than
+    /// [`purrdf_stack::MARGIN_BYTES`] of stack left.
     ///
     /// Its own variant because nothing about the request is malformed and nothing about
-    /// the data is wrong: the parser admitted the request, and the same request answers
+    /// the data is wrong: the parser's limits admit the request, and the same request answers
     /// on a thread with a larger stack (a native thread spawned with more, or a wasm
     /// asynchronous job given a larger `stackBytes`). Refusing is what stands between an
     /// admitted request and a crash — natively an aborted process, on wasm32 a trapped
@@ -463,7 +464,7 @@ impl core::fmt::Display for EvalError {
                 "evaluation stack exhausted: the request's nesting exceeds what this host's \
                  stack can evaluate ({construct} was reached with less than {} bytes of \
                  stack left); run it on a thread with a larger stack",
-                crate::stack::MARGIN_BYTES
+                purrdf_stack::MARGIN_BYTES
             ),
         }
     }
@@ -472,8 +473,14 @@ impl core::fmt::Display for EvalError {
 impl std::error::Error for EvalError {}
 
 impl From<ParseError> for EvalError {
+    /// A parse that ran out of stack is [`EvalError::StackExhausted`], with the
+    /// diagnostic code a host reads to know a larger stack answers the request; every
+    /// other parse failure is [`EvalError::Parse`].
     fn from(err: ParseError) -> Self {
-        Self::Parse(err.to_string())
+        match err {
+            ParseError::StackExhausted { construct, .. } => Self::StackExhausted { construct },
+            other => Self::Parse(other.to_string()),
+        }
     }
 }
 

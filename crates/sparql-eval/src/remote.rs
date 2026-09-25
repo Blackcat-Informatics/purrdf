@@ -134,8 +134,10 @@ pub enum RemoteError {
     /// response removes the positional-prefix/resumption claim even though the lower
     /// answer bound remains sound. `SERVICE SILENT` may not swallow either variant.
     GovernedAfterCompletion(TrippedGovernor),
-    /// An in-process source ran out of stack evaluating the forwarded body: the
-    /// [`EvalError::StackExhausted`] of that evaluation, naming its construct.
+    /// An in-process source ran out of stack parsing or evaluating the forwarded body:
+    /// the [`EvalError::StackExhausted`] of that evaluation, or the
+    /// [`purrdf_sparql_algebra::ParseError::StackExhausted`] of its re-parse, naming the
+    /// construct.
     ///
     /// **Not silenceable**, for the reason [`Self::Denied`] is not: no endpoint failed.
     /// The body nests deeper than the stack of the thread evaluating it can hold, which
@@ -681,17 +683,111 @@ fn strip_blank_columns(
 /// original row count, and an emptied block is the join identity only when that count is
 /// the single row Values-Insertion always injects — a hypothetical zero-row all-columns
 /// block (the empty relation, `FALSE`) is NOT the identity and must not be collapsed away.
+///
+/// A block joined beside a filtered pattern is moved beneath its filters where that
+/// changes no answer — see [`sink_values_under_filters`].
 fn join_dropping_empty_values(left: GraphPattern, right: GraphPattern) -> GraphPattern {
     if is_join_identity_values(&right) {
         left
     } else if is_join_identity_values(&left) {
         right
+    } else if matches!(left, GraphPattern::Filter { .. })
+        && matches!(right, GraphPattern::Values { .. })
+    {
+        sink_values_under_filters(left, right)
     } else {
         GraphPattern::Join {
             left: Box::new(left),
             right: Box::new(right),
         }
     }
+}
+
+/// `Join(Filter(…Filter(x, e1)…, eN), values)` — the shape Values Insertion builds when it
+/// joins a one-row `VALUES` block beside a filtered pattern — rewritten so the block sits
+/// beneath the filters: `Filter(…Filter(Join(x, values), e1)…, eN)`.
+///
+/// # Why
+///
+/// The forwarded text. A `FILTER` constrains its whole group, so the first shape can only
+/// be written with the filtered pattern braced as a group of its own — one nesting level
+/// per wrapper, which the parser's nesting budget counts — and a body the parser admitted
+/// could be forwarded as text it refuses. The second is written flat, as the source was.
+///
+/// # Why the answer does not change
+///
+/// The block moves beneath a filter only when the filter mentions none of its variables
+/// (counting every variable of an `EXISTS` pattern inside it): such a filter reads nothing
+/// the join adds, so joining before or after it keeps the same rows. The first filter that
+/// does mention one stops the descent. Below it, the block is dropped rather than joined
+/// again when the pattern there already joins the identical one-row, fully bound block at
+/// the root of its own filter chain — the shape Values Insertion builds for a filter that
+/// reads the variable itself: every row there already binds each of the block's
+/// variables to the block's own value, so joining the block again is the identity.
+fn sink_values_under_filters(filtered: GraphPattern, values: GraphPattern) -> GraphPattern {
+    let GraphPattern::Values {
+        variables: block_vars,
+        ..
+    } = &values
+    else {
+        return GraphPattern::Join {
+            left: Box::new(filtered),
+            right: Box::new(values),
+        };
+    };
+    let mut conditions = Vec::new();
+    let mut rest = filtered;
+    loop {
+        match rest {
+            GraphPattern::Filter { expr, inner } if !mentions_any(&expr, block_vars) => {
+                conditions.push(expr);
+                rest = *inner;
+            }
+            other => {
+                rest = other;
+                break;
+            }
+        }
+    }
+    let mut pattern = if joins_identical_block(&rest, &values) {
+        rest
+    } else {
+        GraphPattern::Join {
+            left: Box::new(rest),
+            right: Box::new(values),
+        }
+    };
+    for expr in conditions.into_iter().rev() {
+        pattern = GraphPattern::Filter {
+            expr,
+            inner: Box::new(pattern),
+        };
+    }
+    pattern
+}
+
+/// Whether `expr` mentions any of `vars`, an `EXISTS` pattern's variables included.
+fn mentions_any(expr: &purrdf_sparql_algebra::Expression, vars: &[Variable]) -> bool {
+    let mut mentioned = crate::DetHashSet::default();
+    crate::expr::expr_vars(expr, &mut mentioned);
+    vars.iter().any(|v| mentioned.contains(v))
+}
+
+/// Whether `pattern`, below its own chain of filters, is `Join(_, values)` with `values`
+/// a one-row block binding every one of its variables — so every row of `pattern` already
+/// binds them to exactly the block's values. See [`sink_values_under_filters`].
+fn joins_identical_block(pattern: &GraphPattern, values: &GraphPattern) -> bool {
+    let GraphPattern::Values { bindings, .. } = values else {
+        return false;
+    };
+    if bindings.len() != 1 || bindings[0].iter().any(Option::is_none) {
+        return false;
+    }
+    let mut cur = pattern;
+    while let GraphPattern::Filter { inner, .. } = cur {
+        cur = inner;
+    }
+    matches!(cur, GraphPattern::Join { right, .. } if **right == *values)
 }
 
 /// See [`join_dropping_empty_values`].
@@ -1095,9 +1191,18 @@ pub(crate) fn evaluate_in_memory(
         max_intermediate_cells,
         ..
     } = request;
+    // The re-parse runs at whatever depth the `SERVICE` sits, so it can run out of stack
+    // on a body the parser's limits admit. That is this host's stack, not the endpoint:
+    // the same stack refusal the body's evaluation would raise, never a decode failure
+    // `SILENT` could swallow into the join identity.
     let parsed = purrdf_sparql_algebra::SparqlParser::new()
         .parse_query(query_text)
-        .map_err(|e| RemoteError::Decode(e.to_string()))?;
+        .map_err(|e| match e {
+            purrdf_sparql_algebra::ParseError::StackExhausted { construct, .. } => {
+                RemoteError::StackExhausted(construct)
+            }
+            other => RemoteError::Decode(other.to_string()),
+        })?;
     // Evaluated here without the engine's admission, so the one rewrite admission
     // makes that changes answers rather than refusing — a blank node label shared by
     // two pieces of one basic graph pattern is one variable — is applied here too.
@@ -2202,5 +2307,177 @@ mod tests {
             sanitized, leaf,
             "an all-columns-stripped injected Values must collapse out of the Join entirely"
         );
+    }
+
+    /// A one-row block binding `?t` to a quoted triple — a cell Values Insertion joins in
+    /// because no expression constant can spell it, and one sanitizing keeps.
+    fn triple_block() -> GraphPattern {
+        let iri = |local: &str| NamedNode::new_unchecked(format!("http://ex/{local}"));
+        GraphPattern::Values {
+            variables: vec![Variable::new("t")],
+            bindings: vec![vec![Some(GroundTerm::Triple(Box::new(GroundTriple {
+                subject: GroundTerm::NamedNode(iri("a")),
+                predicate: iri("knows"),
+                object: GroundTerm::NamedNode(iri("x")),
+            })))]],
+        }
+    }
+
+    /// `pattern` with `block` joined beside every filter whose inner pattern is itself
+    /// filtered — the shape Values Insertion builds for an outer filter reading `?t` —
+    /// and, when `inner_reads` is set, beneath every inner filter too (the shape it builds
+    /// for a filter reading `?t` itself).
+    fn inject(pattern: &GraphPattern, block: &GraphPattern, inner_reads: bool) -> GraphPattern {
+        match pattern {
+            GraphPattern::Filter { expr, inner } => {
+                let inner = inject(inner, block, inner_reads);
+                let inner = match inner {
+                    GraphPattern::Filter { expr, inner } => {
+                        let inner = if inner_reads {
+                            GraphPattern::Join {
+                                left: inner,
+                                right: Box::new(block.clone()),
+                            }
+                        } else {
+                            *inner
+                        };
+                        GraphPattern::Join {
+                            left: Box::new(GraphPattern::Filter {
+                                expr,
+                                inner: Box::new(inner),
+                            }),
+                            right: Box::new(block.clone()),
+                        }
+                    }
+                    other => other,
+                };
+                GraphPattern::Filter {
+                    expr: expr.clone(),
+                    inner: Box::new(inner),
+                }
+            }
+            GraphPattern::Graph { name, inner } => GraphPattern::Graph {
+                name: name.clone(),
+                inner: Box::new(inject(inner, block, inner_reads)),
+            },
+            GraphPattern::Join { left, right } => GraphPattern::Join {
+                left: Box::new(inject(left, block, inner_reads)),
+                right: Box::new(inject(right, block, inner_reads)),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// `n` nested `GRAPH` groups, each filtered twice; the outer filter reads `?t`, the
+    /// inner one reads it only when `inner_reads` is set.
+    fn doubly_filtered_body(n: usize, inner_reads: bool) -> GraphPattern {
+        let inner_filter = if inner_reads {
+            "!BOUND(?t)"
+        } else {
+            "?o != <http://ex/x>"
+        };
+        let mut body = "?s <http://ex/knows> ?o".to_owned();
+        for _ in 0..n {
+            body = format!(
+                "GRAPH <http://ex/g> {{ ?s <http://ex/knows> ?o {body} \
+                 FILTER({inner_filter}) FILTER(!BOUND(?t)) }}"
+            );
+        }
+        let query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&format!("SELECT * WHERE {{ {body} }}"))
+            .expect("the source body is admitted");
+        let purrdf_sparql_algebra::Query::Select {
+            pattern: GraphPattern::Project { inner, .. },
+            ..
+        } = query
+        else {
+            panic!("a SELECT with its projection");
+        };
+        *inner
+    }
+
+    /// Whether the parser admits `pattern`'s forwarded text.
+    fn forwarded_text_is_admitted(pattern: &GraphPattern) -> Result<(), String> {
+        let text = purrdf_sparql_algebra::pattern_to_select_query(pattern);
+        purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(&text)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_block_joined_beside_filters_is_forwarded_beneath_them_and_admitted() {
+        // 120 nested groups, admitted as written. Joined beside each group's filters, the
+        // block would force a brace per group — twice the nesting — and the text would be
+        // refused; moved beneath the filters, which do not read `?t`, it is written flat.
+        let injected = inject(&doubly_filtered_body(120, false), &triple_block(), false);
+        assert!(
+            forwarded_text_is_admitted(&injected).is_err(),
+            "the block beside the filters does not fit the nesting budget"
+        );
+        let sanitized = sanitize_forwarded_body(&injected);
+        forwarded_text_is_admitted(&sanitized).expect("forwarded beneath the filters");
+        // The one level's shape: the block is joined to the triple, under both filters.
+        let GraphPattern::Graph { inner, .. } = &sanitized else {
+            panic!("the outermost group is a GRAPH");
+        };
+        let GraphPattern::Filter { inner, .. } = &**inner else {
+            panic!("the outer filter stays outermost");
+        };
+        let GraphPattern::Filter { inner, .. } = &**inner else {
+            panic!("the inner filter is directly beneath it");
+        };
+        assert!(
+            matches!(&**inner, GraphPattern::Join { right, .. } if **right == triple_block()),
+            "the block is joined beneath both filters: {inner:?}"
+        );
+    }
+
+    #[test]
+    fn a_block_a_filter_reads_is_not_moved_past_it_and_is_joined_once() {
+        // The inner filter reads `?t`, so Values Insertion joined the block beneath it as
+        // well: the outer block stops at that filter, where every row already binds `?t`
+        // to the block's value, and joining it again there would be the identity.
+        let injected = inject(&doubly_filtered_body(120, true), &triple_block(), true);
+        assert!(
+            forwarded_text_is_admitted(&injected).is_err(),
+            "the block beside the reading filter does not fit the nesting budget"
+        );
+        let sanitized = sanitize_forwarded_body(&injected);
+        forwarded_text_is_admitted(&sanitized).expect("forwarded without the repeated block");
+        let GraphPattern::Graph { inner, .. } = &sanitized else {
+            panic!("the outermost group is a GRAPH");
+        };
+        let GraphPattern::Filter { inner, .. } = &**inner else {
+            panic!("the outer filter stays outermost");
+        };
+        let GraphPattern::Filter { inner, .. } = &**inner else {
+            panic!("the reading filter is directly beneath it, not behind a second block");
+        };
+        assert!(
+            matches!(&**inner, GraphPattern::Join { right, .. } if **right == triple_block()),
+            "the reading filter keeps its own block: {inner:?}"
+        );
+
+        // The valid neighbour of the move: a block that a filter reads, with nothing
+        // beneath that filter binding it, stays beside the filter — moving it would bind
+        // `?t` for a filter that saw it unbound.
+        let reader = GraphPattern::Filter {
+            expr: purrdf_sparql_algebra::Expression::Bound(Variable::new("t")),
+            inner: Box::new(GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/knows",
+                    )),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            }),
+        };
+        let beside = GraphPattern::Join {
+            left: Box::new(reader),
+            right: Box::new(triple_block()),
+        };
+        assert_eq!(sanitize_forwarded_body(&beside), beside);
     }
 }

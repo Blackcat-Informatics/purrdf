@@ -135,10 +135,10 @@ pub mod scratch;
 pub mod execution;
 pub mod service;
 pub mod solution;
-// How much stack the running evaluation has left, and the guard every recursive
-// evaluator entry passes through. Public so a host that switches the stack pointer onto
-// a stack of its own (the wasm asynchronous lane) can install that stack's floor.
-pub mod stack;
+// The guard every recursive evaluator entry passes through, over `purrdf-stack`'s
+// measurement (a host that switches the stack pointer onto a stack of its own installs
+// that stack's floor there, not here).
+mod stack;
 pub mod stat_agg;
 mod statement_layer;
 mod substitute;

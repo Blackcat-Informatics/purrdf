@@ -18,6 +18,8 @@
 //!   validation (delegated to `purrdf-iri`).
 //! * [`ParseError::CdtArity`] — a SEP-0009 composite-datatype function was
 //!   called with a number of arguments its spec-fixed signature does not admit.
+//! * [`ParseError::StackExhausted`] — the query nests deeper than the stack of the
+//!   thread parsing it can hold (the text itself may be fine).
 
 use core::fmt;
 
@@ -74,6 +76,25 @@ pub enum ParseError {
         /// Byte offset of the offending call (best-effort).
         at: usize,
     },
+    /// The query nests deeper than the stack of the thread parsing it can hold:
+    /// `construct` was about to be parsed one level deeper with less than
+    /// [`purrdf_stack::MARGIN_BYTES`] of stack left.
+    ///
+    /// Its own variant rather than a [`Self::Syntax`] because nothing about the text is
+    /// wrong: it is inside the nesting limit, and the same text parses on a thread with
+    /// a larger stack. Refusing is what stands between an admitted nesting depth and a
+    /// crash — natively an aborted process, on `wasm32` a trapped instance — when the
+    /// parse runs where little stack is left (a small thread, or a query re-parsed deep
+    /// inside an evaluation, as an in-process `SERVICE` body is). A caller that must
+    /// tell "a larger stack answers this" from a malformed query matches on this
+    /// variant, never on the message.
+    StackExhausted {
+        /// The construct about to be parsed a level deeper (`"group graph pattern"`,
+        /// `"bracketted expression"`, …).
+        construct: &'static str,
+        /// Byte offset of the token that opened it (best-effort).
+        at: usize,
+    },
 }
 
 impl ParseError {
@@ -99,13 +120,17 @@ impl ParseError {
     }
 
     /// The byte offset the failure was reported at, for the position-bearing
-    /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)/[`CdtArity`](Self::CdtArity)).
+    /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)/[`CdtArity`](Self::CdtArity)/
+    /// [`StackExhausted`](Self::StackExhausted)).
     /// `None` for [`Unsupported`](Self::Unsupported)/[`Iri`](Self::Iri), which are
     /// not tied to a single source position.
     #[must_use]
     pub fn byte_offset(&self) -> Option<usize> {
         match self {
-            Self::Lex { at, .. } | Self::Syntax { at, .. } | Self::CdtArity { at, .. } => Some(*at),
+            Self::Lex { at, .. }
+            | Self::Syntax { at, .. }
+            | Self::CdtArity { at, .. }
+            | Self::StackExhausted { at, .. } => Some(*at),
             Self::Unsupported(_) | Self::Iri { .. } => None,
         }
     }
@@ -149,6 +174,13 @@ impl fmt::Display for ParseError {
             } => write!(
                 f,
                 "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}"
+            ),
+            Self::StackExhausted { construct, at } => write!(
+                f,
+                "SPARQL parse stack exhausted at byte {at}: the {construct} opened there \
+                 nests deeper than this thread's stack can parse (less than {} bytes \
+                 were left); parse it on a thread with a larger stack",
+                purrdf_stack::MARGIN_BYTES
             ),
         }
     }

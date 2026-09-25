@@ -239,7 +239,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 25 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 26 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -487,7 +487,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-stack -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \

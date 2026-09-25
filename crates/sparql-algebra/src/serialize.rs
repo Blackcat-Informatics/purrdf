@@ -20,9 +20,21 @@
 //!   already peeled away (the shape [`pattern_to_select_query`]'s own doctest
 //!   takes, and the shape a whole aggregate query is once a caller — federation or
 //!   otherwise — has stripped the query's top `SELECT` scaffold to reach the WHERE
-//!   body underneath it). Expressions are conservatively fully parenthesized —
-//!   over-parenthesization is a no-op on re-parse, so correctness never depends on
-//!   reproducing the exact precedence.
+//!   body underneath it).
+//! * **Admitted in, admitted out.** The parser bounds how deeply a request may
+//!   nest (`MAX_NESTING_DEPTH`) and how tall an operator tree may grow
+//!   (`MAX_EXPRESSION_HEIGHT`), and a bracket or brace is a level of both. So
+//!   the rendering spends a bracket or a brace only where the grammar needs one
+//!   to rebuild the same tree: expressions follow the grammar's precedence and
+//!   associativity (`a + b + c` bare, `a - (b - c)` and `(a + b) * c`
+//!   bracketted — see `Level`), property paths do the same
+//!   ([`crate::algebra::PropertyPathExpression`]'s `Display`), a `UNION` chain
+//!   or a run of `OPTIONAL`/`MINUS`/`BIND` clauses is written as the one flat
+//!   sequence the parser nests itself, and a sub-`SELECT` is never braced
+//!   twice. Such a brace is one the source text needed too, so the text
+//!   forwarded for a body the parser admitted is admitted again — bracketing
+//!   every operator once turned a 440-operator `FILTER` into a refusal, which a
+//!   `SERVICE SILENT` then answered as if the endpoint had failed.
 //! * Solution-modifier nodes (`Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy`/
 //!   `Group`) re-materialize as a braced **sub-`SELECT`** `{ SELECT ... }`, the
 //!   shape the parser produces for an inline subquery; an aggregate's own
@@ -123,9 +135,8 @@ pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
         // a detail of how to call it.
         fmt_subselect(&mut s, inner);
     } else {
-        s.push_str("SELECT * WHERE { ");
-        fmt_group_body(&mut s, inner);
-        s.push_str(" }");
+        s.push_str("SELECT * WHERE ");
+        fmt_braced_group(&mut s, inner);
     }
     s
 }
@@ -251,14 +262,19 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             expression,
         } => {
             fmt_flattened_left(s, left);
-            s.push_str(" OPTIONAL { ");
-            fmt_group_body(s, right);
+            s.push_str(" OPTIONAL ");
             if let Some(expr) = expression {
+                // The trailing `FILTER` the parser splits back out into this
+                // node's expression, so the right operand stays a group of its
+                // own even when it is a sub-`SELECT`.
+                s.push_str("{ ");
+                fmt_group_body(s, right);
                 s.push_str(" FILTER(");
                 fmt_expr(s, expr);
-                s.push(')');
+                s.push_str(") }");
+            } else {
+                fmt_braced_group(s, right);
             }
-            s.push_str(" }");
         }
         GraphPattern::Lateral { left, right } => {
             fmt_flattened_left(s, left);
@@ -281,37 +297,51 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
                 fmt_group_body(s, right);
                 return;
             }
-            s.push_str(" LATERAL { ");
-            fmt_group_body(s, right);
-            s.push_str(" }");
+            s.push_str(" LATERAL ");
+            fmt_braced_group(s, right);
         }
         GraphPattern::PropertyFunction(call) => fmt_property_function(s, call),
         GraphPattern::Filter { expr, inner } => {
-            fmt_group_body(s, inner);
+            // A `FILTER` constrains its whole group wherever it is written, so
+            // a chain of them over one inner pattern is exactly what the parser
+            // builds from them written in a row; only a filter-free inner
+            // pattern — or another `Filter` — is written inline.
+            if matches!(**inner, GraphPattern::Filter { .. }) {
+                fmt_group_body(s, inner);
+            } else {
+                fmt_flattened_left(s, inner);
+            }
             s.push_str(" FILTER(");
             fmt_expr(s, expr);
             s.push(')');
         }
         GraphPattern::Union { left, right } => {
-            s.push_str("{ ");
-            fmt_group_body(s, left);
-            s.push_str(" } UNION { ");
-            fmt_group_body(s, right);
-            s.push_str(" }");
+            // `{ a } UNION { b } UNION { c }` is `Union(Union(a, b), c)`: the
+            // parser's arm loop nests to the left, so a left `Union` operand is
+            // written as the leading arms of one chain rather than as a braced
+            // arm of its own — which would cost a nesting level per arm. A
+            // right `Union` operand is a braced arm, as it must have been
+            // written.
+            if matches!(**left, GraphPattern::Union { .. }) {
+                fmt_group_body(s, left);
+            } else {
+                fmt_braced_group(s, left);
+            }
+            s.push_str(" UNION ");
+            fmt_braced_group(s, right);
         }
         GraphPattern::Graph { name, inner } => {
             s.push_str("GRAPH ");
             fmt_named_node_pattern(s, name);
-            s.push_str(" { ");
-            fmt_group_body(s, inner);
-            s.push_str(" }");
+            s.push(' ');
+            fmt_braced_group(s, inner);
         }
         GraphPattern::Extend {
             inner,
             variable,
             expression,
         } => {
-            fmt_group_body(s, inner);
+            fmt_flattened_left(s, inner);
             s.push_str(" BIND(");
             fmt_expr(s, expression);
             let _ = write!(s, " AS {})", VarRef(variable));
@@ -326,7 +356,7 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
             element,
             companion,
         } => {
-            fmt_group_body(s, inner);
+            fmt_flattened_left(s, inner);
             s.push_str(" UNFOLD(");
             fmt_expr(s, expression);
             let _ = write!(s, " AS {}", VarRef(element));
@@ -337,9 +367,8 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
         }
         GraphPattern::Minus { left, right } => {
             fmt_flattened_left(s, left);
-            s.push_str(" MINUS { ");
-            fmt_group_body(s, right);
-            s.push_str(" }");
+            s.push_str(" MINUS ");
+            fmt_braced_group(s, right);
         }
         GraphPattern::Service {
             name,
@@ -351,9 +380,8 @@ pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
                 s.push_str("SILENT ");
             }
             fmt_named_node_pattern(s, name);
-            s.push_str(" { ");
-            fmt_group_body(s, inner);
-            s.push_str(" }");
+            s.push(' ');
+            fmt_braced_group(s, inner);
         }
         GraphPattern::Values {
             variables,
@@ -563,13 +591,17 @@ fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
     }
 }
 
-/// Emit the LEFT operand of a `Join`/`LeftJoin`/`Lateral`/`Minus` node,
-/// bracing it as its own group when [`left_operand_needs_bracing`] says
-/// leaving it unbraced would splice its own scope onto the outer group.
-/// Every other LEFT shape (an ordinary `Bgp`/`Path`/`Join`/`Lateral`/`Union`/
-/// `Graph`/`Service`/`Values`/property-function/…) keeps the historical
-/// unbraced rendering: the parser's own left-deep assembly reproduces those
-/// exactly.
+/// Emit the operand a `Join`/`LeftJoin`/`Lateral`/`Minus` writes on its left,
+/// or the pattern a `Filter`/`Extend`/`Unfold` writes before its own clause,
+/// bracing it as its own group only when [`left_operand_needs_bracing`] says
+/// leaving it inline would change the tree the parser rebuilds.
+///
+/// Every other shape is written inline, because the parser's group loop
+/// rebuilds it exactly: each element it reads wraps everything read before it,
+/// which is precisely the left-deep spine these nodes form. Bracing such an
+/// operand anyway would still round-trip, but it costs one nesting level per
+/// link of the chain, so a run of `OPTIONAL`/`MINUS`/`BIND` clauses the parser
+/// admitted would render into text it refuses.
 fn fmt_flattened_left(s: &mut String, left: &GraphPattern) {
     if left_operand_needs_bracing(left) {
         s.push_str("{ ");
@@ -580,55 +612,45 @@ fn fmt_flattened_left(s: &mut String, left: &GraphPattern) {
     }
 }
 
-/// `true` for the [`GraphPattern`] variants that need bracing when they sit
-/// as the LEFT operand of a `Join`/`LeftJoin`/`Lateral`/`Minus` node — a
-/// NARROWER set than [`rendering_starts_with_a_reabsorbable_left`]'s (that
-/// predicate governs the RIGHT-operand hazard, a different question): a
-/// `Filter`/`Extend`/`LeftJoin`/`Minus` LEFT operand renders by emitting ITS
-/// OWN left operand inline first, so flattening it splices its own
-/// filter/bind/optional/minus scope onto the OUTER node's own group instead
-/// of keeping it as its own nested scope (found by the corpus round-trip
-/// sweep: `service/service05.rq`'s `FILTER`, scoped to a bracketed
-/// sub-group, re-associated onto the whole outer group — including a
-/// `SERVICE ?g` lateral join written after it — once flattened unbraced).
+/// `true` for the one [`GraphPattern`] shape that cannot be written inline
+/// before a following group element: a [`GraphPattern::Filter`].
 ///
-/// `Lateral` is DELIBERATELY EXCLUDED, unlike on the right-operand
-/// predicate: it chains left-deep the SAME way `Join` does (SEP-0006
-/// laterality is written left-to-right; both a user-written
-/// `A LATERAL { B } LATERAL { C }` chain and the parser's OWN
-/// property-function-triple folding build exactly this shape as `g`
-/// accumulates), so bracing it here would be WRONG for a PF-folded chain
-/// specifically: the parser's triples-block loop expects to read a
-/// continuous run of triples/PF-calls as ONE triples block, and a brace
-/// splits it, breaking the fold (`roundtrip_property_functions_mixed_with_data_triples`
-/// is what catches this — it round-trips a PF chain immediately followed by
-/// an ordinary triple sharing the same block).
-fn left_operand_needs_bracing(p: &GraphPattern) -> bool {
-    match p {
-        GraphPattern::LeftJoin { .. }
-        | GraphPattern::Minus { .. }
-        | GraphPattern::Filter { .. }
-        | GraphPattern::Extend { .. }
-        // Same reason as `Extend`: an `Unfold` LEFT operand renders its own
-        // inner pattern inline first, so flattening it unbraced would splice
-        // that pattern — and the `UNFOLD` clause's own scope — onto the OUTER
-        // node's group.
-        | GraphPattern::Unfold { .. } => true,
-        GraphPattern::Bgp { .. }
-        | GraphPattern::Path { .. }
-        | GraphPattern::Join { .. }
-        | GraphPattern::Lateral { .. }
-        | GraphPattern::Union { .. }
-        | GraphPattern::Graph { .. }
-        | GraphPattern::Service { .. }
-        | GraphPattern::Values { .. }
-        | GraphPattern::OrderBy { .. }
-        | GraphPattern::Project { .. }
-        | GraphPattern::Distinct { .. }
-        | GraphPattern::Reduced { .. }
-        | GraphPattern::Slice { .. }
-        | GraphPattern::Group { .. }
-        | GraphPattern::PropertyFunction(_) => false,
+/// A `FILTER` constrains the whole group it is written in, wherever in the
+/// group it stands — the parser collects a group's filters and wraps them
+/// around everything else the group built. A `Filter` whose own group was
+/// followed by another element can therefore only have come from a braced
+/// sub-group, and written inline its condition would float out over the outer
+/// element too (found by the corpus round-trip sweep: `service/service05.rq`'s
+/// `FILTER`, scoped to a bracketed sub-group, re-associated onto the whole
+/// outer group — including a `SERVICE ?g` lateral join written after it).
+///
+/// Every other node is rebuilt exactly by the group loop from its inline
+/// rendering: `LeftJoin`/`Minus`/`Lateral` wrap the pattern before them in the
+/// order written, and `Extend`/`Unfold` wrap it the same way, so a
+/// `A OPTIONAL { B } BIND(e AS ?v) MINUS { C }` run reproduces its own
+/// left-deep chain. A `Filter` nested inside one of those is braced by that
+/// node's own rendering, recursively.
+const fn left_operand_needs_bracing(p: &GraphPattern) -> bool {
+    matches!(p, GraphPattern::Filter { .. })
+}
+
+/// Emit `p` as a braced group `{ … }` — the body of a `WHERE`, an arm of a
+/// `UNION`, or the group an `OPTIONAL`/`MINUS`/`LATERAL`/`GRAPH`/`SERVICE`/
+/// `EXISTS` keyword takes.
+///
+/// A sub-`SELECT` already renders as a braced `{ SELECT … }` group, and the
+/// grammar admits it directly in every one of these positions (`GroupGraphPattern
+/// ::= '{' ( SubSelect | GroupGraphPatternSub ) '}'`), so it is written once
+/// rather than wrapped in a second brace: the doubled brace re-parsed to the same
+/// tree, but at one more nesting level per sub-`SELECT` than the source text
+/// spent.
+fn fmt_braced_group(s: &mut String, p: &GraphPattern) {
+    if is_subselect_node(p) {
+        fmt_group_body(s, p);
+    } else {
+        s.push_str("{ ");
+        fmt_group_body(s, p);
+        s.push_str(" }");
     }
 }
 
@@ -871,9 +893,8 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
         let _ = write!(s, " AS {})", VarRef(var));
     }
 
-    s.push_str(" WHERE { ");
-    fmt_group_body(s, cur);
-    s.push_str(" }");
+    s.push_str(" WHERE ");
+    fmt_braced_group(s, cur);
 
     if let Some((vars, aggs)) = group {
         if !vars.is_empty() {
@@ -1071,8 +1092,95 @@ impl core::fmt::Display for VarRef<'_> {
     }
 }
 
-/// Emit an expression. Binary and unary operators are conservatively
-/// parenthesized so re-parse never depends on reproducing exact precedence.
+/// The SPARQL expression grammar's binding strengths, loosest first
+/// (§19.8 `[110]`–`[119]`): the level a rendered expression occupies, and the
+/// level an operand position demands.
+///
+/// An operand whose own level is looser than its position demands is the one
+/// shape that needs brackets; every other operand is written bare. That is what
+/// keeps the forwarded text within the parser's nesting budget: a bracket is one
+/// nesting level (`MAX_NESTING_DEPTH`) and one level of tree height
+/// (`MAX_EXPRESSION_HEIGHT`), so bracketing every operator turned a
+/// 440-operator chain the parser admitted into text it refused. Bracketing only
+/// where the grammar would otherwise build a different tree writes no bracket
+/// the source text did not also need, so the rendering of an admitted tree is
+/// admitted again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Level {
+    /// `ConditionalOrExpression`: `||`, left-associative.
+    Or,
+    /// `ConditionalAndExpression`: `&&`, left-associative.
+    And,
+    /// `RelationalExpression`: one optional `=`/`!=`/`<`/`>`/`<=`/`>=`/`IN`/
+    /// `NOT IN` between two `NumericExpression`s — non-associative.
+    Relational,
+    /// `AdditiveExpression`: `+`/`-`, left-associative.
+    Additive,
+    /// `MultiplicativeExpression`: `*`/`/`, left-associative.
+    Multiplicative,
+    /// `UnaryExpression`: a prefix `!`/`+`/`-` over another unary expression.
+    Unary,
+    /// `PrimaryExpression`: terms, calls, `EXISTS`, and anything bracketted.
+    Primary,
+}
+
+impl Level {
+    /// The level the next-tighter operand of a left-associative operator at
+    /// this level must reach: a right operand of equal level would re-parse
+    /// left-nested, so it demands one level tighter.
+    const fn tighter(self) -> Self {
+        match self {
+            Self::Or => Self::And,
+            Self::And => Self::Relational,
+            Self::Relational => Self::Additive,
+            Self::Additive => Self::Multiplicative,
+            Self::Multiplicative => Self::Unary,
+            Self::Unary | Self::Primary => Self::Primary,
+        }
+    }
+}
+
+/// The level `e` renders at in [`fmt_expr_at`] — which is decided by how it is
+/// SPELLED, not only by its variant: `Not(Equal)` is written `a != b` and
+/// `Not(In)` `a NOT IN (…)` (both relational, and both exactly the trees the
+/// parser builds for those spellings), `Not(Exists)` is written `NOT EXISTS`
+/// (a primary), and any other `Not` is the prefix `!`.
+///
+/// A variable standing for an aggregate's synthetic output renders as the
+/// aggregate call, a primary — the same level the bare variable has.
+fn expr_level(e: &Expression) -> Level {
+    match e {
+        Expression::Or(..) => Level::Or,
+        Expression::And(..) => Level::And,
+        Expression::Equal(..)
+        | Expression::Greater(..)
+        | Expression::GreaterOrEqual(..)
+        | Expression::Less(..)
+        | Expression::LessOrEqual(..)
+        | Expression::In(..) => Level::Relational,
+        Expression::Add(..) | Expression::Subtract(..) => Level::Additive,
+        Expression::Multiply(..) | Expression::Divide(..) => Level::Multiplicative,
+        Expression::Not(inner) => match **inner {
+            Expression::Equal(..) | Expression::In(..) => Level::Relational,
+            Expression::Exists(_) => Level::Primary,
+            _ => Level::Unary,
+        },
+        Expression::UnaryPlus(_) | Expression::UnaryMinus(_) => Level::Unary,
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Variable(_)
+        | Expression::Bound(_)
+        | Expression::SameTerm(..)
+        | Expression::If(..)
+        | Expression::Coalesce(_)
+        | Expression::FunctionCall(..)
+        | Expression::Exists(_) => Level::Primary,
+    }
+}
+
+/// Emit an expression in a position that admits any expression (a `FILTER`,
+/// a `BIND`, an argument, an `IN` list entry, …), bracketting operands only
+/// where the grammar requires it — see [`Level`].
 ///
 /// This is a thin wrapper over [`fmt_expr_agg`] with no enclosing `Group` in
 /// scope; every call site outside [`fmt_subselect`]'s SELECT-expression/
@@ -1114,6 +1222,23 @@ fn fmt_expr(s: &mut String, e: &Expression) {
 /// reached via `fmt_group_body`, which is why the `Exists` arm below does not
 /// thread `group` through).
 fn fmt_expr_agg(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
+    fmt_expr_at(s, e, Level::Or, group);
+}
+
+/// Emit `e` in an operand position that demands at least level `min`: bare when
+/// `e` renders at that level or tighter, bracketted otherwise.
+fn fmt_expr_at(s: &mut String, e: &Expression, min: Level, group: Option<GroupSpec<'_>>) {
+    if expr_level(e) < min {
+        s.push('(');
+        fmt_expr_bare(s, e, group);
+        s.push(')');
+    } else {
+        fmt_expr_bare(s, e, group);
+    }
+}
+
+/// Emit `e` at its own level ([`expr_level`]), with no bracket around it.
+fn fmt_expr_bare(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
     if let Expression::Variable(v) = e
         && let Some((_, aggs)) = group
         && let Some((_, agg)) = aggs.iter().find(|(ov, _)| ov == v)
@@ -1132,9 +1257,9 @@ fn fmt_expr_agg(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
         Expression::Bound(v) => {
             let _ = write!(s, "BOUND({})", VarRef(v));
         }
-        Expression::Or(a, b) => fmt_binop(s, a, "||", b, group),
-        Expression::And(a, b) => fmt_binop(s, a, "&&", b, group),
-        Expression::Equal(a, b) => fmt_binop(s, a, "=", b, group),
+        Expression::Or(a, b) => fmt_left_assoc(s, a, "||", b, Level::Or, group),
+        Expression::And(a, b) => fmt_left_assoc(s, a, "&&", b, Level::And, group),
+        Expression::Equal(a, b) => fmt_relational(s, a, "=", b, group),
         Expression::SameTerm(a, b) => {
             s.push_str("sameTerm(");
             fmt_expr_agg(s, a, group);
@@ -1142,36 +1267,27 @@ fn fmt_expr_agg(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
             fmt_expr_agg(s, b, group);
             s.push(')');
         }
-        Expression::Greater(a, b) => fmt_binop(s, a, ">", b, group),
-        Expression::GreaterOrEqual(a, b) => fmt_binop(s, a, ">=", b, group),
-        Expression::Less(a, b) => fmt_binop(s, a, "<", b, group),
-        Expression::LessOrEqual(a, b) => fmt_binop(s, a, "<=", b, group),
-        Expression::Add(a, b) => fmt_binop(s, a, "+", b, group),
-        Expression::Subtract(a, b) => fmt_binop(s, a, "-", b, group),
-        Expression::Multiply(a, b) => fmt_binop(s, a, "*", b, group),
-        Expression::Divide(a, b) => fmt_binop(s, a, "/", b, group),
-        Expression::UnaryPlus(a) => {
-            s.push_str("(+");
-            fmt_expr_agg(s, a, group);
-            s.push(')');
-        }
-        Expression::UnaryMinus(a) => {
-            s.push_str("(-");
-            fmt_expr_agg(s, a, group);
-            s.push(')');
-        }
-        Expression::Not(a) => {
-            s.push_str("(!");
-            fmt_expr_agg(s, a, group);
-            s.push(')');
-        }
-        Expression::In(a, list) => {
-            s.push('(');
-            fmt_expr_agg(s, a, group);
-            s.push_str(" IN (");
-            fmt_expr_list_agg(s, list, group);
-            s.push_str("))");
-        }
+        Expression::Greater(a, b) => fmt_relational(s, a, ">", b, group),
+        Expression::GreaterOrEqual(a, b) => fmt_relational(s, a, ">=", b, group),
+        Expression::Less(a, b) => fmt_relational(s, a, "<", b, group),
+        Expression::LessOrEqual(a, b) => fmt_relational(s, a, "<=", b, group),
+        Expression::Add(a, b) => fmt_left_assoc(s, a, "+", b, Level::Additive, group),
+        Expression::Subtract(a, b) => fmt_left_assoc(s, a, "-", b, Level::Additive, group),
+        Expression::Multiply(a, b) => fmt_left_assoc(s, a, "*", b, Level::Multiplicative, group),
+        Expression::Divide(a, b) => fmt_left_assoc(s, a, "/", b, Level::Multiplicative, group),
+        Expression::UnaryPlus(a) => fmt_prefix(s, '+', a, group),
+        Expression::UnaryMinus(a) => fmt_prefix(s, '-', a, group),
+        Expression::Not(a) => match &**a {
+            // The spellings the parser itself builds these two trees from.
+            Expression::Equal(l, r) => fmt_relational(s, l, "!=", r, group),
+            Expression::In(l, list) => fmt_in(s, l, " NOT IN (", list, group),
+            Expression::Exists(p) => {
+                s.push_str("NOT EXISTS ");
+                fmt_braced_group(s, p);
+            }
+            other => fmt_prefix(s, '!', other, group),
+        },
+        Expression::In(a, list) => fmt_in(s, a, " IN (", list, group),
         Expression::If(c, t, e2) => {
             s.push_str("IF(");
             fmt_expr_agg(s, c, group);
@@ -1193,26 +1309,65 @@ fn fmt_expr_agg(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
             s.push(')');
         }
         Expression::Exists(p) => {
-            s.push_str("EXISTS { ");
-            fmt_group_body(s, p);
-            s.push_str(" }");
+            s.push_str("EXISTS ");
+            fmt_braced_group(s, p);
         }
     }
 }
 
-/// Emit `(a OP b)` with conservative parentheses.
-fn fmt_binop(
+/// Emit `a OP b` for a left-associative operator at `level`: the left operand
+/// may be any expression of that level (the parser's loop re-nests it to the
+/// left), the right one must bind tighter.
+fn fmt_left_assoc(
+    s: &mut String,
+    a: &Expression,
+    op: &str,
+    b: &Expression,
+    level: Level,
+    group: Option<GroupSpec<'_>>,
+) {
+    fmt_expr_at(s, a, level, group);
+    let _ = write!(s, " {op} ");
+    fmt_expr_at(s, b, level.tighter(), group);
+}
+
+/// Emit `a OP b` for a relational operator: both operands are
+/// `NumericExpression`s, so each must reach [`Level::Additive`].
+fn fmt_relational(
     s: &mut String,
     a: &Expression,
     op: &str,
     b: &Expression,
     group: Option<GroupSpec<'_>>,
 ) {
-    s.push('(');
-    fmt_expr_agg(s, a, group);
+    fmt_expr_at(s, a, Level::Additive, group);
     let _ = write!(s, " {op} ");
-    fmt_expr_agg(s, b, group);
+    fmt_expr_at(s, b, Level::Additive, group);
+}
+
+/// Emit `a IN (list)` / `a NOT IN (list)` (`keyword` carries the spaces and the
+/// opening bracket): the tested operand is a `NumericExpression`, each list
+/// entry any expression.
+fn fmt_in(
+    s: &mut String,
+    a: &Expression,
+    keyword: &str,
+    list: &[Expression],
+    group: Option<GroupSpec<'_>>,
+) {
+    fmt_expr_at(s, a, Level::Additive, group);
+    s.push_str(keyword);
+    fmt_expr_list_agg(s, list, group);
     s.push(')');
+}
+
+/// Emit a prefix `!`/`+`/`-` over a `UnaryExpression` operand. The operator is a
+/// token of its own however the operand begins (the lexer never merges a sign
+/// into what follows it, and every literal renders quoted), so no space is
+/// needed.
+fn fmt_prefix(s: &mut String, op: char, a: &Expression, group: Option<GroupSpec<'_>>) {
+    s.push(op);
+    fmt_expr_at(s, a, Level::Unary, group);
 }
 
 /// Emit a comma-separated expression list.

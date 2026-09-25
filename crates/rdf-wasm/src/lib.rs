@@ -115,11 +115,12 @@ unsafe extern "C" {
 }
 
 /// Runs once, when the instance starts: installs the synchronous shadow stack's floor
-/// for the SPARQL evaluator's stack guard (`purrdf_sparql_eval::stack`).
+/// in [`purrdf_stack`], the measurement the SPARQL parser's and evaluator's stack guards
+/// refuse against.
 ///
-/// The evaluator's default is address 0, the floor rustc's `--stack-first` layout gives
-/// the stack; this reads the linker's own record of it instead, so the guard measures
-/// against wherever the stack really ends however this module was linked. The
+/// Its default is address 0, the floor rustc's `--stack-first` layout gives the stack;
+/// this reads the linker's own record of it instead, so the guards measure against
+/// wherever the stack really ends however this module was linked. The
 /// asynchronous lane switches away from this floor onto each job's region and back
 /// (`async_query`), and puts this value back whenever a job suspends or returns.
 #[cfg(target_arch = "wasm32")]
@@ -128,7 +129,7 @@ pub fn install_stack_floor() {
     // `black_box`: the low end may be address 0, and nothing may be inferred from an
     // address the compiler assumes is not null.
     let low = core::hint::black_box(&raw const __stack_low) as usize;
-    purrdf_sparql_eval::stack::replace_floor(low);
+    purrdf_stack::replace_floor(low);
 }
 
 /// The purrdf engine version (the crate's SemVer), exposed to JS as `version()`.

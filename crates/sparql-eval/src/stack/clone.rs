@@ -352,7 +352,7 @@ mod tests {
         // the copy's 500 levels cannot fit in what remains above it. Measured, not
         // assumed from the requested size, which the C library may round up.
         fn descend(parsed: &Query) -> Result<Query, crate::EvalError> {
-            if super::super::remaining() <= super::super::MARGIN_BYTES + 32 * 1024 {
+            if purrdf_stack::remaining() <= purrdf_stack::MARGIN_BYTES + 32 * 1024 {
                 return super::super::walk(|| query(parsed));
             }
             let frame = core::hint::black_box([0u8; 4096]);

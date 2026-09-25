@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-stack"
+description = "How much stack the running thread has left — natively from the operating system's thread limit, on wasm32 from the shadow stack against an installable floor — and the margin the SPARQL parser and evaluator refuse at instead of overflowing"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-stack"
+rust-version.workspace = true
+keywords = ["stack", "recursion", "wasm", "sparql", "rdf"]
+categories = ["memory-management", "wasm"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only leaf: the one place the workspace measures the stack. The SPARQL
+# parser (`purrdf-sparql-algebra`) and evaluator (`purrdf-sparql-eval`) refuse
+# against it, and the wasm package installs the floors of the stacks it switches
+# onto through it, so all three read one floor per thread and one margin.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_stack"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The thread's stack limit, read once per thread from the operating system.
+# Target-gated because wasm32 measures its shadow stack against the linker's
+# `__stack_low` instead, so the wasm build never pulls it.
+stacker = { workspace = true }

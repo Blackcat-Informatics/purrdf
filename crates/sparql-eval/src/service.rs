@@ -52,7 +52,7 @@
 //! |---|---|---|
 //! | The endpoint is unreachable, or its response undecodable ([`RemoteError::Transport`], [`RemoteError::Decode`], [`RemoteError::Disabled`]) | [`EvalError::Remote`](crate::EvalError) | join identity |
 //! | A capability was denied ([`RemoteError::Denied`]) | [`EvalError::ServiceDenied`](crate::EvalError) | [`EvalError::ServiceDenied`](crate::EvalError) |
-//! | An in-process source ran out of stack evaluating the body ([`RemoteError::StackExhausted`]) | [`EvalError::StackExhausted`](crate::EvalError) | [`EvalError::StackExhausted`](crate::EvalError) |
+//! | An in-process source ran out of stack parsing or evaluating the body ([`RemoteError::StackExhausted`]) | [`EvalError::StackExhausted`](crate::EvalError) | [`EvalError::StackExhausted`](crate::EvalError) |
 //! | This engine's own governor tripped ([`RemoteError::Governed`], [`RemoteError::GovernedAfterCompletion`]) | truncation | truncation |
 //!
 //! The first and last rows are the pre-existing rule, unchanged: `SILENT` is a statement

@@ -1706,6 +1706,7 @@ dependencies = [
  "proptest",
  "purrdf-cdt",
  "purrdf-iri",
+ "purrdf-stack",
  "purrdf-xsd",
  "regex",
 ]
@@ -1746,6 +1747,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-xsd",
  "rayon",
  "regex",
@@ -1753,7 +1755,6 @@ dependencies = [
  "sha2",
  "sha3",
  "smallvec",
- "stacker",
  "wasm-bindgen-test",
 ]
 
@@ -1767,6 +1768,13 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-iri",
+]
+
+[[package]]
+name = "purrdf-stack"
+version = "2.0.2"
+dependencies = [
+ "stacker",
 ]
 
 [[package]]
@@ -1813,6 +1821,7 @@ dependencies = [
  "purrdf-events",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-validate",
  "serde",
  "serde_json",

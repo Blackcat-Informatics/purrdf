@@ -120,13 +120,13 @@ fn subjects(result: Result<SparqlResult, RdfDiagnostic>) -> Result<Vec<String>, 
 /// Run `body` with exactly `bytes` of stack left below it (to within one 4 KiB frame).
 ///
 /// The thread is spawned larger and `body` runs beneath frames that eat down to `bytes`,
-/// measured with the guard's own [`purrdf_sparql_eval::stack::remaining`]: a thread's
+/// measured with the guard's own [`purrdf_stack::remaining`]: a thread's
 /// real stack can be larger than it asked for (the C library reuses a cached stack of up
 /// to several times the requested size), and a test that trusted the request would
 /// then pass or fail with the order the harness ran it in.
 fn on_stack<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + 'static) -> T {
     fn descend<T>(bytes: usize, body: impl FnOnce() -> T) -> T {
-        if purrdf_sparql_eval::stack::remaining() <= bytes {
+        if purrdf_stack::remaining() <= bytes {
             return body();
         }
         let frame = core::hint::black_box([0u8; 4096]);
@@ -362,4 +362,65 @@ fn a_stack_refusal_inside_an_in_process_service_is_not_silenced() {
     assert_stack_refusal(&run(320 * 1024), "a deep SERVICE SILENT body");
     // The valid neighbour: with room, the service answers `s1` only, and the join keeps it.
     assert_eq!(run(LARGE).expect("room for it"), ["s1"]);
+}
+
+/// A `SERVICE SILENT` whose body keeps `?s` only when `depth` nested `STR` calls over
+/// its object equal `<o1>`'s string: only `s1` passes, at any depth.
+fn service_with_nested_calls(depth: usize) -> String {
+    format!(
+        "SELECT ?s WHERE {{ ?s <{EX}p> ?o SERVICE SILENT <{EX}svc> {{ ?s <{EX}p> ?w \
+         FILTER({} = \"{EX}o1\") }} }}",
+        nested("STR(", "?w", ")", depth)
+            .trim_start_matches("SELECT ?s WHERE { ")
+            .trim_end_matches(" }")
+    )
+}
+
+/// Evaluate a prepared plan on a thread with `bytes` of stack, resolving its `SERVICE`
+/// in process against [`dataset`].
+fn evaluate_with_service(
+    prepared: &Arc<PreparedQuery>,
+    bytes: usize,
+) -> Result<Vec<String>, RdfDiagnostic> {
+    let prepared = Arc::clone(prepared);
+    on_stack(bytes, move || {
+        let resolver = InProcessServiceResolver::new().with_endpoint(format!("{EX}svc"), dataset());
+        subjects(NativeSparqlEngine::new().query_prepared(
+            &dataset(),
+            &prepared,
+            &[],
+            QueryOptions {
+                remote: Some(&resolver),
+                ..QueryOptions::EMPTY
+            },
+        ))
+    })
+}
+
+#[test]
+fn a_forwarded_body_too_deep_to_re_parse_is_the_typed_refusal_under_silent() {
+    // The body's 120 nested calls are written again in the text the SERVICE forwards, and
+    // the in-process source re-parses that text at the depth the SERVICE is evaluated at.
+    // With 320 KiB left there, the re-parse runs out of stack: the typed refusal, naming
+    // the parser's construct, and not silenced — `SILENT` answering it with the join
+    // identity would pass every subject as though the service had imposed nothing.
+    let deep = prepare(&service_with_nested_calls(120));
+    let refused = evaluate_with_service(&deep, 320 * 1024);
+    assert_stack_refusal(&refused, "a SERVICE SILENT body 120 calls deep");
+    let message = refused.expect_err("refused").message;
+    assert!(
+        message.contains("function argument list"),
+        "the parser's construct is named: {message}"
+    );
+    // The valid neighbours: the same plan with room for the re-parse answers `s1` alone,
+    // and so does a shallow body on the very same small stack.
+    assert_eq!(
+        evaluate_with_service(&deep, LARGE).expect("room for the re-parse"),
+        ["s1"]
+    );
+    assert_eq!(
+        evaluate_with_service(&prepare(&service_with_nested_calls(3)), 320 * 1024)
+            .expect("a shallow body answers on the small stack"),
+        ["s1"]
+    );
 }

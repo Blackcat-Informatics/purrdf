@@ -993,7 +993,7 @@ fn is_literal(v: &TermValue) -> bool {
 /// between. Do not "optimize away" the widened `Exists` arm on the mistaken
 /// assumption it still drives the correlation decision, and do not double-trust it
 /// against `analyze_pattern`'s output — the two are allowed to differ.
-fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
+pub(crate) fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
     match expr {
         Expression::Variable(v) | Expression::Bound(v) => {
             out.insert(v.clone());

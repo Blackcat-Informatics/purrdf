@@ -55,6 +55,12 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 /// annotation block, in queries and updates alike. The level past the limit is refused
 /// with a typed [`ParseError::Syntax`] naming the construct and this limit.
 ///
+/// The limit bounds the stack a parse *needs*; the same guard also compares it with the
+/// stack the thread *has*, through [`purrdf_stack`], and refuses a level with
+/// [`ParseError::StackExhausted`] once less than [`purrdf_stack::MARGIN_BYTES`] are left
+/// — a request inside the limit, parsed on a small thread or deep inside an evaluation
+/// that re-parses a forwarded `SERVICE` body, is refused rather than overflowing.
+///
 /// # Why 128
 ///
 /// One budget for every construct bounds the stack by 128 times the costliest single
@@ -917,6 +923,17 @@ impl<'a> Parser<'a, '_> {
     /// the native stack the parser can consume is bounded by [`MAX_NESTING_DEPTH`]
     /// times the costliest single level, whatever mix of constructs a request nests.
     /// The count is restored on the error path too.
+    ///
+    /// A level count bounds the stack a parse needs, not the stack it has: a request
+    /// admitted by the count can still be parsed where little is left — on a small
+    /// thread, or deep inside an evaluation that re-parses a forwarded `SERVICE` body.
+    /// So each level also asks [`purrdf_stack::is_low`] and refuses with
+    /// [`ParseError::StackExhausted`] once less than [`purrdf_stack::MARGIN_BYTES`]
+    /// remain, rather than overflowing. What runs between two levels is one level of
+    /// one construct and its leaves — the margin's derivation names the figures — so
+    /// the parser's frames never reach the floor. The count is tested first, so a
+    /// request that reaches the limit with stack to spare is refused by the limit; the
+    /// stack test is one thread-local load and one comparison.
     fn nested<T>(
         &mut self,
         construct: &'static str,
@@ -927,6 +944,12 @@ impl<'a> Parser<'a, '_> {
                 format!("{construct} nesting exceeds the safety limit of {MAX_NESTING_DEPTH}"),
                 self.span(),
             ));
+        }
+        if purrdf_stack::is_low() {
+            return Err(ParseError::StackExhausted {
+                construct,
+                at: self.span(),
+            });
         }
         self.nesting_depth += 1;
         self.nesting_peak = self.nesting_peak.max(self.nesting_depth);
