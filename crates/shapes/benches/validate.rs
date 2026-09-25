@@ -48,6 +48,17 @@
 //! evaluates the path alone. The two `tags` sizes sit either side of the length
 //! at which `shnex:distinct` stops scanning its output and hashes instead.
 //!
+//! `shacl_focus_list_components` is the SHACL 1.2 list components over holders
+//! whose one value node is a SHACL list of `members` IRIs: `length`
+//! (`sh:minListLength`/`sh:maxListLength`), `unique` (`sh:uniqueMembers`) and
+//! `member_shape` (`sh:memberShape` over an IRI-kind shape), each beside a
+//! `control` row that constrains the same value node without walking its list.
+//!
+//! `shacl_focus_closed_by_types` is the same five-property closed shape in its
+//! two closures: `closed_true` (`sh:closed true` with `rdf:type` ignored) and
+//! `by_types` (`sh:closed sh:ByTypes` on the class, whose permitted set is
+//! selected per focus node by its `rdf:type` values).
+//!
 //! `shacl_change_path_contrast` is the conforming-versus-violating pair over ONE
 //! dataset and ONE binding: the change path materializes a focus node only where a
 //! result is built, so a conforming request should cost a constant whatever the
@@ -129,6 +140,8 @@ const COMPUTED_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const TARGET_WHERE_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const SEQUENCE_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const SEQUENCE_TAGS: &[usize] = &[8, 24];
+const LIST_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const LIST_MEMBERS: &[usize] = &[4, 32];
 const REALTIME_FOCUS_SIZES: &[usize] = &[1, 8, 64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -332,9 +345,16 @@ ex:WholeBundleShape a sh:NodeShape ;
 /// A `sh:closed` node shape with five simple-predicate property shapes carrying
 /// `sh:minLength`/`sh:maxLength`/`sh:nodeKind`/`sh:languageIn`/`sh:datatype`,
 /// over `focus_nodes` conforming subjects. Every subject also carries `rdf:type`,
-/// which the shape admits only through `sh:ignoredProperties`, so the closed
-/// permitted-set probe runs on every outgoing triple of every focus node.
-fn closed_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+/// so the closed permitted-set probe runs on every outgoing triple of every focus
+/// node.
+///
+/// `by_types` selects the closure. `false` is `sh:closed true` on a shape
+/// targeting the class, which admits `rdf:type` only through
+/// `sh:ignoredProperties`. `true` is `sh:closed sh:ByTypes` on the class itself
+/// (an implicit class target), whose permitted set is `rdf:type` plus the
+/// properties collected from each focus node's `rdf:type` values (SHACL 1.2 Core
+/// §7.9.1) — the same five, so both forms conform and do the same constraint work.
+fn closed_focus_fixture(focus_nodes: usize, by_types: bool) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
     let closed_class = builder.intern_iri(&format!("{BENCH_EX}ClosedClass"));
@@ -363,18 +383,22 @@ fn closed_focus_fixture(focus_nodes: usize) -> ValidationFixture {
     }
 
     let dataset = builder.freeze().expect("closed focus fixture must freeze");
+    let closure = if by_types {
+        "ex:ClosedClass a rdfs:Class, sh:NodeShape ;\n    sh:closed sh:ByTypes ;"
+    } else {
+        "ex:ClosedBundleShape a sh:NodeShape ;\n    sh:targetClass ex:ClosedClass ;\n    \
+         sh:closed true ;\n    sh:ignoredProperties ( rdf:type ) ;"
+    };
     let shapes = parse_shapes(
         &format!(
             r#"
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix ex: <{BENCH_EX}> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-ex:ClosedBundleShape a sh:NodeShape ;
-    sh:targetClass ex:ClosedClass ;
-    sh:closed true ;
-    sh:ignoredProperties ( rdf:type ) ;
+{closure}
     sh:property [
         sh:path ex:label ;
         sh:minCount 1 ;
@@ -565,6 +589,52 @@ ex:ItemShape a sh:NodeShape ;
         None,
     )
     .expect("sequence focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
+/// `focus_nodes` holders, each whose `ex:members` value is a SHACL list of
+/// `members` distinct IRIs, under a property shape on `ex:members` whose list
+/// constraints come from `form`: `control` checks `sh:minCount 1` alone, `length`
+/// adds `sh:minListLength 1` and `sh:maxListLength` at the member count, `unique`
+/// adds `sh:uniqueMembers true`, and `member_shape` adds `sh:memberShape` over an
+/// IRI-kind shape. Every list meets every form, so the report is empty and each
+/// treatment row differs from `control` only by the list walk its component does.
+fn list_focus_fixture(focus_nodes: usize, members: usize, form: &str) -> ValidationFixture {
+    let mut data = format!("@prefix ex: <{BENCH_EX}> .\n");
+    for index in 0..focus_nodes {
+        write!(data, "ex:holder{index} a ex:Holder ; ex:members (").expect("writes to a String");
+        for member in 0..members {
+            write!(data, " ex:member{member}").expect("writes to a String");
+        }
+        data.push_str(" ) .\n");
+    }
+    let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(&data, None)
+        .expect("list focus data must parse");
+    let constraint = match form {
+        "control" => String::new(),
+        "length" => format!("sh:minListLength 1 ; sh:maxListLength {members} ;"),
+        "unique" => "sh:uniqueMembers true ;".to_owned(),
+        _ => "sh:memberShape ex:IriShape ;".to_owned(),
+    };
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:IriShape a sh:NodeShape ; sh:nodeKind sh:IRI .
+ex:HolderShape a sh:NodeShape ;
+    sh:targetClass ex:Holder ;
+    sh:property [ sh:path ex:members ; sh:minCount 1 ; {constraint} ] .
+"
+        ),
+        None,
+    )
+    .expect("list focus shapes must parse");
     ValidationFixture {
         dataset,
         shapes,
@@ -802,7 +872,7 @@ fn bench_focus_closed(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(5));
     for &focus_nodes in CLOSED_FOCUS_SIZES {
-        let fixture = closed_focus_fixture(focus_nodes);
+        let fixture = closed_focus_fixture(focus_nodes, false);
         let probe = Once::new();
         group.throughput(Throughput::Elements(focus_nodes as u64));
         group.bench_with_input(
@@ -931,6 +1001,61 @@ fn bench_focus_sequence_operators(c: &mut Criterion) {
                     },
                 );
             }
+        }
+    }
+    group.finish();
+}
+
+fn bench_focus_list_components(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_list_components");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in LIST_FOCUS_SIZES {
+        for &members in LIST_MEMBERS {
+            for form in ["control", "length", "unique", "member_shape"] {
+                let fixture = list_focus_fixture(focus_nodes, members, form);
+                let probe = Once::new();
+                group.throughput(Throughput::Elements(focus_nodes as u64));
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{form}_members{members}"), focus_nodes),
+                    &fixture,
+                    move |bencher, fixture| {
+                        probe.call_once(|| {
+                            print_validation_probe(
+                                &format!("list_{form}_members{members}"),
+                                fixture,
+                            );
+                        });
+                        bencher.iter(|| validate_fixture(black_box(fixture)));
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+fn bench_focus_closed_by_types(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_closed_by_types");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in CLOSED_FOCUS_SIZES {
+        for (label, by_types) in [("closed_true", false), ("by_types", true)] {
+            let fixture = closed_focus_fixture(focus_nodes, by_types);
+            let probe = Once::new();
+            group.throughput(Throughput::Elements(focus_nodes as u64));
+            group.bench_with_input(
+                BenchmarkId::new(label, focus_nodes),
+                &fixture,
+                move |bencher, fixture| {
+                    probe.call_once(|| {
+                        print_validation_probe(&format!("closed_{label}"), fixture);
+                    });
+                    bencher.iter(|| validate_fixture(black_box(fixture)));
+                },
+            );
         }
     }
     group.finish();
@@ -1839,6 +1964,8 @@ criterion_group!(
     bench_focus_target_where,
     bench_focus_computed_values,
     bench_focus_sequence_operators,
+    bench_focus_list_components,
+    bench_focus_closed_by_types,
     bench_focus_realtime,
     bench_change_path_contrast,
     bench_subclass_membership,
