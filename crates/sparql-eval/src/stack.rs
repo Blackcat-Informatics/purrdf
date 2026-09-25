@@ -63,8 +63,9 @@
 //! a host installed for a stack it switched onto — and the margin a check refuses at are
 //! [`purrdf_stack`]'s, the one measurement the parser and the wasm host share with this
 //! guard. See [`purrdf_stack::MARGIN_BYTES`] for the measured derivation of the margin.
-
-use core::cell::Cell;
+//! The walk scopes are [`purrdf_stack`]'s too ([`purrdf_stack::walk`]): their state is
+//! part of the per-computation [`purrdf_stack::Context`] a host swaps whenever it
+//! suspends an evaluation and runs something else on the thread.
 
 use crate::error::EvalError;
 
@@ -98,103 +99,42 @@ pub(crate) fn is_low() -> bool {
     purrdf_stack::is_low()
 }
 
-/// Where the current thread stands with respect to [`walk`] scopes.
-#[derive(Clone, Copy)]
-enum WalkState {
-    /// No scope is open: a walk that runs low has nobody to hand a refusal to, so it
-    /// carries on exactly as it did before the guard existed.
-    Unscoped,
-    /// A scope is open and nothing has refused yet.
-    Scoped,
-    /// A walk inside the open scope refused at `construct`; the floor it replaced with
-    /// [`purrdf_stack::EXHAUSTED`] is `floor`.
-    Refused {
-        /// What refused.
-        construct: &'static str,
-        /// The floor to put back when the scope closes.
-        floor: usize,
-    },
-}
-
-thread_local! {
-    /// This thread's [`WalkState`].
-    static WALK: Cell<WalkState> = const { Cell::new(WalkState::Unscoped) };
-}
-
 /// Run `body` — an infallible recursive walk over part of the plan (an analysis, a
 /// substitution, a copy) — so that it can refuse when the stack runs low.
 ///
-/// Such a walk has no error channel, so a level of it that finds less than
-/// [`purrdf_stack::MARGIN_BYTES`] left calls [`walk_is_low`], which latches the refusal
-/// on this thread and tells the walk to stop descending and return a placeholder. This
-/// scope then discards whatever `body` produced and returns [`EvalError::StackExhausted`]
-/// naming the construct that refused: a placeholder never escapes, because the only way
-/// to reach `body`'s value is through the `Ok` this returns only when nothing refused.
-/// Anything the walk wrote through a reference must be discarded with it, which is why
-/// every caller hands its walk state it owns (a fresh table, a fresh map) and drops it on
-/// the error.
+/// This is [`purrdf_stack::walk`], with its refusal typed as the evaluator's: a level of
+/// the walk that finds less than [`purrdf_stack::MARGIN_BYTES`] left calls
+/// [`walk_is_low`], which latches the refusal in this scope and tells the walk to stop
+/// descending and return a placeholder; the scope then discards whatever `body` produced,
+/// so a placeholder never escapes. Anything the walk wrote through a reference must be
+/// discarded with it, which is why every caller hands its walk state it owns (a fresh
+/// table, a fresh map) and drops it on the error. Once a level has refused, every check
+/// in the running context refuses at once until the scope closes, so the walk unwinds
+/// without computing over the placeholder it left.
 ///
-/// Once a level has refused, the rest of the walk must not go on computing over the
-/// placeholder it left — a later level could trip an internal consistency assertion on a
-/// tree it half-built — so the refusal also replaces the thread's floor with
-/// [`purrdf_stack::EXHAUSTED`]: every check on the thread, in every walk, in the
-/// evaluator and in the parser alike, then refuses at once, and the walk unwinds to this
-/// scope level by level without doing any more work.
-/// The real floor is put back when the scope closes.
-///
-/// Scopes nest: the enclosing scope's state (and, after a refusal, the floor) is put back
-/// when this one closes, even when `body` unwinds.
+/// The scope state lives in [`purrdf_stack`] beside the stack floor, as one
+/// [`purrdf_stack::Context`] per running computation: a host that suspends an evaluation
+/// inside a scope — a property path's traversal polls the stop signal, and the wasm
+/// package's asynchronous lane suspends there — swaps the context out, so whatever runs
+/// while it waits neither sees the open scope nor latches its own refusals in it.
 ///
 /// # Errors
 ///
-/// [`EvalError::StackExhausted`] when any level of the walk refused.
+/// [`EvalError::StackExhausted`] naming the construct that refused, when any level of the
+/// walk did.
 pub(crate) fn walk<T>(body: impl FnOnce() -> T) -> Result<T, EvalError> {
-    /// Closes the scope when the walk returns or unwinds: puts the real floor back if a
-    /// level refused, then the enclosing scope's state.
-    struct Close(WalkState);
-    impl Drop for Close {
-        fn drop(&mut self) {
-            let inner = WALK.with(|state| state.replace(self.0));
-            if let WalkState::Refused { floor, .. } = inner {
-                purrdf_stack::replace_floor(floor);
-            }
-        }
-    }
-    let close = Close(WALK.with(|state| state.replace(WalkState::Scoped)));
-    let value = body();
-    let outcome = WALK.with(Cell::get);
-    drop(close);
-    match outcome {
-        WalkState::Refused { construct, .. } => Err(EvalError::StackExhausted { construct }),
-        WalkState::Unscoped | WalkState::Scoped => Ok(value),
-    }
+    purrdf_stack::walk(body).map_err(|construct| EvalError::StackExhausted { construct })
 }
 
 /// Whether a level of an infallible walk must stop descending: inside a [`walk`] scope,
 /// less than [`purrdf_stack::MARGIN_BYTES`] of stack are left (the refusal is latched
 /// for the scope to report), or a level of the same walk already refused. Outside any
 /// scope this is always `false`. `construct` names the walk, for the error.
+///
+/// [`purrdf_stack::walk_is_low`]; its hot path is [`is_low`]'s.
 #[inline]
 pub(crate) fn walk_is_low(construct: &'static str) -> bool {
-    if !is_low() {
-        return false;
-    }
-    walk_refuse(construct)
-}
-
-/// The cold half of [`walk_is_low`]: latch the refusal in the open scope, if any.
-#[cold]
-#[inline(never)]
-fn walk_refuse(construct: &'static str) -> bool {
-    WALK.with(|state| match state.get() {
-        WalkState::Unscoped => false,
-        WalkState::Scoped => {
-            let floor = purrdf_stack::replace_floor(purrdf_stack::EXHAUSTED);
-            state.set(WalkState::Refused { construct, floor });
-            true
-        }
-        WalkState::Refused { .. } => true,
-    })
+    purrdf_stack::walk_is_low(construct)
 }
 
 #[cfg(test)]

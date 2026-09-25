@@ -56,13 +56,16 @@
 //! by counting call sites.
 //!
 //! Inside the region two guards read one measurement. The run installs the region's base
-//! as the stack floor the parser's and evaluator's guards measure against
-//! (`purrdf_stack::replace_floor`), puts the context's own floor back before every
-//! suspension, reinstalls the base on every
-//! resumption (recording the resuming context's floor as the one to put back next), and
-//! puts the context's floor back when the run returns — so every stack measurement on
-//! the job is against its own region, and every one made while it is suspended is
-//! against the stack actually running. The [`JspiStopWatch`] guards polling frames:
+//! as the stack floor the parser's and evaluator's guards measure against, with no walk
+//! scope open (`purrdf_stack::replace_context`, which swaps the floor and the evaluator's
+//! walk-scope state together), puts the context's own back before every suspension,
+//! reinstalls the job's on every resumption (recording the resuming context's as the one
+//! to put back next), and puts the context's own back when the run returns — so every
+//! stack measurement on the job is against its own region, every one made while it is
+//! suspended is against the stack actually running, and a walk scope the job suspends
+//! inside (a property path's traversal polls, and so yields) stays the job's: nothing
+//! that runs while it waits latches a refusal in it, and the jobs close their scopes in
+//! whatever order they are resumed. The [`JspiStopWatch`] guards polling frames:
 //! every poll measures the stack left above the base and, inside a guard band of
 //! 128 KiB, latches a fault ("asynchronous job stack region exhausted …; raise
 //! stackBytes") and stops the job cleanly — before a deeper frame could run off the
@@ -158,20 +161,26 @@
 //! [`QueryEngine`] may run while a job is suspended. Anything shared that a job held
 //! across a poll or a resolver call would therefore be observed half-held by the next
 //! caller — a `RefCell` double borrow panics, and on `wasm32-unknown-unknown` (no
-//! threads) a contended `std::sync::Mutex` panics too. Every candidate on the evaluation
-//! path, and why none spans a suspension:
+//! threads) a contended `std::sync::Mutex` panics too — and per-thread state a job left
+//! set would be read by the next caller as its own. Every candidate on the evaluation
+//! path, every `thread_local!` compiled into this package, and why none is observed
+//! across a suspension:
 //!
 //! | State | Held across a poll or resolver call? |
 //! |---|---|
+//! | The stack floor (`purrdf-stack`'s thread-local `FLOOR`) | Yes — every frame of a suspended job is measured against its region's base. Swapped: it is half of the [`purrdf_stack::Context`] the job installs when its run starts, puts back at every suspension, reinstalls at every resumption and puts back when the run returns (`JspiStopWatch::leave_region` / `enter_region`, `JobInner::run`). |
+//! | The evaluator's walk-scope state (`purrdf-stack`'s thread-local `WALK`: no scope, a scope open, a refusal latched with the floor it replaced) | Yes — a property path's traversal runs inside a walk scope and polls the stop signal at every step, so a job yields with that scope open. Swapped with the floor as the other half of the same `Context`: a job starts with no scope open, a context that runs while the job waits sees its own scopes rather than the job's (so its walks never latch a refusal in the job's scope, nor install the exhausted floor on a context that never refused), and jobs resumed in any order close their own scopes. A refusal latched in a scope never reaches a suspension in any case: it installs the exhausted floor, and the next poll's stack guard stops the job before it could yield. No other walk scope contains a poll or a resolver call — `CONSTRUCT` and update template instantiation, `EXISTS` preparation, the per-row substitution copy, a `SERVICE` body's analysis and serialization, a function body's copy and rewrite all run between polls. |
 //! | `NativeSparqlEngine`'s plan cache (`RefCell<PlanCache>`) | No. Every borrow (`prepare_for`, `prepare_request`, `bind_functions`, `prepare_execution`, the stats accessors) is a temporary inside one statement that parses and admits a plan; planning polls no signal and calls no resolver, and the borrow ends before the returned `Arc<PreparedQuery>` is evaluated. The `engine_is_reentrant_from_a_resolver_and_from_a_poll` test below re-enters one engine from inside its own evaluation to prove it. |
 //! | The BGP join-order cache (`Mutex`, `bgp::order_for`) | No. Locked only around the `get` and the `insert`; the cost-based ordering between them runs unlocked and polls nothing. |
-//! | Plan-memory observers (`plan_memory::interner_memory_observer`, `PlanCharge`) | No. Locked only to add or credit a byte total. |
+//! | Plan-memory observers (`plan_memory::interner_memory_observer`'s thread-local `OBSERVER`, `PlanCharge`) | No. Locked only to add or credit a byte total. |
 //! | Interned schemas and variables (`solution::INTERNED_SCHEMAS`, `substitute::INTERNED_VARIABLES`, thread-local `RefCell`s) | No. Borrowed only inside a pure memo lookup or insert. |
 //! | `GovernorState` (`poll_stop`, `trip`) | No. It polls the signal *before* touching its `OnceLock`, never inside the initializer. |
 //! | Lazily built dataset indexes (`OnceLock` permutations, predecessor and value indexes, path-relation adjacency) | No. Their initializers are pure sorts and scans that poll nothing, so no initialization can be suspended half-done. |
 //! | Reasoner state (`purrdf-entail`'s tableau `RefCell`s, the datalog engines) | No sharing: every closure run owns its own. |
-//! | SHACL's per-thread engine and prepared handles (`purrdf-shapes`'s `SPARQL_ENGINE`, `PREPARED_EXECUTIONS`, scope `RefCell`s) | Not on this lane: no operation here validates shapes, and those handles are already checked out rather than lent while they run. |
-//! | This module's own [`JobSlots`] mutexes and the job registry | No. Each is locked inside one helper that returns owned values, and none is held when [`suspend`] is called. |
+//! | SHACL's per-thread engine, prepared handles and extension environment (`purrdf-shapes`'s `SPARQL_ENGINE`, `PREPARED_EXECUTIONS`, `CACHED_ENV`, scope `RefCell`s) | Not on this lane: no operation here validates shapes, and those handles are already checked out rather than lent while they run. |
+//! | This module's own [`JobSlots`] mutexes and the job registry (thread-local `JOBS` and `LAST_JOB_ID`) | No. Each is locked or borrowed inside one helper that returns owned values, and none is held when [`suspend`] is called. |
+//! | `purrdf-sparql-eval`'s memo-verification switch (`MEMO_VERIFICATION_ENABLED`) | Absent from release builds (it exists only under `debug_assertions`), and never written during an evaluation: only a test harness sets it. |
+//! | Test instrumentation thread-locals — `purrdf-sparql-eval`'s counters and strategy overrides (`LEVEL_ADVANCES`, `POWER_EXPANSIONS`, `NUMERIC_FOLD_TRACE`, `FORCE_PARALLEL`, `FORCE_CHUNK_SIZE`, `MERGE_COUNT`, `INDEX_OF_CALLS`, `FORCE_EXISTS_STRATEGY`, `SUPPRESS_FIRST_WITNESS_WRAP`, `PREPARED_EXISTS_BUILD_COUNT`), `purrdf-core`'s distance-kernel hooks (`BYPASSED`, `HIDDEN`), `purrdf-hnsw`'s `LACKING` | Not compiled into this package: every one is `#[cfg(test)]`. |
 //!
 //! `FORCE_SEQUENTIAL_OPERATION` (`purrdf_sparql_eval::parallel`) is a last-in-first-out
 //! guard that interleaving would break, but it is set only by the fallible lazy-view
@@ -904,11 +913,12 @@ struct JobSlots {
     /// the job runs on its region, which is only ever on `wasm32`.
     region_armed: AtomicBool,
     bounds: StackBounds,
-    /// The stack floor ([`purrdf_stack::replace_floor`]) of the context the
-    /// job was started or last resumed from, put back whenever the job leaves its region:
-    /// at every suspension and when the run returns. Only ever written on `wasm32`, where
-    /// the job runs on its region.
-    outer_floor: AtomicUsize,
+    /// The stack context ([`purrdf_stack::replace_context`]: the stack floor and the
+    /// walk-scope state) of the context the job was started or last resumed from, put
+    /// back whenever the job leaves its region: at every suspension and when the run
+    /// returns. Only ever written on `wasm32`, where the job runs on its region; locked
+    /// only to read or write the value, never across [`suspend`].
+    outer_context: Mutex<purrdf_stack::Context>,
     counters: AsyncCounters,
 }
 
@@ -923,7 +933,7 @@ impl JobSlots {
             finished: AtomicBool::new(false),
             region_armed: AtomicBool::new(false),
             bounds,
-            outer_floor: AtomicUsize::new(0),
+            outer_context: Mutex::new(purrdf_stack::Context::on_floor(0)),
             counters: AsyncCounters::default(),
         }
     }
@@ -1128,12 +1138,13 @@ impl JspiStopWatch {
     fn suspend_on(&self, seq: u32, kind: AsyncEffectKind) -> u32 {
         let started = now_ms();
         // Leaving the region: whatever runs while the job is suspended runs on the
-        // context's own stack, so it gets that stack's floor back — and the job gets its
+        // context's own stack, so it gets that stack's context back — its floor, and its
+        // own walk scopes rather than the one the job may have open — and the job gets its
         // region's back on resumption, from whichever context resumed it (that context's
-        // floor is the one to put back at the next suspension).
-        let region_floor = self.leave_region();
+        // is the one to put back at the next suspension).
+        let region = self.leave_region();
         let status = suspend(self.slots.job, seq);
-        self.enter_region(region_floor);
+        self.enter_region(region);
         self.slots
             .counters
             .record_suspension(kind, now_ms() - started);
@@ -1150,24 +1161,26 @@ impl JspiStopWatch {
         }
     }
 
-    /// Put the outer context's stack floor back before the job leaves its region, and
-    /// return the region's floor to reinstall on the way back in. A no-op off `wasm32`,
-    /// where the job never runs on its region.
-    fn leave_region(&self) -> usize {
+    /// Put the outer context's stack context back before the job leaves its region, and
+    /// return the job's own — its region's floor and its open walk scopes — to reinstall
+    /// on the way back in. `None` off `wasm32`, where the job never runs on its region and
+    /// nothing runs while it is suspended.
+    fn leave_region(&self) -> Option<purrdf_stack::Context> {
         if !cfg!(target_arch = "wasm32") {
-            return 0;
+            return None;
         }
-        purrdf_stack::replace_floor(self.slots.outer_floor.load(Ordering::Relaxed))
+        let outer = *lock(&self.slots.outer_context);
+        Some(purrdf_stack::replace_context(outer))
     }
 
-    /// Reinstall the region's stack floor on resumption, recording the floor of the
-    /// context that resumed the job as the one to put back next. A no-op off `wasm32`.
-    fn enter_region(&self, region_floor: usize) {
-        if !cfg!(target_arch = "wasm32") {
+    /// Reinstall the job's stack context on resumption, recording the context that
+    /// resumed the job as the one to put back next. A no-op off `wasm32`.
+    fn enter_region(&self, region: Option<purrdf_stack::Context>) {
+        let Some(region) = region else {
             return;
-        }
-        let outer = purrdf_stack::replace_floor(region_floor);
-        self.slots.outer_floor.store(outer, Ordering::Relaxed);
+        };
+        let outer = purrdf_stack::replace_context(region);
+        *lock(&self.slots.outer_context) = outer;
     }
 
     /// Give the event loop back once.
@@ -1940,11 +1953,14 @@ impl JobInner {
             .region_armed
             .store(cfg!(target_arch = "wasm32"), Ordering::Relaxed);
         // The region's base is the floor every stack measurement on this job reads — the
-        // poll-time guard band and the evaluator's own guard alike — until the job
-        // suspends or returns (see `JspiStopWatch::leave_region`).
+        // poll-time guard band and the evaluator's own guard alike — and the job starts
+        // with no walk scope open, whatever the context that started it has open, until
+        // it suspends or returns (see `JspiStopWatch::leave_region`).
         if cfg!(target_arch = "wasm32") {
-            let outer = purrdf_stack::replace_floor(self.region.bounds.base);
-            slots.outer_floor.store(outer, Ordering::Relaxed);
+            let outer = purrdf_stack::replace_context(purrdf_stack::Context::on_floor(
+                self.region.bounds.base,
+            ));
+            *lock(&slots.outer_context) = outer;
         }
         let outcome = match (operation, self.watch.stack_check()) {
             (_, Err(fault)) => {
@@ -1959,7 +1975,7 @@ impl JobInner {
         };
         slots.region_armed.store(false, Ordering::Relaxed);
         if cfg!(target_arch = "wasm32") {
-            purrdf_stack::replace_floor(slots.outer_floor.load(Ordering::Relaxed));
+            purrdf_stack::replace_context(*lock(&slots.outer_context));
         }
         match self.region.overrun() {
             Overrun::None => {}

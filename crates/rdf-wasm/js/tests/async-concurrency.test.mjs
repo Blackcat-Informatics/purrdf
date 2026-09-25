@@ -136,6 +136,82 @@ test("a deep sync query during a suspension is answered", async () => {
   assert.equal(stackPointer(), IDLE);
 });
 
+// A property path's traversal runs inside the evaluator's walk scope — the scope that
+// latches a stack refusal for the traversal and discards what it built — and polls the
+// job's stop signal at every step, so under `yieldEveryPolls: 0` a job suspends with that
+// scope open. Whatever runs while it waits (another job, a synchronous query) opens and
+// closes scopes of its own, and the jobs close theirs in whatever order the event loop
+// resumes them, which no single stack would: the scope state is part of each context the
+// scheduler switches between, beside its stack floor.
+const PATH_CHAIN = (() => {
+  const lines = [];
+  for (let index = 0; index < 12; index += 1) lines.push(`<${EX}n${index}> <${EX}p> <${EX}n${index + 1}> .`);
+  return `${lines.join("\n")}\n`;
+})();
+const PATH_SELECT = `SELECT ?s ?o WHERE { ?s <${EX}p>+ ?o }`;
+const PATH_BACKWARD = `SELECT ?s WHERE { ?s <${EX}p>/<${EX}p>* <${EX}n12> }`;
+const PATH_CONSTRUCT = `CONSTRUCT { ?o <${EX}reachedFrom> ?s } WHERE { ?s <${EX}p>* ?o }`;
+
+test("jobs suspended inside a property path's walk scope, interleaved with each other and with synchronous paths, all answer their synchronous baselines", async () => {
+  const engine = new QueryEngine();
+  const data = Dataset.parse(PATH_CHAIN, "nquads");
+  // Baselines from a separate engine, before any job has run on the instance.
+  const baselineEngine = new QueryEngine();
+  const baseline = {
+    select: rowsOf(baselineEngine.select(data, PATH_SELECT)),
+    backward: rowsOf(baselineEngine.select(data, PATH_BACKWARD)),
+    construct: baselineEngine.construct(data, PATH_CONSTRUCT).canonicalize(),
+  };
+  // 12 edges: 78 pairs one or more steps apart, 12 subjects reaching n12, and 91
+  // reflexive-or-longer pairs to construct.
+  assert.equal(baseline.select.length, 78);
+  assert.equal(baseline.backward.length, 12);
+  assert.equal(engine.construct(data, PATH_CONSTRUCT).size, 91);
+
+  const yieldEvery = { yieldEveryPolls: 0 };
+  let settled = 0;
+  const track = (job) => {
+    job.then(() => (settled += 1), () => (settled += 1));
+    return job;
+  };
+  let turns = 0;
+  /** Synchronous path queries, on the main stack, while every unfinished job sits
+   * suspended — mostly mid-traversal, with its walk scope open — then one turn. */
+  const turn = async () => {
+    assert.deepEqual(rowsOf(engine.select(data, PATH_SELECT)), baseline.select, `sync select, turn ${turns}`);
+    assert.equal(engine.construct(data, PATH_CONSTRUCT).canonicalize(), baseline.construct, `sync construct, turn ${turns}`);
+    assert.equal(stackPointer(), IDLE);
+    turns += 1;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  // The short job opens its scope first and closes it while the two started after it
+  // still have theirs open: the reverse of the order a single stack would close them in.
+  const jobs = { backward: track(engine.queryGovernedAsync(data, PATH_BACKWARD, yieldEvery)) };
+  await turn();
+  await turn();
+  jobs.select = track(engine.queryGovernedAsync(data, PATH_SELECT, yieldEvery));
+  jobs.construct = track(engine.constructAsync(data, PATH_CONSTRUCT, yieldEvery));
+  while (settled < Object.keys(jobs).length) await turn();
+  assert.ok(turns > 10, `the jobs interleaved over ${turns} turns`);
+
+  const select = await jobs.select;
+  assert.equal(select.isComplete, true);
+  assert.deepEqual(rowsOf(select.result), baseline.select, "the select job's answer");
+  assert.ok(select.evidence.async.yields > 10, `${select.evidence.async.yields} yields`);
+  const backward = await jobs.backward;
+  assert.equal(backward.isComplete, true);
+  assert.deepEqual(rowsOf(backward.result), baseline.backward, "the backward job's answer");
+  assert.ok(backward.evidence.async.yields > 10, `${backward.evidence.async.yields} yields`);
+  assert.equal((await jobs.construct).canonicalize(), baseline.construct, "the construct job's graph");
+
+  // Afterwards every lane still answers exactly — nothing a job left behind (a scope
+  // it never closed, a refusal it latched) outlives it.
+  assert.deepEqual(rowsOf(engine.select(data, PATH_SELECT)), baseline.select);
+  assert.equal(engine.construct(data, PATH_CONSTRUCT).canonicalize(), baseline.construct);
+  assert.deepEqual(rowsOf(await engine.queryAsync(data, PATH_BACKWARD, yieldEvery)), baseline.backward);
+  assert.equal(stackPointer(), IDLE);
+});
+
 test("an async job started from inside a sync callback runs and returns", async () => {
   const engine = new QueryEngine();
   const data = local();

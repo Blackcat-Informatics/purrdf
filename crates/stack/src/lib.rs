@@ -11,8 +11,10 @@
 //! parser (`purrdf-sparql-algebra`) and evaluator (`purrdf-sparql-eval`) measure the
 //! stack actually left at every recursive entry and refuse, typed, when less than
 //! [`MARGIN_BYTES`] remain. This crate is that measurement, in one place: one floor per
-//! thread, one margin, and the one function hosts call to install the floor of a stack
-//! they switch onto.
+//! thread, one margin, the walk scopes that let a recursion with no error channel refuse
+//! too ([`walk`], [`walk_is_low`]), and the functions hosts call to install the floor of a
+//! stack they switch onto ([`replace_floor`]) or to switch whole contexts
+//! ([`replace_context`]).
 //!
 //! # The floor
 //!
@@ -32,8 +34,9 @@
 //!   Neither `__data_end` nor `__heap_base` says where the stack *ends*, and the first
 //!   pointer observed is the stack's top, not its floor. A host that runs work on a
 //!   stack of its own — the wasm package's asynchronous lane runs each job on a
-//!   heap-allocated region — installs that stack's floor with [`replace_floor`] whenever
-//!   it switches onto it and puts the previous floor back whenever it switches away.
+//!   heap-allocated region — installs that stack's context with [`replace_context`]
+//!   whenever it switches onto it and puts the previous context back whenever it switches
+//!   away (see [Switching contexts](#switching-contexts)).
 //! * **native**: the floor is the current thread's stack limit, as the operating system
 //!   reports it — [`platform::stack_floor`] reads `pthread_getattr_np`,
 //!   `pthread_attr_get_np`, `pthread_stackseg_np`, `pthread_get_stackaddr_np` /
@@ -56,6 +59,31 @@
 //! deepest chain of frames any guarded path can push *between two checks*, plus the
 //! non-recursive work that runs after the last one. See [`MARGIN_BYTES`] for the measured
 //! figures, for the evaluator and for the parser.
+//!
+//! # Walk scopes
+//!
+//! A recursion that has an error channel refuses by returning an error when [`is_low`]
+//! says so. One that has none — an infallible analysis, substitution or copy over a tree
+//! whose height only a level count bounds — runs inside a [`walk`] scope instead: each
+//! level asks [`walk_is_low`], the first that finds the margin gone latches the refusal in
+//! the scope and installs [`EXHAUSTED`] so every later check refuses at once, and the
+//! scope discards whatever the walk built and reports the refusal. Which scope is open,
+//! and what it latched, is per-context state kept beside the floor.
+//!
+//! # Switching contexts
+//!
+//! The floor and the walk-scope state together are a [`Context`]: everything this crate
+//! keeps for the computation running on the thread. A host that runs several
+//! computations on one thread and switches between them *before any has returned* — the
+//! PurRDF wasm package's asynchronous lane suspends a job in the middle of an evaluation
+//! and runs the synchronous lane, or another job, until it resumes — swaps the whole
+//! context with [`replace_context`] at every switch. Swapping the floor alone is not
+//! enough: a job suspended inside a walk scope would leave that scope open for whatever
+//! ran next, whose own walks would latch their refusals in it — handing a placeholder to a
+//! caller with no scope to discard it, and leaving [`EXHAUSTED`] installed on a context
+//! that never refused — and two jobs closing their scopes in the order they happen to be
+//! resumed, rather than the reverse of the order they opened them, would leave each
+//! other's scope state behind.
 
 #![deny(unsafe_code)]
 
@@ -146,19 +174,39 @@ pub const MARGIN_BYTES: usize = 64 * 1024;
 /// A floor that leaves no stack at all: while it is installed, [`remaining`] reports `0`
 /// and [`is_low`] is `true` on this thread, whatever the stack pointer.
 ///
-/// For a guard that must stop every further check on the thread at once — the
-/// evaluator's walks latch a refusal this way so the rest of the walk unwinds without
-/// computing over the placeholder it left — installed with [`replace_floor`], and
-/// replaced by the floor [`replace_floor`] returned once the refusal has been reported.
+/// For a guard that must stop every further check on the thread at once — a [`walk`]
+/// scope latches a refusal this way so the rest of the walk unwinds without computing
+/// over the placeholder it left — installed with [`replace_floor`], and replaced by the
+/// floor [`replace_floor`] returned once the refusal has been reported.
 pub const EXHAUSTED: usize = usize::MAX - 1;
 
 /// The floor's value before anything has been read or installed on this thread.
 const UNKNOWN: usize = usize::MAX;
 
+/// Where the running context stands with respect to [`walk`] scopes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WalkState {
+    /// No scope is open: a walk that runs low has nobody to hand a refusal to, so it
+    /// carries on exactly as it would with no guard at all.
+    Unscoped,
+    /// A scope is open and nothing has refused yet.
+    Scoped,
+    /// A walk inside the open scope refused at `construct`; the floor it replaced with
+    /// [`EXHAUSTED`] is `floor`.
+    Refused {
+        /// What refused.
+        construct: &'static str,
+        /// The floor to put back when the scope closes.
+        floor: usize,
+    },
+}
+
 thread_local! {
     /// The floor of the stack this thread is running on; [`UNKNOWN`] until the first
     /// measurement reads it (or a host installs one with [`replace_floor`]).
     static FLOOR: Cell<usize> = const { Cell::new(UNKNOWN) };
+    /// The running context's [`WalkState`].
+    static WALK: Cell<WalkState> = const { Cell::new(WalkState::Unscoped) };
 }
 
 /// The current stack pointer, as the address of a local of the calling frame.
@@ -195,6 +243,128 @@ pub fn remaining() -> usize {
 /// back: the next measurement reads the floor again.
 pub fn replace_floor(floor: usize) -> usize {
     FLOOR.with(|cell| cell.replace(floor))
+}
+
+/// Everything this crate keeps for the computation running on the thread: the floor of
+/// its stack and the state of its [`walk`] scopes.
+///
+/// A host that switches between computations before they return swaps the whole of it
+/// with [`replace_context`]; see [Switching contexts](crate#switching-contexts). The
+/// value is opaque: a host only ever puts back what [`replace_context`] handed it, or
+/// installs a fresh one with [`Context::on_floor`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Context {
+    /// The floor [`replace_floor`] would install.
+    floor: usize,
+    /// The walk-scope state.
+    walk: WalkState,
+}
+
+impl Context {
+    /// The context of a stack whose floor is `floor`, with no walk scope open — what a
+    /// host installs when it switches onto a stack of its own for a computation that has
+    /// not started yet.
+    #[must_use]
+    pub const fn on_floor(floor: usize) -> Self {
+        Self {
+            floor,
+            walk: WalkState::Unscoped,
+        }
+    }
+}
+
+/// Install `context` as the running computation's, returning the context it replaces
+/// (which the caller puts back when it switches away again).
+///
+/// The floor and the walk-scope state are swapped together, so a walk scope a suspended
+/// computation left open — and a refusal it latched there, with [`EXHAUSTED`] installed —
+/// stays with that computation, and whatever runs while it waits sees only its own. See
+/// [Switching contexts](crate#switching-contexts).
+pub fn replace_context(context: Context) -> Context {
+    Context {
+        floor: replace_floor(context.floor),
+        walk: WALK.with(|state| state.replace(context.walk)),
+    }
+}
+
+/// Run `body` — an infallible recursive walk over a tree whose height only a level count
+/// bounds (an analysis, a substitution, a copy) — so that it can refuse when the stack
+/// runs low.
+///
+/// Such a walk has no error channel, so a level of it that finds less than
+/// [`MARGIN_BYTES`] left calls [`walk_is_low`], which latches the refusal in this scope
+/// and tells the walk to stop descending and return a placeholder. The scope then
+/// discards whatever `body` produced and returns `Err` with the construct that refused:
+/// a placeholder never escapes, because the only way to reach `body`'s value is through
+/// the `Ok` this returns only when nothing refused. Anything the walk wrote through a
+/// reference must be discarded with it, which is why a caller hands its walk state it owns
+/// (a fresh table, a fresh map) and drops it on the error.
+///
+/// Once a level has refused, the rest of the walk must not go on computing over the
+/// placeholder it left — a later level could trip an internal consistency assertion on a
+/// tree it half-built — so the refusal also replaces the running context's floor with
+/// [`EXHAUSTED`]: every check in that context, in every walk, in the evaluator and in the
+/// parser alike, then refuses at once, and the walk unwinds to this scope level by level
+/// without doing any more work. The real floor is put back when the scope closes.
+///
+/// Scopes nest: the enclosing scope's state (and, after a refusal, the floor) is put back
+/// when this one closes, even when `body` unwinds. They nest *per context*: a host that
+/// suspends a computation inside a scope swaps its [`Context`] out with
+/// [`replace_context`], so the scope is closed in the context that opened it.
+///
+/// # Errors
+///
+/// The `construct` a level of the walk named when it refused.
+pub fn walk<T>(body: impl FnOnce() -> T) -> Result<T, &'static str> {
+    /// Closes the scope when the walk returns or unwinds: puts the real floor back if a
+    /// level refused, then the enclosing scope's state.
+    struct Close(WalkState);
+    impl Drop for Close {
+        fn drop(&mut self) {
+            let inner = WALK.with(|state| state.replace(self.0));
+            if let WalkState::Refused { floor, .. } = inner {
+                replace_floor(floor);
+            }
+        }
+    }
+    let close = Close(WALK.with(|state| state.replace(WalkState::Scoped)));
+    let value = body();
+    let outcome = WALK.with(Cell::get);
+    drop(close);
+    match outcome {
+        WalkState::Refused { construct, .. } => Err(construct),
+        WalkState::Unscoped | WalkState::Scoped => Ok(value),
+    }
+}
+
+/// Whether a level of an infallible walk must stop descending: inside a [`walk`] scope,
+/// less than [`MARGIN_BYTES`] of stack are left (the refusal is latched for the scope to
+/// report), or a level of the same walk already refused. Outside any scope this is always
+/// `false`. `construct` names the walk, for the scope's error.
+///
+/// The hot path is [`is_low`]'s; the scope is consulted only once the margin is gone.
+#[inline]
+#[must_use]
+pub fn walk_is_low(construct: &'static str) -> bool {
+    if !is_low() {
+        return false;
+    }
+    walk_refuse(construct)
+}
+
+/// The cold half of [`walk_is_low`]: latch the refusal in the open scope, if any.
+#[cold]
+#[inline(never)]
+fn walk_refuse(construct: &'static str) -> bool {
+    WALK.with(|state| match state.get() {
+        WalkState::Unscoped => false,
+        WalkState::Scoped => {
+            let floor = replace_floor(EXHAUSTED);
+            state.set(WalkState::Refused { construct, floor });
+            true
+        }
+        WalkState::Refused { .. } => true,
+    })
 }
 
 /// Whether less than [`MARGIN_BYTES`] of stack are left.
@@ -409,6 +579,115 @@ mod tests {
             assert_eq!(replace_floor(previous), EXHAUSTED);
             assert!(!is_low());
             assert!(remaining() > MARGIN_BYTES);
+        });
+    }
+
+    /// A floor 1 KiB below the calling frame: inside the margin, so [`is_low`] is `true`.
+    fn low_floor() -> usize {
+        stack_pointer() - 1024
+    }
+
+    /// A walk that runs low inside a scope is refused with the construct it named, the
+    /// rest of the walk sees [`EXHAUSTED`], and closing the scope puts the real floor back.
+    /// Outside any scope the same low stack is not a refusal, and nothing is latched.
+    #[test]
+    fn a_scope_latches_a_low_walk_and_an_unscoped_walk_carries_on() {
+        on_thread(1024 * 1024, || {
+            assert!(!is_low(), "the thread's own floor, read");
+            let real = FLOOR.with(Cell::get);
+            let low = low_floor();
+            replace_floor(low);
+            assert!(!walk_is_low("unscoped walk"), "no scope, no refusal");
+            assert_eq!(replace_floor(real), low, "nothing latched");
+
+            let mut observed = None;
+            let refused = walk(|| {
+                replace_floor(low_floor());
+                let first = walk_is_low("scoped walk");
+                // The low floor is swapped for EXHAUSTED, so every later level stops too.
+                let latched = FLOOR.with(Cell::get);
+                observed = Some((first, latched, walk_is_low("a later level")));
+            });
+            assert_eq!(observed, Some((true, EXHAUSTED, true)));
+            assert_eq!(refused, Err("scoped walk"), "the first refusal is reported");
+            // The scope put back the floor it replaced — the low one this test installed.
+            assert!(is_low());
+            replace_floor(real);
+            assert!(!is_low(), "the thread's own floor is back");
+            assert_eq!(walk(|| walk_is_low("roomy walk")), Ok(false));
+        });
+    }
+
+    /// A computation suspended inside a scope takes the scope with it: the context that
+    /// runs while it waits has none, so a walk there that runs low carries on and latches
+    /// nothing, and the suspended scope is still open — and still able to refuse — when
+    /// the computation resumes. The neighbouring control swaps the floor alone, as a host
+    /// that knew nothing of walk scopes would: the waiting context's walk then latches its
+    /// refusal in the suspended scope, leaves [`EXHAUSTED`] as the waiting context's floor,
+    /// and the suspended computation is refused for a walk it never ran.
+    #[test]
+    fn a_suspended_scope_stays_with_its_context() {
+        on_thread(1024 * 1024, || {
+            assert!(!is_low(), "the thread's own floor, read");
+            let real = FLOOR.with(Cell::get);
+            let mut observed = None;
+            let suspended = walk(|| {
+                // Suspend: the waiting context runs on its own, nearly exhausted, stack.
+                let waiting_floor = low_floor();
+                let job = replace_context(Context::on_floor(waiting_floor));
+                let waiting_low = walk_is_low("waiting walk");
+                let waiting = replace_context(job);
+                // Resume: the job's scope is open, and refuses a walk that runs low.
+                replace_floor(low_floor());
+                let job_low = walk_is_low("resumed walk");
+                observed = Some((
+                    waiting_low,
+                    waiting == Context::on_floor(waiting_floor),
+                    job_low,
+                ));
+            });
+            assert_eq!(observed, Some((false, true, true)));
+            assert_eq!(
+                suspended,
+                Err("resumed walk"),
+                "the job's own refusal, no other"
+            );
+            // Closing the refusing scope put back the floor the job's walk replaced.
+            assert!(is_low());
+            replace_floor(real);
+
+            let waiting = walk(|| {
+                let waiting_floor = low_floor();
+                let job = replace_context(Context::on_floor(waiting_floor));
+                let low = walk_is_low("waiting walk");
+                let after = replace_context(job);
+                (low, after == Context::on_floor(waiting_floor))
+            });
+            assert_eq!(
+                waiting,
+                Ok((false, true)),
+                "the waiting walk had no scope and latched nothing; the job was not refused"
+            );
+            assert!(!is_low());
+
+            let mut observed = None;
+            let floor_only = walk(|| {
+                let job_floor = replace_floor(low_floor());
+                let low = walk_is_low("waiting walk");
+                observed = Some((low, replace_floor(job_floor)));
+            });
+            assert_eq!(
+                observed,
+                Some((true, EXHAUSTED)),
+                "swapping the floor alone latches the waiting walk in the job's scope, and \
+                 leaves the waiting context exhausted"
+            );
+            assert_eq!(
+                floor_only,
+                Err("waiting walk"),
+                "and refuses the job for the waiting context's walk"
+            );
+            replace_floor(real);
         });
     }
 }
