@@ -604,10 +604,16 @@ fn full_fixture() -> Shapes {
     let property = PropertyShape {
         id: ex_term("PropertyShape"),
         path: Path::Sequence(sample_paths()),
+        values: None,
+        default_value: None,
         constraints: sample_constraints(&func),
         property_shapes: vec![PropertyShape {
             id: ex_term("NestedProperty"),
             path: Path::Predicate(ex("nested")),
+            values: Some(NodeExpr::Path(Path::Predicate(ex("computed")))),
+            default_value: Some(NodeExpr::Constant(Term::Literal(
+                Literal::new_simple_literal("fallback"),
+            ))),
             constraints: vec![Constraint::MinCount(1)],
             property_shapes: Vec::new(),
             reifier_shapes: Vec::new(),
@@ -735,6 +741,11 @@ fn full_fixture() -> Shapes {
                 },
                 deactivated: offset == 1,
                 schedule,
+                expected_predicates: if offset == 0 {
+                    vec![ex("expected")]
+                } else {
+                    Vec::new()
+                },
             });
         }
     }
@@ -1209,6 +1220,7 @@ fn shapes_with_order(order: Option<OrderKey>) -> Shapes {
             order,
             deactivated: false,
             schedule: RuleSchedule::General,
+            expected_predicates: Vec::new(),
         }],
         ..leaf_shape("Ordered")
     }])
@@ -1456,6 +1468,7 @@ fn rule_schedule_round_trips() {
                 order: Some(OrderKey::new(2.0)),
                 deactivated: false,
                 schedule,
+                expected_predicates: Vec::new(),
             }],
             ..leaf_shape("Scheduled")
         }]);

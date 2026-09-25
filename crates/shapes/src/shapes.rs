@@ -663,6 +663,26 @@ pub struct PropertyShape {
     pub id: Term,
     /// The property path this shape applies to.
     pub path: Path,
+    /// The `sh:values` node expression, when the shape declares one.
+    ///
+    /// SHACL 1.2 Core, "Value Nodes of Property Shapes": "For property shapes with
+    /// a value for sh:path p the set of value nodes is produced by the following
+    /// steps: Add all nodes in the data graph that can be reached from the focus
+    /// node with the path mapping of p. If e is the value of sh:values at the
+    /// property shape, then add the output nodes of evalExpr(e, data graph, focus
+    /// node, {}). If the set is still empty and d is the value of sh:defaultValue
+    /// at the property shape, then add the output nodes of evalExpr(d, data graph,
+    /// focus node, {})." The computed nodes are UNIONED with the path's value
+    /// nodes, never substituted for them. "A property shape has at most one value
+    /// for the property sh:values and this value is a well-formed node
+    /// expression", and "A property shape can only have values for sh:values
+    /// and/or sh:defaultValue when its value for sh:path is a Predicate Path", so
+    /// `Some` here implies [`Path::Predicate`].
+    pub values: Option<NodeExpr>,
+    /// The `sh:defaultValue` node expression, when the shape declares one: the
+    /// value nodes when the path and [`Self::values`] produce none (see
+    /// [`Self::values`] for the rule, quoted). Same arity and path restriction.
+    pub default_value: Option<NodeExpr>,
     /// Constraints on values reached via the path.
     pub constraints: Vec<Constraint>,
     /// Property shapes nested under THIS property shape via `sh:property`
@@ -2130,6 +2150,11 @@ impl<'s> Parser<'s> {
 
         let path = self.parse_path(&path_node, ps_node, &mut FastSet::default())?;
 
+        // sh:values / sh:defaultValue — the computed value nodes (see
+        // `PropertyShape::values` for the Core rule).
+        let values = self.computed_values_expr(ps_node, &path, sh::VALUES)?;
+        let default_value = self.computed_values_expr(ps_node, &path, sh::DEFAULT_VALUE)?;
+
         // severity
         let severity = self.severity_of(ps_node)?.unwrap_or(Severity::Violation);
 
@@ -2249,6 +2274,8 @@ impl<'s> Parser<'s> {
         Ok(PropertyShape {
             id: ps_node.clone(),
             path,
+            values,
+            default_value,
             constraints: parsed.constraints,
             property_shapes,
             reifier_shapes,
@@ -2259,6 +2286,68 @@ impl<'s> Parser<'s> {
             deactivated,
             box_roles,
         })
+    }
+
+    /// The `sh:values` or `sh:defaultValue` node expression of property shape
+    /// `ps_node` (`predicate` names which), or `None` when it declares none.
+    ///
+    /// SHACL 1.2 Core, "Property Shapes": "A property shape has at most one value
+    /// for the property sh:values and this value is a well-formed node
+    /// expression. A property shape has at most one value for the property
+    /// sh:defaultValue and this value is a well-formed node expression. A property
+    /// shape can only have values for sh:values and/or sh:defaultValue when its
+    /// value for sh:path is a Predicate Path." Each of the three is a load error
+    /// here. An IRI, a literal and a triple term are constant expressions whose
+    /// output is themselves; a blank node that is the subject of no triple is the
+    /// empty expression; any other blank node is a structured expression, parsed
+    /// with the property shape as its prefix owner, as a constraint's is.
+    fn computed_values_expr(
+        &mut self,
+        ps_node: &Term,
+        path: &Path,
+        predicate: &str,
+    ) -> Result<Option<NodeExpr>, String> {
+        let mut values: Vec<Term> = self.objects_of(ps_node, predicate);
+        let local = if predicate == sh::VALUES {
+            "sh:values"
+        } else {
+            "sh:defaultValue"
+        };
+        let node = match values.len() {
+            0 => return Ok(None),
+            1 => values.pop().ok_or_else(|| {
+                format!("internal defect: {local} on property shape {ps_node} vanished")
+            })?,
+            n => {
+                return Err(format!(
+                    "property shape {ps_node} has {n} values for {local}; SHACL 1.2 Core: \"A \
+                     property shape has at most one value for the property {local}\""
+                ));
+            }
+        };
+        if !matches!(path, Path::Predicate(_)) {
+            return Err(format!(
+                "property shape {ps_node} has a value for {local} but its sh:path is not an IRI; \
+                 SHACL 1.2 Core: \"A property shape can only have values for sh:values and/or \
+                 sh:defaultValue when its value for sh:path is a Predicate Path\""
+            ));
+        }
+        let expr = match &node {
+            Term::NamedNode(_) | Term::Literal(_) | Term::Triple(_) => NodeExpr::Constant(node),
+            Term::BlankNode(_) if self.is_empty_expression(&node) => NodeExpr::Empty,
+            Term::BlankNode(_) => {
+                let saved_shape = self.current_shape.replace(ps_node.clone());
+                let parsed = self.parse_node_expr(&node);
+                self.current_shape = saved_shape;
+                parsed.map_err(|e| {
+                    format!(
+                        "{local} on property shape {ps_node} is not a well-formed node \
+                         expression: {e}"
+                    )
+                })?
+            }
+        };
+        Ok(Some(expr))
     }
 
     /// Parse an `sh:path` value into a [`Path`] (all six §2.3.1 path forms).

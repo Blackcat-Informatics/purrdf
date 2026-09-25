@@ -109,7 +109,13 @@ const TOTAL_CASES: usize = 375;
 /// sh:NodeShape, rdfs:Class` to the shapes graph; the engine already honours those
 /// two axioms whether or not the graph asserts them, so the merge changes no
 /// answer here either.
-const COMPARED_ON_REPORT: usize = 359;
+///
+/// Moved from 359 to 361 when `sh:values` and `sh:defaultValue` became evaluated:
+/// `property-select-001` and `property-sparqlExpr-001` now load, so their reports
+/// are compared too, and the refused-at-load entries went from 4 to 2. The merged
+/// vocabulary declares `sh:defaultValue` itself (and no `sh:values`), never as a
+/// statement about a shape, so the merge changes no computed value node.
+const COMPARED_ON_REPORT: usize = 361;
 
 /// One case, reduced to what both parses need.
 struct Input {

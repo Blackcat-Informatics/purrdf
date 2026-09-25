@@ -48,6 +48,20 @@
 //! The result is a NEW frozen `Arc<RdfDataset>` holding the base graph plus every
 //! inferred triple, emitted in a deterministic order.
 //!
+//! # Expected derived triples
+//!
+//! SHACL 1.2 Inference Rules §3.8: "sh:defaultValue and sh:values describe
+//! implicit triples that are similar to inferences produced by rules. When a rule
+//! refers to a certain property, it is reasonable for the rule to expect that
+//! these implicit triples are present." A rule names such a property with
+//! `sh:expectedPredicate` ([`Rule::expected_predicates`]), and §8 fixes when the
+//! triples exist: for each layer, "Compute the expected derived triples for all
+//! rules in the layer", run the layer, then "Delete the derived triples (except
+//! those that were also inferred by rules) and their reifiers". Each stratum here
+//! is such a layer: its derived triples are computed over the graph it starts
+//! from, visible to every rule of the stratum, and deleted at its end unless a
+//! rule inferred them too — so they never reach the entailed graph on their own.
+//!
 //! # Termination
 //!
 //! Run-once rules terminate by construction (one evaluation each). Value-preserving
@@ -77,8 +91,8 @@ use crate::constraints::conforms_with_plan;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
 use crate::engine::resolve_focus_nodes;
 use crate::expression::{NodeExpr, RecursionGuard, eval_planned_node_expr};
-use crate::shapes::{Shape, Shapes};
-use crate::term::{Term, term_id_to_native};
+use crate::shapes::{Path, PropertyShape, Shape, Shapes};
+use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// The fixed non-default [`::purrdf::BlankScope`] the shapes document's blanks
 /// are standardized apart into when exposed as `$shapesGraph` (see
@@ -331,6 +345,11 @@ pub struct Rule {
     /// The SRL §4.4 half of its stratification layer this rule belongs to,
     /// decided from the rule head at parse time (see [`RuleSchedule`]).
     pub schedule: RuleSchedule,
+    /// The rule's `sh:expectedPredicate` values, sorted and deduplicated: the
+    /// predicates whose `sh:values` / `sh:defaultValue` DERIVED TRIPLES are
+    /// present in the graph while the rule's layer executes (SHACL 1.2 Inference
+    /// Rules §3.8; see [`apply_rules`]). Empty for a rule that expects none.
+    pub expected_predicates: Vec<NamedNode>,
 }
 
 impl Rule {
@@ -353,6 +372,8 @@ struct PreparedRule<'a> {
     tiebreak: String,
     rule_id: String,
     schedule: RuleSchedule,
+    /// The rule's `sh:expectedPredicate` values ([`Rule::expected_predicates`]).
+    expected: &'a [NamedNode],
     producer: Producer<'a>,
 }
 
@@ -409,6 +430,11 @@ struct Materialized {
     /// every term of a newly-derived fact that the universe did not yet contain.
     /// Drained by [`Materialized::promote_minted_terms`] at each phase boundary.
     minted: Vec<Term>,
+    /// The current layer's EXPECTED DERIVED TRIPLES that no rule has inferred
+    /// (SHACL 1.2 Inference Rules §3.8): in `facts` while the layer executes, and
+    /// deleted from it at the layer's end ([`Materialized::retract_derived`]). A
+    /// rule that infers one removes it from here, which is what keeps it.
+    derived: FastSet<[Term; 3]>,
 }
 
 impl Materialized {
@@ -440,6 +466,12 @@ impl Materialized {
             fresh: None,
         };
         for triple in produced {
+            // A derived triple a rule also infers is kept past the layer's end:
+            // "Delete the derived triples (except those that were also inferred by
+            // rules)". It is already visible, so inferring it adds nothing new.
+            if !self.derived.is_empty() {
+                self.derived.remove(&triple);
+            }
             if self.facts.contains(&triple) {
                 continue;
             }
@@ -481,6 +513,153 @@ impl Materialized {
     fn promote_minted_terms(&mut self, universe: &mut FastSet<Term>) {
         universe.extend(self.minted.drain(..));
     }
+
+    /// Make the layer's expected derived triples visible: every one not already
+    /// in `facts` is added, and remembered as derived. Its terms join the
+    /// universe, because a derived triple is not a rule's output: a computed
+    /// literal it carries exists in the graph the layer reads, exactly as a base
+    /// term does.
+    fn assert_derived(&mut self, derived: Vec<[Term; 3]>, universe: &mut FastSet<Term>) {
+        for triple in derived {
+            if self.facts.contains(&triple) {
+                continue;
+            }
+            universe.extend(triple.iter().cloned());
+            self.facts.insert(triple.clone());
+            self.derived.insert(triple);
+            self.stale = true;
+            self.view = None;
+        }
+    }
+
+    /// Delete the layer's derived triples that no rule inferred, "and their
+    /// reifiers" (SHACL 1.2 Inference Rules §8).
+    ///
+    /// A reifier of a deleted triple is the subject `r` of an INFERRED
+    /// `r rdf:reifies <<( s p o )>>` whose triple term is that triple. The
+    /// declaration goes; and a reifier left reifying nothing is no reifier, so
+    /// every inferred triple about it — its annotations — goes too. A reifier that
+    /// still reifies a surviving triple keeps its annotations, and nothing the
+    /// base graph asserts is touched: it is the caller's data.
+    fn retract_derived(&mut self, original: &FastSet<[Term; 3]>) {
+        if self.derived.is_empty() {
+            return;
+        }
+        let derived = std::mem::take(&mut self.derived);
+        for triple in &derived {
+            self.facts.remove(triple);
+        }
+        let reifies = Term::NamedNode(NamedNode::from(crate::model::rdf::REIFIES));
+        let reifies_deleted = |fact: &[Term; 3]| -> bool {
+            let [_, predicate, object] = fact;
+            if *predicate != reifies || original.contains(fact) {
+                return false;
+            }
+            let Term::Triple(reified) = object else {
+                return false;
+            };
+            derived.contains(&[
+                reified.subject.clone(),
+                Term::NamedNode(reified.predicate.clone()),
+                reified.object.clone(),
+            ])
+        };
+        let mut orphaned: FastSet<Term> = self
+            .facts
+            .iter()
+            .filter(|fact| reifies_deleted(fact))
+            .map(|[reifier, _, _]| reifier.clone())
+            .collect();
+        if orphaned.is_empty() {
+            self.stale = true;
+            self.view = None;
+            return;
+        }
+        self.facts.retain(|fact| !reifies_deleted(fact));
+        // A reifier that still declares another reification is still a reifier.
+        for fact in &self.facts {
+            if fact[1] == reifies {
+                orphaned.remove(&fact[0]);
+            }
+        }
+        self.facts
+            .retain(|fact| original.contains(fact) || !orphaned.contains(&fact[0]));
+        self.stale = true;
+        self.view = None;
+    }
+}
+
+/// Whether property shape `ps` computes derived value nodes for one of
+/// `expected`: it is not deactivated, its path is one of those predicates, and it
+/// declares `sh:values` or `sh:defaultValue`.
+fn derives_expected(ps: &PropertyShape, expected: &FastSet<&str>) -> bool {
+    !ps.deactivated
+        && (ps.values.is_some() || ps.default_value.is_some())
+        && matches!(&ps.path, Path::Predicate(p) if expected.contains(p.as_str()))
+}
+
+/// The EXPECTED DERIVED TRIPLES for the predicates `expected`, read over `data`.
+///
+/// SHACL 1.2 Inference Rules §3.8: "For a given predicate p, the derived value
+/// nodes are all value nodes that can be computed using sh:defaultValue and
+/// sh:values as defined by SHACL 1.2 Core in any (non-deactivated) property shape
+/// that uses p as sh:path in the shapes graph. For these derived value nodes v the
+/// derived triples are the triples where v is the object, p is the predicate and
+/// the subjects are the target nodes of the property shapes."
+///
+/// A property shape's target nodes are the focus nodes its declaring shape's
+/// targets select — in the specification's own example the property shape
+/// carries no target and its node shape `sh:targetClass ex:Rectangle` supplies
+/// the subjects — so each non-deactivated top-level shape's targets are resolved
+/// and its property shapes' value nodes computed there, by the one "Value Nodes
+/// of Property Shapes" rule validation applies. The path's own value nodes are
+/// already triples of the graph, so only the computed ones are new. A literal
+/// target node cannot be the subject of a triple, so it has no derived triple.
+///
+/// # Errors
+///
+/// Returns an error when target resolution or an expression evaluation fails.
+fn expected_derived_triples(
+    data: &ShaclData,
+    shapes: &Shapes,
+    expected: &FastSet<&str>,
+) -> Result<Vec<[Term; 3]>, String> {
+    let mut out: Vec<[Term; 3]> = Vec::new();
+    for shape in &shapes.node_shapes {
+        if shape.deactivated
+            || !shape
+                .property_shapes
+                .iter()
+                .any(|ps| derives_expected(ps, expected))
+        {
+            continue;
+        }
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+        let binding = lowered.bind(data.core_view(), lowered.classes());
+        let focus_nodes =
+            resolve_focus_nodes(data, &shape.id, &shape.targets, &binding, lowered.classes())?;
+        let plan = lowered.plan(shape, 0, &binding, lowered.classes(), lowered.no_targets())?;
+        for (ps, property_plan) in plan.properties()? {
+            if !derives_expected(ps, expected) {
+                continue;
+            }
+            let Path::Predicate(predicate) = &ps.path else {
+                continue;
+            };
+            for focus in &focus_nodes {
+                let focus = focus.to_term(data.core_view());
+                if !focus.is_subject() {
+                    continue;
+                }
+                for value in
+                    crate::constraints::property_value_terms(data, &focus, ps, property_plan)?
+                {
+                    out.push([focus.clone(), Term::NamedNode(predicate.clone()), value]);
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Run the whole rule set under the *SPARQL 1.2 RL* (SRL) §6.5 layered model and
@@ -519,10 +698,21 @@ fn run_strata(
         stale: false,
         view: None,
         minted: Vec::new(),
+        derived: FastSet::default(),
     };
     let mut fresh_rounds = 0usize;
 
     for stratum in prepared.chunk_by(same_stratum) {
+        // "Compute the expected derived triples for all rules in the layer"
+        // (SHACL 1.2 Inference Rules §8), over the graph the layer starts from.
+        let expected: FastSet<&str> = stratum
+            .iter()
+            .flat_map(|prep| prep.expected.iter().map(NamedNode::as_str))
+            .collect();
+        if !expected.is_empty() {
+            let derived = expected_derived_triples(state.view(ctx)?, ctx.shapes, &expected)?;
+            state.assert_derived(derived, &mut universe);
+        }
         // SL.once: "these rules are each evaluated exactly once at the start"
         // (SRL §4.4). Each one's output is folded into `GE` before the next runs.
         // A run-once rule terminates by construction, so it is outside the
@@ -578,6 +768,9 @@ fn run_strata(
                 }
             }
         }
+        // "Delete the derived triples (except those that were also inferred by
+        // rules) and their reifiers" — the layer's last step.
+        state.retract_derived(ctx.original);
         // This stratum's derived terms exist now; the next stratum reads them as
         // ordinary graph terms.
         state.promote_minted_terms(&mut universe);
@@ -687,10 +880,11 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
         .collect();
     inferred.sort_by_cached_key(triple_sort_key);
 
+    let reifiers = reifier_subjects(&facts);
     let mut builder = RdfDatasetBuilder::new();
     push_projection(&mut builder, base.as_ref());
     for triple in &inferred {
-        push_fact(&mut builder, triple)?;
+        push_fact(&mut builder, triple, &reifiers)?;
     }
     builder.freeze().map_err(|e| e.to_string())
 }
@@ -755,6 +949,7 @@ fn prepare_rule<'a>(
         tiebreak: rule_id.clone(),
         rule_id,
         schedule: rule.schedule,
+        expected: &rule.expected_predicates,
         producer,
     }
 }
@@ -876,8 +1071,14 @@ fn sparql_rule_producer(
                     execution,
                     Some(tag.as_str()),
                 )?;
+                // The CONSTRUCT graph's RDF 1.2 statement layer lives in side-tables
+                // beside its quads: a `?r rdf:reifies <<( … )>>` head row is a reifier
+                // declaration and a row about `?r` its annotation. Reading the quads
+                // alone would silently drop both, so all three are read.
                 for quad in
                     quads_for_pattern_ids(graph.as_ref(), None, None, None, GraphFilter::AnyGraph)
+                        .chain(graph.reifier_quads())
+                        .chain(graph.annotation_quads())
                 {
                     let s = term_id_to_native(graph.as_ref(), quad.s);
                     let p = term_id_to_native(graph.as_ref(), quad.p);
@@ -1108,10 +1309,19 @@ fn push_projection(builder: &mut RdfDatasetBuilder, base: &RdfDataset) {
     }
 }
 
-/// The base default-graph triples as an owned-term fact set.
+/// The base default-graph triples as an owned-term fact set — the RDF 1.2
+/// statement layer included, as `r rdf:reifies <<( s p o )>>` and annotation rows,
+/// so a rule re-deriving a base reifier or annotation is not counted as new
+/// inference.
 fn base_triples(base: &RdfDataset) -> FastSet<[Term; 3]> {
     let mut set: FastSet<[Term; 3]> = FastSet::default();
-    for quad in quads_for_pattern_ids(base, None, None, None, GraphFilter::DefaultGraph) {
+    let statement_layer = base
+        .reifier_quads()
+        .chain(base.annotation_quads())
+        .filter(|quad| quad.g.is_none());
+    for quad in quads_for_pattern_ids(base, None, None, None, GraphFilter::DefaultGraph)
+        .chain(statement_layer)
+    {
         set.insert([
             term_id_to_native(base, quad.s),
             term_id_to_native(base, quad.p),
@@ -1146,20 +1356,61 @@ fn triple_sort_key(triple: &[Term; 3]) -> (String, String, String) {
     )
 }
 
-/// Push one owned head triple into `builder`. Its predicate is an IRI (enforced by
-/// the producers), so a non-IRI predicate here is an internal invariant breach.
-fn push_fact(builder: &mut RdfDatasetBuilder, triple: &[Term; 3]) -> Result<(), String> {
+/// Every subject of a `r rdf:reifies <<( s p o )>>` fact: the reifiers of the
+/// accumulated graph, whose other triples are their annotations.
+fn reifier_subjects(facts: &FastSet<[Term; 3]>) -> FastSet<Term> {
+    facts
+        .iter()
+        .filter(|[_, p, o]| {
+            matches!(p, Term::NamedNode(p) if p.as_str() == crate::model::rdf::REIFIES)
+                && matches!(o, Term::Triple(_))
+        })
+        .map(|[r, _, _]| r.clone())
+        .collect()
+}
+
+/// Push one owned head triple into `builder`, into the layer RDF 1.2 puts it in:
+/// `r rdf:reifies <<( s p o )>>` is a reifier declaration, a triple whose subject
+/// is one of `reifiers` is that reifier's annotation, and every other triple is a
+/// quad — the classification a parsed graph gets, so a rule's reification reads
+/// back through the statement layer exactly as an asserted one does. Its
+/// predicate is an IRI (enforced by the producers), so a non-IRI predicate here
+/// is an internal invariant breach.
+fn push_fact(
+    builder: &mut RdfDatasetBuilder,
+    triple: &[Term; 3],
+    reifiers: &FastSet<Term>,
+) -> Result<(), String> {
     let [s, p, o] = triple;
     let Term::NamedNode(predicate) = p else {
         return Err(format!(
             "internal error: inferred triple has non-IRI predicate {p}"
         ));
     };
-    builder.push_owned_quad(&RdfQuad::new(
-        s.to_rdf_term(),
-        predicate.as_str(),
-        o.to_rdf_term(),
-    ));
+    if predicate.as_str() == crate::model::rdf::REIFIES
+        && let Term::Triple(statement) = o
+    {
+        builder.push_owned_reifier(&::purrdf::RdfReifier::new(
+            s.to_rdf_term(),
+            ::purrdf::RdfTriple::new(
+                statement.subject.to_rdf_term(),
+                statement.predicate.as_str(),
+                statement.object.to_rdf_term(),
+            ),
+        ));
+    } else if reifiers.contains(s) {
+        builder.push_owned_annotation(&::purrdf::RdfAnnotation::new(
+            s.to_rdf_term(),
+            predicate.as_str(),
+            o.to_rdf_term(),
+        ));
+    } else {
+        builder.push_owned_quad(&RdfQuad::new(
+            s.to_rdf_term(),
+            predicate.as_str(),
+            o.to_rdf_term(),
+        ));
+    }
     Ok(())
 }
 
@@ -1201,11 +1452,12 @@ fn rebuild_dataset(
     facts: &FastSet<[Term; 3]>,
     original: &FastSet<[Term; 3]>,
 ) -> Result<Arc<RdfDataset>, String> {
+    let reifiers = reifier_subjects(facts);
     let mut builder = RdfDatasetBuilder::new();
     push_projection(&mut builder, base.as_ref());
     for triple in facts {
         if !original.contains(triple) {
-            push_fact(&mut builder, triple)?;
+            push_fact(&mut builder, triple, &reifiers)?;
         }
     }
     builder.freeze().map_err(|e| e.to_string())
@@ -1822,6 +2074,57 @@ mod tests {
     }
 
     // ── SPARQLRule execution ─────────────────────────────────────────────────────
+
+    /// A rule's CONSTRUCT head may declare a reifier (`_:r rdf:reifies <<( … )>>`)
+    /// and annotate it; both live in the CONSTRUCT graph's RDF 1.2 statement layer,
+    /// not its quads, and both reach the entailed graph's statement layer — the
+    /// reifier declared for the reified triple, the annotation on the reifier —
+    /// rather than being dropped as the quads-only read did. A second rule then
+    /// READS the reification back (`?r rdf:reifies ?t`), so a derived reifier is
+    /// visible to rules exactly as an asserted one is. The control rule reads the
+    /// same pattern over a graph with no reification and derives nothing.
+    #[test]
+    fn a_rule_derived_reification_reaches_the_statement_layer() {
+        let shapes = r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:T ;
+              sh:rule [ a sh:SPARQLRule ; sh:order 0 ;
+                sh:construct """CONSTRUCT {
+                    _:r rdf:reifies <<( $this ex:p ?o )>> . _:r ex:source "rule" }
+                  WHERE { $this ex:p ?o }""" ] ;
+              sh:rule [ a sh:SPARQLRule ; sh:order 1 ;
+                sh:construct """CONSTRUCT { $this ex:reified true }
+                  WHERE { ?r rdf:reifies <<( $this ex:p ?o )>> }""" ] .
+        "#;
+        let ds = entail("ex:a a ex:T ; ex:p ex:b .", shapes);
+        assert_eq!(ds.reifiers().count(), 1, "{:?}", triples(&ds));
+        let (reifier, _) = ds.reifiers().next().expect("one reifier");
+        assert_eq!(ds.annotations_of(reifier).count(), 1);
+        assert!(
+            triples(&ds)
+                .iter()
+                .any(|(s, p, _)| *s == ex("a") && *p == ex("reified")),
+            "{:?}",
+            triples(&ds)
+        );
+
+        let control = entail(
+            "ex:a a ex:T ; ex:p ex:b .",
+            r#"
+            ex:S a sh:NodeShape ; sh:targetClass ex:T ;
+              sh:rule [ a sh:SPARQLRule ;
+                sh:construct """CONSTRUCT { $this ex:reified true }
+                  WHERE { ?r rdf:reifies <<( $this ex:p ?o )>> }""" ] .
+            "#,
+        );
+        assert_eq!(control.reifiers().count(), 0);
+        assert!(
+            !triples(&control)
+                .iter()
+                .any(|(_, p, _)| *p == ex("reified")),
+            "{:?}",
+            triples(&control)
+        );
+    }
 
     #[test]
     fn single_sparql_rule_derives_head() {
@@ -2890,9 +3193,7 @@ mod tests {
     #[test]
     fn minted_labels_are_never_scope_split() {
         let foci = [
-            Term::NamedNode(crate::term::NamedNode::new_unchecked(
-                "http://example.org/x.s5",
-            )),
+            Term::NamedNode(NamedNode::new_unchecked("http://example.org/x.s5")),
             Term::blank("b.s2"),
             Term::blank("b1"),
         ];

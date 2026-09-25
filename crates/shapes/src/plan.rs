@@ -432,6 +432,11 @@ pub(crate) struct LoweredShape {
 pub(crate) struct LoweredProperty {
     /// The lowered property path — every predicate step resolved to a slot.
     path: LoweredPath,
+    /// The lowered `sh:values` expression, exactly when the property shape has one.
+    values: Option<LoweredExpr>,
+    /// The lowered `sh:defaultValue` expression, exactly when the property shape
+    /// has one.
+    default_value: Option<LoweredExpr>,
     constraints: Box<[LoweredConstraint]>,
     properties: Box<[Self]>,
     reifiers: Box<[LoweredShape]>,
@@ -1065,6 +1070,47 @@ impl<'a> PropertyPlan<'a> {
     #[inline]
     pub(crate) fn path(&self) -> &'a LoweredPath {
         &self.lowered.path
+    }
+
+    /// The plan the property shape's own node expressions evaluate under: its
+    /// parent's, since `sh:values` and `sh:defaultValue` are evaluated at the
+    /// parent's focus node.
+    #[inline]
+    pub(crate) fn parent(&self) -> ShapePlan<'a> {
+        self.plan
+    }
+
+    /// The `sh:values` expression paired with its lowering, when the property
+    /// shape has one.
+    ///
+    /// # Errors
+    /// Returns an error when the property shape and its lowering disagree on
+    /// whether it has one.
+    pub(crate) fn values(
+        &self,
+        property: &'a PropertyShape,
+    ) -> Result<Option<(&'a NodeExpr, &'a LoweredExpr)>, String> {
+        pair_optional(
+            property.values.as_ref(),
+            self.lowered.values.as_ref(),
+            "sh:values",
+        )
+    }
+
+    /// The `sh:defaultValue` expression paired with its lowering, when the
+    /// property shape has one.
+    ///
+    /// # Errors
+    /// As [`Self::values`].
+    pub(crate) fn default_value(
+        &self,
+        property: &'a PropertyShape,
+    ) -> Result<Option<(&'a NodeExpr, &'a LoweredExpr)>, String> {
+        pair_optional(
+            property.default_value.as_ref(),
+            self.lowered.default_value.as_ref(),
+            "sh:defaultValue",
+        )
     }
 
     /// This property shape's constraints, each paired with its lowering.
@@ -1842,6 +1888,33 @@ fn pair<'a, A, B>(
     Ok(ast.iter().zip(lowered.iter()))
 }
 
+/// Pair an optional AST node with its optional lowering, refusing when exactly one
+/// of the two is present — the single-item twin of [`pair`].
+fn pair_optional<'a, A, B>(
+    ast: Option<&'a A>,
+    lowered: Option<&'a B>,
+    what: &str,
+) -> Result<Option<(&'a A, &'a B)>, String> {
+    match (ast, lowered) {
+        (Some(ast), Some(lowered)) => Ok(Some((ast, lowered))),
+        (None, None) => Ok(None),
+        (ast, _) => Err(format!(
+            "internal validation-plan defect: a property shape {} {what} but its lowering {}, so \
+             the shape lowering and the shape it lowered have diverged",
+            if ast.is_some() {
+                "declares"
+            } else {
+                "declares no"
+            },
+            if ast.is_some() {
+                "holds none"
+            } else {
+                "holds one"
+            },
+        )),
+    }
+}
+
 // ── Prepared targets ────────────────────────────────────────────────────────────
 
 /// Dataset-bound target predicates used by a prepared validator.
@@ -2260,10 +2333,29 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
 /// and its reifier shapes.
 fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProperty {
     let path = lower_path(&property.path, walk);
+    // `sh:values` and `sh:defaultValue` are evaluated at the FOCUS node — "the
+    // output nodes of evalExpr(e, data graph, focus node, {})" — so they are
+    // lowered here, before the walk moves to the value nodes, and their reads are
+    // recorded from the node the walk stands on.
+    let values = property
+        .values
+        .as_ref()
+        .map(|expr| lower_expression(expr, walk));
+    let default_value = property
+        .default_value
+        .as_ref()
+        .map(|expr| lower_expression(expr, walk));
     // Every step of the path is a read, and everything below applies to the nodes
     // the path arrives at — so the footprint moves to those value nodes here, while
     // remembering the declaring node the property-pair comparands are read from.
     let scope = walk.footprint.enter_values(&property.path);
+    // A computed value node is an expression's OUTPUT, not a node the path reaches,
+    // so with either expression present the value nodes are no longer all
+    // describable by a path from the focus node: what the constraints below read
+    // there is recorded unrooted, which turns the footprint TOP exactly when one of
+    // them actually reads a triple at a value node.
+    let computed =
+        (values.is_some() || default_value.is_some()).then(|| walk.footprint.enter_unrooted());
     let constraints = lower_constraints(&property.constraints, &property.property_shapes, walk);
     let properties: Box<[LoweredProperty]> = property
         .property_shapes
@@ -2291,9 +2383,14 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         .map(|reifier| lower_shape(reifier, walk))
         .collect();
     walk.footprint.leave(reified);
+    if let Some(computed) = computed {
+        walk.footprint.leave(computed);
+    }
     walk.footprint.leave(scope);
     LoweredProperty {
         path,
+        values,
+        default_value,
         constraints,
         properties,
         reifiers,
@@ -3030,6 +3127,9 @@ ex:FlagShape a sh:NodeShape ;
         property: &super::LoweredProperty,
         out: &mut Vec<&'a str>,
     ) {
+        for expr in property.values.iter().chain(&property.default_value) {
+            collect_expr_class_slots(lowered, expr, out);
+        }
         for constraint in &property.constraints {
             collect_constraint_class_slots(lowered, constraint, out);
         }

@@ -1298,30 +1298,9 @@ fn eval_property_shape<'a, S: ResultSink>(
     if ps.deactivated {
         return Ok(Flow::Continue);
     }
-    // Carry the value nodes id-native for the common interned-focus case
-    // ([`path::eval_ids`]); a non-interned SHACL-AF focus falls back to the
-    // owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
-    // without materializing, and only the value nodes a violation records — or a
-    // content constraint inspects — are resolved to owned terms.
-    // The path is the LOWERED one: every predicate step carries the dataset
-    // identity resolved at bind, so a property shape evaluated across a million
-    // focus nodes hashes its predicate IRI zero times.
-    let lowered_path = property_plan.path();
-    let binding = context.plan.binding();
-    let value_nodes: SmallVec<[ValueNode; 4]> = match focus {
-        FocusNode::Interned(id) => {
-            path::eval_planned_ids_from_id(store.core_view(), *id, lowered_path, binding)?
-                .into_iter()
-                .map(ValueNode::Interned)
-                .collect()
-        }
-        FocusNode::Foreign(term) => {
-            path::eval_planned(store.core_view(), term, lowered_path, binding)?
-                .into_iter()
-                .map(ValueNode::Foreign)
-                .collect()
-        }
-    };
+    // The value nodes: the path's, plus `sh:values` / `sh:defaultValue` output
+    // (see `property_value_nodes`), id-native wherever the data graph interns them.
+    let value_nodes = property_value_nodes(store, focus, ps, property_plan, context.depth)?;
     // Report-only materialization is lazy: a conforming focus node never
     // allocates a native path term, clones a complex path structure, merges the
     // source graph-box roles, or scans the graph for the path's roles. All four
@@ -1409,6 +1388,137 @@ fn eval_property_shape<'a, S: ResultSink>(
         );
     }
     Ok(Flow::Continue)
+}
+
+/// The value nodes of property shape `ps` at `focus`.
+///
+/// SHACL 1.2 Core, "Value Nodes of Property Shapes": "For property shapes with a
+/// value for sh:path p the set of value nodes is produced by the following steps:
+/// Add all nodes in the data graph that can be reached from the focus node with
+/// the path mapping of p. If e is the value of sh:values at the property shape,
+/// then add the output nodes of evalExpr(e, data graph, focus node, {}). If the
+/// set is still empty and d is the value of sh:defaultValue at the property
+/// shape, then add the output nodes of evalExpr(d, data graph, focus node, {})."
+///
+/// So the computed nodes are UNIONED with the path's — a SET, so a computed node
+/// the path already reached is not added twice — and the default applies only
+/// when both produced nothing. Each expression is evaluated with the focus node as
+/// its focus and an empty scope, over the data graph; an evaluation failure is a
+/// validation error, exactly as an `sh:expression` constraint's is.
+///
+/// A property shape with neither expression — every shape SHACL Core writes —
+/// pays for the path walk alone: the two `Option` checks are the whole cost.
+///
+/// Carries the value nodes id-native for the common interned-focus case
+/// ([`path::eval_ids`]); a non-interned SHACL-AF focus falls back to the
+/// owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
+/// without materializing, and only the value nodes a violation records — or a
+/// content constraint inspects — are resolved to owned terms. The path is the
+/// LOWERED one: every predicate step carries the dataset identity resolved at
+/// bind, so a property shape evaluated across a million focus nodes hashes its
+/// predicate IRI zero times. A computed node the data graph interns is carried as
+/// its identity too; one it does not intern (a computed literal, say) is carried
+/// as the term the expression produced.
+///
+/// # Errors
+///
+/// Returns an error when the path walk or an expression evaluation fails, or when
+/// the property shape and its lowering disagree.
+fn property_value_nodes(
+    store: &ShaclData,
+    focus: &FocusNode,
+    ps: &PropertyShape,
+    property_plan: PropertyPlan<'_>,
+    depth: u32,
+) -> Result<SmallVec<[ValueNode; 4]>, String> {
+    let lowered_path = property_plan.path();
+    let binding = property_plan.parent().binding();
+    let mut value_nodes: SmallVec<[ValueNode; 4]> = match focus {
+        FocusNode::Interned(id) => {
+            path::eval_planned_ids_from_id(store.core_view(), *id, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Interned)
+                .collect()
+        }
+        FocusNode::Foreign(term) => {
+            path::eval_planned(store.core_view(), term, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Foreign)
+                .collect()
+        }
+    };
+    let values = property_plan.values(ps)?;
+    let default_value = property_plan.default_value(ps)?;
+    if values.is_none() && default_value.is_none() {
+        return Ok(value_nodes);
+    }
+    let ds = store.core_view();
+    let focus_term = focus.to_term(ds);
+    let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+    let mut computed = |expr: &crate::expression::NodeExpr,
+                        lowered: &crate::plan::LoweredExpr,
+                        value_nodes: &mut SmallVec<[ValueNode; 4]>,
+                        which: &str|
+     -> Result<(), String> {
+        let produced = crate::expression::eval_planned_node_expr(
+            store,
+            &focus_term,
+            expr,
+            lowered,
+            property_plan.parent(),
+            &mut guard,
+        )
+        .map_err(|e| format!("{which} of property shape {} at {focus_term}: {e}", ps.id))?;
+        for term in produced {
+            let node = match FocusNode::resolve(ds, &term) {
+                FocusNode::Interned(id) => ValueNode::Interned(id),
+                FocusNode::Foreign(term) => ValueNode::Foreign(term),
+            };
+            let present = value_nodes.iter().any(|existing| match (existing, &node) {
+                (ValueNode::Interned(a), ValueNode::Interned(b)) => a == b,
+                (ValueNode::Foreign(a), ValueNode::Foreign(b)) => a == b,
+                // `FocusNode::resolve` interns whatever the data graph interns, so an
+                // interned node and a foreign one are never the same term.
+                (ValueNode::Interned(_), ValueNode::Foreign(_))
+                | (ValueNode::Foreign(_), ValueNode::Interned(_)) => false,
+            });
+            if !present {
+                value_nodes.push(node);
+            }
+        }
+        Ok(())
+    };
+    if let Some((expr, lowered)) = values {
+        computed(expr, lowered, &mut value_nodes, "sh:values")?;
+    }
+    if value_nodes.is_empty()
+        && let Some((expr, lowered)) = default_value
+    {
+        computed(expr, lowered, &mut value_nodes, "sh:defaultValue")?;
+    }
+    Ok(value_nodes)
+}
+
+/// The value nodes of property shape `ps` at `focus`, as owned terms: the SHACL
+/// 1.2 Core "Value Nodes of Property Shapes" set [`property_value_nodes`]
+/// computes, for a caller outside validation — the rules engine's derived triples
+/// (SHACL 1.2 Inference Rules §3.8) — that speaks owned terms.
+///
+/// # Errors
+///
+/// As [`property_value_nodes`].
+pub(crate) fn property_value_terms(
+    store: &ShaclData,
+    focus: &Term,
+    ps: &PropertyShape,
+    property_plan: PropertyPlan<'_>,
+) -> Result<Vec<Term>, String> {
+    let ds = store.core_view();
+    let focus = FocusNode::resolve(ds, focus);
+    Ok(property_value_nodes(store, &focus, ps, property_plan, 0)?
+        .iter()
+        .map(|node| node.to_term(ds))
+        .collect())
 }
 
 /// Everything the reifier-shape evaluation needs from the `eval_property_shape`
@@ -4518,6 +4628,8 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex(&format!("{id}-property")),
                 path: Path::Predicate(NamedNode::new_unchecked(path_iri)),
+                values: None,
+                default_value: None,
                 constraints,
                 property_shapes: vec![],
                 reifier_shapes: vec![],
@@ -4900,6 +5012,8 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
@@ -4953,6 +5067,8 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
@@ -5010,6 +5126,8 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![],
                 property_shapes: vec![],
                 reifier_shapes: vec![reifier_shape],
@@ -6297,6 +6415,8 @@ mod tests {
                 path: Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
                     format!("{EX}parent"),
                 )))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
@@ -6354,6 +6474,8 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("S-property"),
                 path: composite(),
+                values: None,
+                default_value: None,
                 constraints,
                 property_shapes: vec![],
                 reifier_shapes: vec![],
@@ -6413,6 +6535,8 @@ mod tests {
                 path: Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
                     format!("{EX}parent"),
                 )))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
@@ -6704,6 +6828,8 @@ mod tests {
             .map(|(index, p)| PropertyShape {
                 id: ex(&format!("Property-{index}")),
                 path: Path::Predicate(NamedNode::new_unchecked(*p)),
+                values: None,
+                default_value: None,
                 constraints: vec![],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
@@ -7129,6 +7255,8 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
@@ -7162,6 +7290,8 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],

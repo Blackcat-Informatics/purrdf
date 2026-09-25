@@ -167,15 +167,10 @@ const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
         "w3c12/inference-rules/rules-entailment-validation",
         R_ENTAILMENT,
     ),
-    ("w3c12/sparql/property/property-select-001", R_VALUES),
-    ("w3c12/sparql/property/property-sparqlExpr-001", R_VALUES),
 ];
 
 const R_ENTAILMENT: &str = "declares sh:entailment, and SHACL requires a processor to signal a \
      failure for an entailment regime it does not support";
-
-const R_VALUES: &str = "uses sh:values on a property shape, which the engine refuses at load \
-     as unimplemented";
 
 const R_INSTANCES_OF_EXPR: &str = "a custom function body passes a node-expression argument to \
      shnex:instancesOf, which the parser refuses because it requires an IRI";
@@ -262,7 +257,12 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// `targetClassImplicit-002`, `targetWhere-001` and `targetNode-select-001` now
 /// load and agree on a report (+3) — the two new target kinds travel in the
 /// product — and [`W3C12_REFUSED_AT_LOAD`] went from 7 entries to 4.
-const AGREED_ON_REPORT_CASES: usize = 359;
+///
+/// Moved from 359 to 361 when `sh:values` and `sh:defaultValue` became evaluated:
+/// `property-select-001` and `property-sparqlExpr-001` now load and agree on a
+/// report (+2) — a property shape's two node expressions travel in the product —
+/// and [`W3C12_REFUSED_AT_LOAD`] went from 4 entries to 2.
+const AGREED_ON_REPORT_CASES: usize = 361;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -345,7 +345,14 @@ const AGREED_ON_REPORT_CASES: usize = 359;
 /// report, because the data graph's `sh:shape` declarations selected no focus
 /// node; they select its two focus nodes now, and the lanes agree on the
 /// violation the suite expects (+1).
-const AGREED_WITH_RESULTS_CASES: usize = 339;
+///
+/// # Why it moved from 339 to 340
+///
+/// `property-sparqlExpr-001` loads now that `sh:values` is evaluated, and its
+/// computed URI length fails `sh:hasValue 27` at `ex:Invalid` — the violation the
+/// suite expects (+1). `property-select-001` loads too and is agreed on as an
+/// empty report: its computed full name satisfies `sh:hasValue "John Muir"`.
+const AGREED_WITH_RESULTS_CASES: usize = 340;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

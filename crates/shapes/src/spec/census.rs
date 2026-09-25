@@ -5,8 +5,9 @@
 //!
 //! A shapes-graph loader that reads the predicates it knows and walks past the
 //! rest turns every term it does not know into a silent no-op: a misspelled
-//! `sh:minCont`, a `sh:values` this engine does not compute, a `sh:js` constraint
-//! from an extension it does not implement — each loads green and checks nothing.
+//! `sh:minCont`, a SHACL-SPARQL result annotation this engine does not produce, a
+//! `sh:js` constraint from an extension it does not implement — each loads green
+//! and checks nothing.
 //! The census closes that door. Its universe is the UNION of
 //!
 //! * every term the vendored SHACL 1.2 vocabularies declare (`shacl.ttl`,
@@ -101,6 +102,11 @@ pub enum Role {
     Declaration,
     /// A term only a PARAMETER DECLARATION (an object of `sh:parameter`) carries.
     ParameterDeclaration,
+    /// A property shape's COMPUTED VALUE NODES: `sh:values` and `sh:defaultValue`,
+    /// node expressions whose output nodes join the path's value nodes (SHACL 1.2
+    /// Core, "Value Nodes of Property Shapes"). Only a property shape with a
+    /// predicate path may carry one.
+    ComputedValues,
     /// Prefix-declaration vocabulary (`sh:declare`, `sh:prefix`, `sh:namespace`).
     Prefixes,
     /// Validation-report vocabulary.
@@ -110,6 +116,17 @@ pub enum Role {
     /// A class or an individual SHACL names (`sh:NodeShape`, `sh:IRI`,
     /// `sh:Violation`, …): an object, never a predicate.
     Vocabulary,
+}
+
+/// Where the loader reads a term. See [`CensusRow::class_at`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Site {
+    /// A predicate of a shape node.
+    Shape,
+    /// A predicate of a parameter declaration (an object of `sh:parameter`).
+    ParameterDeclaration,
+    /// A predicate of a node-expression node.
+    NodeExpression,
 }
 
 /// One classified term.
@@ -129,8 +146,30 @@ impl CensusRow {
             TermClass::ConstraintParameter { .. } | TermClass::NonValidating => true,
             TermClass::Target => self.iri != sh::SPARQL_TARGET && self.iri != sh_iri!("Target"),
             TermClass::Rule => self.iri == sh::RULE,
-            TermClass::Structural(role) => role == Role::ShapeCharacteristic,
+            TermClass::Structural(role) => {
+                role == Role::ShapeCharacteristic || role == Role::ComputedValues
+            }
             TermClass::Unimplemented(_) => false,
+        }
+    }
+
+    /// The term's class at `site`.
+    ///
+    /// One term, one meaning, except where the specification gives a term a
+    /// different meaning by position. There is one such term:
+    ///
+    /// * `sh:defaultValue` on a PARAMETER DECLARATION is documentation. SHACL 1.2
+    ///   SPARQL Extensions, on a function's `sh:parameter` declaring
+    ///   `sh:defaultValue "en"`: "note that the SHACL constraints from the
+    ///   sh:parameter declarations are not automatically enforced, nor will the
+    ///   declared sh:defaultValue be used at runtime. These mainly serve
+    ///   documentation purposes." On a property shape it computes value nodes
+    ///   ([`Role::ComputedValues`]).
+    #[must_use]
+    pub fn class_at(&self, site: Site) -> TermClass {
+        match site {
+            Site::ParameterDeclaration if self.iri == sh::DEFAULT_VALUE => TermClass::NonValidating,
+            Site::Shape | Site::ParameterDeclaration | Site::NodeExpression => self.class,
         }
     }
 
@@ -164,7 +203,6 @@ impl CensusRow {
                 self.class,
                 TermClass::Structural(Role::ParameterDeclaration)
             )
-            || self.iri == sh::DEFAULT_VALUE
     }
 }
 
@@ -217,16 +255,14 @@ static EXPLICIT: &[CensusRow] = &[
     // read from the DATA graph for every shape, never a shape's own target
     // predicate, so it has no row in the table's target list.
     row(sh::SHAPE, TermClass::Target),
-    unimplemented(
-        sh::VALUES,
-        "sh:values computes a property shape's value nodes (SHACL 1.2 Core §2.3), and this \
-         engine does not evaluate it",
-    ),
-    unimplemented(
-        sh::DEFAULT_VALUE,
-        "sh:defaultValue computes a property shape's value nodes when no other value exists \
-         (SHACL 1.2 Core §2.3), and this engine does not evaluate it",
-    ),
+    // SHACL 1.2 Core, "Value Nodes of Property Shapes": "If e is the value of
+    // sh:values at the property shape, then add the output nodes of evalExpr(e,
+    // data graph, focus node, {}). If the set is still empty and d is the value of
+    // sh:defaultValue at the property shape, then add the output nodes of
+    // evalExpr(d, data graph, focus node, {})." On a parameter declaration
+    // `sh:defaultValue` is documentation (see `CensusRow::class_at`).
+    structural(sh::VALUES, Role::ComputedValues),
+    structural(sh::DEFAULT_VALUE, Role::ComputedValues),
     // The IRI value of `sh:closed` (§7.9.1), never a predicate.
     vocabulary(sh::BY_TYPES),
     // ── Node kinds (§4.1.3) ──
@@ -375,7 +411,10 @@ static EXPLICIT: &[CensusRow] = &[
     row(sh::PREDICATE, TermClass::Rule),
     row(sh::OBJECT, TermClass::Rule),
     row(sh::CONSTRUCT, TermClass::Rule),
-    unimplemented(sh_iri!("expectedPredicate"), RULES),
+    // SHACL 1.2 Inference Rules §3.8: "The expected derived triples of a rule are
+    // the derived triples for all values of the property sh:expectedPredicate at
+    // the rule."
+    row(sh::EXPECTED_PREDICATE, TermClass::Rule),
     unimplemented(sh_iri!("layer"), RULES),
     unimplemented(sh_iri!("runOnce"), RULES),
     unimplemented(sh_iri!("RuleSet"), RULES),

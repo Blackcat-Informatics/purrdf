@@ -321,6 +321,56 @@ fn unique_values_for_records_its_declared_code() {
     );
 }
 
+/// A property shape whose value nodes `sh:values` / `sh:defaultValue` compute is
+/// dropped, with one declared code per term against its shape and a `$comment`: a
+/// JSON document does not carry a computed value, so projecting `sh:minCount 1`
+/// onto the document would require what the computation supplies. The same shape
+/// without either term keeps the property and requires it.
+#[test]
+fn computed_values_record_their_declared_codes() {
+    let computed = compile_ttl(
+        r"
+        ex:RectangleShape a sh:NodeShape ;
+            sh:targetClass ex:Rectangle ;
+            sh:property [ sh:path ex:area ; sh:minCount 1 ;
+                          sh:values [ sh:path ex:size ] ; sh:defaultValue 1 ] .
+        ",
+    );
+    let mut codes = recorded_codes(&computed);
+    codes.sort_unstable();
+    assert_eq!(codes, vec!["sh:defaultValue", "sh:values"]);
+    assert_ledger_sound(&computed.losses, "shacl", "json-schema");
+    assert!(
+        computed
+            .schema_json
+            .contains("the property shape on ex:area was dropped"),
+        "{}",
+        computed.schema_json
+    );
+    assert!(
+        !computed.schema_json.contains("\"required\":[\"ex:area\"]"),
+        "a computed property must not be required of the document: {}",
+        computed.schema_json
+    );
+    let asserted = compile_ttl(
+        r"
+        ex:RectangleShape a sh:NodeShape ;
+            sh:targetClass ex:Rectangle ;
+            sh:property [ sh:path ex:area ; sh:minCount 1 ] .
+        ",
+    );
+    assert!(
+        asserted.losses.is_empty(),
+        "{:?}",
+        recorded_codes(&asserted)
+    );
+    assert!(
+        asserted.schema_json.contains("ex:area"),
+        "{}",
+        asserted.schema_json
+    );
+}
+
 /// `sh:closed sh:ByTypes` permits what each instance's own types collect, which an
 /// object schema's one key set cannot state: it records its declared code against
 /// its shape, leaves a `$comment` and leaves the object open; the same shape with

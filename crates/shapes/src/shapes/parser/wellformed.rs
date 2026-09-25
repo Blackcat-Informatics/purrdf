@@ -39,7 +39,7 @@ use crate::data::{GraphFilter, native_quads, quads_for_pattern_ids};
 use crate::model::{rdf, sh, xsd};
 use crate::shapes::Parser;
 use crate::spec::ValueRule;
-use crate::spec::census::{self, Role, TermClass};
+use crate::spec::census::{self, Role, Site, TermClass};
 use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// `rdf:langString`.
@@ -294,10 +294,19 @@ impl Parser<'_> {
                      silently ignoring it (a misspelled parameter checks nothing)"
                 ));
             };
+            let site = if is_parameter {
+                Site::ParameterDeclaration
+            } else {
+                Site::Shape
+            };
+            if row.class_at(site) == TermClass::NonValidating
+                && row.class != TermClass::NonValidating
+            {
+                // A term the specification makes documentation at this position
+                // (`sh:defaultValue` on a parameter declaration): any value.
+                continue;
+            }
             if let TermClass::Unimplemented(why) = row.class {
-                if is_parameter && p == sh::DEFAULT_VALUE {
-                    continue;
-                }
                 return Err(format!(
                     "shape {shape} uses <{p}>, which is not evaluated by this engine: {why}; the \
                      shape is refused rather than validated as if it were absent"
@@ -335,11 +344,54 @@ impl Parser<'_> {
                     self.check_characteristic_value(shape, p, object)?;
                 }
                 TermClass::NonValidating => check_non_validating_value(shape, p, object)?,
+                TermClass::Structural(Role::ComputedValues) => {
+                    self.check_computed_values_site(shape, p, is_parameter)?;
+                }
                 TermClass::Structural(_) | TermClass::Rule => {}
                 TermClass::Unimplemented(_) => {}
             }
         }
         Ok(())
+    }
+
+    /// Where `sh:values` / `sh:defaultValue` may appear: on a property shape whose
+    /// `sh:path` is an IRI, and nowhere else.
+    ///
+    /// SHACL 1.2 Core, "Property Shapes": "A property shape can only have values
+    /// for sh:values and/or sh:defaultValue when its value for sh:path is a
+    /// Predicate Path." A node shape has no path, so it has no value nodes these
+    /// could add to ("For node shapes the value nodes are the individual focus
+    /// nodes, forming a set with exactly one member"). A parameter declaration is
+    /// never validated, so an `sh:values` on one would compute value nodes for
+    /// nothing; its `sh:defaultValue` is documentation and never reaches here
+    /// (see [`census::CensusRow::class_at`]).
+    fn check_computed_values_site(
+        &self,
+        shape: &Term,
+        predicate: &str,
+        is_parameter: bool,
+    ) -> Result<(), String> {
+        if is_parameter {
+            return Err(format!(
+                "parameter declaration {shape} carries <{predicate}>; a parameter declaration \
+                 is never validated, so the value nodes it would compute would be computed for \
+                 nothing"
+            ));
+        }
+        match self.first_object_of(shape, sh::PATH) {
+            None => Err(format!(
+                "shape {shape} has no sh:path, so it is a node shape, and carries \
+                 <{predicate}>; SHACL 1.2 Core: \"A property shape can only have values for \
+                 sh:values and/or sh:defaultValue when its value for sh:path is a Predicate \
+                 Path\""
+            )),
+            Some(Term::NamedNode(_)) => Ok(()),
+            Some(path) => Err(format!(
+                "property shape {shape} carries <{predicate}> but its sh:path {path} is not an \
+                 IRI; SHACL 1.2 Core: \"A property shape can only have values for sh:values \
+                 and/or sh:defaultValue when its value for sh:path is a Predicate Path\""
+            )),
+        }
     }
 
     /// The RDF 1.2 reifiers of the shape statement `(shape, predicate, object)`.
@@ -684,6 +736,7 @@ fn describe_class(class: TermClass) -> &'static str {
             Role::Builtin => "a built-in component or function IRI",
             Role::Declaration => "declaration vocabulary",
             Role::ParameterDeclaration => "parameter-declaration vocabulary",
+            Role::ComputedValues => "a property shape's computed value nodes",
             Role::Prefixes => "prefix-declaration vocabulary",
             Role::Report => "validation-report vocabulary",
             Role::Graph => "graph-level vocabulary",

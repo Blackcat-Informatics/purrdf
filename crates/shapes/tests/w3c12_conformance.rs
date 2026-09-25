@@ -74,9 +74,6 @@ use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_f
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
-const R_VALUES: &str =
-    "sh:values on a property shape is not evaluated, so the shape is refused at load";
-
 const R_PREFIX_SCAN: &str = "prefix handling scans PREFIX lines out of the shapes document text, including one \
      inside a string literal, so the query is resolved against the wrong namespace";
 
@@ -103,9 +100,6 @@ const R_RULE_TEMPLATE: &str = "sh:SPARQLRuleTemplate is not implemented: templat
 const R_RULE_PROCESSOR: &str = "sh:ruleProcessor is not validated: an unknown processor at rule or rule-set level \
      runs instead of being refused";
 
-const R_EXPECTED_PREDICATE: &str = "sh:values / sh:defaultValue on a property shape are not evaluated, so the shapes \
-     graph the rule depends on is refused at load";
-
 const R_UNBOUND_ARG: &str = "an unbound shnex:var argument makes the sparql: call yield nothing instead of \
      reaching BOUND/COALESCE as unbound";
 
@@ -127,8 +121,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
     // ── SPARQL surface ──
-    ("sparql/property/property-select-001", R_VALUES),
-    ("sparql/property/property-sparqlExpr-001", R_VALUES),
     ("sparql/node/prefixes-002", R_PREFIX_SCAN),
     (
         "sparql/functions/instanceCount-example",
@@ -178,10 +170,6 @@ const XFAIL: &[(&str, &str)] = &[
     (
         "inference-rules/ruleProcessor-unknown-at-ruleset",
         R_RULE_PROCESSOR,
-    ),
-    (
-        "inference-rules/expectedPredicate-example",
-        R_EXPECTED_PREDICATE,
     ),
     // ── Node expressions ──
     ("node-expr/shnex-sparql/bound-example", R_UNBOUND_ARG),

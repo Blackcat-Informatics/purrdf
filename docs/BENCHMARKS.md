@@ -274,14 +274,17 @@ memory thresholds.
 
 ### SHACL validation hot paths
 
-The `validate` benchmark contains six deterministic SHACL workloads:
+The `validate` benchmark contains nine deterministic SHACL workloads:
 
 | Group | Fixed fixture and measured boundary |
 | --- | --- |
 | `shacl_validate/corpus_all` | All 72 committed first-party conformance cases, including text ingestion, shapes parsing, target resolution, constraint evaluation, and report assembly. |
 | `shacl_focus_core` | 512, 1,024, 2,048, 3,000, 100,000, and 1,000,000 target nodes. Each node contributes four quads; the shapes exercise a 40-level asserted subclass hierarchy, pattern, datatype, and class constraints. |
+| `shacl_focus_closed` | 512, 4,096, and 65,536 conforming target nodes under a `sh:closed` node shape with five simple-predicate property shapes carrying `sh:minLength`, `sh:maxLength`, `sh:nodeKind`, `sh:languageIn` and `sh:datatype`; every node also carries `rdf:type`, admitted only through `sh:ignoredProperties`, so the closed permitted-set probe runs on every outgoing triple of every focus node. |
 | `shacl_focus_sparql` | 64, 512, and 4,096 target nodes with two quads per node and a caller-declared SHACL-SPARQL function. |
 | `shacl_focus_unique_values_for` | 512, 4,096, and 65,536 conforming target nodes with three quads per node under `sh:uniqueValuesFor ( ex:notation ex:scheme )`, the cross-focus component whose verdict for one node depends on every other target node. The target set is grouped by value tuple once per validation, so the per-node cost is expected to stay flat across the sweep. |
+| `shacl_focus_target_where` | 512, 4,096, and 65,536 target nodes, each with a notation, beside as many unrelated nodes, under `sh:targetWhere` in two resolutions: `narrowed`, where the where shape's `sh:class` bounds the candidates to the class's instances, and `full_scan`, the same condition behind a one-member `sh:or` the narrowing does not look inside, which checks every node of the graph against the shape. |
+| `shacl_focus_computed_values` | 512, 4,096, and 65,536 conforming target nodes under one property shape with `sh:minCount 1` and `sh:datatype xsd:integer`, whose value nodes come from the path alone (`asserted`, the control every shape without computed values pays), from a `sh:values [ sh:path ex:width ]` node expression evaluated at each focus node (`values`), or from a `sh:defaultValue 1` added where nothing else produced a value (`default`). |
 | `shacl_focus_realtime` | One prepared 1,000,000-node snapshot (4,000,079 quads and 3,000,088 terms), a compatibility focus filter over one node, and id-native prepared requests containing 1, 8, 64, 512, or 4,096 focus nodes. Dataset and shapes preparation stays outside each request's timed loop. |
 | `shacl_change_path_contrast` | One 1,000,000-node snapshot carrying both a conforming and a disjoint violating focus population, one binding, and id-native requests of 1, 8, 64, 512, or 4,096 focus nodes from each. Conformance is the only thing that differs between the two rows at a given size, so the deferred-materialization trade — a conforming request costs a constant, a violating one pays per violation — is visible as two columns. The violating side asserts one result per focus node, so a cheap row cannot be a row that stopped producing results. |
 
