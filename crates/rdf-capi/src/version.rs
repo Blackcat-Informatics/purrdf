@@ -76,10 +76,10 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// consumer recompile twice for one reason. A symbol added AFTER `0.8.0` ships is a
 /// different question, and the paragraph below is the answer to it.
 ///
-/// Every one of those is additive: no existing prototype was retyped, reordered,
-/// removed or given a parameter, and no discriminant was renumbered. A host built
-/// against `0.7.0` calls everything it called before, with the same arguments, and gets
-/// the same values back.
+/// Every one of those nine is additive: no discriminant was renumbered, and a host
+/// built against `0.7.0` calls each symbol it called before with the same arguments —
+/// except `purrdf_shacl_validate_to_sarif`, whose one incompatible change is described
+/// below.
 ///
 /// It bumps anyway, and the reason is the sentence at the top of this comment rather
 /// than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
@@ -91,6 +91,13 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// make that question answerable, and a number that cannot distinguish two shipped
 /// libraries is not answering it. Additive changes are cheap for the CONSUMER, not free
 /// for the VERSION.
+///
+/// The same unshipped bump also carries one INCOMPATIBLE change:
+/// `purrdf_shacl_validate_to_sarif` gained `conformance_disallows` /
+/// `conformance_disallows_count` — the SHACL 1.2 conformance-disallow set — between
+/// `data_nt` and `out_buffer`. A host built against `0.7.0` must recompile; the
+/// bump it rides is the one that already says so, rather than a second export for
+/// the same job.
 ///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes

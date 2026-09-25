@@ -17,10 +17,11 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use super::{
-    AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ARG_KEY, TAGS_CLOSED_MODE,
-    TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND, TAGS_FN_CALL, TAGS_NODE_EXPR,
-    TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_RULE_SCHEDULE, TAGS_SEVERITY, TAGS_SHAPE_ARG,
-    TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast_derived, speculative_capacity, write_varint,
+    AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ANNOTATED_CONSTRAINT,
+    TAGS_ARG_KEY, TAGS_CLOSED_MODE, TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND,
+    TAGS_FN_CALL, TAGS_NODE_EXPR, TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_RULE_SCHEDULE,
+    TAGS_SEVERITY, TAGS_SHAPE_ARG, TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast_derived,
+    speculative_capacity, write_varint,
 };
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -30,8 +31,9 @@ use crate::product::{ProductDimension, ShapesProductError};
 use crate::report::Severity;
 use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
 use crate::shapes::{
-    ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint, NodeKindValue, Path,
-    PropertyShape, Shape, Shapes, SparqlTargetType, Target, TargetTypeParam,
+    AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
+    ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
+    Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
@@ -84,7 +86,8 @@ fn leaf_shape(id: &str) -> Shape {
         constraints: Vec::new(),
         property_shapes: Vec::new(),
         severity: Severity::Violation,
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![],
         deactivated: false,
         box_roles: Vec::new(),
         rules: Vec::new(),
@@ -145,6 +148,8 @@ fn sample_severities() -> Vec<Severity> {
         Severity::Violation,
         Severity::Warning,
         Severity::Info,
+        Severity::Debug,
+        Severity::Trace,
         Severity::Other(ex("Critical")),
     ]
 }
@@ -394,7 +399,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         Constraint::Node(Box::new(leaf_shape("NodeShape"))),
         Constraint::Sparql {
             select: "SELECT $this WHERE { $this ?p ?o }".to_owned(),
-            message: Some("no".to_owned()),
+            messages: vec![Literal::new_simple_literal("no")],
             severity: Some(Severity::Warning),
         },
         // A composite path, so the pair tags are exercised past the IRI form.
@@ -414,7 +419,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
         },
         Constraint::Expression {
             expr: NodeExpr::Exists(Box::new(NodeExpr::Path(Path::Predicate(ex("p"))))),
-            message: None,
+            messages: vec![],
             severity: Some(Severity::Info),
         },
         Constraint::NodeByExpression {
@@ -423,7 +428,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
                 args: vec![(ArgKey::Index(0), NodeExpr::This)],
             },
             shapes: Arc::new(OnceLock::new()),
-            message: Some("shape".to_owned()),
+            messages: vec![Literal::new_simple_literal("shape")],
             severity: None,
         },
         Constraint::Component {
@@ -433,7 +438,7 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
             validator: ComponentValidator::Ask {
                 ask: "ASK { $this ?p ?o }".to_owned(),
             },
-            message: None,
+            messages: vec![],
             severity: None,
         },
         Constraint::MinListLength(1),
@@ -605,14 +610,35 @@ fn full_fixture() -> Shapes {
             reifier_shapes: Vec::new(),
             reification_required: false,
             severity: Severity::Warning,
-            message: Some("nested".to_owned()),
+            messages: vec![Literal::new_simple_literal("nested")],
+            constraint_annotations: vec![],
             deactivated: true,
             box_roles: vec![ex("role/abox")],
         }],
         reifier_shapes: vec![leaf_shape("ReifierShape")],
         reification_required: true,
         severity: Severity::Other(ex("Critical")),
-        message: None,
+        messages: vec![],
+        constraint_annotations: vec![
+            ConstraintAnnotation {
+                constraint: AnnotatedConstraint::Constraint(0),
+                severity: Some(Severity::Debug),
+                messages: vec![
+                    Literal::new_language_tagged_literal_unchecked("erste", "de"),
+                    Literal::new_simple_literal("first"),
+                ],
+            },
+            ConstraintAnnotation {
+                constraint: AnnotatedConstraint::Constraint(2),
+                severity: None,
+                messages: vec![Literal::new_simple_literal("third")],
+            },
+            ConstraintAnnotation {
+                constraint: AnnotatedConstraint::Reifier,
+                severity: Some(Severity::Trace),
+                messages: vec![],
+            },
+        ],
         deactivated: false,
         box_roles: vec![ex("role/tbox"), ex("role/rbox")],
     };
@@ -621,7 +647,7 @@ fn full_fixture() -> Shapes {
         .into_iter()
         .map(|expr| Constraint::Expression {
             expr,
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
@@ -630,7 +656,7 @@ fn full_fixture() -> Shapes {
         .into_iter()
         .map(|call| Constraint::Expression {
             expr: NodeExpr::Call(call),
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
@@ -642,7 +668,7 @@ fn full_fixture() -> Shapes {
                 node: Box::new(NodeExpr::This),
                 shape,
             },
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
@@ -669,7 +695,7 @@ fn full_fixture() -> Shapes {
             source_shape: ex_term("SourceShape"),
             bindings: Vec::new(),
             validator,
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
@@ -678,7 +704,7 @@ fn full_fixture() -> Shapes {
         .into_iter()
         .map(|severity| Constraint::Sparql {
             select: "SELECT $this WHERE { $this ?p ?o }".to_owned(),
-            message: None,
+            messages: vec![],
             severity: Some(severity),
         })
         .collect();
@@ -687,7 +713,7 @@ fn full_fixture() -> Shapes {
         .into_iter()
         .map(|key| Constraint::Expression {
             expr: NodeExpr::Arg(key),
-            message: None,
+            messages: vec![],
             severity: None,
         })
         .collect();
@@ -727,7 +753,12 @@ fn full_fixture() -> Shapes {
         constraints,
         property_shapes: vec![property],
         severity: Severity::Info,
-        message: Some("everything".to_owned()),
+        messages: vec![Literal::new_simple_literal("everything")],
+        constraint_annotations: vec![ConstraintAnnotation {
+            constraint: AnnotatedConstraint::Constraint(1),
+            severity: Some(Severity::Other(ex("Critical"))),
+            messages: vec![],
+        }],
         deactivated: false,
         box_roles: vec![ex("role/cbox")],
         rules,
@@ -1239,7 +1270,7 @@ fn custom_function_cycle_encodes_as_dag() {
                     func: Arc::clone(&func),
                     args: vec![(ArgKey::Index(0), NodeExpr::This)],
                 },
-                message: None,
+                messages: vec![],
                 severity: None,
             },
             // A SECOND call site of the SAME declaration: the table must still
@@ -1249,7 +1280,7 @@ fn custom_function_cycle_encodes_as_dag() {
                     func: Arc::clone(&func),
                     args: vec![(ArgKey::Index(1), NodeExpr::Empty)],
                 },
-                message: None,
+                messages: vec![],
                 severity: None,
             },
         ],
@@ -1301,7 +1332,7 @@ fn custom_function_cycle_encodes_as_dag() {
                 func: fixture_fn(),
                 args: Vec::new(),
             },
-            message: None,
+            messages: vec![],
             severity: None,
         }],
         ..leaf_shape("Bodiless")
@@ -1321,7 +1352,7 @@ fn two_declarations_of_one_function_iri_are_refused() {
             func,
             args: Vec::new(),
         },
-        message: None,
+        messages: vec![],
         severity: None,
     };
 
@@ -1769,13 +1800,13 @@ fn the_decoded_shape_index_is_one_shared_handle() {
             Constraint::NodeByExpression {
                 expr: NodeExpr::This,
                 shapes: Arc::new(OnceLock::new()),
-                message: None,
+                messages: vec![],
                 severity: None,
             },
             Constraint::NodeByExpression {
                 expr: NodeExpr::Empty,
                 shapes: Arc::new(OnceLock::new()),
-                message: None,
+                messages: vec![],
                 severity: None,
             },
             Constraint::Expression {
@@ -1786,7 +1817,7 @@ fn the_decoded_shape_index_is_one_shared_handle() {
                         shapes: Arc::new(OnceLock::new()),
                     },
                 },
-                message: None,
+                messages: vec![],
                 severity: None,
             },
         ],
@@ -1921,4 +1952,121 @@ fn a_non_canonical_type_index_is_malformed_and_the_canonical_one_decodes() {
         test_reader(&canonical).closed_mode(),
         Ok(ClosedMode::ByTypes(_))
     ));
+}
+
+/// A per-constraint annotation list the shapes parser could not have written is
+/// refused as malformed — out of range, out of order, a reifier annotation on a
+/// node shape, an override of nothing — and the canonical list beside each
+/// decodes; the tag past `AnnotatedConstraint`'s space is an unknown capability.
+#[test]
+fn a_non_canonical_constraint_annotation_list_is_malformed_and_the_canonical_one_decodes() {
+    let encode = |entries: &[(Option<usize>, Option<Severity>, Option<&str>)]| {
+        let mut writer = test_writer();
+        writer.count(entries.len());
+        for (index, severity, message) in entries {
+            match index {
+                Some(index) => {
+                    writer.tag(0);
+                    writer.count(*index);
+                }
+                None => writer.tag(1),
+            }
+            writer.opt_severity(severity.as_ref());
+            let messages: Vec<Literal> = message
+                .iter()
+                .map(|m| Literal::new_simple_literal(*m))
+                .collect();
+            writer.messages(&messages);
+        }
+        writer.out
+    };
+    let decode = |bytes: &[u8], constraints: usize, property_shape: bool| {
+        test_reader(bytes).constraint_annotations(constraints, property_shape)
+    };
+    let warning = || Some(Severity::Warning);
+
+    let canonical = encode(&[(Some(0), warning(), None), (None, None, Some("m"))]);
+    let decoded = decode(&canonical, 1, true).expect("the canonical list decodes");
+    assert_eq!(decoded.len(), 2);
+    assert_eq!(decoded[1].constraint, AnnotatedConstraint::Reifier);
+
+    for (label, bytes, constraints, property_shape) in [
+        (
+            "past the constraints",
+            encode(&[(Some(1), warning(), None)]),
+            1,
+            true,
+        ),
+        (
+            "out of order",
+            encode(&[(Some(1), warning(), None), (Some(0), warning(), None)]),
+            2,
+            true,
+        ),
+        (
+            "a reifier on a node shape",
+            encode(&[(None, warning(), None)]),
+            1,
+            false,
+        ),
+        (
+            "overriding nothing",
+            encode(&[(Some(0), None, None)]),
+            1,
+            true,
+        ),
+    ] {
+        assert_eq!(
+            decode(&bytes, constraints, property_shape)
+                .expect_err(label)
+                .dimension(),
+            ProductDimension::Malformed,
+            "{label}"
+        );
+    }
+
+    let mut unknown = test_writer();
+    unknown.count(1);
+    unknown.tag(TAGS_ANNOTATED_CONSTRAINT);
+    assert_eq!(
+        decode(&unknown.out, 1, true)
+            .expect_err("an unknown AnnotatedConstraint tag is refused")
+            .dimension(),
+        ProductDimension::UnsupportedCapability
+    );
+}
+
+/// A message set out of canonical order, repeated, or holding a literal SHACL
+/// does not permit as an `sh:message` is malformed; the canonical set of tagged
+/// messages beside it decodes with every tag intact.
+#[test]
+fn a_non_canonical_message_set_is_malformed_and_the_canonical_one_decodes() {
+    let encode = |messages: &[Literal]| {
+        let mut writer = test_writer();
+        writer.count(messages.len());
+        for message in messages {
+            writer.literal(message);
+        }
+        writer.out
+    };
+    let en = Literal::new_language_tagged_literal_unchecked("Too many", "en");
+    let de = Literal::new_language_tagged_literal_unchecked("Zu viele", "de");
+    let decoded = test_reader(&encode(&[en.clone(), de.clone()]))
+        .messages()
+        .expect("the canonical set decodes");
+    assert_eq!(decoded, vec![en.clone(), de.clone()]);
+    for (label, bytes) in [
+        ("out of order", encode(&[de, en.clone()])),
+        ("repeated", encode(&[en.clone(), en])),
+        (
+            "not a message literal",
+            encode(&[Literal::new_typed_literal("1", ex("Datatype"))]),
+        ),
+    ] {
+        assert_eq!(
+            test_reader(&bytes).messages().expect_err(label).dimension(),
+            ProductDimension::Malformed,
+            "{label}"
+        );
+    }
 }

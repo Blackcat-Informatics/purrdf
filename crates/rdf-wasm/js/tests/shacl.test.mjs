@@ -47,6 +47,38 @@ test("shaclValidateToSarif rejects malformed shapes (never a silent pass)", () =
   assert.throws(() => shaclValidateToSarif("@@@ not turtle", DATA));
 });
 
+// The conformance-disallow set: a Warning-graded violation does not conform under the
+// default set and conforms under sh:Violation alone; a non-IRI level throws.
+test("shaclValidateToSarif honours conformanceDisallows", () => {
+  const warning = SHAPES.replace(
+    "sh:path ex:age ;",
+    "sh:path ex:age ; sh:severity sh:Warning ;",
+  );
+  const run = (disallows) =>
+    JSON.parse(shaclValidateToSarif(warning, DATA, undefined, disallows)).runs[0].properties;
+  assert.equal(run(undefined).shaclConforms, false);
+  const relaxed = run(["http://www.w3.org/ns/shacl#Violation"]);
+  assert.equal(relaxed.shaclConforms, true);
+  assert.deepEqual(relaxed.shaclConformanceDisallows, [
+    "http://www.w3.org/ns/shacl#Violation",
+  ]);
+  assert.throws(() => shaclValidateToSarif(warning, DATA, undefined, ["Violation"]));
+});
+
+// Every sh:message reaches the SARIF result, each with its language tag.
+test("shaclValidateToSarif carries every message with its language", () => {
+  const tagged = SHAPES.replace(
+    "sh:datatype xsd:integer ]",
+    'sh:datatype xsd:integer ; sh:message "Too many"@en , "Zu viele"@de ]',
+  );
+  const result = JSON.parse(shaclValidateToSarif(tagged, DATA)).runs[0].results[0];
+  assert.equal(result.message.text, "Too many");
+  assert.deepEqual(result.properties.shaclMessages, [
+    { text: "Too many", language: "en" },
+    { text: "Zu viele", language: "de" },
+  ]);
+});
+
 // A `sh:rule` shapes graph that types every ex:Person as ex:adult ex:yes.
 const RULE_SHAPES = `@prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix ex: <http://example.org/> .

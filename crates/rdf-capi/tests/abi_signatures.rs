@@ -308,9 +308,12 @@ fn the_signatures_the_minor_bump_paid_for_are_the_ones_that_shipped() {
     let expected: [(&str, String); 4] = [
         (
             "purrdf_shacl_validate_to_sarif",
+            // `0.8.0` (unshipped) also inserted the conformance-disallow set before
+            // the out-parameters; `shapes_base_iri` stays where `0.7.0` put it.
             "int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, \
-             const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, \
-             PurrdfError **out_error)"
+             const char *shapes_base_iri, const char *data_nt, \
+             const char *const *conformance_disallows, size_t conformance_disallows_count, \
+             PurrdfBuffer **out_buffer, PurrdfError **out_error)"
                 .to_owned(),
         ),
         (

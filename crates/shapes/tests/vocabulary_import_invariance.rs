@@ -72,7 +72,7 @@ const TOTAL_CASES: usize = 375;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
-/// the three corpora except the 12 declared `sht:Failure` inputs and the 14 SHACL
+/// the three corpora except the 12 declared `sht:Failure` inputs and the 7 SHACL
 /// 1.2 entries this engine refuses at load (the same partition the product
 /// equivalence harness pins).
 ///
@@ -94,7 +94,13 @@ const TOTAL_CASES: usize = 375;
 /// Moved from 349 to 351 when `sh:closed sh:ByTypes` became evaluated:
 /// `closed-003` and `closed-004` now load, so their reports are compared too,
 /// and the refused-at-load entries went from 14 to 12.
-const COMPARED_ON_REPORT: usize = 351;
+///
+/// Moved from 351 to 356 when per-constraint reifier annotations and the
+/// `sh:Debug` / `sh:Trace` severities became evaluated: `deactivated-003`,
+/// `severity-003`, `severity-004`, `severity-005` and `message-002` now load, so
+/// their reports are compared too, and the refused-at-load entries went from 12
+/// to 7.
+const COMPARED_ON_REPORT: usize = 356;
 
 /// One case, reduced to what both parses need.
 struct Input {

@@ -1027,8 +1027,11 @@ pub(crate) static SPARQL_ALIASES: &[SparqlAlias] = &[
     },
 ];
 
-/// The severities the engine recognises as built-in (SHACL 1.2 Core §3.6.3).
-pub(crate) static SEVERITIES: &[&str] = &[sh::VIOLATION, sh::WARNING, sh::INFO];
+/// The severities the engine recognises as built-in: the five SHACL 1.2 Core
+/// names in "Declaring the Severity of a Shape or Constraint" ("SHACL includes the
+/// IRIs listed in the table below to represent severities").
+pub(crate) static SEVERITIES: &[&str] =
+    &[sh::VIOLATION, sh::WARNING, sh::INFO, sh::DEBUG, sh::TRACE];
 
 /// The target predicates the engine implements (SHACL 1.2 Core §2.1.3, plus the
 /// SHACL-SPARQL `sh:target`).

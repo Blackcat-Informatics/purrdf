@@ -237,6 +237,11 @@ pub(crate) struct ValidateOptions<'a> {
     /// [`purrdf_shapes::shapes::from_dataset_with_config`] through
     /// [`purrdf_shapes::model::BoxRoleVocab::for_namespace`] — see [`load_shapes`].
     pub(crate) box_role_vocab: Option<&'a str>,
+    /// `--conformance-disallows IRI`, repeatable: the conformance-disallow set this run
+    /// is judged against, as the operator wrote it. Empty means SHACL's default set.
+    /// [`validation_options`] turns it into the engine's
+    /// [`ValidationOptions`](purrdf_shapes::engine::ValidationOptions).
+    pub(crate) conformance_disallows: &'a [String],
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base IRI relative IRIs in the DATA graph resolve against.
@@ -279,6 +284,21 @@ enum ShapesSource {
 }
 
 impl ShapesSource {
+    /// These shapes, answering every validation under `options` — the request's
+    /// conformance-disallow set — on both routes: the parsed shapes take them
+    /// directly, and a restored preparation, which the product never carries them
+    /// in, takes them through
+    /// [`PreparedShapes::with_validation_options`](engine::PreparedShapes::with_validation_options).
+    fn with_validation_options(self, options: engine::ValidationOptions) -> Self {
+        match self {
+            Self::Parsed(mut shapes) => {
+                shapes.set_validation_options(options);
+                Self::Parsed(shapes)
+            }
+            Self::Restored(prepared) => Self::Restored(prepared.with_validation_options(options)),
+        }
+    }
+
     /// The shapes to validate against.
     fn shapes(&self) -> &Shapes {
         match self {
@@ -330,6 +350,24 @@ impl ShapesSource {
     }
 }
 
+/// The validation-request options `--conformance-disallows` names: SHACL's default
+/// set when the flag is absent, exactly the named IRIs otherwise.
+///
+/// # Errors
+///
+/// A usage error when a value is not an absolute IRI.
+fn validation_options(
+    options: &ValidateOptions<'_>,
+) -> Result<engine::ValidationOptions, CliError> {
+    if options.conformance_disallows.is_empty() {
+        return Ok(engine::ValidationOptions::default());
+    }
+    let set =
+        purrdf::shapes::report::ConformanceDisallows::from_iris(options.conformance_disallows)
+            .map_err(|message| CliError::Usage(format!("--conformance-disallows: {message}")))?;
+    Ok(engine::ValidationOptions::default().with_conformance_disallows(set))
+}
+
 /// Run the `validate` subcommand.
 pub(crate) fn run(
     options: &ValidateOptions<'_>,
@@ -365,9 +403,11 @@ pub(crate) fn run(
     // fail against the command line rather than after the data has been parsed and
     // validated.
     let plan = ShapesPlan::decide(options)?;
+    // Decided off the command line too: an IRI that is not one is a malformed request.
+    let validation = validation_options(options)?;
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
-    let source = plan.load(options)?;
+    let source = plan.load(options)?.with_validation_options(validation);
     // Before the verdict, because it describes the INPUT rather than the outcome and an
     // operator reading a failed run needs to know which shapes produced it even when the
     // validation below never gets to print anything. A restored product renders the

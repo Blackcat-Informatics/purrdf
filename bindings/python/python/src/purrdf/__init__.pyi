@@ -1553,6 +1553,8 @@ class _ValidationReport:
 
     @property
     def conforms(self) -> bool: ...
+    # Each result dict carries "messages": every sh:resultMessage, as
+    # {"text": str, "language"?: str, "direction"?: "ltr" | "rtl", "datatype"?: str}.
     @property
     def results(self) -> list[dict[str, builtins.object]]: ...
     def to_ntriples(self) -> str: ...
@@ -1719,9 +1721,22 @@ class shapes:
     # `shapes_base` is the base IRI the SHAPES document's relative IRI references
     # resolve against; `data_nt` needs no counterpart because N-Triples admits no
     # relative IRI by grammar.
+    #
+    # `conformance_disallows` is the conformance-disallow set: severity IRIs whose
+    # results make the data non-conforming. `None` is SHACL's default set
+    # (sh:Violation, sh:Warning, sh:Info); an empty sequence or a non-IRI raises
+    # ValueError. The dict carries "conforms", "conformance_disallows" (the set the
+    # report was judged against) and "results", each result's "severity" being its
+    # IRI — sh:Debug and sh:Trace included, which the default set does not block —
+    # and its "messages" EVERY sh:resultMessage, each {"text", and "language" /
+    # "direction" / "datatype" when present}.
     @staticmethod
     def validate(
-        shapes_ttl: str, data_nt: str, *, shapes_base: str | None = None
+        shapes_ttl: str,
+        data_nt: str,
+        *,
+        shapes_base: str | None = None,
+        conformance_disallows: Sequence[str] | None = None,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): apply every
     # SHACL-AF sh:rule to a fixpoint, returning the materialized dataset (base

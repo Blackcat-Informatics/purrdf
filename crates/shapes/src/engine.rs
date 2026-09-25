@@ -18,7 +18,7 @@ use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, Trippe
 use crate::data::{DatasetIdentity, GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
 use crate::plan::{ClassCatalog, DatasetBinding, LoweredShapes, PreparedTargets, ShapePlan};
 use crate::provenance::ValidatorProvenance;
-use crate::report::ValidationReport;
+use crate::report::{ConformanceDisallows, ValidationReport};
 use crate::shapes::{Shape, Shapes, Target};
 use crate::term::{
     NamedNode, Term, canonical_cmp, canonical_cmp_id_term, canonical_cmp_ids, term_id_to_native,
@@ -293,8 +293,10 @@ impl BoundShapes {
         shapes: &[Shape],
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
+        disallows: &ConformanceDisallows,
     ) -> Result<Self, String> {
-        let binding = lowered.bind(data.core_view(), &classes);
+        let mut binding = lowered.bind(data.core_view(), &classes);
+        binding.set_conformance_disallows(disallows);
         let targets = shapes
             .iter()
             .map(|shape| {
@@ -321,8 +323,10 @@ impl BoundShapes {
         data: &ShaclData,
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
+        disallows: &ConformanceDisallows,
     ) -> Self {
-        let binding = lowered.bind(data.core_view(), &classes);
+        let mut binding = lowered.bind(data.core_view(), &classes);
+        binding.set_conformance_disallows(disallows);
         Self {
             lowered,
             classes,
@@ -1105,7 +1109,10 @@ fn evaluate_shape_focus_nodes(
     )
 }
 
-fn finish_report(mut results: Vec<crate::report::ValidationResult>) -> ValidationReport {
+fn finish_report(
+    mut results: Vec<crate::report::ValidationResult>,
+    disallows: &ConformanceDisallows,
+) -> ValidationReport {
     // Deterministic sort key: (focus_node, component, source_shape, path, value,
     // message, severity). The message and severity tiebreakers make the ordering
     // TOTAL: two results that agree on the first five components (e.g. several
@@ -1129,15 +1136,12 @@ fn finish_report(mut results: Vec<crate::report::ValidationResult>) -> Validatio
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            result.message.clone().unwrap_or_default(),
+            crate::report::messages_sort_key(&result.messages),
             result.severity.clone(),
         )
     };
     results.sort_by_cached_key(sort_key);
-    ValidationReport {
-        conforms: results.is_empty(),
-        results,
-    }
+    ValidationReport::from_results(results, disallows.clone())
 }
 
 fn validate_with_plan_and_focus_filter<F>(
@@ -1177,10 +1181,44 @@ where
             |_| true,
         )?);
     }
-    Ok(finish_report(all_results))
+    Ok(finish_report(
+        all_results,
+        &shapes.validation_options.conformance_disallows,
+    ))
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+/// The options of a validation REQUEST: what the caller asks of one validation,
+/// as opposed to what the shapes graph says.
+///
+/// Carried on [`Shapes::validation_options`], so every entry point that takes a
+/// shapes graph — the free functions, [`PreparedShapes`] and every
+/// [`PreparedValidator`] bound from it — answers under the same options, and a
+/// preparation restored from a prepared product takes them through
+/// [`PreparedShapes::with_validation_options`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ValidationOptions {
+    /// The set of disallowed severity levels (SHACL 1.2 Core, "Conformance
+    /// Checking"): a result whose severity is in the set makes the report — and
+    /// every nested conformance check the run performs — non-conforming, and a
+    /// result whose severity is not in it does not. Defaults to exactly
+    /// `sh:Violation`, `sh:Warning`, `sh:Info` ("If the validation report contains
+    /// no such triples, sh:Violation, sh:Warning, and sh:Info are set as
+    /// defaults"). The report echoes a non-default set as
+    /// `sh:conformanceDisallows` triples; see [`ConformanceDisallows`].
+    pub conformance_disallows: ConformanceDisallows,
+}
+
+impl ValidationOptions {
+    /// These options with the conformance-disallow set replaced.
+    #[must_use]
+    pub fn with_conformance_disallows(mut self, disallows: ConformanceDisallows) -> Self {
+        self.conformance_disallows = disallows;
+        self
+    }
+}
 
 /// Immutable shape preparation reusable across independent dataset snapshots.
 ///
@@ -1350,6 +1388,21 @@ impl PreparedShapes {
     #[must_use]
     pub fn shapes(&self) -> &Arc<Shapes> {
         &self.shapes
+    }
+
+    /// This preparation answering every later bind under `options`.
+    ///
+    /// The route for a preparation whose [`Shapes`] the caller does not hold — one
+    /// restored from a prepared product — to take a validation request's options
+    /// ([`Shapes::validation_options`]). The options are request configuration,
+    /// not shapes-graph content, so the analysis and the lowering are kept: only
+    /// the shapes value is copied (copy-on-write; a preparation holding the only
+    /// reference changes it in place), and a validator already bound keeps the
+    /// options it was bound with.
+    #[must_use]
+    pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
+        Arc::make_mut(&mut self.shapes).validation_options = options;
+        self
     }
 
     /// Bind shared shape analysis to a new data holder. All dataset-dependent
@@ -1573,6 +1626,7 @@ impl PreparedValidator {
             &shapes.node_shapes,
             prepared.lowered(),
             Arc::clone(&prepared.classes),
+            &shapes.validation_options.conformance_disallows,
         )?;
         Ok(Self {
             data,
@@ -1677,7 +1731,10 @@ impl PreparedValidator {
                 |_| true,
             )?);
         }
-        Ok(finish_report(all_results))
+        Ok(finish_report(
+            all_results,
+            &self.shapes.validation_options.conformance_disallows,
+        ))
     }
 
     /// Validate only the supplied candidate focus nodes that match each shape's
@@ -2182,7 +2239,10 @@ impl PreparedValidator {
     fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, String> {
         let focus_nodes = focus_nodes.nodes_of(&self.data)?;
         if focus_nodes.is_empty() {
-            return Ok(finish_report(Vec::new()));
+            return Ok(finish_report(
+                Vec::new(),
+                &self.shapes.validation_options.conformance_disallows,
+            ));
         }
         // The dual question, asked once for the whole focus set: not "shape, do
         // you contain this node?" once per (shape, focus node) pair, but "node,
@@ -2212,7 +2272,10 @@ impl PreparedValidator {
                 |focus| claimed.contains(focus),
             )?);
         }
-        Ok(finish_report(all_results))
+        Ok(finish_report(
+            all_results,
+            &self.shapes.validation_options.conformance_disallows,
+        ))
     }
 }
 
@@ -2574,7 +2637,12 @@ where
 {
     let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
     let classes = Arc::clone(lowered.classes());
-    let bound = BoundShapes::bind_untargeted(data, lowered, classes);
+    let bound = BoundShapes::bind_untargeted(
+        data,
+        lowered,
+        classes,
+        &shapes.validation_options.conformance_disallows,
+    );
     validate_with_plan_and_focus_filter(data, shapes, &bound, &mut include_focus)
 }
 
@@ -2848,6 +2916,26 @@ pub fn validate_graphs(
     shapes_base: Option<&str>,
 ) -> Result<ValidationReport, String> {
     validate_graphs_with_config(data_nt, shapes_ttl, shapes_base, None)
+}
+
+/// [`validate_graphs`] under a validation request's `options` — its
+/// conformance-disallow set.
+///
+/// # Errors
+///
+/// Returns an error string if either graph fails to parse or validation
+/// hard-fails.
+pub fn validate_graphs_with_options(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    options: &ValidationOptions,
+) -> Result<ValidationReport, String> {
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
+        .map_err(|errors| errors.join("\n"))?;
+    let mut shapes = parse_shapes(shapes_ttl, shapes_base)?;
+    shapes.set_validation_options(options.clone());
+    validate_dataset(data.as_ref(), &shapes)
 }
 
 /// [`validate_graphs`] with the caller-supplied [`BoxRoleVocab`](crate::model::BoxRoleVocab)
@@ -3724,10 +3812,11 @@ mod tests {
         let shapes = load_shapes_ttl(&shapes_ttl);
         let report = validate(&data, &shapes);
 
-        // SHACL: conforms is false if ANY result exists, regardless of severity
+        // SHACL 1.2 Core: sh:Warning is in the default conformance-disallow set,
+        // so a Warning result makes conforms false.
         assert!(
             !report.conforms,
-            "Warning results must still make conforms=false"
+            "Warning results must still make conforms=false under the default set"
         );
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].severity, Severity::Warning);

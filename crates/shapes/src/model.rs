@@ -58,6 +58,16 @@ pub mod sh {
     /// `sh:Info` — the informational result severity.
     pub const INFO: &str = "http://www.w3.org/ns/shacl#Info";
 
+    /// `sh:Debug` — "a debug message that is not a constraint violation".
+    pub const DEBUG: &str = "http://www.w3.org/ns/shacl#Debug";
+
+    /// `sh:Trace` — "a trace message that is not a constraint violation".
+    pub const TRACE: &str = "http://www.w3.org/ns/shacl#Trace";
+
+    /// `sh:conformanceDisallows` — a severity level the validation report's
+    /// conformance-disallow set holds.
+    pub const CONFORMANCE_DISALLOWS: &str = "http://www.w3.org/ns/shacl#conformanceDisallows";
+
     // ── Shape type terms ───────────────────────────────────────────────────────
 
     /// `sh:NodeShape` — the class of node shapes.

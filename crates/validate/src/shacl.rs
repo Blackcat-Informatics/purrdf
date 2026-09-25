@@ -62,7 +62,12 @@ pub fn validate_to_sarif_string(
     data_nt: &str,
     options: &SarifOptions,
 ) -> Result<String, String> {
-    let report = engine::validate_graphs(data_nt, shapes_ttl, shapes_base)?;
+    let report = engine::validate_graphs_with_options(
+        data_nt,
+        shapes_ttl,
+        shapes_base,
+        &options.validation,
+    )?;
     Ok(report_to_sarif_string(&report, options))
 }
 
@@ -159,8 +164,9 @@ pub fn validate_changes_to_sarif_string(
             .map_err(|error| error.to_string())?,
     );
 
-    let shapes = Arc::new(engine::parse_shapes(shapes_ttl, shapes_base)?);
-    let validator = PreparedShapes::new(shapes).bind_delta_with_shapes_graph(
+    let mut shapes = engine::parse_shapes(shapes_ttl, shapes_base)?;
+    shapes.set_validation_options(options.validation.clone());
+    let validator = PreparedShapes::new(Arc::new(shapes)).bind_delta_with_shapes_graph(
         Arc::clone(&snapshot),
         None,
         ViewLimits::default(),
@@ -210,6 +216,50 @@ mod tests {
         assert!(sarif.contains("\"version\": \"2.1.0\""));
         assert!(sarif.contains("\"level\": \"error\""));
         assert!(sarif.contains("DatatypeConstraintComponent"));
+    }
+
+    /// The request's conformance-disallow set reaches the validation: a
+    /// Warning-only report does not conform under the default set and conforms
+    /// under {Violation}, and the log says which set it was judged against.
+    #[test]
+    fn validate_to_sarif_string_honours_conformance_disallows() {
+        let shapes = SHAPES.replace(
+            "sh:path ex:age ;",
+            "sh:path ex:age ; sh:severity sh:Warning ;",
+        );
+        let conforms = |options: &SarifOptions| -> (Value, Value) {
+            let sarif = validate_to_sarif_string(&shapes, None, DATA, options).expect("sarif");
+            let log: Value = serde_json::from_str(&sarif).expect("json");
+            let properties = log["runs"][0]["properties"].clone();
+            (
+                properties["shaclConforms"].clone(),
+                properties["shaclConformanceDisallows"].clone(),
+            )
+        };
+        assert_eq!(
+            conforms(&SarifOptions::default()),
+            (
+                json!(false),
+                json!([
+                    "http://www.w3.org/ns/shacl#Violation",
+                    "http://www.w3.org/ns/shacl#Warning",
+                    "http://www.w3.org/ns/shacl#Info"
+                ])
+            )
+        );
+        let relaxed = SarifOptions {
+            validation: engine::ValidationOptions::default().with_conformance_disallows(
+                purrdf_shapes::report::ConformanceDisallows::new([
+                    purrdf_shapes::report::Severity::Violation,
+                ])
+                .expect("non-empty"),
+            ),
+            ..SarifOptions::default()
+        };
+        assert_eq!(
+            conforms(&relaxed),
+            (json!(true), json!(["http://www.w3.org/ns/shacl#Violation"]))
+        );
     }
 
     #[test]

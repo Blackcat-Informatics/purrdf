@@ -456,6 +456,6 @@ mod tests {
         for severity in super::implemented().severities() {
             assert!(crate::report::Severity::from_iri(severity).is_some());
         }
-        assert_eq!(super::implemented().severities().len(), 3);
+        assert_eq!(super::implemented().severities().len(), 5);
     }
 }

@@ -84,7 +84,7 @@ int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset, const c
 int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset, const char *media_type, const char *base_iri, PurrdfWriteCallback on_chunk, void *user_data, size_t *out_statement_rows_dropped, size_t *out_directional_literals_dropped, size_t *out_named_graph_rows_dropped, PurrdfError **out_error)
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, const char *added_nt, const char *removed_nt, PurrdfBuffer **out_buffer, int32_t *out_scope, size_t *out_focus_nodes, PurrdfBuffer **out_reason, PurrdfError **out_error)
-int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, const char *const *conformance_disallows, size_t conformance_disallows_count, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shapes_product_admit(const uint8_t *product, size_t product_len, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shapes_product_admit_expecting(const uint8_t *product, size_t product_len, const char *data_nt, const char *expect_identity, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shapes_product_certify(const uint8_t *product, size_t product_len, PurrdfError **out_error)

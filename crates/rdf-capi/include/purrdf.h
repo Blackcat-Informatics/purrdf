@@ -91,10 +91,10 @@
  * consumer recompile twice for one reason. A symbol added AFTER `0.8.0` ships is a
  * different question, and the paragraph below is the answer to it.
  *
- * Every one of those is additive: no existing prototype was retyped, reordered,
- * removed or given a parameter, and no discriminant was renumbered. A host built
- * against `0.7.0` calls everything it called before, with the same arguments, and gets
- * the same values back.
+ * Every one of those nine is additive: no discriminant was renumbered, and a host
+ * built against `0.7.0` calls each symbol it called before with the same arguments —
+ * except `purrdf_shacl_validate_to_sarif`, whose one incompatible change is described
+ * below.
  *
  * It bumps anyway, and the reason is the sentence at the top of this comment rather
  * than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
@@ -106,6 +106,13 @@
  * make that question answerable, and a number that cannot distinguish two shipped
  * libraries is not answering it. Additive changes are cheap for the CONSUMER, not free
  * for the VERSION.
+ *
+ * The same unshipped bump also carries one INCOMPATIBLE change:
+ * `purrdf_shacl_validate_to_sarif` gained `conformance_disallows` /
+ * `conformance_disallows_count` — the SHACL 1.2 conformance-disallow set — between
+ * `data_nt` and `out_buffer`. A host built against `0.7.0` must recompile; the
+ * bump it rides is the one that already says so, rather than a second export for
+ * the same job.
  *
  * One of them is worth a second look regardless: appending a status is sound, but
  * RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
@@ -2567,14 +2574,33 @@ int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
  * mis-parse. `data_nt` needs no counterpart — N-Triples admits no relative IRI by
  * grammar, so a base there could only be ignored.
  *
+ * `conformance_disallows` / `conformance_disallows_count` name the
+ * conformance-disallow set: the severity IRIs whose results make the data
+ * non-conforming — the report's verdict and every nested `sh:node` / `sh:not` /
+ * `sh:and` / `sh:or` / `sh:xone` check alike. `count == 0` (the array may then be
+ * NULL) is SHACL's default set, `sh:Violation`, `sh:Warning` and `sh:Info`; a
+ * value that is not an absolute IRI is a `ParseError`. The SARIF run carries
+ * `properties.shaclConforms` and `properties.shaclConformanceDisallows`, because the
+ * results alone cannot say whether the data conforms: an `sh:Debug` / `sh:Trace`
+ * result (SARIF `kind` `informational`, `level` `none`) appears in the log of a
+ * conforming report. A result's `message.text` is its untagged `sh:resultMessage`
+ * when it has one, else the first in canonical order; whenever that text alone
+ * would lose something (several messages, a language tag, a direction, an
+ * `rdf:HTML` message) the result's `properties.shaclMessages` lists every message
+ * as `{"text", "language"?, "direction"?, "datatype"?}`.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
- * `shapes_base_iri` must be null or a NUL-terminated C string;
- * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
+ * `shapes_base_iri` must be null or a NUL-terminated C string; when
+ * `conformance_disallows_count` is non-zero, `conformance_disallows` must address
+ * that many NUL-terminated C strings; `out_buffer` must be a writable pointer;
+ * `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
                                        const char *shapes_base_iri,
                                        const char *data_nt,
+                                       const char *const *conformance_disallows,
+                                       size_t conformance_disallows_count,
                                        PurrdfBuffer **out_buffer,
                                        PurrdfError **out_error);
 

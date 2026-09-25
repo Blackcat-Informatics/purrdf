@@ -1402,10 +1402,49 @@ export function shaclEntail(
   dataNt: string,
   shapesBase?: string,
 ): string;
+/**
+ * A SHACL severity IRI. The five built-in levels SHACL 1.2 Core names, most severe
+ * first; any other IRI is a custom severity and is carried verbatim.
+ */
+export type ShaclSeverity =
+  | "http://www.w3.org/ns/shacl#Violation"
+  | "http://www.w3.org/ns/shacl#Warning"
+  | "http://www.w3.org/ns/shacl#Info"
+  | "http://www.w3.org/ns/shacl#Debug"
+  | "http://www.w3.org/ns/shacl#Trace"
+  | (string & {});
+
+/** One `sh:resultMessage` in a SARIF result's `properties.shaclMessages`. */
+export interface ShaclSarifMessage {
+  text: string;
+  language?: string;
+  direction?: "ltr" | "rtl";
+  /** Present only for a datatype other than `xsd:string` / the language strings. */
+  datatype?: string;
+}
+
+/**
+ * Validate `dataNt` (N-Triples) against `shapesTtl` (Turtle), returning a SARIF 2.1.0
+ * JSON log. `shapesBase` carries the meaning it does on `shaclEntail`.
+ *
+ * `conformanceDisallows` is the conformance-disallow set: the severities whose results
+ * make the data non-conforming. Omitted, it is SHACL's default set (`sh:Violation`,
+ * `sh:Warning`, `sh:Info`); an empty array or a value that is not an absolute IRI
+ * throws. The log's run carries `properties.shaclConforms` (boolean) and
+ * `properties.shaclConformanceDisallows` (the set the report was judged against),
+ * because the results alone cannot say whether the data conforms: an `sh:Debug` or
+ * `sh:Trace` result is SARIF `kind: "informational"` with `level: "none"` and appears in
+ * the log of a conforming report, its IRI kept in `properties.shaclSeverity`.
+ * A result's `message.text` is its untagged `sh:resultMessage` when it has one (else
+ * the first in canonical order); whenever that text alone would lose something —
+ * several messages, a language tag, a direction, an `rdf:HTML` message — the result's
+ * `properties.shaclMessages` lists EVERY message as `ShaclSarifMessage`.
+ */
 export function shaclValidateToSarif(
   shapesTtl: string,
   dataNt: string,
   shapesBase?: string,
+  conformanceDisallows?: readonly ShaclSeverity[],
 ): string;
 
 /**

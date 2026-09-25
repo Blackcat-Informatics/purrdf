@@ -31,7 +31,7 @@ use purrdf_sparql_eval::{
 };
 
 use crate::report::{Severity, ValidationResult};
-use crate::term::{NamedNode, Term, term_value_to_native};
+use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -130,7 +130,7 @@ pub fn eval_sparql_constraint(
     component: &NamedNode,
     source_shape: &Term,
     severity: &Severity,
-    message: Option<&String>,
+    messages: &[Literal],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -144,7 +144,7 @@ pub fn eval_sparql_constraint(
         component,
         source_shape,
         severity,
-        message,
+        messages,
         shapes_graph_iri,
         current_shape,
     )
@@ -163,7 +163,7 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     component: &NamedNode,
     source_shape: &Term,
     severity: &Severity,
-    message: Option<&String>,
+    messages: &[Literal],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -197,7 +197,7 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
         // buffer is built once and refilled per row — and only when there is a
         // message to render, so the overwhelmingly common message-less constraint
         // pays nothing.
-        let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+        let mut template_bindings: Vec<(String, Term)> = if !messages.is_empty() {
             Vec::with_capacity(solutions.variables().len() + 1)
         } else {
             Vec::new()
@@ -227,7 +227,9 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
             // This is also the ONE reader of every column, and the reason the
             // interned egress converts per cell rather than per row: a constraint
             // with no `sh:message` never asks for a cell it does not report.
-            let message = message.map(|m| {
+            let messages = if messages.is_empty() {
+                Vec::new()
+            } else {
                 template_bindings.clear();
                 for (index, var) in solutions.variables().iter().enumerate() {
                     if let Some(value) = solutions.cell(row, index) {
@@ -238,8 +240,8 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
                 if !template_bindings.iter().any(|(n, _)| n == "this") {
                     template_bindings.push(("this".to_owned(), focus.clone()));
                 }
-                crate::components::substitute_message_templates(m, &template_bindings)
-            });
+                crate::components::render_message_templates(messages, &template_bindings)
+            };
             out.push(ValidationResult {
                 focus_node: focus.clone(),
                 result_path,
@@ -248,7 +250,7 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
                 source_constraint_component: component.clone(),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message,
+                messages,
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
@@ -2286,7 +2288,7 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            None,
+            &[],
             None,
             None,
         )
@@ -2308,7 +2310,7 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            None,
+            &[],
             None,
             None,
         )
@@ -2355,7 +2357,7 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
             None,
             None,
         )
@@ -2363,7 +2365,7 @@ mod tests {
 
         assert_eq!(results.len(), 1, "exactly one untyped literal");
         assert_eq!(
-            results[0].message.as_deref(),
+            results[0].messages.first().map(Literal::value),
             Some(
                 "Property http://www.w3.org/2000/01/rdf-schema#label contains an untyped \
                  plain string literal: 'Stakeholder requirement'."
@@ -2393,13 +2395,13 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
             None,
             None,
         )
         .expect("eval must succeed");
         assert_eq!(
-            results[0].message.as_deref(),
+            results[0].messages.first().map(Literal::value),
             Some("value is 'Stakeholder requirement'")
         );
     }
@@ -2419,13 +2421,13 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
             None,
             None,
         )
         .expect("eval must succeed");
         assert_eq!(
-            results[0].message.as_deref(),
+            results[0].messages.first().map(Literal::value),
             Some("focus http://example.org/s failed"),
             "{{$this}} resolves from the pre-binding, not from the projection"
         );
@@ -2450,7 +2452,7 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
             None,
             None,
         )
@@ -2458,7 +2460,7 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(
-            results[0].message.as_deref(),
+            results[0].messages.first().map(Literal::value),
             Some("unbound {$value}, absent {$nosuchvar}, literal {not-a-var}"),
             "unbound and non-variable placeholders are left exactly as authored"
         );
@@ -2484,7 +2486,7 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
             None,
             None,
         )
@@ -2493,7 +2495,12 @@ mod tests {
         assert_eq!(results.len(), 2);
         let mut rendered: Vec<&str> = results
             .iter()
-            .map(|r| r.message.as_deref().expect("message present"))
+            .map(|r| {
+                r.messages
+                    .first()
+                    .map(Literal::value)
+                    .expect("message present")
+            })
             .collect();
         rendered.sort_unstable();
         assert_eq!(
@@ -2518,12 +2525,15 @@ mod tests {
             &dummy_component(),
             &dummy_shape(),
             &Severity::Violation,
-            Some(&message),
+            &[Literal::new_simple_literal(message.as_str())],
             None,
             None,
         )
         .expect("eval must succeed");
-        assert_eq!(results[0].message.as_deref(), Some("Values must be typed."));
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("Values must be typed.")
+        );
     }
 
     // ── eval_scalar_expr ──────────────────────────────────────────────────────

@@ -890,8 +890,17 @@ fn validate_prepared(
 ) -> Result<String, ShapesProductRefusal> {
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
-    let report = engine::validate_dataset_with_shapes_graph(data.as_ref(), prepared.shapes(), None)
-        .map_err(ShapesProductRefusal::Shapes)?;
+    // The request's options travel with the call, not with the product: a
+    // restored preparation answers under the default set until a request names
+    // another, and only then is the shapes value copied to carry it.
+    let report = if prepared.shapes().validation_options() == &options.validation {
+        engine::validate_dataset_with_shapes_graph(data.as_ref(), prepared.shapes(), None)
+    } else {
+        let mut shapes = (**prepared.shapes()).clone();
+        shapes.set_validation_options(options.validation.clone());
+        engine::validate_dataset_with_shapes_graph(data.as_ref(), &shapes, None)
+    }
+    .map_err(ShapesProductRefusal::Shapes)?;
     Ok(report_to_sarif_string(&report, options))
 }
 
@@ -1002,6 +1011,49 @@ mod tests {
             validate_with_rebuilt_shapes_product(&product, DATA, &SarifOptions::default())
                 .expect("validate with the rebuilt product");
         assert_eq!(sarif, rebuilt_sarif);
+    }
+
+    /// A request's conformance-disallow set reaches a validation through a
+    /// restored product — admitted and rebuilt alike — and the default set is the
+    /// control that answers differently.
+    #[test]
+    fn a_product_validation_honours_the_request_disallow_set() {
+        let warning = SHAPES.replace(
+            "sh:path ex:age ;",
+            "sh:path ex:age ; sh:severity sh:Warning ;",
+        );
+        let product = pack_shapes_product(&warning, None).expect("shapes pack");
+        let conforms = |sarif: String| -> serde_json::Value {
+            let log: serde_json::Value = serde_json::from_str(&sarif).expect("json");
+            log["runs"][0]["properties"]["shaclConforms"].clone()
+        };
+        let relaxed = SarifOptions {
+            validation: purrdf_shapes::engine::ValidationOptions::default()
+                .with_conformance_disallows(
+                    purrdf_shapes::report::ConformanceDisallows::new([
+                        purrdf_shapes::report::Severity::Violation,
+                    ])
+                    .expect("non-empty"),
+                ),
+            ..SarifOptions::default()
+        };
+        assert_eq!(
+            conforms(
+                validate_with_shapes_product(&product, DATA, &SarifOptions::default())
+                    .expect("validates")
+            ),
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            conforms(validate_with_shapes_product(&product, DATA, &relaxed).expect("validates")),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            conforms(
+                validate_with_rebuilt_shapes_product(&product, DATA, &relaxed).expect("validates")
+            ),
+            serde_json::json!(true)
+        );
     }
 
     #[test]

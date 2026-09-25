@@ -2407,3 +2407,77 @@ fn a_change_document_may_have_stdin_but_only_if_nothing_else_does() {
         stderr(&accepted)
     );
 }
+
+/// `--conformance-disallows` is the conformance-disallow set the run is judged against, on
+/// the parse route and the product route alike: a Warning-only graph does not conform under
+/// SHACL's default set and conforms under `sh:Violation` alone, the report echoes the named
+/// set, and a value that is not an IRI is a usage error rather than a silently default run.
+#[test]
+fn cli_validate_conformance_disallows() {
+    const WARNING_SHAPES: &str = concat!(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+        "@prefix ex: <http://example.org/> .\n",
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+        "ex:PersonShape a sh:NodeShape ;\n",
+        "  sh:targetClass ex:Person ;\n",
+        "  sh:property [ sh:path ex:age ; sh:datatype xsd:integer ; sh:severity sh:Warning ] .\n",
+    );
+    const ECHO: &str =
+        "<http://www.w3.org/ns/shacl#conformanceDisallows> <http://www.w3.org/ns/shacl#Violation>";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "warning.ttl", WARNING_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let default = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&default), 0, "{}", stderr(&default));
+    assert!(stderr(&default).contains("shacl conforms false\n"));
+    assert!(stdout(&default).contains(&conforms_triple(false)));
+    assert!(
+        !stdout(&default).contains("conformanceDisallows"),
+        "the default set is echoed by stating none:\n{}",
+        stdout(&default)
+    );
+
+    let violation = "http://www.w3.org/ns/shacl#Violation";
+    let relaxed = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--conformance-disallows",
+        violation,
+        &data,
+    ]);
+    assert_eq!(code(&relaxed), 0, "{}", stderr(&relaxed));
+    assert!(stderr(&relaxed).contains("shacl conforms true\n"));
+    assert!(stderr(&relaxed).contains("shacl results 1\n"));
+    let report = stdout(&relaxed);
+    assert!(report.contains(&conforms_triple(true)), "{report}");
+    assert!(report.contains(ECHO), "the named set is echoed:\n{report}");
+
+    let product = dir.path().join("warning.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let restored = run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        "--conformance-disallows",
+        violation,
+        &data,
+    ]);
+    assert_eq!(code(&restored), 0, "{}", stderr(&restored));
+    assert!(stderr(&restored).contains("shacl conforms true\n"));
+    assert!(stdout(&restored).contains(ECHO));
+
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--conformance-disallows",
+        "Violation",
+        &data,
+    ]);
+    assert_eq!(code(&refused), 2, "a usage error: {}", stderr(&refused));
+    assert!(stderr(&refused).contains("--conformance-disallows"));
+}

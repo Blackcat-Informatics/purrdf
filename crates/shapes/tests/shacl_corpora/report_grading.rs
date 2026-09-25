@@ -19,15 +19,37 @@
 //! compared. `sht:Failure` means the input must be REJECTED: any `Err` from
 //! loading or validation passes, a successful validation fails.
 //!
+//! Two parts of the expected report are more than a comparison:
+//!
+//! * its `sh:conformanceDisallows` values are the VALIDATION PARAMETER the case
+//!   runs under ("the test framework needs to use the values of
+//!   sh:conformanceDisallows from the mf:result", W3C
+//!   `core/validation-reports/conformance-disallows-001`), so the case is
+//!   validated with exactly that set, and the report must echo it back; and
+//! * every `sh:resultMessage` it mentions must be carried by a produced result
+//!   with the same tuple ("the test harness needs to preserve all
+//!   sh:resultMessage triples that are mentioned in the 'expected' results
+//!   graph", W3C `core/misc/message-001`). The comparison is EXACT: the produced
+//!   result's message set — each literal with its language tag, direction and
+//!   datatype — must equal the expected set. A result the expected report states
+//!   no message for is not graded on messages.
+//!
 //! Every function here returns a verdict; none asserts one. The harness decides
 //! what a verdict means against its ledger.
 
 use std::fs;
 
-use super::{Expected, Multiset, W3cCase, file_iri, norm};
+use purrdf_shapes::engine::ValidationOptions;
+use purrdf_shapes::report::{ConformanceDisallows, ValidationReport};
+
+use std::collections::BTreeSet;
+
+use purrdf_shapes::term::Term;
+
+use super::{Expected, Multiset, Tuple, W3cCase, file_iri, norm};
 
 /// Load graphs, run the engine. `Err` carries the parse/validation error.
-fn validate_case(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport, String> {
+fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
     let shapes_dataset = purrdf::parse_dataset(
@@ -53,6 +75,15 @@ fn validate_case(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport
             .map_err(|e| format!("data graph parse error: {e}"))?
     };
 
+    let mut shapes = shapes;
+    if !tc.conformance_disallows.is_empty() {
+        let disallows = ConformanceDisallows::from_iris(&tc.conformance_disallows)
+            .map_err(|e| format!("the expected report's sh:conformanceDisallows: {e}"))?;
+        shapes.set_validation_options(
+            ValidationOptions::default().with_conformance_disallows(disallows),
+        );
+    }
+
     purrdf_shapes::engine::validate_dataset_with_shapes_graph(
         data_dataset.as_ref(),
         &shapes,
@@ -61,18 +92,76 @@ fn validate_case(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport
     .map_err(|e| format!("validation error: {e}"))
 }
 
+/// The two report checks beyond the tuple multiset (see the module docs): the
+/// requested conformance-disallow set is echoed, and every expected message is
+/// carried.
+fn grade_report_details(tc: &W3cCase, report: &ValidationReport) -> Result<(), String> {
+    if !tc.conformance_disallows.is_empty() {
+        let echoed =
+            purrdf_shapes::report::conformance_disallows_from_dataset(&report.to_dataset())
+                .map_err(|e| format!("the report's own sh:conformanceDisallows: {e}"))?;
+        let requested = ConformanceDisallows::from_iris(&tc.conformance_disallows)
+            .map_err(|e| format!("the expected report's sh:conformanceDisallows: {e}"))?;
+        if echoed != requested {
+            return Err(format!(
+                "the report echoes sh:conformanceDisallows {:?}, not the requested {:?}",
+                echoed.iris(),
+                requested.iris()
+            ));
+        }
+    }
+    // Each expected result that states messages claims one produced result with
+    // the same tuple whose message set is EXACTLY the expected set; a claimed
+    // result is not claimed twice, so two expected results need two produced ones.
+    let mut unclaimed: Vec<(Tuple, BTreeSet<String>)> = report
+        .results
+        .iter()
+        .map(|r| {
+            (
+                result_tuple(r),
+                r.messages
+                    .iter()
+                    .map(|m| super::message_key(&Term::Literal(m.clone())))
+                    .collect(),
+            )
+        })
+        .collect();
+    for (tuple, messages) in &tc.expected_messages {
+        let Some(position) = unclaimed
+            .iter()
+            .position(|(produced, carried)| produced == tuple && carried == messages)
+        else {
+            let produced: Vec<&BTreeSet<String>> = unclaimed
+                .iter()
+                .filter(|(produced, _)| produced == tuple)
+                .map(|(_, carried)| carried)
+                .collect();
+            return Err(format!(
+                "no produced result {tuple:?} carries exactly the expected sh:resultMessage \
+                 set {messages:?}; the results with that tuple carry {produced:?}"
+            ));
+        };
+        unclaimed.swap_remove(position);
+    }
+    Ok(())
+}
+
+/// The comparison tuple of one produced result.
+fn result_tuple(r: &purrdf_shapes::report::ValidationResult) -> Tuple {
+    (
+        norm(&r.focus_node),
+        r.result_path.as_ref().map(norm),
+        r.value.as_ref().map(norm),
+        format!("<{}>", r.source_constraint_component.as_str()),
+        format!("<{}>", r.severity.iri()),
+    )
+}
+
 /// Multiset of comparison tuples the engine produced.
-fn produced_multiset(report: &purrdf_shapes::report::ValidationReport) -> Multiset {
+fn produced_multiset(report: &ValidationReport) -> Multiset {
     let mut multiset = Multiset::new();
     for r in &report.results {
-        let focus = norm(&r.focus_node);
-        let path = r.result_path.as_ref().map(norm);
-        let value = r.value.as_ref().map(norm);
-        let component = format!("<{}>", r.source_constraint_component.as_str());
-        let severity = format!("<{}>", r.severity.iri());
-        *multiset
-            .entry((focus, path, value, component, severity))
-            .or_insert(0) += 1;
+        *multiset.entry(result_tuple(r)).or_insert(0) += 1;
     }
     multiset
 }
@@ -95,7 +184,25 @@ pub(crate) fn no_panic<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, St
 
 /// Grade one `sht:Validate` case to a pass (`Ok`) / fail-with-reason (`Err`).
 pub(crate) fn run_validate_case(tc: &W3cCase) -> Result<(), String> {
-    grade(&tc.expected, produce(tc))
+    grade_against(tc, &tc.expected)
+}
+
+/// Grade one `sht:Validate` case against `expected` — the approved expectation,
+/// or an amended one — with the [`grade`] comparison and the report details the
+/// case itself asks for.
+pub(crate) fn grade_against(tc: &W3cCase, expected: &Expected) -> Result<(), String> {
+    let report = no_panic(|| validate_case(tc));
+    grade(
+        expected,
+        report
+            .as_ref()
+            .map(|report| (report.conforms, produced_multiset(report)))
+            .map_err(Clone::clone),
+    )?;
+    match report {
+        Ok(report) => grade_report_details(tc, &report),
+        Err(_) => Ok(()),
+    }
 }
 
 /// Run the engine over one case and reduce its report to what [`grade`]

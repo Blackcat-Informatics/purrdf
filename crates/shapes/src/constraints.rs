@@ -22,9 +22,12 @@ use crate::path;
 use crate::plan::{
     DatasetBinding, PairPath, PlannedConstraint, PropertyPlan, RangeBound, ShapePlan,
 };
-use crate::report::ValidationResult;
-use crate::shapes::{ComponentValidator, NodeKindValue, Path, PropertyShape, Shape};
-use crate::term::{NamedNode, Term, Triple, canonical_cmp_ids, term_id_to_native};
+use crate::report::{ConformanceDisallows, Severity, ValidationResult};
+use crate::shapes::{
+    AnnotatedConstraint, ComponentValidator, ConstraintAnnotation, NodeKindValue, Path,
+    PropertyShape, Shape, annotation_for,
+};
+use crate::term::{Literal, NamedNode, Term, Triple, canonical_cmp_ids, term_id_to_native};
 
 /// Internal value-node currency for the constraint layer.
 ///
@@ -244,19 +247,99 @@ impl ValueKind {
 /// Keeping this separate from [`Shape`] lets property-shape evaluation borrow
 /// the three fields it needs instead of cloning an entire synthetic shape for
 /// every focus node.
+///
+/// `severity` and `message` are the ones the constraint's results carry by
+/// default: its reifier annotation's when it has one, else its shape's.
 #[derive(Clone, Copy)]
 struct ConstraintSource<'a> {
     id: &'a Term,
-    severity: &'a crate::report::Severity,
-    message: &'a Option<String>,
+    severity: &'a Severity,
+    messages: &'a [Literal],
+    /// Whether `severity` is a reifier annotation on the constraint's own
+    /// statements, which beats the severity a SHACL-SPARQL constraint node or a
+    /// custom component declares for itself.
+    pinned_severity: bool,
+    /// As `pinned_severity`, for `messages`.
+    pinned_messages: bool,
 }
 
-impl<'a> From<&'a Shape> for ConstraintSource<'a> {
-    fn from(shape: &'a Shape) -> Self {
+impl<'a> ConstraintSource<'a> {
+    /// The source of a constraint of the shape `id`, whose own severity and
+    /// message are `severity` and `message`, under the constraint's reifier
+    /// `annotation` if it has one.
+    ///
+    /// SHACL 1.2 Core, "Severity (sh:resultSeverity)": the value is "the value of
+    /// sh:severity at a reifier of any of the triples containing the parameters of
+    /// the constraint that caused the result", then "the value of sh:severity of
+    /// the shape in the shapes graph that caused the result", then `sh:Violation`;
+    /// and "Messages declared using reification have precedence over those
+    /// declared at the surrounding shape".
+    #[inline]
+    fn annotated(
+        id: &'a Term,
+        severity: &'a Severity,
+        messages: &'a [Literal],
+        annotation: Option<&'a ConstraintAnnotation>,
+    ) -> Self {
+        let pinned_severity = annotation.and_then(|a| a.severity.as_ref());
+        let pinned_messages = annotation
+            .map(|a| a.messages.as_slice())
+            .filter(|pinned| !pinned.is_empty());
         Self {
-            id: &shape.id,
-            severity: &shape.severity,
-            message: &shape.message,
+            id,
+            severity: pinned_severity.unwrap_or(severity),
+            messages: pinned_messages.unwrap_or(messages),
+            pinned_severity: pinned_severity.is_some(),
+            pinned_messages: pinned_messages.is_some(),
+        }
+    }
+
+    /// The `index`-th node-level constraint of `shape`.
+    #[inline]
+    fn of_shape(shape: &'a Shape, index: usize) -> Self {
+        Self::annotated(
+            &shape.id,
+            &shape.severity,
+            &shape.messages,
+            annotation_for(
+                &shape.constraint_annotations,
+                AnnotatedConstraint::Constraint(index),
+            ),
+        )
+    }
+
+    /// The `which` constraint of the property shape `ps`.
+    #[inline]
+    fn of_property(ps: &'a PropertyShape, which: AnnotatedConstraint) -> Self {
+        Self::annotated(
+            &ps.id,
+            &ps.severity,
+            &ps.messages,
+            annotation_for(&ps.constraint_annotations, which),
+        )
+    }
+
+    /// The severity of a result whose constraint node declares `own`: a pinned
+    /// reifier severity, else `own`, else the shape's.
+    fn severity_over(&self, own: Option<&Severity>) -> Severity {
+        if self.pinned_severity {
+            self.severity.clone()
+        } else {
+            own.unwrap_or(self.severity).clone()
+        }
+    }
+
+    /// The messages of a result whose constraint node declares `own`, ordered as
+    /// [`Self::severity_over`] orders severities: a pinned reifier set, else the
+    /// node's own set when it declares one, else the shape's.
+    fn messages_over<'b>(&self, own: &'b [Literal]) -> &'b [Literal]
+    where
+        'a: 'b,
+    {
+        if self.pinned_messages || own.is_empty() {
+            self.messages
+        } else {
+            own
         }
     }
 }
@@ -347,12 +430,15 @@ trait ResultSink {
     /// compiled into that traversal.
     const RECORDS_RESULTS: bool;
 
-    /// Record one violation.
+    /// Record one violation of `severity`.
     ///
-    /// `build` produces the result this violation would be REPORTED as. It is
-    /// invoked if and only if [`Self::RECORDS_RESULTS`], so a caller may put
-    /// arbitrary reporting work inside it.
-    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow;
+    /// `build` produces the result this violation would be REPORTED as, and the
+    /// result it builds carries exactly `severity`. It is invoked if and only if
+    /// [`Self::RECORDS_RESULTS`], so a caller may put arbitrary reporting work
+    /// inside it. The severity travels beside the builder rather than inside it
+    /// because a conformance probe judges it without building anything: whether a
+    /// result blocks conformance is decided by the run's conformance-disallow set.
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow;
 }
 
 /// The reporting sink: every result is kept, and the traversal always runs to
@@ -366,22 +452,42 @@ impl ResultSink for Collect {
     const RECORDS_RESULTS: bool = true;
 
     #[inline]
-    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+    fn violation(
+        &mut self,
+        _severity: &Severity,
+        build: impl FnOnce() -> ValidationResult,
+    ) -> Flow {
         self.results.push(build());
         Flow::Continue
     }
 }
 
-/// The conformance sink: records THAT a violation exists and stops the traversal.
+/// The conformance sink: records THAT a disallowed violation exists and stops the
+/// traversal.
 ///
-/// SHACL conformance is "produces no results", so the first violation settles it
-/// and everything after it is work whose answer is already known.
-#[derive(Default)]
-struct AnyViolation {
+/// SHACL 1.2 Core, "Conformance Checking": "A focus node conforms to a shape if
+/// and only if the set of result of the validation of the focus node against the
+/// shape does not contain any validation results with a severity level of the set
+/// of disallowed levels and no failure has been reported by it." So the first
+/// result whose severity is in the run's disallow set settles it, and everything
+/// after it is work whose answer is already known; a result whose severity is not
+/// in the set (an `sh:Debug` one, under the default set) leaves the verdict open
+/// and the traversal continues.
+struct AnyViolation<'d> {
     seen: bool,
+    disallows: &'d ConformanceDisallows,
 }
 
-impl AnyViolation {
+impl<'d> AnyViolation<'d> {
+    /// A probe that judges results against `disallows`.
+    #[inline]
+    const fn new(disallows: &'d ConformanceDisallows) -> Self {
+        Self {
+            seen: false,
+            disallows,
+        }
+    }
+
     /// The conformance verdict this probe reached.
     #[inline]
     const fn conforms(&self) -> bool {
@@ -389,13 +495,21 @@ impl AnyViolation {
     }
 }
 
-impl ResultSink for AnyViolation {
+impl ResultSink for AnyViolation<'_> {
     const RECORDS_RESULTS: bool = false;
 
     #[inline]
-    fn violation(&mut self, _build: impl FnOnce() -> ValidationResult) -> Flow {
-        self.seen = true;
-        Flow::Stop
+    fn violation(
+        &mut self,
+        severity: &Severity,
+        _build: impl FnOnce() -> ValidationResult,
+    ) -> Flow {
+        if self.disallows.contains(severity) {
+            self.seen = true;
+            Flow::Stop
+        } else {
+            Flow::Continue
+        }
     }
 }
 
@@ -415,9 +529,9 @@ impl<S: ResultSink> ResultSink for NodeRoles<'_, S> {
     const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
 
     #[inline]
-    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow {
         let roles = self.roles;
-        self.inner.violation(move || {
+        self.inner.violation(severity, move || {
             let mut result = build();
             if !roles.is_empty() {
                 result.apply_box_roles(roles, &[]);
@@ -510,9 +624,9 @@ impl<S: ResultSink> ResultSink for Stamped<'_, S> {
     const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
 
     #[inline]
-    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow {
         let stamp = self.stamp;
-        self.inner.violation(move || {
+        self.inner.violation(severity, move || {
             let mut result = build();
             stamp.apply(&mut result);
             result
@@ -671,7 +785,7 @@ fn conforms_memoized<'a>(
     {
         return Ok(recorded);
     }
-    let mut probe = AnyViolation::default();
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
     walk_shape(context.inner(plan), focus, &mut probe)?;
     let verdict = probe.conforms();
     if let Some(key) = key {
@@ -684,7 +798,9 @@ fn conforms_memoized<'a>(
 
 /// Validate a single focus node against a shape, returning all `ValidationResult`s.
 ///
-/// Any result ⇒ non-conformance (regardless of severity).  Recurses for
+/// Whether the results make the focus node non-conforming is decided by their
+/// severities against the conformance-disallow set (see
+/// [`crate::report::ConformanceDisallows`]); this returns every result.  Recurses for
 /// `sh:and`, `sh:or`, `sh:xone`, and `sh:node` constraints.
 ///
 /// A `deactivated` shape produces no results.
@@ -866,14 +982,14 @@ fn walk_shape<S: ResultSink>(
             inner: &mut *sink,
             roles: &shape.box_roles,
         };
-        for (constraint, lowered) in plan.constraints()? {
+        for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
             if eval_constraint(
                 context,
                 focus,
                 &node_value_nodes,
                 plan.planned(constraint, lowered)?,
                 None,
-                ConstraintSource::from(shape),
+                ConstraintSource::of_shape(shape, index),
                 &mut node_sink,
             )?
             .stopped()
@@ -896,12 +1012,21 @@ fn walk_shape<S: ResultSink>(
     // the OFFENDING PREDICATE's path roles — so closed-world violations carry the
     // same predicate attribution that property-shape results do — violations
     // must not drop their predicate role.
-    for (constraint, lowered) in plan.constraints()? {
+    for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
         if let PlannedConstraint::Closed {
             permitted,
             by_types,
         } = plan.planned(constraint, lowered)?
-            && eval_closed(context, focus, shape, permitted, by_types, sink).stopped()
+            && eval_closed(
+                context,
+                focus,
+                shape,
+                ConstraintSource::of_shape(shape, index),
+                permitted,
+                by_types,
+                sink,
+            )
+            .stopped()
         {
             return Ok(Flow::Stop);
         }
@@ -954,6 +1079,7 @@ fn eval_closed<S: ResultSink>(
     context: ValidationContext<'_, '_>,
     focus: &FocusNode,
     shape: &Shape,
+    source: ConstraintSource<'_>,
     permitted: &FastSet<TermId>,
     by_types: Option<crate::plan::ClosedByTypes<'_>>,
     sink: &mut S,
@@ -982,7 +1108,7 @@ fn eval_closed<S: ResultSink>(
         let Term::NamedNode(predicate) = term_id_to_native(ds, quad.p) else {
             continue;
         };
-        let flow = sink.violation(|| {
+        let flow = sink.violation(source.severity, || {
             // Resolve the offending predicate's graph-box roles (the same
             // resolution property shapes use for their path) so closed-world
             // results are not left with empty path attribution.
@@ -995,8 +1121,8 @@ fn eval_closed<S: ResultSink>(
                 value: Some(term_id_to_native(ds, quad.o)),
                 source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
                 source_shape: shape.id.clone(),
-                severity: shape.severity.clone(),
-                message: shape.message.clone(),
+                severity: source.severity.clone(),
+                messages: source.messages.to_vec(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
@@ -1034,8 +1160,10 @@ fn permitted_by_types(
     )
 }
 
-/// Returns `true` iff the focus node produces zero validation results against
-/// the shape (i.e., it fully conforms).
+/// Returns `true` iff the focus node conforms to the shape: it produces no
+/// validation result whose severity is in the DEFAULT conformance-disallow set
+/// (`sh:Violation`, `sh:Warning`, `sh:Info`) — a bare shape carries no validation
+/// request, so SHACL's default set is the one it is judged against.
 ///
 /// This convenience entry point lowers `shape` on every call — the whole
 /// cycle-aware walk, plus one interning probe per constant it names. A caller that
@@ -1101,7 +1229,7 @@ pub(crate) fn conforms_with_id_depth(
         depth,
         memo: &memo,
     };
-    let mut probe = AnyViolation::default();
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
     walk_shape(context, focus, &mut probe)?;
     Ok(probe.conforms())
 }
@@ -1181,13 +1309,7 @@ fn eval_property_shape<'a, S: ResultSink>(
         parent_box_roles,
         lazy: &lazy,
     };
-    let constraint_source = ConstraintSource {
-        id: &ps.id,
-        severity: &ps.severity,
-        message: &ps.message,
-    };
-
-    for (constraint, lowered) in property_plan.constraints(ps)? {
+    for (index, (constraint, lowered)) in property_plan.constraints(ps)?.enumerate() {
         // The stamp travels with the sink rather than being applied to a returned
         // vector, so the property shape's path, focus and roles are resolved
         // inside the result builder — which a conformance-only traversal never
@@ -1202,7 +1324,7 @@ fn eval_property_shape<'a, S: ResultSink>(
             &value_nodes,
             context.plan.planned(constraint, lowered)?,
             Some(&ps.path),
-            constraint_source,
+            ConstraintSource::of_property(ps, AnnotatedConstraint::Constraint(index)),
             &mut stamped,
         )?
         .stopped()
@@ -1359,6 +1481,10 @@ fn eval_reifier_shapes<S: ResultSink>(
     let reifies_id = ds.term_id_by_iri(rdf::REIFIES);
 
     let source_roles = with_cbox_role(source_roles, context.box_role_vocab);
+    // The reifier-shape constraint's severity and message: its reifier
+    // annotation's when it has one, else the property shape's.
+    let source = ConstraintSource::of_property(ps, AnnotatedConstraint::Reifier);
+    let disallows = context.plan.binding().conformance_disallows();
     // The reifier identities of ONE value node's statement, in canonical term
     // order. Inline for the sizes a statement layer actually carries — a handful
     // of reifiers per statement — so the common case keeps the whole arm free of
@@ -1402,7 +1528,7 @@ fn eval_reifier_shapes<S: ResultSink>(
             _ => false,
         };
         if !reified && ps.reification_required {
-            let flow = sink.violation(|| {
+            let flow = sink.violation(source.severity, || {
                 let mut result = ValidationResult {
                     focus_node: focus.to_term(ds),
                     result_path: Some(ctx.path_term().clone()),
@@ -1412,8 +1538,8 @@ fn eval_reifier_shapes<S: ResultSink>(
                         sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                     ),
                     source_shape: ps.id.clone(),
-                    severity: ps.severity.clone(),
-                    message: ps.message.clone(),
+                    severity: source.severity.clone(),
+                    messages: source.messages.to_vec(),
                     source_box_roles: vec![],
                     path_box_roles: vec![],
                     result_box_roles: vec![],
@@ -1444,32 +1570,57 @@ fn eval_reifier_shapes<S: ResultSink>(
                     // this result's message, and this sink keeps no message. Probe
                     // for the first inner violation and stop there rather than
                     // collecting the rest.
-                    let mut probe = AnyViolation::default();
+                    let mut probe = AnyViolation::new(disallows);
                     walk_shape(reifier_context, &reifier_focus, &mut probe)?;
                     if probe.conforms() {
                         continue;
                     }
-                    let flow = sink.violation(|| {
-                        let message = reifier_shape.message.clone().or_else(|| ps.message.clone());
-                        reifier_result(&ctx, predicate, value, &source_roles, message, &[])
+                    let flow = sink.violation(source.severity, || {
+                        let messages = if source.pinned_messages {
+                            source.messages.to_vec()
+                        } else {
+                            first_messages(&[&reifier_shape.messages, &ps.messages])
+                        };
+                        reifier_result(
+                            &ctx,
+                            predicate,
+                            value,
+                            &source_roles,
+                            &source,
+                            messages,
+                            &[],
+                        )
                     });
                     if flow.stopped() {
                         return Ok(Flow::Stop);
                     }
                     continue;
                 }
-                for inner in collect_shape(reifier_context, &reifier_focus)? {
-                    let flow = sink.violation(|| {
-                        let message = inner
-                            .message
-                            .or_else(|| reifier_shape.message.clone())
-                            .or_else(|| ps.message.clone());
+                // Only an inner result the run's conformance-disallow set holds
+                // makes the reifier non-conforming, so only such a result is
+                // reported here — the same judgement the probe above makes, and so
+                // a report and a conformance check over this arm cannot disagree.
+                for inner in collect_shape(reifier_context, &reifier_focus)?
+                    .into_iter()
+                    .filter(|inner| disallows.contains(&inner.severity))
+                {
+                    let flow = sink.violation(source.severity, || {
+                        let messages = if source.pinned_messages {
+                            source.messages.to_vec()
+                        } else {
+                            first_messages(&[
+                                &inner.messages,
+                                &reifier_shape.messages,
+                                &ps.messages,
+                            ])
+                        };
                         reifier_result(
                             &ctx,
                             predicate,
                             value,
                             &source_roles,
-                            message,
+                            &source,
+                            messages,
                             &inner.source_box_roles,
                         )
                     });
@@ -1483,15 +1634,26 @@ fn eval_reifier_shapes<S: ResultSink>(
     Ok(Flow::Continue)
 }
 
+/// The first non-empty message set of `candidates`, whole — the messages of a
+/// result come from one declaration, never a mixture of several.
+fn first_messages(candidates: &[&Vec<Literal>]) -> Vec<Literal> {
+    candidates
+        .iter()
+        .find(|messages| !messages.is_empty())
+        .map(|messages| (*messages).clone())
+        .unwrap_or_default()
+}
+
 /// One `sh:reifierShape` result: the enclosing property shape's focus node, path
-/// and quoted triple term, carrying `message` and the roles the inner result
+/// and quoted triple term, carrying `messages` and the roles the inner result
 /// contributed.
 fn reifier_result(
     ctx: &ReifierEvalContext<'_, '_, '_>,
     predicate: &NamedNode,
     value: &ValueNode,
     source_roles: &[NamedNode],
-    message: Option<String>,
+    source: &ConstraintSource<'_>,
+    messages: Vec<Literal>,
     inner_source_roles: &[NamedNode],
 ) -> ValidationResult {
     let ds = ctx.context.store.core_view();
@@ -1502,8 +1664,8 @@ fn reifier_result(
         value: Some(reified_triple_term(ds, ctx.focus, predicate, value)),
         source_constraint_component: NamedNode::from(sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT),
         source_shape: ctx.ps.id.clone(),
-        severity: ctx.ps.severity.clone(),
-        message,
+        severity: source.severity.clone(),
+        messages,
         source_box_roles: vec![],
         path_box_roles: vec![],
         result_box_roles: vec![],
@@ -1685,7 +1847,7 @@ fn eval_constraint<'a, S: ResultSink>(
     // serialization can emit the spec-mandated structure.
     let path_structure = || path.filter(|p| !matches!(p, Path::Predicate(_))).cloned();
     let severity = source.severity;
-    let message = source.message;
+    let messages = source.messages;
     let source_shape = source.id;
     let shapes_graph_iri = store.shapes_graph_iri();
 
@@ -1699,7 +1861,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 source_constraint_component: NamedNode::from($component),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message: message.clone(),
+                messages: messages.to_vec(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
@@ -1716,7 +1878,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 source_constraint_component: NamedNode::from($component),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message: message.clone(),
+                messages: messages.to_vec(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
@@ -1734,7 +1896,12 @@ fn eval_constraint<'a, S: ResultSink>(
     // `if` above each of these — is shared, and only the reporting is skipped.
     macro_rules! emit {
         ($result:expr) => {
-            if sink.violation(|| $result).stopped() {
+            if sink.violation(severity, || $result).stopped() {
+                return Ok(Flow::Stop);
+            }
+        };
+        (severity = $severity:expr; $result:expr) => {
+            if sink.violation($severity, || $result).stopped() {
                 return Ok(Flow::Stop);
             }
         };
@@ -2219,10 +2386,18 @@ fn eval_constraint<'a, S: ResultSink>(
                         .unwrap_or_default()
                 )
             });
-            let violation_message = match (&compile_error, message) {
-                (Some(error), Some(shape_message)) => Some(format!("{shape_message} ({error})")),
-                (Some(error), None) => Some(error.clone()),
-                (None, shape_message) => shape_message.clone(),
+            // Every declared message is kept, each marked with the compile error
+            // in its own language literal; with none declared, the error is the
+            // message.
+            let violation_messages: Vec<Literal> = match &compile_error {
+                Some(error) if messages.is_empty() => {
+                    vec![Literal::new_simple_literal(error.clone())]
+                }
+                Some(error) => messages
+                    .iter()
+                    .map(|m| m.with_value(format!("{} ({error})", m.value())))
+                    .collect(),
+                None => messages.to_vec(),
             };
             for value in value_nodes {
                 let violates = match (compiled, value.lexical(ds)) {
@@ -2241,7 +2416,7 @@ fn eval_constraint<'a, S: ResultSink>(
                         ),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
-                        message: violation_message.clone(),
+                        messages: violation_messages.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
                         result_box_roles: vec![],
@@ -2384,10 +2559,14 @@ fn eval_constraint<'a, S: ResultSink>(
                         ),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
-                        message: message.clone().or_else(|| Some(format!(
-                            "duplicate language tag: {}",
-                            lang.to_lowercase()
-                        ))),
+                        messages: if messages.is_empty() {
+                            vec![Literal::new_simple_literal(format!(
+                                "duplicate language tag: {}",
+                                lang.to_lowercase()
+                            ))]
+                        } else {
+                            messages.to_vec()
+                        },
                         source_box_roles: vec![],
                         path_box_roles: vec![],
                         result_box_roles: vec![],
@@ -2755,11 +2934,11 @@ fn eval_constraint<'a, S: ResultSink>(
         // substituting $this for this focus node (SparqlRequest.substitutions).
         PlannedConstraint::Sparql {
             select,
-            message: cmsg,
+            messages: cmsg,
             severity: csev,
         } => {
-            let sev = csev.clone().unwrap_or_else(|| severity.clone());
-            let msg = cmsg.clone().or_else(|| message.clone());
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
             // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
             // stands for the shape's path in SPARQL surface syntax.
             let query = substitute_path_placeholder(select, path);
@@ -2784,7 +2963,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 source_shape,
                 &sev,
-                msg.as_ref(),
+                msg,
                 shapes_graph_iri,
                 Some(source_shape),
             )
@@ -2793,7 +2972,7 @@ fn eval_constraint<'a, S: ResultSink>(
             // per-value-node verdict, so the query runs whatever the sink is;
             // what the sink decides is only whether they are kept.
             for produced_result in produced {
-                emit!(produced_result);
+                emit!(severity = &sev; produced_result);
             }
             Flow::Continue
         }
@@ -2808,11 +2987,11 @@ fn eval_constraint<'a, S: ResultSink>(
         PlannedConstraint::Expression {
             expr,
             lowered,
-            message: cmsg,
+            messages: cmsg,
             severity: csev,
         } => {
-            let sev = csev.clone().unwrap_or_else(|| severity.clone());
-            let msg = cmsg.clone().or_else(|| message.clone());
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
             // Seed the guard with the ambient filter/exists depth so a
             // `sh:filterShape` re-entry through this expression keeps the
             // cross-shape recursion count monotone (fail-closed at the depth
@@ -2848,13 +3027,13 @@ fn eval_constraint<'a, S: ResultSink>(
                 )
                 .map_err(|e| format!("sh:expression constraint on shape {source_shape}: {e}"))?;
                 if !crate::expression::is_true(&out) {
-                    emit!({
+                    emit!(severity = &sev; {
                         let mut r = result!(
                             sh::EXPRESSION_CONSTRAINT_COMPONENT,
                             Some(value_node.clone())
                         );
                         r.severity.clone_from(&sev);
-                        r.message.clone_from(&msg);
+                        r.messages = msg.to_vec();
                         r
                     });
                 }
@@ -2873,11 +3052,11 @@ fn eval_constraint<'a, S: ResultSink>(
             lowered,
             shapes,
             index,
-            message: cmsg,
+            messages: cmsg,
             severity: csev,
         } => {
-            let sev = csev.clone().unwrap_or_else(|| severity.clone());
-            let msg = cmsg.clone().or_else(|| message.clone());
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
             // The index is filled at the end of the shapes-graph parse; an unfilled
             // one means this constraint escaped that parse, which would silently
             // make every conformance check vacuous. Refuse loudly instead.
@@ -2964,13 +3143,13 @@ fn eval_constraint<'a, S: ResultSink>(
                                     )
                                 })?;
                         if !conforms {
-                            emit!({
+                            emit!(severity = &sev; {
                                 let mut r = result!(
                                     sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
                                     Some(value_node.to_term(ds))
                                 );
                                 r.severity.clone_from(&sev);
-                                r.message.clone_from(&msg);
+                                r.messages = msg.to_vec();
                                 r
                             });
                         }
@@ -3005,11 +3184,11 @@ fn eval_constraint<'a, S: ResultSink>(
             source_shape,
             bindings,
             validator,
-            message: cmsg,
+            messages: cmsg,
             severity: csev,
         } => {
-            let sev = csev.clone().unwrap_or_else(|| severity.clone());
-            let msg = cmsg.clone().or_else(|| message.clone());
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
             let dataset = store.sparql_view();
             // The custom-component validators run over the owned term model; resolve
             // the value nodes for the ASK validator's per-value binding.
@@ -3035,7 +3214,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     source_shape,
                     path,
                     &sev,
-                    msg.as_ref(),
+                    msg,
                     shapes_graph_iri,
                     Some(source_shape),
                 ),
@@ -3049,7 +3228,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     source_shape,
                     path,
                     &sev,
-                    msg.as_ref(),
+                    msg,
                     shapes_graph_iri,
                     Some(source_shape),
                 ),
@@ -3058,7 +3237,7 @@ fn eval_constraint<'a, S: ResultSink>(
             // As for `sh:sparql`: a custom component answers in results, so the
             // validator runs whatever the sink is.
             for produced_result in produced {
-                emit!(produced_result);
+                emit!(severity = &sev; produced_result);
             }
             Flow::Continue
         }
@@ -4251,7 +4430,8 @@ mod tests {
             constraints,
             property_shapes: vec![],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -4272,12 +4452,14 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -4398,7 +4580,7 @@ mod tests {
         let results = validate_shape(&store, &ex("alice"), shape);
         let messages: Vec<Option<&str>> = results
             .iter()
-            .map(|result| result.message.as_deref())
+            .map(|result| result.messages.first().map(Literal::value))
             .collect();
         assert_eq!(
             messages,
@@ -4543,12 +4725,14 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![named_role(&vocab.box_config_box)],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_tbox)],
             rules: vec![],
@@ -4594,12 +4778,14 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -4631,7 +4817,8 @@ mod tests {
             ))])],
             property_shapes: vec![],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_config_box)],
             rules: vec![],
@@ -4648,12 +4835,14 @@ mod tests {
                 reifier_shapes: vec![reifier_shape],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_tbox)],
             rules: vec![],
@@ -5190,10 +5379,10 @@ mod tests {
                 "{regex:?} must still report the Pattern constraint component"
             );
             for result in &results {
-                let message = result
-                    .message
-                    .as_deref()
-                    .unwrap_or_else(|| panic!("{regex:?} / {flags:?} must carry a message"));
+                let message = result.messages.first().map_or_else(
+                    || panic!("{regex:?} / {flags:?} must carry a message"),
+                    Literal::value,
+                );
                 assert!(
                     message.contains("invalid sh:pattern"),
                     "{regex:?} / {flags:?}: message {message:?} must mark the SHAPE as invalid"
@@ -5868,12 +6057,14 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -5923,12 +6114,14 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -5980,12 +6173,14 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -6147,7 +6342,8 @@ mod tests {
             constraints: vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
             property_shapes: vec![],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: true,
             box_roles: vec![],
             rules: vec![],
@@ -6268,7 +6464,8 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             })
@@ -6282,7 +6479,8 @@ mod tests {
             }],
             property_shapes,
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -6691,12 +6889,14 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: true,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -6722,12 +6922,14 @@ mod tests {
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Info,
-                message: Some("p is recommended".to_owned()),
+                messages: vec![Literal::new_simple_literal("p is recommended")],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -6739,6 +6941,9 @@ mod tests {
             Severity::Info,
             "the property shape's severity overrides the parent's"
         );
-        assert_eq!(results[0].message.as_deref(), Some("p is recommended"));
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("p is recommended")
+        );
     }
 }

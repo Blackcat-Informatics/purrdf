@@ -12,7 +12,9 @@
 //!   the grader the SHACL 1.0 harness uses, so both suites mean the same thing by
 //!   "the report agrees": `sh:conforms` plus the multiset of
 //!   `(focusNode, resultPath, value, sourceConstraintComponent, severity)`
-//!   tuples, blank nodes normalized. `sht:Failure` expects an error at load or
+//!   tuples, blank nodes normalized, every `sh:resultMessage` the expected report
+//!   mentions, and — where the expected report states `sh:conformanceDisallows`
+//!   — validation under exactly that set, echoed back in the report. `sht:Failure` expects an error at load or
 //!   validation. The only departure from the approved expectation is
 //!   [`EXPECTATION_DEFECTS`].
 //! * **`sht:EvalNodeExpr`** — the `sht:nodeExpr` node is parsed by the shapes
@@ -61,7 +63,7 @@ use purrdf_shapes::expression::{
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::{apply_rules, engine, shapes, sparql, text_ingest};
 
-use shacl_corpora::report_grading::{grade, no_panic, produce};
+use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
 use shacl_corpora::shacl12::{
     Body, Case12, InferCase, InferExpected, NodeExprCase, SrlCase, W3C12_TOTAL_CASES, shacl12_cases,
 };
@@ -71,22 +73,6 @@ use shacl_corpora::{Expected, Multiset, W3cCase, file_iri, parse_turtle_file};
 
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
-
-const R_REIFIER_DEACTIVATED: &str = "a {| sh:deactivated true |} reifier annotation on a (shape, parameter, value) \
-     statement is not evaluated, so the shapes graph is refused at load";
-
-const R_REIFIER_SEVERITY: &str = "a {| sh:severity sh:Warning |} reifier annotation on a (shape, parameter, value) \
-     statement is not evaluated, so the shapes graph is refused at load";
-
-const R_DEBUG_TRACE: &str = "the sh:Debug / sh:Trace severities are not evaluated as non-blocking, so a shape \
-     declaring one is refused at load";
-
-const R_CONFORMANCE_DISALLOWS: &str =
-    "sh:conformanceDisallows is not implemented; every result blocks conformance";
-
-const R_REIFIER_MESSAGE: &str = "a {| sh:message … |} reifier annotation on a (shape, parameter, value) statement \
-     is not evaluated, so the shapes graph is refused at load (the report comparison does not \
-     grade sh:resultMessage, which is how the former silent drop of the message passed)";
 
 const R_SHAPE_CLASS_SUBJECT: &str = "a shape typed sh:ShapeClass is refused at load (implicit class targets are not \
      evaluated); the rule also omits sh:subject, which SHACL 1.2 Rules defaults to the focus \
@@ -168,17 +154,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// A ledgered entry MUST fail; when engine work fixes it the harness errors with
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
-    // ── Closed shapes ──
-    // ── Reifier annotations, severities, conformance ──
-    ("core/misc/deactivated-003", R_REIFIER_DEACTIVATED),
-    ("core/misc/severity-003", R_REIFIER_SEVERITY),
-    ("core/misc/severity-004", R_DEBUG_TRACE),
-    ("core/misc/severity-005", R_DEBUG_TRACE),
-    ("core/misc/message-002", R_REIFIER_MESSAGE),
-    (
-        "core/validation-reports/conformance-disallows-001",
-        R_CONFORMANCE_DISALLOWS,
-    ),
     // ── Report details ──
     ("core/property/reifierShape-001", R_REIFIER_SHAPE_VALUE),
     ("core/property/reifierShape-002", R_REIFIER_SHAPE_VALUE),
@@ -682,7 +657,7 @@ fn graded_expectation(id: &str, tc: &W3cCase) -> Result<Expected, String> {
 
 /// Grade one `sht:Validate` entry against its graded expectation.
 fn run_validate(id: &str, tc: &W3cCase) -> Result<(), String> {
-    grade(&graded_expectation(id, tc)?, produce(tc))
+    grade_against(tc, &graded_expectation(id, tc)?)
 }
 
 // ── Term-level comparison ─────────────────────────────────────────────────────

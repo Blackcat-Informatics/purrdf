@@ -30,8 +30,15 @@
 //!   path bnodes) normalize the same way, so only a *simple* (IRI) result path
 //!   is compared by identity;
 //! - **`sh:sourceShape` is NOT compared** — many suite shapes are blank nodes;
-//! - **`sh:resultMessage` and nested `sh:detail` are NOT compared** — the
-//!   engine's message text is its own, and it does not emit `sh:detail`;
+//! - **`sh:resultMessage` is compared only where the expected report states
+//!   one** — the suite asks a harness "to preserve all sh:resultMessage triples
+//!   that are mentioned in the 'expected' results graph", so a produced result
+//!   with the same tuple must carry EXACTLY that message set (language tags,
+//!   directions and datatypes included); an engine-generated message on a result
+//!   the suite states none for is the engine's own;
+//! - **nested `sh:detail` is NOT compared**;
+//! - the expected report's `sh:conformanceDisallows` values are the validation
+//!   parameter the case runs under, and the report must echo them;
 //! - `mf:result sht:Failure` means the validator must REJECT the test input
 //!   (any engine `Err` passes; a successful validation fails).
 //!

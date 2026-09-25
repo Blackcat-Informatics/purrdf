@@ -25,7 +25,8 @@ use crate::expression::NodeExpr;
 use crate::model::{BoxRoleVocab, rdf, rdfs, sh};
 use crate::provenance::ParseProvenance;
 use crate::report::Severity;
-use crate::term::{NamedNode, Term};
+use crate::term::{Literal, NamedNode, Term};
+use parser::annotations::Annotated;
 
 pub(crate) mod link;
 mod parser;
@@ -424,7 +425,7 @@ pub enum Constraint {
         select: String,
         /// Optional per-constraint message override (from `sh:message` on the
         /// constraint blank node).
-        message: Option<String>,
+        messages: Vec<Literal>,
         /// Optional per-constraint severity override (from `sh:severity` on the
         /// constraint blank node).
         severity: Option<Severity>,
@@ -476,7 +477,7 @@ pub enum Constraint {
         expr: NodeExpr,
         /// Optional per-constraint message override (from `sh:message` on the
         /// expression node).
-        message: Option<String>,
+        messages: Vec<Literal>,
         /// Optional per-constraint severity override (from `sh:severity` on the
         /// expression node).
         severity: Option<Severity>,
@@ -504,7 +505,7 @@ pub enum Constraint {
         shapes: Arc<OnceLock<FastMap<Term, Shape>>>,
         /// Optional per-constraint message override (from `sh:message` on the
         /// expression node).
-        message: Option<String>,
+        messages: Vec<Literal>,
         /// Optional per-constraint severity override (from `sh:severity` on the
         /// expression node).
         severity: Option<Severity>,
@@ -559,10 +560,71 @@ pub enum Constraint {
         /// The selected validator (ASK or SELECT).
         validator: ComponentValidator,
         /// Optional message override (shape → validator → component).
-        message: Option<String>,
+        messages: Vec<Literal>,
         /// Optional severity override (shape → validator → component).
         severity: Option<Severity>,
     },
+}
+
+/// Which constraint of a shape a [`ConstraintAnnotation`] annotates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AnnotatedConstraint {
+    /// The constraint at this index of the shape's `constraints`.
+    Constraint(usize),
+    /// A property shape's `sh:reifierShape` / `sh:reificationRequired` constraint
+    /// (`sh:ReifierShapeConstraintComponent`), which a [`PropertyShape`] carries
+    /// in its own fields rather than in `constraints`.
+    Reifier,
+}
+
+/// A per-constraint override read from RDF 1.2 reifier annotations in the shapes
+/// graph.
+///
+/// SHACL 1.2 Core, "Declaring the Severity of a Shape or Constraint": "In
+/// addition to declaring severities per shape, the property sh:severity can also
+/// be used on a reifier for a triple where the shape is the subject and one of the
+/// parameters of the constraint is the predicate. Let T be the set of triples that
+/// represent a constraint in a shape. A shapes graph can specify at most one value
+/// for the property sh:severity in the reifiers of the triples in T." "Declaring
+/// Messages for a Shape or Constraint" says the same of `sh:message`, and the
+/// result rules put the reifier first: `sh:resultSeverity` is "the value of
+/// sh:severity at a reifier of any of the triples containing the parameters of
+/// the constraint that caused the result", then "the value of sh:severity of the
+/// shape", and "Messages declared using reification have precedence over those
+/// declared at the surrounding shape".
+///
+/// A reifier `sh:deactivated true` has no annotation here: "the constraints that
+/// use the triple are called deactivated constraints. Deactivated constraints are
+/// ignored during validation", so the parser does not emit the constraint at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstraintAnnotation {
+    /// The constraint the override applies to.
+    pub constraint: AnnotatedConstraint,
+    /// The reifier `sh:severity`, which beats the shape's (and a SHACL-SPARQL
+    /// constraint node's own) severity.
+    pub severity: Option<Severity>,
+    /// The reifier `sh:message` values — the whole set — which beat the shape's
+    /// (and a constraint node's own) messages; empty when the reifier states none.
+    pub messages: Vec<Literal>,
+}
+
+/// The annotation for `which`, if the shape's sorted annotation list has one.
+///
+/// A linear scan: the list is empty for every shape whose shapes graph annotates
+/// no constraint, and holds at most one entry per constraint otherwise.
+#[inline]
+pub(crate) fn annotation_for(
+    annotations: &[ConstraintAnnotation],
+    which: AnnotatedConstraint,
+) -> Option<&ConstraintAnnotation> {
+    annotations
+        .iter()
+        .find(|annotation| annotation.constraint == which)
+}
+
+/// Whether `value` is a literal SHACL permits as an `sh:message`.
+pub(crate) fn parser_is_text_literal(value: &Term) -> bool {
+    parser::wellformed::is_text_literal(value, true)
 }
 
 /// A property shape, reached via `sh:property` from a node shape.
@@ -585,8 +647,14 @@ pub struct PropertyShape {
     pub reification_required: bool,
     /// Severity override (default `Violation`).
     pub severity: Severity,
-    /// Optional human-readable message.
-    pub message: Option<String>,
+    /// The shape's `sh:message` values, every one, as literals (language tag,
+    /// direction and datatype kept) in [`crate::report::canonical_messages`] order;
+    /// empty when it declares none.
+    pub messages: Vec<Literal>,
+    /// The per-constraint reifier annotations on this shape's constraints, sorted
+    /// by [`ConstraintAnnotation::constraint`], at most one per constraint; empty
+    /// when the shapes graph annotates none of them.
+    pub constraint_annotations: Vec<ConstraintAnnotation>,
     /// Whether `sh:deactivated true` is set — a deactivated property shape
     /// validates nothing.
     pub deactivated: bool,
@@ -608,8 +676,15 @@ pub struct Shape {
     pub property_shapes: Vec<PropertyShape>,
     /// Severity override (default `Violation`).
     pub severity: Severity,
-    /// Optional human-readable message.
-    pub message: Option<String>,
+    /// The shape's `sh:message` values, every one, as literals (language tag,
+    /// direction and datatype kept) in [`crate::report::canonical_messages`] order;
+    /// empty when it declares none.
+    pub messages: Vec<Literal>,
+    /// The per-constraint reifier annotations on this shape's constraints, sorted
+    /// by [`ConstraintAnnotation::constraint`], at most one per constraint; empty
+    /// when the shapes graph annotates none of them. Never holds
+    /// [`AnnotatedConstraint::Reifier`], which only a property shape has.
+    pub constraint_annotations: Vec<ConstraintAnnotation>,
     /// Whether `sh:deactivated true` is set.
     pub deactivated: bool,
     /// Optional graph-box role annotations on this shape, read via the
@@ -662,6 +737,25 @@ pub struct Shapes {
     /// `AGG(<iri>, …)` calls fail with the usual "no custom aggregate is
     /// registered" error.
     pub aggregates: Arc<AggregateRegistry>,
+    /// The caller's validation-request options — today the conformance-disallow
+    /// set ([`crate::engine::ValidationOptions::conformance_disallows`]). Read
+    /// with [`Shapes::validation_options`], set with
+    /// [`Shapes::set_validation_options`].
+    ///
+    /// Like [`Self::aggregates`], this is host configuration and never read from
+    /// the shapes graph: SHACL 1.2 Core says "The conformance-disallow set is
+    /// defined by the validation engine. A validation engine MAY provide
+    /// mechanisms to customize this set." Every validation entry point that takes
+    /// these shapes — the free functions, [`crate::engine::PreparedShapes`] and
+    /// every [`crate::engine::PreparedValidator`] bound from it — answers under it.
+    ///
+    /// Not a public field, because it is NOT part of the declarative model a
+    /// prepared product carries (the product model census reaches exactly the
+    /// public fields): a preparation restored from a product starts from the
+    /// default and takes a request's options through
+    /// [`crate::engine::PreparedShapes::with_validation_options`]. `pub(crate)`
+    /// rather than private for the reason [`Self::parse_provenance`] gives.
+    pub(crate) validation_options: crate::engine::ValidationOptions,
     /// SHACL-AF `sh:SPARQLTargetType` declarations declared in the shapes graph,
     /// keyed by target-type IRI string. Empty when the graph declares no custom
     /// target types.
@@ -687,6 +781,19 @@ pub struct Shapes {
 }
 
 impl Shapes {
+    /// The validation-request options every validation of these shapes answers
+    /// under (see [`crate::engine::ValidationOptions`]).
+    #[must_use]
+    pub fn validation_options(&self) -> &crate::engine::ValidationOptions {
+        &self.validation_options
+    }
+
+    /// Validate these shapes under `options` from now on — a host's
+    /// conformance-disallow set, for one.
+    pub fn set_validation_options(&mut self, options: crate::engine::ValidationOptions) {
+        self.validation_options = options;
+    }
+
     /// Borrow the original frozen dataset retained when these shapes were parsed.
     ///
     /// The same allocation `parse_shapes` interned, not a copy of it, so a
@@ -723,6 +830,7 @@ impl Default for Shapes {
             box_role_vocab: None,
             functions: Arc::new(UserFunctionRegistry::new()),
             aggregates: Arc::new(AggregateRegistry::new()),
+            validation_options: crate::engine::ValidationOptions::default(),
             target_types: std::collections::BTreeMap::new(),
             shapes_graph: None,
             shapes_dataset: ::purrdf::RdfDatasetBuilder::new()
@@ -1069,13 +1177,14 @@ pub(crate) struct Parser<'s> {
     /// `sh:closed sh:ByTypes` the parse meets and shared by every later one — a
     /// shapes graph without one never pays for it.
     closed_type_index: Option<Arc<ClosedTypeIndex>>,
+    /// The shapes graph's reifier and annotation side tables, indexed once, for
+    /// the per-constraint annotations ([`parser::annotations`]).
+    annotation_index: parser::annotations::AnnotationIndex,
+    /// Every annotated `(shape, parameter, value)` statement a constraint parse
+    /// applied, so a statement no route applied is refused rather than ignored
+    /// ([`Self::check_annotations_applied`]).
+    annotations_applied: FastSet<(Term, String, Term)>,
 }
-
-/// `rdf:langString`, a permitted datatype of `sh:message`.
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-
-/// `rdf:dirLangString`, a permitted datatype of `sh:message`.
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
 
@@ -1177,6 +1286,8 @@ impl<'s> Parser<'s> {
             node_by_expr_constants: Vec::new(),
             current_shape: None,
             closed_type_index: None,
+            annotation_index: parser::annotations::AnnotationIndex::build(data),
+            annotations_applied: FastSet::default(),
         }
     }
 
@@ -1322,6 +1433,7 @@ impl<'s> Parser<'s> {
             box_role_vocab: self.box_role_vocab.clone(),
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::new()),
+            validation_options: crate::engine::ValidationOptions::default(),
             target_types: self
                 .target_types
                 .iter()
@@ -1432,7 +1544,8 @@ impl<'s> Parser<'s> {
             constraints: vec![],
             property_shapes: vec![ps],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated,
             box_roles: vec![],
             rules,
@@ -1544,32 +1657,30 @@ impl<'s> Parser<'s> {
         build_prefix_header(self.data, &self.doc_prefixes, owners)
     }
 
-    /// The `sh:message` of `node`: the smallest of its values, each of which must
-    /// be a literal with datatype `xsd:string`, `rdf:langString` or
-    /// `rdf:dirLangString` (SHACL 1.2 Core §3.6.2.3). A value of any other kind
-    /// is refused rather than skipped.
-    pub(crate) fn message_of(&self, node: &Term) -> Result<Option<String>, String> {
-        let mut messages: Vec<String> = Vec::new();
+    /// The `sh:message` values of `node`, every one, in
+    /// [`crate::report::canonical_messages`] order. SHACL 1.2 Core: "The values of
+    /// sh:message are literals with datatype xsd:string, rdf:dirLangString,
+    /// rdf:langString, or rdf:HTML"; a value of any other kind is refused rather
+    /// than skipped, and none is dropped — "all validation results produced as a
+    /// result of the shape will have exactly these messages".
+    pub(crate) fn messages_of(&self, node: &Term) -> Result<Vec<Literal>, String> {
+        let mut messages: Vec<Literal> = Vec::new();
         for value in self.objects_of(node, sh::MESSAGE) {
-            match &value {
+            match value {
                 Term::Literal(lit)
-                    if matches!(
-                        lit.datatype_str(),
-                        crate::model::xsd::STRING | RDF_LANG_STRING | RDF_DIR_LANG_STRING
-                    ) =>
+                    if parser::wellformed::is_text_literal(&Term::Literal(lit.clone()), true) =>
                 {
-                    messages.push(lit.value().to_owned());
+                    messages.push(lit);
                 }
                 other => {
                     return Err(format!(
-                        "sh:message on {node} must be an xsd:string, rdf:langString or \
-                         rdf:dirLangString literal, got {other}"
+                        "sh:message on {node} must be an xsd:string, rdf:langString, \
+                         rdf:dirLangString or rdf:HTML literal, got {other}"
                     ));
                 }
             }
         }
-        messages.sort();
-        Ok(messages.into_iter().next())
+        Ok(crate::report::canonical_messages(messages))
     }
 
     /// The `sh:severity` of `node`, which must be an IRI (SHACL 1.2 Core
@@ -1622,7 +1733,8 @@ impl<'s> Parser<'s> {
                 constraints: vec![],
                 property_shapes: vec![],
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
                 rules: vec![],
@@ -1640,7 +1752,7 @@ impl<'s> Parser<'s> {
         let severity = self.severity_of(id)?.unwrap_or(Severity::Violation);
 
         // -- Message (take first by stable sort of string representation) --
-        let message = self.message_of(id)?;
+        let messages = self.messages_of(id)?;
 
         // -- Deactivated --
         let deactivated = self.deactivated_of(id)?;
@@ -1653,22 +1765,28 @@ impl<'s> Parser<'s> {
         crate::term::sort_terms_canonical(&mut property_shape_nodes);
         let mut property_shapes = Vec::new();
         for ps_node in property_shape_nodes {
-            property_shapes.push(self.parse_property_shape(&ps_node)?);
+            let annotated = self.constraint_annotation(id, &[(sh::PROPERTY, &ps_node)])?;
+            let ps = self.parse_property_shape(&ps_node)?;
+            if let Some(ps) = annotate_property_edge(ps, annotated) {
+                property_shapes.push(ps);
+            }
         }
 
         // -- Node-level constraints --
-        let constraints = self.parse_constraints(id, false)?;
+        let parsed = self.parse_constraints(id, false)?;
         let box_roles = self.box_roles_of(id)?;
         // -- SHACL-AF rules (sh:rule) --
         let rules = self.parse_rules(id)?;
+        self.check_annotations_applied(id)?;
 
         Ok(Shape {
             id: id.clone(),
             targets,
-            constraints,
+            constraints: parsed.constraints,
             property_shapes,
             severity,
-            message,
+            messages,
+            constraint_annotations: parsed.annotations,
             deactivated,
             box_roles,
             rules,
@@ -1882,13 +2000,14 @@ impl<'s> Parser<'s> {
         let severity = self.severity_of(ps_node)?.unwrap_or(Severity::Violation);
 
         // message
-        let message = self.message_of(ps_node)?;
+        let messages = self.messages_of(ps_node)?;
 
         // sh:deactivated — a deactivated property shape validates nothing.
         let deactivated = self.deactivated_of(ps_node)?;
 
         // constraints on the property shape
-        let constraints = self.parse_constraints(ps_node, true)?;
+        let parsed = self.parse_constraints(ps_node, true)?;
+        let mut constraint_annotations = parsed.annotations;
 
         // Nested sh:property on a property shape (spec §2.1: sh:property may
         // appear on ANY shape) — each nested property shape applies to THIS
@@ -1902,6 +2021,14 @@ impl<'s> Parser<'s> {
             let key = InFlight::Shape(ps_str.clone());
             self.in_flight.insert(key.clone());
             for nested in nested_nodes {
+                let annotated =
+                    match self.constraint_annotation(ps_node, &[(sh::PROPERTY, &nested)]) {
+                        Ok(annotated) => annotated,
+                        Err(e) => {
+                            self.in_flight.remove(&key);
+                            return Err(e);
+                        }
+                    };
                 if self
                     .in_flight
                     .contains(&InFlight::Shape(nested.to_string()))
@@ -1909,7 +2036,7 @@ impl<'s> Parser<'s> {
                     continue;
                 }
                 match self.parse_property_shape(&nested) {
-                    Ok(parsed) => property_shapes.push(parsed),
+                    Ok(parsed) => property_shapes.extend(annotate_property_edge(parsed, annotated)),
                     Err(e) => {
                         self.in_flight.remove(&key);
                         return Err(e);
@@ -1920,9 +2047,10 @@ impl<'s> Parser<'s> {
         }
 
         let box_roles = self.box_roles_of(ps_node)?;
-        let reification_required = match self.first_object_of(ps_node, sh::REIFICATION_REQUIRED) {
+        let reification_required_term = self.first_object_of(ps_node, sh::REIFICATION_REQUIRED);
+        let mut reification_required = match &reification_required_term {
             None => false,
-            Some(value) => parser::node_expr::boolean_value(&value).ok_or_else(|| {
+            Some(value) => parser::node_expr::boolean_value(value).ok_or_else(|| {
                 format!(
                     "sh:reificationRequired on property shape {ps_str} must be an xsd:boolean \
                      literal, got {value}"
@@ -1939,6 +2067,32 @@ impl<'s> Parser<'s> {
                 "sh:reifierShape or sh:reificationRequired on property shape {ps_str} requires an IRI sh:path"
             ));
         }
+        // The `sh:ReifierShapeConstraintComponent` constraint's T: its
+        // `sh:reifierShape` statements and its `sh:reificationRequired` one.
+        let mut reifier_triples: Vec<(&str, &Term)> = reifier_shape_nodes
+            .iter()
+            .map(|node| (sh::REIFIER_SHAPE, node))
+            .collect();
+        if let Some(term) = &reification_required_term {
+            reifier_triples.push((sh::REIFICATION_REQUIRED, term));
+        }
+        let reifier_annotation = if !reifier_shape_nodes.is_empty() || reification_required {
+            self.constraint_annotation(ps_node, &reifier_triples)?
+        } else {
+            // `sh:reificationRequired false` alone is an inactive component.
+            for &(predicate, value) in &reifier_triples {
+                self.apply_to_nothing(ps_node, predicate, value)?;
+            }
+            Annotated::Plain
+        };
+        let reifier_deactivated = reifier_annotation == Annotated::Deactivated;
+        if let Annotated::Override { severity, messages } = reifier_annotation {
+            constraint_annotations.push(ConstraintAnnotation {
+                constraint: AnnotatedConstraint::Reifier,
+                severity,
+                messages,
+            });
+        }
         let mut reifier_shapes = Vec::new();
         for node in reifier_shape_nodes {
             // A reifier shape is a SHAPE, and a shape carrying `sh:path` is a
@@ -1950,16 +2104,24 @@ impl<'s> Parser<'s> {
             // nothing and every reifier would pass.
             reifier_shapes.push(self.parse_inline_shape(node)?);
         }
+        if reifier_deactivated {
+            // "Deactivated constraints are ignored during validation": the
+            // reifier shapes were still parsed, so an ill-formed one is refused.
+            reifier_shapes.clear();
+            reification_required = false;
+        }
+        self.check_annotations_applied(ps_node)?;
 
         Ok(PropertyShape {
             id: ps_node.clone(),
             path,
-            constraints,
+            constraints: parsed.constraints,
             property_shapes,
             reifier_shapes,
             reification_required,
             severity,
-            message,
+            messages,
+            constraint_annotations,
             deactivated,
             box_roles,
         })
@@ -2165,7 +2327,8 @@ impl<'s> Parser<'s> {
                 constraints: vec![],
                 property_shapes: vec![],
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
                 rules: vec![],
@@ -2184,7 +2347,8 @@ impl<'s> Parser<'s> {
                 constraints: vec![],
                 property_shapes: vec![ps],
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
                 rules: vec![],
@@ -2196,6 +2360,34 @@ impl<'s> Parser<'s> {
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
+
+/// A property shape as the `sh:property` statement that reaches it is annotated.
+///
+/// `sh:property` is a constraint parameter (`sh:PropertyConstraintComponent`),
+/// and "the validation results are the results of validating v as focus node
+/// against the property shape $property" — the results that constraint causes
+/// are the property shape's. So a reifier on the `sh:property` statement
+/// annotates exactly those results: `sh:deactivated true` drops this reach of
+/// the property shape (the same shape reached through another, unannotated
+/// statement still validates), and `sh:severity` / `sh:message` take the place of
+/// the property shape's own for this reach, below any reifier annotation on the
+/// property shape's own constraint statements, which names the constraint that
+/// caused the result more narrowly still.
+fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> Option<PropertyShape> {
+    match annotated {
+        Annotated::Deactivated => None,
+        Annotated::Plain => Some(ps),
+        Annotated::Override { severity, messages } => {
+            if let Some(severity) = severity {
+                ps.severity = severity;
+            }
+            if !messages.is_empty() {
+                ps.messages = messages;
+            }
+            Some(ps)
+        }
+    }
+}
 
 /// The local name of an IRI: the substring after the last `#` or `/`. Used to
 /// derive a `sh:SPARQLFunction` parameter's pre-bound SPARQL variable name from its
@@ -2849,7 +3041,10 @@ mod tests {
         assert_eq!(shapes.node_shapes.len(), 1);
         let shape = &shapes.node_shapes[0];
         assert_eq!(shape.severity, Severity::Warning);
-        assert_eq!(shape.message.as_deref(), Some("This is a warning"));
+        assert_eq!(
+            shape.messages.first().map(Literal::value),
+            Some("This is a warning")
+        );
         assert!(shape.deactivated);
     }
 

@@ -20,12 +20,13 @@ use std::collections::BTreeMap;
 
 use purrdf_core::{RdfDiagnostic, RdfLocation, RdfSeverity, UnitInterner};
 use purrdf_rdf::SpanTable;
+use purrdf_shapes::engine::ValidationOptions;
 use purrdf_shapes::report::{Severity, ValidationReport, ValidationResult};
-use purrdf_shapes::term::Term;
+use purrdf_shapes::term::{Literal, Term};
 
 use crate::model::{
     ArtifactLocation, Driver, Level, Location, LogicalLocation, Message, PhysicalLocation,
-    PropertyBag, Region, ReportingDescriptor, Run, SarifLog, SarifResult, Tool,
+    PropertyBag, Region, ReportingDescriptor, ResultKind, Run, SarifLog, SarifResult, Tool,
 };
 use crate::path_syntax::render_path;
 
@@ -37,9 +38,34 @@ pub const TOOL_NAME: &str = "purrdf";
 /// `run.originalUriBaseIds` (SARIF's indirection for a shared base URI).
 pub const SRCROOT_BASE_ID: &str = "SRCROOT";
 
-/// A property-bag key carrying a custom (`sh:severity`) IRI verbatim, so an
-/// open-world SHACL severity is never lost when coerced to a SARIF `level`.
+/// A property-bag key carrying a `sh:severity` IRI verbatim wherever the SARIF
+/// `level` cannot tell it apart — a custom severity, and the `sh:Debug` /
+/// `sh:Trace` levels that both map to `none` — so no SHACL severity is lost.
 pub const PROP_SHACL_SEVERITY: &str = "shaclSeverity";
+
+/// A result property carrying EVERY `sh:resultMessage` of the SHACL result, in
+/// the report's canonical order, each as `{"text": …}` plus `"language"`,
+/// `"direction"` (`"ltr"`/`"rtl"`) and `"datatype"` when the literal has them
+/// (`datatype` is omitted for `xsd:string` and the language-string types, which
+/// the other two keys already say). SARIF's `message.text` is one plain string, so
+/// it carries the [`primary_message`] and this bag carries all of them — present
+/// whenever `message.text` alone would lose something, that is, unless the result
+/// has no message or exactly one untagged `xsd:string` message.
+pub const PROP_SHACL_MESSAGES: &str = "shaclMessages";
+
+/// The run-level property carrying the SHACL report's `sh:conforms`.
+///
+/// A SARIF log alone cannot say whether the data conforms: `sh:Debug` and
+/// `sh:Trace` results appear in the log of a conforming report, and whether a
+/// `sh:Warning` or `sh:Info` result blocks conformance depends on the request's
+/// conformance-disallow set. So a report log states it.
+pub const PROP_SHACL_CONFORMS: &str = "shaclConforms";
+
+/// The run-level property carrying the conformance-disallow set the report was
+/// judged against, as severity IRIs in [`ConformanceDisallows::levels`] order.
+///
+/// [`ConformanceDisallows::levels`]: purrdf_shapes::report::ConformanceDisallows::levels
+pub const PROP_SHACL_CONFORMANCE_DISALLOWS: &str = "shaclConformanceDisallows";
 
 /// Optional source context that upgrades results from logical-only to
 /// source-traced. All fields are optional — absent context degrades gracefully
@@ -63,6 +89,13 @@ pub struct SarifSources<'a> {
 /// produce a minimal, timestamp-free, deterministic log.
 #[derive(Debug, Clone, Default)]
 pub struct SarifOptions {
+    /// The validation request's options — its conformance-disallow set — for the
+    /// entry points that VALIDATE before rendering
+    /// ([`crate::validate_to_sarif_string`], [`crate::validate_changes_to_sarif_string`]
+    /// and the prepared-product validations). Defaults to the SHACL default set
+    /// (`sh:Violation`, `sh:Warning`, `sh:Info`). Rendering an already-produced
+    /// report reads the set the report carries, never this field.
+    pub validation: ValidationOptions,
     /// The tool version to emit as `driver.version`.
     pub tool_version: Option<String>,
     /// A URI for `driver.informationUri`.
@@ -74,7 +107,16 @@ pub struct SarifOptions {
     pub source_root_uri: Option<String>,
 }
 
-/// SARIF `level` for a SHACL [`Severity`]. Open-world `Other` maps to `note`; the
+/// SARIF `level` for a SHACL [`Severity`].
+///
+/// `sh:Violation` is `error`, `sh:Warning` is `warning`, and `sh:Info` — "a
+/// non-critical constraint violation indicating an informative message" — is
+/// `note`, as is an open-world `Other` severity. `sh:Debug` and `sh:Trace` are "not
+/// a constraint violation", so their result is SARIF `kind` `informational`
+/// ([`shacl_kind`]), and SARIF 2.1.0 §3.27.10 then fixes the level: "If kind has
+/// any value other than 'fail', then if level is absent, it SHALL default to
+/// 'none', and if it is present, it SHALL have the value 'none'." Wherever the
+/// level cannot tell two severities apart (`Other`, `Debug`, `Trace`), the
 /// verbatim IRI is preserved in the result's property bag (see
 /// [`PROP_SHACL_SEVERITY`]) so the mapping is non-lossy.
 #[must_use]
@@ -83,6 +125,18 @@ pub fn shacl_level(severity: &Severity) -> Level {
         Severity::Violation => Level::Error,
         Severity::Warning => Level::Warning,
         Severity::Info | Severity::Other(_) => Level::Note,
+        Severity::Debug | Severity::Trace => Level::None,
+    }
+}
+
+/// SARIF result `kind` for a SHACL [`Severity`]: `informational` for `sh:Debug`
+/// and `sh:Trace`, which SHACL defines as "not a constraint violation", and absent
+/// (SARIF's default, `fail`) for every level that is one.
+#[must_use]
+pub const fn shacl_kind(severity: &Severity) -> Option<ResultKind> {
+    match severity {
+        Severity::Debug | Severity::Trace => Some(ResultKind::Informational),
+        Severity::Violation | Severity::Warning | Severity::Info | Severity::Other(_) => None,
     }
 }
 
@@ -141,7 +195,15 @@ pub fn build_report_sarif_with(
 
     sort_results(&mut results);
     let rules = register_rules(&mut results);
-    let run = assemble_run(rules, results, options);
+    let mut run = assemble_run(rules, results, options);
+    run.properties.insert(
+        PROP_SHACL_CONFORMS,
+        serde_json::Value::Bool(report.conforms),
+    );
+    run.properties.insert(
+        PROP_SHACL_CONFORMANCE_DISALLOWS,
+        report.conformance_disallows.iris(),
+    );
     SarifLog::single_run(run)
 }
 
@@ -218,9 +280,9 @@ pub fn diagnostics_to_sarif_string(
 ///
 /// ```
 /// use purrdf_validate::{SarifOptions, SarifReport};
-/// use purrdf_shapes::report::ValidationReport;
+/// use purrdf_shapes::report::{ConformanceDisallows, ValidationReport};
 ///
-/// let report = ValidationReport { conforms: true, results: vec![] };
+/// let report = ValidationReport::from_results(vec![], ConformanceDisallows::default());
 /// let sarif = report.to_sarif(&SarifOptions::default());
 /// assert!(sarif.contains("\"version\": \"2.1.0\""));
 /// ```
@@ -251,14 +313,24 @@ fn result_to_sarif(
     base_id: Option<&str>,
 ) -> SarifResult {
     let mut properties = PropertyBag::new();
-    if let Severity::Other(iri) = &result.severity {
-        properties.insert(PROP_SHACL_SEVERITY, iri.as_str().to_owned());
+    if matches!(
+        result.severity,
+        Severity::Other(_) | Severity::Debug | Severity::Trace
+    ) {
+        properties.insert(PROP_SHACL_SEVERITY, result.severity.iri().to_owned());
     }
 
-    let message = result
-        .message
-        .clone()
-        .unwrap_or_else(|| synthesize_message(result));
+    let message = primary_message(&result.messages).unwrap_or_else(|| synthesize_message(result));
+    // A lone untagged `xsd:string` message is carried whole by `message.text`;
+    // any other message set — several messages, a language tag, a direction, an
+    // `rdf:HTML` literal — needs the bag, or something would be lost.
+    let text_carries_all = match result.messages.as_slice() {
+        [only] => only.language().is_none() && only.datatype_str() == XSD_STRING,
+        _ => result.messages.is_empty(),
+    };
+    if !text_carries_all {
+        properties.insert(PROP_SHACL_MESSAGES, shacl_messages(&result.messages));
+    }
 
     // Primary location: the focus node, with a physical span when the source is
     // tracked, plus logical locations for focus / result path / component.
@@ -311,6 +383,7 @@ fn result_to_sarif(
     SarifResult {
         rule_id: result.source_constraint_component.as_str().to_owned(),
         rule_index: None,
+        kind: shacl_kind(&result.severity),
         level: shacl_level(&result.severity),
         message: Message::text(message),
         locations: vec![primary],
@@ -371,6 +444,7 @@ fn diagnostic_to_sarif(diagnostic: &RdfDiagnostic, base_id: Option<&str>) -> Sar
     SarifResult {
         rule_id: diagnostic.code.clone(),
         rule_index: None,
+        kind: None,
         level: rdf_level(diagnostic.severity),
         message: Message::text(text),
         locations,
@@ -432,6 +506,52 @@ fn diagnostic_location(
         properties,
     )
 }
+
+/// The one message SARIF's `message.text` carries: the first untagged `xsd:string`
+/// message in the report's canonical order (the language-neutral one, when the
+/// shapes graph declares one), else the first message in that order. `None` when
+/// the result has no message, so the text is synthesized. Every message, tagged
+/// or not, is in the [`PROP_SHACL_MESSAGES`] property.
+fn primary_message(messages: &[Literal]) -> Option<String> {
+    messages
+        .iter()
+        .find(|m| m.language().is_none() && m.datatype_str() == XSD_STRING)
+        .or_else(|| messages.first())
+        .map(|m| m.value().to_owned())
+}
+
+/// The [`PROP_SHACL_MESSAGES`] value for `messages`.
+fn shacl_messages(messages: &[Literal]) -> serde_json::Value {
+    serde_json::Value::Array(
+        messages
+            .iter()
+            .map(|m| {
+                let mut entry = serde_json::Map::new();
+                entry.insert("text".to_owned(), m.value().into());
+                if let Some(language) = m.language() {
+                    entry.insert("language".to_owned(), language.into());
+                }
+                if let Some(direction) = m.direction() {
+                    entry.insert(
+                        "direction".to_owned(),
+                        match direction {
+                            purrdf_core::RdfTextDirection::Ltr => "ltr",
+                            purrdf_core::RdfTextDirection::Rtl => "rtl",
+                        }
+                        .into(),
+                    );
+                }
+                if m.language().is_none() && m.datatype_str() != XSD_STRING {
+                    entry.insert("datatype".to_owned(), m.datatype_str().into());
+                }
+                serde_json::Value::Object(entry)
+            })
+            .collect(),
+    )
+}
+
+/// `xsd:string`.
+const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Synthesize an actionable message from a result's structured parts — never a
 /// bare IRI dump. Example:
@@ -519,6 +639,7 @@ fn assemble_run(
         results,
         invocations,
         original_uri_base_ids,
+        properties: PropertyBag::new(),
     }
 }
 
@@ -540,7 +661,9 @@ mod tests {
                 "http://example.org/PersonShape",
             )),
             severity,
-            message: message.map(ToOwned::to_owned),
+            messages: message
+                .map(|m| vec![Literal::new_simple_literal(m)])
+                .unwrap_or_default(),
             source_box_roles: vec![],
             path_box_roles: vec![],
             result_box_roles: vec![],
@@ -559,6 +682,7 @@ mod tests {
                 custom,
                 None,
             )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let r = &log.runs[0].results[0];
@@ -573,6 +697,153 @@ mod tests {
         );
     }
 
+    /// `sh:Debug` and `sh:Trace` are "not a constraint violation": SARIF kind
+    /// `informational`, which fixes the level at `none`, with the two told apart
+    /// by the verbatim IRI; `sh:Info` stays a `fail`-kind `note` (the control).
+    #[test]
+    fn sarif_debug_and_trace_are_informational_level_none() {
+        let report = ValidationReport::from_results(
+            vec![
+                result(
+                    "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                    Severity::Debug,
+                    Some("debug"),
+                ),
+                result(
+                    "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                    Severity::Trace,
+                    Some("trace"),
+                ),
+                result(
+                    "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                    Severity::Info,
+                    Some("info"),
+                ),
+            ],
+            purrdf_shapes::report::ConformanceDisallows::default(),
+        );
+        let log = build_report_sarif(&report, &SarifOptions::default());
+        let by_message = |text: &str| {
+            log.runs[0]
+                .results
+                .iter()
+                .find(|r| r.message.text == text)
+                .expect("the result is rendered")
+        };
+        for (text, iri) in [
+            ("debug", "http://www.w3.org/ns/shacl#Debug"),
+            ("trace", "http://www.w3.org/ns/shacl#Trace"),
+        ] {
+            let r = by_message(text);
+            assert_eq!(r.level, Level::None, "{text}");
+            assert_eq!(r.kind, Some(ResultKind::Informational), "{text}");
+            assert_eq!(
+                r.properties
+                    .0
+                    .get(PROP_SHACL_SEVERITY)
+                    .and_then(|v| v.as_str()),
+                Some(iri)
+            );
+        }
+        let info = by_message("info");
+        assert_eq!(info.level, Level::Note);
+        assert_eq!(info.kind, None);
+        assert!(!info.properties.0.contains_key(PROP_SHACL_SEVERITY));
+        let json = crate::model::to_json_pretty(&log);
+        assert!(json.contains("\"kind\": \"informational\""));
+        assert!(json.contains("\"level\": \"none\""));
+    }
+
+    /// A report log states `sh:conforms` and the set it was judged against: a
+    /// conforming report can carry results, so the results alone cannot say.
+    #[test]
+    fn sarif_run_properties_carry_conforms_and_the_disallow_set() {
+        let debug_only = ValidationReport::from_results(
+            vec![result(
+                "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                Severity::Debug,
+                None,
+            )],
+            purrdf_shapes::report::ConformanceDisallows::default(),
+        );
+        let log = build_report_sarif(&debug_only, &SarifOptions::default());
+        let properties = &log.runs[0].properties.0;
+        assert_eq!(
+            properties.get(PROP_SHACL_CONFORMS),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            properties.get(PROP_SHACL_CONFORMANCE_DISALLOWS),
+            Some(&serde_json::json!([
+                "http://www.w3.org/ns/shacl#Violation",
+                "http://www.w3.org/ns/shacl#Warning",
+                "http://www.w3.org/ns/shacl#Info"
+            ]))
+        );
+        let warning_only = ValidationReport::from_results(
+            vec![result(
+                "http://www.w3.org/ns/shacl#DatatypeConstraintComponent",
+                Severity::Warning,
+                None,
+            )],
+            purrdf_shapes::report::ConformanceDisallows::new([Severity::Violation])
+                .expect("non-empty"),
+        );
+        let log = build_report_sarif(&warning_only, &SarifOptions::default());
+        let properties = &log.runs[0].properties.0;
+        assert_eq!(
+            properties.get(PROP_SHACL_CONFORMS),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            properties.get(PROP_SHACL_CONFORMANCE_DISALLOWS),
+            Some(&serde_json::json!(["http://www.w3.org/ns/shacl#Violation"]))
+        );
+        // A diagnostics log is not a SHACL report and states neither.
+        let diagnostics = build_diagnostics_sarif(&[], &SarifOptions::default());
+        assert!(diagnostics.runs[0].properties.is_empty());
+    }
+
+    /// Every message reaches SARIF: `message.text` is the untagged one when there
+    /// is one (else the first in canonical order), and `shaclMessages` carries
+    /// them all with their languages.
+    #[test]
+    fn sarif_carries_every_message_with_its_language() {
+        let mut tagged = result(
+            "http://www.w3.org/ns/shacl#MaxLengthConstraintComponent",
+            Severity::Violation,
+            None,
+        );
+        tagged.messages = purrdf_shapes::report::canonical_messages(vec![
+            Literal::new_language_tagged_literal_unchecked("Zu viele", "de"),
+            Literal::new_language_tagged_literal_unchecked("Too many", "en"),
+        ]);
+        let mut mixed = tagged.clone();
+        mixed.messages.push(Literal::new_simple_literal("plain"));
+        mixed.messages = purrdf_shapes::report::canonical_messages(mixed.messages);
+        for (r, primary) in [(tagged, "Too many"), (mixed, "plain")] {
+            let report = ValidationReport::from_results(
+                vec![r],
+                purrdf_shapes::report::ConformanceDisallows::default(),
+            );
+            let log = build_report_sarif(&report, &SarifOptions::default());
+            let out = &log.runs[0].results[0];
+            assert_eq!(out.message.text, primary);
+            let all = out
+                .properties
+                .0
+                .get(PROP_SHACL_MESSAGES)
+                .expect("every message");
+            let languages: Vec<Option<&str>> = all
+                .as_array()
+                .expect("array")
+                .iter()
+                .map(|m| m.get("language").and_then(|l| l.as_str()))
+                .collect();
+            assert!(languages.contains(&Some("en")) && languages.contains(&Some("de")));
+        }
+    }
+
     #[test]
     fn synthesized_message_is_actionable_not_a_bare_iri() {
         let report = ValidationReport {
@@ -582,6 +853,7 @@ mod tests {
                 Severity::Violation,
                 None,
             )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let text = &log.runs[0].results[0].message.text;
@@ -622,6 +894,7 @@ mod tests {
                     Some("boom2"),
                 ),
             ],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let run = &log.runs[0];
@@ -661,6 +934,7 @@ mod tests {
                 Severity::Violation,
                 Some("bad"),
             )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let sources = SarifSources {
             artifact_uri: Some("data.ttl"),
@@ -701,6 +975,7 @@ mod tests {
                 Severity::Violation,
                 Some("bad"),
             )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let sources = SarifSources {
             artifact_uri: Some("data.ttl"),
@@ -730,6 +1005,7 @@ mod tests {
                 Severity::Violation,
                 Some("bad"),
             )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let related = &log.runs[0].results[0].related_locations;
@@ -758,6 +1034,7 @@ mod tests {
         let report = ValidationReport {
             conforms: false,
             results: vec![r],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let path_loc = log.runs[0].results[0].locations[0]
@@ -806,6 +1083,7 @@ mod tests {
                     Some("min"),
                 ),
             ],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let json = report_to_sarif_string(&report, &SarifOptions::default());
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
@@ -840,6 +1118,7 @@ mod tests {
                 Severity::Violation,
                 Some("bad"),
             )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let log = build_report_sarif(&report, &SarifOptions::default());
         let rule = &log.runs[0].tool.driver.rules[0];
@@ -874,6 +1153,7 @@ mod tests {
                 Severity::Violation,
                 Some("bad"),
             )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let sources = SarifSources {
             artifact_uri: Some("alice.ttl"),
@@ -929,6 +1209,7 @@ mod tests {
                 Severity::Violation,
                 Some("bad"),
             )],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let sources = SarifSources {
             artifact_uri: Some("alice.ttl"),
@@ -991,6 +1272,7 @@ mod tests {
         let report = ValidationReport {
             conforms: true,
             results: vec![],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
         let none = build_report_sarif(&report, &SarifOptions::default());
         assert_eq!(none.runs[0].invocations, [] as [_; 0]);
@@ -1035,6 +1317,7 @@ mod tests {
         let report = ValidationReport {
             conforms: false,
             results: vec![vr],
+            conformance_disallows: purrdf_shapes::report::ConformanceDisallows::default(),
         };
 
         // The numeric id's Display form is the interner ordinal (`unit` + index) —

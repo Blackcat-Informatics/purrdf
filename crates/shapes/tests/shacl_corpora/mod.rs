@@ -144,6 +144,18 @@ pub(crate) struct W3cCase {
     /// used as the named graph for `$shapesGraph` pre-binding in SHACL-SPARQL.
     pub(crate) shapes_graph_iri: Option<String>,
     pub(crate) expected: Expected,
+    /// The `sh:conformanceDisallows` IRIs of the EXPECTED report, which the suite
+    /// uses as a validation parameter ("the test framework needs to use the
+    /// values of sh:conformanceDisallows from the mf:result", W3C
+    /// `core/validation-reports/conformance-disallows-001`). Empty when the
+    /// expected report states none, which means the default set.
+    pub(crate) conformance_disallows: Vec<String>,
+    /// Every expected result that carries `sh:resultMessage`, with its messages
+    /// as [`message_key`]s — compared EXACTLY, as a set. The suite asks a harness "to preserve all
+    /// sh:resultMessage triples that are mentioned in the 'expected' results
+    /// graph" (W3C `core/misc/message-001`), so these are graded beside the tuple
+    /// multiset.
+    pub(crate) expected_messages: Vec<(Tuple, BTreeSet<String>)>,
 }
 
 /// One numbered case directory from the first-party corpus.
@@ -430,12 +442,24 @@ pub(crate) fn parse_entry(
 
     let result = object(g, entry, mf::RESULT)
         .unwrap_or_else(|| panic!("{id}: sht:Validate entry has no mf:result"));
-    let expected = match &result {
-        Term::NamedNode(n) if n.as_str() == sht::FAILURE => Expected::Failure,
-        report_node => Expected::Report {
-            conforms: expected_conforms(g, report_node, &id),
-            results: expected_multiset(g, report_node),
-        },
+    let (expected, conformance_disallows, expected_messages) = match &result {
+        Term::NamedNode(n) if n.as_str() == sht::FAILURE => {
+            (Expected::Failure, Vec::new(), Vec::new())
+        }
+        report_node => (
+            Expected::Report {
+                conforms: expected_conforms(g, report_node, &id),
+                results: expected_multiset(g, report_node),
+            },
+            objects(g, report_node, sh::CONFORMANCE_DISALLOWS)
+                .into_iter()
+                .map(|level| match level {
+                    Term::NamedNode(n) => n.as_str().to_owned(),
+                    other => panic!("{id}: sh:conformanceDisallows value {other} is not an IRI"),
+                })
+                .collect(),
+            expected_result_messages(g, report_node),
+        ),
     };
 
     Some(W3cCase {
@@ -445,6 +469,8 @@ pub(crate) fn parse_entry(
         data_path,
         shapes_graph_iri,
         expected,
+        conformance_disallows,
+        expected_messages,
     })
 }
 
@@ -460,20 +486,45 @@ fn expected_conforms(g: &RdfDataset, report_node: &Term, id: &str) -> bool {
     }
 }
 
+/// The comparison tuple of one expected result node.
+fn expected_tuple(g: &RdfDataset, result: &Term) -> Tuple {
+    let focus = object(g, result, sh::FOCUS_NODE).map_or_else(String::new, |t| norm(&t));
+    let path = object(g, result, sh::RESULT_PATH).map(|t| norm(&t));
+    let value = object(g, result, sh::VALUE).map(|t| norm(&t));
+    let component =
+        object(g, result, sh::SOURCE_CONSTRAINT_COMPONENT).map_or_else(String::new, |t| norm(&t));
+    let severity = object(g, result, sh::RESULT_SEVERITY)
+        .map_or_else(|| format!("<{}>", sh::VIOLATION), |t| norm(&t));
+    (focus, path, value, component, severity)
+}
+
+/// One message as the grader compares it: the literal's N-Triples rendering, so
+/// the lexical form, the language tag, the base direction and the datatype all
+/// take part.
+pub(crate) fn message_key(message: &Term) -> String {
+    message.to_string()
+}
+
+/// Every expected result carrying `sh:resultMessage`, with its messages as
+/// [`message_key`]s.
+fn expected_result_messages(g: &RdfDataset, report_node: &Term) -> Vec<(Tuple, BTreeSet<String>)> {
+    objects(g, report_node, sh::RESULT)
+        .into_iter()
+        .filter_map(|result| {
+            let messages: BTreeSet<String> = objects(g, &result, sh::RESULT_MESSAGE)
+                .into_iter()
+                .map(|message| message_key(&message))
+                .collect();
+            (!messages.is_empty()).then(|| (expected_tuple(g, &result), messages))
+        })
+        .collect()
+}
+
 /// Build the expected result multiset from the expected-report node.
 fn expected_multiset(g: &RdfDataset, report_node: &Term) -> Multiset {
     let mut multiset = Multiset::new();
     for result in objects(g, report_node, sh::RESULT) {
-        let focus = object(g, &result, sh::FOCUS_NODE).map_or_else(String::new, |t| norm(&t));
-        let path = object(g, &result, sh::RESULT_PATH).map(|t| norm(&t));
-        let value = object(g, &result, sh::VALUE).map(|t| norm(&t));
-        let component = object(g, &result, sh::SOURCE_CONSTRAINT_COMPONENT)
-            .map_or_else(String::new, |t| norm(&t));
-        let severity = object(g, &result, sh::RESULT_SEVERITY)
-            .map_or_else(|| format!("<{}>", sh::VIOLATION), |t| norm(&t));
-        *multiset
-            .entry((focus, path, value, component, severity))
-            .or_insert(0) += 1;
+        *multiset.entry(expected_tuple(g, &result)).or_insert(0) += 1;
     }
     multiset
 }

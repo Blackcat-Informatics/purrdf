@@ -194,28 +194,60 @@ fn shape_class_is_refused_and_an_rdfs_class_node_shape_loads() {
     );
 }
 
+/// `sh:Debug` is a built-in severity (SHACL 1.2 Core: "A debug message that is
+/// not a constraint violation"): its result is reported and does not block
+/// conformance under the default disallow set, where a `sh:Warning` one does.
 #[test]
-fn debug_severity_is_refused_and_warning_loads() {
-    refused(
-        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity sh:Debug ; sh:nodeKind sh:Literal .",
-        "sh:Debug",
+fn debug_severity_is_reported_without_blocking_and_warning_blocks() {
+    let shapes = |severity: &str| {
+        format!(
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity {severity} ; sh:nodeKind sh:Literal ."
+        )
+    };
+    let debug = validate(&shapes("sh:Debug"), "");
+    assert_eq!(debug.results.len(), 1);
+    assert_eq!(
+        debug.results[0].severity,
+        purrdf_shapes::report::Severity::Debug
     );
-    let report = validate(
-        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity sh:Warning ; sh:nodeKind sh:Literal .",
-        "",
-    );
-    assert_eq!(report.results.len(), 1);
+    assert!(debug.conforms);
+    let warning = validate(&shapes("sh:Warning"), "");
+    assert_eq!(warning.results.len(), 1);
+    assert!(!warning.conforms);
 }
 
+/// A `{| sh:deactivated true |}` reifier annotation on a constraint statement
+/// deactivates that constraint (SHACL 1.2 Core, "Deactivating Shapes and
+/// Constraints"); the unannotated statement is the control. A non-validating
+/// annotation (`sh:formalized` on an `sh:intent`) still loads, and a SHACL term
+/// that is not one of the three constraint annotations is still refused.
 #[test]
-fn a_reifier_annotation_is_refused_and_a_non_validating_one_loads() {
-    refused(
-        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal {| sh:deactivated true |} .",
-        "reifier annotation",
+fn a_reifier_annotation_deactivates_its_constraint_and_a_non_validating_one_loads() {
+    assert!(
+        validate(
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal {| sh:deactivated true |} .",
+            "",
+        )
+        .results
+        .is_empty()
+    );
+    assert_eq!(
+        results(&validate(
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal .",
+            ""
+        )),
+        vec![(
+            "<http://example.org/ns#a>".to_owned(),
+            "<http://example.org/ns#a>".to_owned()
+        )]
     );
     loads(
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:IRI ;
            sh:intent \"a is an IRI\"@en {| sh:formalized true |} .",
+    );
+    refused(
+        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal {| sh:minCount 1 |} .",
+        "only sh:deactivated, sh:severity and sh:message annotate a constraint",
     );
 }
 
