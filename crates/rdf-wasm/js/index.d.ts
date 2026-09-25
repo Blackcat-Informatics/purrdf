@@ -1288,11 +1288,26 @@ export interface AsyncLoadRequest {
 /** Either effect a host handler can receive. */
 export type AsyncEffectRequest = AsyncServiceRequest | AsyncLoadRequest;
 
-/** What `resolveService` is told beside the request. */
+/**
+ * What `resolveService` is told beside the request.
+ *
+ * One job asks once for a request it repeats with the same `silent` and
+ * `maxIntermediateCells`, and reuses that answer, a failure included but never a fault.
+ * Concurrent jobs share one call through the same `resolveService` only when the request,
+ * `silent` and `maxIntermediateCells` are identical and the joining job's deadline falls
+ * no later than the call's own. The call's own deadline is its start plus the
+ * `remainingDeadlineMs` it was told; a job without a deadline joins only a call told none.
+ * Every other job gets its own call and its own context. Every waiting job receives the
+ * shared answer as it stands. `LOAD` requests are never shared or reused.
+ */
 export interface AsyncResolverContext {
-  /** Aborts when the job is cancelled or its deadline passes; the job does not wait for the handler after that. */
+  /**
+   * Aborts when the job is cancelled or its deadline passes; the job does not wait for
+   * the handler after that. For a call several jobs share, it aborts only once every one
+   * of them has stopped waiting.
+   */
   readonly signal: AbortSignal;
-  /** Milliseconds left before the job's deadline, when it has one. */
+  /** Milliseconds left before the job's deadline, when it has one. For a shared call, the deadline of the job that started it. */
   readonly remainingDeadlineMs: number | undefined;
   /** Whether the clause is `SERVICE SILENT` — for information only: an empty answer is not the host's to invent. */
   readonly silent: boolean;

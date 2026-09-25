@@ -118,7 +118,7 @@ let idleTop = 0;
 let poisonReason = null;
 let maxConcurrentJobs = DEFAULT_MAX_CONCURRENT_JOBS;
 const records = new Map(); // job id -> record
-const singleFlight = new WeakMap(); // resolveService -> Map<key, shared exchange>
+const singleFlight = new WeakMap(); // resolveService -> Map<key, shared exchange[]>
 const datasetQueues = new Map(); // dataset id -> tail promise
 
 const encoder = new TextEncoder();
@@ -297,12 +297,15 @@ export function configureAsync(options) {
  *   resolves to) SPARQL Results JSON as a `Uint8Array`, `ArrayBuffer` or `string`; a
  *   `Response` (a non-ok status is a transport failure and its body is cancelled); or
  *   `{ kind: "transport" | "denied", message }`. A throw, a rejection or any other value
- *   is a fault that fails the job.
+ *   is a fault that fails the job. A job asks at most once for a request it repeats
+ *   (the same request, `silent` and `maxIntermediateCells`), and concurrent jobs share
+ *   one call when the host would see an equivalent context for each (see
+ *   `joinSingleFlight`); `ctx.signal` is then the shared call's.
  * - `resolveLoad(request, ctx)` — answers a `LOAD` effect. `request` is
  *   `{ kind: "load", iri }`, `ctx` is `{ signal }`. It returns `{ bytes | text,
  *   mediaType, base? }` (`base` defaults to the IRI), a `Response` (its `Content-Type`
  *   names the media type; its URL, or the IRI, is the base), a `Dataset`, or a typed
- *   failure as above.
+ *   failure as above. Every `LOAD` is its own call.
  * - `signal` — an `AbortSignal` that cancels the job.
  * - `deadlineMs` — the job's deadline, so an awaited effect is abandoned when it passes
  *   (the job itself reports the trip as a deadline).
@@ -469,6 +472,9 @@ async function answerService(record, effect) {
     silent: effect.silent,
     maxIntermediateCells: effect.maxIntermediateCells,
   };
+  // Every field the host can observe except the deadline and the signal. The deadline is
+  // matched by `joinSingleFlight`; the per-job memo needs no deadline component, because
+  // one job's deadline is one instant for every request it issues.
   const key = JSON.stringify([
     request.endpoint,
     request.queryText,
@@ -484,11 +490,8 @@ async function answerService(record, effect) {
   if (settled === undefined) {
     const shared = joinSingleFlight(resolveService, key, request, ctx);
     const winner = await Promise.race([shared.promise, record.stop.promise]);
-    if (winner === STOPPED) {
-      leaveSingleFlight(shared);
-      return abandon(record, seq);
-    }
     leaveSingleFlight(shared);
+    if (winner === STOPPED) return abandon(record, seq);
     settled = winner;
     if (settled.type !== "fault") record.memo.set(key, settled);
   }
@@ -521,10 +524,29 @@ function serviceRequest(effect) {
 }
 
 /**
- * One host call shared by every job that issues an identical request through the same
- * `resolveService` while it is in flight. Its promise never rejects: the host's answer
- * is normalized, and a host bug becomes a fault every waiting job latches. Its signal
- * aborts once every waiting job has abandoned it.
+ * One host call shared by every job that issues the same request through the same
+ * `resolveService` while it is in flight, when the host would see the same context for
+ * each of them.
+ *
+ * A job joins an open exchange only when its key matches — the request, `silent` and
+ * `maxIntermediateCells` — and the exchange's deadline is no earlier than the job's own:
+ * the host was told `remainingDeadlineMs` when the exchange started, so the instant it
+ * bounds the call by is `start + remainingDeadlineMs` (no bound when the job that started
+ * it had no deadline), and the joining job's is `now + its remainingDeadlineMs`. A host
+ * that bounds its work by the deadline it was told therefore gives up no earlier than it
+ * would on the joining job's own call, so a failure the shared call reports by running
+ * out of time is one the job's own call would have reported too. Any other job starts an
+ * exchange of its own, called with its own context. A job without a deadline joins only
+ * an exchange without one.
+ *
+ * Because the contexts are equivalent, the answer — rows, a transport or denied failure,
+ * or a fault — is delivered to every waiting job as it stands: it is what the same remote
+ * answered the same request. The exchange's promise never rejects: the host's answer is
+ * normalized, and a host bug becomes a fault every waiting job latches.
+ *
+ * The host's `signal` belongs to the exchange, not to any one job. A job that is stopped
+ * while it waits abandons only its own effect; the signal aborts once every waiting job
+ * has abandoned the exchange, and never after it has settled.
  */
 function joinSingleFlight(resolveService, key, request, ctx) {
   let exchanges = singleFlight.get(resolveService);
@@ -532,20 +554,36 @@ function joinSingleFlight(resolveService, key, request, ctx) {
     exchanges = new Map();
     singleFlight.set(resolveService, exchanges);
   }
-  let shared = exchanges.get(key);
+  const deadline = absoluteDeadline(ctx.remainingDeadlineMs);
+  let open = exchanges.get(key);
+  let shared = open?.find((candidate) => candidate.deadline >= deadline);
   if (shared === undefined) {
     const controller = new AbortController();
-    shared = { controller, waiters: 0, open: true, exchanges, key, promise: undefined };
+    shared = { controller, deadline, waiters: 0, open: true, exchanges, key, promise: undefined };
     const current = shared;
+    if (open === undefined) {
+      open = [];
+      exchanges.set(key, open);
+    }
+    open.push(shared);
     shared.promise = invokeHost(
       "resolveService",
       () => resolveService({ ...request, headers: request.headers.map((pair) => [...pair]) }, { ...ctx, signal: controller.signal }),
       (value) => normalizeService(value, request.endpoint, controller.signal),
     ).finally(() => closeSingleFlight(current));
-    exchanges.set(key, shared);
   }
   shared.waiters += 1;
   return shared;
+}
+
+/** The instant a job's remaining deadline ends at, or `Infinity` when it has none. */
+function absoluteDeadline(remainingDeadlineMs) {
+  if (remainingDeadlineMs === undefined || remainingDeadlineMs === null) return Infinity;
+  return now() + Number(remainingDeadlineMs);
+}
+
+function now() {
+  return typeof globalThis.performance?.now === "function" ? globalThis.performance.now() : Date.now();
 }
 
 function leaveSingleFlight(shared) {
@@ -559,7 +597,11 @@ function leaveSingleFlight(shared) {
 function closeSingleFlight(shared) {
   if (!shared.open) return;
   shared.open = false;
-  if (shared.exchanges.get(shared.key) === shared) shared.exchanges.delete(shared.key);
+  const open = shared.exchanges.get(shared.key);
+  if (open === undefined) return;
+  const index = open.indexOf(shared);
+  if (index !== -1) open.splice(index, 1);
+  if (open.length === 0) shared.exchanges.delete(shared.key);
 }
 
 async function normalizeService(value, endpoint, signal) {

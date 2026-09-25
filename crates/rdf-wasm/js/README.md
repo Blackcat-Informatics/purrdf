@@ -336,7 +336,9 @@ to send:
 `ctx` carries four fields:
 
 - `signal`: an `AbortSignal` that fires when the job is cancelled or its deadline
-  passes. From then on the job no longer waits for the handler.
+  passes. From then on the job no longer waits for the handler. For a call that several
+  jobs share (see [Concurrency](#concurrency)), it fires only once every one of them has
+  stopped.
 - `remainingDeadlineMs`: the time left before the deadline, when the job has one.
 - `silent`: whether the clause was written `SERVICE SILENT`.
 - `maxIntermediateCells`: the query's cell ceiling, when one is set.
@@ -461,8 +463,32 @@ update reads a snapshot and is applied only if the dataset was not mutated while
 otherwise it rejects and applies nothing. `dataset.id` identifies a dataset within the
 wasm instance, and `dataset.generation` counts the mutations it has seen.
 `configureAsync({ maxConcurrentJobs })` bounds how many jobs may be in flight (16 by
-default); a twin started beyond the bound rejects. Identical `SERVICE` requests in flight
-through the same `resolveService` share one call.
+default); a twin started beyond the bound rejects.
+
+A job asks `resolveService` once for each distinct `SERVICE` request. When it repeats a
+request with the same `ctx.silent` and `ctx.maxIntermediateCells`, it reuses the first
+answer, a failure included. A fault is never reused. Another job, even one issuing the
+same request later, asks again.
+
+Concurrent jobs share one call only when the handler would see an equivalent context.
+A job joins a call already in flight through the same `resolveService` when all of these
+hold:
+
+- the request is identical: endpoint, query text, `Accept`, `Content-Type`,
+  `User-Agent`, timeout and headers;
+- `ctx.silent` is the same;
+- `ctx.maxIntermediateCells` is the same, or unset for both;
+- the job's deadline falls no later than the instant the call was told about. That
+  instant is when the call started plus the `remainingDeadlineMs` it received. A job
+  without a deadline joins only a call that was given none.
+
+Any other job gets a call of its own, with its own `ctx`. A handler that bounds its work
+by `ctx.remainingDeadlineMs` therefore never gives up on a joined job sooner than it
+would on that job's own call. Every waiting job receives the shared answer as it stands:
+rows, a `transport` or `denied` failure, or a fault. The call's `ctx.signal` belongs to
+the shared call. When one waiting job is cancelled or passes its deadline, only that job
+stops waiting. The signal fires once every waiting job has stopped. `LOAD` requests are
+never shared or reused.
 
 ### Stack regions and faults
 
