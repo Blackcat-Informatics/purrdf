@@ -16,8 +16,8 @@ use purrdf_sparql_eval::{
 
 use crate::data::ShaclData;
 use crate::expression::{
-    CustomFunction, FnCall, NodeExpr, RecursionGuard, ShapeArg, eval_custom_function_call,
-    eval_node_expr, sparql_ns_lowering,
+    CustomFunction, FnCall, NodeExpr, RecursionGuard, ShapeArg, SparqlCallForm,
+    eval_custom_function_call, eval_node_expr, sparql_ns_lowering,
 };
 use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::provenance::ParseProvenance;
@@ -509,6 +509,36 @@ pub(crate) fn invoke_expression_function(
     Ok(result.as_ref().map(Term::to_term_value))
 }
 
+/// What a declared built-in LIST-parameter function calls, resolved ONCE when the
+/// function is registered: the spec symbol table and the `sparql:` resolver are
+/// load-time lookups, and a query that calls the function once per solution row
+/// must not repeat them per call. Only the arity-dependent rendering is per call.
+#[derive(Debug, Clone)]
+pub(crate) enum NativeListCallee {
+    /// `shnex:conformsToShape`.
+    ConformsToShape,
+    /// A `sparql:<NAME>` function: its SPARQL call form, or why the IRI resolves
+    /// to none — kept, not dropped, so every call answers with that error exactly
+    /// as an unresolved call always has.
+    Sparql(Result<SparqlCallForm, String>),
+}
+
+impl NativeListCallee {
+    /// Resolve `iri` — one of the declared built-ins the linker registers.
+    pub(crate) fn resolve(iri: &str) -> Self {
+        if iri == shnex::CONFORMS_TO_SHAPE {
+            return Self::ConformsToShape;
+        }
+        Self::Sparql(match iri.strip_prefix(sparql_ns::NS) {
+            Some(local) => sparql_ns_lowering(local),
+            None => Err(format!(
+                "<{iri}> is registered as a built-in list-parameter function but is neither \
+                 shnex:conformsToShape nor a sparql: function"
+            )),
+        })
+    }
+}
+
 /// Evaluate one SPARQL call of a built-in LIST-parameter function the shapes graph
 /// declares — the closure [`crate::shapes::link::register_native_list_functions`]
 /// installs (SHACL 1.2 SPARQL Extensions §7.3).
@@ -528,6 +558,7 @@ pub(crate) fn invoke_expression_function(
 /// is an error.
 pub(crate) fn invoke_native_list_function(
     iri: &str,
+    callee: &NativeListCallee,
     shape_index: &ShapeIndex,
     call: &ExprFnCall<'_>,
 ) -> Result<Option<TermValue>, EvalError> {
@@ -538,7 +569,17 @@ pub(crate) fn invoke_native_list_function(
             None => return Ok(None),
         }
     }
-    let expr = if iri == shnex::CONFORMS_TO_SHAPE {
+    let expr = if let NativeListCallee::Sparql(form) = callee {
+        let rendered = form
+            .clone()
+            .and_then(|form| form.render(iri, args.len()))
+            .map_err(EvalError::function)?;
+        NodeExpr::Call(FnCall::Sparql {
+            iri: NamedNode::from(iri),
+            expr: rendered,
+            args,
+        })
+    } else {
         let [node, shape]: [NodeExpr; 2] = args.try_into().map_err(|args: Vec<NodeExpr>| {
             EvalError::function(format!(
                 "shnex:conformsToShape takes exactly 2 arguments, got {}",
@@ -552,21 +593,6 @@ pub(crate) fn invoke_native_list_function(
                 shapes: Arc::clone(shape_index),
             },
         }
-    } else {
-        let local = iri.strip_prefix(sparql_ns::NS).ok_or_else(|| {
-            EvalError::function(format!(
-                "<{iri}> is registered as a built-in list-parameter function but is neither \
-                 shnex:conformsToShape nor a sparql: function"
-            ))
-        })?;
-        let rendered = sparql_ns_lowering(local)
-            .and_then(|form| form.render(iri, args.len()))
-            .map_err(EvalError::function)?;
-        NodeExpr::Call(FnCall::Sparql {
-            iri: NamedNode::from(iri),
-            expr: rendered,
-            args,
-        })
     };
     let store = ShaclData::new(
         Arc::clone(call.focus_graph),

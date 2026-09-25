@@ -77,6 +77,23 @@ pub(crate) struct LoweredByTypes {
     index: u32,
 }
 
+/// The lowering of one `sh:class` value (SHACL 1.2 Core §4.1.1).
+///
+/// Two forms, because the overwhelmingly common value names ONE class and must
+/// cost what it cost before lists were admitted: a term slot resolves at bind to
+/// an `Option<TermId>` in the binding's existing term row, where a set slot
+/// builds one hash set per binding. A SHACL list of two or more classes takes the
+/// set; a one-member list means exactly what the single IRI means and takes the
+/// term slot.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LoweredClasses {
+    /// One class: the slot of its dataset identity.
+    One(TermSlot),
+    /// Two or more classes, any of which a value node may be an instance of: the
+    /// slot of their identity set.
+    AnyOf(SetSlot),
+}
+
 /// A [`crate::shapes::ClosedTypeIndex`], lowered: each type's slot, and the
 /// [`LoweredShapes::terms`] range its collected properties occupy.
 #[derive(Debug)]
@@ -518,12 +535,12 @@ pub(crate) type BoundParse = Option<f64>;
 /// constraint it is evaluating.
 #[derive(Debug)]
 pub(crate) enum LoweredConstraint {
-    /// `sh:class` — the slot holding the dataset identities of the value's
-    /// classes (one for an IRI value, one per member for a SHACL list value).
+    /// `sh:class` — where the dataset identities of the value's classes are
+    /// resolved: one term slot for a single class, one set slot for a list of them.
     ///
-    /// A class this data graph does not intern is absent from the resolved set,
-    /// and that is not a loss: a term with no dataset identity has no instance.
-    Class(SetSlot),
+    /// A class this data graph does not intern resolves to no identity, and that
+    /// is not a loss: a term with no dataset identity has no instance.
+    Class(LoweredClasses),
     /// `sh:datatype` — compared as a datatype IRI string, never interned.
     Datatype,
     /// `sh:nodeKind` — a discriminant test on the value node.
@@ -1242,6 +1259,38 @@ pub(crate) enum PairPath<'a> {
     Path(&'a LoweredPath),
 }
 
+/// The resolved classes of one `sh:class` value, in the form its lowering chose
+/// (see [`LoweredClasses`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PlannedClasses<'a> {
+    /// One class's dataset identity; `None` when this data graph does not intern it.
+    One(Option<TermId>),
+    /// The interned identities of two or more classes.
+    AnyOf(&'a FastSet<TermId>),
+}
+
+impl PlannedClasses<'_> {
+    /// Whether no class resolved to a dataset identity, so nothing is an instance
+    /// of any of them.
+    #[inline]
+    pub(crate) fn is_empty(self) -> bool {
+        match self {
+            Self::One(class) => class.is_none(),
+            Self::AnyOf(classes) => classes.is_empty(),
+        }
+    }
+
+    /// Whether `is_instance` holds for ANY resolved class — the disjunction SHACL
+    /// 1.2 Core §4.1.1 states over the members of the value.
+    #[inline]
+    pub(crate) fn any(self, mut is_instance: impl FnMut(TermId) -> bool) -> bool {
+        match self {
+            Self::One(class) => class.is_some_and(is_instance),
+            Self::AnyOf(classes) => classes.iter().any(|&class| is_instance(class)),
+        }
+    }
+}
+
 /// ONE constraint, with every derivation it needs that does not depend on the
 /// focus node already resolved.
 ///
@@ -1256,10 +1305,10 @@ pub(crate) enum PlannedConstraint<'a> {
     /// `sh:class` — the dataset identities of the value's classes, resolved at
     /// bind; a value node conforms when it is an instance of ANY of them.
     ///
-    /// An EMPTY set means this data graph interns no term for any of the
+    /// An EMPTY resolution means this data graph interns no term for any of the
     /// classes, so nothing can be an instance of them and every value node
     /// violates. That is a verdict, not a failure to compute one.
-    Class(&'a FastSet<TermId>),
+    Class(PlannedClasses<'a>),
     /// `sh:datatype` — the permitted datatype IRIs (any one matches).
     Datatype(&'a [NamedNode]),
     /// `sh:nodeKind` — the permitted node kinds (any one matches).
@@ -1462,8 +1511,11 @@ impl<'a> ShapePlan<'a> {
         lowered: &'a LoweredConstraint,
     ) -> Result<PlannedConstraint<'a>, String> {
         Ok(match (constraint, lowered) {
-            (Constraint::Class(_), LoweredConstraint::Class(slot)) => {
-                PlannedConstraint::Class(self.binding.set(*slot)?)
+            (Constraint::Class(_), LoweredConstraint::Class(LoweredClasses::One(slot))) => {
+                PlannedConstraint::Class(PlannedClasses::One(self.binding.term(*slot)?))
+            }
+            (Constraint::Class(_), LoweredConstraint::Class(LoweredClasses::AnyOf(slot))) => {
+                PlannedConstraint::Class(PlannedClasses::AnyOf(self.binding.set(*slot)?))
             }
             (Constraint::Datatype(datatypes), LoweredConstraint::Datatype) => {
                 PlannedConstraint::Datatype(datatypes)
@@ -2071,13 +2123,19 @@ impl ShapeWalk {
     }
 
     /// Record every member of one `sh:class` value as a planned class AND hand
-    /// back the slot of their identity SET — [`Self::class_slot`] for a value
-    /// that names one class or a SHACL list of them.
-    fn class_set_slot(&mut self, classes: &[NamedNode]) -> SetSlot {
+    /// back where their identities resolve — [`Self::class_slot`] for a value
+    /// that names one class or a SHACL list of them: a term slot for one class,
+    /// the slot of their identity SET for two or more.
+    fn class_slots(&mut self, classes: &[NamedNode]) -> LoweredClasses {
+        if let [class] = classes {
+            return LoweredClasses::One(self.class_slot(class));
+        }
         for class in classes {
             self.classes.insert(class.clone());
         }
-        self.set_slot(classes.iter().map(|class| Term::NamedNode(class.clone())))
+        LoweredClasses::AnyOf(
+            self.set_slot(classes.iter().map(|class| Term::NamedNode(class.clone()))),
+        )
     }
 
     /// Seal the walk into the lowering it produced.
@@ -2482,7 +2540,7 @@ fn lower_constraint(
     // it reaches is reached again below, by this same walk.
     walk.footprint.record_constraint(constraint);
     match constraint {
-        Constraint::Class(classes) => LoweredConstraint::Class(walk.class_set_slot(classes)),
+        Constraint::Class(classes) => LoweredConstraint::Class(walk.class_slots(classes)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
         Constraint::NodeKind(_) => LoweredConstraint::NodeKind,
         Constraint::MinCount(_) => LoweredConstraint::MinCount,
@@ -3176,8 +3234,11 @@ ex:FlagShape a sh:NodeShape ;
         out: &mut Vec<&'a str>,
     ) {
         match constraint {
-            LoweredConstraint::Class(slot) => {
-                let range = lowered.sets[*slot as usize].clone();
+            LoweredConstraint::Class(classes) => {
+                let range = match *classes {
+                    super::LoweredClasses::One(slot) => slot..slot + 1,
+                    super::LoweredClasses::AnyOf(slot) => lowered.sets[slot as usize].clone(),
+                };
                 for term in &lowered.terms[range.start as usize..range.end as usize] {
                     let Term::NamedNode(class) = term else {
                         panic!("an sh:class slot holds something other than an IRI");

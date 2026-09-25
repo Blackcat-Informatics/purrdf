@@ -2137,9 +2137,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 // edge walk), so a conforming value is never materialized. A
                 // non-interned value node has no `rdf:type` edge and is no instance.
                 let violates = match vn.as_id(ds) {
-                    Some(id) => !classes
-                        .iter()
-                        .any(|&class| store.class_view().is_instance(id, class)),
+                    Some(id) => !classes.any(|class| store.class_view().is_instance(id, class)),
                     None => true,
                 };
                 if violates {

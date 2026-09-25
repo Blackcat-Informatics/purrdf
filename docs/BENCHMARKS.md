@@ -93,6 +93,9 @@ simply not narrated here:
   dataset and one binding.
 - `crates/shapes/benches/schema_surface.rs` — complete ontology-aware schema
   compilation for shaped-only, sparse, and dense property surfaces.
+- `crates/shapes/benches/srl_closure.rs` — SPARQL 1.2 RL transitive closure
+  through the public text API: the parse-and-check of the closure program, and
+  `srl::infer` over chains of increasing length.
 - `crates/shapes/benches/shacl_product_reuse.rs` — the prepared-shapes product,
   phase by phase: the cold parse-and-prepare path a product replaces, the
   producer's encode, the three restore tiers (structural open, memo admit,
@@ -128,7 +131,7 @@ Additional benches are run package-by-package, e.g.
 
 ### Native criterion benchmark inventory
 
-This table documents 22 of the 71 `[[bench]]` targets registered across the
+This table documents 23 of the 77 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -151,6 +154,7 @@ here.
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
+| `crates/shapes/benches/srl_closure.rs` | SPARQL 1.2 RL transitive closure: parse-and-check of the closure program, then `srl::infer` over chains of 16, 64, and 128 `:link` edges, asserting the `n(n + 1)/2` inferred triples. |
 | `crates/shapes/benches/shacl_product_reuse.rs` | Prepared-shapes product phases reported separately: cold parse-and-prepare, producer encode, structural open, memo admit, memo-free rebuild, the reusable class-catalog derivation, per-dataset binding, and evaluation. Report-only; no ratio or threshold is asserted. |
 | `crates/shapes/benches/shacl_product_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for those same prepared-shapes-product phases, plus the encoded artifact's byte length. |
 | `crates/entail/benches/chase.rs` | RDFS materialization scaling on subclass chains, measured through the whole `materialize` path: clause-program lowering plus `purrdf-datalog`'s semi-naive fixpoint. |
@@ -274,7 +278,7 @@ memory thresholds.
 
 ### SHACL validation hot paths
 
-The `validate` benchmark contains nine deterministic SHACL workloads:
+The `validate` benchmark contains these deterministic SHACL workloads:
 
 | Group | Fixed fixture and measured boundary |
 | --- | --- |
@@ -285,6 +289,10 @@ The `validate` benchmark contains nine deterministic SHACL workloads:
 | `shacl_focus_unique_values_for` | 512, 4,096, and 65,536 conforming target nodes with three quads per node under `sh:uniqueValuesFor ( ex:notation ex:scheme )`, the cross-focus component whose verdict for one node depends on every other target node. The target set is grouped by value tuple once per validation, so the per-node cost is expected to stay flat across the sweep. |
 | `shacl_focus_target_where` | 512, 4,096, and 65,536 target nodes, each with a notation, beside as many unrelated nodes, under `sh:targetWhere` in two resolutions: `narrowed`, where the where shape's `sh:class` bounds the candidates to the class's instances, and `full_scan`, the same condition behind a one-member `sh:or` the narrowing does not look inside, which checks every node of the graph against the shape. |
 | `shacl_focus_computed_values` | 512, 4,096, and 65,536 conforming target nodes under one property shape with `sh:minCount 1` and `sh:datatype xsd:integer`, whose value nodes come from the path alone (`asserted`, the control every shape without computed values pays), from a `sh:values [ sh:path ex:width ]` node expression evaluated at each focus node (`values`), or from a `sh:defaultValue 1` added where nothing else produced a value (`default`). |
+| `shacl_focus_sequence_operators` | 512, 4,096, and 65,536 target nodes, each carrying 8 or 24 `ex:tag` IRIs, under one `sh:expression` evaluated at every focus node whose operand is the node's tags concatenated with themselves: `distinct` keeps the first occurrences, `filter` keeps every member conforming to an IRI-kind shape (duplicates and order included), and `control` evaluates the path alone. The two tag counts sit either side of the length at which `shnex:distinct` stops scanning its output and hashes instead. |
+| `shacl_focus_list_components` | 512, 4,096, and 65,536 target nodes whose one `ex:members` value is a SHACL list of 4 or 32 IRIs, under a property shape with `sh:minCount 1` plus one list component: `length` (`sh:minListLength`/`sh:maxListLength`), `unique` (`sh:uniqueMembers true`), or `member_shape` (`sh:memberShape` over an IRI-kind shape), beside a `control` row that constrains the same value node without walking its list. |
+| `shacl_focus_closed_by_types` | The `shacl_focus_closed` fixture at the same sizes in its two closures: `closed_true` (`sh:closed true` with `rdf:type` ignored) and `by_types` (`sh:closed sh:ByTypes` on the class itself, whose permitted set is selected per focus node by its `rdf:type` values). |
+| `shacl_rules_transitive_closure` | SHACL-AF rules closing an `ex:link` chain of 8, 16, or 32 nodes transitively into `ex:reaches` through `entail_dataset`; every measured iteration asserts the `n(n − 1)/2` inferred quads. |
 | `shacl_focus_realtime` | One prepared 1,000,000-node snapshot (4,000,079 quads and 3,000,088 terms), a compatibility focus filter over one node, and id-native prepared requests containing 1, 8, 64, 512, or 4,096 focus nodes. Dataset and shapes preparation stays outside each request's timed loop. |
 | `shacl_change_path_contrast` | One 1,000,000-node snapshot carrying both a conforming and a disjoint violating focus population, one binding, and id-native requests of 1, 8, 64, 512, or 4,096 focus nodes from each. Conformance is the only thing that differs between the two rows at a given size, so the deferred-materialization trade — a conforming request costs a constant, a violating one pays per violation — is visible as two columns. The violating side asserts one result per focus node, so a cheap row cannot be a row that stopped producing results. |
 

@@ -70,7 +70,9 @@ use crate::expression::{CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg
 use crate::product::ast::MAX_DEPTH;
 use crate::product::{ProductDimension, ShapesProductError};
 use crate::rules::{Rule, RuleBody};
-use crate::shapes::parser::functions::{invoke_expression_function, invoke_native_list_function};
+use crate::shapes::parser::functions::{
+    NativeListCallee, invoke_expression_function, invoke_native_list_function,
+};
 use crate::shapes::{Constraint, PropertyShape, Shape, Target};
 use crate::term::Term;
 
@@ -226,13 +228,15 @@ pub(crate) fn register_native_list_functions(
         } else {
             Arity::AtLeast(0)
         };
-        let callee = iri.clone();
+        let name = iri.clone();
+        // Resolved here, at load, so a call pays only the arity-dependent render.
+        let callee = NativeListCallee::resolve(iri);
         let index = Arc::clone(shape_index);
         registry.register_expr(
             iri.clone(),
             arity,
             Arc::new(move |call: &ExprFnCall<'_>| {
-                invoke_native_list_function(&callee, &index, call)
+                invoke_native_list_function(&name, &callee, &index, call)
             }),
         );
     }
