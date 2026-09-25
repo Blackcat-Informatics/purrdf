@@ -163,7 +163,7 @@ for (const row of rows) console.log(row.s.value, row.x.value);
 
 ### Cloudflare Workers
 
-`@blackcatinformatics/purrdf/cloudflare` 提供 `createFetchServiceResolver`、`createFetchLoadResolver` 与 `handleSparqlRequest`；后者以一个 `Response` 应答一个 SPARQL 1.1 Protocol 请求：`200` 附带协商出的文档，governor 叫停请求时返回 `422` 或 `503`（绝不会以 `200` 返回部分结果），错误以 `application/problem+json` 给出，`Server-Timing` 取自作业的证据，并在配置后发送 CORS 头。一个完整的 Worker：
+`@blackcatinformatics/purrdf/cloudflare` 提供 `createFetchServiceResolver`、`createFetchLoadResolver` 与 `handleSparqlRequest`；后者以一个 `Response` 应答一个 SPARQL 1.1 Protocol 请求：`200` 附带协商出的文档，governor 叫停请求时返回 `422` 或 `503`（绝不会以 `200` 返回部分结果），错误以 `application/problem+json` 给出，`Server-Timing` 取自作业的证据，并在配置后发送 CORS 头。两个处理函数都以 `redirect: "manual"` 发起请求：`SERVICE` 请求绝不跟随重定向（3xx 是一个带类型的传输失败，因此被编目端点的请求头与凭据绝不会到达另一个源），而 `LOAD` 仅在对被重定向的 IRI 重新按目录鉴权之后才会跟随每一跳，跳数上限为 `maxRedirects`（默认 5）。一个完整的 Worker：
 
 ```js worker-recipe
 import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";

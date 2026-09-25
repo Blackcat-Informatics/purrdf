@@ -54,20 +54,32 @@ export interface FetchServiceResolverOptions {
 }
 
 export interface FetchLoadResolverOptions {
-  /** The policy every `LOAD` is authorized against (required). */
+  /** The policy every `LOAD` is authorized against — the initial IRI, and every redirect hop (required). */
   readonly catalog: ServiceCatalog;
-  /** Each fetch's own bound, in milliseconds (a positive integer; required). */
+  /** Each hop's own bound, in milliseconds (a positive integer; required). */
   readonly timeoutMs: number;
   readonly fetch?: FetchLike;
   readonly bindings?: ServiceBindings;
+  /** Redirect hops a `LOAD` follows before failing typed transport. Defaults to 5. */
+  readonly maxRedirects?: number;
 }
 
-/** A `resolveService` handler that sends each `SERVICE` request with `fetch`. */
+/**
+ * A `resolveService` handler that sends each `SERVICE` request with `fetch`, with
+ * `redirect: "manual"`: a 3xx is a `{ kind: "transport" }` failure, never followed, so a
+ * catalogued endpoint's headers and credential can never reach an origin the catalog did
+ * not authorize.
+ */
 export function createFetchServiceResolver(
   options: FetchServiceResolverOptions,
 ): AsyncServiceResolver;
 
-/** A `resolveLoad` handler that fetches each `LOAD` document. */
+/**
+ * A `resolveLoad` handler that fetches each `LOAD` document with `redirect: "manual"`,
+ * following a redirect by hand — re-authorizing every hop against `catalog` and
+ * re-deriving that hop's own headers, up to `maxRedirects` hops — rather than letting
+ * `fetch` carry headers or a credential across an origin change on its own.
+ */
 export function createFetchLoadResolver(options: FetchLoadResolverOptions): AsyncLoadResolver;
 
 /** The ceilings every request runs under. `deadlineMs` is required. */

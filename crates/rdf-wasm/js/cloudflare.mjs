@@ -209,13 +209,41 @@ function errorText(error) {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
+// Statuses the Fetch algorithm classifies as a redirect (WHATWG Fetch §4.3): the ones a
+// `Location` response header retargets. 304 (Not Modified) is not among them.
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+// How many redirect hops `createFetchLoadResolver` follows before giving up (its
+// `maxRedirects` option). Chosen, not derived: generous enough for a real document
+// mirror, small enough that a redirect loop fails fast.
+const DEFAULT_MAX_LOAD_REDIRECTS = 5;
+
 /**
- * Issue one request and read its whole body. Every way it can fail to produce a 2xx body
- * — an unparsable URL, a network error, the timeout, the job abandoning the request, a
- * non-2xx status — is a `{ kind: "transport" }` failure, which `SILENT` may swallow; the
- * body of a refused response is cancelled, never read.
+ * Whether `response` is a redirect this adapter refuses to follow blindly: a 3xx with a
+ * `Location`, or the opaque-redirect filtering a browser's `fetch` applies to
+ * `redirect: "manual"` (`type === "opaqueredirect"`, `status === 0`, headers withheld).
  */
-async function exchange({ what, url, method, headers, body, timeoutMs, signal, bindings, fetchImpl }) {
+function isRedirectResponse(response) {
+  return response.type === "opaqueredirect" || REDIRECT_STATUSES.has(response.status);
+}
+
+/** `response`'s redirect status and `Location` (`location` is `null` for an opaque one). */
+function redirectTarget(response) {
+  if (response.type === "opaqueredirect") return { status: 0, location: null };
+  return { status: response.status, location: response.headers.get("Location") };
+}
+
+/**
+ * Issue one request with `redirect: "manual"` and read its whole body. This never
+ * follows a redirect itself: a redirect response is handed back as `{ redirect: { status,
+ * location } }` for the caller to decide — a transport failure that names the endpoint
+ * (`SERVICE`, which must never send a second request to an origin the catalog never
+ * authorized), or a hop to re-authorize and re-fetch (`LOAD`). Every other way it can fail
+ * to produce a 2xx body — an unparsable URL, a network error, the timeout, the job
+ * abandoning the request, a non-2xx non-redirect status — is a `{ kind: "transport" }`
+ * failure; the body of a refused or redirect response is cancelled, never read.
+ */
+async function fetchOnce({ what, url, method, headers, body, timeoutMs, signal, bindings, fetchImpl }) {
   let parsed;
   try {
     parsed = new URL(url);
@@ -231,7 +259,7 @@ async function exchange({ what, url, method, headers, body, timeoutMs, signal, b
       headers,
       body,
       signal: combined,
-      redirect: "follow",
+      redirect: "manual",
     });
   } catch (error) {
     if (timeout.aborted) {
@@ -241,6 +269,10 @@ async function exchange({ what, url, method, headers, body, timeoutMs, signal, b
       return { kind: "transport", message: `${what}: abandoned by the query` };
     }
     return { kind: "transport", message: `${what}: ${errorText(error)}` };
+  }
+  if (isRedirectResponse(response)) {
+    await response.body?.cancel().catch(() => undefined);
+    return { redirect: redirectTarget(response) };
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
@@ -258,6 +290,32 @@ async function exchange({ what, url, method, headers, body, timeoutMs, signal, b
     }
     return { kind: "transport", message: `${what}: reading the body failed (${errorText(error)})` };
   }
+}
+
+/** A message for a redirect `fetchOnce` refuses to follow: its status and, when readable, its `Location`. */
+function redirectMessage({ status, location }) {
+  const where = location ? ` to ${location}` : " (Location withheld by an opaque redirect)";
+  return `redirected (HTTP ${status || "opaque"}${where}); a catalogued endpoint's redirect is never followed`;
+}
+
+/** A message for a redirect that carries no usable `Location` to follow (opaque, or unparsable). */
+function noLocationMessage(status) {
+  return `an opaque redirect (HTTP ${status || "opaque"}) withheld its Location; nothing to follow`;
+}
+
+/**
+ * `fetchOnce`, for a caller that never follows a redirect itself: `SERVICE`, whose
+ * profile headers and credential must never be sent to any origin beyond the one the
+ * catalog authorized. A redirect response becomes a `{ kind: "transport" }` failure
+ * naming the endpoint and the redirect's status and `Location`; no request is ever sent
+ * to the `Location`, and neither its headers nor its body leave this function.
+ */
+async function exchange(args) {
+  const result = await fetchOnce(args);
+  if (result.redirect !== undefined) {
+    return { kind: "transport", message: `${args.what}: ${redirectMessage(result.redirect)}` };
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +350,13 @@ async function cacheKey(request) {
  * whichever comes first, and whenever the query abandons it (`ctx.signal`). Everything
  * that stops a 2xx answer arriving is a `{ kind: "transport" }` failure — never a throw,
  * which would be a fault that fails even a `SERVICE SILENT`.
+ *
+ * The fetch is always sent with `redirect: "manual"` and never follows one: a 3xx (or a
+ * browser's opaque-redirect response to a cross-origin `redirect: "manual"` fetch) is
+ * itself a `{ kind: "transport" }` failure naming the endpoint and the redirect's status
+ * and, when readable, its `Location`. No second request is ever sent — to the `Location`
+ * or anywhere else — so the profile's headers and credential (an `X-Api-Key`, a
+ * `Cookie`, …) can never reach an origin the catalog did not authorize.
  *
  * With `cache` (a Cache API object such as `caches.default`) and `cacheTtlSeconds`,
  * answers are reused: keyed under a fixed `.invalid` origin by a SHA-256 of the endpoint,
@@ -375,57 +440,102 @@ export function createFetchServiceResolver(options) {
  * response's `Content-Type` (parameters stripped), the base from the final URL after
  * redirects.
  *
- * Before any fetch the catalog authorizes the IRI (`ServiceCatalog.authorizeLoad`: the
- * `network` capability, and `credentials` for a credential); a refusal is a
- * `{ kind: "denied" }` failure, which fails even a `LOAD SILENT`. The request sends an
- * `Accept` naming every RDF syntax the engine parses, the profile's `User-Agent`, and the
- * profile's headers and credential, and is bounded by `timeoutMs` and the profile's
- * timeout, whichever is shorter. Everything else that stops a document arriving —
- * including a response with no `Content-Type` — is a `{ kind: "transport" }` failure.
+ * Before any fetch — and before *every* redirect hop — the catalog authorizes the IRI
+ * (`ServiceCatalog.authorizeLoad`: the `network` capability, and `credentials` for a
+ * credential); a refusal is a `{ kind: "denied" }` failure, which fails even a
+ * `LOAD SILENT`, whether it is the initial IRI or one a redirect retargeted to. Each
+ * hop's request sends an `Accept` naming every RDF syntax the engine parses, and the
+ * `User-Agent`, headers and credential of *that hop's own* authorization — never the
+ * previous hop's, so a redirect to a different origin never carries along a credential or
+ * header the target's own catalog profile did not itself grant. Each hop is bounded by
+ * `timeoutMs` and its own profile's timeout, whichever is shorter.
+ *
+ * The fetch is always sent with `redirect: "manual"`. A 3xx (or a browser's
+ * opaque-redirect response) is followed by hand: its `Location` is resolved against the
+ * current URL and re-authorized from scratch, up to `maxRedirects` hops (5 by default,
+ * an option here); a 307/308 on this always-`GET` request is simply re-fetched with
+ * `GET`, and the loaded document's `base` is the *final* authorized URL, not the
+ * originally requested one. Exceeding `maxRedirects`, or a redirect whose `Location` is
+ * missing or unparsable (including an opaque redirect, which withholds it), is a
+ * `{ kind: "transport" }` failure. Everything else that stops a document arriving —
+ * including a response with no `Content-Type` — is a `{ kind: "transport" }` failure too.
  */
 export function createFetchLoadResolver(options) {
   const caller = "createFetchLoadResolver";
   const source = plainObject(options, `${caller} options`);
-  refuseUnknownKeys(source, ["catalog", "fetch", "bindings", "timeoutMs"], caller);
+  refuseUnknownKeys(source, ["catalog", "fetch", "bindings", "timeoutMs", "maxRedirects"], caller);
   const catalog = requireCatalog(source.catalog, caller);
   const timeoutMs = requireTimeout(source.timeoutMs, caller);
   const fetchImpl = fetchOption(source.fetch, caller);
   const bindings = bindingsOption(source.bindings, caller);
+  const maxRedirects = isPresent(source.maxRedirects)
+    ? positiveInteger(source.maxRedirects, "maxRedirects", caller)
+    : DEFAULT_MAX_LOAD_REDIRECTS;
 
   return async function resolveLoad(request, ctx) {
-    const authorization = catalog.authorizeLoad(request.iri);
-    let denial;
-    let headers;
-    let profileTimeout;
-    try {
-      denial = authorization.denial;
-      headers = [["Accept", authorization.accept]];
-      const userAgent = authorization.userAgent;
-      if (userAgent !== undefined) headers.push(["User-Agent", userAgent]);
-      headers.push(...pairs(authorization.headers));
-      profileTimeout = authorization.timeoutMs;
-    } finally {
-      authorization.free();
+    let iri = request.iri;
+    let hop = 0;
+    for (;;) {
+      const authorization = catalog.authorizeLoad(iri);
+      let denial;
+      let headers;
+      let profileTimeout;
+      try {
+        denial = authorization.denial;
+        headers = [["Accept", authorization.accept]];
+        const userAgent = authorization.userAgent;
+        if (userAgent !== undefined) headers.push(["User-Agent", userAgent]);
+        headers.push(...pairs(authorization.headers));
+        profileTimeout = authorization.timeoutMs;
+      } finally {
+        authorization.free();
+      }
+      if (denial !== undefined) return { kind: "denied", message: denial };
+      const what = iri === request.iri ? `LOAD <${iri}>` : `LOAD <${iri}> (redirected from <${request.iri}>)`;
+      const result = await fetchOnce({
+        what,
+        url: iri,
+        method: "GET",
+        headers,
+        body: undefined,
+        timeoutMs: profileTimeout === undefined ? timeoutMs : Math.min(timeoutMs, profileTimeout),
+        signal: ctx.signal,
+        bindings,
+        fetchImpl,
+      });
+      if (result.redirect !== undefined) {
+        if (hop >= maxRedirects) {
+          return {
+            kind: "transport",
+            message:
+              `LOAD <${request.iri}>: exceeded ${maxRedirects} redirect hop${maxRedirects === 1 ? "" : "s"}; ` +
+              `the last was ${what}`,
+          };
+        }
+        const { location, status } = result.redirect;
+        if (!location) {
+          return { kind: "transport", message: `${what}: ${noLocationMessage(status)}` };
+        }
+        let next;
+        try {
+          next = new URL(location, iri).toString();
+        } catch (error) {
+          return {
+            kind: "transport",
+            message: `${what}: Location ${JSON.stringify(location)} is not a resolvable URL (${errorText(error)})`,
+          };
+        }
+        hop += 1;
+        iri = next;
+        continue;
+      }
+      if (result.kind !== undefined) return result;
+      const mediaType = result.contentType?.split(";")[0].trim();
+      if (!mediaType) {
+        return { kind: "transport", message: `${what}: the response has no Content-Type` };
+      }
+      return { bytes: result.bytes, mediaType, base: result.url || iri };
     }
-    if (denial !== undefined) return { kind: "denied", message: denial };
-    const what = `LOAD <${request.iri}>`;
-    const answer = await exchange({
-      what,
-      url: request.iri,
-      method: "GET",
-      headers,
-      body: undefined,
-      timeoutMs: profileTimeout === undefined ? timeoutMs : Math.min(timeoutMs, profileTimeout),
-      signal: ctx.signal,
-      bindings,
-      fetchImpl,
-    });
-    if (answer.kind !== undefined) return answer;
-    const mediaType = answer.contentType?.split(";")[0].trim();
-    if (!mediaType) {
-      return { kind: "transport", message: `${what}: the response has no Content-Type` };
-    }
-    return { bytes: answer.bytes, mediaType, base: answer.url || request.iri };
   };
 }
 

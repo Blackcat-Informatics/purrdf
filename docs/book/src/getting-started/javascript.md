@@ -220,8 +220,12 @@ network error, which the handler above reports as a transport failure. Write
 `handleSparqlRequest`, which answers one SPARQL 1.1 Protocol request with a
 `Response`: `200` with the negotiated document, `422` or `503` when a governor
 stopped it (never a `200` with a partial body), `application/problem+json`
-errors, `Server-Timing` from the job's evidence, and CORS when asked for. A
-complete Worker:
+errors, `Server-Timing` from the job's evidence, and CORS when asked for. Both
+resolvers fetch with `redirect: "manual"`: a `SERVICE` request never follows a
+redirect (a 3xx is a typed transport failure, so a catalogued endpoint's
+headers and credential can never reach a different origin), and a `LOAD`
+follows one only by re-authorizing the redirected IRI against the catalog
+before every hop, up to `maxRedirects` (5 by default). A complete Worker:
 
 ```js worker-recipe
 import wasm from "@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm";

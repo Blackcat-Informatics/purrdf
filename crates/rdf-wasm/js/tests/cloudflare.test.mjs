@@ -589,6 +589,80 @@ test("a transport failure fails a query, and SERVICE SILENT swallows it", async 
   assert.equal(silent.rowCount, 2);
 });
 
+// ---------------------------------------------------------------------------
+// SERVICE and a redirecting endpoint: `redirect: "manual"`, never followed
+// ---------------------------------------------------------------------------
+
+/** Each row's `s`/`x` bindings, `UNBOUND` where a variable is not bound, sorted. */
+function summarizeRows(rows) {
+  return rows
+    .toArray()
+    .map((row) => `s=${row.s?.value ?? "UNBOUND"}&x=${row.x?.value ?? "UNBOUND"}`)
+    .sort();
+}
+
+test("SERVICE redirect: a 302 to an unlisted origin is a transport failure, never fetched; SILENT matches the endpoint being down", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const evilOrigin = "https://evil.example.org";
+  const { calls, fetch } = recordingFetch((url) => {
+    assert.equal(String(url), REMOTE, "no request is ever sent anywhere but the catalogued endpoint");
+    return new Response(null, { status: 302, headers: { Location: `${evilOrigin}/steal` } });
+  });
+  const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
+  const answer = await resolveService(serviceRequest(), liveCtx());
+  assert.equal(answer.kind, "transport");
+  assert.match(answer.message, /^SERVICE <https:\/\/remote\.example\.org\/sparql>: redirected \(HTTP 302 to https:\/\/evil\.example\.org\/steal\)/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, REMOTE);
+
+  // The oracle: SERVICE SILENT over the redirecting endpoint returns exactly the same
+  // rows as SERVICE SILENT over an endpoint that is simply down — proving the redirect
+  // was refused outright, not partially honoured (which would bind `x` for some rows).
+  const engine = new QueryEngine();
+  const silentRedirected = await engine.selectAsync(
+    dataset(),
+    FEDERATED().replace("SERVICE <", "SERVICE SILENT <"),
+    { resolveService, catalog },
+  );
+  const resolveDown = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch: async () => new Response("down", { status: 502 }),
+  });
+  const silentDown = await engine.selectAsync(
+    dataset(),
+    FEDERATED().replace("SERVICE <", "SERVICE SILENT <"),
+    { resolveService: resolveDown, catalog },
+  );
+  assert.equal(silentRedirected.rowCount, silentDown.rowCount);
+  assert.deepEqual(summarizeRows(silentRedirected.rows), summarizeRows(silentDown.rows));
+});
+
+test("SERVICE redirect: a 307 is never followed — no body or header ever reaches the Location", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const { calls, fetch } = recordingFetch(() =>
+    new Response(null, { status: 307, headers: { Location: `${REMOTE_ORIGIN}/elsewhere` } }),
+  );
+  const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
+  const answer = await resolveService(serviceRequest(), liveCtx());
+  assert.equal(answer.kind, "transport");
+  assert.match(answer.message, /redirected \(HTTP 307 to https:\/\/remote\.example\.org\/elsewhere\)/);
+  assert.equal(calls.length, 1, "the 307's Location is never fetched — a re-sent 307 body would be a second call");
+  assert.equal(calls[0].url, REMOTE);
+  assert.equal(calls[0].init.body, serviceRequest().queryText, "only the catalogued endpoint ever saw the body");
+});
+
+test("SERVICE redirect: an opaque-redirect response is also a transport failure, its Location withheld", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const opaque = { type: "opaqueredirect", status: 0, ok: false, headers: new Headers(), body: null };
+  const { calls, fetch } = recordingFetch(() => opaque);
+  const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
+  const answer = await resolveService(serviceRequest(), liveCtx());
+  assert.equal(answer.kind, "transport");
+  assert.match(answer.message, /redirected \(HTTP opaque \(Location withheld by an opaque redirect\)\)/);
+  assert.equal(calls.length, 1);
+});
+
 test("the cache answers a repeated request and stores through waitUntil", async () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
   const cache = fakeCache();
@@ -750,6 +824,126 @@ test("a LOAD response without a Content-Type is a transport failure; with one it
     new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: bare }),
   );
   assert.match(missing.message, /no Content-Type/);
+});
+
+// ---------------------------------------------------------------------------
+// createFetchLoadResolver and a redirecting document: manual, re-authorized hops
+// ---------------------------------------------------------------------------
+
+const SECOND_ORIGIN = "https://second.example.org";
+const SECOND_DOC = `${SECOND_ORIGIN}/doc2.ttl`;
+// A relative IRI: only correct if resolved against the redirected document's own URL.
+const RELATIVE_TTL = `<rel> <${EX}p> <${EX}o> .\n`;
+
+test("LOAD redirect: a redirect to an unlisted origin is denied, and the unlisted origin is never fetched", async () => {
+  const catalog = catalogFor([DOC, { capabilities: ["network"] }]);
+  const evilOrigin = "https://evil.example.org";
+  const { calls, fetch } = recordingFetch((url) => {
+    assert.equal(String(url), DOC, "only the authorized DOC is ever fetched");
+    return new Response(null, { status: 302, headers: { Location: `${evilOrigin}/steal.ttl` } });
+  });
+  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
+  const denied = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
+  assert.equal(denied.kind, "denied");
+  assert.match(denied.message, new RegExp(`LOAD <${evilOrigin}/steal\\.ttl>`));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, DOC);
+});
+
+test("LOAD redirect: the valid neighbour — a redirect to a listed origin loads, and a relative IRI resolves against the final URL", async () => {
+  const catalog = catalogFor(
+    [DOC, { capabilities: ["network"] }],
+    [SECOND_DOC, { capabilities: ["network"] }],
+  );
+  const { calls, fetch } = recordingFetch((url) => {
+    if (String(url) === DOC) {
+      return new Response(null, { status: 302, headers: { Location: SECOND_DOC } });
+    }
+    assert.equal(String(url), SECOND_DOC);
+    return new Response(RELATIVE_TTL, { status: 200, headers: { "Content-Type": "text/turtle" } });
+  });
+  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
+  const target = new Dataset();
+  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad });
+  assert.equal(target.size, 1);
+  // The oracle: the document's relative `<rel>` IRI is `${SECOND_ORIGIN}/rel` only if it
+  // was resolved against the redirected document's own URL — a base of the originally
+  // requested DOC would instead (wrongly) resolve it under REMOTE_ORIGIN.
+  const rows = new QueryEngine().select(target, `SELECT ?s WHERE { ?s <${EX}p> <${EX}o> }`);
+  assert.equal(rows.rowCount, 1);
+  assert.equal(rows.rows.toArray()[0].s.value, `${SECOND_ORIGIN}/rel`);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, DOC);
+  assert.equal(calls[1].url, SECOND_DOC);
+});
+
+test("LOAD redirect: a redirect loop fails as typed transport after exactly maxRedirects hops", async () => {
+  // A fallback profile authorizes every origin, so only the hop limit — never a denial —
+  // can stop this loop: each hop's URL is distinct (a growing query string) but always
+  // redirects again.
+  const catalog = new ServiceCatalog();
+  catalog.setFallback(JSON.stringify({ capabilities: ["network"] }));
+  const { calls, fetch } = recordingFetch((url) => {
+    const next = `${DOC}?n=${calls.length}`;
+    return new Response(null, { status: 302, headers: { Location: next } });
+  });
+  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch, maxRedirects: 3 });
+  const answer = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
+  assert.equal(answer.kind, "transport");
+  assert.match(answer.message, /exceeded 3 redirect hops/);
+  assert.equal(calls.length, 4, "the initial request plus exactly the 3 hops the limit allows");
+
+  // The valid neighbour: the same loop with a taller limit follows more hops before
+  // failing, proving the count is the limit's, not some other fixed constant.
+  const taller = recordingFetch((url) => {
+    const next = `${DOC}?n=${taller.calls.length}`;
+    return new Response(null, { status: 302, headers: { Location: next } });
+  });
+  const generousLoad = createFetchLoadResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch: taller.fetch,
+    maxRedirects: 6,
+  });
+  await generousLoad({ kind: "load", iri: DOC }, liveCtx());
+  assert.equal(taller.calls.length, 7);
+});
+
+test("refusal pair: maxRedirects must be a positive integer when given; without it, 5 is the default", () => {
+  const catalog = catalogFor([DOC, { capabilities: ["network"] }]);
+  assert.match(
+    syncThrow(() => createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch: neverFetch, maxRedirects: 0 }))
+      .message,
+    /maxRedirects must be a positive integer/,
+  );
+  assert.equal(
+    typeof createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch: neverFetch, maxRedirects: 2 }),
+    "function",
+  );
+});
+
+test("LOAD redirect: the redirected origin's own profile headers are sent, never the source's", async () => {
+  const catalog = catalogFor(
+    [DOC, { capabilities: ["network"], headers: [["X-Source", "source-only"]], userAgent: "source-agent/1" }],
+    [SECOND_DOC, { capabilities: ["network"], headers: [["X-Target", "target-only"]], userAgent: "target-agent/1" }],
+  );
+  const { calls, fetch } = recordingFetch((url) =>
+    String(url) === DOC
+      ? new Response(null, { status: 302, headers: { Location: SECOND_DOC } })
+      : new Response(TTL, { status: 200, headers: { "Content-Type": "text/turtle" } }),
+  );
+  const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
+  const loaded = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
+  assert.equal(loaded.base, SECOND_DOC);
+  assert.equal(calls.length, 2);
+  const sourceHeaders = calls[0].init.headers;
+  const targetHeaders = calls[1].init.headers;
+  assert.ok(sourceHeaders.some(([name, value]) => name === "X-Source" && value === "source-only"));
+  assert.ok(!sourceHeaders.some(([name]) => name === "X-Target"));
+  assert.ok(targetHeaders.some(([name, value]) => name === "X-Target" && value === "target-only"));
+  assert.ok(!targetHeaders.some(([name]) => name === "X-Source"));
+  assert.ok(targetHeaders.some(([name, value]) => name === "User-Agent" && value === "target-agent/1"));
+  assert.ok(!targetHeaders.some(([name, value]) => name === "User-Agent" && value === "source-agent/1"));
 });
 
 // ---------------------------------------------------------------------------

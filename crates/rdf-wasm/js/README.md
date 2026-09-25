@@ -480,13 +480,23 @@ pieces:
 
 - `createFetchServiceResolver({ catalog, timeoutMs, fetch?, bindings?, cache?, cacheTtlSeconds?, waitUntil? })`
   returns a `resolveService` that POSTs each request with `fetch`, or through the
-  service binding registered for the endpoint's origin. A network error, a timeout or
-  a non-2xx status is reported as `{ kind: "transport" }`, never thrown. With `cache`
-  and `cacheTtlSeconds` it reuses answers through the Cache API, and it refuses a request
-  that carries a credential with a `TypeError` (a fault) rather than read it from or
-  write it to a shared cache.
-- `createFetchLoadResolver({ catalog, timeoutMs, fetch?, bindings? })` returns a
-  `resolveLoad` that authorizes each IRI against the catalog and then GETs it.
+  service binding registered for the endpoint's origin, always with `redirect: "manual"`.
+  A network error, a timeout or a non-2xx status is reported as `{ kind: "transport" }`,
+  never thrown — and so is a 3xx (or a browser's opaque-redirect response): it is never
+  followed, so the profile's headers and credential (an `X-Api-Key`, a `Cookie`, …) can
+  never reach an origin the catalog did not authorize. With `cache` and `cacheTtlSeconds`
+  it reuses answers through the Cache API, and it refuses a request that carries a
+  credential with a `TypeError` (a fault) rather than read it from or write it to a shared
+  cache.
+- `createFetchLoadResolver({ catalog, timeoutMs, fetch?, bindings?, maxRedirects? })`
+  returns a `resolveLoad` that authorizes each IRI against the catalog and then GETs it,
+  also with `redirect: "manual"`. A redirect is followed by hand, up to `maxRedirects`
+  hops (5 by default): its `Location` is resolved and re-authorized against the catalog
+  exactly as the initial IRI is — an unauthorized hop is the same `{ kind: "denied" }`
+  failure as an unauthorized initial `LOAD` — and that hop's own headers and credential
+  are sent, never the previous hop's. The loaded document's `base` is the final, redirected
+  and authorized URL. Exceeding `maxRedirects`, or a redirect with no usable `Location`
+  (an opaque one withholds it), is a `{ kind: "transport" }` failure.
 - `handleSparqlRequest(request, options)` answers one protocol request (`GET ?query=`,
   or a `POST` of `application/sparql-query`, `application/sparql-update` or a form) with
   a `Response`. The statuses are `200` with the negotiated document, `204` for an
