@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-25T17:22:49-06:00\n"
+"POT-Creation-Date: 2026-09-25T17:24:47-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -713,7 +713,10 @@ msgid ""
 "zero nightly (unstable) features, so stable 1.98 builds it. The repository's "
 "own toolchain floats on nightly for its sharper lints; see [Versioning & "
 "Releases](../project/releases.md)."
-msgstr "MSRV 为 Rust **1.98**，位于 stable 通道：按政策，代码不使用任何 nightly（不稳定）特性，因此 stable 1.98 即可构建。仓库自身的工具链浮动跟随 nightly，以获得更锐利的 lint；参见[版本管理与发布](../project/releases.md)。"
+msgstr ""
+"MSRV 为 Rust **1.98**，位于 stable 通道：按政策，代码不使用任何 nightly（不稳"
+"定）特性，因此 stable 1.98 即可构建。仓库自身的工具链浮动跟随 nightly，以获得"
+"更锐利的 lint；参见[版本管理与发布](../project/releases.md)。"
 
 #: src/getting-started/rust.md:26
 msgid "Build, freeze, serialize, parse"
@@ -4166,7 +4169,7 @@ msgstr ""
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
 #: src/sparql/querying.md:1928 src/validation/shacl.md:677
-#: src/validation/shex.md:64 src/entailment.md:294
+#: src/validation/shex.md:64 src/entailment.md:301
 msgid "Conformance"
 msgstr "一致性"
 
@@ -4298,7 +4301,7 @@ msgid "the `base` argument to `parse_dataset`, the CLI's `--base`"
 msgstr "`parse_dataset` 的 `base` 参数、CLI 的 `--base`"
 
 #: src/concepts/base-iris.md:29 src/sparql/embedding-knn.md:49
-#: src/entailment.md:149 src/entailment-rules.md:61
+#: src/entailment.md:156 src/entailment-rules.md:61
 msgid "3"
 msgstr "3"
 
@@ -10586,8 +10589,8 @@ msgstr "名称"
 msgid "role"
 msgstr "作用"
 
-#: src/sparql/embedding-knn.md:46 src/entailment.md:148 src/entailment.md:153
-#: src/entailment.md:154 src/entailment-rules.md:60 src/entailment-rules.md:64
+#: src/sparql/embedding-knn.md:46 src/entailment.md:155 src/entailment.md:160
+#: src/entailment.md:161 src/entailment-rules.md:60 src/entailment-rules.md:64
 #: src/entailment-rules.md:65
 msgid "0"
 msgstr "0"
@@ -14695,7 +14698,7 @@ msgstr ""
 "`materialize_dl_reported(...)`，或 `materialize(ds, "
 "Materialization::OwlDirect(bgp))`"
 
-#: src/entailment.md:20 src/entailment.md:153
+#: src/entailment.md:20 src/entailment.md:160
 msgid "`OWL-Direct`"
 msgstr "`OWL-Direct`"
 
@@ -14712,7 +14715,7 @@ msgstr ""
 msgid "`materialize_rif(...)`"
 msgstr "`materialize_rif(...)`"
 
-#: src/entailment.md:21 src/entailment.md:22 src/entailment.md:154
+#: src/entailment.md:21 src/entailment.md:22 src/entailment.md:161
 msgid "`RIF`"
 msgstr "`RIF`"
 
@@ -15078,24 +15081,20 @@ msgid ""
 "left sitting there, matching the boundary's own namespace instead of the "
 "caller's data. A predicate variable is projected like any other, and under "
 "`owl-rl` it also renders a `limit`: it ranges over the whole predicate "
-"vocabulary, so it ranges over the schema predicates Theorem PR1's conclusion "
-"hypothesis excludes — the table claims no completeness for them, whether or "
-"not `scm-*` derives one — and over the constructs the mechanisms beyond the "
-"table decide, for which the closure the rows are drawn from holds nothing."
-msgstr ""
-"模式是在任意位置（包括**谓词**位置）带有 `?name`（或 `$name`）的 N-Triples。"
-"RDF 把该位置保留给 IRI，因此边界的做法是：把每个变量改写为取自某个命名空间的"
-"项（该命名空间由边界扫描调用方自己的文本后划出），之后再把每次出现映射回来；"
-"该命名空间的任何内容都不会出现在结果行、绑定或报告中。唯一不接受变量的位置是"
-"字面量的**数据类型**：`\"5\"^^?d` 要求在一个存放 IRI 而非项的位置上进行绑定，"
-"它会被点名拒绝——替身绝不能留在那里，否则它匹配的是边界自己的命名空间，而不是"
-"调用方的数据。谓词变量与其他变量一样被投影；在 `owl-rl` 下，它还会产生一个 "
-"`limit`：它的取值范围是整个谓词词汇表，因此也涵盖定理 PR1 的结论假设所排除的 "
-"schema 谓词——无论 `scm-*` 是否推出了某个结论，规则表都不对它们声称完备性——并"
-"涵盖由规则表之外的判定手段所判定的构造，而结果行所取自的推理闭包对这些构造不"
-"含任何内容。"
+"vocabulary, so it ranges over the schema predicates, which the theorem "
+"behind the rule table's completeness does not cover. That theorem is Theorem "
+"PR1 of [OWL 2 Profiles §4.3](https://www.w3.org/TR/owl2-profiles/"
+"#Reasoning_in_OWL_2_RL_and_RDF_Graphs_using_Rules), and its hypothesis has "
+"two halves: the premise lies inside the OWL 2 RL syntax, and the conclusion "
+"is _assertional_ — class assertions over class names, property assertions, "
+"`owl:sameAs` and `owl:differentFrom` over named individuals. Only when both "
+"hold is the rule table complete, so a schema conclusion is one the table "
+"claims no completeness for, whether or not `scm-*` derives it. The predicate "
+"variable also ranges over the constructs the mechanisms beyond the table "
+"decide, for which the closure the rows are drawn from holds nothing."
+msgstr "模式是在任意位置（包括**谓词**位置）带有 `?name`（或 `$name`）的 N-Triples。RDF 把该位置保留给 IRI，因此边界的做法是：把每个变量改写为取自某个命名空间的项（该命名空间由边界扫描调用方自己的文本后划出），之后再把每次出现映射回来；该命名空间的任何内容都不会出现在结果行、绑定或报告中。唯一不接受变量的位置是字面量的**数据类型**：`\"5\"^^?d` 要求在一个存放 IRI 而非项的位置上进行绑定，它会被点名拒绝——替身绝不能留在那里，否则它匹配的是边界自己的命名空间，而不是调用方的数据。谓词变量与其他变量一样被投影；在 `owl-rl` 下，它还会产生一个 `limit`：它的取值范围是整个谓词词汇表，因此也涵盖 schema 谓词，而规则表的完备性所依据的定理并不覆盖这些谓词。该定理是 [OWL 2 Profiles §4.3](https://www.w3.org/TR/owl2-profiles/#Reasoning_in_OWL_2_RL_and_RDF_Graphs_using_Rules) 中的定理 PR1，其假设分为两半：前提处于 OWL 2 RL 语法之内，且结论是*断言型*的——即基于类名的类断言、属性断言，以及基于具名个体的 `owl:sameAs` 与 `owl:differentFrom`。只有两半同时成立时规则表才是完备的，因此对于 schema 结论，无论 `scm-*` 是否推出了它，规则表都不声称完备。谓词变量还涵盖由规则表之外的判定手段所判定的构造，而结果行所取自的推理闭包对这些构造不含任何内容。"
 
-#: src/entailment.md:135
+#: src/entailment.md:142
 msgid ""
 "Every answer arrives with the certificate of the run underneath it — the "
 "same `purrdf-reasoning-report` block a materialization renders, plus a "
@@ -15104,11 +15103,11 @@ msgstr ""
 "每个答案都附带其背后那次运行的证书——与物化所输出的相同的 `purrdf-reasoning-"
 "report` 块，外加一行 `mechanism`，指明是六种判定手段中的哪一种得出了裁决。"
 
-#: src/entailment.md:139
+#: src/entailment.md:146
 msgid "Rule coverage"
 msgstr "规则覆盖"
 
-#: src/entailment.md:141
+#: src/entailment.md:148
 msgid ""
 "`rules(regime)` is the rule table the specification defines the regime by; "
 "`implemented(regime)` is the subset the evaluator fires. Both are `&'static` "
@@ -15119,85 +15118,85 @@ msgstr ""
 "实际触发的子集。二者都是按规范表格顺序排列的 `&'static` 切片，因此差距是一个"
 "可执行的工件，而不是一句话："
 
-#: src/entailment.md:146 src/entailment-rules.md:58 src/entailment-rules.md:86
+#: src/entailment.md:153 src/entailment-rules.md:58 src/entailment-rules.md:86
 msgid "Regime"
 msgstr "机制"
 
-#: src/entailment.md:146
+#: src/entailment.md:153
 msgid "Rule table"
 msgstr "规则表"
 
-#: src/entailment.md:146 src/entailment-rules.md:58
+#: src/entailment.md:153 src/entailment-rules.md:58
 msgid "Defined"
 msgstr "定义数"
 
-#: src/entailment.md:146 src/entailment-rules.md:58 src/entailment-rules.md:92
+#: src/entailment.md:153 src/entailment-rules.md:58 src/entailment-rules.md:92
 #: src/entailment-rules.md:100 src/entailment-rules.md:123
 #: src/entailment-rules.md:206
 msgid "Implemented"
 msgstr "已实现"
 
-#: src/entailment.md:148
+#: src/entailment.md:155
 msgid "`Simple`"
 msgstr "`Simple`"
 
-#: src/entailment.md:148
+#: src/entailment.md:155
 msgid "— (identity closure)"
 msgstr "—（恒等闭包）"
 
-#: src/entailment.md:149
+#: src/entailment.md:156
 msgid "`RDF`"
 msgstr "`RDF`"
 
-#: src/entailment.md:149
+#: src/entailment.md:156
 msgid "RDF 1.2 Semantics §8.1.1"
 msgstr "RDF 1.2 Semantics §8.1.1"
 
-#: src/entailment.md:150
+#: src/entailment.md:157
 msgid "`RDFS`"
 msgstr "`RDFS`"
 
-#: src/entailment.md:150
+#: src/entailment.md:157
 msgid "RDF 1.2 Semantics §8.1.1 + §9.2.1"
 msgstr "RDF 1.2 Semantics §8.1.1 + §9.2.1"
 
-#: src/entailment.md:150 src/entailment-rules.md:62
+#: src/entailment.md:157 src/entailment-rules.md:62
 msgid "18"
 msgstr "18"
 
-#: src/entailment.md:151
+#: src/entailment.md:158
 msgid "`OWL-RL`"
 msgstr "`OWL-RL`"
 
-#: src/entailment.md:151
+#: src/entailment.md:158
 msgid "OWL 2 Profiles §4.3 Tables 4–9"
 msgstr "OWL 2 Profiles §4.3 表 4–9"
 
-#: src/entailment.md:151 src/entailment-rules.md:63
+#: src/entailment.md:158 src/entailment-rules.md:63
 msgid "78"
 msgstr "78"
 
-#: src/entailment.md:152
+#: src/entailment.md:159
 msgid "`D`"
 msgstr "`D`"
 
-#: src/entailment.md:152
+#: src/entailment.md:159
 msgid "OWL 2 Profiles §4.3 Table 8"
 msgstr "OWL 2 Profiles §4.3 表 8"
 
-#: src/entailment.md:152 src/entailment-rules.md:66
+#: src/entailment.md:159 src/entailment-rules.md:66
 msgid "5"
 msgstr "5"
 
-#: src/entailment.md:153
+#: src/entailment.md:160
 msgid "— (SHOIQ(D) tableau, not a fixed table)"
 msgstr "—（SHOIQ(D) tableau，而非固定的表）"
 
-#: src/entailment.md:154
+#: src/entailment.md:161
 msgid "— (caller-supplied rule set)"
 msgstr "—（调用方提供的规则集）"
 
-#: src/entailment.md:156
+#: src/entailment.md:163
 msgid ""
 "The per-rule breakdown — every rule id, its specification citation, and "
 "whether it is fired — is [generated from that API](entailment-rules.md) and "
@@ -15206,11 +15205,11 @@ msgstr ""
 "逐条规则的明细——每个规则 id、其规范出处，以及是否触发——是[由该 API 生成的]"
 "(entailment-rules.md)，并受漂移防护，因此不会落后于代码。"
 
-#: src/entailment.md:160
+#: src/entailment.md:167
 msgid "Where the numbers stop:"
 msgstr "数字止步之处："
 
-#: src/entailment.md:162
+#: src/entailment.md:169
 msgid ""
 "**The four existential rules fire, but their conclusions are withheld.** "
 "`rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` each conclude about a _fresh_ "
@@ -15230,7 +15229,7 @@ msgstr ""
 "`Construct::Surrogate` 报告。不含替代项的内容不会丢失：把一个项替换为新的空节"
 "点只会削弱一个三元组。"
 
-#: src/entailment.md:171
+#: src/entailment.md:178
 msgid ""
 "**A complete rule table is not a complete closure.** `OWL-RL` fires all 78 "
 "rules, and a run that met a boundary still reports "
@@ -15264,7 +15263,7 @@ msgstr ""
 "有八个是通过**反驳**而非匹配到达的，这些根本不增加任何规则：参见下文的一致性"
 "一节。"
 
-#: src/entailment.md:188
+#: src/entailment.md:195
 msgid ""
 "**Seventeen OWL 2 RL rules conclude `false`.** \"Implemented\" for those "
 "means _decided_: a body match becomes `EntailError::Inconsistent` carrying a "
@@ -15276,11 +15275,11 @@ msgstr ""
 "证，指明该规则以及满足它的那些断言三元组。对一条没有结论的规则而言，这是它唯"
 "一能做的事。"
 
-#: src/entailment.md:193
+#: src/entailment.md:200
 msgid "The chase (Simple / RDF / RDFS / OWL-RL / D)"
 msgstr "chase（Simple / RDF / RDFS / OWL-RL / D）"
 
-#: src/entailment.md:195
+#: src/entailment.md:202
 msgid ""
 "`materialize` runs a forward-materialization chase: a fixed rule set for the "
 "selected regime, applied by a semi-naive fixpoint until no new quads appear. "
@@ -15293,7 +15292,7 @@ msgstr ""
 "定性的——给定的输入与机制总是得出相同的推理闭包——又由于它在 `TermId` 空间中工"
 "作，途中没有任何项会被重新解析或重新序列化。"
 
-#: src/entailment.md:201
+#: src/entailment.md:208
 msgid ""
 "Typical use: materialize first, then query with the plain [SPARQL engine]"
 "(sparql/querying.md) or validate the closure with [SHACL](validation/"
@@ -15302,7 +15301,7 @@ msgstr ""
 "典型用法：先物化，然后用普通的 [SPARQL 引擎](sparql/querying.md)查询，或用 "
 "[SHACL](validation/shacl.md) 验证推理闭包（SHACL 验证器本身不做任何推理）。"
 
-#: src/entailment.md:206
+#: src/entailment.md:213
 msgid ""
 "The rule set is not written twice. `calculus_program(regime)` renders it as "
 "DL clauses and `materialize` evaluates exactly those clauses through "
@@ -15313,11 +15312,11 @@ msgstr ""
 "`materialize` 正是通过 [`purrdf-datalog`](datalog.md) 的半朴素求值器对这些子"
 "句求值，因此报告所携带的契约哈希标识的就是实际运行的子句。"
 
-#: src/entailment.md:211
+#: src/entailment.md:218
 msgid "Every run says what it did"
 msgstr "每次运行都说明它做了什么"
 
-#: src/entailment.md:213
+#: src/entailment.md:220
 msgid ""
 "`materialize` returns `(closure, ReasoningReport)`. There is deliberately no "
 "report-free variant, because the alternative — two entry points, one of "
@@ -15328,7 +15327,7 @@ msgstr ""
 "为另一种做法——两个入口，其中一个丢弃证据——正是部分规则集被描述成完整规则集的"
 "由来。报告包含："
 
-#: src/entailment.md:218
+#: src/entailment.md:225
 msgid ""
 "**`Completeness`** — derived from `rules(regime)` minus "
 "`implemented(regime)`, so it improves by itself as rules are added, and it "
@@ -15337,25 +15336,25 @@ msgstr ""
 "**`Completeness`**——由 `rules(regime)` 减去 `implemented(regime)` 得出，因此"
 "随着规则的加入会自行改善，并且它点名列出 `missing` 规则，而不只是计数；"
 
-#: src/entailment.md:221
+#: src/entailment.md:228
 msgid ""
 "**per-rule firing counts** — which rules fired and how many conclusions each "
 "contributed;"
 msgstr "**逐规则触发计数**——哪些规则触发了，各自贡献了多少结论；"
 
-#: src/entailment.md:223
+#: src/entailment.md:230
 msgid ""
 "**`Boundary`s** — the constructs the run met and could not close over, each "
 "with its reason;"
 msgstr "**`Boundary`**——本次运行遇到且无法闭合的构造，各附原因；"
 
-#: src/entailment.md:225
+#: src/entailment.md:232
 msgid ""
 "**the evaluation budget** — what the run consumed of the evaluator's fixed "
 "ceilings;"
 msgstr "**求值预算**——本次运行消耗了求值器固定上限中的多少；"
 
-#: src/entailment.md:227
+#: src/entailment.md:234
 msgid ""
 "**a contract hash** — `purrdf-datalog`'s digest of the clause program, so a "
 "cached closure minted under a different calculus can be _refused_ rather "
@@ -15364,7 +15363,7 @@ msgstr ""
 "**契约哈希**——`purrdf-datalog` 对子句程序的摘要，因此在另一种演算下生成的缓存"
 "推理闭包可以被*拒绝*，而不是被信任；"
 
-#: src/entailment.md:230
+#: src/entailment.md:237
 msgid ""
 "**an inconsistency witness**, when a rule that concludes `false` matched: "
 "the rule id, the asserted triples that satisfied its premises in premise "
@@ -15373,7 +15372,7 @@ msgstr ""
 "**不相容见证**，当一条结论为 `false` 的规则匹配时给出：规则 id、按前提顺序满"
 "足其前提的断言三元组，以及它们所取自的图。"
 
-#: src/entailment.md:234
+#: src/entailment.md:241
 msgid ""
 "A report cannot claim `Exact` while naming a boundary. `ReasoningReport` "
 "stores no completeness field at all: `completeness()` derives the value from "
@@ -15387,7 +15386,7 @@ msgstr ""
 "是被检查。这是有意为之——早先的设计存储了该字段，并把它与对同一组输入的推导结"
 "果相比较，这在构造上就是空洞的，永远不可能失败。"
 
-#: src/entailment.md:241
+#: src/entailment.md:248
 msgid ""
 "The rendering is byte-stable, so the Python, WebAssembly, and C hosts hand "
 "back the same report text as Rust for the same input."
@@ -15395,11 +15394,11 @@ msgstr ""
 "输出是字节稳定的，因此对于相同输入，Python、WebAssembly 与 C 宿主返回的报告文"
 "本与 Rust 相同。"
 
-#: src/entailment.md:244
+#: src/entailment.md:251
 msgid "OWL-Direct: the tableau"
 msgstr "OWL-Direct：tableau"
 
-#: src/entailment.md:246
+#: src/entailment.md:253
 msgid ""
 "`OWL-Direct` semantics is open-world Description Logic, which a forward "
 "chase cannot answer. `materialize_dl_reported` runs an **SHOIQ(D) tableau** "
@@ -15416,11 +15415,11 @@ msgstr ""
 "`materialize` 对 `Materialization::OwlDirect` 委托给它，从而到达同一个 "
 "tableau，而不是重新表述它。"
 
-#: src/entailment.md:254 src/entailment-rules.md:65
+#: src/entailment.md:261 src/entailment-rules.md:65
 msgid "RIF"
 msgstr "RIF"
 
-#: src/entailment.md:256
+#: src/entailment.md:263
 msgid ""
 "`materialize_rif` evaluates **RIF-Core** rules over a parsed `RuleSet`, "
 "covering the SPARQL RIF entailment regime."
@@ -15428,11 +15427,11 @@ msgstr ""
 "`materialize_rif` 在已解析的 `RuleSet` 上求值 **RIF-Core** 规则，覆盖 SPARQL "
 "RIF 蕴涵机制。"
 
-#: src/entailment.md:259
+#: src/entailment.md:266
 msgid "D (datatype) entailment"
 msgstr "D（数据类型）蕴涵"
 
-#: src/entailment.md:261
+#: src/entailment.md:268
 msgid ""
 "`D` is materialized, not refused. PurRDF realizes it as Simple entailment "
 "plus the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8 — the fixed rule "
@@ -15443,7 +15442,7 @@ msgstr ""
 "§4.3 表 8 中的五条 `dt-*` 规则——即前向 chase 能为其枚举的固定规则表——由 "
 "`purrdf-xsd` 在 XSD *值*空间上判定，而不是通过比较词法形式。"
 
-#: src/entailment.md:266
+#: src/entailment.md:273
 msgid ""
 "What Table 8 does not cover is the infinite value spaces themselves, and "
 "that is reported as a `Construct::DatatypeValueSpace` boundary on the run "
@@ -15454,11 +15453,11 @@ msgstr ""
 "`Construct::DatatypeValueSpace` 边界被报告，而不是被声称已覆盖。因此 `D` 推理"
 "闭包是*在其所陈述的边界之内*完备的，而报告正是陈述该边界的地方。"
 
-#: src/entailment.md:271
+#: src/entailment.md:278
 msgid "Every host materializes `d`, the command-line tool included."
 msgstr "每个宿主都能物化 `d`，命令行工具也不例外。"
 
-#: src/entailment.md:273
+#: src/entailment.md:280
 msgid ""
 "There is **no unsupported-regime error**. `materialize` takes a "
 "`Materialization`, which carries each regime's own input — a basic graph "
@@ -15475,11 +15474,11 @@ msgstr ""
 "`ReasoningReport::regime()`、`rules()`、`implemented()` 与 "
 "`Regime::from_iri` 都以它表述。"
 
-#: src/entailment.md:280
+#: src/entailment.md:287
 msgid "Invariants"
 msgstr "不变量"
 
-#: src/entailment.md:282
+#: src/entailment.md:289
 msgid ""
 "**No minted vocabulary.** Every constant in the crate's `vocab` module is a "
 "standard `rdf:`/`rdfs:`/`owl:` IRI drawn from the entailment specs "
@@ -15490,7 +15489,7 @@ msgstr ""
 "的标准 `rdf:`/`rdfs:`/`owl:` IRI——按照[工具包而非本体的规则](project/design-"
 "rules.md)，该 crate 不编造任何词汇。"
 
-#: src/entailment.md:286
+#: src/entailment.md:293
 msgid ""
 "**Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`, "
 "[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `blake3`, and two "
@@ -15504,18 +15503,18 @@ msgstr ""
 "构建到该目标），因此这些引擎可以原样带入 Rust、Python、WebAssembly 与 C，不依"
 "赖线程、文件系统或 RNG。"
 
-#: src/entailment.md:291
+#: src/entailment.md:298
 msgid ""
 "**Deterministic.** Same input + regime → same closure, always — and the same "
 "report, byte for byte."
 msgstr ""
 "**确定性。** 相同的输入 + 机制 → 相同的推理闭包，始终如此——报告也逐字节相同。"
 
-#: src/entailment.md:296
+#: src/entailment.md:303
 msgid "Two corpora measure two different things, and the distinction matters:"
 msgstr "两份语料度量的是两件不同的事，这一区别很重要："
 
-#: src/entailment.md:298
+#: src/entailment.md:305
 msgid ""
 "**W3C SPARQL 1.1 entailment-regime group — 70 of 70 cases pass**, with zero "
 "ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, "
@@ -15526,7 +15525,7 @@ msgstr ""
 "RDF/RDFS/OWL-RL chase、OWL-Direct（DL）tableau、RIF-Core 规则引擎，以及 RDF "
 "公理性的谓词类型推定，全部经由 SPARQL 一致性测试框架运行。"
 
-#: src/entailment.md:302
+#: src/entailment.md:309
 msgid ""
 "**W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero "
 "unledgered. This corpus is _consistency_\\-shaped: all 262 vendored cases "
@@ -15543,7 +15542,7 @@ msgstr ""
 "明。4 个分歧中的每一个都在一个带类型的台账中点名列出；未入台账的分歧，以及已"
 "入台账却开始一致的用例，都是硬失败。"
 
-#: src/entailment.md:310
+#: src/entailment.md:317
 msgid ""
 "Two things this row does **not** say. First, the upstream material is not "
 "free of entailment tests — the W3C manifest holds **206 positive and 23 "
@@ -15568,7 +15567,7 @@ msgstr ""
 "荷的分拣，而非能力限制，而「262 个中 258 个」是基于一份语料的数字，而不是基"
 "于 W3C 所发布内容的数字。"
 
-#: src/entailment.md:323
+#: src/entailment.md:330
 msgid ""
 "Those five figures are a **dated measurement**, recorded in `census.tsv`'s "
 "`dl_probe` column and described in that suite's `PROVENANCE.md`. The harness "
@@ -15583,7 +15582,7 @@ msgstr ""
 "归。重新推导这些数字意味着重新运行探测，这是一项有意的操作，而不是把关检查的"
 "一部分。"
 
-#: src/entailment.md:329
+#: src/entailment.md:336
 msgid ""
 "**W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero "
 "unledgered. This is the independent oracle for the rule table: W3C's own "
@@ -15596,7 +15595,7 @@ msgstr ""
 "`Regime::OwlRl` 下调用一次 `purrdf_entail::entails()` 作答。两个通道证明的是"
 "不同的事，分开报告。"
 
-#: src/entailment.md:335
+#: src/entailment.md:342
 msgid ""
 "**The negative lane is 23 of 23: no unsoundness.** The chase never derived a "
 "triple W3C publishes as _not_ entailed. That is the safety result, and it "
@@ -15607,14 +15606,14 @@ msgstr ""
 "被蕴涵的三元组。这是安全性结果，它在*全部* 23 个负向用例上都成立——可靠性是每"
 "个用例都必须满足的，因此没有按 profile 过滤任何用例。"
 
-#: src/entailment.md:340
+#: src/entailment.md:347
 msgid ""
 "**Those 23 agreements are two different results, and the harness prints the "
 "split** on a scoreboard line of its own:"
 msgstr ""
 "**这 23 次一致是两种不同的结果，测试框架会打印其划分**，单独占一行记分板："
 
-#: src/entailment.md:347
+#: src/entailment.md:354
 msgid ""
 "Three are _decided_ non-entailments — both halves of Theorem PR1's "
 "hypothesis hold, so the closure's failure to contain the non-conclusion is a "
@@ -15632,7 +15631,7 @@ msgstr ""
 "`refuted 0`。`23 of 23` 应读作「未发现不可靠性」，绝不能读作「证明了 23 个非"
 "蕴涵」。"
 
-#: src/entailment.md:356
+#: src/entailment.md:363
 msgid ""
 "The positive lane is **27 of 27** — the 27 positive entailments W3C itself "
 "places inside the RL profile under RDF-Based semantics — and the typed "
@@ -15646,7 +15645,7 @@ msgstr ""
 "conclusion` 为 0，`negative-conclusion` 为 0，`construct-outside-rl` 为 0，"
 "`imports-unresolved` 为 0，且**可处理项为 0**（`missing-rule` 为 0）。"
 
-#: src/entailment.md:363
+#: src/entailment.md:370
 msgid ""
 "Every class it used to hold is closed, and the rule table did not change "
 "once to close any of them. `entails()` reaches a conclusion six ways, and "
@@ -15655,7 +15654,7 @@ msgstr ""
 "它过去包含的每一类都已关闭，而为了关闭其中任何一类，规则表一次也没有改变。"
 "`entails()` 以六种方式得出结论，其中五种不是匹配："
 
-#: src/entailment.md:367
+#: src/entailment.md:374
 msgid ""
 "**refutation.** A negative fact still has no head anywhere in Tables 4–9 — "
 "no rule concludes `owl:differentFrom`, and none concludes membership in an "
@@ -15678,7 +15677,7 @@ msgstr ""
 "态，并且恰好在每一对都被驳倒时才被蕴涵——这就是为什么有两个条目随之离开了 "
 "`schema-conclusion` 类。"
 
-#: src/entailment.md:378
+#: src/entailment.md:385
 msgid ""
 "**freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a "
 "universally quantified Horn implication, and an implication is decided by "
@@ -15696,7 +15695,7 @@ msgstr ""
 "的一次查找，而且这一步不可省略：模式公理是一个合取式，只确立其中有意思的那一"
 "半，就会声称该语义并不许可的结论。"
 
-#: src/entailment.md:386
+#: src/entailment.md:393
 msgid ""
 "**comprehension.** A conclusion may assert that a CLASS EXISTS — an "
 "anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the RDF-"
@@ -15709,7 +15708,7 @@ msgstr ""
 "件所许可，但须满足一个关于运算对象的类型附加条件。只生成结论所点名的那些脚手"
 "架，且所用的空节点已检查在两份文档中都不存在。"
 
-#: src/entailment.md:391
+#: src/entailment.md:398
 msgid ""
 "**reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the "
 "profile states no rule for it — and a rule that did would range over every "
@@ -15721,7 +15720,7 @@ msgstr ""
 "给出规则——而如果有这样一条规则，它的取值范围将是每一个资源，从而扩大每个使用"
 "方默认都会计算的推理闭包。结论自身的自环改为从前提的自反类型声明中读出。"
 
-#: src/entailment.md:396
+#: src/entailment.md:403
 msgid ""
 "**datatype containment.** A property's declared `rdfs:range` datatypes "
 "intersect, and the intersection may be contained in one the premise never "
@@ -15735,7 +15734,7 @@ msgstr ""
 "⊓ unsignedInt ⊑ unsignedShort`，这两者都无法通过对三元组做连接来发现。在 XSD "
 "值空间上判定，采用三值逻辑，否定答案只有在反例范围被精确判定时才会给出。"
 
-#: src/entailment.md:403
+#: src/entailment.md:410
 msgid ""
 "The last case needed no mechanism at all, only the document its premise "
 "names: `webont-imports-011` `owl:imports` a support ontology the upstream "
@@ -15748,7 +15747,7 @@ msgstr ""
 "W3C 自己的 URL 获取后随库固化在这些用例旁边，并作为调用方持有的配置提供给 "
 "`entails()`。该库仍然不获取任何内容。"
 
-#: src/entailment.md:409
+#: src/entailment.md:416
 msgid ""
 "Nothing about the inventory moves: `rules(Regime::OwlRl)` and "
 "`implemented(Regime::OwlRl)` are still exactly the same 78, "
@@ -15768,7 +15767,7 @@ msgstr ""
 "结的常量、规则体与规则头；生成的三元组以及许可它们的推理闭包三元组），以及它"
 "自己的检查器，无需运行推理机即可重新判定全部内容。"
 
-#: src/entailment.md:419
+#: src/entailment.md:426
 msgid ""
 "The one case that used to be actionable is closed by an **extension**, and "
 "the extension is labelled rather than absorbed. `a owl:differentFrom b` "
@@ -15795,7 +15794,7 @@ msgstr ""
 "ext-eq-diff-sym`。因此调用方得到的推理闭包是表 4–9 再加上一份它可以阅读并拒绝"
 "的清单，而 `OWL-RL 78 / 78` 仍然只是关于表 4–9 的声明，别无其他。"
 
-#: src/entailment.md:433
+#: src/entailment.md:440
 msgid ""
 "The live scoreboard is [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/CONFORMANCE.md)."
@@ -17680,7 +17679,12 @@ msgid ""
 "that compiler. Contributors and the CI gates run a _floating_ nightly named "
 "in `rust-toolchain.toml` for its sharper clippy and rustdoc lints and its "
 "stronger default borrow checker; release artifacts are built on stable."
-msgstr "**不使用任何 nightly 特性，MSRV 基于 stable**——工作区中任何地方都没有 `#![feature(...)]` 属性，MSRV 下限（当前为 1.98，位于 stable 通道）由专门的 CI 作业强制执行，该作业恰好在这一版本的编译器上构建。贡献者与 CI 门禁使用 `rust-toolchain.toml` 中指定的*浮动* nightly，以获得更锐利的 clippy 与 rustdoc lint 以及更强的默认借用检查器；发布工件在 stable 上构建。"
+msgstr ""
+"**不使用任何 nightly 特性，MSRV 基于 stable**——工作区中任何地方都没有 `#!"
+"[feature(...)]` 属性，MSRV 下限（当前为 1.98，位于 stable 通道）由专门的 CI "
+"作业强制执行，该作业恰好在这一版本的编译器上构建。贡献者与 CI 门禁使用 `rust-"
+"toolchain.toml` 中指定的*浮动* nightly，以获得更锐利的 clippy 与 rustdoc "
+"lint 以及更强的默认借用检查器；发布工件在 stable 上构建。"
 
 #: src/project/design-rules.md:106
 msgid ""
@@ -18269,7 +18273,13 @@ msgid ""
 "features (no `#![feature(...)]` attributes, which the MSRV job proves on "
 "every change), and the release lanes build every published artifact on "
 "stable."
-msgstr "MSRV 是对使用方的承诺；开发工具链是一项工具选择，二者相互正交。`rust-toolchain.toml` 为本地工作与 CI 关卡指定了一个**浮动的 nightly**，因为 nightly 的 clippy 与 rustdoc 带有 stable 所缺少的 lint，且其默认借用检查器更强——但按照策略，源码不使用任何 nightly（不稳定）特性（没有任何 `#![feature(...)]` 属性，MSRV 作业在每次变更时都会证明这一点），而发布通道在 stable 上构建每一个已发布的工件。"
+msgstr ""
+"MSRV 是对使用方的承诺；开发工具链是一项工具选择，二者相互正交。`rust-"
+"toolchain.toml` 为本地工作与 CI 关卡指定了一个**浮动的 nightly**，因为 "
+"nightly 的 clippy 与 rustdoc 带有 stable 所缺少的 lint，且其默认借用检查器更"
+"强——但按照策略，源码不使用任何 nightly（不稳定）特性（没有任何 `#!"
+"[feature(...)]` 属性，MSRV 作业在每次变更时都会证明这一点），而发布通道在 "
+"stable 上构建每一个已发布的工件。"
 
 #: src/project/releases.md:47
 msgid "Tag-driven trusted publishing"

@@ -127,10 +127,17 @@ IRI rather than a term, and it is refused by name — the stand-in must never be
 sitting there, matching the boundary's own namespace instead of the caller's data.
 A predicate variable is projected
 like any other, and under `owl-rl` it also renders a `limit`: it ranges over the
-whole predicate vocabulary, so it ranges over the schema predicates Theorem PR1's
-conclusion hypothesis excludes — the table claims no completeness for them, whether
-or not `scm-*` derives one — and over the constructs the mechanisms beyond the table
-decide, for which the closure the rows are drawn from holds nothing.
+whole predicate vocabulary, so it ranges over the schema predicates, which the
+theorem behind the rule table's completeness does not cover. That theorem is
+Theorem PR1 of
+[OWL 2 Profiles §4.3](https://www.w3.org/TR/owl2-profiles/#Reasoning_in_OWL_2_RL_and_RDF_Graphs_using_Rules),
+and its hypothesis has two halves: the premise lies inside the OWL 2 RL syntax, and
+the conclusion is *assertional* — class assertions over class names, property
+assertions, `owl:sameAs` and `owl:differentFrom` over named individuals. Only when
+both hold is the rule table complete, so a schema conclusion is one the table claims
+no completeness for, whether or not `scm-*` derives it. The predicate variable also
+ranges over the constructs the mechanisms beyond the table decide, for which the
+closure the rows are drawn from holds nothing.
 
 Every answer arrives with the certificate of the run underneath it — the same
 `purrdf-reasoning-report` block a materialization renders, plus a `mechanism` line
