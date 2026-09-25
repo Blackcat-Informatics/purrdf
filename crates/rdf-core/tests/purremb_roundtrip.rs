@@ -3,6 +3,7 @@
 
 //! End-to-end PURREMB construction, verification, and Matryoshka access.
 
+use purrdf_core::distance::{Arithmetic as _, Exact};
 use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
     CertifiedPurrpckSource, ContentDigest, CorpusTarget, DimensionalityPolicy, DistanceMetric,
@@ -256,7 +257,10 @@ fn typed_round_trip_verifies_source_and_matryoshka_views() {
         .effective_matrix(target_set.id(), spaces[1].id())
         .expect("full lookup")
         .expect("full matrix")
-        .f32_row(0)
+        .f32_row(
+            0,
+            Exact::resolve().expect("the test thread runs the default float environment"),
+        )
         .expect("normalized row")
         .collect::<Result<Vec<_>, _>>()
         .expect("finite normalized values");

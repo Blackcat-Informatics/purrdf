@@ -158,6 +158,9 @@ jobs:
       - name: Check every scraped conformance row is RED without its scoreboard line
         run: python3 scripts/conformance-matrix.py --self-test
 
+      - name: Check the SIMD asm evidence gate can still fail
+        run: python3 scripts/check-simd-asm.py --self-test
+
       - name: Verify BM25F goldens against the independent integer reference
         run: python3 crates/text/tests/reference/bm25f.py --check
 
@@ -211,6 +214,12 @@ jobs:
           node-version: 24
 
       - name: Run workspace tests (includes doc tests)
+        # A hosted x86_64 runner guarantees only the SSE2 baseline, so that is the one
+        # reassociated path this job requires; the distance, kNN and HNSW tests still
+        # assert they executed every path the runner reports. `avx512-sde` below
+        # requires the rest.
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,sse2
         run: cargo test --workspace --locked
 
   projection-oracles:
@@ -297,34 +306,34 @@ jobs:
       - name: Install MSRV Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "1.96"
+          toolchain: "1.98"
 
       # RUSTUP_TOOLCHAIN is mandatory here, not belt-and-braces. The action
       # selects a toolchain with `rustup default`, which sits at the BOTTOM of
       # rustup's precedence order — below `rust-toolchain.toml`. So the install
-      # step above alone does not make cargo use 1.96 inside this repo; the
+      # step above alone does not make cargo use 1.98 inside this repo; the
       # repo pin wins and the job silently measures the dev toolchain instead.
       # `RUSTUP_TOOLCHAIN` outranks the file, so this is what actually holds the
-      # floor at 1.96 and proves no nightly-only feature has crept in.
+      # floor at 1.98 and proves no nightly-only feature has crept in.
       - name: Check workspace on MSRV
         run: cargo check --workspace --lib --locked
         env:
-          RUSTUP_TOOLCHAIN: "1.96"
+          RUSTUP_TOOLCHAIN: "1.98"
 
       # Prove the guard is live: if the toolchain selection above ever regresses
       # to the repo pin, this fails loudly instead of the job quietly passing on
       # a compiler that is not the MSRV.
-      - name: Assert the MSRV job really ran on 1.96
+      - name: Assert the MSRV job really ran on 1.98
         run: |
           set -euo pipefail
           version=$(rustc --version)
           echo "$version"
           case "$version" in
-            "rustc 1.96."*) ;;
-            *) echo "::error::MSRV job resolved '$version', expected rustc 1.96.x" >&2; exit 1 ;;
+            "rustc 1.98."*) ;;
+            *) echo "::error::MSRV job resolved '$version', expected rustc 1.98.x" >&2; exit 1 ;;
           esac
         env:
-          RUSTUP_TOOLCHAIN: "1.96"
+          RUSTUP_TOOLCHAIN: "1.98"
 
   wasm:
     runs-on: ubuntu-latest
@@ -412,7 +421,9 @@ jobs:
         # they ANSWER the same way there: the embedding kNN surface ranks by binary64
         # arithmetic, and a reassociated sum or a fused multiply-add would swap two
         # near-tied neighbours rather than merely shift a last digit. Same test body,
-        # same pinned expectations, executed on both targets.
+        # same pinned expectations, executed on both targets. The reassociated HNSW
+        # index is built, recorded, decoded, verified and searched here too, on the
+        # baseline (wasm-scalar) and +simd128 (wasm-simd128) builds alike.
         run: make wasm-test
 
       - name: TypeScript emitter schema oracle
@@ -420,6 +431,255 @@ jobs:
 
       - name: GraphQL emitter schema oracle
         run: node crates/shapes/tests/graphql_oracle.mjs
+
+  # The SIMD asm evidence gate. It builds the audited packages seven times -- x86_64
+  # (baseline, x86-64-v3, x86-64-v4), aarch64 (baseline, neoverse-v1) and wasm32
+  # (baseline, +simd128) -- in release with one codegen unit and LTO off, and counts
+  # the vector work each manifest site compiled to. It is its own job because those
+  # builds are most of its run time; each configuration is a cold build of the graph.
+  simd-asm:
+    runs-on: ubuntu-latest
+    # Seven configurations at roughly seven minutes each, with margin.
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+
+      - name: Install the C cross toolchain the asm gate's build scripts compile with
+        # blake3's build script compiles C for aarch64 (its NEON backend). The asm gate
+        # never measures that object, but the build script must succeed. The gate names
+        # clang + llvm-ar for every cross target; clang finds the aarch64 C library
+        # headers through the Ubuntu cross installation, which is why the aarch64 gcc
+        # and libc packages are installed beside it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Count the vector work in emitted asm on seven target configurations
+        # Every manifest site must still compile to the vector instructions that prove
+        # its shape, with no fused multiply-add where the arithmetic is exact and no
+        # relaxed-simd anywhere.
+        run: make simd-asm
+
+  # The third ISA the distance arithmetic's bit-identity claim is EXECUTED on. The
+  # exact law pins one summation order in source, so its results must be the same
+  # bits on x86_64, wasm32 and aarch64; the asm gate above can only show NEON code
+  # exists, and this job runs it. The pinned goldens these tests compare against are
+  # the ones x86_64 and wasm32 already hold, so a divergent aarch64 fold fails here.
+  # The reassociated arithmetic runs its NEON path too, against its error bound.
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      - name: Run the distance arithmetic's path and reference-model tests on NEON
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
+        run: cargo test --locked -p purrdf-core --lib distance
+
+      - name: Run the kNN kernels and their pinned cross-target answers on aarch64
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
+        run: |
+          cargo test --locked -p purrdf-sparql-eval --lib knn
+          cargo test --locked -p purrdf-sparql-eval --test knn_wasm_determinism
+          cargo test --locked -p purrdf-sparql-eval --test knn_wasm_reassociated
+
+      - name: Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
+        run: |
+          cargo test --locked -p purrdf-hnsw --lib --test determinism --test conformance \
+            --test wasm_reassociated
+
+  # The architectures whose float control register this build does not read. On them the
+  # float environment is proven by the behavioural probe alone, so a kernel that computes
+  # on x86_64, aarch64 and wasm32 must compute here too rather than refuse an environment
+  # that was never shown to be wrong. Six targets are type-checked; two of them execute
+  # the distance, kNN and HNSW suites: i686 natively through the multilib C library, and
+  # riscv64 under user-mode emulation, which also sets the RISC-V rounding field and
+  # proves the probe refuses every non-default mode on a target with no register reader.
+  # Neither has a named reassociated path, so both execute the reassociated arithmetic
+  # along its portable one, against its error bound, and i686 runs the HNSW unit tests
+  # that decode and refuse an image recorded on that path.
+  cross-arch:
+    runs-on: ubuntu-latest
+    # Six cold check graphs, the i686 test build and the i586 (x87) test build.
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: i686-unknown-linux-gnu, i586-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu
+
+      - name: Install the i686 C library
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-multilib
+
+      - name: Type-check the distance kernels and their consumers on six architectures
+        run: |
+          for target in \
+            i686-unknown-linux-gnu \
+            armv7-unknown-linux-gnueabihf \
+            riscv64gc-unknown-linux-gnu \
+            powerpc64le-unknown-linux-gnu \
+            s390x-unknown-linux-gnu \
+            loongarch64-unknown-linux-gnu
+          do
+            cargo check --locked --target "$target" \
+              -p purrdf-core -p purrdf-sparql-eval -p purrdf-hnsw
+          done
+
+      - name: Run the distance, kNN and HNSW suites on i686
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable
+        run: |
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-core --lib distance
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
+            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hnsw \
+            --lib --test determinism --test conformance --test float_environment \
+            --test float_environment_rayon --test wasm_reassociated
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
+            --test binary_arithmetic
+
+      # i586 has no SSE2, so every binary64 and binary32 operation runs on the x87,
+      # which rounds to its register precision and again on every store. Every
+      # result-affecting operation in the workspace computes through `purrdf_xsd::ieee`,
+      # under a guard that sets the format's precision and with the subnormal range of
+      # products and quotients scaled; these suites prove the operations, the SPARQL
+      # `xsd:double`/`xsd:float` arithmetic and aggregates, and the distance kernels
+      # equal the integer software reference bit for bit, that the probe refuses a
+      # thread where the guard did not take hold, and that a thread (or rayon worker)
+      # with a directed rounding control is refused by name. The i586 target links
+      # against the same 32-bit C library as i686.
+      - name: Run the arithmetic, distance, kNN and HNSW suites on i586 (x87)
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable
+        run: |
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --lib
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib distance
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib ir::embedding
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval --lib bgp::tests
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-sparql-eval \
+            --test binary_arithmetic
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib \
+            --test float_environment_x87 --test float_environment_x87_rayon
+
+  # riscv64 runs apart from i686 because the distribution's multilib and riscv64
+  # cross compilers cannot be installed together. Its HNSW worker-count digest under
+  # emulation is the long pole.
+  cross-arch-riscv64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+      CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64 -L /usr/riscv64-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: riscv64gc-unknown-linux-gnu
+
+      - name: Install the riscv64 cross linker and user-mode emulation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+      - name: Run the distance, kNN and HNSW suites on riscv64 under emulation
+        env:
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable
+        run: |
+          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-core --lib distance
+          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
+          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval \
+            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-hnsw \
+            --test determinism --test conformance --test wasm_reassociated
+
+  # The x86_64 dispatch paths a hosted runner does not guarantee, EXECUTED. GitHub's
+  # x86_64 runners promise neither AVX2+FMA nor AVX-512F, so without this job the
+  # reassociated avx512f compilation would ship having run only on whichever runner
+  # happened to have it. Intel's Software Development Emulator runs the test binaries
+  # as a Sapphire Rapids processor, which reports AVX2, FMA and AVX-512F, and
+  # PURRDF_REQUIRE_DISPATCH_PATHS makes every x86_64 path a requirement: a path the
+  # emulated processor does not report, or a test that did not execute it, fails the
+  # job. The binaries are built natively first; only running them is emulated. The
+  # HNSW digest suites stay on the native lanes: their worker-count sweep is minutes
+  # natively, and the unit tests already build, search and verify an index on every
+  # path the emulated processor reports.
+  avx512-sde:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      - name: Install Intel SDE
+        # The action verifies the archive against the SHA-256 it pins per SDE version.
+        uses: petarpetrovt/setup-sde@6d2773bc0ef3005fd52e0ae0bb91782321793aec # v6.0
+        with:
+          environmentVariableName: SDE_PATH
+          sdeVersion: 10.13.1
+
+      - name: Build the distance, kNN and HNSW test binaries
+        run: |
+          cargo test --locked --no-run -p purrdf-core --lib
+          cargo test --locked --no-run -p purrdf-sparql-eval --lib \
+            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked --no-run -p purrdf-hnsw --lib
+
+      - name: Run them on an emulated AVX-512F processor, requiring every x86_64 path
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ env.SDE_PATH }}/sde64 -spr --
+          PURRDF_REQUIRE_DISPATCH_PATHS: portable,avx2,sse2,avx2+fma,avx512f
+        run: |
+          cargo test --locked -p purrdf-core --lib distance
+          cargo test --locked -p purrdf-sparql-eval --lib knn
+          cargo test --locked -p purrdf-sparql-eval \
+            --test knn_wasm_determinism --test knn_wasm_reassociated
+          cargo test --locked -p purrdf-hnsw --lib
 
   # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
   # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module

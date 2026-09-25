@@ -104,6 +104,9 @@ pub mod viz;
 // caller cannot raise or lower it, because every consumer gets the one portability and
 // denial-of-service envelope.
 mod nesting;
+// The one entry every result-affecting `serde_json` read goes through, so a JSON number
+// becomes the binary64 nearest its decimal value on every target. Internal.
+mod json_number;
 
 // Mirror the kernel's root-level re-exports so `purrdf::RdfTerm`,
 // `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two

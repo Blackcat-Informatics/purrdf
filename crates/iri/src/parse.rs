@@ -11,6 +11,7 @@
 //! strict ASCII subset in URI mode.
 
 use crate::error::{IriError, Result};
+use crate::scan::{ByteRun, byte_runs, count_runs, in_runs};
 use core::ops::Range;
 
 /// A parsed, validated IRI (or URI) with byte-offset spans for each component.
@@ -453,10 +454,26 @@ fn validate_component(
     allow_iprivate: bool,
     mode: Mode,
 ) -> Result<()> {
+    debug_assert!(
+        extra_mask & !COMPONENT_EXTRAS == 0,
+        "a component admits only the single-byte extra classes"
+    );
     let bytes = s.as_bytes();
     let allowed = UNRESERVED | SUB_DELIMS | extra_mask;
     let mut i = 0usize;
     while i < bytes.len() {
+        // Clean-run precheck: skip every leading byte of the next eight that the
+        // per-byte arm below would accept as an ASCII class member, all at once.
+        // It stops at the first byte that needs that arm — a `%`, a non-ASCII
+        // lead, or a refused byte — which the arm then handles exactly as
+        // before, so acceptance, errors and offsets are unchanged.
+        if let Some(word) = bytes[i..].first_chunk::<CLEAN_WORD>() {
+            let run = clean_prefix_len(word, extra_mask);
+            i += run;
+            if run == CLEAN_WORD {
+                continue;
+            }
+        }
         let b = bytes[i];
         if b == b'%' {
             // Require exactly two following hex digits.
@@ -486,6 +503,99 @@ fn validate_component(
         return Err(IriError::DisallowedChar(c, base_off + i));
     }
     Ok(())
+}
+
+/// The width of the [`validate_component`] clean-run precheck: one `u64` of bytes.
+const CLEAN_WORD: usize = 8;
+
+/// The extra classes a component may admit beyond `unreserved` / `sub-delims`,
+/// each of which is a single byte.
+const COMPONENT_EXTRAS: u8 = COLON | AT | SLASH | QUESTION;
+
+/// The [`CLASS`] members of `mask`, over all 256 byte values (non-ASCII bytes
+/// carry no ASCII class).
+const fn class_members(mask: u8) -> [u8; 256] {
+    let mut table = [0_u8; 256];
+    let mut i = 0;
+    while i < CLASS.len() {
+        if CLASS[i] & mask != 0 {
+            table[i] = 1;
+        }
+        i += 1;
+    }
+    table
+}
+
+/// The one byte a single-byte class holds, found in [`CLASS`] so the class
+/// table stays the only place the class is spelled.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the index is below CLASS.len() == 128; u8::try_from is not const-callable"
+)]
+const fn sole_member(mask: u8) -> u8 {
+    let mut found = None;
+    let mut i = 0;
+    while i < CLASS.len() {
+        if CLASS[i] & mask != 0 {
+            assert!(
+                found.is_none(),
+                "a single-byte class has exactly one member"
+            );
+            found = Some(i as u8);
+        }
+        i += 1;
+    }
+    match found {
+        Some(b) => b,
+        None => panic!("a single-byte class has exactly one member"),
+    }
+}
+
+/// `unreserved` / `sub-delims`, the classes every component admits, as byte runs
+/// derived from [`CLASS`] at compile time.
+const COMPONENT_BASE_TABLE: [u8; 256] = class_members(UNRESERVED | SUB_DELIMS);
+const COMPONENT_BASE_RUNS: [ByteRun; count_runs(&COMPONENT_BASE_TABLE)] =
+    byte_runs(&COMPONENT_BASE_TABLE);
+const COLON_BYTE: u8 = sole_member(COLON);
+const AT_BYTE: u8 = sole_member(AT);
+const SLASH_BYTE: u8 = sole_member(SLASH);
+const QUESTION_BYTE: u8 = sole_member(QUESTION);
+
+/// How many leading bytes of `word` are ASCII members of
+/// `UNRESERVED | SUB_DELIMS | extra_mask`, as comparisons only.
+///
+/// Each lane is the class test written as run comparisons plus one equality
+/// per admitted extra byte, OR-ed without a branch, and stored as a `0x00` /
+/// `0xFF` byte. The eight lanes read as one little-endian `u64`, and its
+/// trailing ones over 8 are the clean prefix. Independent byte lanes with no
+/// cross-lane dependence are the shape the compiler lowers to packed byte
+/// compares where the target has them.
+#[allow(
+    clippy::inline_always,
+    reason = "the precheck must be inlined into the component loop so its lane compares \
+              vectorize there rather than behind a call per eight bytes"
+)]
+#[allow(
+    clippy::needless_bitwise_bool,
+    reason = "every lane is evaluated without a branch; a lazy `||` would reintroduce \
+              the per-byte branch the precheck exists to remove"
+)]
+#[inline(always)]
+fn clean_prefix_len(word: &[u8; CLEAN_WORD], extra_mask: u8) -> usize {
+    let colon = extra_mask & COLON != 0;
+    let at = extra_mask & AT != 0;
+    let slash = extra_mask & SLASH != 0;
+    let question = extra_mask & QUESTION != 0;
+    let mut lanes = [0_u8; CLEAN_WORD];
+    for (lane, &b) in lanes.iter_mut().zip(word) {
+        let clean = in_runs(b, &COMPONENT_BASE_RUNS)
+            | (colon & (b == COLON_BYTE))
+            | (at & (b == AT_BYTE))
+            | (slash & (b == SLASH_BYTE))
+            | (question & (b == QUESTION_BYTE));
+        *lane = u8::from(clean).wrapping_neg();
+    }
+    (u64::from_le_bytes(lanes).trailing_ones() / u8::BITS) as usize
 }
 
 fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
@@ -744,6 +854,197 @@ mod tests {
                 "the corpus never produces {label}, so the equivalence is untested there"
             );
         }
+    }
+
+    /// `validate_component` as it was before the clean-run precheck: the
+    /// per-byte loop alone, kept as the oracle the precheck must not move.
+    fn validate_component_reference(
+        s: &str,
+        base_off: usize,
+        extra_mask: u8,
+        allow_iprivate: bool,
+        mode: Mode,
+    ) -> Result<()> {
+        let bytes = s.as_bytes();
+        let allowed = UNRESERVED | SUB_DELIMS | extra_mask;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'%' {
+                if i + 3 > bytes.len()
+                    || !bytes[i + 1].is_ascii_hexdigit()
+                    || !bytes[i + 2].is_ascii_hexdigit()
+                {
+                    return Err(IriError::BadPercentEncoding(base_off + i));
+                }
+                i += 3;
+                continue;
+            }
+            if b < 0x80 {
+                if ascii_class(b, allowed) {
+                    i += 1;
+                    continue;
+                }
+                return Err(IriError::DisallowedChar(b as char, base_off + i));
+            }
+            let c = s[i..].chars().next().expect("non-ASCII byte begins a char");
+            if iri_extra_ok(c, allow_iprivate, mode) {
+                i += c.len_utf8();
+                continue;
+            }
+            return Err(IriError::DisallowedChar(c, base_off + i));
+        }
+        Ok(())
+    }
+
+    /// Every combination of the extra classes a component may admit.
+    fn extra_masks() -> impl Iterator<Item = u8> {
+        (0_u8..16).map(|bits| {
+            [COLON, AT, SLASH, QUESTION]
+                .iter()
+                .enumerate()
+                .filter(|&(k, _)| bits & (1 << k) != 0)
+                .fold(0, |mask, (_, &class)| mask | class)
+        })
+    }
+
+    /// The comparison form of the precheck agrees with the class table on every
+    /// byte value, for every extra mask, in every lane position.
+    #[test]
+    fn clean_prefix_compares_match_the_class_table() {
+        for extra in extra_masks() {
+            let allowed = UNRESERVED | SUB_DELIMS | extra;
+            for b in 0..=u8::MAX {
+                let member = ascii_class(b, allowed);
+                for lane in 0..CLEAN_WORD {
+                    let mut word = [b'a'; CLEAN_WORD];
+                    word[lane] = b;
+                    let expected = if member { CLEAN_WORD } else { lane };
+                    assert_eq!(
+                        clean_prefix_len(&word, extra),
+                        expected,
+                        "byte {b:#04X} in lane {lane}, extra {extra:#04X}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Fixed-seed random components: the precheck path returns the same verdict,
+    /// error and offset as the per-byte path, for every extra mask, both modes and
+    /// both `iprivate` settings.
+    #[test]
+    fn validate_component_matches_the_per_byte_reference() {
+        // Every byte class boundary in ASCII, a percent in each shape, and
+        // scalars on both sides of the `ucschar`/`iprivate` edges.
+        const PIECES: &[&str] = &[
+            "a",
+            "Z",
+            "0",
+            "9",
+            "-",
+            ".",
+            "_",
+            "~",
+            "!",
+            "$",
+            "&",
+            "'",
+            "(",
+            ")",
+            "*",
+            "+",
+            ",",
+            ";",
+            "=",
+            ":",
+            "@",
+            "/",
+            "?",
+            "#",
+            "[",
+            "]",
+            " ",
+            "\"",
+            "<",
+            ">",
+            "\\",
+            "^",
+            "`",
+            "{",
+            "|",
+            "}",
+            "\u{7f}",
+            "\u{0}",
+            "\u{1f}",
+            "%",
+            "%4",
+            "%41",
+            "%4g",
+            "%zz",
+            "\u{a0}",
+            "\u{9f}",
+            "\u{e9}",
+            "\u{d7ff}",
+            "\u{e000}",
+            "\u{f8ff}",
+            "\u{f900}",
+            "\u{fdd0}",
+            "\u{fffd}",
+            "\u{fffe}",
+            "\u{10000}",
+            "\u{1fffe}",
+            "\u{e0fff}",
+            "\u{e1000}",
+            "\u{f0000}",
+            "\u{10fffd}",
+        ];
+        let mut state = 0x01B1_C0DE_5EED_u64;
+        let mut next = move || {
+            usize::try_from(crate::test_rng::splitmix64_next(&mut state) % 1_000_003)
+                .expect("small")
+        };
+        let mut verdicts = [0_usize; 3];
+        for len in (0..=70).chain([128, 400]) {
+            for _ in 0..30 {
+                let mut s = String::new();
+                while s.len() < len {
+                    // Mostly clean bytes, so the refusals land at every offset.
+                    if next() % 5 == 0 {
+                        s.push_str(PIECES[next() % PIECES.len()]);
+                    } else {
+                        s.push(
+                            "abcXYZ019-._~!$&'()*+,;="[next() % 24..]
+                                .chars()
+                                .next()
+                                .expect("ascii"),
+                        );
+                    }
+                }
+                for extra in extra_masks() {
+                    for allow_iprivate in [false, true] {
+                        for mode in [Mode::Iri, Mode::Uri] {
+                            let got = validate_component(&s, 7, extra, allow_iprivate, mode);
+                            let expected =
+                                validate_component_reference(&s, 7, extra, allow_iprivate, mode);
+                            assert_eq!(
+                                got.as_ref().map_err(ToString::to_string),
+                                expected.as_ref().map_err(ToString::to_string),
+                                "{s:?} extra {extra:#04X} iprivate {allow_iprivate}"
+                            );
+                            verdicts[match &got {
+                                Ok(()) => 0,
+                                Err(IriError::DisallowedChar(..)) => 1,
+                                Err(_) => 2,
+                            }] += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // Non-vacuity: the corpus accepts, refuses a character, and refuses a
+        // percent-encoding.
+        assert!(verdicts.iter().all(|&n| n > 0), "{verdicts:?}");
     }
 
     #[test]

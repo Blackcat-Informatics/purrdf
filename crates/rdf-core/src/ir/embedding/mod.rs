@@ -26,5 +26,7 @@ pub use metadata::*;
 pub use target::*;
 pub use verify::*;
 pub use view::*;
+// The normative PURREMB norm step, for `crate::distance::l2_norm`.
+pub(crate) use view::norm_fold;
 pub use wire::*;
 pub use writer::*;

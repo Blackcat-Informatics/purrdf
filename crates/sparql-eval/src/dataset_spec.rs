@@ -135,10 +135,7 @@ impl<I: ViewTermId> ActiveDataset<I> {
     /// unrestricted). An absent `g` yields an empty default graph (the WHERE matches
     /// nothing), matching the implicit-existence doctrine.
     pub(crate) fn with_default_graph<D: DatasetView<Id = I>>(dataset: &D, g: &TermValue) -> Self {
-        let ids = dataset
-            .term_id_by_value(g)
-            .map(|id| vec![id])
-            .unwrap_or_default();
+        let ids = dataset.term_id_by_value(g).map_or_default(|id| vec![id]);
         Self {
             default: DefaultSpec::Merged(ids),
             named: None,

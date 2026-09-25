@@ -35,6 +35,8 @@
 
 use std::sync::Arc;
 
+use purrdf_core::terminals::{ByteClass, byte_run_count};
+
 use super::{DefectiveRow, RawRow, RawSection, RawUnit, Reading};
 use crate::model::RowDefect;
 
@@ -98,7 +100,56 @@ struct Walker {
 /// falls before the first span and no unit's literal is ever anything
 /// but the verbatim bytes of its span. At any other offset the mark is
 /// ordinary content and stays inside the unit that holds it.
+///
+/// Each line feed is found by one chunked scan ([`find_line_feed`]), so a
+/// line's bytes are crossed sixteen at a time rather than one.
 fn lines(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut start = if text.starts_with(BYTE_ORDER_MARK) {
+        BYTE_ORDER_MARK.len_utf8()
+    } else {
+        0
+    };
+    // The mark is three bytes and holds no line feed, so scanning from `start`
+    // finds exactly the line feeds a scan from zero finds.
+    while let Some(offset) = find_line_feed(&bytes[start..]) {
+        let end = start + offset;
+        out.push((start, end));
+        start = end + 1;
+    }
+    if start < text.len() {
+        out.push((start, text.len()));
+    }
+    out
+}
+
+/// The line feed, as a byte class table: the one byte a line ends at.
+const LINE_FEED_TABLE: [u8; 256] = {
+    let mut table = [0_u8; 256];
+    table[b'\n' as usize] = 1;
+    table
+};
+
+const LINE_FEED: ByteClass<{ byte_run_count(&LINE_FEED_TABLE) }> =
+    ByteClass::from_table(LINE_FEED_TABLE);
+
+/// The offset of the first line feed of `bytes`, or `None`.
+///
+/// The workspace's chunked byte-class kernel
+/// ([`ByteClass`](purrdf_core::terminals::ByteClass)): sixteen-byte chunks
+/// compared against `\n` as `0x00`/`0xFF` lanes, the lanes' maximum as the
+/// branch-free clean-chunk test (the one-run form of the kernel), and the hit
+/// chunk's bytes tested again for the offset. It reaches this crate through
+/// `purrdf-core`, its one dependency.
+#[inline(never)]
+fn find_line_feed(bytes: &[u8]) -> Option<usize> {
+    LINE_FEED.find_first(bytes)
+}
+
+/// The per-byte line split [`lines`] replaced, kept verbatim as the oracle.
+#[cfg(test)]
+fn lines_reference(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start = if text.starts_with(BYTE_ORDER_MARK) {
         BYTE_ORDER_MARK.len_utf8()
@@ -656,6 +707,71 @@ fn backticked(cell: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
+        }
+    }
+
+    /// The chunked line split agrees with the per-byte one on fixed-seed text
+    /// holding line feeds, runs of them, CR, the byte order mark at the start
+    /// and elsewhere, and non-ASCII in every UTF-8 width, at lengths 0-70 and
+    /// past several chunks.
+    #[test]
+    fn chunked_lines_agree_with_the_per_byte_split() {
+        const PIECES: &[&str] = &[
+            "\n",
+            "\n\n",
+            "\r\n",
+            "\r",
+            " ",
+            "\t",
+            "#",
+            "|",
+            "\u{feff}",
+            "\u{a0}",
+            "\u{e9}",
+            "\u{2028}",
+            "\u{1f408}",
+        ];
+        let mut rng = SplitMix(0x11AE_5000_0000_0001);
+        let mut far_breaks = 0_usize;
+        for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
+            for round in 0..40 {
+                let density = if round % 2 == 0 { 4 } else { 40 };
+                let mut text = String::new();
+                if round % 3 == 0 {
+                    text.push('\u{feff}');
+                }
+                for _ in 0..len {
+                    if rng.below(density) == 0 {
+                        text.push_str(PIECES[rng.below(PIECES.len())]);
+                    } else {
+                        text.push('m');
+                    }
+                }
+                let got = lines(&text);
+                assert_eq!(got, lines_reference(&text), "{text:?}");
+                far_breaks += got
+                    .iter()
+                    .filter(|&&(start, end)| end - start >= 16)
+                    .count();
+            }
+        }
+        assert!(far_breaks > 0, "lines longer than one chunk were split");
+    }
 
     #[test]
     fn a_heading_a_movement_and_a_verse_are_recognized() {

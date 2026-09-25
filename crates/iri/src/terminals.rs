@@ -53,10 +53,32 @@
 //! rejected. Both spellings in each pair are names the workspace's terminal gate
 //! recognises as this module's, so a local fork under either name is caught.
 //!
-//! Every predicate is ordered **ASCII-first**: the overwhelmingly common scalar
-//! in real documents is below `0x80` and costs one comparison against a
-//! two-or-three entry table, and only a scalar at or above `0x80` pays for the
-//! range search.
+//! Every predicate is ordered **table-first**: the overwhelmingly common scalar
+//! in real documents is below `0x80`, and every scalar below U+0100 is answered
+//! by one load from a `const [u8; 256]` class table that a `const fn` builds
+//! from the production's own range table at compile time. Only a scalar at or
+//! above U+0100 pays for the range search. The range table stays the single
+//! source; the class table is a projection of it, and a test checks the two
+//! agree on all 256 entries.
+//!
+//! # Byte-class scanners
+//!
+//! The same range tables drive four scanners that find the first byte of a
+//! class in a byte slice: [`find_first_trivia`], [`find_first_iri_body_special`],
+//! [`find_first_json_string_special`] and [`find_first_xml_special`]. Each walks
+//! the input sixteen bytes at a time, tests every byte of a chunk against the
+//! class's byte runs written as plain comparisons into `0x00`/`0xFF` byte lanes,
+//! ORs the lanes together as the clean-chunk test, and in the chunk that holds
+//! a hit takes the trailing-zero count of the lanes read as one `u128`, so the
+//! compiler lowers a chunk to a handful of vector compares and one mask
+//! extraction on every target that has them. The runs are derived at compile time from the class table, which
+//! is derived from the range table, so a scanner cannot disagree with the
+//! predicate it accelerates. Portable Rust, no `unsafe`, no dependency.
+//!
+//! A writer whose law stops at a class no production names — the bytes one
+//! egress escapes, the bytes a CSV field quotes on, a line feed — declares it
+//! as a [`ByteClass`] over its own `const [u8; 256]` table and gets the same
+//! kernel rather than a retyped one.
 //!
 //! This module lives in the zero-dependency [`purrdf-iri`](crate) leaf because
 //! that is the one crate every parser in the workspace already depends on —
@@ -78,6 +100,11 @@
 //! the resemblance is the trap: `PN_CHARS_BASE` is `NameStartChar` minus `':'`
 //! and `'_'`, and `NameChar` is `PN_CHARS` plus `':'` and `'.'`. Neither pair
 //! may be aliased to the other — see [`is_xml_name_start_char`].
+
+pub use crate::scan::{
+    ByteClass, byte_run_count, find_first_iri_body_special, find_first_json_string_special,
+    find_first_trivia, find_first_xml_special,
+};
 
 /// An inclusive Unicode scalar-value range `[lo, hi]`, the unit every
 /// production below is transcribed into.
@@ -102,8 +129,47 @@ const ASCII_LIMIT: u32 = 0x80;
     reason = "u32::from is not const-callable on stable; this is the one widening site"
 )]
 #[inline]
-const fn widen(b: u8) -> u32 {
+pub(crate) const fn widen(b: u8) -> u32 {
     b as u32
+}
+
+/// One past the last scalar a class table answers: the tables have one entry
+/// per value of a byte, and a scalar below this limit is answered by a load.
+pub(crate) const TABLE_LIMIT: u32 = 0x100;
+
+/// Narrow a scalar already proved below [`TABLE_LIMIT`] to a class-table index.
+///
+/// The cast is lossless for every value the callers pass (each is below
+/// `0x100`), and `usize::try_from` is not const-callable on stable, so the one
+/// narrowing site is isolated here.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "every caller passes a scalar below TABLE_LIMIT; try_from is not const-callable"
+)]
+#[inline]
+pub(crate) const fn table_index(cp: u32) -> usize {
+    cp as usize
+}
+
+/// Project a range table onto the 256 values of a byte: entry `i` is `1` when
+/// the scalar `i` is a member and `0` otherwise.
+///
+/// This is the one derivation every class table goes through, evaluated at
+/// compile time, so a class table is never written by hand and cannot drift
+/// from the range table it projects. For a byte-shaped production (proved
+/// wholly ASCII) the entries at or above `0x80` are all `0`; for a
+/// scalar-shaped one entry `i` answers the scalar U+00`i`, not a UTF-8 byte.
+#[must_use]
+pub(crate) const fn class_table(ranges: &[ScalarRange]) -> [u8; 256] {
+    let mut table = [0_u8; 256];
+    let mut cp = 0_u32;
+    while cp < TABLE_LIMIT {
+        if in_ranges(cp, ranges) {
+            table[table_index(cp)] = 1;
+        }
+        cp += 1;
+    }
+    table
 }
 
 /// Whether `cp` falls in one of `ranges`, by binary search.
@@ -112,7 +178,7 @@ const fn widen(b: u8) -> u32 {
 /// `terminal!` macro emits carries a compile-time proof of exactly
 /// that, rather than a comment asserting it.
 #[inline]
-const fn in_ranges(cp: u32, ranges: &[ScalarRange]) -> bool {
+pub(crate) const fn in_ranges(cp: u32, ranges: &[ScalarRange]) -> bool {
     let mut lo = 0;
     let mut hi = ranges.len();
     while lo < hi {
@@ -353,7 +419,8 @@ macro_rules! terminal {
         #[inline]
         #[must_use]
         $vis const fn $name(b: u8) -> bool {
-            in_ranges(widen(b), $table)
+            const TABLE: [u8; 256] = class_table($table);
+            TABLE[table_index(widen(b))] != 0
         }
 
         /// The production's full range set, sorted and disjoint.
@@ -372,7 +439,12 @@ macro_rules! terminal {
             #[inline]
             #[must_use]
             $char_vis const fn $char_name(c: char) -> bool {
-                in_ranges(c as u32, $table)
+                // The table is proved wholly ASCII, so no scalar at or above
+                // `TABLE_LIMIT` is a member: `false` there is the production's
+                // answer, not a shortcut.
+                const TABLE: [u8; 256] = class_table($table);
+                let cp = c as u32;
+                cp < TABLE_LIMIT && TABLE[table_index(cp)] != 0
             }
         )?
     };
@@ -422,9 +494,15 @@ macro_rules! terminal {
         #[inline]
         #[must_use]
         $vis const fn $name(c: char) -> bool {
+            // Every scalar below `TABLE_LIMIT` is answered by the class table of
+            // the COMPOSED set — base, ASCII additions and non-ASCII additions —
+            // so the answer there is the whole production's, inherited members
+            // included. Above it, only the non-ASCII table and the base can
+            // hold a member.
+            const TABLE: [u8; 256] = class_table($ranges_name());
             let cp = c as u32;
-            if cp < ASCII_LIMIT {
-                return in_ranges(cp, $ascii_table) $( || $base(c) )?;
+            if cp < TABLE_LIMIT {
+                return TABLE[table_index(cp)] != 0;
             }
             in_ranges(cp, $non_ascii_table) $( || $base(c) )?
         }
@@ -867,6 +945,39 @@ terminal! {
 }
 
 terminal! {
+    /// Whether a byte may NOT appear raw in a JSON string body.
+    ///
+    /// ```text
+    /// char       = unescaped / escape ( ... )
+    /// unescaped  = %x20-21 / %x23-5B / %x5D-10FFFF
+    /// ```
+    ///
+    /// RFC 8259 §7. The production admits every scalar except three kinds, and
+    /// this table is exactly those: the C0 controls `%x00-1F`, the quotation
+    /// mark `%x22` that ends the string, and the reverse solidus `%x5C` that
+    /// opens an `escape`. **Nothing else.** U+007F DELETE and the C1 controls
+    /// U+0080-U+009F are `unescaped` and legal raw, which is why neither
+    /// [`char::is_control`] nor [`u8::is_ascii_control`] is this predicate: both
+    /// answer `true` for U+007F, and the first for the whole C1 block, so either
+    /// would stop a clean run at a byte the grammar admits.
+    ///
+    /// Every member is ASCII, so the byte test is exact over UTF-8: a multi-byte
+    /// sequence's lead and continuation bytes are all `>= 0x80` and can never
+    /// alias one of them. A JSON reader therefore finds the end of a clean run
+    /// by bytes alone and copies the run whole; see
+    /// [`find_first_json_string_special`].
+    table JSON_STRING_FORBIDDEN_RANGES;
+    pub const fn is_json_string_forbidden_byte(u8);
+    ranges_fn: json_string_forbidden_ranges;
+    ranges: [
+        (0x00, 0x1F), // %x00-1F: the C0 controls
+        (0x22, 0x22), // '"'
+        (0x5C, 0x5C), // '\'
+    ];
+    cardinality: 34;
+}
+
+terminal! {
     /// `NameStartChar ::= ':' | [A-Z] | '_' | [a-z] | [#xC0-#xD6] |`
     /// `[#xD8-#xF6] | [#xF8-#x2FF] | [#x370-#x37D] | [#x37F-#x1FFF] |`
     /// `[#x200C-#x200D] | [#x2070-#x218F] | [#x2C00-#x2FEF] |`
@@ -970,13 +1081,15 @@ terminal! {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScalarRange, blank_node_label_start_ranges, in_ranges, iriref_forbidden_ranges,
-        is_blank_node_label_start, is_iriref_forbidden, is_iriref_forbidden_byte, is_pn_chars,
+        ScalarRange, blank_node_label_start_ranges, in_ranges, ipvfuture_address_char_ranges,
+        iriref_forbidden_ranges, is_blank_node_label_start, is_ipvfuture_address_char,
+        is_iriref_forbidden, is_iriref_forbidden_byte, is_json_string_forbidden_byte, is_pn_chars,
         is_pn_chars_base, is_pn_chars_u, is_pn_local_esc, is_pn_local_start, is_varname_continue,
-        is_varname_start, is_ws, is_ws_char, is_xml_name_char, is_xml_name_start_char,
-        pn_chars_base_ranges, pn_chars_ranges, pn_chars_u_ranges, pn_local_esc_ranges,
-        pn_local_start_ranges, ranges_sorted_disjoint, varname_continue_ranges,
-        varname_start_ranges, ws_ranges, xml_name_char_ranges, xml_name_start_char_ranges,
+        is_varname_start, is_ws, is_ws_char, is_xml_char, is_xml_name_char, is_xml_name_start_char,
+        json_string_forbidden_ranges, pn_chars_base_ranges, pn_chars_ranges, pn_chars_u_ranges,
+        pn_local_esc_ranges, pn_local_start_ranges, ranges_sorted_disjoint,
+        varname_continue_ranges, varname_start_ranges, ws_ranges, xml_char_ranges,
+        xml_name_char_ranges, xml_name_start_char_ranges,
     };
     use pretty_assertions::assert_eq;
 
@@ -1127,6 +1240,104 @@ mod tests {
             );
             assert_eq!(is_xml_name_char(c), xml_name_char_oracle(c), "{c:?}");
         }
+    }
+
+    /// **The class tables are the range tables, on every one of their 256
+    /// entries.** Each predicate answers a scalar below `TABLE_LIMIT` from a
+    /// `const [u8; 256]` projected from its range table, so the table is checked
+    /// here against the binary search over the range table the predicates ran
+    /// before they had one: the byte-shaped predicates over every byte, the
+    /// scalar-shaped ones over U+0000-U+00FF.
+    #[test]
+    fn lut_matches_ranges() {
+        type ByteCase = (&'static str, &'static [ScalarRange], fn(u8) -> bool);
+        let bytes: &[ByteCase] = &[
+            ("ws", ws_ranges(), is_ws),
+            (
+                "iriref_forbidden",
+                iriref_forbidden_ranges(),
+                is_iriref_forbidden_byte,
+            ),
+            (
+                "json_string_forbidden",
+                json_string_forbidden_ranges(),
+                is_json_string_forbidden_byte,
+            ),
+        ];
+        for (name, ranges, predicate) in bytes {
+            for b in 0..=u8::MAX {
+                assert_eq!(
+                    predicate(b),
+                    in_ranges(u32::from(b), ranges),
+                    "{name} at {b:#04X}"
+                );
+            }
+        }
+        let scalars: &[RangeCase] = &[
+            ("ws_char", ws_ranges(), is_ws_char),
+            (
+                "iriref_forbidden",
+                iriref_forbidden_ranges(),
+                is_iriref_forbidden,
+            ),
+            (
+                "ipvfuture_address",
+                ipvfuture_address_char_ranges(),
+                is_ipvfuture_address_char,
+            ),
+            ("xml_char", xml_char_ranges(), is_xml_char),
+            ("pn_chars_base", pn_chars_base_ranges(), is_pn_chars_base),
+            ("pn_chars_u", pn_chars_u_ranges(), is_pn_chars_u),
+            ("pn_chars", pn_chars_ranges(), is_pn_chars),
+            (
+                "blank_node_label_start",
+                blank_node_label_start_ranges(),
+                is_blank_node_label_start,
+            ),
+            ("pn_local_start", pn_local_start_ranges(), is_pn_local_start),
+            ("varname_start", varname_start_ranges(), is_varname_start),
+            (
+                "varname_continue",
+                varname_continue_ranges(),
+                is_varname_continue,
+            ),
+            ("pn_local_esc", pn_local_esc_ranges(), is_pn_local_esc),
+            (
+                "xml_name_start_char",
+                xml_name_start_char_ranges(),
+                is_xml_name_start_char,
+            ),
+            ("xml_name_char", xml_name_char_ranges(), is_xml_name_char),
+        ];
+        for (name, ranges, predicate) in scalars {
+            for b in 0..=u8::MAX {
+                assert_eq!(
+                    predicate(char::from(b)),
+                    in_ranges(u32::from(b), ranges),
+                    "{name} at U+{b:04X}"
+                );
+            }
+        }
+        // The first scalars past the table answer by the range search, so the
+        // seam is checked from both sides.
+        for (name, ranges, predicate) in scalars {
+            for cp in 0xF0..0x110 {
+                let c = char::from_u32(cp).expect("below the surrogates");
+                assert_eq!(predicate(c), in_ranges(cp, ranges), "{name} at U+{cp:04X}");
+            }
+        }
+    }
+
+    #[test]
+    fn json_string_forbidden_is_exactly_the_complement_of_unescaped() {
+        // RFC 8259 §7: unescaped = %x20-21 / %x23-5B / %x5D-10FFFF.
+        for b in 0..=u8::MAX {
+            let unescaped = matches!(b, 0x20..=0x21 | 0x23..=0x5B | 0x5D..=0x7F) || b >= 0x80;
+            assert_eq!(is_json_string_forbidden_byte(b), !unescaped, "{b:#04X}");
+        }
+        // DELETE is `unescaped`, although both control predicates say otherwise.
+        assert!(0x7F_u8.is_ascii_control());
+        assert!(!is_json_string_forbidden_byte(0x7F));
     }
 
     #[test]

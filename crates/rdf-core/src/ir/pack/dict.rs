@@ -391,8 +391,30 @@ fn read_len_prefixed_str<'a>(bytes: &'a [u8], pos: &mut usize) -> Result<&'a str
 }
 
 /// The length, in bytes, of the common leading prefix of `a` and `b`.
+///
+/// Word-parallel: both slices are walked in eight-byte words, and a word pair
+/// is compared as one `u64` XOR. A zero XOR is eight shared bytes; the first
+/// non-zero XOR ends the prefix, and because the words are read little-endian
+/// the first differing byte is the lowest non-zero byte of the XOR, so its
+/// offset in the word is the XOR's trailing-zero count over 8. The bytes after
+/// the last whole word pair are compared one at a time.
 fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
-    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+    let len = a.len().min(b.len());
+    let (a, b) = (&a[..len], &b[..len]);
+    let (a_words, a_tail) = a.as_chunks::<8>();
+    let (b_words, b_tail) = b.as_chunks::<8>();
+    for (k, (x, y)) in a_words.iter().zip(b_words).enumerate() {
+        let diff = u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y);
+        if diff != 0 {
+            return k * 8 + (diff.trailing_zeros() / u8::BITS) as usize;
+        }
+    }
+    a_words.len() * 8
+        + a_tail
+            .iter()
+            .zip(b_tail)
+            .take_while(|(x, y)| x == y)
+            .count()
 }
 
 // ---------------------------------------------------------------------------
@@ -2200,5 +2222,65 @@ mod tests {
             .validate_references()
             .expect_err("nesting past the ceiling must be rejected");
         assert!(matches!(err, PackDictError::Malformed(_)));
+    }
+
+    /// The byte-at-a-time prefix length [`common_prefix_len`] replaced: the
+    /// oracle of the word-parallel version.
+    fn common_prefix_len_bytewise(a: &[u8], b: &[u8]) -> usize {
+        a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+    }
+
+    /// Every split point of a shared prefix, at every length around the word
+    /// size and its multiples, with the first differing byte differing in each
+    /// single bit, and with one side a strict prefix of the other.
+    #[test]
+    fn common_prefix_len_matches_bytewise_at_every_split() {
+        let base: Vec<u8> = (0..40_u8)
+            .map(|i| i.wrapping_mul(37).wrapping_add(11))
+            .collect();
+        for len in 0..=base.len() {
+            let a = &base[..len];
+            for split in 0..=len {
+                for bit in 0..8 {
+                    let mut b = a.to_vec();
+                    if split < len {
+                        b[split] ^= 1 << bit;
+                    }
+                    assert_eq!(
+                        common_prefix_len(a, &b),
+                        common_prefix_len_bytewise(a, &b),
+                        "len {len} split {split} bit {bit}"
+                    );
+                    assert_eq!(
+                        common_prefix_len(&b, a),
+                        common_prefix_len_bytewise(&b, a),
+                        "len {len} split {split} bit {bit} (swapped)"
+                    );
+                }
+                // One side a strict prefix of the other.
+                assert_eq!(common_prefix_len(&a[..split], a), split);
+                assert_eq!(common_prefix_len(a, &a[..split]), split);
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// Random byte strings over a small alphabet (so long shared prefixes
+        /// are common) agree with the bytewise oracle.
+        #[test]
+        fn proptest_common_prefix_len_matches_bytewise(
+            a in prop::collection::vec(0_u8..3, 0..48),
+            b in prop::collection::vec(0_u8..3, 0..48),
+        ) {
+            prop_assert_eq!(common_prefix_len(&a, &b), common_prefix_len_bytewise(&a, &b));
+            let mut shared = a.clone();
+            shared.extend_from_slice(&b);
+            prop_assert_eq!(
+                common_prefix_len(&shared, &a),
+                common_prefix_len_bytewise(&shared, &a)
+            );
+        }
     }
 }

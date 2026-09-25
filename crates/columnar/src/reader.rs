@@ -12,6 +12,7 @@ use purrdf_core::{
     RdfTextDirection, TermId, TermValue,
 };
 
+use crate::column::Int64Column;
 use crate::error::ColumnarError;
 use crate::files::ParquetFiles;
 use crate::parquet::{ColumnValues, TableData, bounded_row_capacity, read_table};
@@ -105,10 +106,10 @@ impl Dictionary {
         let values = resolve_term_records(&records)?;
         ensure_strict_order(&values, "term dictionary order")?;
 
-        let named_column = int_column(data, 10)?;
+        let mut named_column = int_column(data, 10)?.rows();
         let mut named_graphs = Vec::with_capacity(bounded_row_capacity(values.len()));
         for (row, value) in values.iter().enumerate() {
-            let flag = required_i64(named_column, row, "terms.named_graph")?;
+            let flag = required_i64(named_column.next_row(), row, "terms.named_graph")?;
             let named = match flag {
                 0 => false,
                 1 => true,
@@ -141,75 +142,54 @@ impl Dictionary {
     }
 }
 
+/// One term row's nullable INT64 cells, read from each column's rows in step.
+#[derive(Debug, Clone, Copy)]
+struct TermInts {
+    datatype: Option<i64>,
+    direction: Option<i64>,
+    scope: Option<i64>,
+    triple_s: Option<i64>,
+    triple_p: Option<i64>,
+    triple_o: Option<i64>,
+}
+
 fn parse_term_records(data: &TableData) -> Result<Vec<TermRecord>, ColumnarError> {
-    let ids = int_column(data, 0)?;
-    let kinds = int_column(data, 1)?;
+    let mut ids = int_column(data, 0)?.rows();
+    let mut kinds = int_column(data, 1)?.rows();
     let lex = bytes_column(data, 2)?;
-    let datatypes = int_column(data, 3)?;
+    let mut datatypes = int_column(data, 3)?.rows();
     let languages = bytes_column(data, 4)?;
-    let directions = int_column(data, 5)?;
-    let scopes = int_column(data, 6)?;
-    let triple_subjects = int_column(data, 7)?;
-    let triple_predicates = int_column(data, 8)?;
-    let triple_objects = int_column(data, 9)?;
+    let mut directions = int_column(data, 5)?.rows();
+    let mut scopes = int_column(data, 6)?.rows();
+    let mut triple_subjects = int_column(data, 7)?.rows();
+    let mut triple_predicates = int_column(data, 8)?.rows();
+    let mut triple_objects = int_column(data, 9)?.rows();
     let mut records = Vec::with_capacity(bounded_row_capacity(data.row_count));
 
     for row in 0..data.row_count {
-        let id = required_i64(ids, row, "terms.id")?;
+        let id = ids.next_row();
+        let kind = kinds.next_row();
+        let ints = TermInts {
+            datatype: datatypes.next_row(),
+            direction: directions.next_row(),
+            scope: scopes.next_row(),
+            triple_s: triple_subjects.next_row(),
+            triple_p: triple_predicates.next_row(),
+            triple_o: triple_objects.next_row(),
+        };
+        let id = required_i64(id, row, "terms.id")?;
         if id != row as i64 {
             return Err(ColumnarError::malformed(
                 "terms.id",
                 format!("row {row} has id {id}; ids must be dense and zero-based"),
             ));
         }
-        let kind = required_i64(kinds, row, "terms.kind")?;
+        let kind = required_i64(kind, row, "terms.kind")?;
         records.push(match kind {
-            0 => parse_iri_record(
-                row,
-                lex,
-                datatypes,
-                languages,
-                directions,
-                scopes,
-                triple_subjects,
-                triple_predicates,
-                triple_objects,
-            )?,
-            1 => parse_literal_record(
-                row,
-                data.row_count,
-                lex,
-                datatypes,
-                languages,
-                directions,
-                scopes,
-                triple_subjects,
-                triple_predicates,
-                triple_objects,
-            )?,
-            2 => parse_blank_record(
-                row,
-                lex,
-                datatypes,
-                languages,
-                directions,
-                scopes,
-                triple_subjects,
-                triple_predicates,
-                triple_objects,
-            )?,
-            3 => parse_triple_record(
-                row,
-                data.row_count,
-                lex,
-                datatypes,
-                languages,
-                directions,
-                scopes,
-                triple_subjects,
-                triple_predicates,
-                triple_objects,
-            )?,
+            0 => parse_iri_record(row, lex, languages, ints)?,
+            1 => parse_literal_record(row, data.row_count, lex, languages, ints)?,
+            2 => parse_blank_record(row, lex, languages, ints)?,
+            3 => parse_triple_record(row, data.row_count, lex, languages, ints)?,
             _ => {
                 return Err(ColumnarError::Unsupported {
                     context: "terms.kind",
@@ -221,46 +201,34 @@ fn parse_term_records(data: &TableData) -> Result<Vec<TermRecord>, ColumnarError
     Ok(records)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn parse_iri_record(
     row: usize,
     lex: &[Option<Vec<u8>>],
-    datatypes: &[Option<i64>],
     languages: &[Option<Vec<u8>>],
-    directions: &[Option<i64>],
-    scopes: &[Option<i64>],
-    triple_subjects: &[Option<i64>],
-    triple_predicates: &[Option<i64>],
-    triple_objects: &[Option<i64>],
+    ints: TermInts,
 ) -> Result<TermRecord, ColumnarError> {
-    ensure_null_i64(row, datatypes, "terms.datatype")?;
+    ensure_null_i64(row, ints.datatype, "terms.datatype")?;
     ensure_null_bytes(row, languages, "terms.lang")?;
-    ensure_null_i64(row, directions, "terms.direction")?;
-    ensure_null_i64(row, scopes, "terms.scope")?;
-    ensure_null_i64(row, triple_subjects, "terms.triple_s")?;
-    ensure_null_i64(row, triple_predicates, "terms.triple_p")?;
-    ensure_null_i64(row, triple_objects, "terms.triple_o")?;
+    ensure_null_i64(row, ints.direction, "terms.direction")?;
+    ensure_null_i64(row, ints.scope, "terms.scope")?;
+    ensure_null_i64(row, ints.triple_s, "terms.triple_s")?;
+    ensure_null_i64(row, ints.triple_p, "terms.triple_p")?;
+    ensure_null_i64(row, ints.triple_o, "terms.triple_o")?;
     Ok(TermRecord::Iri(required_utf8(lex, row, "terms.lex")?))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn parse_literal_record(
     row: usize,
     term_count: usize,
     lex: &[Option<Vec<u8>>],
-    datatypes: &[Option<i64>],
     languages: &[Option<Vec<u8>>],
-    directions: &[Option<i64>],
-    scopes: &[Option<i64>],
-    triple_subjects: &[Option<i64>],
-    triple_predicates: &[Option<i64>],
-    triple_objects: &[Option<i64>],
+    ints: TermInts,
 ) -> Result<TermRecord, ColumnarError> {
-    ensure_null_i64(row, scopes, "terms.scope")?;
-    ensure_null_i64(row, triple_subjects, "terms.triple_s")?;
-    ensure_null_i64(row, triple_predicates, "terms.triple_p")?;
-    ensure_null_i64(row, triple_objects, "terms.triple_o")?;
-    let direction = match directions[row] {
+    ensure_null_i64(row, ints.scope, "terms.scope")?;
+    ensure_null_i64(row, ints.triple_s, "terms.triple_s")?;
+    ensure_null_i64(row, ints.triple_p, "terms.triple_p")?;
+    ensure_null_i64(row, ints.triple_o, "terms.triple_o")?;
+    let direction = match ints.direction {
         None => None,
         Some(0) => Some(RdfTextDirection::Ltr),
         Some(1) => Some(RdfTextDirection::Rtl),
@@ -273,31 +241,25 @@ fn parse_literal_record(
     };
     Ok(TermRecord::Literal {
         lexical: required_utf8(lex, row, "terms.lex")?,
-        datatype: required_term_ref(datatypes, row, term_count, "terms.datatype")?,
+        datatype: required_term_ref(ints.datatype, row, term_count, "terms.datatype")?,
         language: optional_utf8(languages, row, "terms.lang")?,
         direction,
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn parse_blank_record(
     row: usize,
     lex: &[Option<Vec<u8>>],
-    datatypes: &[Option<i64>],
     languages: &[Option<Vec<u8>>],
-    directions: &[Option<i64>],
-    scopes: &[Option<i64>],
-    triple_subjects: &[Option<i64>],
-    triple_predicates: &[Option<i64>],
-    triple_objects: &[Option<i64>],
+    ints: TermInts,
 ) -> Result<TermRecord, ColumnarError> {
-    ensure_null_i64(row, datatypes, "terms.datatype")?;
+    ensure_null_i64(row, ints.datatype, "terms.datatype")?;
     ensure_null_bytes(row, languages, "terms.lang")?;
-    ensure_null_i64(row, directions, "terms.direction")?;
-    ensure_null_i64(row, triple_subjects, "terms.triple_s")?;
-    ensure_null_i64(row, triple_predicates, "terms.triple_p")?;
-    ensure_null_i64(row, triple_objects, "terms.triple_o")?;
-    let scope = required_i64(scopes, row, "terms.scope")?;
+    ensure_null_i64(row, ints.direction, "terms.direction")?;
+    ensure_null_i64(row, ints.triple_s, "terms.triple_s")?;
+    ensure_null_i64(row, ints.triple_p, "terms.triple_p")?;
+    ensure_null_i64(row, ints.triple_o, "terms.triple_o")?;
+    let scope = required_i64(ints.scope, row, "terms.scope")?;
     let scope = u32::try_from(scope).map_err(|_| {
         ColumnarError::malformed(
             "terms.scope",
@@ -310,28 +272,22 @@ fn parse_blank_record(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn parse_triple_record(
     row: usize,
     term_count: usize,
     lex: &[Option<Vec<u8>>],
-    datatypes: &[Option<i64>],
     languages: &[Option<Vec<u8>>],
-    directions: &[Option<i64>],
-    scopes: &[Option<i64>],
-    triple_subjects: &[Option<i64>],
-    triple_predicates: &[Option<i64>],
-    triple_objects: &[Option<i64>],
+    ints: TermInts,
 ) -> Result<TermRecord, ColumnarError> {
     ensure_null_bytes(row, lex, "terms.lex")?;
-    ensure_null_i64(row, datatypes, "terms.datatype")?;
+    ensure_null_i64(row, ints.datatype, "terms.datatype")?;
     ensure_null_bytes(row, languages, "terms.lang")?;
-    ensure_null_i64(row, directions, "terms.direction")?;
-    ensure_null_i64(row, scopes, "terms.scope")?;
+    ensure_null_i64(row, ints.direction, "terms.direction")?;
+    ensure_null_i64(row, ints.scope, "terms.scope")?;
     Ok(TermRecord::Triple {
-        s: required_term_ref(triple_subjects, row, term_count, "terms.triple_s")?,
-        p: required_term_ref(triple_predicates, row, term_count, "terms.triple_p")?,
-        o: required_term_ref(triple_objects, row, term_count, "terms.triple_o")?,
+        s: required_term_ref(ints.triple_s, row, term_count, "terms.triple_s")?,
+        p: required_term_ref(ints.triple_p, row, term_count, "terms.triple_p")?,
+        o: required_term_ref(ints.triple_o, row, term_count, "terms.triple_o")?,
     })
 }
 
@@ -422,17 +378,23 @@ fn decode_quad_rows(
     data: &TableData,
     named_graphs: &[bool],
 ) -> Result<Vec<QuadRow>, ColumnarError> {
-    let first = int_column(data, 0)?;
-    let second = int_column(data, 1)?;
-    let third = int_column(data, 2)?;
-    let graphs = int_column(data, 3)?;
+    let mut first = int_column(data, 0)?.rows();
+    let mut second = int_column(data, 1)?.rows();
+    let mut third = int_column(data, 2)?.rows();
+    let mut graphs = int_column(data, 3)?.rows();
     let mut rows = Vec::with_capacity(bounded_row_capacity(data.row_count));
     for row in 0..data.row_count {
+        let (a, b, c, g) = (
+            first.next_row(),
+            second.next_row(),
+            third.next_row(),
+            graphs.next_row(),
+        );
         rows.push((
-            required_term_ref(first, row, named_graphs.len(), "row first term")?,
-            required_term_ref(second, row, named_graphs.len(), "row second term")?,
-            required_term_ref(third, row, named_graphs.len(), "row third term")?,
-            optional_graph_ref(graphs, row, named_graphs)?,
+            required_term_ref(a, row, named_graphs.len(), "row first term")?,
+            required_term_ref(b, row, named_graphs.len(), "row second term")?,
+            required_term_ref(c, row, named_graphs.len(), "row third term")?,
+            optional_graph_ref(g, row, named_graphs)?,
         ));
     }
     ensure_strict_order(&rows, "quad-like row order")?;
@@ -443,19 +405,26 @@ fn decode_reifier_rows(
     data: &TableData,
     named_graphs: &[bool],
 ) -> Result<Vec<ReifierRow>, ColumnarError> {
-    let reifiers = int_column(data, 0)?;
-    let subjects = int_column(data, 1)?;
-    let predicates = int_column(data, 2)?;
-    let objects = int_column(data, 3)?;
-    let graphs = int_column(data, 4)?;
+    let mut reifiers = int_column(data, 0)?.rows();
+    let mut subjects = int_column(data, 1)?.rows();
+    let mut predicates = int_column(data, 2)?.rows();
+    let mut objects = int_column(data, 3)?.rows();
+    let mut graphs = int_column(data, 4)?.rows();
     let mut rows = Vec::with_capacity(bounded_row_capacity(data.row_count));
     for row in 0..data.row_count {
+        let (r, s, p, o, g) = (
+            reifiers.next_row(),
+            subjects.next_row(),
+            predicates.next_row(),
+            objects.next_row(),
+            graphs.next_row(),
+        );
         rows.push((
-            required_term_ref(reifiers, row, named_graphs.len(), "reifiers.reifier")?,
-            required_term_ref(subjects, row, named_graphs.len(), "reifiers.s")?,
-            required_term_ref(predicates, row, named_graphs.len(), "reifiers.p")?,
-            required_term_ref(objects, row, named_graphs.len(), "reifiers.o")?,
-            optional_graph_ref(graphs, row, named_graphs)?,
+            required_term_ref(r, row, named_graphs.len(), "reifiers.reifier")?,
+            required_term_ref(s, row, named_graphs.len(), "reifiers.s")?,
+            required_term_ref(p, row, named_graphs.len(), "reifiers.p")?,
+            required_term_ref(o, row, named_graphs.len(), "reifiers.o")?,
+            optional_graph_ref(g, row, named_graphs)?,
         ));
     }
     ensure_strict_order(&rows, "reifier row order")?;
@@ -570,7 +539,7 @@ fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
     }
 }
 
-fn int_column(data: &TableData, index: usize) -> Result<&[Option<i64>], ColumnarError> {
+fn int_column(data: &TableData, index: usize) -> Result<&Int64Column, ColumnarError> {
     match data.columns.get(index) {
         Some(ColumnValues::Int64(values)) => Ok(values),
         _ => Err(ColumnarError::malformed(
@@ -591,11 +560,11 @@ fn bytes_column(data: &TableData, index: usize) -> Result<&[Option<Vec<u8>>], Co
 }
 
 fn required_i64(
-    column: &[Option<i64>],
+    value: Option<i64>,
     row: usize,
     context: &'static str,
 ) -> Result<i64, ColumnarError> {
-    column[row].ok_or_else(|| {
+    value.ok_or_else(|| {
         ColumnarError::malformed(context, format!("required value is null at row {row}"))
     })
 }
@@ -637,12 +606,12 @@ fn optional_utf8(
 }
 
 fn required_term_ref(
-    column: &[Option<i64>],
+    value: Option<i64>,
     row: usize,
     term_count: usize,
     context: &'static str,
 ) -> Result<usize, ColumnarError> {
-    let value = required_i64(column, row, context)?;
+    let value = required_i64(value, row, context)?;
     let id = usize::try_from(value).map_err(|_| {
         ColumnarError::malformed(context, format!("row {row} has negative term id {value}"))
     })?;
@@ -656,11 +625,11 @@ fn required_term_ref(
 }
 
 fn optional_graph_ref(
-    column: &[Option<i64>],
+    value: Option<i64>,
     row: usize,
     named_graphs: &[bool],
 ) -> Result<Option<usize>, ColumnarError> {
-    let Some(value) = column[row] else {
+    let Some(value) = value else {
         return Ok(None);
     };
     let graph = usize::try_from(value).map_err(|_| {
@@ -686,10 +655,10 @@ fn optional_graph_ref(
 
 fn ensure_null_i64(
     row: usize,
-    column: &[Option<i64>],
+    value: Option<i64>,
     context: &'static str,
 ) -> Result<(), ColumnarError> {
-    if column[row].is_some() {
+    if value.is_some() {
         return Err(ColumnarError::malformed(
             context,
             format!("value must be null for term kind at row {row}"),
@@ -792,7 +761,7 @@ mod tests {
         let ColumnValues::Int64(ids) = &mut terms.columns[0] else {
             panic!("terms.id is INT64");
         };
-        ids[0] = Some(9);
+        ids.values_mut()[0] = 9;
         array[0] = write_table(&terms, Compression::Uncompressed).unwrap();
         assert!(matches!(
             read(&ParquetFiles::from_array(array)),

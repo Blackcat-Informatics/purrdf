@@ -32,26 +32,123 @@ it would buy the same guarantee at the cost of introducing a quantization step t
 PURREMB's own format does not have, and of disagreeing with the artifact's
 arithmetic.
 
-It would also disagree with the spec. `docs/PURREMB.md` already states the
-arithmetic contract normatively: *"All intermediate operations are IEEE-754 binary64,
-round-to-nearest ties-to-even, performed in the written order without a fused
-multiply-add."* The kNN kernels implement exactly that, and `purrdf-core`'s own
-deterministic L2 fold is the code precedent, `#[allow(clippy::suboptimal_flops)]`
-and all.
+It would also disagree with the spec. `docs/PURREMB.md` states the arithmetic
+contract normatively for the artifact's own folds: *"All intermediate operations are
+IEEE-754 binary64, round-to-nearest ties-to-even, performed in the written order
+without a fused multiply-add."* The L2 norm is one of those folds (§13.2), so the kNN
+kernels do not compute a norm of their own: `Resolved::<Exact>::norm` (re-exported
+through `knn`) is `purrdf_core`'s normative `norm_fold`, the single copy of that order in
+the workspace, and the artifact writer's own normalization runs it too. For the distance sums,
+PURREMB §7.4 lets a kernel optimize evaluation as long as it preserves the metric and
+the row-number tie-break, so their order is this crate's contract rather than the
+format's, and it is pinned just as hard: every dot product and squared Euclidean sum is
+`purrdf_core::distance::Exact`.
 
 So there are precisely two residual ways a float kernel can diverge, and both are
 closed structurally rather than hoped about:
 
 | hazard | why it would diverge | what closes it |
 |---|---|---|
-| **reassociation** | float addition is not associative, so a sum depends on the order it was folded in | every fold runs over ascending component index, in one sequential loop; no accumulator is ever split across rayon workers or chunked |
-| **fused multiply-add** | `a * b + c` as a single FMA rounds once where the written form rounds twice | every product is bound to a named local before it is added; Rust never contracts implicitly and PURREMB forbids the fusion |
+| **reassociation** | float addition is not associative, so a sum depends on the order it was folded in | the order is part of the arithmetic's definition (`Exact`, identifier `binary64-lane16-tree-v1`): sixteen binary64 lanes, lane `l` summing the terms at indices `16·c + l` over the whole sixteen-element chunks in ascending `c`; the pairwise tree `(l, l+8)`, `(l, l+4)`, `(l, l+2)`, `(0, 1)`; then the remaining terms one at a time in ascending index. No accumulator is ever split across rayon workers. Every target and every dispatch path computes that one order |
+| **fused multiply-add** | `a * b + c` as a single FMA rounds once where the written form rounds twice | every product is bound to a named local before it is added; Rust never contracts implicitly, no exact path enables `fma`, and PURREMB forbids the fusion |
 
-The reassociation rule is asserted, not merely stated. A test folds a vector chosen
-so the two directions genuinely disagree — `[1e16, -1e16, 1]` against all-ones sums
-to `1` left-to-right and `0` right-to-left — and pins which one the kernel produces.
-A test that only checked "the same input gives the same output twice" would pass on
-a kernel with no fixed order at all.
+Fixing the order as sixteen independent lanes is what lets the fold vectorize without
+licensing the compiler to reorder anything: the lanes are sixteen separate add chains,
+and LLVM packs them into whatever vector width the target has (SSE2, AVX2 and AVX-512F on x86-64,
+NEON on aarch64, `f64x2` under wasm `+simd128`). On `x86_64` the exact scan dispatches
+once per search between a portable compilation of the body and AVX2 and AVX-512F
+compilations of the same body; `purrdf_core`'s tests hold every path the host can execute to a scalar
+reference model of the lanes, the tree and the tail, bit for bit. A vector shorter than
+one chunk folds exactly as the old ascending sequential loop did, since the tree of
+sixteen zero lanes is zero.
+
+The order is asserted, not merely stated. A test folds a vector chosen so the orders
+genuinely disagree — `1e16`, `1` and `-1e16` in lanes 0, 1 and 8 against all-ones sums
+to `1` under the lane tree and to `0` under both sequential orders — and pins which one
+the kernel produces. A test that only checked "the same input gives the same output
+twice" would pass on a kernel with no fixed order at all.
+
+The arithmetic also assumes IEEE-754's default environment. A thread with flush-to-zero
+or denormals-are-zero set, or another rounding direction, computes different bits from
+the same code, so resolving the arithmetic proves the environment by behaviour on every
+target — thirteen binary64 operations whose IEEE-754 results are known constants, after
+a read of the control register where one is readable (MXCSR on x86-64, FPCR on aarch64,
+the x87 control word where the x87 computes binary64) —
+and refuses such a thread with `EvalError::FloatEnvironment`, at space
+construction and again at every search, since an invocation may run on another thread.
+The handle that check returns cannot leave the thread that made it: the environment is
+per-thread control state, so `Resolved<A>` is neither `Send` nor `Sync`. A relation, which
+the engine shares across threads, stores only the thread-free `Selected<A>` path, and
+every scan and every membership lookup resolves it on the thread that runs it.
+The per-pair entry points follow the same law: `Kernel::distance` and
+`Kernel::distance_bounded` take the `Resolved<Exact>` handle that `Exact::resolve`
+returns (both re-exported from `knn`), and the reassociated pair take a
+`Resolved<Reassociated>`, so there is no pair distance a flushing thread can compute
+without first being refused by name. A caller resolves once per call site and passes
+the `Copy` handle to every pair it scores. The norms those pairs divide by follow it too:
+the norm is a method of the exact handle only, `Resolved::<Exact>::norm`, because the fold
+has one written order and no reassociated form, and a reassociated consumer reaches it
+through `Resolved::exact`. On a flushing thread a row whose norm is subnormal would fold
+to `+0`, so no norm is computed without the check either. `EmbeddingSpace::from_artifact`
+passes the handle it resolves first to PURREMB's deterministic-L2 row reader
+(`EffectiveMatrixView::f32_row`/`f64_row`) and to the norms it computes.
+
+The metric does not change with the arithmetic. `DistanceMetric` names *what* is
+measured, and the family-contract digest is computed from it alone; the arithmetic is
+recorded beside it, in the HNSW image header and profile, and in the ranked declaration
+of either relation (below).
+
+A second arithmetic sits beside the exact one under its own names:
+`Kernel::distance_reassociated` and `Kernel::distance_bounded_reassociated` compute
+the same metric under `purrdf_core::distance::Reassociated` (identifier
+`binary64-reassociated-v1`). Inside each 64-element block the sum is folded with the
+`algebraic_*` operations, so the compiler may reassociate it and contract multiplies
+into fused multiply-adds; block sums are combined in ascending order, so the bounded
+form's checkpoints are true prefixes of the full value. Its last bits depend on the
+target, the build and the dispatch path (SSE2, AVX2+FMA or AVX-512F on x86-64, chosen
+at run time; NEON on aarch64; `simd128` or scalar on wasm, as built), and the resolved
+handle's evidence says so in words. Each path compiles the body once, out of line, so
+every caller on one path gets the same bits for the same pair. The exact entry points
+never run it, and it never stands in for them; `knn_wasm_reassociated` executes it on
+both wasm32 builds and holds each result to the summation error bound of the exact one.
+
+### The relation is generic over the arithmetic
+
+`EmbeddingKnnRelation<A: Arithmetic = Exact>` carries the law as a type parameter.
+`EmbeddingKnnRelation::new(space)` is the exact relation, unchanged and infallible: it
+resolves the float environment and a dispatch path per search, and every exact path
+returns the same bits. `EmbeddingKnnRelation::new_reassociated(space)` returns
+`Result<EmbeddingKnnRelation<Reassociated>, EvalError>`: it resolves the reassociated
+dispatch path once, refuses a flushing float environment with the named
+`EvalError::FloatEnvironment`, keeps the path as a `Selected<Reassociated>`
+(`EmbeddingKnnRelation::selected`), and every search and membership lookup then
+resolves that path on the calling thread, which checks that thread's environment, and
+runs `A`'s batch kernel on it. The
+scan is the same scan in both, scoring every row, so the reassociated relation omits
+nothing the exact one would name; what it can do is order two near-tied rows
+differently.
+
+That difference is declared, not hidden. `ranked_declaration` names the law in
+`RankedDeclaration::arithmetic` as `RankArithmetic::FloatDistance`
+(`binary64-lane16-tree-v1` or `binary64-reassociated-v1`), which
+`canonical_description` folds, so the registry's
+content fingerprint and every plan id drawn from it bind the arithmetic: an exact and a
+reassociated producer over one space are two plans. The reassociated relation also
+composes the host's order fidelity with `OrderFidelity::Perturbed`, carrying the
+arithmetic's evidence for the resolved path verbatim, through
+`composed_order_fidelity`, the single composition the HNSW relation also uses. A fused
+answer carries that evidence in `FusionTrailer::fidelities` and reports the stratum as
+having no finite score bound. The completeness axis stays as the host declares it.
+
+The tests hold each half to an observation. `exact_scan_matches_kernel_bits` and
+`reassociated_scan_matches_reassociated_kernel_bits` compare every distance each
+relation emits with `Kernel::distance` and `Kernel::distance_reassociated` on the same
+path, bit for bit, over a fixture whose crafted pair cancels exactly under every
+unfused order and leaves zero only there, so on a fused path the reassociated relation
+is seen to differ from the exact one. `reassociated_relation_declares_perturbed_order`
+and its control `exact_relation_names_exact_arithmetic` pin the declaration, and
+`fusion_trailer_names_reassociated_kernel` in `purrdf-retrieval` fuses both producers
+over one space, with the exact one as the control row.
 
 ### The cross-target claim is executed, not argued
 
@@ -61,15 +158,19 @@ kernel that is target-independent from one that is merely self-consistent wherev
 was last compiled. `make wasm` has the same limit in the other direction — it proves
 the release crates *build* for wasm32, never that they *answer* the same way there.
 
-So `crates/sparql-eval/tests/knn_wasm_determinism.rs` is one test body carrying two
-attributes: an ordinary `#[test]` natively, a `#[wasm_bindgen_test]` on wasm32. It runs
-a real SPARQL kNN query over a real PURREMB artifact whose components are deliberately
-*not* exactly representable in binary64 — every product, every partial sum and both
-norms round — and asserts five pinned `xsd:double` lexicals, in order. `cargo test`
-executes it on the host; the new `make wasm-test` lane compiles it to wasm32 and runs it
-in Node through `wasm-bindgen-test-runner` (which ships in the wasm-bindgen archive the
-wasm lane already installs, so there is no second pin to keep in step). CI's wasm job
-runs that lane. A target that computes a different last bit renders a different lexical
+So `crates/sparql-eval/tests/knn_wasm_determinism.rs` carries test bodies with two
+attributes each: an ordinary `#[test]` natively, a `#[wasm_bindgen_test]` on wasm32.
+They run real SPARQL kNN queries over real PURREMB artifacts whose components are
+deliberately *not* exactly representable in binary64 — every product, every partial sum
+and both norms round — and assert five pinned `xsd:double` lexicals each, in order. One
+fixture is six-dimensional, which reaches only the exact fold's sequential tail; the
+other is seventy-dimensional, which fills all sixteen lanes and the 64-element bound
+checkpoint and leaves a six-element tail, asked under cosine and under squared
+Euclidean. `cargo test` executes them on the host; `make wasm-test` compiles them to
+wasm32 twice — on the baseline target and with `+simd128`, where the lanes become
+`f64x2` operations — and runs both in Node through `wasm-bindgen-test-runner` (which
+ships in the wasm-bindgen archive the wasm lane already installs, so there is no second
+pin to keep in step). CI's wasm job runs that lane. A target that computes a different last bit renders a different lexical
 and fails there, rather than surfacing later as an unexplained reordering.
 
 ### The limit of the claim, stated

@@ -54,15 +54,16 @@ use std::collections::BTreeSet;
 
 use rayon::prelude::*;
 
+use purrdf_core::distance::{Arithmetic, Exact, Resolved};
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
-use crate::HnswIndex;
 use crate::error::{HnswError, Result};
 use crate::graph::{Edge, Graph, VectorMatrix};
 use crate::level::{level_cap, level_from_index};
 use crate::params::Params;
 use crate::search::{DistanceCache, Query, Visited, greedy_descend, norm_of, search_layer};
 use crate::select::select_neighbors;
+use crate::{Compiled, HnswIndex, resolve_recorded};
 
 /// One node's proposal: per layer, the selected neighbours in rank order.
 type NodeProposal = Vec<(u32, Vec<Ranked>)>;
@@ -89,32 +90,46 @@ struct Round<'a> {
     params: &'a Params,
 }
 
-/// Build an index over `matrix` under `kernel` and `params`.
+/// Build an index over `matrix` under `kernel` and `params`, with a fixed round size, or
+/// the capped doubling schedule when `batch` is `None`.
+///
+/// Every distance runs under arithmetic `A`, resolved on the calling thread; the path it
+/// resolves is the one the image records. The graph is built by `compiled`'s build walk,
+/// the copy this crate compiled for `A`, which is also the copy every later rebuild
+/// verification runs.
+///
+/// `batch = Some(1)` is a plain serial insertion: each node proposes against the graph
+/// that already holds every row below it. It exists so the determinism suite can observe
+/// that the round structure is load-bearing — within-round isolation produces a different
+/// graph — rather than asserting the property against a second identical build.
 ///
 /// # Errors
 ///
 /// [`HnswError::InvalidParameter`] / [`HnswError::ParameterValidation`] for a parameter or
 /// matrix problem caught before any work; [`HnswError::ZeroNorm`] when `kernel` divides by
 /// a norm and a row's is zero; [`HnswError::NonFiniteDistance`] if a kernel result leaves
-/// the finite range.
-pub(crate) fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Result<HnswIndex> {
-    build_with_batch(matrix, kernel, params, None)
-}
-
-/// Build with a fixed round size, or the capped doubling schedule when `batch` is `None`.
-///
-/// `batch = Some(1)` is a plain serial insertion: each node proposes against the graph
-/// that already holds every row below it. It exists so the determinism suite can observe
-/// that the round structure is load-bearing — within-round isolation produces a different
-/// graph — rather than asserting the property against a second identical build.
-pub(crate) fn build_with_batch(
+/// the finite range; [`HnswError::FloatEnvironment`] if the calling thread, or a worker
+/// thread the build runs on, is not in the IEEE environment the arithmetic defines.
+pub(crate) fn build_with_batch<A: Arithmetic>(
     matrix: VectorMatrix,
     kernel: Kernel,
     params: Params,
     batch: Option<usize>,
-) -> Result<HnswIndex> {
-    let (graph, norms) = build_graph(&matrix, kernel, params, batch)?;
-    Ok(HnswIndex::new(matrix, kernel, params, graph, norms))
+    compiled: Compiled<A>,
+) -> Result<HnswIndex<A>> {
+    let arithmetic = A::resolve()?;
+    let (graph, norms) = (compiled.build_graph)(&matrix, arithmetic, kernel, params, batch)?;
+    // The index keeps the thread-free selection, never this thread's handle: it outlives
+    // the build and is searched on whatever thread its caller runs.
+    Ok(HnswIndex::new(
+        matrix,
+        kernel,
+        params,
+        graph,
+        norms,
+        arithmetic.selected(),
+        compiled,
+    ))
 }
 
 /// The graph and per-row norms for `matrix`, without taking ownership of it.
@@ -124,8 +139,14 @@ pub(crate) fn build_with_batch(
 /// holds the vectors -- `verify_rebuild`, which rebuilds in order to compare -- avoid
 /// copying them. At a million rows of 4,096 `f64` that copy is over thirty gigabytes, and
 /// the guard's verification path was paying it twice.
-pub(crate) fn build_graph(
+///
+/// Every distance runs under `arithmetic`, resolved on the calling thread; each worker of
+/// the parallel proposal phase resolves again on its own thread, because the float
+/// environment is a per-thread property, and must resolve the same dispatch path, because
+/// the image records one.
+pub(crate) fn build_graph<A: Arithmetic>(
     matrix: &VectorMatrix,
+    arithmetic: Resolved<A>,
     kernel: Kernel,
     params: Params,
     batch: Option<usize>,
@@ -137,7 +158,7 @@ pub(crate) fn build_graph(
     let levels: Vec<u32> = (0..n)
         .map(|row| level_from_index(row as u64, params.m(), cap))
         .collect();
-    let norms = compute_norms(matrix, kernel)?;
+    let norms = compute_norms(matrix, arithmetic.exact(), kernel)?;
 
     let mut graph = Graph::with_levels(levels.clone());
 
@@ -173,13 +194,15 @@ pub(crate) fn build_graph(
                 norms: &norms,
                 params: &params,
             };
-            let edges = propose_round(&round, &batch_rows, &levels)?;
+            let edges = propose_round(&round, arithmetic, &batch_rows, &levels)?;
             graph.commit(edges, &params);
         }
         start = end;
     }
 
-    repair_connectivity(&mut graph, matrix, kernel, &norms, &params, entry)?;
+    repair_connectivity(
+        &mut graph, matrix, arithmetic, kernel, &norms, &params, entry,
+    )?;
 
     Ok((graph, norms))
 }
@@ -212,9 +235,10 @@ pub(crate) fn build_graph(
 ///
 /// Determinism: the orphan order, the host preference, and the eviction choice are all
 /// total functions of the graph, so the repaired graph is a pure function of the build.
-fn repair_connectivity(
+fn repair_connectivity<A: Arithmetic>(
     graph: &mut Graph,
     matrix: &VectorMatrix,
+    arithmetic: Resolved<A>,
     kernel: Kernel,
     norms: &[f64],
     params: &Params,
@@ -240,6 +264,7 @@ fn repair_connectivity(
             let host = choose_host(graph, &reachable, &protected, bound, entry, orphan)?;
             let distance = matrix
                 .distance(
+                    arithmetic,
                     kernel,
                     host,
                     norm_of(norms, host),
@@ -326,13 +351,21 @@ fn choose_host(
 /// Computed once, before any graph work, so a space that cannot be searched under the
 /// chosen metric fails at construction rather than mid-build. PURREMB v1: cosine distance
 /// is undefined for a zero-norm operand.
-pub(crate) fn compute_norms(matrix: &VectorMatrix, kernel: Kernel) -> Result<Vec<f64>> {
+///
+/// `arithmetic` is the exact handle the norms are folded under, whatever arithmetic the
+/// index ranks by; a caller holding another arithmetic's handle passes its
+/// [`Resolved::exact`].
+pub(crate) fn compute_norms(
+    matrix: &VectorMatrix,
+    arithmetic: Resolved<Exact>,
+    kernel: Kernel,
+) -> Result<Vec<f64>> {
     if !kernel.needs_norms() {
         return Ok(Vec::new());
     }
     let mut norms = Vec::with_capacity(matrix.rows());
     for row in 0..matrix.rows() {
-        let value = matrix.norm_of_row(row);
+        let value = matrix.norm_of_row(arithmetic, row);
         if value <= 0.0 {
             return Err(HnswError::ZeroNorm { row });
         }
@@ -347,13 +380,25 @@ pub(crate) fn compute_norms(matrix: &VectorMatrix, kernel: Kernel) -> Result<Vec
 /// order and the flattening below is deterministic regardless of which worker ran which
 /// row. The shared [`DistanceCache`] is the only cross-worker state and affects nothing
 /// but how often a distance is recomputed.
-fn propose_round(round: &Round<'_>, batch: &[usize], levels: &[u32]) -> Result<Vec<Edge>> {
+fn propose_round<A: Arithmetic>(
+    round: &Round<'_>,
+    arithmetic: Resolved<A>,
+    batch: &[usize],
+    levels: &[u32],
+) -> Result<Vec<Edge>> {
     let node_count = round.frozen.node_count();
+    let recorded = arithmetic.image_code();
     let results: Vec<Result<NodeProposal>> = batch
         .par_iter()
         .map_init(
-            || Visited::new(node_count),
-            |visited, &node| propose_node(round, visited, node, levels[node]),
+            // Resolved per worker: the float environment belongs to the thread that runs
+            // the proposal, not to the one that started the build. The worker must land on
+            // the path the build resolved, since the image records that one.
+            || (Visited::new(node_count), resolve_recorded::<A>(recorded)),
+            |(visited, arithmetic), &node| {
+                let arithmetic = arithmetic.clone()?;
+                propose_node(round, arithmetic, visited, node, levels[node])
+            },
         )
         .collect();
 
@@ -385,8 +430,9 @@ fn propose_round(round: &Round<'_>, batch: &[usize], levels: &[u32]) -> Result<V
 }
 
 /// The proposed links for one node: per layer, the selected neighbours in rank order.
-fn propose_node(
+fn propose_node<A: Arithmetic>(
     round: &Round<'_>,
+    arithmetic: Resolved<A>,
     visited: &mut Visited,
     node: usize,
     node_level: u32,
@@ -400,7 +446,14 @@ fn propose_node(
     // never need the same pair, so a shared cache buys little and costs a lock in the
     // innermost loop of the parallel phase.
     let cache = DistanceCache::new();
-    let query = Query::new(round.matrix, round.kernel, round.norms, &cache, node);
+    let query = Query::new(
+        round.matrix,
+        round.kernel,
+        arithmetic,
+        round.norms,
+        &cache,
+        node,
+    );
     let frozen_top = frozen.max_level();
 
     // Greedy descent through the snapshot's layers above this node's own level.
@@ -427,6 +480,7 @@ fn propose_node(
             &beam,
             round.params.degree_bound(layer),
             round.matrix,
+            arithmetic,
             round.kernel,
             round.norms,
         )?;
@@ -441,6 +495,11 @@ fn propose_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::distance::Exact;
+
+    fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Result<HnswIndex> {
+        build_with_batch(matrix, kernel, params, None, Compiled::<Exact>::here())
+    }
 
     fn fixture(rows: usize, dims: usize) -> VectorMatrix {
         let mut state = 0x1234_5678_9abc_def0_u64;

@@ -109,7 +109,7 @@ C (the GTS container itself reaches Python and C, not the wasm package). Most ap
 directly when you want the index and its arithmetic on their own.
 
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
-follows the workspace `rust-version` (currently 1.96, stable toolchain only).
+follows the workspace `rust-version` (currently 1.98, stable toolchain only).
 
 ## License
 

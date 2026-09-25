@@ -18,7 +18,7 @@ a sub-crate.
 cargo add purrdf
 ```
 
-The MSRV is Rust **1.96** (stable toolchain only; the workspace is
+The MSRV is Rust **1.98** (stable toolchain only; the workspace is
 nightly-free by policy).
 
 ## Build, freeze, serialize, parse

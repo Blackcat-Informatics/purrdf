@@ -37,8 +37,8 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, ServiceLevel,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, RankArithmetic, RankedDeclaration, RequestFacet,
+    ServiceLevel, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -260,6 +260,7 @@ fn counted_registry(left: Index) -> (PropertyFunctionRegistry, [Arc<AtomicU64>; 
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
+                arithmetic: RankArithmetic::FloatFree,
                 domains: CandidateDomains::within([block.clone()]),
                 block_position: None,
                 exclusion: ExclusionBasis::Unavailable,

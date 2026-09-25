@@ -160,7 +160,7 @@ impl FrontierDedup {
             return set.insert(id);
         }
         if accumulated.len() < Self::LINEAR_MAX {
-            return !accumulated.contains(&id);
+            return !linear_contains(accumulated, id);
         }
         let mut set: IdSet =
             IdSet::with_capacity_and_hasher(accumulated.len() * 2, ::purrdf::FastHasher::default());
@@ -169,6 +169,40 @@ impl FrontierDedup {
         self.hashed = Some(set);
         fresh
     }
+}
+
+/// Ids per chunk of [`linear_contains`]: four `u32` lanes, one 128-bit vector.
+const DEDUP_CHUNK: usize = 4;
+
+/// Whether `id` is one of `ids`, testing every id with no early exit.
+///
+/// Four ids at a time: each chunk's answers are `0x0000_0000`/`0xFFFF_FFFF`
+/// lanes, OR-ed lane-wise into an accumulator that is folded once after the
+/// last chunk, and the at most three ids after the last whole chunk are tested
+/// one at a time. A loop that can stop at the first hit (the slice's own
+/// `contains`) is not vectorized; with no exit, each chunk is one packed
+/// compare on every target with vector compares. The chunk is four lanes rather than eight because the linear stage
+/// holds fewer than [`FrontierDedup::LINEAR_MAX`] ids, so a wider chunk would
+/// leave most frontiers entirely in the one-at-a-time tail.
+#[allow(
+    clippy::inline_always,
+    reason = "the chunk loop must inline into the dedup probe so the probed id stays a \
+              broadcast register and each chunk's compares pack"
+)]
+#[inline(always)]
+fn linear_contains(ids: &[TermId], id: TermId) -> bool {
+    let (chunks, tail) = ids.as_chunks::<DEDUP_CHUNK>();
+    let mut acc = [0_u32; DEDUP_CHUNK];
+    for chunk in chunks {
+        for (lane, seen) in acc.iter_mut().zip(chunk) {
+            *lane |= u32::from(*seen == id).wrapping_neg();
+        }
+    }
+    let mut hit = acc.iter().fold(0, |any, &lane| any | lane) != 0;
+    for seen in tail {
+        hit |= *seen == id;
+    }
+    hit
 }
 
 /// Id-native value-node producer for a focus node whose interned identity is
@@ -857,5 +891,161 @@ mod tests {
             primary_predicate(&path).map(NamedNode::as_str),
             Some("http://example.org/ns#p")
         );
+    }
+
+    /// The linear stage as it was written: the slice's own short-circuiting
+    /// `contains`. Kept as the oracle of the chunked fold.
+    fn reference_linear_contains(ids: &[TermId], id: TermId) -> bool {
+        ids.contains(&id)
+    }
+
+    /// [`FrontierDedup`] as it was written, with the short-circuiting linear
+    /// stage. Kept as the oracle of the rewritten dedup across the promotion
+    /// into the hashed set.
+    #[derive(Default)]
+    struct ReferenceDedup {
+        hashed: Option<IdSet>,
+    }
+
+    impl ReferenceDedup {
+        fn clear(&mut self) {
+            if let Some(set) = &mut self.hashed {
+                set.clear();
+            }
+        }
+
+        fn insert(&mut self, accumulated: &[TermId], id: TermId) -> bool {
+            if let Some(set) = &mut self.hashed {
+                return set.insert(id);
+            }
+            if accumulated.len() < FrontierDedup::LINEAR_MAX {
+                return !reference_linear_contains(accumulated, id);
+            }
+            let mut set: IdSet = IdSet::with_capacity_and_hasher(
+                accumulated.len() * 2,
+                ::purrdf::FastHasher::default(),
+            );
+            set.extend(accumulated.iter().copied());
+            let fresh = set.insert(id);
+            self.hashed = Some(set);
+            fresh
+        }
+    }
+
+    /// A deterministic SplitMix64 step: the tests' only source of variety.
+    fn mix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Every frontier size of the linear stage, 0 through 16, and a few past it:
+    /// each id is found wherever it sits (a hit at every position, including in
+    /// the one-at-a-time rows after the last whole chunk), and ids that are not
+    /// there are not found.
+    #[test]
+    fn linear_contains_matches_the_slice_scan_at_every_size() {
+        for len in 0..=FrontierDedup::LINEAR_MAX + 4 {
+            let ids: Vec<TermId> = (0..len)
+                .map(|i| TermId::from_index(u32::try_from(3 * i + 1).unwrap()))
+                .collect();
+            for (position, &id) in ids.iter().enumerate() {
+                assert!(linear_contains(&ids, id), "len {len}: position {position}");
+                assert!(reference_linear_contains(&ids, id));
+            }
+            for miss in [0, 2, 3, 3 * u32::try_from(len).unwrap() + 1, u32::MAX - 1] {
+                let id = TermId::from_index(miss);
+                assert_eq!(
+                    linear_contains(&ids, id),
+                    reference_linear_contains(&ids, id),
+                    "len {len}: probe {miss}"
+                );
+            }
+            assert!(!linear_contains(&ids, TermId::from_index(0)), "len {len}");
+        }
+    }
+
+    /// Random frontiers with repeats, at every size of the linear stage: the
+    /// fold and the slice scan agree on every probe.
+    #[test]
+    fn linear_contains_matches_the_slice_scan_on_random_frontiers() {
+        let mut state = 0xF207_u64;
+        for len in 0..=FrontierDedup::LINEAR_MAX {
+            for _ in 0..64 {
+                let ids: Vec<TermId> = (0..len)
+                    .map(|_| TermId::from_index((mix(&mut state) % 20) as u32))
+                    .collect();
+                for probe in 0..22 {
+                    let id = TermId::from_index(probe);
+                    assert_eq!(
+                        linear_contains(&ids, id),
+                        reference_linear_contains(&ids, id),
+                        "len {len}: {ids:?} probe {probe}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The dedup admits the same ids in the same order as the one it replaced,
+    /// through the linear stage, across the promotion into the hashed set at
+    /// [`FrontierDedup::LINEAR_MAX`] admitted ids, and after a `clear`, for
+    /// streams whose repeats land on either side of the boundary.
+    #[test]
+    fn frontier_dedup_admits_what_the_reference_admits() {
+        let mut state = 0xDED0_u64;
+        for space in [4_u64, 15, 16, 17, 24, 64] {
+            for _ in 0..32 {
+                let mut dedup = FrontierDedup::default();
+                let mut reference = ReferenceDedup::default();
+                for _step in 0..2 {
+                    let mut out: Vec<TermId> = Vec::new();
+                    let mut expected: Vec<TermId> = Vec::new();
+                    for _ in 0..48 {
+                        let id = TermId::from_index((mix(&mut state) % space) as u32);
+                        let fresh = dedup.insert(&out, id);
+                        assert_eq!(
+                            fresh,
+                            reference.insert(&expected, id),
+                            "space {space}: {id:?} after {out:?}"
+                        );
+                        if fresh {
+                            out.push(id);
+                            expected.push(id);
+                        }
+                    }
+                    assert_eq!(out, expected);
+                    dedup.clear();
+                    reference.clear();
+                }
+            }
+        }
+    }
+
+    /// The promotion boundary exactly: with `LINEAR_MAX - 1` ids admitted the
+    /// probe is still linear, with `LINEAR_MAX` it builds the set, and a repeat
+    /// of any admitted id is refused on both sides while a fresh id is admitted.
+    #[test]
+    fn frontier_dedup_promotion_boundary() {
+        let max = FrontierDedup::LINEAR_MAX;
+        for admitted in [max - 1, max, max + 1] {
+            let ids: Vec<TermId> = (0..admitted)
+                .map(|i| TermId::from_index(u32::try_from(i).unwrap()))
+                .collect();
+            for (position, &repeat) in ids.iter().enumerate() {
+                let mut dedup = FrontierDedup::default();
+                assert!(
+                    !dedup.insert(&ids, repeat),
+                    "{admitted} admitted: position {position} is a repeat"
+                );
+                assert_eq!(dedup.hashed.is_some(), admitted >= max);
+            }
+            let fresh = TermId::from_index(u32::try_from(admitted).unwrap());
+            let mut dedup = FrontierDedup::default();
+            assert!(dedup.insert(&ids, fresh), "{admitted} admitted: fresh id");
+            assert_eq!(dedup.hashed.is_some(), admitted >= max);
+        }
     }
 }

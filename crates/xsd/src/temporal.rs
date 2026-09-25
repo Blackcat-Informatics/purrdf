@@ -1209,7 +1209,8 @@ fn arith_overflow(datatype: XsdDatatype, reason: &'static str) -> XsdError {
 
 /// Exact `a + b` for two seconds-shaped decimals of possibly different scales.
 fn decimal_add_exact(datatype: XsdDatatype, a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
-    let (am, bm, scale) = align_decimals(a, b);
+    let (am, bm, scale) = align_decimals(a, b)
+        .ok_or_else(|| arith_overflow(datatype, "decimal addition overflow"))?;
     let sum = am
         .checked_add(bm)
         .ok_or_else(|| arith_overflow(datatype, "decimal addition overflow"))?;

@@ -17,6 +17,7 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
+use purrdf_core::distance::{Arithmetic, BuildIdentity, BuildShape, Path, Reassociated};
 use purrdf_core::{EmbeddingView, IndexUseRole, verify_embedding};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, profile, relation::HnswSpace};
 use purrdf_sparql_eval::{Completeness, KnnGuard, OrderFidelity, PropertyFunction};
@@ -373,4 +374,258 @@ fn the_profiles_own_evidence_and_loss_contract_still_bind_and_are_what_fidelity_
         "a graph over untransformed vectors compares exact distances for every candidate it \
          visits, so the rows it does return are in true relative order"
     );
+}
+
+/// The guard's profile, read back from `artifact`, or its refusal.
+fn validated(artifact: &[u8]) -> purrdf_hnsw::Result<Params> {
+    let mut view = EmbeddingView::from_bytes(artifact).expect("the artifact opens");
+    verify_embedding(&mut view).expect("the artifact verifies");
+    let selected = guard::select(&view).expect("the guard names the profile");
+    guard::validate_guard(&selected)
+}
+
+/// The description of a `GuardProfile` refusal, or a panic naming what was raised instead.
+fn profile_refusal(error: HnswError) -> String {
+    match error {
+        HnswError::GuardProfile { description } => description,
+        other => panic!("expected a profile refusal, got {other}"),
+    }
+}
+
+#[test]
+fn guard_refuses_cross_paired_profile() {
+    let exact = purremb::Fixture::new(24, 4, params());
+    let fast = purremb::Fixture::new_reassociated(24, 4, params());
+    let path = Reassociated::resolve()
+        .expect("the test thread runs the default float environment")
+        .path();
+
+    // The two legal pairings: each implementation with its own arithmetic's evidence, and
+    // a payload recording a code that evidence names. Both validate and both load.
+    assert_eq!(validated(&exact.bytes).expect("validates"), params());
+    assert_eq!(validated(&fast.bytes).expect("validates"), params());
+    assert_eq!(
+        fast.guard_contract.implementation.identifier,
+        profile::IMPLEMENTATION_ID_REASSOCIATED
+    );
+    assert!(
+        HnswSpace::from_artifact(
+            &exact.bytes,
+            exact.target_set,
+            exact.vector_space,
+            exact.bindings(),
+            KnnGuard::new(24, 24).expect("valid"),
+        )
+        .is_ok()
+    );
+    let space = HnswSpace::from_artifact_reassociated(
+        &fast.bytes,
+        fast.target_set,
+        fast.vector_space,
+        fast.bindings(),
+        KnnGuard::new(24, 24).expect("valid"),
+    )
+    .expect("the reassociated space binds");
+    assert_eq!(space.evidence(), profile::loss_evidence_reassociated(path));
+
+    // Illegal: the exact implementation carrying the reassociated evidence.
+    let mut crossed = profile::implementation();
+    crossed.revision = Some(profile::loss_evidence_reassociated(path).into_bytes());
+    let refusal = profile_refusal(
+        validated(&exact.with_implementation(crossed)).expect_err("a cross pairing is refused"),
+    );
+    assert!(
+        refusal.contains("`hnsw-v2` carries the evidence revision `hnsw-reassociated-v2`"),
+        "{refusal}"
+    );
+
+    // Illegal: the reassociated implementation carrying the exact evidence.
+    let mut crossed = profile::implementation_for::<Reassociated>(path);
+    crossed.revision = Some(profile::LOSS_EVIDENCE.as_bytes().to_vec());
+    let refusal = profile_refusal(
+        validated(&fast.with_implementation(crossed)).expect_err("a cross pairing is refused"),
+    );
+    assert!(
+        refusal.contains("`hnsw-reassociated-v2` carries the evidence revision `hnsw-v2`"),
+        "{refusal}"
+    );
+
+    // Illegal: a legal reassociated identity for ANOTHER path over this path's payload. The
+    // guard alone is a published row, so it validates; the pairing of that row with the
+    // payload's recorded code is what the load refuses.
+    let other = [
+        Path::Portable,
+        Path::Sse2,
+        Path::Avx2Fma,
+        Path::Avx512f,
+        Path::Neon,
+        Path::WasmSimd128,
+    ]
+    .into_iter()
+    .find(|candidate| *candidate != path)
+    .expect("another reassociated path exists");
+    let elsewhere = fast.with_implementation(profile::implementation_for::<Reassociated>(other));
+    assert_eq!(
+        validated(&elsewhere).expect("the row alone is legal"),
+        params()
+    );
+    let mut view = EmbeddingView::from_bytes(&elsewhere).expect("the artifact opens");
+    verify_embedding(&mut view).expect("the artifact verifies");
+    let selected = guard::select(&view).expect("the guard names the profile");
+    let refusal = profile_refusal(
+        guard::load_reassociated(&selected, fast.matrix.clone())
+            .expect_err("a guard naming another path than its payload is refused"),
+    );
+    assert!(refusal.contains("two different compilations"), "{refusal}");
+
+    // And an implementation loaded as the other arithmetic is refused at the guard, before
+    // any payload is decoded.
+    let mut view = EmbeddingView::from_bytes(&fast.bytes).expect("the artifact opens");
+    verify_embedding(&mut view).expect("the artifact verifies");
+    let selected = guard::select(&view).expect("the guard names the profile");
+    let refusal = profile_refusal(
+        guard::load(&selected, fast.matrix.clone()).expect_err("loaded as the wrong law"),
+    );
+    assert!(refusal.contains("hnsw-reassociated-v2"), "{refusal}");
+}
+
+/// A reassociated payload recorded by a build of another shape is refused by name at the
+/// guard, both by the load and by the rebuild verification; the payload commitment is
+/// the artifact's own, so the refusal is the shape check and not a failed checksum. The
+/// neighbour is the same artifact with the payload this build wrote.
+#[test]
+fn a_foreign_build_shape_is_refused_at_the_guard() {
+    let fast = purremb::Fixture::new_reassociated(24, 4, params());
+    let here = BuildShape::here();
+    // The shape follows the code in a reassociated header.
+    assert_eq!(fast.image[64..72], here.bits().to_le_bytes());
+    let foreign = BuildShape::from_parts(here.bits() ^ 1 << 47, here.identity());
+    assert_ne!(foreign, here);
+    let mut patched = fast.image.clone();
+    patched[64..72].copy_from_slice(&foreign.bits().to_le_bytes());
+    let refusal = HnswError::ArithmeticBuildMismatch {
+        recorded: foreign,
+        here,
+    };
+
+    for (artifact, refused) in [
+        (fast.with_payload(fast.image.clone()), false),
+        (fast.with_payload(patched), true),
+    ] {
+        let mut view = EmbeddingView::from_bytes(&artifact).expect("the artifact opens");
+        verify_embedding(&mut view).expect("the payload commitment is the artifact's own");
+        let selected = guard::select(&view).expect("the guard names the profile");
+        guard::verify_payload_commitment(
+            &selected,
+            guard::payload_bytes(&selected).expect("inline"),
+        )
+        .expect("the guard commits these bytes");
+        let loaded = guard::load_reassociated(&selected, fast.matrix.clone());
+        let verified = guard::verify_rebuild(&selected, &fast.matrix, &fast.params);
+        if refused {
+            assert_eq!(loaded.expect_err("a foreign build is refused"), refusal);
+            assert_eq!(
+                verified.expect_err("refused by name, never `Ok(false)`"),
+                refusal
+            );
+        } else {
+            let index = loaded.expect("this build's payload loads");
+            assert_eq!(index.canonical_image(), fast.image);
+            assert!(verified.expect("this build's payload verifies"));
+        }
+    }
+}
+
+/// A reassociated payload whose shape bits are this build's but whose recorded build
+/// identity is another's -- another compiler, target CPU, optimisation level or codegen
+/// flags -- is refused by name at the guard, by the load and by the rebuild verification.
+/// The payload is re-committed through the real builder, so the refusal is the identity
+/// check and not a failed checksum; the neighbour is the same artifact with the payload
+/// this build wrote.
+#[test]
+fn a_foreign_build_identity_is_refused_at_the_guard() {
+    let fast = purremb::Fixture::new_reassociated(24, 4, params());
+    let here = BuildShape::here();
+    // The identity's digest follows the shape's bits in a reassociated header.
+    assert_eq!(fast.image[64..72], here.bits().to_le_bytes());
+    assert_eq!(fast.image[72..80], here.identity().digest().to_le_bytes());
+    let foreign = BuildShape::from_parts(
+        here.bits(),
+        BuildIdentity::from_digest(here.identity().digest().rotate_left(32)),
+    );
+    assert_ne!(foreign, here);
+    let mut patched = fast.image.clone();
+    patched[72..80].copy_from_slice(&foreign.identity().digest().to_le_bytes());
+    let refusal = HnswError::ArithmeticBuildMismatch {
+        recorded: foreign,
+        here,
+    };
+
+    for (artifact, refused) in [
+        (fast.with_payload(fast.image.clone()), false),
+        (fast.with_payload(patched), true),
+    ] {
+        let mut view = EmbeddingView::from_bytes(&artifact).expect("the artifact opens");
+        verify_embedding(&mut view).expect("the payload commitment is the artifact's own");
+        let selected = guard::select(&view).expect("the guard names the profile");
+        guard::verify_payload_commitment(
+            &selected,
+            guard::payload_bytes(&selected).expect("inline"),
+        )
+        .expect("the guard commits these bytes");
+        let loaded = guard::load_reassociated(&selected, fast.matrix.clone());
+        let verified = guard::verify_rebuild(&selected, &fast.matrix, &fast.params);
+        if refused {
+            assert_eq!(loaded.expect_err("a foreign build is refused"), refusal);
+            assert_eq!(
+                verified.expect_err("refused by name, never `Ok(false)`"),
+                refusal
+            );
+            assert!(
+                refusal
+                    .to_string()
+                    .contains("the target and features agree and the build identity differs"),
+                "{refusal}"
+            );
+        } else {
+            let index = loaded.expect("this build's payload loads");
+            assert_eq!(index.canonical_image(), fast.image);
+            assert!(verified.expect("this build's payload verifies"));
+        }
+    }
+}
+
+/// A reassociated payload one distance bit away from its build, under this build's path
+/// and shape and re-committed through the real builder so its checksum holds, is the
+/// tamper answer at the guard: `verify_rebuild` is `Ok(false)`, exactly as for an exact
+/// payload. The control is the untouched payload, which verifies `true`.
+#[test]
+fn a_tampered_reassociated_payload_verifies_false_at_the_guard() {
+    let exact = purremb::Fixture::new(24, 4, params());
+    let fast = purremb::Fixture::new_reassociated(24, 4, params());
+    assert_eq!(fast.image[64..72], BuildShape::here().bits().to_le_bytes());
+    // Node 0's first layer-0 distance: the header, then node 0 (row u64, level u32,
+    // reserved u32), its layer-0 record (layer u32, reserved u32, count u64), then the
+    // first neighbour's row u64.
+    for (fixture, header) in [(&exact, 72), (&fast, 88)] {
+        let count = header + 16 + 8;
+        assert!(
+            u64::from_le_bytes(fixture.image[count..count + 8].try_into().expect("u64")) > 0,
+            "node 0 has a layer-0 neighbour"
+        );
+        let mut tampered = fixture.image.clone();
+        tampered[count + 16] ^= 1;
+        for (payload, expected) in [(fixture.image.clone(), true), (tampered, false)] {
+            let artifact = fixture.with_payload(payload);
+            let mut view = EmbeddingView::from_bytes(&artifact).expect("the artifact opens");
+            verify_embedding(&mut view).expect("the payload commitment is the artifact's own");
+            let selected = guard::select(&view).expect("the guard names the profile");
+            assert_eq!(
+                guard::verify_rebuild(&selected, &fixture.matrix, &fixture.params)
+                    .expect("a build of the recorded shape answers"),
+                expected,
+                "header {header}: the untouched payload verifies and the tampered one is false"
+            );
+        }
+    }
 }

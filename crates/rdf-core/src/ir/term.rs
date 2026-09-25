@@ -83,6 +83,16 @@ impl TermId {
         (self.0.get() - 1) as usize
     }
 
+    /// The stored non-zero value, `index + 1`, as a plain `u32`.
+    ///
+    /// Crate-internal: it lets a filter compare ids as words, with `0` free to
+    /// stand for an absent `Option<TermId>` (the niche), without exposing the
+    /// offset outside the kernel.
+    #[inline]
+    pub(crate) const fn raw(self) -> u32 {
+        self.0.get()
+    }
+
     /// Construct a `TermId` from a dense table index.
     ///
     /// Low-level kernel API: the interner mints ids in allocation order; the

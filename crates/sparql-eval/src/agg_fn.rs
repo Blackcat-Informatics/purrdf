@@ -21,11 +21,15 @@
 //! `AVG`/`MIN`/`MAX`/`SAMPLE` → unbound, `GROUP_CONCAT` → `""`), `step` (fold one
 //! row's already-evaluated argument tuple in), and `finish` (produce the group's
 //! answer, or `None` for unbound) — exactly [`AggregateAccumulator`]'s three
-//! methods. Every built-in aggregate (`crate::modifier`'s `CountAccumulator`/
-//! `SumAccumulator`/`AvgAccumulator`/`MinAccumulator`/`MaxAccumulator`/
-//! `SampleAccumulator`/`GroupConcatAccumulator`) is a genuine
-//! `impl AggregateAccumulator`, the SAME trait a [`CustomAggregate::init`] call
-//! produces from a HOST registration — one fold algebra, not two. Only the
+//! methods. Every built-in aggregate but `SUM`/`AVG` (`crate::modifier`'s
+//! `CountAccumulator`/`MinAccumulator`/`MaxAccumulator`/`SampleAccumulator`/
+//! `GroupConcatAccumulator`) is a genuine `impl AggregateAccumulator`, the SAME
+//! trait a [`CustomAggregate::init`] call
+//! produces from a HOST registration — one fold algebra, not two. (`SUM`/`AVG`
+//! fold SPARQL's left-to-right `op:numeric-add` chain through
+//! `crate::modifier::fold_numeric` instead: a `combine` of two partial sums is
+//! a different expression from that chain, so they cannot honour the
+//! `combine` law below.) Only the
 //! DISPATCH differs: a built-in's concrete accumulator type is known at compile
 //! time, so `crate::modifier::fold_builtin` drives it by generic monomorphization
 //! (an ordinary, inlinable call on every `step`, no vtable); a registered

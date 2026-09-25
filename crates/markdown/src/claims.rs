@@ -164,7 +164,7 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
             }
             1 => {
                 if let Some((i, unit)) = units.next() {
-                    let cites = citations.get(&i).map(Vec::as_slice).unwrap_or_default();
+                    let cites = citations.get(&i).map_or_default(Vec::as_slice);
                     claims.push(unit_claim(
                         document.id(),
                         profile,

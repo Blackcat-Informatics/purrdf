@@ -44,6 +44,8 @@
 //! *below* the cap still parses, because an over-refusal here would reject
 //! conforming data just as surely as a missing check would accept malformed data.
 
+use purrdf_iri::json_escape::{JsonEscapes, push_string};
+
 use crate::error::GeoError;
 
 /// The greatest number of nested arrays and objects [`parse`] will accept.
@@ -528,33 +530,12 @@ fn write_into(value: &JsonValue, out: &mut String) {
     }
 }
 
+/// A JSON string: the workspace's one JSON escape law,
+/// [`purrdf_iri::json_escape`], in its [`JsonEscapes::ShortForms`] spelling
+/// (`\b` and `\f` short; DEL and every non-ASCII scalar legal raw and written
+/// as itself).
 fn write_string(text: &str, out: &mut String) {
-    out.push('"');
-    for character in text.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            control if u32::from(control) < 0x20 => {
-                out.push_str("\\u");
-                let code = u32::from(control);
-                for shift in [12_u32, 8, 4, 0] {
-                    let nibble = (code >> shift) & 0xF;
-                    // Every nibble is < 16, so `from_digit` cannot fail; the
-                    // fallback keeps the function total without an unwrap.
-                    out.push(char::from_digit(nibble, 16).unwrap_or('0'));
-                }
-            }
-            // Everything else, including U+007F and every non-ASCII scalar, is
-            // legal unescaped in RFC 8259 and is written as itself.
-            other => out.push(other),
-        }
-    }
-    out.push('"');
+    push_string(out, text, JsonEscapes::ShortForms);
 }
 
 #[cfg(test)]

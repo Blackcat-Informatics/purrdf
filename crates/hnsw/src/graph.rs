@@ -32,15 +32,50 @@
 
 use std::collections::BTreeSet;
 
+use purrdf_core::distance::{
+    Arithmetic, BuildIdentity, BuildShape, Exact, Resolved, RowsRef, Selected,
+};
+
 use crate::error::{HnswError, Result};
 use crate::params::Params;
-use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked, norm};
+use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked};
 
 /// The canonical image's magic marker; identifies the format before any length is trusted.
 pub(crate) const IMAGE_MAGIC: [u8; 8] = *b"PURHNSW1";
 
 /// The canonical image's format version.
-pub(crate) const IMAGE_VERSION: u32 = 1;
+///
+/// Version 2 is the first whose distances are folded by a named arithmetic, and the
+/// first whose header records that arithmetic's image code (in the `u32` that version 1
+/// reserved as zero): `1` for the sixteen-lane exact arithmetic, and for the
+/// reassociated one the code of the dispatch path the build ran, followed by the build's
+/// [`BuildShape`]: its bits, then its identity's digest. A version-1 image's distances were folded sequentially, so its recorded
+/// bits are not the ones this build computes; it is refused with
+/// [`HnswError::VersionMismatch`] rather than decoded.
+pub(crate) const IMAGE_VERSION: u32 = 2;
+
+/// What an image header records about the arithmetic its distances were computed under:
+/// the image code, and for an arithmetic whose bits depend on the build, the build's shape.
+///
+/// The shape is present exactly when the arithmetic has one ([`Arithmetic::build_shape`]),
+/// so an exact image carries none and its bytes are the ones it always had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Recorded {
+    /// The image code of the arithmetic and dispatch path.
+    pub code: u32,
+    /// The build shape, for an arithmetic whose bits depend on the build.
+    pub shape: Option<BuildShape>,
+}
+
+impl Recorded {
+    /// What an image computed on `arithmetic`'s path in this build records.
+    pub(crate) fn of<A: Arithmetic>(arithmetic: Selected<A>) -> Self {
+        Self {
+            code: arithmetic.image_code(),
+            shape: A::build_shape(),
+        }
+    }
+}
 
 /// A deterministic, finite-valued, row-major matrix of `f64` vectors.
 ///
@@ -257,21 +292,43 @@ impl VectorMatrix {
         }
     }
 
-    /// The L2 norm of row `row`, at whatever width it is stored.
+    /// The L2 norm of row `row`, at whatever width it is stored, by PURREMB's normative
+    /// fold ([`Resolved::<Exact>::norm`]).
+    ///
+    /// `arithmetic` is the exact handle, for the reason every distance here takes one: the
+    /// fold is binary64 arithmetic, and on a thread that flushes subnormals it would
+    /// return different bits for a row whose squared ratios are subnormal, which a cosine
+    /// kernel then divides by. Such a thread cannot obtain the handle. An index running
+    /// under another arithmetic obtains it with [`Resolved::exact`]: the norm has one
+    /// written order, whatever arithmetic ranks the distances.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` is not a valid row index.
     #[must_use]
-    pub fn norm_of_row(&self, row: usize) -> f64 {
+    pub fn norm_of_row(&self, arithmetic: Resolved<Exact>, row: usize) -> f64 {
         let start = row * self.dims;
         match &self.data {
-            Vectors::F64(data) => norm(&data[start..start + self.dims]),
-            Vectors::F32(data) => norm(&data[start..start + self.dims]),
+            Vectors::F64(data) => arithmetic.norm(&data[start..start + self.dims]),
+            Vectors::F32(data) => arithmetic.norm(&data[start..start + self.dims]),
         }
     }
+}
 
-    /// The distance between two stored rows under `kernel`, or `None` if it left the finite
-    /// range.
+impl VectorMatrix {
+    /// The distance between two stored rows under `kernel`, along `arithmetic`'s
+    /// resolved dispatch path, or `None` if it left the finite range.
+    ///
+    /// `arithmetic` comes from [`Arithmetic::resolve`] (or
+    /// [`Arithmetic::resolve_recorded`]), called once per scan or call site on the thread
+    /// that computes. That call is where a thread that flushes subnormals or rounds other
+    /// than to nearest is refused, by name; every distance this type computes takes the
+    /// handle it returns, so none is computed on a thread that was not checked. The handle
+    /// is `Copy`, and passing it costs nothing per pair.
     #[must_use]
-    pub fn distance(
+    pub fn distance<A: Arithmetic>(
         &self,
+        arithmetic: Resolved<A>,
         kernel: Kernel,
         a: usize,
         a_norm: f64,
@@ -279,14 +336,17 @@ impl VectorMatrix {
         b_norm: f64,
     ) -> Option<f64> {
         let (a_start, b_start) = (a * self.dims, b * self.dims);
+        let measure = kernel.measure();
         match &self.data {
-            Vectors::F64(data) => kernel.distance(
+            Vectors::F64(data) => arithmetic.distance(
+                measure,
                 &data[a_start..a_start + self.dims],
                 a_norm,
                 &data[b_start..b_start + self.dims],
                 b_norm,
             ),
-            Vectors::F32(data) => kernel.distance(
+            Vectors::F32(data) => arithmetic.distance(
+                measure,
                 &data[a_start..a_start + self.dims],
                 a_norm,
                 &data[b_start..b_start + self.dims],
@@ -295,14 +355,18 @@ impl VectorMatrix {
         }
     }
 
-    /// The distance from an external `binary64` query to a stored row.
+    /// The distance from an external `binary64` query to stored row `row`, along
+    /// `arithmetic`'s resolved dispatch path.
     ///
     /// The query is `f64` because it was computed rather than stored -- an embedding produced
-    /// at query time has no artifact width. A mixed-width pair is the ordinary case and is
-    /// bit-identical to a matched one.
+    /// at query time has no artifact width. A mixed-width pair is the ordinary case, and under
+    /// an arithmetic whose bits do not depend on the path it is bit-identical to a matched one.
+    /// `arithmetic` is the checked handle [`VectorMatrix::distance`] takes, for the same
+    /// reason.
     #[must_use]
-    pub fn distance_from_query(
+    pub fn distance_from_query<A: Arithmetic>(
         &self,
+        arithmetic: Resolved<A>,
         kernel: Kernel,
         query: &[f64],
         query_norm: f64,
@@ -310,20 +374,35 @@ impl VectorMatrix {
         row_norm: f64,
     ) -> Option<f64> {
         let start = row * self.dims;
+        let measure = kernel.measure();
         match &self.data {
-            Vectors::F64(data) => {
-                kernel.distance(query, query_norm, &data[start..start + self.dims], row_norm)
-            }
-            Vectors::F32(data) => {
-                kernel.distance(query, query_norm, &data[start..start + self.dims], row_norm)
-            }
+            Vectors::F64(data) => arithmetic.distance(
+                measure,
+                query,
+                query_norm,
+                &data[start..start + self.dims],
+                row_norm,
+            ),
+            Vectors::F32(data) => arithmetic.distance(
+                measure,
+                query,
+                query_norm,
+                &data[start..start + self.dims],
+                row_norm,
+            ),
         }
     }
 
     /// [`VectorMatrix::distance`], permitted to stop once it cannot clear `bound`.
     #[must_use]
-    pub fn distance_bounded(
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the resolved arithmetic, the kernel, both endpoints with their norms and \
+                  the bound are each an independent input of one distance"
+    )]
+    pub fn distance_bounded<A: Arithmetic>(
         &self,
+        arithmetic: Resolved<A>,
         kernel: Kernel,
         a: usize,
         a_norm: f64,
@@ -332,15 +411,18 @@ impl VectorMatrix {
         bound: Bound,
     ) -> Bounded {
         let (a_start, b_start) = (a * self.dims, b * self.dims);
+        let measure = kernel.measure();
         match &self.data {
-            Vectors::F64(data) => kernel.distance_bounded(
+            Vectors::F64(data) => arithmetic.distance_bounded(
+                measure,
                 &data[a_start..a_start + self.dims],
                 a_norm,
                 &data[b_start..b_start + self.dims],
                 b_norm,
                 bound,
             ),
-            Vectors::F32(data) => kernel.distance_bounded(
+            Vectors::F32(data) => arithmetic.distance_bounded(
+                measure,
                 &data[a_start..a_start + self.dims],
                 a_norm,
                 &data[b_start..b_start + self.dims],
@@ -348,6 +430,98 @@ impl VectorMatrix {
                 bound,
             ),
         }
+    }
+
+    /// The distances from stored row `seed` to each row of `ids`, in `ids` order, by one
+    /// call to the batch kernel.
+    ///
+    /// `norms` is the index's per-row norm table: empty for a kernel that does not divide
+    /// by one, one per row otherwise.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the resolved arithmetic, the kernel, the seed with its norm, the norm \
+                  table, the ids and the output are each an independent input of one batch"
+    )]
+    pub(crate) fn distances_from_row<A: Arithmetic>(
+        &self,
+        arithmetic: Resolved<A>,
+        kernel: Kernel,
+        seed: usize,
+        seed_norm: f64,
+        norms: &[f64],
+        ids: &[usize],
+        out: &mut [Option<f64>],
+    ) {
+        let start = seed * self.dims;
+        let measure = kernel.measure();
+        match &self.data {
+            Vectors::F64(data) => arithmetic.distances_indexed(
+                measure,
+                &data[start..start + self.dims],
+                seed_norm,
+                self.rows_ref(data, norms),
+                ids,
+                out,
+            ),
+            Vectors::F32(data) => arithmetic.distances_indexed(
+                measure,
+                &data[start..start + self.dims],
+                seed_norm,
+                self.rows_ref(data, norms),
+                ids,
+                out,
+            ),
+        }
+    }
+
+    /// The distances from an external `binary64` query to each row of `ids`, in `ids`
+    /// order, by one call to the batch kernel.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the resolved arithmetic, the kernel, the query with its norm, the norm \
+                  table, the ids and the output are each an independent input of one batch"
+    )]
+    pub(crate) fn distances_from_query<A: Arithmetic>(
+        &self,
+        arithmetic: Resolved<A>,
+        kernel: Kernel,
+        query: &[f64],
+        query_norm: f64,
+        norms: &[f64],
+        ids: &[usize],
+        out: &mut [Option<f64>],
+    ) {
+        let measure = kernel.measure();
+        match &self.data {
+            Vectors::F64(data) => arithmetic.distances_indexed(
+                measure,
+                query,
+                query_norm,
+                self.rows_ref(data, norms),
+                ids,
+                out,
+            ),
+            Vectors::F32(data) => arithmetic.distances_indexed(
+                measure,
+                query,
+                query_norm,
+                self.rows_ref(data, norms),
+                ids,
+                out,
+            ),
+        }
+    }
+
+    /// This matrix's buffer as the batch kernels' row view.
+    fn rows_ref<'a, T: purrdf_core::distance::Scalar>(
+        &self,
+        data: &'a [T],
+        norms: &'a [f64],
+    ) -> RowsRef<'a, T> {
+        RowsRef::new(data, self.rows, self.dims, norms).expect(
+            "a validated matrix holds rows * dims values, and its norm table is empty or \
+             one per row",
+        )
     }
 }
 
@@ -520,8 +694,15 @@ impl Graph {
         true
     }
 
-    /// Encode the graph into its canonical byte image.
-    pub(crate) fn canonical_image(&self, kernel: Kernel, params: &Params) -> Vec<u8> {
+    /// Encode the graph into its canonical byte image, recording `arithmetic` -- the
+    /// image code of the arithmetic and dispatch path its distances were computed
+    /// on, and the build shape of one whose bits depend on the build -- in the header.
+    pub(crate) fn canonical_image(
+        &self,
+        kernel: Kernel,
+        params: &Params,
+        arithmetic: Recorded,
+    ) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&IMAGE_MAGIC);
         push_u32(&mut out, IMAGE_VERSION);
@@ -532,7 +713,13 @@ impl Graph {
         push_u64(&mut out, as_u64(params.ef_search()));
         push_u64(&mut out, as_u64(self.node_count()));
         push_u32(&mut out, self.max_level);
-        push_u32(&mut out, 0);
+        // The arithmetic, and path, the recorded distances were folded under, and the
+        // shape of the build that compiled that path, where the arithmetic has one.
+        push_u32(&mut out, arithmetic.code);
+        if let Some(shape) = arithmetic.shape {
+            push_u64(&mut out, shape.bits());
+            push_u64(&mut out, shape.identity().digest());
+        }
         push_u64(&mut out, self.entry.map_or(u64::MAX, as_u64));
 
         for row in 0..self.node_count() {
@@ -666,10 +853,19 @@ pub(crate) struct GraphImage {
     pub graph: Graph,
     pub kernel: Kernel,
     pub params: Params,
+    /// What the header records about the arithmetic: one of the decoding arithmetic's
+    /// codes, and a build shape exactly when that arithmetic has one.
+    pub arithmetic: Recorded,
 }
 
-/// Decode a canonical image, validating every structural invariant it must satisfy.
-pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
+/// Decode a canonical image as one computed under arithmetic `A`, validating every
+/// structural invariant it must satisfy.
+///
+/// A header whose arithmetic field is not one of `A`'s image codes is refused with
+/// [`HnswError::ArithmeticMismatch`]: its distances were folded under another law. Which
+/// of `A`'s codes it records, and the build shape it records when `A` has one, are
+/// returned for the caller to hold against the path it runs and the build it is.
+pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
     let mut cursor = Cursor::new(bytes);
     if cursor.take(IMAGE_MAGIC.len())? != IMAGE_MAGIC.as_slice() {
         return Err(HnswError::InvalidPayload {
@@ -692,12 +888,25 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
     )?;
     let node_count = cursor.usize()?;
     let max_level = cursor.u32()?;
-    let reserved = cursor.u32()?;
-    if reserved != 0 {
-        return Err(HnswError::InvalidPayload {
-            reason: format!("the header's reserved field is {reserved}, not zero"),
+    let code = cursor.u32()?;
+    if !A::IMAGE_CODES.contains(&code) {
+        return Err(HnswError::ArithmeticMismatch {
+            arithmetic: A::ID,
+            actual: code,
         });
     }
+    // The code is one of `A`'s, so the fields follow exactly when `A` has a shape.
+    let shape = match A::build_shape() {
+        Some(_) => {
+            let bits = cursor.u64()?;
+            Some(BuildShape::from_parts(
+                bits,
+                BuildIdentity::from_digest(cursor.u64()?),
+            ))
+        }
+        None => None,
+    };
+    let arithmetic = Recorded { code, shape };
     let entry_raw = cursor.u64()?;
 
     // A node record is at least 16 bytes of fixed fields (row, level, reserved) plus one
@@ -836,6 +1045,7 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
         graph,
         kernel,
         params,
+        arithmetic,
     })
 }
 
@@ -954,9 +1164,18 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::distance::{Exact, Reassociated};
 
     fn params() -> Params {
         Params::new(4, 8, 16, 8).expect("valid")
+    }
+
+    /// What an exact image records: its one code and no shape.
+    const fn exact() -> Recorded {
+        Recorded {
+            code: Exact::IMAGE_CODE,
+            shape: None,
+        }
     }
 
     fn sample_graph() -> Graph {
@@ -1051,30 +1270,101 @@ mod tests {
     fn a_canonical_image_round_trips_byte_for_byte() {
         let graph = sample_graph();
         let params = params();
-        let image = graph.canonical_image(Kernel::SquaredEuclidean, &params);
-        let decoded = decode_image(&image).expect("the image decodes");
+        let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, exact());
+        let decoded = decode_image::<Exact>(&image).expect("the image decodes");
         assert_eq!(decoded.kernel, Kernel::SquaredEuclidean);
         assert_eq!(decoded.params, params);
+        assert_eq!(decoded.arithmetic, exact());
         assert_eq!(decoded.graph, graph, "the graph survives decode");
-        let reencoded = decoded
-            .graph
-            .canonical_image(decoded.kernel, &decoded.params);
+        let reencoded =
+            decoded
+                .graph
+                .canonical_image(decoded.kernel, &decoded.params, decoded.arithmetic);
         assert_eq!(image, reencoded, "decode then encode is the identity");
+    }
+
+    #[test]
+    fn the_header_code_is_decoded_only_by_its_own_arithmetic() {
+        let graph = sample_graph();
+        let params = params();
+        for &code in Reassociated::IMAGE_CODES {
+            let recorded = Recorded {
+                code,
+                shape: Some(BuildShape::here()),
+            };
+            let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, recorded);
+            assert_eq!(
+                decode_image::<Reassociated>(&image)
+                    .expect("a reassociated code decodes as reassociated")
+                    .arithmetic,
+                recorded
+            );
+            assert!(matches!(
+                decode_image::<Exact>(&image),
+                Err(HnswError::ArithmeticMismatch { actual, .. }) if actual == code
+            ));
+        }
+        let exact_image = graph.canonical_image(Kernel::SquaredEuclidean, &params, exact());
+        assert!(matches!(
+            decode_image::<Reassociated>(&exact_image),
+            Err(HnswError::ArithmeticMismatch { actual: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn only_a_reassociated_header_carries_a_build_shape() {
+        let graph = sample_graph();
+        let params = params();
+        let exact_image = graph.canonical_image(Kernel::SquaredEuclidean, &params, exact());
+        let shape = BuildShape::from_parts(
+            0x0123_4567_89ab_cdef,
+            BuildIdentity::from_digest(0xfedc_ba98_7654_3210),
+        );
+        let reassociated = Recorded {
+            code: 3,
+            shape: Some(shape),
+        };
+        let image = graph.canonical_image(Kernel::SquaredEuclidean, &params, reassociated);
+        // The shape is the sixteen bytes after the arithmetic code, its bits then its
+        // identity's digest; everything else is the exact image's, shifted by them.
+        assert_eq!(image.len(), exact_image.len() + 16);
+        assert_eq!(image[..60], exact_image[..60]);
+        assert_eq!(image[60..64], 3_u32.to_le_bytes());
+        assert_eq!(image[64..72], shape.bits().to_le_bytes());
+        assert_eq!(image[72..80], shape.identity().digest().to_le_bytes());
+        assert_eq!(image[80..], exact_image[64..]);
+        // The decoder reads the shape back verbatim, whatever build it names; holding it
+        // against this build is the caller's refusal, not the decoder's.
+        let decoded = decode_image::<Reassociated>(&image).expect("decodes");
+        assert_eq!(decoded.arithmetic, reassociated);
+        assert_eq!(
+            decoded
+                .graph
+                .canonical_image(decoded.kernel, &decoded.params, decoded.arithmetic),
+            image
+        );
+        // An image whose shape field is missing is truncated, not an exact image.
+        let mut shapeless = exact_image;
+        shapeless[60..64].copy_from_slice(&3_u32.to_le_bytes());
+        assert!(matches!(
+            decode_image::<Reassociated>(&shapeless),
+            Err(HnswError::InvalidPayload { .. })
+        ));
     }
 
     #[test]
     fn truncated_and_corrupt_images_are_refused() {
         let graph = sample_graph();
-        let image = graph.canonical_image(Kernel::Cosine, &params());
-        assert!(decode_image(&image[..image.len() - 1]).is_err());
+        let image = graph.canonical_image(Kernel::Cosine, &params(), exact());
+        assert!(decode_image::<Exact>(&image[..image.len() - 1]).is_err());
         let mut trailing = image.clone();
         trailing.push(0);
-        assert!(decode_image(&trailing).is_err());
+        assert!(decode_image::<Exact>(&trailing).is_err());
         let mut bad_magic = image.clone();
         bad_magic[0] ^= 0xff;
-        assert!(decode_image(&bad_magic).is_err());
+        assert!(decode_image::<Exact>(&bad_magic).is_err());
         let mut bad_version = image;
         bad_version[8] = 0xff;
-        assert!(decode_image(&bad_version).is_err());
+        assert!(decode_image::<Exact>(&bad_version).is_err());
     }
 }

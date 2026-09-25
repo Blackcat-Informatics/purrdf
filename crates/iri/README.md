@@ -29,6 +29,8 @@ CURIE/prefix handling.
   percent-encoding, and dot-segment normalization; idempotent.
 - **CURIE/prefix** — `expand_curie` / `resolve` / `contract` over a
   `PrefixMap`.
+- **JSON string escape law** — `json_escape`, the one RFC 8259 §7 string-body
+  escaper every PurRDF JSON writer shares, over a chunked clean-run scan.
 - **Hard-fail** — malformed input is a typed `IriError`, never a degraded
   fallback or silent default.
 
@@ -69,7 +71,7 @@ as `purrdf::iri`; depend on `purrdf-iri` directly when you just want a small,
 dependency-free IRI library.
 
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
-follows the workspace `rust-version` (currently 1.96, stable toolchain only).
+follows the workspace `rust-version` (currently 1.98, stable toolchain only).
 
 ## License
 
