@@ -49,8 +49,8 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
-    ServiceLevel, TermKind, TermPattern, TermPlacement, Volatility,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic, RankedDeclaration,
+    RequestFacet, ServiceLevel, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -378,6 +378,7 @@ fn shaped_registry(
                 candidate_position: CANDIDATE_POSITION,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
+                arithmetic: RankArithmetic::FloatFree,
                 domains: CandidateDomains::within([shared.clone()]),
                 block_position: None,
                 exclusion,

@@ -5,6 +5,8 @@
 
 use std::{borrow::Cow, fmt::Write as _, ops::Range};
 
+use purrdf_core::terminals::find_first_json_string_special;
+
 use crate::{Bounds, JsonError, Kind, Value};
 
 pub(crate) fn parse(
@@ -236,7 +238,50 @@ impl Parser<'_> {
         }
     }
 
+    /// One string's body span, positioned at its opening quote.
+    ///
+    /// Each clean run — everything up to the next `"`, `\\` or C0 control, which
+    /// RFC 8259 §7 calls `unescaped` — is crossed by one chunked scan of exactly
+    /// that class ([`find_first_json_string_special`]); only the byte it stops at
+    /// takes the per-byte grammar below. The text is a `&str`, so a run needs no
+    /// UTF-8 check, and the scan's class holds only ASCII bytes, so it always
+    /// stops on a char boundary.
     fn string(&mut self) -> Result<Range<usize>, JsonError> {
+        self.expect(b'"', "a quoted string")?;
+        let start = self.at;
+        loop {
+            let rest = &self.bytes[self.at..];
+            self.at += find_first_json_string_special(rest).unwrap_or(rest.len());
+            match self.peek() {
+                None => return Err(self.syntax("a closing quote")),
+                Some(b'"') => {
+                    let end = self.at;
+                    self.at += 1;
+                    return Ok(start..end);
+                }
+                Some(b'\\') => {
+                    self.at += 1;
+                    match self.peek() {
+                        Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {
+                            self.at += 1;
+                        }
+                        Some(b'u') => {
+                            self.at += 1;
+                            self.hex4()?;
+                        }
+                        _ => return Err(self.syntax("a JSON escape")),
+                    }
+                }
+                // The scan stops only at `"`, `\\` and the C0 controls.
+                Some(_) => return Err(self.syntax("an escaped control character")),
+            }
+        }
+    }
+
+    /// The per-byte string scan [`string`](Self::string) replaced, kept verbatim
+    /// as the oracle.
+    #[cfg(test)]
+    fn string_reference(&mut self) -> Result<Range<usize>, JsonError> {
         self.expect(b'"', "a quoted string")?;
         let start = self.at;
         loop {
@@ -360,4 +405,101 @@ fn decode_hex(chars: &mut core::str::Chars<'_>, at: usize) -> Result<u32, JsonEr
         result = result * 16 + digit;
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Parser;
+    use crate::Bounds;
+
+    fn parser(text: &str) -> Parser<'_> {
+        Parser {
+            text,
+            bytes: text.as_bytes(),
+            at: 0,
+            values: Vec::new(),
+            bounds: Bounds::standard(),
+            pointer_bytes: 0,
+        }
+    }
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
+        }
+    }
+
+    /// The chunked string scan agrees with the per-byte one — span, end
+    /// position, or the same typed refusal at the same offset — on fixed-seed
+    /// bodies holding every special byte, whole and malformed escapes, DEL and
+    /// the C1 block (lawful raw), and non-ASCII in every UTF-8 width, at lengths
+    /// 0-70 and past several chunks.
+    #[test]
+    fn chunked_string_scan_agrees_with_the_per_byte_scan() {
+        const PIECES: &[&str] = &[
+            "\"",
+            "\\",
+            "\\\"",
+            "\\\\",
+            "\\/",
+            "\\b",
+            "\\n",
+            "\\u0001",
+            "\\uD83D\\uDE00",
+            "\\u12",
+            "\\x",
+            "\u{0}",
+            "\u{1}",
+            "\t",
+            "\n",
+            "\u{1f}",
+            "\u{7f}",
+            " ",
+            "\u{85}",
+            "\u{e9}",
+            "\u{4e2d}",
+            "\u{1f600}",
+        ];
+        let mut rng = SplitMix(0x0150_05CA_9000_0001);
+        let (mut ok, mut refused) = (0_usize, 0_usize);
+        for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
+            for round in 0..40 {
+                let density = if round % 2 == 0 { 4 } else { 60 };
+                let mut text = String::from("\"");
+                for _ in 0..len {
+                    if rng.below(density) == 0 {
+                        text.push_str(PIECES[rng.below(PIECES.len())]);
+                    } else {
+                        text.push('s');
+                    }
+                }
+                if round % 5 != 0 {
+                    text.push('"');
+                }
+                text.push_str(", 1");
+                let (mut fast, mut reference) = (parser(&text), parser(&text));
+                let got = fast.string();
+                let expected = reference.string_reference();
+                assert_eq!(format!("{got:?}"), format!("{expected:?}"), "{text:?}");
+                assert_eq!(fast.at, reference.at, "{text:?}");
+                if got.is_ok() {
+                    ok += 1;
+                } else {
+                    refused += 1;
+                }
+            }
+        }
+        assert!(ok > 0 && refused > 0, "{ok} {refused}");
+    }
 }

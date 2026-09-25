@@ -47,7 +47,17 @@
 //!   character class decides token BOUNDARIES under maximal munch, so an
 //!   approximation misparses documents rather than merely widening the accepted
 //!   language, and one transcription is the only way to keep the scanners
-//!   agreeing with each other.
+//!   agreeing with each other. The same module carries the byte-class
+//!   scanners built from those tables ([`terminals::find_first_trivia`],
+//!   [`terminals::find_first_iri_body_special`],
+//!   [`terminals::find_first_json_string_special`],
+//!   [`terminals::find_first_xml_special`]): portable chunked scans that find
+//!   the first byte of a class sixteen bytes at a time.
+//! * **JSON string escape law** — [`json_escape`], the one RFC 8259 §7 string
+//!   body escaper every PurRDF JSON writer shares, over the JSON string-body
+//!   scanner above. It lives in this leaf because it is the one crate every
+//!   JSON-emitting crate reaches; [`json_escape::JsonEscapes`] names the three
+//!   spellings those writers pin.
 //!
 //! # Hard-fail
 //!
@@ -126,12 +136,16 @@
 mod base;
 mod curie;
 mod error;
+pub mod json_escape;
 pub mod langtag;
 mod normalize;
 mod parse;
 pub mod pos;
 mod resolve;
+mod scan;
 pub mod terminals;
+#[cfg(test)]
+mod test_rng;
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};

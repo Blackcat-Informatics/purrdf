@@ -148,6 +148,8 @@ fn bench_pack_index_hypothesis(c: &mut Criterion) {
     let dense_object_term = pack_term(&pack, 'o', dense_object);
     let sparse_predicate_term = pack_term(&pack, 'p', sparse_predicate);
     let sparse_object_term = pack_term(&pack, 'o', sparse_object);
+    // Object 1: 256 positions (`s % 257 == 0`), all of them the dense predicate's.
+    let skewed_object_term = pack_term(&pack, 'o', 1);
 
     let expected_dense_predicate = pack
         .quads_for_pattern(None, Some(dense_predicate_term), None, GraphMatch::Any)
@@ -223,6 +225,23 @@ fn bench_pack_index_hypothesis(c: &mut Criterion) {
         wavelet.predicate_object_count(&adjacency, sparse_predicate_local, sparse_object_local),
         expected_sparse_pair
     );
+
+    // The skewed pairs agree with the object's own pattern filtered by predicate:
+    // every position of the first pair's object is a hit, none of the second's.
+    for (predicate, object, hits) in [
+        (dense_predicate_term, skewed_object_term, true),
+        (sparse_predicate_term, dense_object_term, false),
+    ] {
+        let pair = pack
+            .quads_for_pattern(None, Some(predicate), Some(object), GraphMatch::Any)
+            .count();
+        let scanned = pack
+            .quads_for_pattern(None, None, Some(object), GraphMatch::Any)
+            .filter(|quad| quad.p == predicate)
+            .count();
+        assert_eq!(pair, scanned);
+        assert_eq!(pair > 0, hits);
+    }
 
     eprintln!(
         "pack-index-context rows={} triples={} pack-bytes={} foq-index-bytes={} wavelet-index-bytes={}",
@@ -368,6 +387,33 @@ fn bench_pack_index_hypothesis(c: &mut Criterion) {
             ))
         });
     });
+    // The skewed pairs the WatDiv and LUBM query sets mostly issue: one list tens
+    // to thousands of times the other. `object_short` pairs the dense predicate
+    // (65,536 positions) with an object reached 256 times, every one through that
+    // predicate; `predicate_short` pairs the 64-position sparse predicate with the
+    // dense object (65,536 positions), which it never reaches. Only the shorter
+    // list is decoded, so each answers in time proportional to that list.
+    for (name, predicate, object) in [
+        (
+            "pair_skewed_object_short",
+            dense_predicate_term,
+            skewed_object_term,
+        ),
+        (
+            "pair_skewed_predicate_short",
+            sparse_predicate_term,
+            dense_object_term,
+        ),
+    ] {
+        query.bench_function(format!("production_foq/{name}"), |b| {
+            b.iter(|| {
+                std::hint::black_box(
+                    pack.quads_for_pattern(None, Some(predicate), Some(object), GraphMatch::Any)
+                        .count(),
+                )
+            });
+        });
+    }
     query.finish();
 }
 

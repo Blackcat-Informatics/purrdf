@@ -136,6 +136,8 @@ pub mod stat_agg;
 mod statement_layer;
 mod substitute;
 mod template;
+#[doc(hidden)]
+pub mod test_rng;
 pub mod update;
 pub mod user_fn;
 // The per-query record of what the relations a query invoked attested about the
@@ -213,11 +215,12 @@ pub use purrdf_sparql_algebra::ParserOptions;
 // relation into the engine without naming the module path.
 pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, KnnObservations, Ranked};
 pub use property_fn::{
-    AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DomainTag, DuplicatePolicy,
-    ExclusionBasis, IndexGeneration, MemoryRelation, OrderFidelity, PfArgs, PfArity, PfAttestation,
-    PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry,
-    RankFidelity, RankedDeclaration, RequestFacet, ServiceLevel, TermKind, TermPattern,
-    TermPlacement, generation_contained, service_level_contained,
+    AcceptedTerm, CandidateDomains, Completeness, DeclaredArithmetic, DepthPlacement, DomainTag,
+    DuplicatePolicy, ExclusionBasis, IndexGeneration, MemoryRelation, OrderFidelity, PfArgs,
+    PfArity, PfAttestation, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
+    PropertyFunctionRegistry, RankArithmetic, RankFidelity, RankedDeclaration, RequestFacet,
+    ServiceLevel, TermKind, TermPattern, TermPlacement, composed_order_fidelity,
+    generation_contained, service_level_contained,
 };
 // The property-function registry's CONTENT-only identity. It lives in the private
 // planning module beside the instance-bearing fingerprint, which renders it rather

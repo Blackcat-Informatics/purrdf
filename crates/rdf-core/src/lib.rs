@@ -72,6 +72,13 @@ pub mod describe;
 /// Structured diagnostics: severity, source/GTS locations, conversion losses,
 /// and the [`RdfDiagnostic`] record callers translate to their reporting layer.
 pub mod diagnostic;
+// The binary64 distance arithmetics every ranked-retrieval surface computes with: the
+// sealed `Arithmetic` contract, the fixed-lane `Exact` law, the target-dependent
+// reassociated law, their batch kernels and once-per-scan dispatch, and the
+// float-environment precondition. Outside `ir` on purpose: dispatch needs `std`'s CPU
+// detection and `unsafe` calls into `#[target_feature]` compilations, neither of which
+// belongs in the `no_std`-ready IR.
+pub mod distance;
 // Native FnO (W3C Function Ontology) typed catalog model + serializer.
 // PyO3-free; the `purrdf-slice` FnO emitter builds a `FnoCatalog` from the slice
 // framework and serializes it here, replacing rdflib `emit_fno`/`_emit_fnom`.
@@ -122,6 +129,8 @@ pub mod small;
 pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;
+#[doc(hidden)]
+pub mod test_rng;
 pub mod turtle;
 // The canonical, review-friendly Turtle RENDERER over the IR — the oxigraph-free half
 // of the on-disk normalizer (the oxigraph-coupled text parser stays in `purrdf`).

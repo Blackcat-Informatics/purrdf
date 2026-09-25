@@ -373,11 +373,15 @@ impl<'a> Projector<'a> {
                     "record set `{id}` row datatype `{datatype}` does not match caller JSON datatype"
                 )));
             }
-            rows.push(serde_json::from_str(&lexical).map_err(|error| {
-                ProjectionError::syntax(format!(
-                    "parse inline row JSON for record set `{id}`: {error}"
-                ))
-            })?);
+            rows.push(
+                crate::json_number::read_json(|| serde_json::from_str(&lexical)).map_err(
+                    |error| {
+                        ProjectionError::syntax(format!(
+                            "parse inline row JSON for record set `{id}`: {error}"
+                        ))
+                    },
+                )?,
+            );
         }
         Ok(ResearchRecordSet {
             id,
@@ -1216,6 +1220,71 @@ mod tests {
             project_research_object(lifted.as_ref(), "croissant-1.1", &config).expect("reproject");
         assert_eq!(second.model, first.model);
         assert!(second.loss_ledger.is_empty());
+    }
+
+    /// A record set's inline rows are rdf:JSON literals serialized from their numbers, and
+    /// projecting them back reads every number as the value it was: the witnesses'
+    /// serialized forms are ones a reader that is not correctly rounded (or the x87's
+    /// double-rounded fast path) read as a neighbour.
+    #[test]
+    fn record_set_row_numbers_project_back_to_their_own_values() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        let config = config();
+        let serialized = |value: f64| serde_json::to_string(&value).ok();
+        let numbers: Vec<f64> = soft::misread_spellings(40, serialized)
+            .into_iter()
+            .chain(soft::x87_misread_spellings(20, serialized))
+            .map(|(value, _)| value)
+            .collect();
+        let rows: Vec<serde_json::Value> = numbers
+            .chunks(6)
+            .map(|chunk| serde_json::json!({ "n": chunk }))
+            .collect();
+        let record_set = "https://example.org/entities/numbers";
+        let mut dataset = ResearchDataset {
+            id: config.identity().dataset_iri().to_owned(),
+            titles: vec![
+                ResearchText::plain("Dataset", config.roles().iri(ResearchRole::XsdString))
+                    .expect("text"),
+            ],
+            descriptions: vec![],
+            identifiers: vec![],
+            versions: vec![],
+            issued: vec![],
+            modified: vec![],
+            landing_pages: vec![],
+            keywords: vec![],
+            licenses: vec![],
+            creators: vec![],
+            publishers: vec![],
+            resources: vec![],
+            activities: vec![],
+            record_sets: vec![],
+        };
+        dataset.record_sets.push(record_set.to_owned());
+        let model = ResearchObjectModel {
+            dataset,
+            agents: vec![],
+            resources: vec![],
+            activities: vec![],
+            record_sets: vec![ResearchRecordSet {
+                id: record_set.to_owned(),
+                names: vec![],
+                descriptions: vec![],
+                fields: vec![],
+                rows: rows.clone(),
+            }],
+        };
+        let lifted = lift_research_object(model, &config).expect("lift");
+        let projected =
+            project_research_object(&*lifted, "croissant-1.1", &config).expect("project");
+        let mut read = projected.model.record_sets[0].rows.clone();
+        let mut expected = rows;
+        let key = |row: &serde_json::Value| serde_json::to_string(row).expect("row");
+        read.sort_by_key(key);
+        expected.sort_by_key(key);
+        assert_eq!(read, expected);
     }
 
     #[test]

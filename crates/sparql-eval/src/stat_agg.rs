@@ -37,8 +37,9 @@
 //! every input and therefore cannot stay in the exact decimal tower the way
 //! `VARIANCE`/`VAR_POP` do: the variance itself is computed exactly (promoted
 //! per the tower above), and ONLY the final `sqrt` step drops to `xsd:double`
-//! (Rust's `f64::sqrt`), mirroring how this crate already treats `xsd:double`
-//! as its one inexact numeric tier. `VARIANCE`/`VAR_POP` never leave the exact
+//! (`purrdf_xsd::ieee::f64_sqrt`, the square root correctly rounded on every
+//! target, the x87 included), mirroring how this crate already treats
+//! `xsd:double` as its one inexact numeric tier. `VARIANCE`/`VAR_POP` never leave the exact
 //! tower.
 //!
 //! `STDDEV`/`VARIANCE` are the **sample** statistics (`n - 1` denominator,
@@ -928,7 +929,8 @@ impl AggregateAccumulator for MomentsAccumulator {
                 let Some(v) = to_f64(&variance) else {
                     return Ok(None);
                 };
-                let root = v.max(0.0).sqrt();
+                // Correctly rounded on every target, the x87 included.
+                let root = purrdf_xsd::ieee::f64_sqrt(v.max(0.0));
                 Ok(Some(TermValue::typed_literal(
                     XsdValue::Double(root).canonical_lexical(),
                     XSD_DOUBLE,

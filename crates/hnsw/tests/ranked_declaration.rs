@@ -14,6 +14,10 @@
 
 use std::sync::Arc;
 
+#[path = "support/corpus.rs"]
+mod corpus;
+
+use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_core::{DistanceMetric, IndexLossContract, TermValue};
 use purrdf_hnsw::relation::{
     HnswRelation, HnswSpace, RankedHnswRegistration, composed_order_fidelity, order_fidelity,
@@ -22,7 +26,7 @@ use purrdf_hnsw::relation::{
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, profile};
 use purrdf_sparql_eval::{
     CandidateDomains, Completeness, DuplicatePolicy, KnnGuard, OrderFidelity,
-    PropertyFunctionRegistry, TermKind,
+    PropertyFunctionRegistry, RankArithmetic, TermKind,
 };
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -37,17 +41,7 @@ fn params() -> Params {
 /// `(-1, 1)`; nothing here reads a clock or an RNG.
 fn space_over(rows: usize, terms: Vec<TermValue>, params: Params) -> Arc<HnswSpace> {
     let dims = 4;
-    let mut state = 0x51DE_0000_1234_ABCD_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        let value = ((z >> 11) as f64 / (1u64 << 53) as f64).mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.125 } else { value });
-    }
+    let data = corpus::linear_unit_values(0x51DE_0000_1234_ABCD_u64, rows * dims);
     let matrix = VectorMatrix::new(rows, dims, data).expect("a valid matrix");
     let index =
         HnswIndex::build(matrix, &DistanceMetric::SquaredEuclidean, params).expect("it builds");
@@ -426,4 +420,86 @@ fn a_search_within_the_beam_is_still_served() {
         .search_rows(0, 4)
         .expect("a search within the beam succeeds");
     assert!(!rows.is_empty(), "and it returns rows");
+}
+
+// --- The reassociated index declares its own arithmetic ----------------------
+
+/// A reassociated space over the same vectors [`space`] builds its exact index over.
+fn reassociated_space(rows: usize) -> Arc<HnswSpace<Reassociated>> {
+    let exact = space(rows);
+    let index = HnswIndex::build_reassociated(
+        exact.index().matrix().clone(),
+        &DistanceMetric::SquaredEuclidean,
+        params(),
+    )
+    .expect("it builds");
+    let guard = KnnGuard::new(rows as u64, rows as u64).expect("a valid guard");
+    Arc::new(HnswSpace::from_index(index, iris(rows), guard).expect("a valid space"))
+}
+
+#[test]
+fn reassociated_hnsw_declares_its_evidence_perturbed_order_and_law() {
+    let fast = reassociated_space(16);
+    let path = fast.index().arithmetic().path();
+    let evidence = profile::loss_evidence_reassociated(path);
+    assert_eq!(
+        fast.evidence(),
+        evidence,
+        "the space carries the path's revision"
+    );
+
+    let decl = HnswRelation::new(Arc::clone(&fast)).ranked_declaration(
+        stratum(),
+        TermKind::Iri,
+        XSD_INTEGER.to_owned(),
+        OrderFidelity::Faithful,
+        CandidateDomains::Unrestricted,
+    );
+    let Completeness::Lossy { evidence: lossy } = &decl.fidelity.completeness else {
+        panic!("an HNSW search offers candidates and never certifies absence");
+    };
+    assert_eq!(
+        &**lossy, evidence,
+        "the reassociated revision, byte for byte"
+    );
+    let OrderFidelity::Perturbed { evidence: order } = &decl.fidelity.order else {
+        panic!("a law whose bits depend on the path perturbs the order");
+    };
+    assert_eq!(
+        Some(&**order),
+        Reassociated::evidence(path),
+        "the order axis carries the arithmetic's own evidence, as the reassociated kNN \
+         relation's does"
+    );
+    let RankArithmetic::FloatDistance(law) = decl.arithmetic else {
+        panic!(
+            "an HNSW relation ranks by float distances, got {:?}",
+            decl.arithmetic
+        );
+    };
+    assert_eq!(law.id(), Reassociated::ID);
+
+    // The control: the exact space over the same vectors declares what it always did,
+    // so each difference above is the arithmetic's and not the fixture's.
+    let exact = declaration(&space(16));
+    let Completeness::Lossy {
+        evidence: exact_lossy,
+    } = &exact.fidelity.completeness
+    else {
+        panic!("an HNSW search offers candidates and never certifies absence");
+    };
+    assert_eq!(&**exact_lossy, profile::LOSS_EVIDENCE);
+    assert_eq!(exact.fidelity.order, OrderFidelity::Faithful);
+    let RankArithmetic::FloatDistance(exact_law) = exact.arithmetic else {
+        panic!(
+            "an HNSW relation ranks by float distances, got {:?}",
+            exact.arithmetic
+        );
+    };
+    assert_eq!(exact_law.id(), Exact::ID);
+    assert_ne!(
+        decl.canonical_description(),
+        exact.canonical_description(),
+        "two laws are two plans"
+    );
 }

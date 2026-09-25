@@ -22,6 +22,8 @@
 
 use std::fmt::Write as _;
 
+use purrdf_iri::json_escape::{JsonEscapes, push_string};
+
 use crate::mapping_support::effective_registry;
 use crate::vocab::SliceVocab;
 
@@ -126,26 +128,13 @@ pub fn emit_jsonld_context(vocab: &SliceVocab) -> String {
     out
 }
 
-/// Minimal JSON string escaping (the registry holds plain prefixes and URIs, but
-/// escape defensively so a future entry with a quote/backslash cannot emit broken
-/// JSON).
+/// A registry string as a whole JSON string: the workspace's one JSON escape
+/// law, [`purrdf_iri::json_escape`], in its [`JsonEscapes::Minimal`] spelling
+/// (the registry holds plain prefixes and URIs, but a future entry with a quote,
+/// backslash or control still emits valid JSON).
 fn json_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+    push_string(&mut out, s, JsonEscapes::Minimal);
     out
 }
 

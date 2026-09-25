@@ -31,6 +31,9 @@ purrdf-alloc-probe = { workspace = true }
 # The kernel: dataset builder, pack container, paged tier, governor and
 # accounting vocabulary the envelope is stated in.
 purrdf-core = { workspace = true }
+# The workspace's one JSON string escape law (`json_escape`), for the report's
+# error strings. Zero-dependency leaf the kernel already pulls in.
+purrdf-iri = { workspace = true }
 # Codecs for the round-trip workload, the GTS adapters, and the shared
 # deterministic keystone corpus generator (gts_fixtures).
 purrdf-rdf = { workspace = true }

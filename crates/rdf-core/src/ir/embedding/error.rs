@@ -143,6 +143,12 @@ pub enum EmbeddingError {
         /// Effective prefix dimension.
         dimension: u32,
     },
+    /// The calling thread's floating-point environment cannot compute a deterministic
+    /// L2 normalization: it flushes subnormals or rounds other than to nearest, ties to
+    /// even, so the normalized values, and the projection digest folded from them, would
+    /// not be the ones PURREMB §13.2 defines. Raised only where a normalized projection
+    /// is computed; an artifact with none is read and verified on any thread.
+    FloatEnvironment(crate::distance::FloatEnvironmentError),
     /// A document or chunk content digest, length, or scalar boundary failed.
     ContentMismatch(&'static str),
     /// A source-local ordinal resolves to another canonical target.
@@ -223,6 +229,11 @@ impl fmt::Display for EmbeddingError {
             Self::ZeroNorm { row, dimension } => {
                 write!(f, "zero norm at row {row} for prefix dimension {dimension}")
             }
+            Self::FloatEnvironment(error) => write!(
+                f,
+                "the floating-point environment cannot compute a deterministic L2 \
+                 normalization: {error}"
+            ),
             Self::ContentMismatch(context) => write!(f, "content mismatch: {context}"),
             Self::OrdinalMismatch {
                 target_kind,
@@ -239,7 +250,20 @@ impl fmt::Display for EmbeddingError {
     }
 }
 
-impl std::error::Error for EmbeddingError {}
+impl std::error::Error for EmbeddingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::FloatEnvironment(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::distance::FloatEnvironmentError> for EmbeddingError {
+    fn from(error: crate::distance::FloatEnvironmentError) -> Self {
+        Self::FloatEnvironment(error)
+    }
+}
 
 /// A PURREMB streaming-write failure.
 #[derive(Debug)]

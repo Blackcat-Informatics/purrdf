@@ -117,16 +117,22 @@ because BM25 needs a logarithm and IEEE-754 does not require `ln` to be
 correctly rounded. That reason does not transfer. A kNN kernel needs no
 transcendental — subtraction, multiplication, addition, division and square
 root are all correctly rounded — so binary64 gives the *same* cross-target
-guarantee here, and it is the arithmetic `docs/PURREMB.md` states normatively
+guarantee here. `docs/PURREMB.md` fixes the artifact's own folds normatively
 ("binary64, round-to-nearest ties-to-even, in the written order, without a
-fused multiply-add"). Fixed point would have introduced a quantization step the
-format does not have.
+fused multiply-add"), and the L2 norm is one of them, so the kNN surface uses
+`purrdf_core`'s normative norm fold rather than a copy of it. Fixed point would
+have introduced a quantization step the format does not have.
 
-The two residual hazards are closed structurally: every fold runs over
-ascending component index in one sequential loop, never split across workers
-(a test folds `[1e16, -1e16, 1]`, which sums to `1` one way and `0` the other,
-and pins which), and every product is bound to a named local before it is added
-so no fused multiply-add can form. Distances are emitted as `xsd:double`, whose
+The two residual hazards are closed structurally. Every dot product and squared
+Euclidean sum follows one pinned law, `purrdf_core::distance::Exact`
+(`binary64-lane16-tree-v1`): sixteen binary64 lanes over the whole
+sixteen-element chunks, a fixed pairwise tree, then the remaining terms in
+ascending index, never split across workers. It is the same order on every
+target and dispatch path, and its independent lanes are what lets it vectorize
+without licensing any reordering (a test folds a vector whose lane-tree sum is
+`1` and whose sequential sums are `0`, and pins which). Every product is bound
+to a named local before it is added, so no fused multiply-add can form, and a
+thread whose float environment flushes subnormals is refused by name. Distances are emitted as `xsd:double`, whose
 canonical lexical round-trips the exact bits — a rounded decimal would print
 two adjacent doubles alike and hide exactly the divergence this is about.
 

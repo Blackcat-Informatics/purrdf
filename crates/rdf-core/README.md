@@ -117,7 +117,7 @@ through `purrdf-rdf`; depend on `purrdf-core` directly only when you are
 building an engine or adapter over the IR itself.
 
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
-follows the workspace `rust-version` (currently 1.96, stable toolchain only).
+follows the workspace `rust-version` (currently 1.98, stable toolchain only).
 
 ## License
 

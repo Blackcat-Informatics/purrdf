@@ -578,6 +578,94 @@ fn merge_batches<W: Weight>(left: &Batch<W>, right: &Batch<W>) -> Result<Batch<W
 
 // ── Relations ───────────────────────────────────────────────────────────────────
 
+/// The mutable tail of a [`Relation`]: the current epoch's rows in insertion
+/// order, held as three parallel columns.
+///
+/// The key columns are separate so the duplicate probe on insert
+/// ([`Self::contains`]) reads two contiguous `u32` columns rather than
+/// twelve-byte `(subject, object, row)` tuples: over the tuples the compares
+/// stride three words apart and the loop stays scalar, over the columns they
+/// pack. Row `i` is `(subjects[i], objects[i], rows[i])`; the three columns
+/// always have the same length.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Tail {
+    subjects: Vec<TermId>,
+    objects: Vec<TermId>,
+    rows: Vec<RowId>,
+}
+
+impl Tail {
+    /// Append row `(subject, object, row)`.
+    fn push(&mut self, subject: TermId, object: TermId, row: RowId) {
+        self.subjects.push(subject);
+        self.objects.push(object);
+        self.rows.push(row);
+    }
+
+    /// The number of rows.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Whether the tail holds no row.
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Row `position`, as `(subject, object, row)`.
+    ///
+    /// # Panics
+    ///
+    /// When `position` is not below [`Self::len`].
+    #[inline]
+    pub(crate) fn row(&self, position: usize) -> (TermId, TermId, RowId) {
+        (
+            self.subjects[position],
+            self.objects[position],
+            self.rows[position],
+        )
+    }
+
+    /// The rows in insertion order, as `(subject, object, row)`.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (TermId, TermId, RowId)> + '_ {
+        self.subjects
+            .iter()
+            .zip(&self.objects)
+            .zip(&self.rows)
+            .map(|((&s, &o), &r)| (s, o, r))
+    }
+
+    /// Whether some row has the key `(subject, object)`.
+    ///
+    /// Every row is tested and the answers are OR-folded, with no exit on the
+    /// first hit: a loop that can leave early is not vectorized, and the tail is
+    /// bounded by [`TAIL_SEAL_THRESHOLD`], so on a target with vector compares
+    /// the whole scan is a handful of packed compares.
+    #[allow(
+        clippy::needless_bitwise_bool,
+        reason = "the non-short-circuit `&` is the point: a lazy `&&` puts a branch in the \
+                  lane loop, and the compares of both key columns must be evaluated every row"
+    )]
+    fn contains(&self, subject: TermId, object: TermId) -> bool {
+        let mut hit = false;
+        for (&s, &o) in self.subjects.iter().zip(&self.objects) {
+            hit |= (s == subject) & (o == object);
+        }
+        hit
+    }
+
+    /// Empty the tail, returning its rows in insertion order.
+    fn take_rows(&mut self) -> Vec<(TermId, TermId, RowId)> {
+        let rows = self.iter().collect();
+        self.subjects.clear();
+        self.objects.clear();
+        self.rows.clear();
+        rows
+    }
+}
+
 /// The size a mutable tail may reach before it is sealed into a sorted batch.
 ///
 /// A tiny relation never reaches it — it stays a single small tail `Vec`,
@@ -599,7 +687,7 @@ pub(crate) struct Relation {
     batches: Vec<Batch>,
     /// The mutable tail: `(subject_id, object_id, row_id)` rows of the current epoch,
     /// in insertion order, sealed once it reaches [`TAIL_SEAL_THRESHOLD`].
-    tail: Vec<(TermId, TermId, RowId)>,
+    tail: Tail,
     /// The number of rows across batches + tail (the dense per-relation row count).
     len: usize,
 }
@@ -625,7 +713,7 @@ impl Relation {
         if self.contains(s_id, o_id) {
             return None;
         }
-        self.tail.push((s_id, o_id, row_id));
+        self.tail.push(s_id, o_id, row_id);
         self.len += 1;
         if self.tail.len() >= TAIL_SEAL_THRESHOLD {
             self.seal();
@@ -637,10 +725,7 @@ impl Relation {
     /// sorted batch plus a linear scan of the tail (no hashing).
     fn contains(&self, subject: TermId, object: TermId) -> bool {
         self.batches.iter().any(|b| b.contains(subject, object))
-            || self
-                .tail
-                .iter()
-                .any(|&(s, o, _)| s == subject && o == object)
+            || self.tail.contains(subject, object)
     }
 
     /// Seal the mutable tail into a new sorted immutable batch, then consolidate.
@@ -654,7 +739,7 @@ impl Relation {
         if self.tail.is_empty() {
             return;
         }
-        let mut rows = core::mem::take(&mut self.tail);
+        let mut rows = self.tail.take_rows();
         rows.sort_unstable_by_key(|&(s, o, _)| (s, o));
         self.batches.push(Batch::from_sorted(&rows));
         self.consolidate();
@@ -709,7 +794,7 @@ impl Relation {
 
     /// The unsorted tail rows — the cursor's final (linear-scanned) leg.
     #[inline]
-    pub(crate) fn tail(&self) -> &[(TermId, TermId, RowId)] {
+    pub(crate) fn tail(&self) -> &Tail {
         &self.tail
     }
 }
@@ -2077,5 +2162,129 @@ mod tests {
         // An empty run and an out-of-range start both answer with the length.
         assert_eq!(gallop_lower_bound(&[], 0, TermId::from_index(0)), 0);
         assert_eq!(gallop_lower_bound(&run, 999, TermId::from_index(0)), 64);
+    }
+
+    /// The tail's duplicate probe as it was written over `(subject, object, row)`
+    /// tuples: a short-circuiting scan that stops at the first matching key.
+    /// Kept as the oracle of the column fold.
+    fn reference_tail_contains(
+        rows: &[(TermId, TermId, RowId)],
+        subject: TermId,
+        object: TermId,
+    ) -> bool {
+        rows.iter().any(|&(s, o, _)| s == subject && o == object)
+    }
+
+    /// A tail of `len` rows over a small id space (so keys collide across rows
+    /// in either column), with the tuples it was built from.
+    fn random_tail(len: usize, state: &mut u64) -> (Tail, Vec<(TermId, TermId, RowId)>) {
+        let mut tail = Tail::default();
+        let mut rows = Vec::with_capacity(len);
+        for i in 0..len {
+            let s = TermId::from_index((crate::test_support::mix(state) % 24) as usize);
+            let o = TermId::from_index((crate::test_support::mix(state) % 24) as usize);
+            let r = RowId::from_index(i);
+            tail.push(s, o, r);
+            rows.push((s, o, r));
+        }
+        (tail, rows)
+    }
+
+    /// The column fold answers every probe as the tuple scan does, at every tail
+    /// length up to and including the seal threshold: each row's own key (a hit
+    /// at every position), each row's key with one column changed (a miss unless
+    /// another row happens to hold it), and keys from outside the id space (a
+    /// miss everywhere).
+    #[test]
+    fn tail_contains_matches_the_tuple_scan() {
+        let mut state = 0x5EED_0F7A_11C0_u64;
+        let outside = TermId::from_index(1_000);
+        for len in 0..=TAIL_SEAL_THRESHOLD {
+            for _ in 0..4 {
+                let (tail, rows) = random_tail(len, &mut state);
+                assert_eq!(tail.len(), len);
+                assert_eq!(tail.is_empty(), len == 0);
+                let mut probes = vec![(outside, outside)];
+                for &(s, o, _) in &rows {
+                    probes.push((s, o));
+                    probes.push((s, outside));
+                    probes.push((outside, o));
+                    probes.push((o, s));
+                }
+                for (s, o) in probes {
+                    assert_eq!(
+                        tail.contains(s, o),
+                        reference_tail_contains(&rows, s, o),
+                        "len {len}, probe ({s:?}, {o:?})"
+                    );
+                }
+                for (position, &(s, o, _)) in rows.iter().enumerate() {
+                    assert!(tail.contains(s, o), "len {len}: row {position} is found");
+                }
+                assert!(!tail.contains(outside, outside), "len {len}: absent key");
+            }
+        }
+    }
+
+    /// A hit in exactly one position, with every other row a near miss that
+    /// shares one column with the probe: the fold must see the one row, wherever
+    /// it sits, and must not take a one-column match for a hit.
+    #[test]
+    fn tail_contains_finds_a_lone_hit_at_every_position() {
+        let subject = TermId::from_index(7);
+        let object = TermId::from_index(9);
+        for len in 1..=TAIL_SEAL_THRESHOLD {
+            for hit in 0..len {
+                let mut tail = Tail::default();
+                let mut rows = Vec::with_capacity(len);
+                for i in 0..len {
+                    let row = if i == hit {
+                        (subject, object)
+                    } else if i % 2 == 0 {
+                        (subject, TermId::from_index(100 + i))
+                    } else {
+                        (TermId::from_index(100 + i), object)
+                    };
+                    tail.push(row.0, row.1, RowId::from_index(i));
+                    rows.push((row.0, row.1, RowId::from_index(i)));
+                }
+                assert!(tail.contains(subject, object), "len {len}, hit {hit}");
+                assert!(reference_tail_contains(&rows, subject, object));
+                assert!(
+                    !tail.contains(object, subject),
+                    "len {len}, hit {hit}: the swapped key is absent"
+                );
+                assert!(!reference_tail_contains(&rows, object, subject));
+            }
+            // The same near misses with no hit at all.
+            let mut tail = Tail::default();
+            for i in 0..len {
+                let (s, o) = if i % 2 == 0 {
+                    (subject, TermId::from_index(100 + i))
+                } else {
+                    (TermId::from_index(100 + i), object)
+                };
+                tail.push(s, o, RowId::from_index(i));
+            }
+            assert!(!tail.contains(subject, object), "len {len}: no hit");
+        }
+    }
+
+    /// The columns read back as the tuples they were pushed as, in insertion
+    /// order, by position and by iteration, and draining the tail returns them
+    /// in that order and leaves it empty.
+    #[test]
+    fn tail_columns_round_trip_rows_in_insertion_order() {
+        let mut state = 0xC011_u64;
+        for len in [0, 1, 7, 8, 9, TAIL_SEAL_THRESHOLD - 1, TAIL_SEAL_THRESHOLD] {
+            let (mut tail, rows) = random_tail(len, &mut state);
+            let by_position: Vec<_> = (0..tail.len()).map(|i| tail.row(i)).collect();
+            assert_eq!(by_position, rows);
+            assert_eq!(tail.iter().collect::<Vec<_>>(), rows);
+            assert_eq!(tail.take_rows(), rows);
+            assert!(tail.is_empty());
+            assert_eq!(tail.len(), 0);
+            assert_eq!(tail.iter().count(), 0);
+        }
     }
 }

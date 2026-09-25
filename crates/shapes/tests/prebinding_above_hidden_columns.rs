@@ -179,11 +179,7 @@ fn check_report(position: &str, constraint: &str) {
                 dataset
                     .term_id_by_value(&focus)
                     .unwrap_or_else(|| panic!("{position}: {focus:?} is a fixture node")),
-                result
-                    .value
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_default(),
+                result.value.as_ref().map_or_default(ToString::to_string),
             )
         })
         .collect();
@@ -265,11 +261,7 @@ fn a_select_expression_after_group_by_reads_the_focus_node() {
                 dataset
                     .term_id_by_value(&result.focus_node.to_term_value())
                     .expect("a fixture node"),
-                result
-                    .value
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_default(),
+                result.value.as_ref().map_or_default(ToString::to_string),
             )
         })
         .collect();
@@ -299,11 +291,7 @@ fn an_order_by_after_group_by_reads_the_focus_node() {
                 dataset
                     .term_id_by_value(&result.focus_node.to_term_value())
                     .expect("a fixture node"),
-                result
-                    .value
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_default(),
+                result.value.as_ref().map_or_default(ToString::to_string),
             )
         })
         .collect();

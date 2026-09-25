@@ -24,8 +24,8 @@ use purrdf_retrieval::{
     StreamEnding, Term, ToleratedDepth, TopK, contribution, contribution_under,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, ExclusionBasis, MemoryRelation, PropertyFunctionRegistry, RankedDeclaration,
-    TermKind, TermPattern,
+    AcceptedTerm, ExclusionBasis, MemoryRelation, PropertyFunctionRegistry, RankArithmetic,
+    RankedDeclaration, TermKind, TermPattern,
 };
 
 const K: u32 = 60;
@@ -8799,6 +8799,7 @@ fn registry_declaring_fidelity(
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity,
+            arithmetic: RankArithmetic::FloatFree,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             exclusion: ExclusionBasis::Unavailable,

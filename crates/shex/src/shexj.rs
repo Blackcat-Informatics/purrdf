@@ -64,6 +64,7 @@
 //! the empty stem is the spec's "any language" wildcard.
 
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag};
+use purrdf_xsd::ieee::Binary64Scope;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Number, Value, json};
@@ -108,8 +109,14 @@ pub const SHEX_CONTEXT: &str = "http://www.w3.org/ns/shex.jsonld";
 /// assert!(err.to_string().contains("iri-relative-no-base"));
 /// ```
 pub fn parse_shexj(input: &str, base: Option<&str>) -> Result<Schema> {
-    let value: Value =
-        serde_json::from_str(input).map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
+    // A numeric facet's value is compared with every datum validated against it: read it
+    // inside a binary64 scope so the x87 rounds `serde_json`'s exact fast path once, like
+    // every other unit (the workspace's `float_roundtrip` makes the rest correctly rounded).
+    let value: Value = {
+        let _binary64 = Binary64Scope::enter();
+        serde_json::from_str(input)
+    }
+    .map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
     Reader::new(base)?.schema(&value)
 }
 
@@ -1175,6 +1182,38 @@ mod tests {
 
     fn parse(base: Option<&str>) -> Result<Schema> {
         parse_shexj(EVERY_POSITION, base)
+    }
+
+    /// A numeric facet holds the value its decimal spells: the witnesses are numbers a
+    /// reader that is not correctly rounded (or the x87's double-rounded fast path) reads
+    /// as a neighbour, which then admits or refuses the data next to the bound.
+    #[test]
+    fn numeric_facets_are_correctly_rounded() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        let mut lexicals = soft::misread_decimals(30);
+        lexicals.extend(soft::x87_fast_path_decimals(30));
+        let shapes = lexicals
+            .iter()
+            .enumerate()
+            .map(|(index, lexical)| {
+                format!(r#"{{"type":"NodeConstraint","id":"N{index}","mininclusive":{lexical}}}"#)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let document = format!(r#"{{"type":"Schema","shapes":[{shapes}]}}"#);
+        let schema = parse_shexj(&document, Some(BASE)).expect("schema");
+        for (declaration, lexical) in schema.shapes.iter().zip(&lexicals) {
+            let ShapeExpr::Node(constraint) = &declaration.expr else {
+                panic!("expected a node constraint, found {:?}", declaration.expr);
+            };
+            let correct: f64 = lexical.parse().expect("decimal");
+            assert_eq!(
+                constraint.mininclusive,
+                Some(NumericLiteral::Fractional(correct)),
+                "{lexical}"
+            );
+        }
     }
 
     fn shape_of(schema: &Schema, index: usize) -> &Shape {

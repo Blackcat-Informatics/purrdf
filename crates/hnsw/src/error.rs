@@ -83,6 +83,67 @@ pub enum HnswError {
         actual: u32,
     },
 
+    /// A payload's header records an arithmetic code this index type does not compute
+    /// with.
+    ///
+    /// The code is the arithmetic the recorded distances were produced under. Reading
+    /// them as another arithmetic's would compare numbers from two different laws, so
+    /// the payload is refused by name rather than decoded; a zero (the reserved value
+    /// of the previous image version) names no arithmetic at all.
+    ArithmeticMismatch {
+        /// The identifier of the arithmetic this index computes with.
+        arithmetic: &'static str,
+        /// The code found in the bytes.
+        actual: u32,
+    },
+
+    /// A payload's header records a dispatch path of its arithmetic that this process
+    /// cannot run.
+    ///
+    /// A reassociated arithmetic's bits depend on the compilation that produced them, so
+    /// an image records the path its distances came from, and only that path can decode
+    /// it, verify its rebuild or search it: another path would recompute every distance
+    /// with different last bits. Any process that can run the recorded path does so,
+    /// even where a wider one is available; this is raised only when the recorded path's
+    /// compilation is not in this build (it belongs to another target) or the processor
+    /// does not report a feature it needs. That is not tampering and not an honest "no",
+    /// so it is refused by name rather than answered `false`. An arithmetic whose bits
+    /// are the same on every path records one code and never raises this.
+    ArithmeticPathUnavailable {
+        /// The image code the payload records.
+        recorded: u32,
+        /// The image code of the widest dispatch path this process runs: the one a new
+        /// build here would record.
+        available: u32,
+    },
+
+    /// A payload's header records a build shape for its arithmetic that is not this
+    /// build's.
+    ///
+    /// A reassociated arithmetic's bits depend on what its dispatch path compiled to, and
+    /// that depends on the build as well as the path: its target architecture and target
+    /// features, and its [`BuildIdentity`](purrdf_core::distance::BuildIdentity) --
+    /// compiler release and LLVM version, target CPU, optimisation level, debug assertions
+    /// and codegen flags. The same path contracts to fused multiply-add in one build and not
+    /// in another. So the image records the shape of the build that computed it, and a
+    /// build of another shape refuses it by name rather than searching it, or rebuilding it
+    /// and answering `false`, with bits another compilation would produce. Within a build
+    /// of the recorded shape a rebuild that differs is the honest `false`.
+    ArithmeticBuildMismatch {
+        /// The shape the payload records.
+        recorded: purrdf_core::distance::BuildShape,
+        /// This build's shape.
+        here: purrdf_core::distance::BuildShape,
+    },
+
+    /// The calling thread's floating-point environment is not the IEEE-754 one the
+    /// distance arithmetic defines its results under.
+    ///
+    /// A build, rebuild or search computed under a flush-to-zero or re-rounding
+    /// environment would produce different distances, and a different graph, with
+    /// nothing in the result to say so.
+    FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
+
     /// A checked arithmetic operation overflowed.
     ArithmeticOverflow,
 
@@ -176,6 +237,43 @@ impl fmt::Display for HnswError {
                 f,
                 "payload version {actual} is not the implemented version {expected}"
             ),
+            Self::ArithmeticMismatch { arithmetic, actual } => write!(
+                f,
+                "the payload's arithmetic field is {actual}, which is not a code of the \
+                 {arithmetic} distance arithmetic this index computes with"
+            ),
+            Self::ArithmeticPathUnavailable {
+                recorded,
+                available,
+            } => write!(
+                f,
+                "the payload's distances were computed on the dispatch path recorded as \
+                 arithmetic code {recorded} ({}), which this process cannot run: its \
+                 compilation is not in this build, or the processor lacks a feature it needs \
+                 (the widest path this process runs is code {available}, {}); an image whose \
+                 arithmetic depends on its dispatch path is reproducible only on the path \
+                 that built it",
+                crate::profile::path_label(*recorded),
+                crate::profile::path_label(*available)
+            ),
+            Self::ArithmeticBuildMismatch { recorded, here } => write!(
+                f,
+                "the payload's distances were computed by another build ({recorded}) than this \
+                 one ({here}): {}; what a dispatch path compiles to depends on the build's \
+                 target architecture and features, compiler, target CPU, optimisation level and \
+                 codegen flags, so the image is reproducible only by a build of its own shape",
+                if recorded.bits() == here.bits() {
+                    "the target and features agree and the build identity differs"
+                } else if recorded.identity() == here.identity() {
+                    "the build identity agrees and the target or features differ"
+                } else {
+                    "the target or features and the build identity differ"
+                }
+            ),
+            Self::FloatEnvironment(error) => write!(
+                f,
+                "the floating-point environment cannot run the distance arithmetic: {error}"
+            ),
             Self::ArithmeticOverflow => write!(f, "index arithmetic overflowed"),
             Self::AddressSpaceExceeded { required, maximum } => write!(
                 f,
@@ -215,8 +313,19 @@ impl fmt::Display for HnswError {
 
 impl std::error::Error for HnswError {}
 
+impl From<purrdf_core::distance::FloatEnvironmentError> for HnswError {
+    fn from(error: purrdf_core::distance::FloatEnvironmentError) -> Self {
+        Self::FloatEnvironment(error)
+    }
+}
+
 impl From<purrdf_core::EmbeddingError> for HnswError {
     fn from(error: purrdf_core::EmbeddingError) -> Self {
+        // A refused float environment is the same refusal whichever layer met it, and
+        // keeps its name rather than becoming an artifact defect.
+        if let purrdf_core::EmbeddingError::FloatEnvironment(refusal) = error {
+            return Self::FloatEnvironment(refusal);
+        }
         Self::Embedding {
             description: error.to_string(),
         }
@@ -226,6 +335,12 @@ impl From<purrdf_core::EmbeddingError> for HnswError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::distance::{BuildIdentity, BuildShape};
+
+    /// An `x86_64` shape with `features`, under `identity`.
+    fn shape(features: &[&str], identity: BuildIdentity) -> BuildShape {
+        BuildShape::encode("x86_64", features, identity)
+    }
 
     #[test]
     fn every_variant_renders_without_its_debug_representation() {
@@ -255,6 +370,34 @@ mod tests {
                 expected: 1,
                 actual: 2,
             },
+            HnswError::ArithmeticMismatch {
+                arithmetic: "binary64-lane16-tree-v1",
+                actual: 0,
+            },
+            HnswError::ArithmeticPathUnavailable {
+                recorded: 2,
+                available: 3,
+            },
+            HnswError::ArithmeticBuildMismatch {
+                recorded: shape(&["sse2"], BuildIdentity::here()),
+                here: shape(&["sse2", "fma"], BuildIdentity::here()),
+            },
+            HnswError::ArithmeticBuildMismatch {
+                recorded: shape(&["sse2"], BuildIdentity::from_digest(7)),
+                here: shape(&["sse2"], BuildIdentity::here()),
+            },
+            HnswError::ArithmeticBuildMismatch {
+                recorded: shape(&["sse2"], BuildIdentity::from_digest(7)),
+                here: shape(&["sse2", "fma"], BuildIdentity::here()),
+            },
+            HnswError::FloatEnvironment(
+                purrdf_core::distance::FloatEnvironmentError::FlushToZero {
+                    evidence: purrdf_core::distance::FloatEnvironmentEvidence::Register {
+                        name: "MXCSR",
+                        bits: 0x9fc0,
+                    },
+                },
+            ),
             HnswError::ArithmeticOverflow,
             HnswError::AddressSpaceExceeded {
                 required: 10,
@@ -277,6 +420,35 @@ mod tests {
                 description: "structure refused".to_owned(),
             },
         ];
+        // The build refusal names both shapes as feature lists and both identities, and
+        // says which of the two parts differs.
+        let mismatches: Vec<String> = cases
+            .iter()
+            .filter(|case| matches!(case, HnswError::ArithmeticBuildMismatch { .. }))
+            .map(ToString::to_string)
+            .collect();
+        let here = BuildIdentity::here().to_string();
+        let foreign = BuildIdentity::from_digest(7).to_string();
+        assert!(
+            mismatches[0].contains("x86_64 with sse2, under")
+                && mismatches[0].contains("x86_64 with sse2, fma, under")
+                && mismatches[0].contains(&here)
+                && mismatches[0].contains("the build identity agrees and the target"),
+            "{}",
+            mismatches[0]
+        );
+        assert!(
+            mismatches[1].contains(&foreign)
+                && mismatches[1].contains(&here)
+                && mismatches[1].contains("the target and features agree and the build identity"),
+            "{}",
+            mismatches[1]
+        );
+        assert!(
+            mismatches[2].contains("the target or features and the build identity differ"),
+            "{}",
+            mismatches[2]
+        );
         let mut seen = std::collections::HashSet::new();
         for error in cases {
             let message = error.to_string();

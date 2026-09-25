@@ -7,6 +7,7 @@
 //! with a tiny schema-local parser instead of a general JSON library.
 
 use ciborium::value::Value;
+use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
 use crate::wire::{
     MAGIC, VERSION, blake3_256, canonical, content_id, header_id, hex, iter_items, map_get,
@@ -367,45 +368,12 @@ pub fn verify_proof(proof: &Proof) -> Result<(), String> {
     Ok(())
 }
 
-/// A byte that the JSON escaper copies through verbatim: printable ASCII other
-/// than the two JSON metacharacters. Everything else — C0 controls, DEL
-/// (`0x7F`, which `char::is_control` reports), and every non-ASCII lead or
-/// continuation byte (`char::is_control` also covers the C1 range
-/// U+0080–U+009F) — is handed to the per-`char` arm below.
-fn json_plain_byte(b: u8) -> bool {
-    (0x20..0x7F).contains(&b) && b != b'"' && b != b'\\'
-}
-
+/// A proof string's JSON body: the workspace's one JSON escape law,
+/// [`purrdf_iri::json_escape`], in its [`JsonEscapes::Controls`] spelling (DEL
+/// and the C1 controls escaped too, as this writer always has).
 fn json_escape(text: &str) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        // Bulk-copy the run of plain ASCII bytes in one `push_str` instead of
-        // one `push` per `char`; every trigger is an ASCII byte, so the split
-        // point is always a char boundary.
-        let run = rest
-            .bytes()
-            .position(|b| !json_plain_byte(b))
-            .unwrap_or(rest.len());
-        out.push_str(&rest[..run]);
-        rest = &rest[run..];
-        let Some(ch) = rest.chars().next() else {
-            break;
-        };
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-        rest = &rest[ch.len_utf8()..];
-    }
+    let mut out = String::with_capacity(text.len());
+    push_body(&mut out, text, JsonEscapes::Controls);
     out
 }
 

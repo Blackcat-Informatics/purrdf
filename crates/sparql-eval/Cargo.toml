@@ -11,7 +11,6 @@ license.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-sparql-eval"
 rust-version.workspace = true
-readme = "README.md"
 keywords = ["sparql", "rdf", "rdf-12", "evaluator", "query"]
 categories = ["database-implementations", "data-structures"]
 
@@ -127,10 +126,12 @@ proptest = { workspace = true }
 criterion = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-# The wasm32 test harness, for `tests/knn_wasm_determinism.rs` — the one test in this
-# crate that must EXECUTE on wasm32-unknown-unknown rather than merely compile for it,
-# because the embedding kNN surface ranks by binary64 arithmetic and "the same answer on
-# every target" is a claim two runs on one target cannot check. Run by `make wasm-test`.
+# The wasm32 test harness, for `tests/knn_wasm_determinism.rs` and
+# `tests/knn_wasm_reassociated.rs` — the tests in this crate that must EXECUTE on
+# wasm32-unknown-unknown rather than merely compile for it, because the embedding kNN
+# surface ranks by binary64 arithmetic: "the same answer on every target" (exact) and
+# "within the error bound on every target" (reassociated) are claims two runs on one
+# target cannot check. Run by `make wasm-test`.
 wasm-bindgen-test = { workspace = true }
 
 [[bench]]
@@ -236,4 +237,13 @@ harness = false
 # rayon global pool pinned. Report-only; `make bench` lane only — excluded from
 # `make check`.
 name = "regex_eval"
+harness = false
+
+[[bench]]
+# The embedding kNN relation's exhaustive search -- one whole invocation (open, full-space
+# scan, top-k, drain) -- under `EmbeddingKnnRelation::new` (Exact) and
+# `new_reassociated` (Reassociated) over the same deterministic PURREMB space, per
+# metric at 384, 768 and 1536 dimensions. Report-only -- no timing/speedup assertions.
+# `make bench` lane only -- excluded from `make check`.
+name = "knn_relation"
 harness = false

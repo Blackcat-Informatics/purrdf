@@ -25,22 +25,40 @@
 //! both:
 //!
 //! * **Reassociation.** Floating-point addition is not associative, so a sum's value
-//!   depends on the order it was accumulated in. Every fold here runs over ascending
-//!   component index, in one sequential loop, and no accumulation is ever split across
-//!   rayon workers or chunked. The order is part of the contract, not an implementation
-//!   detail: [`accumulation_order_is_pinned`](tests::accumulation_order_is_pinned)
-//!   exercises a vector whose sum genuinely differs when folded the other way.
+//!   depends on the order it was accumulated in. Every fold here is
+//!   [`purrdf_core::distance::Exact`], whose order is part of its definition: sixteen
+//!   binary64 lanes, lane `l` summing the terms at indices `16·c + l` over the whole
+//!   sixteen-element chunks in ascending `c`; then the pairwise tree `(l, l+8)`,
+//!   `(l, l+4)`, `(l, l+2)`, `(0, 1)`; then the remaining terms added one at a time in
+//!   ascending index. No accumulation is ever split across rayon workers. Because the
+//!   order is the definition and not an accident of compilation, every target and every
+//!   dispatch path computes it, and the sixteen independent lanes are what lets it
+//!   vectorize without licensing the compiler to reorder anything.
+//!   The test `accumulation_order_is_pinned_and_the_sequential_orders_genuinely_differ`
+//!   exercises a vector whose sum genuinely differs under the sequential orders.
 //! * **Fused multiply-add.** `a * b + c` computed as a single FMA rounds once where the
 //!   written form rounds twice, and the two differ. Rust never contracts them
 //!   implicitly, and PURREMB v1 forbids the fusion normatively ("performed in the written
-//!   order without a fused multiply-add"). Every product below is therefore bound to a
-//!   named local before it is added — the same shape, for the same reason, that
-//!   `purrdf_core`'s own deterministic L2 fold uses.
+//!   order without a fused multiply-add"). Every product is therefore bound to a named
+//!   local before it is added — the same shape, for the same reason, that
+//!   `purrdf_core`'s own deterministic L2 fold uses. There is no FMA on any exact path.
 //!
 //! This is not a weaker guarantee than the integer route; for these five operations it is
 //! the same guarantee, and it is the one the artifact format itself already specifies.
 //! Its limit is stated where it belongs: on [`Kernel::distance`], which reports whether
 //! its result stayed finite rather than ranking by an infinity.
+//!
+//! # The reassociated entry points are a second contract, not a mode
+//!
+//! [`Kernel::distance_reassociated`] and [`Kernel::distance_bounded_reassociated`]
+//! compute the same metric under [`Reassociated`]: the sum is reassociated and may be
+//! contracted to fused multiply-add, so its last bits depend on the target, the build
+//! and the dispatch path, and near-ties may order differently. They are separate
+//! functions with their own names, they take the [`Resolved`] handle that
+//! `Reassociated::resolve` returned after checking the float environment and picking
+//! the path, and they never stand in for the exact entry points, nor those for them.
+//! The divergence is stated in words by `Resolved::evidence`, for every consumer that
+//! records it.
 //!
 //! # The metric definitions are PURREMB's, not this module's
 //!
@@ -52,6 +70,16 @@
 use core::cmp::Ordering;
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::Measure;
+
+/// The stored-scalar width trait, the bound a partial fold is tested against, the
+/// bounded outcome, the two arithmetics, the trait that resolves them, the per-thread
+/// resolved handle every distance entry point takes and the thread-free selection a
+/// relation stores, re-exported from the module that defines them so a caller names one
+/// type for each.
+pub use purrdf_core::distance::{
+    Arithmetic, Bound, Bounded, Exact, Reassociated, Resolved, Scalar, Selected,
+};
 
 /// The three built-in metrics, decoded from a family contract's declaration.
 ///
@@ -82,6 +110,16 @@ impl Kernel {
         }
     }
 
+    /// The [`Measure`] the distance arithmetic computes for this kernel.
+    #[must_use]
+    pub const fn measure(self) -> Measure {
+        match self {
+            Self::Cosine => Measure::Cosine,
+            Self::NegativeDot => Measure::NegativeDot,
+            Self::SquaredEuclidean => Measure::SquaredEuclidean,
+        }
+    }
+
     /// Whether this kernel divides by an operand's L2 norm, and therefore needs every
     /// vector it ranks to have a non-zero one.
     #[must_use]
@@ -97,28 +135,32 @@ impl Kernel {
     /// instead of [`Kernel::distance`] and get a bit-identical answer wherever it gets one
     /// at all.
     ///
-    /// Only [`Kernel::SquaredEuclidean`] can actually abandon: its terms are squares, so its
-    /// partial sums are monotone. `NegativeDot` and `Cosine` accumulate signed products
+    /// Only [`Kernel::SquaredEuclidean`] can actually abandon: its terms are squares, so every
+    /// lane of the exact fold is non-decreasing and a checkpoint every 64 components reads a
+    /// value no larger than the total. `NegativeDot` and `Cosine` accumulate signed products
     /// whose partial sums can move in either direction, so a partial sum proves nothing
     /// about the total; those are computed in full and then classified. The API is total so
     /// a caller need not branch on the kernel to stay correct.
+    ///
+    /// `arithmetic` is the checked handle [`Kernel::distance`] takes, for the same reason.
     #[must_use]
     pub fn distance_bounded<A: Scalar, B: Scalar>(
         self,
+        arithmetic: Resolved<Exact>,
         query: &[A],
         query_norm: f64,
         candidate: &[B],
         candidate_norm: f64,
         bound: Bound,
     ) -> Bounded {
-        if self == Self::SquaredEuclidean {
-            return squared_euclidean_bounded(query, candidate, bound);
-        }
-        match self.distance(query, query_norm, candidate, candidate_norm) {
-            None => Bounded::NonFinite,
-            Some(value) if bound.is_met_by(value) => Bounded::Beyond,
-            Some(value) => Bounded::Below(value),
-        }
+        arithmetic.distance_bounded(
+            self.measure(),
+            query,
+            query_norm,
+            candidate,
+            candidate_norm,
+            bound,
+        )
     }
 
     /// The distance from `query` to `candidate` under this kernel, or `None` when the
@@ -130,9 +172,9 @@ impl Kernel {
     /// inside the fold, so the answer is bit-identical to one computed from operands widened
     /// in advance. See [`Scalar`].
     ///
-    /// `query_norm` and `candidate_norm` are the operands' [`norm`]s. They are
-    /// parameters rather than recomputed here because a candidate's norm does not depend
-    /// on the query: a search over `n` candidates computes each one once at index
+    /// `query_norm` and `candidate_norm` are the operands' L2 norms, from
+    /// [`Resolved::<Exact>::norm`]. They are parameters rather than recomputed here
+    /// because a candidate's norm does not depend on the query: a search over `n` candidates computes each one once at index
     /// construction instead of `n` times per invocation, and — more to the point — a norm
     /// computed once is a norm that cannot be computed two ways. They are ignored by the
     /// kernels that do not divide by them.
@@ -144,217 +186,86 @@ impl Kernel {
     /// range. An infinity would still *sort*, and it would sort last, so a caller would
     /// receive a confidently-ranked answer computed from a number that overflowed. Saying
     /// so instead is the whole difference between a wrong answer and an error.
+    ///
+    /// # The float environment
+    ///
+    /// `arithmetic` comes from `Exact::resolve` ([`Arithmetic::resolve`]), called once per
+    /// scan or call site on the thread that computes, which checked the float environment
+    /// and chose the dispatch path. A thread that flushes subnormals or rounds other than
+    /// to nearest is refused there, by name, so it never reaches this function: there is
+    /// no entry point that computes an exact distance without that check. Every exact path
+    /// returns the same bits, so which one the handle names does not change the answer.
     #[must_use]
     pub fn distance<A: Scalar, B: Scalar>(
         self,
+        arithmetic: Resolved<Exact>,
         query: &[A],
         query_norm: f64,
         candidate: &[B],
         candidate_norm: f64,
     ) -> Option<f64> {
-        let value = match self {
-            Self::SquaredEuclidean => squared_euclidean(query, candidate),
-            Self::NegativeDot => -dot(query, candidate),
-            Self::Cosine => {
-                // Written exactly as PURREMB v1 states it: one product, one quotient, one
-                // subtraction, each rounded on its own.
-                let denominator = query_norm * candidate_norm;
-                let quotient = dot(query, candidate) / denominator;
-                1.0 - quotient
-            }
-        };
-        value.is_finite().then_some(value)
+        // Cosine is written exactly as PURREMB v1 states it -- one product, one quotient,
+        // one subtraction, each rounded on its own -- inside the exact arithmetic.
+        arithmetic.distance(self.measure(), query, query_norm, candidate, candidate_norm)
     }
-}
 
-/// A stored scalar that widens to binary64 **exactly**.
-///
-/// PURREMB stores embedding matrices as either `binary32` or `binary64` (§12), and widening
-/// an `f32` to an `f64` is lossless -- every `f32` is representable. So a kernel can accept
-/// either width and widen per component inside its fold, and get bit-for-bit the answer it
-/// would have got from a matrix widened up front.
-///
-/// That distinction is worth the trait. Widening at LOAD doubles the resident size of an
-/// `f32` corpus and changes no arithmetic; widening in the FOLD costs nothing and changes no
-/// arithmetic either. At a million rows of 4,096 components that is sixteen gigabytes of
-/// difference for an identical answer, and on `wasm32` -- whose address space stops at four
-/// gigabytes -- it is the difference between a corpus loading and being refused.
-///
-/// Narrowing is NOT offered and must not be added: `f64` to `f32` loses bits, so a genuine
-/// `binary64` artifact has to stay `binary64`.
-pub trait Scalar: Copy {
-    /// This value as an `f64`, exactly.
-    fn widen(self) -> f64;
-}
-
-impl Scalar for f32 {
-    fn widen(self) -> f64 {
-        f64::from(self)
-    }
-}
-
-impl Scalar for f64 {
-    fn widen(self) -> f64 {
-        self
-    }
-}
-
-/// The threshold a bounded distance is measured against.
-///
-/// The two forms exist because the callers' comparisons differ, and picking the wrong one is
-/// a silent wrong answer rather than a slow one. A caller ranking by [`Ranked`] — distance
-/// first, then row — may only abandon on a **strictly** greater partial sum, because at an
-/// equal distance the row still decides the comparison. A caller testing a bare `<` on the
-/// distance alone may abandon on equality, since equality already falsifies it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Bound {
-    /// Abandon once the partial sum is greater than or equal to this value.
-    AtOrAbove(f64),
-    /// Abandon only once the partial sum is strictly greater than this value.
-    Above(f64),
-}
-
-impl Bound {
-    /// Whether `sum` has reached this bound.
+    /// The distance from `query` to `candidate` under the [`Reassociated`] arithmetic,
+    /// or `None` when it left the finite range.
+    ///
+    /// The same metric as [`Kernel::distance`], computed under a different contract: the
+    /// sum is reassociated and may be contracted to fused multiply-add along the
+    /// `arithmetic` handle's dispatch path, so the result may differ in its last bits from
+    /// [`Kernel::distance`] and between dispatch paths or builds, the sign of a zero
+    /// result is unspecified, and near-ties may order differently
+    /// ([`Resolved::evidence`] says so in the words a consumer records). On one path in
+    /// one build it is a function of its operands. A non-finite result is refused
+    /// exactly as [`Kernel::distance`] refuses it.
+    ///
+    /// `arithmetic` comes from `Reassociated::resolve`, called once per scan, which
+    /// checked the float environment and chose the path. The norms are not reassociated:
+    /// PURREMB's norm fold has one written order, so they come from
+    /// [`Resolved::<Exact>::norm`] on `arithmetic.exact()` ([`Resolved::exact`]), exactly
+    /// as [`Kernel::distance`]'s do.
     #[must_use]
-    pub fn is_met_by(self, sum: f64) -> bool {
-        match self {
-            Self::AtOrAbove(limit) => sum >= limit,
-            Self::Above(limit) => sum > limit,
-        }
+    pub fn distance_reassociated<A: Scalar, B: Scalar>(
+        self,
+        arithmetic: Resolved<Reassociated>,
+        query: &[A],
+        query_norm: f64,
+        candidate: &[B],
+        candidate_norm: f64,
+    ) -> Option<f64> {
+        arithmetic.distance(self.measure(), query, query_norm, candidate, candidate_norm)
     }
-}
 
-/// The outcome of a bounded distance evaluation.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Bounded {
-    /// The distance, on the near side of the bound, computed in full.
-    Below(f64),
-    /// The bound was reached; the distance's value was never completed.
-    Beyond,
-    /// A partial sum left the finite range, exactly as [`Kernel::distance`] reports `None`.
-    NonFinite,
-}
-
-/// `sum(a[i] · b[i])`, accumulated over ascending index.
-///
-/// The product is bound before it is added so the pair cannot be contracted into a fused
-/// multiply-add, which would round once where this rounds twice. See the module docs.
-#[allow(
-    clippy::suboptimal_flops,
-    reason = "PURREMB v1 prescribes separate rounded multiply and add operations; fusing \
-              them would make this kernel's answer depend on whether the target has an FMA \
-              instruction, which is exactly the divergence the module docs rule out"
-)]
-fn dot<A: Scalar, B: Scalar>(a: &[A], b: &[B]) -> f64 {
-    let mut sum = 0.0_f64;
-    for (x, y) in a.iter().zip(b.iter()) {
-        let product = x.widen() * y.widen();
-        sum += product;
+    /// [`Kernel::distance_reassociated`], permitted to stop once the answer cannot clear
+    /// `bound`.
+    ///
+    /// A [`Bounded::Below`] value is bit-identical to what
+    /// [`Kernel::distance_reassociated`] returns on the same handle, and
+    /// [`Bounded::Beyond`] is returned only when that value meets the bound: the
+    /// reassociated fold combines its 64-element blocks in order, so every checkpoint is
+    /// a true prefix of the full value. As with [`Kernel::distance_bounded`], only
+    /// [`Kernel::SquaredEuclidean`] actually abandons.
+    #[must_use]
+    pub fn distance_bounded_reassociated<A: Scalar, B: Scalar>(
+        self,
+        arithmetic: Resolved<Reassociated>,
+        query: &[A],
+        query_norm: f64,
+        candidate: &[B],
+        candidate_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        arithmetic.distance_bounded(
+            self.measure(),
+            query,
+            query_norm,
+            candidate,
+            candidate_norm,
+            bound,
+        )
     }
-    sum
-}
-
-/// `sum((a[i] - b[i])²)`, accumulated over ascending index.
-///
-/// Delegates to [`squared_euclidean_bounded`] with an unreachable bound, so there is exactly
-/// one squared-Euclidean fold in this crate and the bounded form cannot drift away from the
-/// full one. An infinite bound can only be met by a sum that has already overflowed, which
-/// that function reports separately.
-fn squared_euclidean<A: Scalar, B: Scalar>(a: &[A], b: &[B]) -> f64 {
-    match squared_euclidean_bounded(a, b, Bound::Above(f64::INFINITY)) {
-        Bounded::Below(sum) => sum,
-        // A partial sum that overflowed. `Kernel::distance` turns a non-finite value into
-        // `None`, which is the same answer the unbounded fold gave by returning the
-        // infinity itself.
-        Bounded::NonFinite | Bounded::Beyond => f64::INFINITY,
-    }
-}
-
-/// `sum((a[i] - b[i])²)`, abandoned as soon as the running sum meets `bound`.
-///
-/// Every term is a square and therefore non-negative, so under round-to-nearest the partial
-/// sums are **non-decreasing**: once one meets the bound, no later term can bring the total
-/// back under it. A caller that only needs to know whether the distance clears a threshold
-/// can therefore stop, and at four thousand dimensions stopping early is most of the work
-/// and most of the memory traffic.
-///
-/// The accumulation is bit-identical to running to completion. The chunking controls only
-/// how often the bound is tested; the inner loop still walks ascending index with one
-/// running sum, in the same order, with the same separate roundings. A candidate that is
-/// NOT abandoned is therefore scored exactly as [`Kernel::distance`] would score it, which
-/// is what lets an index use this without moving a single ranked answer.
-#[allow(
-    clippy::suboptimal_flops,
-    reason = "see `dot`: the multiply and the add are deliberately separate roundings"
-)]
-fn squared_euclidean_bounded<A: Scalar, B: Scalar>(a: &[A], b: &[B], bound: Bound) -> Bounded {
-    /// How many terms are folded between bound tests. Purely a cost knob: the sums are
-    /// monotone, so a later test still abandons, and finishing the loop returns the exact
-    /// same total whatever this is.
-    const BLOCK: usize = 64;
-
-    let mut sum = 0.0_f64;
-    for (block_a, block_b) in a.chunks(BLOCK).zip(b.chunks(BLOCK)) {
-        for (x, y) in block_a.iter().zip(block_b.iter()) {
-            let delta = x.widen() - y.widen();
-            let square = delta * delta;
-            sum += square;
-        }
-        if !sum.is_finite() {
-            return Bounded::NonFinite;
-        }
-        if bound.is_met_by(sum) {
-            return Bounded::Beyond;
-        }
-    }
-    Bounded::Below(sum)
-}
-
-/// The Euclidean (L2) norm of `vector`, by the same scaled fold PURREMB's own
-/// deterministic normalization uses.
-///
-/// The obvious `sum(x²).sqrt()` overflows for a vector whose components are individually
-/// representable but whose squares are not, and underflows to zero for a vector of
-/// subnormals — in both cases producing a norm that is wrong rather than imprecise, which
-/// for cosine means dividing by it. The scaled fold carries a running maximum magnitude
-/// and a sum of squared *ratios* instead, so it is exact in the same places and finite in
-/// many more.
-///
-/// Reproducing `purrdf_core`'s algorithm rather than inventing a second one is the point:
-/// a space stored with `PrefixPostprocessing::DeterministicL2` was normalized by that
-/// fold, and a cosine kernel that measured its norms by a different one would disagree
-/// with the artifact's own arithmetic.
-///
-/// A zero-length vector, and a vector of all zeros, both norm to `0.0`. That is reported
-/// rather than refused here; refusing it is [`Kernel::needs_norms`]'s caller's job,
-/// because a zero norm is fatal for cosine and harmless for the other two.
-#[allow(
-    clippy::suboptimal_flops,
-    reason = "see `dot`: every multiply and add is a separate rounding, matching \
-              `purrdf_core`'s `norm_fold` bit for bit"
-)]
-#[must_use]
-pub fn norm<T: Scalar>(vector: &[T]) -> f64 {
-    let mut scale = 0.0_f64;
-    let mut sum_of_squares = 1.0_f64;
-    for value in vector {
-        let magnitude = value.widen().abs();
-        if magnitude == 0.0 {
-            continue;
-        }
-        if scale < magnitude {
-            let ratio = scale / magnitude;
-            let square = ratio * ratio;
-            sum_of_squares = 1.0 + sum_of_squares * square;
-            scale = magnitude;
-        } else {
-            let ratio = magnitude / scale;
-            let square = ratio * ratio;
-            sum_of_squares += square;
-        }
-    }
-    scale * sum_of_squares.sqrt()
 }
 
 /// One scored candidate: how far it is, and which row of the space it is.
@@ -458,6 +369,17 @@ pub fn best(k: usize, candidates: impl IntoIterator<Item = Ranked>) -> Vec<Ranke
 mod tests {
     use super::*;
 
+    /// The exact arithmetic this process resolves: the checked handle every exact entry
+    /// point takes.
+    fn exact() -> Resolved<Exact> {
+        Exact::resolve().expect("the test thread runs the default float environment")
+    }
+
+    /// `vector`'s L2 norm, through the only public form of the fold: the exact handle.
+    fn norm<T: Scalar>(vector: &[T]) -> f64 {
+        exact().norm(vector)
+    }
+
     /// A ranked candidate, tersely.
     const fn r(distance: f64, row: usize) -> Ranked {
         Ranked { distance, row }
@@ -502,18 +424,18 @@ mod tests {
 
         // sum((3-0)^2 + (4-5)^2) = 9 + 1 = 10.
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&a, norm_a, &b, norm_b),
+            Kernel::SquaredEuclidean.distance(exact(), &a, norm_a, &b, norm_b),
             Some(10.0)
         );
         // -dot = -20.
         assert_eq!(
-            Kernel::NegativeDot.distance(&a, norm_a, &b, norm_b),
+            Kernel::NegativeDot.distance(exact(), &a, norm_a, &b, norm_b),
             Some(-20.0)
         );
         // 1 - 20/(5*5) = 1 - 0.8 = 0.19999999999999996 in binary64: pinned by BITS, not
         // by a decimal that would hide which of two adjacent doubles this is.
         let cosine = Kernel::Cosine
-            .distance(&a, norm_a, &b, norm_b)
+            .distance(exact(), &a, norm_a, &b, norm_b)
             .expect("finite");
         assert_eq!(
             cosine.to_bits(),
@@ -529,7 +451,7 @@ mod tests {
         let v = [1.0_f64, 2.0, 3.0];
         let n = norm(&v);
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&v, n, &v, n),
+            Kernel::SquaredEuclidean.distance(exact(), &v, n, &v, n),
             Some(0.0),
             "sum of squared zero differences"
         );
@@ -541,7 +463,9 @@ mod tests {
         // states, not a defect in this kernel: what the surface actually needs is that a
         // vector ranks ahead of everything else, which it does, and it is asserted that
         // way rather than by a zero that is not there.
-        let cosine = Kernel::Cosine.distance(&v, n, &v, n).expect("finite");
+        let cosine = Kernel::Cosine
+            .distance(exact(), &v, n, &v, n)
+            .expect("finite");
         assert!(
             cosine.abs() <= 4.0 * f64::EPSILON,
             "cosine self-distance is within a few ULP of zero, got {cosine}"
@@ -549,7 +473,7 @@ mod tests {
         let other = [3.0_f64, 2.0, 1.0];
         let other_norm = norm(&other);
         let across = Kernel::Cosine
-            .distance(&v, n, &other, other_norm)
+            .distance(exact(), &v, n, &other, other_norm)
             .expect("finite");
         assert!(
             cosine < across,
@@ -559,36 +483,50 @@ mod tests {
     }
 
     #[test]
-    fn accumulation_order_is_pinned_and_the_reverse_order_genuinely_differs() {
+    fn accumulation_order_is_pinned_and_the_sequential_orders_genuinely_differ() {
         // The determinism claim with teeth. `1e16 + 1 - 1e16` is `0` folded left-to-right
-        // and `1` folded right-to-left, because binary64 addition is not associative. So
-        // this vector's dot product with the all-ones vector has two different correct
-        // answers depending on the order, and asserting WHICH one this kernel produces is
-        // asserting that the order is fixed rather than incidental.
-        let a = [1e16_f64, -1e16, 1.0];
-        let ones = [1.0_f64, 1.0, 1.0];
+        // and `1` when the two large terms meet first, because binary64 addition is not
+        // associative. This vector puts `1e16` in lane 0, `1` in lane 1 and `-1e16` in
+        // lane 8 of the exact fold's sixteen lanes, so its dot product with the all-ones
+        // vector has different correct answers under different orders, and asserting
+        // WHICH one this kernel produces is asserting that the order is the pinned one.
+        let mut a = [0.0_f64; 16];
+        a[0] = 1e16;
+        a[1] = 1.0;
+        a[8] = -1e16;
+        let ones = [1.0_f64; 16];
 
-        let forward = Kernel::NegativeDot
-            .distance(&a, 0.0, &ones, 0.0)
+        let pinned = Kernel::NegativeDot
+            .distance(exact(), &a, 0.0, &ones, 0.0)
             .expect("finite");
         assert_eq!(
-            forward, -1.0,
-            "ascending index order: (1e16 - 1e16) cancels exactly, then + 1 is 1"
+            pinned, -1.0,
+            "the lane tree pairs lane 0 with lane 8 first: (1e16 - 1e16) cancels exactly, \
+             and the 1 in lane 1 survives"
         );
 
-        // The other order, computed here rather than assumed, so the test proves the two
-        // really do differ on this input instead of merely asserting that they might.
+        // The two sequential orders, computed here rather than assumed, so the test proves
+        // they really do differ on this input instead of merely asserting that they might.
+        let mut forward = 0.0_f64;
+        for (x, y) in a.iter().zip(ones.iter()) {
+            let product = x * y;
+            forward += product;
+        }
         let mut reversed = 0.0_f64;
         for (x, y) in a.iter().zip(ones.iter()).rev() {
             let product = x * y;
             reversed += product;
         }
         assert_eq!(
+            forward, 0.0,
+            "ascending index order: 1e16 + 1 rounds the 1 away, then - 1e16 is 0"
+        );
+        assert_eq!(
             reversed, 0.0,
-            "descending index order: (1 - 1e16) rounds the 1 away, then + 1e16 is 0"
+            "descending index order: -1e16 + 1 rounds the 1 away, then + 1e16 is 0"
         );
         assert_ne!(
-            -forward, reversed,
+            -pinned, forward,
             "if these agreed, this test would be watching nothing"
         );
     }
@@ -639,7 +577,7 @@ mod tests {
         let a = [f64::MAX, f64::MAX];
         let b = [-f64::MAX, -f64::MAX];
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&a, 0.0, &b, 0.0),
+            Kernel::SquaredEuclidean.distance(exact(), &a, 0.0, &b, 0.0),
             None,
             "an infinite sum of squares still sorts, and would sort LAST — a confidently \
              ranked answer computed from a number that overflowed"
@@ -657,7 +595,7 @@ mod tests {
         let expected = 0.0_f64 + square + square;
         assert!(expected.is_finite());
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&c, 0.0, &d, 0.0),
+            Kernel::SquaredEuclidean.distance(exact(), &c, 0.0, &d, 0.0),
             Some(expected),
             "two squares of 1e150 are finite and must be ranked, not refused"
         );
@@ -769,17 +707,7 @@ mod tests {
 
     /// A deterministic stream of values in `[-1, 1)`, for the differential tests below.
     fn stream(len: usize, seed: u64) -> Vec<f64> {
-        let mut state = seed;
-        (0..len)
-            .map(|_| {
-                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-                let mut z = state;
-                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-                z ^= z >> 31;
-                ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
-            })
-            .collect()
+        crate::test_rng::stream(len, seed)
     }
 
     #[test]
@@ -797,8 +725,9 @@ mod tests {
                 Kernel::Cosine,
             ] {
                 let (na, nb) = (norm(&a), norm(&b));
-                let full = kernel.distance(&a, na, &b, nb).expect("finite");
-                let bounded = kernel.distance_bounded(&a, na, &b, nb, Bound::Above(f64::INFINITY));
+                let full = kernel.distance(exact(), &a, na, &b, nb).expect("finite");
+                let bounded =
+                    kernel.distance_bounded(exact(), &a, na, &b, nb, Bound::Above(f64::INFINITY));
                 match bounded {
                     Bounded::Below(value) => assert_eq!(
                         value.to_bits(),
@@ -821,13 +750,13 @@ mod tests {
         let b = stream(300, 0xB0B_0002);
         let (na, nb) = (norm(&a), norm(&b));
         let truth = Kernel::SquaredEuclidean
-            .distance(&a, na, &b, nb)
+            .distance(exact(), &a, na, &b, nb)
             .expect("finite");
 
         for scale in [0.0_f64, 0.25, 0.5, 0.99, 1.0, 1.01, 2.0] {
             let limit = truth * scale;
             for bound in [Bound::AtOrAbove(limit), Bound::Above(limit)] {
-                let got = Kernel::SquaredEuclidean.distance_bounded(&a, na, &b, nb, bound);
+                let got = Kernel::SquaredEuclidean.distance_bounded(exact(), &a, na, &b, nb, bound);
                 match got {
                     Bounded::Below(value) => {
                         assert_eq!(value.to_bits(), truth.to_bits());
@@ -855,6 +784,7 @@ mod tests {
         let zero = vec![0.0_f64; 8];
         assert_eq!(
             Kernel::SquaredEuclidean.distance_bounded(
+                exact(),
                 &huge,
                 0.0,
                 &zero,
@@ -865,9 +795,114 @@ mod tests {
             "an overflow is an error even when a bound would otherwise have abandoned"
         );
         assert_eq!(
-            Kernel::SquaredEuclidean.distance(&huge, 0.0, &zero, 0.0),
+            Kernel::SquaredEuclidean.distance(exact(), &huge, 0.0, &zero, 0.0),
             None,
             "and the unbounded fold still refuses it too"
+        );
+    }
+
+    /// The reassociated arithmetic this process resolves.
+    fn reassociated() -> Resolved<Reassociated> {
+        Reassociated::resolve().expect("the test thread runs the default float environment")
+    }
+
+    #[test]
+    fn the_reassociated_entry_points_compute_the_metric_within_the_error_bound() {
+        let fast = reassociated();
+        for len in [1_usize, 63, 64, 65, 200, 4_096] {
+            let a = stream(len, 0xFA57_0001);
+            let b = stream(len, 0xFA57_0002);
+            let (na, nb) = (norm(&a), norm(&b));
+            // Every term is at most 4 in magnitude (components are in [-1, 1)), so
+            // `Σ|tᵢ| ≤ 4·n` and the contract's `2·n·ε·Σ|tᵢ|` is at most `8·n²·ε`. Each
+            // arithmetic is within `n·ε·Σ|tᵢ|` of the true sum, so the two are within
+            // that bound of each other.
+            let bound = 8.0 * (len * len) as f64 * f64::EPSILON;
+            for kernel in [Kernel::SquaredEuclidean, Kernel::NegativeDot] {
+                let exact = kernel.distance(exact(), &a, na, &b, nb).expect("finite");
+                let reassociated = kernel
+                    .distance_reassociated(fast, &a, na, &b, nb)
+                    .expect("finite");
+                assert!(
+                    (exact - reassociated).abs() <= bound,
+                    "{kernel:?} at len {len} on {}: {exact} vs {reassociated}",
+                    fast.path()
+                );
+                assert_eq!(
+                    kernel.distance_bounded_reassociated(
+                        fast,
+                        &a,
+                        na,
+                        &b,
+                        nb,
+                        Bound::Above(f64::INFINITY)
+                    ),
+                    Bounded::Below(reassociated),
+                    "{kernel:?} at len {len}: the bounded form agrees bit for bit"
+                );
+            }
+            // Bounded abandonment agrees with the full reassociated value on both sides
+            // of it: one ulp above is not met, the value itself is `AtOrAbove`.
+            let full = Kernel::SquaredEuclidean
+                .distance_reassociated(fast, &a, na, &b, nb)
+                .expect("finite");
+            assert_eq!(
+                Kernel::SquaredEuclidean.distance_bounded_reassociated(
+                    fast,
+                    &a,
+                    na,
+                    &b,
+                    nb,
+                    Bound::AtOrAbove(full.next_up())
+                ),
+                Bounded::Below(full)
+            );
+            assert_eq!(
+                Kernel::SquaredEuclidean.distance_bounded_reassociated(
+                    fast,
+                    &a,
+                    na,
+                    &b,
+                    nb,
+                    Bound::AtOrAbove(full)
+                ),
+                Bounded::Beyond
+            );
+        }
+        assert!(
+            fast.evidence()
+                .is_some_and(|text| text.contains(fast.path().name())),
+            "the reassociated handle names its divergence and its path"
+        );
+    }
+
+    #[test]
+    fn the_reassociated_entry_points_refuse_an_overflow_as_the_exact_ones_do() {
+        let fast = reassociated();
+        let a = [f64::MAX, f64::MAX];
+        let b = [-f64::MAX, -f64::MAX];
+        assert_eq!(
+            Kernel::SquaredEuclidean.distance_reassociated(fast, &a, 0.0, &b, 0.0),
+            None
+        );
+        assert_eq!(
+            Kernel::SquaredEuclidean.distance_bounded_reassociated(
+                fast,
+                &a,
+                0.0,
+                &b,
+                0.0,
+                Bound::AtOrAbove(1.0)
+            ),
+            Bounded::NonFinite
+        );
+        // The valid neighbour ranks.
+        let c = [1e150_f64, 1e150];
+        let d = [0.0_f64, 0.0];
+        assert!(
+            Kernel::SquaredEuclidean
+                .distance_reassociated(fast, &c, 0.0, &d, 0.0)
+                .is_some_and(f64::is_finite)
         );
     }
 
@@ -878,14 +913,7 @@ mod tests {
         // matrix widened in advance -- otherwise halving the resident size would quietly be
         // a different index. Asserted on bits, not on an epsilon.
         let mut state = 0xF32_0000_1234_ABCD_u64;
-        let mut next = || {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^= z >> 31;
-            ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0) as f32
-        };
+        let mut next = || crate::test_rng::unit_f64_next(&mut state) as f32;
         for len in [1_usize, 63, 64, 65, 200, 4_096] {
             let a32: Vec<f32> = (0..len).map(|_| next()).collect();
             let b32: Vec<f32> = (0..len).map(|_| next()).collect();
@@ -904,8 +932,12 @@ mod tests {
                 Kernel::Cosine,
             ] {
                 let (na, nb) = (norm(&a64), norm(&b64));
-                let narrow = kernel.distance(&a32, na, &b32, nb).expect("finite");
-                let wide = kernel.distance(&a64, na, &b64, nb).expect("finite");
+                let narrow = kernel
+                    .distance(exact(), &a32, na, &b32, nb)
+                    .expect("finite");
+                let wide = kernel
+                    .distance(exact(), &a64, na, &b64, nb)
+                    .expect("finite");
                 assert_eq!(
                     narrow.to_bits(),
                     wide.to_bits(),
@@ -914,7 +946,9 @@ mod tests {
 
                 // And the mixed case, which is the ordinary one: a query embedded at query
                 // time is f64, the corpus it searches is f32.
-                let mixed = kernel.distance(&a64, na, &b32, nb).expect("finite");
+                let mixed = kernel
+                    .distance(exact(), &a64, na, &b32, nb)
+                    .expect("finite");
                 assert_eq!(
                     mixed.to_bits(),
                     wide.to_bits(),

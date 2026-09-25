@@ -31,6 +31,7 @@
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_core::distance::{Arithmetic, Exact, Path, Reassociated};
 use purrdf_core::{DistanceMetric, TermValue};
 use purrdf_hnsw::relation::{HnswObservations, HnswRelation, HnswSpace};
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, level::splitmix64};
@@ -98,6 +99,37 @@ fn space() -> Arc<HnswSpace> {
     space_at(params().ef_search()).1
 }
 
+/// The component count of the reassociated fixture: two whole 64-element blocks and a
+/// tail, so the reassociated arithmetic's block structure is exercised and its last bits
+/// can part from the exact arithmetic's.
+const WIDE: usize = 150;
+
+/// A reassociated space over the first [`ROWS`] terms of the universe, [`WIDE`]
+/// components per row, at the widest beam the fixture admits, beside its matrix.
+fn reassociated_space() -> (VectorMatrix, Arc<HnswSpace<Reassociated>>) {
+    let vectors = matrix(ROWS, WIDE);
+    let index = HnswIndex::build_reassociated(
+        vectors.clone(),
+        &DistanceMetric::SquaredEuclidean,
+        Params::new(4, 8, 16, ROWS).expect("the fixture beam is valid"),
+    )
+    .expect("the reassociated fixture graph builds");
+    let terms: Vec<TermValue> = universe().into_iter().take(ROWS).collect();
+    let guard = KnnGuard::new(ROWS as u64, ROWS as u64).expect("the fixture guard is valid");
+    (
+        vectors,
+        Arc::new(HnswSpace::from_index(index, terms, guard).expect("the fixture space is valid")),
+    )
+}
+
+/// The `?distance` an emitted row carries, as the binary64 it spells.
+fn distance_of(row: &PfRow) -> f64 {
+    let TermValue::Literal { lexical_form, .. } = &row[HnswRelation::DISTANCE] else {
+        panic!("the distance position carries a literal")
+    };
+    lexical_form.parse().expect("an xsd:double lexical")
+}
+
 fn stratum() -> purrdf_core::Iri {
     purrdf_core::parse_iri(STRATUM).expect("the fixture stratum IRI is valid")
 }
@@ -118,8 +150,8 @@ fn declaration(relation: &HnswRelation) -> RankedDeclaration {
 /// `k` is an `Option` because the count is what decides which of the relation's two
 /// questions an invocation asks: `Some` is the ranked read, `None` is the membership
 /// lookup. Every call site below says which one it means.
-fn drain(
-    relation: &HnswRelation,
+fn drain<A: Arithmetic>(
+    relation: &HnswRelation<A>,
     seed: Option<&TermValue>,
     k: Option<&str>,
     neighbour: Option<&TermValue>,
@@ -302,8 +334,22 @@ fn a_bound_count_keeps_its_cut_and_a_free_one_without_a_candidate_is_refused() {
 
 #[test]
 fn every_term_of_the_universe_agrees_with_its_row() {
-    let space = space();
-    let relation = HnswRelation::new(Arc::clone(&space));
+    every_term_agrees_with_its_row(&space());
+}
+
+/// The walk, over the reassociated relation: the membership verdict is a fact about the
+/// matrix, so the arithmetic changes nothing in it, and the reassociated relation's
+/// membership arm (`Answer::Membership` of `HnswRelation<Reassociated>`) is executed
+/// rather than inferred from the exact one's.
+#[test]
+fn every_term_of_the_universe_agrees_with_its_row_under_the_reassociated_arithmetic() {
+    every_term_agrees_with_its_row(&reassociated_space().1);
+}
+
+/// Every term of the universe, asked as a membership lookup seeded at row zero, is
+/// answered by exactly its own row when `space` holds one and by nothing when it does not.
+fn every_term_agrees_with_its_row<A: Arithmetic>(space: &Arc<HnswSpace<A>>) {
+    let relation = HnswRelation::new(Arc::clone(space));
     let seed = space
         .term(0)
         .expect("the fixture space holds row zero")
@@ -399,8 +445,20 @@ fn an_excluded_term_is_named_by_no_beam_at_any_width_and_a_held_one_is() {
 
 #[test]
 fn a_membership_lookup_computes_no_distance_and_visits_no_graph_node() {
-    let space = space();
-    let relation = HnswRelation::new(Arc::clone(&space));
+    a_lookup_costs_one_distance_at_most(&space());
+}
+
+/// The cost, over the reassociated relation: the same counters, the same zeroes, and the
+/// same control, so the reassociated membership arm is shown to be a point lookup too.
+#[test]
+fn a_reassociated_membership_lookup_computes_no_distance_and_visits_no_graph_node() {
+    a_lookup_costs_one_distance_at_most(&reassociated_space().1);
+}
+
+/// An excluded candidate costs nothing, a held one costs one pairwise distance and no
+/// traversal, and the ranked read beside them does traverse.
+fn a_lookup_costs_one_distance_at_most<A: Arithmetic>(space: &Arc<HnswSpace<A>>) {
+    let relation = HnswRelation::new(Arc::clone(space));
     let observed = relation.observations();
     let seed = space.term(0).expect("the fixture holds row zero").clone();
     let stranger = universe()
@@ -484,4 +542,95 @@ fn the_distance_a_lookup_reports_is_the_one_the_beam_would_have() {
         compared += 1;
     }
     assert_eq!(compared, ranked.len() as u64);
+}
+
+/// **Under the reassociated arithmetic, the lookup's distance is still the beam's, bit
+/// for bit, and it is the reassociated kernel's rather than the exact one's.**
+///
+/// The membership arm of `HnswRelation<Reassociated>` computes its one distance through
+/// the index's `row_distance`, on the dispatch path the index recorded and resolved on
+/// the calling thread; the beam computes the same pair through its search. Asserted
+/// against the beam, and against the reassociated kernel itself on the recorded path, so
+/// both readings of one pair agree with the arithmetic that ranked them.
+///
+/// The observing oracle is the exact kernel over the same pairs. On a path that fuses
+/// (AVX2+FMA, AVX-512F) the reassociated and exact distances of this fixture part in
+/// their last bits, and the lookup must land on the reassociated side of that split; a
+/// lookup silently computed under the exact law would equal the exact column instead.
+/// On a path that does not fuse the two may agree bitwise, which is reported.
+#[test]
+fn a_reassociated_lookup_reports_the_distance_its_beam_would_have() {
+    let (vectors, space) = reassociated_space();
+    let relation = HnswRelation::new(Arc::clone(&space));
+    let observed = relation.observations();
+    let index = space.index();
+    let recorded = index
+        .arithmetic()
+        .resolve()
+        .expect("the test thread runs the default float environment");
+    let exact = Exact::resolve().expect("the test thread runs the default float environment");
+    let kernel = index.kernel();
+
+    let mut compared = 0_usize;
+    let mut told_apart = 0_usize;
+    for seed_row in 0..space.row_count() {
+        let seed = space.term(seed_row).expect("a row of the space").clone();
+        let (ranked, _) = drain(&relation, Some(&seed), Some(&ROWS.to_string()), None);
+        assert!(ranked.len() > 1, "the fixture must rank more than one row");
+        for row in &ranked {
+            let neighbour = row[HnswRelation::NEIGHBOUR].clone();
+            let at = space.row_of(&neighbour).expect("a ranked term has a row");
+            let (lookups, distances, searches) = (
+                observed.membership_lookups(),
+                observed.membership_distances(),
+                observed.searches(),
+            );
+            let (looked_up, _) = drain(&relation, Some(&seed), None, Some(&neighbour));
+            assert_eq!(looked_up.len(), 1);
+            assert_eq!(
+                (
+                    observed.membership_lookups(),
+                    observed.membership_distances(),
+                    observed.searches()
+                ),
+                (lookups + 1, distances + 1, searches),
+                "the membership arm answered, with one distance and no search — {}",
+                report(&observed)
+            );
+            assert_eq!(
+                looked_up[0][HnswRelation::DISTANCE],
+                row[HnswRelation::DISTANCE],
+                "seed {seed_row}: the lookup's distance for {neighbour:?} must be the beam's own"
+            );
+            let reassociated = vectors
+                .distance(recorded, kernel, seed_row, 0.0, at, 0.0)
+                .expect("finite");
+            assert_eq!(
+                distance_of(&looked_up[0]).to_bits(),
+                reassociated.to_bits(),
+                "seed {seed_row}, row {at}: the reassociated kernel on {}",
+                recorded.path()
+            );
+            let exact = vectors
+                .distance(exact, kernel, seed_row, 0.0, at, 0.0)
+                .expect("finite");
+            if exact.to_bits() != reassociated.to_bits() {
+                told_apart += 1;
+            }
+            compared += 1;
+        }
+    }
+    assert!(compared > ROWS, "every seed ranked more than itself");
+    println!(
+        "reassociated lookups on {}: {told_apart} of {compared} pair(s) told apart from the \
+         exact law",
+        recorded.path()
+    );
+    if matches!(recorded.path(), Path::Avx2Fma | Path::Avx512f) {
+        assert!(
+            told_apart > 0,
+            "on a fusing path the fixture must separate the two laws, or the agreement above \
+             cannot tell a reassociated lookup from an exact one"
+        );
+    }
 }

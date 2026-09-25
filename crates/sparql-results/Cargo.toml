@@ -11,7 +11,6 @@ license.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-sparql-results"
 rust-version.workspace = true
-readme = "README.md"
 keywords = ["sparql", "rdf", "rdf-12", "results", "serialization"]
 categories = ["encoding"]
 

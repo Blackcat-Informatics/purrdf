@@ -3,11 +3,13 @@
 
 //! The build-cost harness: how long one deterministic HNSW build takes, at scale.
 //!
-//! This target exists to disclose the shipped build path's wall-clock cost at scale, rather
-//! than leave it unmeasured. It builds the index through the **shipped build path** —
-//! [`HnswIndex::build`], not a private shortcut — at every rung of the shared declared
+//! This target exists to disclose the shipped build paths' wall-clock cost at scale, rather
+//! than leave it unmeasured. It builds the index through the **shipped build paths** —
+//! [`HnswIndex::build`] under the exact arithmetic and [`HnswIndex::build_reassociated`]
+//! under the reassociated one, not a private shortcut — at every rung of the shared declared
 //! ladder (`corpus::LADDER`: 5,000, 50,000, 200,000 and 1,000,000 rows at 4,096
-//! dimensions), times each once, and prints the table.
+//! dimensions), times each once, and prints both in one table. The reassociated row names
+//! the dispatch path it ran, because its cost and its bits are that path's.
 //!
 //! It is **report-only**. Nothing here asserts a timing, no gate invokes it, and a slow
 //! sample on a shared host is not a failure. The number's job is disclosure, not
@@ -105,10 +107,10 @@ fn main() {
     );
     println!();
     println!(
-        "{:>10}  {:>6}  {:>12}  {:>12}  {:>10}  {:>16}",
-        "rows", "dims", "generate", "build", "img MiB", "graph digest"
+        "{:>10}  {:>6}  {:>12}  {:>22}  {:>12}  {:>10}  {:>16}",
+        "rows", "dims", "generate", "arithmetic", "build", "img MiB", "graph digest"
     );
-    println!("{}", "-".repeat(76));
+    println!("{}", "-".repeat(100));
 
     // Every declared rung runs. A point that is not measured is a point this harness does
     // not claim, and a default that silently skips the one scale the offer is about is how a
@@ -120,32 +122,69 @@ fn main() {
         let vectors = matrix(scale, dims);
         let generate = generate.elapsed();
 
+        // Both arithmetics over the same vectors, one after the other. The index owns its
+        // matrix, so the second build regenerates it from the same deterministic stream
+        // rather than cloning it: a clone would hold two matrices at once, which at 10^6
+        // rows is a second 30 GiB. Each index is dropped before the next is built.
         let start = Instant::now();
         let index = HnswIndex::build(vectors, &DistanceMetric::SquaredEuclidean, params)
             .expect("the generated corpus builds");
         let build = start.elapsed();
-
-        // A digest is proof the build produced a graph rather than timing an allocation; a
-        // scale whose digest is zero or equal to another scale's would be measuring
-        // nothing. Computing it is outside the build timing and happens before the index
-        // is dropped, so the peak footprint stays one scale at a time.
-        let image = index.canonical_image();
-        let digest = fnv1a_64(black_box(&image));
-        println!(
-            "{scale:>10}  {dims:>6}  {:>12.3}  {:>12.3}  {:>10.1}  {:>16}",
-            generate.as_secs_f64(),
-            build.as_secs_f64(),
-            image.len() as f64 / (1024.0 * 1024.0),
-            format!("{digest:016x}")
+        report(
+            scale,
+            dims,
+            generate,
+            "exact",
+            build,
+            &index.canonical_image(),
         );
         drop(index);
-        drop(image);
+
+        let vectors = matrix(scale, dims);
+        let start = Instant::now();
+        let index =
+            HnswIndex::build_reassociated(vectors, &DistanceMetric::SquaredEuclidean, params)
+                .expect("the generated corpus builds");
+        let build = start.elapsed();
+        let arithmetic = format!("reassociated/{}", index.arithmetic().path());
+        report(
+            scale,
+            dims,
+            generate,
+            &arithmetic,
+            build,
+            &index.canonical_image(),
+        );
+        drop(index);
     }
 
     println!();
     println!(
         "Totals are single samples from a shared host; treat them as the disclosed build \
          cost, not as an acceptance threshold."
+    );
+}
+
+/// Print one row of the table.
+///
+/// A digest is proof the build produced a graph rather than timing an allocation; a scale
+/// whose digest is zero or equal to another scale's would be measuring nothing. It is
+/// computed outside the build timing.
+fn report(
+    scale: usize,
+    dims: usize,
+    generate: std::time::Duration,
+    arithmetic: &str,
+    build: std::time::Duration,
+    image: &[u8],
+) {
+    let digest = fnv1a_64(black_box(image));
+    println!(
+        "{scale:>10}  {dims:>6}  {:>12.3}  {arithmetic:>22}  {:>12.3}  {:>10.1}  {:>16}",
+        generate.as_secs_f64(),
+        build.as_secs_f64(),
+        image.len() as f64 / (1024.0 * 1024.0),
+        format!("{digest:016x}")
     );
 }
 

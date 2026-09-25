@@ -8,6 +8,7 @@
 //! dependencies.
 
 use ciborium::value::Value;
+use purrdf_iri::json_escape::{JsonEscapes, push_string};
 
 pub use crate::model::ByteRange;
 use crate::model::{Diagnostic, StreamableInfo};
@@ -342,27 +343,13 @@ fn aggregate_digest(inventory: &Inventory) -> Vec<u8> {
     ])))
 }
 
-fn json_escape(text: &str) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    for ch in text.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
+/// A report string as a whole JSON string: the workspace's one JSON escape
+/// law, [`purrdf_iri::json_escape`], in its [`JsonEscapes::Controls`] spelling
+/// (DEL and the C1 controls escaped too, as this writer always has).
 fn json_string(text: &str) -> String {
-    format!("\"{}\"", json_escape(text))
+    let mut out = String::with_capacity(text.len() + 2);
+    push_string(&mut out, text, JsonEscapes::Controls);
+    out
 }
 
 fn json_hex(bytes: &[u8]) -> String {
@@ -1003,6 +990,44 @@ pub fn diff_json(result: &DiffResult) -> String {
 mod tests {
     use super::*;
     use crate::writer::Writer;
+
+    /// The per-`char` escaper this module carried before it delegated to the
+    /// shared law, kept verbatim as the oracle for [`json_string`].
+    fn json_string_reference(text: &str) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::from("\"");
+        for ch in text.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if c.is_control() => {
+                    let _ = write!(out, "\\u{:04x}", c as u32);
+                }
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    #[test]
+    fn json_string_matches_reference() {
+        let cases = [
+            "",
+            "plain ascii text 0123456789 ~!@#$%^&*()_+-=[]{};':,./<>?",
+            "\"\\\n\r\t",
+            "\u{0}\u{1}\u{8}\u{c}\u{1f}\u{7f}",
+            "\u{80}\u{85}\u{9f}\u{a0}\u{bf}\u{c0}",
+            "caf\u{e9} \u{4e2d}\u{6587} \u{1f431} \u{2028}\u{2029}",
+            "a diagnostic detail longer than one sixteen-byte chunk\u{7f}\u{85}\"end",
+        ];
+        for case in cases {
+            assert_eq!(json_string(case), json_string_reference(case), "{case:?}");
+        }
+    }
 
     #[test]
     fn missing_returns_exact_tail_range() {

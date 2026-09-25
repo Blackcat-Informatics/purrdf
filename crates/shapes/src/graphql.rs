@@ -1702,8 +1702,7 @@ fn object_field_count(object: &Map<String, Value>, path: &str) -> Result<usize, 
     let property_names = object
         .get("properties")
         .and_then(Value::as_object)
-        .map(|properties| properties.keys().cloned().collect::<BTreeSet<_>>())
-        .unwrap_or_default();
+        .map_or_default(|properties| properties.keys().cloned().collect::<BTreeSet<_>>());
     Ok(properties + required.difference(&property_names).count())
 }
 
@@ -1983,7 +1982,7 @@ fn find_cycle_edge(
         colors.insert(start.clone(), 1);
         let mut stack = vec![(start.clone(), 0_usize)];
         while let Some((node, index)) = stack.last_mut() {
-            let outgoing = adjacency.get(node).map(Vec::as_slice).unwrap_or_default();
+            let outgoing = adjacency.get(node).map_or_default(Vec::as_slice);
             if *index >= outgoing.len() {
                 colors.insert(node.clone(), 2);
                 stack.pop();

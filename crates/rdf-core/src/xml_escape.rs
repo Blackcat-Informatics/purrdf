@@ -10,6 +10,8 @@
 use core::fmt;
 use std::borrow::Cow;
 
+use purrdf_iri::terminals::{find_first_xml_special, is_xml_char};
+
 /// The XML context containing an escaped value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
@@ -53,27 +55,44 @@ fn replacement(character: char, context: Context) -> Option<&'static str> {
     }
 }
 
+/// The scalar that begins at `offset`, a char boundary of `value`.
+fn scalar_at(value: &str, offset: usize) -> char {
+    value[offset..]
+        .chars()
+        .next()
+        .expect("the XML scan stops on char boundaries")
+}
+
 /// Escape a value, borrowing it when no scalar needs an XML reference.
 ///
 /// All scalars are validated, including the non-ASCII clean path.
 ///
+/// One pass of [`find_first_xml_special`], which stops only at the bytes that
+/// begin a scalar needing a reference in either context or a scalar outside
+/// `Char`: everything between two stops is lawful content, copied whole.
+///
 /// # Errors
 /// Returns the first scalar excluded by XML 1.0 §2.2 production `[2]`.
 pub fn escape(value: &str, context: Context) -> Result<Cow<'_, str>, InvalidXmlChar> {
+    let bytes = value.as_bytes();
     let mut output: Option<String> = None;
     let mut start = 0;
-    for (offset, character) in value.char_indices() {
-        if !purrdf_iri::terminals::is_xml_char(character) {
+    let mut at = 0;
+    while let Some(offset) = find_first_xml_special(&bytes[at..]) {
+        let hit = at + offset;
+        let character = scalar_at(value, hit);
+        if !is_xml_char(character) {
             return Err(InvalidXmlChar {
-                byte_offset: offset,
+                byte_offset: hit,
                 character,
             });
         }
+        at = hit + character.len_utf8();
         if let Some(reference) = replacement(character, context) {
-            let out = output.get_or_insert_with(|| String::with_capacity(value.len()));
-            out.push_str(&value[start..offset]);
+            let out = output.get_or_insert_with(|| String::with_capacity(value.len() + 8));
+            out.push_str(&value[start..hit]);
             out.push_str(reference);
-            start = offset + character.len_utf8();
+            start = at;
         }
     }
     Ok(match output {
@@ -85,17 +104,30 @@ pub fn escape(value: &str, context: Context) -> Result<Cow<'_, str>, InvalidXmlC
     })
 }
 
+/// How many references [`push_into`]'s one pass remembers before it emits.
+///
+/// Emission waits for the whole value to validate, so the offsets of the
+/// references found on the way are held in a fixed array on the stack rather
+/// than rediscovered. A value with more references than this has its tail,
+/// from the first reference not held, scanned a second time for emission only.
+const HELD_REFERENCES: usize = 32;
+
 /// Append an escaped value to any text sink.
 ///
-/// Validity is decided in a FIRST pass, before a single byte is emitted, so a
-/// rejected value leaves `output` untouched **without the rewind** the `String`
-/// form used to perform. That matters because the sinks this feeds may already
-/// have drained earlier bytes downstream, where `truncate` is not available and
-/// never will be.
+/// Validity is decided before a single byte is emitted, so a rejected value
+/// leaves `output` untouched **without a rewind**. That matters because the
+/// sinks this feeds may already have drained earlier bytes downstream, where
+/// `truncate` is not available and never will be.
 ///
-/// The cost is that a valid value is scanned twice. It is paid back at the call
-/// sites that previously reached for [`escape`], which allocates a whole `String`
-/// whenever any scalar needs a reference; this allocates nothing.
+/// Validation and the search for references are one pass: one
+/// [`find_first_xml_special`] scan stops at every byte that begins a scalar
+/// outside `Char` or a scalar needing a reference, the scalar there is checked
+/// and classified at once, and the offsets of the first references found are
+/// held in a small fixed-size array on the stack rather than rediscovered.
+/// Emission then copies the runs between them whole, with no second scan;
+/// only a value holding more references than the array holds has its tail,
+/// from the first reference not held, scanned a second time for emission
+/// only. Nothing is allocated.
 ///
 /// Emission itself is infallible here by contract: a sink that can fail records
 /// its own sticky error and surfaces it at its own terminal, so this function
@@ -109,24 +141,58 @@ pub fn push_into<W: fmt::Write + ?Sized>(
     context: Context,
     output: &mut W,
 ) -> Result<(), InvalidXmlChar> {
-    for (offset, character) in value.char_indices() {
-        if !purrdf_iri::terminals::is_xml_char(character) {
+    let bytes = value.as_bytes();
+    let mut held = [(0_usize, ""); HELD_REFERENCES];
+    let mut held_count = 0;
+    let mut first_unheld = None;
+    let mut at = 0;
+    while let Some(offset) = find_first_xml_special(&bytes[at..]) {
+        let hit = at + offset;
+        let character = scalar_at(value, hit);
+        if !is_xml_char(character) {
             return Err(InvalidXmlChar {
-                byte_offset: offset,
+                byte_offset: hit,
                 character,
             });
         }
-    }
-    let mut start = 0;
-    for (offset, character) in value.char_indices() {
+        at = hit + character.len_utf8();
         if let Some(reference) = replacement(character, context) {
-            // The sink owns its own failure channel; see the contract above.
-            let _ = output.write_str(&value[start..offset]);
-            let _ = output.write_str(reference);
-            start = offset + character.len_utf8();
+            if held_count < HELD_REFERENCES {
+                held[held_count] = (hit, reference);
+                held_count += 1;
+            } else if first_unheld.is_none() {
+                first_unheld = Some(hit);
+            }
         }
     }
-    let _ = output.write_str(&value[start..]);
+    // Every referenced scalar is ASCII, so it is one byte long. The sink owns
+    // its own failure channel; see the contract above.
+    let mut start = 0;
+    for &(hit, reference) in &held[..held_count] {
+        if start < hit {
+            let _ = output.write_str(&value[start..hit]);
+        }
+        let _ = output.write_str(reference);
+        start = hit + 1;
+    }
+    if let Some(from) = first_unheld {
+        let mut at = from;
+        while let Some(offset) = find_first_xml_special(&bytes[at..]) {
+            let hit = at + offset;
+            let character = scalar_at(value, hit);
+            at = hit + character.len_utf8();
+            if let Some(reference) = replacement(character, context) {
+                if start < hit {
+                    let _ = output.write_str(&value[start..hit]);
+                }
+                let _ = output.write_str(reference);
+                start = at;
+            }
+        }
+    }
+    if start < value.len() {
+        let _ = output.write_str(&value[start..]);
+    }
     Ok(())
 }
 
@@ -144,6 +210,157 @@ pub fn push(value: &str, context: Context, output: &mut String) -> Result<(), In
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two-pass escaper `push_into` replaced, kept verbatim as the oracle:
+    /// a whole validation pass, then a per-`char` replacement pass.
+    fn reference_push_into<W: fmt::Write + ?Sized>(
+        value: &str,
+        context: Context,
+        output: &mut W,
+    ) -> Result<(), InvalidXmlChar> {
+        for (offset, character) in value.char_indices() {
+            if !is_xml_char(character) {
+                return Err(InvalidXmlChar {
+                    byte_offset: offset,
+                    character,
+                });
+            }
+        }
+        let mut start = 0;
+        for (offset, character) in value.char_indices() {
+            if let Some(reference) = replacement(character, context) {
+                let _ = output.write_str(&value[start..offset]);
+                let _ = output.write_str(reference);
+                start = offset + character.len_utf8();
+            }
+        }
+        let _ = output.write_str(&value[start..]);
+        Ok(())
+    }
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            crate::test_rng::splitmix64_next(&mut self.0)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
+        }
+    }
+
+    /// Every special scalar of either context, the non-`Char`s a `str` can
+    /// hold, their lawful neighbours in the `0xEF` block, and non-ASCII in
+    /// every UTF-8 width.
+    const SCALARS: &[char] = &[
+        '&',
+        '<',
+        '>',
+        '"',
+        '\'',
+        '\t',
+        '\n',
+        '\r',
+        '\u{0}',
+        '\u{7}',
+        '\u{1F}',
+        '\u{7F}',
+        '\u{85}',
+        '\u{E9}',
+        '\u{D7FF}',
+        '\u{E000}',
+        '\u{EFFF}',
+        '\u{F000}',
+        '\u{FFFD}',
+        '\u{FFFE}',
+        '\u{FFFF}',
+        '\u{10000}',
+        '\u{1F408}',
+        '\u{10FFFF}',
+    ];
+
+    #[test]
+    fn one_pass_agrees_with_the_two_pass_escaper() {
+        let mut rng = SplitMix(0x0E5C_A9E0_0000_0A11);
+        let (mut ok, mut refused, mut overflowed) = (0_usize, 0_usize, 0_usize);
+        for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
+            for round in 0..40 {
+                // Every fourth value draws a special on every second scalar,
+                // so a value holds far more references than one pass holds.
+                let density = if round % 4 == 0 { 2 } else { 8 };
+                // Half the values draw from the specials without the
+                // non-`Char`s, so long valid values are common too.
+                let pool = if round % 2 == 0 {
+                    &SCALARS[..8]
+                } else {
+                    SCALARS
+                };
+                let value: String = (0..len)
+                    .map(|_| {
+                        if rng.below(density) == 0 {
+                            pool[rng.below(pool.len())]
+                        } else {
+                            'x'
+                        }
+                    })
+                    .collect();
+                for (skip, _) in value.char_indices().take(4) {
+                    let input = &value[skip..];
+                    for context in [Context::Text, Context::Attribute] {
+                        let mut got = String::from("prefix");
+                        let mut expected = String::from("prefix");
+                        let result = push_into(input, context, &mut got);
+                        assert_eq!(
+                            result,
+                            reference_push_into(input, context, &mut expected),
+                            "{context:?} {input:?}"
+                        );
+                        assert_eq!(got, expected, "{context:?} {input:?}");
+                        match escape(input, context) {
+                            Ok(escaped) => {
+                                assert!(result.is_ok());
+                                assert_eq!(&got["prefix".len()..], escaped.as_ref());
+                                ok += 1;
+                                let references = input
+                                    .chars()
+                                    .filter(|&c| replacement(c, context).is_some())
+                                    .count();
+                                overflowed += usize::from(references > HELD_REFERENCES);
+                            }
+                            Err(error) => {
+                                assert_eq!(Err(error), result);
+                                assert_eq!(got, "prefix", "a refusal emits nothing");
+                                refused += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Non-vacuity: valid values, refused values, and values past the held
+        // references all occurred.
+        assert!(
+            ok > 0 && refused > 0 && overflowed > 0,
+            "{ok} {refused} {overflowed}"
+        );
+    }
+
+    /// A value with more references than one pass holds, then a forbidden
+    /// scalar: still refused before any byte is written.
+    #[test]
+    fn a_refusal_after_many_references_emits_nothing() {
+        let value = format!("{}\u{FFFE}", "&".repeat(HELD_REFERENCES * 3));
+        let mut out = String::new();
+        let error = push_into(&value, Context::Text, &mut out).unwrap_err();
+        assert_eq!(error.byte_offset, HELD_REFERENCES * 3);
+        assert_eq!(out, "");
+        // The neighbour without the forbidden scalar is written in full.
+        let value = "&".repeat(HELD_REFERENCES * 3);
+        push_into(&value, Context::Text, &mut out).expect("valid");
+        assert_eq!(out, "&amp;".repeat(HELD_REFERENCES * 3));
+    }
 
     #[test]
     fn unchanged_values_are_borrowed_and_invalid_values_are_atomic() {

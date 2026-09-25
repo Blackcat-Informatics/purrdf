@@ -51,9 +51,10 @@ impl StrictNumber {
             Self::Signed(value) => serde_json::Number::from(*value),
             Self::Unsigned(value) => serde_json::Number::from(*value),
             Self::Decimal(value) => {
-                serde_json::from_str::<serde_json::Number>(value).map_err(|error| {
-                    OkfError::new(format!("invalid OKF decimal `{value}`: {error}"))
-                })?
+                crate::json_number::read_json(|| serde_json::from_str::<serde_json::Number>(value))
+                    .map_err(|error| {
+                        OkfError::new(format!("invalid OKF decimal `{value}`: {error}"))
+                    })?
             }
         };
         Ok(serde_json::Value::Number(number))

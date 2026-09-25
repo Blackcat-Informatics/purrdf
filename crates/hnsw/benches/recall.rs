@@ -16,6 +16,16 @@
 //!   the relation reports through `PfCursor::take_work`;
 //! * **p50/p99 query latency** — the index against the exact scan.
 //!
+//! # Both arithmetics, one oracle
+//!
+//! Each corpus is built twice over the same matrix and parameters: once as the
+//! [`Exact`](purrdf_core::distance::Exact) index ([`HnswIndex::build`]) and once as the
+//! [`Reassociated`](purrdf_core::distance::Reassociated) one
+//! ([`HnswIndex::build_reassociated`]), and each runs the same `ef` sweep, printed under its
+//! own `arithmetic=` heading. Both are graded against the one exact scan: a reassociated
+//! index's recall is the fraction of the exact nearest rows it offered. The two sweeps are
+//! printed side by side and never divided into each other.
+//!
 //! # Recall is comparable only within one `ef`
 //!
 //! Every figure here is a function of `ef_search`, and the index identity *includes*
@@ -46,13 +56,14 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use purrdf_core::DistanceMetric;
+use purrdf_core::distance::{Arithmetic, Exact};
 #[path = "../tests/support/corpus.rs"]
 mod corpus;
 
 use corpus::CorpusShape;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
-use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
+use purrdf_sparql_eval::knn::{Kernel, Ranked, best};
 
 /// The one kernel both paths rank by.
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
@@ -94,11 +105,12 @@ fn uniform(rows: usize, dims: usize) -> VectorMatrix {
 
 /// Every row scored against `query_row`, in the exact path's order.
 fn exact_scored(vectors: &VectorMatrix, norms: &[f64], query_row: usize) -> Vec<Ranked> {
+    let exact = Exact::resolve().expect("the default float environment is the IEEE one");
     let query = vectors.row(query_row);
     (0..vectors.rows())
         .map(|row| Ranked {
             distance: KERNEL
-                .distance(query, norms[query_row], vectors.row(row), norms[row])
+                .distance(exact, query, norms[query_row], vectors.row(row), norms[row])
                 .expect("the fixture is finite and the kernel keeps it so"),
             row,
         })
@@ -165,6 +177,10 @@ fn main() {
          ef_construction={EF_CONSTRUCTION}"
     );
     println!("The exact oracle is Kernel::distance + best() over every row.");
+    println!(
+        "Each corpus is swept twice, arithmetic=exact and arithmetic=reassociated, both graded \
+         against that one exact oracle."
+    );
     println!("Recall is comparable ONLY within one ef; each row is a distinct index identity.");
     println!(
         "Every rung of the shared declared ladder is reported. Nothing here is gated off by \
@@ -197,7 +213,10 @@ fn main() {
 /// not a query-time override: every search still runs at whatever its index declares.
 fn report(name: &str, rows: usize, dims: usize) {
     let vectors = family(name, rows, dims);
-    let norms: Vec<f64> = (0..rows).map(|row| norm(vectors.row(row))).collect();
+    let arithmetic = Exact::resolve().expect("the default float environment is the IEEE one");
+    let norms: Vec<f64> = (0..rows)
+        .map(|row| arithmetic.norm(vectors.row(row)))
+        .collect();
 
     // The exact ordering for every query, computed once: it is the oracle the index is
     // scored against, and recomputing it per `ef` would not change a bit of it.
@@ -212,11 +231,37 @@ fn report(name: &str, rows: usize, dims: usize) {
     println!("--- corpus={name} {rows}x{dims} ---");
 
     let seed_params = Params::new(M, M0, EF_CONSTRUCTION, EF_VALUES[0]).expect("valid parameters");
-    let mut index = HnswIndex::build(vectors, &DistanceMetric::SquaredEuclidean, seed_params)
+    // The reassociated index is built over its own copy of the same matrix: each index owns
+    // the vectors it describes, and both are graded against the one exact oracle above.
+    let reassociated_vectors = vectors.clone();
+    let exact = HnswIndex::build(vectors, &DistanceMetric::SquaredEuclidean, seed_params)
         .expect("the fixture builds");
+    sweep("exact", exact, &norms, &exact_ordered);
+    let reassociated = HnswIndex::build_reassociated(
+        reassociated_vectors,
+        &DistanceMetric::SquaredEuclidean,
+        seed_params,
+    )
+    .expect("the fixture builds under the reassociated arithmetic");
+    sweep("reassociated", reassociated, &norms, &exact_ordered);
+}
+
+/// The whole `ef` sweep over one built index, graded against `exact_ordered`.
+///
+/// Generic over the index's arithmetic so the `Exact` and `Reassociated` indexes are
+/// measured by the same code against the same oracle. The oracle is the exact scan in
+/// both cases: a reassociated index's recall is the fraction of the EXACT nearest rows it
+/// offered, never a fraction of its own arithmetic's ordering.
+fn sweep<A: Arithmetic>(
+    arithmetic: &str,
+    mut index: HnswIndex<A>,
+    norms: &[f64],
+    exact_ordered: &[Vec<Ranked>],
+) {
+    println!("  arithmetic={arithmetic}");
     // The rank table does not depend on `ef`, and `ordered` covers every row, so one buffer
     // overwritten in place replaces `queries * EF_VALUES.len()` allocate-and-fill passes.
-    let mut rank_by_row = vec![usize::MAX; rows];
+    let mut rank_by_row = vec![usize::MAX; index.rows()];
 
     for ef in EF_VALUES {
         index = index.rebind_ef_search(ef).expect("a valid beam width");
@@ -261,7 +306,7 @@ fn report(name: &str, rows: usize, dims: usize) {
                 black_box(&offered);
 
                 let start = Instant::now();
-                let scored = exact_scored(vectors, &norms, query);
+                let scored = exact_scored(vectors, norms, query);
                 let answer = best(K, scored);
                 exact_ns.push(start.elapsed().as_nanos() as u64);
                 black_box(&answer);

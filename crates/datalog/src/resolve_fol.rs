@@ -800,8 +800,7 @@ fn solve_body(
             let answers: Vec<NodeId> = engine
                 .tables
                 .get(&call_key)
-                .map(|table| table.values().copied().collect())
-                .unwrap_or_default();
+                .map_or_default(|table| table.values().copied().collect());
             for answer in answers {
                 if engine.steps >= limits.cap {
                     engine.exhausted = true;

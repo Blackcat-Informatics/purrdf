@@ -13,14 +13,14 @@
 //! bytes must hash elsewhere and hand the crate the resulting hex or raw bytes.
 //!
 //! The hex-decode loop is shared with `ContentDigest::from_hex` via
-//! `decode_hex_32` so the two domains
+//! `decode_hex_32` / `decode_hex_32_lower` so the two domains
 //! never drift apart on parsing behavior; only the case-sensitivity policy
 //! differs (this domain requires canonical lowercase hex).
 
 use std::fmt;
 
 use crate::RdfDiagnostic;
-use crate::content_store::decode_hex_32;
+use crate::content_store::decode_hex_32_lower;
 
 /// A content id in the BLAKE3 GTS domain (`blake3:<hex>` term references).
 ///
@@ -63,10 +63,7 @@ impl Blake3ContentId {
     /// malformed rather than silently normalized.
     #[must_use]
     pub fn from_hex(hex: &str) -> Option<Self> {
-        if hex.bytes().any(|b| b.is_ascii_uppercase()) {
-            return None;
-        }
-        decode_hex_32(hex).map(Self)
+        decode_hex_32_lower(hex).map(Self)
     }
 }
 

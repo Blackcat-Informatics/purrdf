@@ -1665,7 +1665,7 @@ fn compact_literal(
 }
 
 fn canonical_json_value(lexical: &str) -> Option<JsonValue> {
-    let parsed: JsonValue = serde_json::from_str(lexical).ok()?;
+    let parsed: JsonValue = crate::json_number::read_json(|| serde_json::from_str(lexical)).ok()?;
     (serde_json::to_string(&parsed).ok()?.as_str() == lexical).then_some(parsed)
 }
 
@@ -1731,6 +1731,32 @@ fn insert_unique(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An rdf:JSON literal serialized from a number is canonical, and writes back as that
+    /// native JSON number: the serialized forms of the witnesses are ones a reader that is
+    /// not correctly rounded (or the x87's double-rounded fast path) read as a neighbour,
+    /// whose serialization then differs from the literal, so it was refused as
+    /// non-canonical.
+    #[test]
+    fn a_serialized_number_is_canonical_json_with_its_own_value() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        let serialized = |value: f64| serde_json::to_string(&value).ok();
+        let witnesses = soft::misread_spellings(40, serialized)
+            .into_iter()
+            .chain(soft::x87_misread_spellings(20, serialized));
+        for (value, lexical) in witnesses {
+            let array = format!("[{lexical}]");
+            let parsed = canonical_json_value(&array).unwrap_or_else(|| {
+                panic!("`{array}` is canonical JSON");
+            });
+            assert_eq!(
+                parsed[0].as_f64().map(f64::to_bits),
+                Some(value.to_bits()),
+                "{lexical}"
+            );
+        }
+    }
 
     fn materialized_sort_key(value: &Value) -> String {
         let object = value.expanded_json();

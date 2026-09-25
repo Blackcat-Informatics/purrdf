@@ -36,6 +36,7 @@ use purrdf_sparql_algebra::{
     GraphPattern, Literal, NamedNodePattern, PropertyFunctionCall, TermPattern, TriplePattern,
     Variable,
 };
+use purrdf_xsd::ieee::{Binary64, Binary64Scope};
 
 use crate::DetHashSet;
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
@@ -598,7 +599,8 @@ fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
 /// *sequence* of a `SELECT` without `ORDER BY`, which is spec-permitted (SPARQL §11
 /// leaves solution order unspecified absent `ORDER BY`), so any golden over an
 /// un-`ORDER BY`-ed query must be order-tolerant. Determinism: cardinality probes are
-/// pure, the cost arithmetic is order-stable `f64` (compared via `total_cmp`), and
+/// pure, the cost arithmetic is order-stable `f64`, each operation correctly rounded on
+/// every target (`purrdf_xsd::ieee`), compared via `total_cmp`, and
 /// ties break on the lexicographically smallest order (lowest original index first) —
 /// identical run to run, no hash-iteration leak.
 ///
@@ -682,8 +684,31 @@ fn join_positions<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> usi
 
 /// The running intermediate-size estimate after appending a pattern: scale by its
 /// base size, divide by `T` for each already-bound join axis.
-fn step_size(running: f64, base_p: f64, joins: usize, t: f64) -> f64 {
-    running * base_p / t.powi(joins as i32)
+///
+/// Every operation is correctly rounded binary64 through `ops`, so the estimate -- and
+/// with it the join order a query's unordered rows come out in, and the peak a governed
+/// query is refused at -- is the same on every target, the x87 included.
+fn step_size(ops: Binary64<'_>, running: f64, base_p: f64, joins: usize, t: f64) -> f64 {
+    ops.div(ops.mul(running, base_p), power(ops, t, joins))
+}
+
+/// `base^exponent` by square-and-multiply, low bit first -- the order `f64::powi`'s
+/// runtime (`__powidf2`) multiplies in -- each product correctly rounded, so the power
+/// is one defined value on every target rather than whatever a target's `powi` computes.
+fn power(ops: Binary64<'_>, base: f64, exponent: usize) -> f64 {
+    let mut result = 1.0_f64;
+    let mut base = base;
+    let mut exponent = exponent;
+    loop {
+        if exponent & 1 != 0 {
+            result = ops.mul(result, base);
+        }
+        exponent >>= 1;
+        if exponent == 0 {
+            return result;
+        }
+        base = ops.mul(base, base);
+    }
 }
 
 /// Greedy minimum-cardinality join order for a large BGP (`n > COST_DP_MAX_PATTERNS`):
@@ -696,6 +721,8 @@ fn cost_order_greedy<I: ViewTermId>(
     n_cols: usize,
 ) -> Vec<usize> {
     let n = compiled.len();
+    let precision = Binary64Scope::enter();
+    let ops = precision.ops();
     let mut bound = vec![false; n_cols];
     let mut scheduled = vec![false; n];
     let mut order = Vec::with_capacity(n);
@@ -717,7 +744,7 @@ fn cost_order_greedy<I: ViewTermId>(
                 continue;
             }
             let joins = join_positions(&compiled[i], &bound);
-            let size = step_size(running, base[i], joins, t);
+            let size = step_size(ops, running, base[i], joins, t);
             // Strict `<` over an index-order scan ⇒ lowest original index wins ties.
             if best.is_none() || size < best_size {
                 best = Some(i);
@@ -801,6 +828,8 @@ fn cost_order_dp<I: ViewTermId>(
     };
 
     let full: usize = (1usize << n) - 1;
+    let precision = Binary64Scope::enter();
+    let ops = precision.ops();
     let mut dp: Vec<Option<DpPlan>> = vec![None; full + 1];
     dp[0] = Some(DpPlan {
         cost: 0.0,
@@ -840,8 +869,8 @@ fn cost_order_dp<I: ViewTermId>(
             } else {
                 join_positions(&compiled[i], &bound)
             };
-            let size = step_size(plan.size, base[i], joins, t);
-            let cost = plan.cost + size;
+            let size = step_size(ops, plan.size, base[i], joins, t);
+            let cost = ops.add(plan.cost, size);
             // Append pattern index `i` as a new LSB nibble (1-based so index 0 ≠ empty).
             let order_bits = (plan.order_bits << 4) | (i as u64 + 1);
             let len = plan.len + 1;
@@ -1642,12 +1671,14 @@ fn replay_cost_estimate<D: DatasetView>(
         }
     }
 
+    let precision = Binary64Scope::enter();
+    let ops = precision.ops();
     let mut bound = vec![false; n_cols];
     let mut running = 1.0f64;
     let mut peak = 0.0f64;
     for &i in order {
         let joins = join_positions(&compiled[i], &bound);
-        running = step_size(running, base[i], joins, t);
+        running = step_size(ops, running, base[i], joins, t);
         peak = peak.max(running);
         mark_bound(&compiled[i], &mut bound);
     }
@@ -2187,6 +2218,8 @@ mod tests {
         t: f64,
         n_cols: usize,
     ) -> f64 {
+        let precision = Binary64Scope::enter();
+        let ops = precision.ops();
         let mut bound = vec![false; n_cols];
         let mut running = 1.0f64;
         let mut total = 0.0f64;
@@ -2196,8 +2229,8 @@ mod tests {
             } else {
                 join_positions(&compiled[i], &bound)
             };
-            running = step_size(running, base[i], joins, t);
-            total += running;
+            running = step_size(ops, running, base[i], joins, t);
+            total = ops.add(total, running);
             mark_bound(&compiled[i], &mut bound);
         }
         total
@@ -2525,5 +2558,46 @@ mod tests {
         assert_eq!(r_cost, r_structural);
         // Full cross-on-hub join: 20 (hot) × 10 (warm) × 5 (mid) × 1 (rare).
         assert_eq!(r_cost.len(), 20 * 10 * 5, "full cross-on-hub join");
+    }
+
+    /// The cost model's power and step are correctly rounded binary64 in a defined
+    /// order: the software reference's square-and-multiply, bit for bit on every target,
+    /// and -- where the unit is IEEE -- exactly what `f64::powi` gave before.
+    #[test]
+    fn the_cost_model_is_correctly_rounded_binary64_in_a_defined_order() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        let precision = Binary64Scope::enter();
+        let ops = precision.ops();
+        let mut state = 0xc057_u64;
+        for _ in 0..20_000 {
+            state = purrdf_core::test_rng::splitmix64_step(state);
+            // A term count and cardinalities anywhere a dataset can have them.
+            let t = (state >> 11) as f64 / 4096.0 + 1.0;
+            let running = (state & 0xffff_ffff) as f64 * 1.0e-3;
+            let base_p = ((state >> 20) & 0xf_ffff) as f64;
+            for joins in 0..=3_usize {
+                let mut reference_power = 1.0_f64;
+                for _ in 0..joins {
+                    reference_power = soft::mul(reference_power, t);
+                }
+                // `t·t` then `t·t²`: the same products as the multiply-first chain.
+                if joins == 3 {
+                    reference_power = soft::mul(t, soft::mul(t, t));
+                }
+                assert_eq!(power(ops, t, joins).to_bits(), reference_power.to_bits());
+                let step = soft::div(soft::mul(running, base_p), reference_power);
+                assert_eq!(
+                    step_size(ops, running, base_p, joins, t).to_bits(),
+                    step.to_bits()
+                );
+                if !purrdf_xsd::ieee::X87 {
+                    assert_eq!(
+                        power(ops, t, joins).to_bits(),
+                        t.powi(joins as i32).to_bits()
+                    );
+                }
+            }
+        }
     }
 }

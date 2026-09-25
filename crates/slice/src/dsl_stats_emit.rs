@@ -22,6 +22,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use purrdf_iri::json_escape::{JsonEscapes, push_string};
+
 use crate::error::SliceError;
 use crate::mapping_support::{collect_dsl_store, object_literal, subjects_of_type};
 use crate::vocab::SliceVocab;
@@ -128,20 +130,14 @@ fn render_stats(
     out
 }
 
-/// Render a string as a JSON string literal, mirroring Python's `json.dumps` of a
-/// `str` (the file names here are plain ASCII `*.sssom.tsv`, but escape defensively
-/// for `"` and `\`).
+/// Render a string as a JSON string literal exactly as Python's `json.dumps`
+/// of a `str` does (its default `ensure_ascii=True`): the workspace's one JSON
+/// escape law, [`purrdf_iri::json_escape`], in its [`JsonEscapes::Ascii`]
+/// spelling. The file names here are plain ASCII `*.sssom.tsv` in practice; the
+/// spelling is what keeps a control or non-ASCII name valid and Python-equal.
 fn json_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
+    push_string(&mut out, s, JsonEscapes::Ascii);
     out
 }
 
@@ -201,6 +197,28 @@ mod tests {
         assert_eq!(
             text,
             "{\n \"cells_by_set\": {},\n \"equivalences\": 0,\n \"functions\": 0,\n \"mapping_sets\": 0,\n \"projections\": 0\n}\n"
+        );
+    }
+
+    /// A set file name holding a control or a non-ASCII scalar. The emitter
+    /// used to escape only `"` and `\`, so a raw U+0001 reached the document
+    /// (RFC 8259 forbids it: the output was not JSON) and `é` was written raw
+    /// where the Python emitter this file is byte-identical to writes `\u00e9`.
+    /// Both now match `json.dumps(stats, indent=1, sort_keys=True)`.
+    #[test]
+    fn render_stats_escapes_file_names_as_python_does() {
+        let cells = BTreeMap::from([
+            ("a\u{1}b.sssom.tsv".to_owned(), 1),
+            ("caf\u{e9}\t\"q\".sssom.tsv".to_owned(), 2),
+        ]);
+        let text = render_stats(&cells, 3, 0, 2, 0);
+        assert_eq!(
+            text,
+            "{\n \"cells_by_set\": {\n  \"a\\u0001b.sssom.tsv\": 1,\n  \"caf\\u00e9\\t\\\"q\\\".sssom.tsv\": 2\n },\n \"equivalences\": 3,\n \"functions\": 0,\n \"mapping_sets\": 2,\n \"projections\": 0\n}\n"
+        );
+        assert!(
+            !text.chars().any(|c| c.is_control() && c != '\n'),
+            "no raw control scalar may reach the document"
         );
     }
 }

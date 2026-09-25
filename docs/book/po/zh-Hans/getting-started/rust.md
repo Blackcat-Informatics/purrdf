@@ -20,7 +20,7 @@ Rust 下游只需要一个依赖：门面 crate（umbrella crate）
 cargo add purrdf
 ```
 
-MSRV 为 Rust **1.96**（仅限 stable 工具链；按政策，工作区不含任何 nightly 特性）。
+MSRV 为 Rust **1.98**（仅限 stable 工具链；按政策，工作区不含任何 nightly 特性）。
 
 **译注：中国大陆镜像。**从中国大陆访问 crates.io 时常有延迟或间歇性不可达。常用的 crates.io
 镜像有清华大学 TUNA（`mirrors.tuna.tsinghua.edu.cn/crates.io-index`）、中国科学技术大学 USTC

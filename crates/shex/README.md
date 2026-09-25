@@ -87,7 +87,7 @@ as `purrdf::shex`; depend on `purrdf-shex` directly only when you want the ShEx
 engine alone.
 
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
-follows the workspace `rust-version` (currently 1.96, stable toolchain only).
+follows the workspace `rust-version` (currently 1.98, stable toolchain only).
 
 ## License
 

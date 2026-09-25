@@ -63,7 +63,8 @@ native_corpus="$(printf '%s\n' "$native_output" | sed -n 's/^corpus_len=//p')"
 #
 # The helper is OUTSIDE the workspace, so it is built from its own directory with
 # its own lock file. `--target-dir` keeps its artifacts out of the workspace's,
-# so a stale workspace build can never be mistaken for a fresh wasm one.
+# so a stale workspace build can never be mistaken for a fresh wasm one, and the
+# module folded is the one cargo reports it just wrote.
 # ---------------------------------------------------------------------------
 helper_dir="$PWD/crates/geo/determinism"
 # CARGO_TARGET_DIR may be absolute (shared caches usually are), so it cannot be
@@ -77,11 +78,20 @@ case "${CARGO_TARGET_DIR:-}" in
 esac
 mkdir -p "$target_dir"
 
-(cd "$helper_dir" && cargo build --quiet --release \
-	--target wasm32-unknown-unknown --target-dir "$target_dir")
-
-wasm="$target_dir/wasm32-unknown-unknown/release/purrdf_geo_determinism.wasm"
-[ -f "$wasm" ] || fail "the wasm module was not produced at $wasm"
+# The module's path is read from cargo's own `compiler-artifact` message, never
+# assumed from `--target-dir`: a cargo wrapper is entitled to place final artifacts
+# somewhere else, and then the assumed path is either empty or, worse, holds a stale
+# module from an earlier build that the digest would silently fold instead. The
+# module is copied out at once into a file this script owns.
+messages="$(cd "$helper_dir" && cargo build --quiet --release \
+	--target wasm32-unknown-unknown --target-dir "$target_dir" \
+	--message-format=json-render-diagnostics)" || fail "the wasm helper did not build"
+built="$(printf '%s\n' "$messages" | grep '"reason":"compiler-artifact"' |
+	sed -n 's/.*"\([^"]*\/purrdf_geo_determinism\.wasm\)".*/\1/p' | tail -n 1)"
+[ -n "$built" ] || fail "cargo reported no purrdf_geo_determinism.wasm artifact"
+[ -f "$built" ] || fail "cargo reported the wasm module at $built, which does not exist"
+wasm="$target_dir/purrdf_geo_determinism.wasm"
+cp "$built" "$wasm"
 
 wasm_output="$(node scripts/geo-determinism.mjs "$wasm")"
 

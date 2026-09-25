@@ -172,7 +172,7 @@ bumping.
 
 **The source stays nightly-free.** There are zero `#![feature(...)]` attributes
 in `crates/` and `bindings/`, and adding one is forbidden. What consumers need
-is `rust-version` in `Cargo.toml` (the MSRV, currently 1.96) — a *lower* floor on
+is `rust-version` in `Cargo.toml` (the MSRV, currently 1.98) — a *lower* floor on
 the *stable* channel — enforced by the dedicated `msrv` CI job. Never "align" the
 MSRV to the dev pin; they answer different questions.
 
@@ -183,7 +183,7 @@ Two traps, both load-bearing:
   pins another does not fail — it silently runs the pin. Only
   `RUSTUP_TOOLCHAIN` outranks the file, which is why the `msrv` job and the
   release lanes set it explicitly, and why the `msrv` job also asserts
-  `rustc --version` really is 1.96.x.
+  `rustc --version` really is 1.98.x.
 * `scripts/check-toolchain-pin.py` (in `make check` and CI) fails on any
   workflow whose install step disagrees with the pin without that explicit
   escape, and on a floating channel.

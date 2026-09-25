@@ -210,13 +210,32 @@ impl<'a> Lexer<'a> {
     }
 
     /// The `ahead`-th char from the cursor without consuming (`ahead == 0` is the
-    /// current char). Small `ahead` only (0/1/2), so the per-call decode is cheap.
+    /// current char). Small `ahead` only (0/1/2).
+    ///
+    /// ASCII fast path: when the `ahead + 1` bytes from the cursor are all ASCII,
+    /// each is one char, so the `ahead`-th char is the byte at `pos + ahead` and
+    /// no UTF-8 decode runs. Any non-ASCII byte in that window — or a window that
+    /// runs past the end — falls to the decoding walk, which is the complete
+    /// answer: an ASCII byte is its own char and a multi-byte sequence's bytes are
+    /// all `>= 0x80`, so the two paths cannot disagree.
     fn peek(&self, ahead: usize) -> Option<char> {
+        if let Some(window) = self.bytes.get(self.pos..=self.pos + ahead)
+            && window.is_ascii()
+        {
+            return Some(char::from(window[ahead]));
+        }
         self.src[self.pos..].chars().nth(ahead)
     }
 
+    /// The char at the cursor. An ASCII byte is its own char; only a non-ASCII
+    /// lead byte pays for the UTF-8 decode.
+    #[inline]
     fn cur(&self) -> Option<char> {
-        self.src[self.pos..].chars().next()
+        match self.bytes.get(self.pos) {
+            Some(&b) if b.is_ascii() => Some(char::from(b)),
+            Some(_) => self.src[self.pos..].chars().next(),
+            None => None,
+        }
     }
 
     /// The byte `ahead` bytes past the cursor, if in bounds.
@@ -246,8 +265,10 @@ impl<'a> Lexer<'a> {
         Ok(out)
     }
 
-    /// Skip `WS` and `#` line comments. The comment tail is skipped with a
-    /// single `memchr` to the newline rather than a per-char walk.
+    /// Skip `WS` and `#` line comments. A whitespace run is skipped with one
+    /// [`terminals::find_first_trivia`] — a chunked scan that tests sixteen bytes
+    /// at a time — and a comment tail with a single `memchr` to the newline,
+    /// rather than a per-byte walk for either.
     ///
     /// The whitespace test is [`terminals::is_ws`] — the grammar's
     /// `WS ::= #x20 | #x9 | #xD | #xA` — applied to the raw byte, NOT
@@ -270,15 +291,19 @@ impl<'a> Lexer<'a> {
     ///   and N-Quads.
     fn skip_trivia(&mut self) {
         loop {
-            match self.byte_at(0) {
-                Some(b) if terminals::is_ws(b) => self.pos += 1,
-                Some(b'#') => match memchr::memchr(b'\n', &self.bytes[self.pos..]) {
-                    // Consume through the newline (byte-identical to the prior
-                    // per-char loop, which broke AFTER pushing past '\n').
-                    Some(rel) => self.pos += rel + 1,
-                    None => self.pos = self.bytes.len(),
-                },
-                _ => break,
+            // The whole `WS` run at once: the scan stops at the first byte that
+            // is not `WS` (the class is `terminals::is_ws` exactly), or runs off
+            // the end.
+            let rest = &self.bytes[self.pos..];
+            self.pos += terminals::find_first_trivia(rest).unwrap_or(rest.len());
+            if self.byte_at(0) != Some(b'#') {
+                break;
+            }
+            match memchr::memchr(b'\n', &self.bytes[self.pos..]) {
+                // Consume through the newline (byte-identical to the prior
+                // per-char loop, which broke AFTER pushing past '\n').
+                Some(rel) => self.pos += rel + 1,
+                None => self.pos = self.bytes.len(),
             }
         }
     }
@@ -386,35 +411,35 @@ impl<'a> Lexer<'a> {
 
     /// `<` is `IRIREF` / `<<` / `<=` / `<`. Try a greedy IRIREF body first.
     ///
-    /// Fast path: `memchr` the closing `>`. A UCHAR escape (`\uXXXX`) never contains a
-    /// literal `>` byte, so the first `>` is always the true `IRIREF` end. When the
-    /// body has no backslash (every ordinary IRI), it is emitted VERBATIM as a single
-    /// slice after a delimiter-free check — no per-char `String` build. Only a body
-    /// carrying a `\` UCHAR escape (or no closing `>`) falls to the decoding scan.
+    /// One pass: [`terminals::find_first_iri_body_special`] finds the first byte of
+    /// the body the production does not admit raw. Its class holds every byte this
+    /// decision turns on, so the byte it stops at settles it:
+    ///
+    /// * `>` — every byte before it is lawful raw content with no escape, so the
+    ///   body is emitted VERBATIM as one borrowed slice, with no per-char `String`
+    ///   build;
+    /// * `\` — the body carries a `UCHAR` escape, and the decoding scan takes over
+    ///   from the `<`;
+    /// * any other forbidden byte, or the end of the input with no `>` — this is
+    ///   not an `IRIREF`, and `<` is an operator.
+    ///
+    /// A `UCHAR` never contains a literal `>`, and every byte the production
+    /// forbids raw is ASCII, so the byte scan is exact: a UTF-8 lead or
+    /// continuation byte is always `>= 0x80` and can never alias one.
     fn lex_lt_or_iri(&mut self) -> Result<Token<'a>> {
         let body_start = self.pos + 1;
-        if let Some(rel) = memchr::memchr(b'>', &self.bytes[body_start..]) {
-            let end = body_start + rel;
-            let body = &self.src[body_start..end];
-            if !body.as_bytes().contains(&b'\\') {
-                // No escapes: an IRIREF iff no forbidden char appears in the body. Every
-                // character the production forbids raw is ASCII, so a BYTE scan is exact —
-                // a UTF-8 lead/continuation byte is always `>= 0x80` and can never alias one.
-                if !body
-                    .as_bytes()
-                    .iter()
-                    .copied()
-                    .any(terminals::is_iriref_forbidden_byte)
-                {
-                    self.pos = end + 1; // consume through '>'
-                    return Ok(Token::Iri(Cow::Borrowed(body)));
-                }
-                // A disallowed char precedes the '>' → not an IRIREF.
-                return Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt));
+        match terminals::find_first_iri_body_special(&self.bytes[body_start..])
+            .map(|rel| (body_start + rel, self.bytes[body_start + rel]))
+        {
+            Some((end, b'>')) => {
+                self.pos = end + 1; // consume through '>'
+                Ok(Token::Iri(Cow::Borrowed(&self.src[body_start..end])))
             }
+            Some((_, b'\\')) => self.lex_iri_escaped(),
+            // A disallowed char precedes any '>' (or there is none) → not an
+            // IRIREF.
+            _ => Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt)),
         }
-        // Backslash in the body (UCHAR), or no closing '>': decode char by char.
-        self.lex_iri_escaped()
     }
 
     /// The `IRIREF` slow path: a byte-cursor scan that decodes `\uXXXX`/`\UXXXXXXXX`
@@ -1204,6 +1229,55 @@ pub(crate) fn is_varname(name: &str) -> bool {
     terminals::is_varname_start(first) && chars.all(terminals::is_varname_continue)
 }
 
+/// The implementations the chunked scans and the ASCII cursor replaced, kept as
+/// the oracle the equivalence tests hold the rewrites to.
+#[cfg(test)]
+impl<'a> Lexer<'a> {
+    fn peek_reference(&self, ahead: usize) -> Option<char> {
+        self.src[self.pos..].chars().nth(ahead)
+    }
+
+    fn cur_reference(&self) -> Option<char> {
+        self.src[self.pos..].chars().next()
+    }
+
+    fn skip_trivia_reference(&mut self) {
+        loop {
+            match self.byte_at(0) {
+                Some(b) if terminals::is_ws(b) => self.pos += 1,
+                Some(b'#') => match memchr::memchr(b'\n', &self.bytes[self.pos..]) {
+                    Some(rel) => self.pos += rel + 1,
+                    None => self.pos = self.bytes.len(),
+                },
+                _ => break,
+            }
+        }
+    }
+
+    /// The three-pass `IRIREF` scan: `memchr` to `>`, a backslash scan, then a
+    /// forbidden-byte scan.
+    fn lex_lt_or_iri_reference(&mut self) -> Result<Token<'a>> {
+        let body_start = self.pos + 1;
+        if let Some(rel) = memchr::memchr(b'>', &self.bytes[body_start..]) {
+            let end = body_start + rel;
+            let body = &self.src[body_start..end];
+            if !body.as_bytes().contains(&b'\\') {
+                if !body
+                    .as_bytes()
+                    .iter()
+                    .copied()
+                    .any(terminals::is_iriref_forbidden_byte)
+                {
+                    self.pos = end + 1;
+                    return Ok(Token::Iri(Cow::Borrowed(body)));
+                }
+                return Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt));
+            }
+        }
+        self.lex_iri_escaped()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1219,6 +1293,179 @@ mod tests {
             .into_iter()
             .map(|s| s.token)
             .collect()
+    }
+
+    // ── The chunked scans and the ASCII cursor against the code they replaced ──────
+    //
+    // Fixed-seed random text over an alphabet that holds every byte on either side of
+    // a `WS` or `IRIREF`-forbidden run boundary, the comment and escape syntax, and
+    // non-ASCII scalars of every UTF-8 length. At EVERY char boundary of every input,
+    // the rewritten function and the reference must leave the cursor in the same place
+    // and return the same token or error.
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            usize::try_from((z ^ (z >> 31)) % 1_000_003).expect("small") % n
+        }
+    }
+
+    const SCAN_PIECES: &[&str] = &[
+        // `WS` and its byte neighbours.
+        " ",
+        "\t",
+        "\n",
+        "\r",
+        "\u{8}",
+        "\u{b}",
+        "\u{c}",
+        "\u{e}",
+        "\u{1f}",
+        "!",
+        // Every `IRIREF`-forbidden run edge: `#x00-#x20`, `"`, `<`, `>`, `\`, `^`, `` ` ``,
+        // `{|}`, and the lawful bytes beside each.
+        "\u{0}",
+        "\"",
+        "#",
+        ";",
+        "<",
+        "=",
+        ">",
+        "?",
+        "[",
+        "\\",
+        "]",
+        "^",
+        "_",
+        "`",
+        "a",
+        "{",
+        "|",
+        "}",
+        "~",
+        "\u{7f}",
+        // Comments, escapes, and IRI-shaped runs, so bodies close and escape often.
+        "# comment\n",
+        "#",
+        "\\u0041",
+        "\\U0001F408",
+        "\\u00",
+        "\\q",
+        "urn:ex:",
+        "http://example.org/a/b",
+        "<urn:ex:a>",
+        "<<",
+        "<=",
+        // Non-ASCII of every length, including the lawful-in-IRIREF whitespace.
+        "\u{a0}",
+        "\u{e9}",
+        "\u{2028}",
+        "\u{3000}",
+        "\u{65e5}",
+        "\u{fffd}",
+        "\u{1f408}",
+    ];
+
+    fn scan_corpus() -> Vec<String> {
+        let mut rng = SplitMix(0x1E7E_4A5E_C0DE);
+        let mut out = Vec::new();
+        for len in (0..=70).chain([128, 300, 1000]) {
+            for _ in 0..12 {
+                let mut s = String::new();
+                while s.len() < len {
+                    // Mostly plain name bytes, so runs and bodies cross chunk edges.
+                    if rng.below(3) == 0 {
+                        s.push_str(SCAN_PIECES[rng.below(SCAN_PIECES.len())]);
+                    } else {
+                        s.push(
+                            "abcdefghijklmnopqrstuvwxyz:/.0123456789"[rng.below(39)..]
+                                .chars()
+                                .next()
+                                .expect("ascii"),
+                        );
+                    }
+                }
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    fn lexer_at(src: &str, pos: usize) -> Lexer<'_> {
+        let mut lexer = Lexer::new(src);
+        lexer.pos = pos;
+        lexer
+    }
+
+    #[test]
+    fn ascii_cursor_matches_the_decoding_cursor() {
+        for src in scan_corpus() {
+            for (pos, _) in src.char_indices().chain([(src.len(), ' ')]) {
+                let lexer = lexer_at(&src, pos);
+                assert_eq!(lexer.cur(), lexer.cur_reference(), "{src:?} at {pos}");
+                for ahead in 0..=3 {
+                    assert_eq!(
+                        lexer.peek(ahead),
+                        lexer.peek_reference(ahead),
+                        "{src:?} at {pos} + {ahead}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn chunked_trivia_skip_matches_the_byte_loop() {
+        let mut past_a_chunk = 0_usize;
+        for src in scan_corpus() {
+            for (pos, _) in src.char_indices().chain([(src.len(), ' ')]) {
+                let mut new = lexer_at(&src, pos);
+                let mut old = lexer_at(&src, pos);
+                new.skip_trivia();
+                old.skip_trivia_reference();
+                assert_eq!(new.pos, old.pos, "{src:?} from {pos}");
+                past_a_chunk += usize::from(new.pos - pos > 16);
+            }
+        }
+        // Non-vacuity: some skips ran past a whole chunk.
+        assert!(past_a_chunk > 0);
+    }
+
+    #[test]
+    fn single_pass_iriref_matches_the_three_pass_scan() {
+        let mut outcomes = [0_usize; 4];
+        for src in scan_corpus() {
+            for (pos, c) in src.char_indices() {
+                if c != '<' {
+                    continue;
+                }
+                let mut new = lexer_at(&src, pos);
+                let mut old = lexer_at(&src, pos);
+                let got = new.lex_lt_or_iri();
+                let expected = old.lex_lt_or_iri_reference();
+                assert_eq!(
+                    format!("{got:?}"),
+                    format!("{expected:?}"),
+                    "{src:?} at {pos}"
+                );
+                assert_eq!(new.pos, old.pos, "{src:?} at {pos}");
+                outcomes[match &got {
+                    Ok(Token::Iri(Cow::Borrowed(_))) => 0,
+                    Ok(Token::Iri(Cow::Owned(_))) => 1,
+                    Ok(_) => 2,
+                    Err(_) => 3,
+                }] += 1;
+            }
+        }
+        // Non-vacuity: the corpus reaches the borrowed body, the escaped body and
+        // the operator fallback.
+        assert!(outcomes[..3].iter().all(|&n| n > 0), "{outcomes:?}");
     }
 
     #[test]

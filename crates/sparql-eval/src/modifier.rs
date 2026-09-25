@@ -74,8 +74,8 @@
 //! (a raised type error is a defect to surface, never a solution to silently
 //! vanish). `SUM`/`AVG` layer a THIRD, aggregate-specific error on top: a
 //! non-numeric or overflowing running total *poisons the fold* — represented
-//! as [`NumericFold`] going from `Some` to `None` inside [`SumAccumulator`]/
-//! [`AvgAccumulator`] (see their docs) — rather than raising `Err` — the SPARQL 1.1/1.2
+//! as [`NumericFold`]'s chain going to `None` inside [`fold_numeric`] (see its
+//! docs) — rather than raising `Err` — the SPARQL 1.1/1.2
 //! aggregate algebra has no notion of a "poisoned" set-function result, but an
 //! unbound aggregate OUTPUT is exactly the shape the spec already uses for
 //! `MinList`/`MaxList`/`Sample`'s empty-group `error` (see below), so this
@@ -1135,8 +1135,8 @@ pub fn fold_values(
 ) -> Result<Option<TermValue>, EvalError> {
     match aggregate {
         ValueAggregate::Count => fold_builtin(values, CountAccumulator::default, acc_step_one),
-        ValueAggregate::Sum => fold_builtin(values, SumAccumulator::default, acc_step_one),
-        ValueAggregate::Avg => fold_builtin(values, AvgAccumulator::default, acc_step_one),
+        ValueAggregate::Sum => fold_numeric(values, NumericAggregate::Sum),
+        ValueAggregate::Avg => fold_numeric(values, NumericAggregate::Avg),
         ValueAggregate::Min => fold_builtin(values, MinAccumulator::default, acc_step_one),
         ValueAggregate::Max => fold_builtin(values, MaxAccumulator::default, acc_step_one),
         ValueAggregate::Sample => fold_builtin(values, SampleAccumulator::default, acc_step_one),
@@ -1294,9 +1294,8 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 /// without touching [`EvalCtx`]/the governor at all (every charge already
 /// happened in phase 1) and is why phase 2 is safe to parallelize regardless
 /// of volatility (see phase 2's own comment below). A
-/// built-in accumulator (this module: [`CountAccumulator`], [`SumAccumulator`],
-/// [`AvgAccumulator`], [`MinAccumulator`], [`MaxAccumulator`],
-/// [`SampleAccumulator`], [`GroupConcatAccumulator`]) and a registered
+/// built-in accumulator (this module: [`CountAccumulator`], [`MinAccumulator`],
+/// [`MaxAccumulator`], [`SampleAccumulator`], [`GroupConcatAccumulator`]) and a registered
 /// [`crate::agg_fn::CustomAggregate`] both instantiate the exact SAME
 /// [`crate::agg_fn::AggregateAccumulator`] trait — `init`/`step`/`combine`/
 /// `finish` — the one fold algebra this crate has; only the DISPATCH differs
@@ -1501,8 +1500,8 @@ fn eval_aggregate<D: DatasetView + Sync>(
         AggregateFunction::Count => {
             fold_builtin(&survivors, CountAccumulator::default, acc_step_one)?
         }
-        AggregateFunction::Sum => fold_builtin(&survivors, SumAccumulator::default, acc_step_one)?,
-        AggregateFunction::Avg => fold_builtin(&survivors, AvgAccumulator::default, acc_step_one)?,
+        AggregateFunction::Sum => fold_numeric(&survivors, NumericAggregate::Sum)?,
+        AggregateFunction::Avg => fold_numeric(&survivors, NumericAggregate::Avg)?,
         AggregateFunction::Min => fold_builtin(&survivors, MinAccumulator::default, acc_step_one)?,
         AggregateFunction::Max => fold_builtin(&survivors, MaxAccumulator::default, acc_step_one)?,
         AggregateFunction::Sample => {
@@ -1779,8 +1778,14 @@ pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
 }
 
 /// The running numeric fold `SUM`/`AVG` share, wrapped `Option`-poisonable by
-/// [`SumAccumulator`]/[`AvgAccumulator`] (see their docs for why the poisoned
-/// state lives one level up, as `None`, rather than as a variant here).
+/// [`fold_numeric`]'s chain (the poisoned state lives one level up, as `None`,
+/// rather than as a variant here).
+///
+/// `SUM`/`AVG` are the two built-ins that do NOT go through
+/// [`crate::agg_fn::AggregateAccumulator`]'s `combine`: SPARQL defines them as a
+/// left-to-right chain of `op:numeric-add`, and a combine of two partial sums is
+/// a different expression — see [`fold_numeric`] for the fold that keeps the
+/// chain's value bit for bit while still chunking the exact tiers.
 ///
 /// A **pure-integer** running group ([`Self::Int`]) accumulates through
 /// [`BigInt`] — arbitrary precision, so it never overflows regardless of how
@@ -1801,7 +1806,7 @@ pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
 /// is the numeric tower alone; F&O has no `SUM`/`AVG` for `xsd:duration` either.
 /// [`Self::Dur`] extends the aggregate algebra to the duration group, which
 /// `.goals`' MAXIMAL UTILITY line asks for once nothing in [`is_numeric_xsd`]'s
-/// gate has to move to reach it (see [`NumericFold::step`]'s doc for the exact
+/// gate has to move to reach it (see [`NumericFold::step_xsd`]'s doc for the exact
 /// gate). The RAW `(months, seconds)` pair is an abelian group under
 /// componentwise `+` unconditionally — see [`Self::Dur`]'s own doc for why the
 /// fold accumulates that raw pair (rather than folding through
@@ -1817,7 +1822,7 @@ enum NumericFold {
     /// Every value folded in so far has been `xsd:integer` (or a derived
     /// integer facet): an exact, unbounded running total, plus the count of
     /// values folded (only `AVG` reads it) and the datatype to report if the
-    /// fold never grows past this single value (see [`SumAccumulator`]'s docs
+    /// fold never grows past this single value (see [`int_sum_value`]'s docs
     /// on why a singleton group preserves its one literal's exact subtype,
     /// e.g. `xsd:byte`, while two or more folded values normalize to plain
     /// `xsd:integer` — `datatype` here mirrors that: it starts as the first
@@ -1900,11 +1905,13 @@ enum NumericFold {
 }
 
 impl NumericFold {
-    /// Fold `value` in. `false` means `value` POISONS the fold — a genuinely
-    /// non-numeric value, or an arithmetic failure promoting/adding it — and
-    /// the caller ([`SumAccumulator`]/[`AvgAccumulator`]) turns that into its
-    /// own `None`, discarding this state permanently; `true` means `self` now
-    /// reflects `value` folded in.
+    /// Fold the already-parsed value `xv` in (the caller parses with
+    /// [`xsd_of`]; a value that does not parse poisons there). `false` means
+    /// `xv` POISONS the fold — a genuinely non-numeric value, or an arithmetic
+    /// failure promoting/adding it — and the sequential chain
+    /// ([`fold_numeric`]/[`NumericSummary::finish`]) turns that into its own
+    /// `None`, discarding this state permanently; `true` means `self` now
+    /// reflects `xv` folded in.
     ///
     /// This match is exhaustive over `Empty`/`Int`/`Ok`/`Dur`: poisoning has no
     /// variant of its own to (mis)match here, because the wrapper's
@@ -1924,20 +1931,22 @@ impl NumericFold {
     /// their own existing arithmetic (`int_sum_promote_base`'s `None` arm, or
     /// `numeric_add`'s `TypeMismatch`, respectively — neither needed an edit),
     /// and `Self::Dur` rejects a numeric value explicitly below.
-    fn step(&mut self, value: &TermValue) -> bool {
-        let Some(xv) = xsd_of(value) else {
-            return false;
-        };
-        if !is_numeric_xsd(&xv) && !matches!(xv, XsdValue::Duration(_)) {
+    ///
+    /// A `false` return leaves `self` exactly as it was: every arm below
+    /// computes its fallible result before assigning anything, which
+    /// [`NumericSummary`] relies on to stop an exact fold at a refused row and
+    /// hand that row to the sequential chain instead.
+    fn step_xsd(&mut self, xv: &XsdValue) -> bool {
+        if !is_numeric_xsd(xv) && !matches!(xv, XsdValue::Duration(_)) {
             return false;
         }
         match self {
             Self::Empty => {
                 *self = match xv {
                     XsdValue::Integer { value, datatype } => Self::Int {
-                        sum: BigInt::from_i128(value),
+                        sum: BigInt::from_i128(*value),
                         count: 1,
-                        datatype,
+                        datatype: *datatype,
                     },
                     XsdValue::Duration(dur) => Self::Dur {
                         months: i128::from(dur.months()),
@@ -1946,7 +1955,7 @@ impl NumericFold {
                         count: 1,
                     },
                     other => Self::Ok {
-                        acc: other,
+                        acc: other.clone(),
                         count: 1,
                     },
                 };
@@ -1956,7 +1965,7 @@ impl NumericFold {
                 sum,
                 count,
                 datatype,
-            } => match &xv {
+            } => match xv {
                 XsdValue::Integer { value, .. } => {
                     sum.add_i128(*value);
                     *count += 1;
@@ -1977,7 +1986,7 @@ impl NumericFold {
                     None => false,
                 },
             },
-            Self::Ok { acc, count } => match numeric_add(acc, &xv) {
+            Self::Ok { acc, count } => match numeric_add(acc, xv) {
                 Ok(sum) => {
                     *acc = sum;
                     *count += 1;
@@ -1994,7 +2003,7 @@ impl NumericFold {
                 // The top-of-function gate admits only the numeric tower or a
                 // duration; a numeric value reaching an already-`Dur` fold is
                 // exactly the mixed-group case, and poisons.
-                let XsdValue::Duration(dur) = &xv else {
+                let XsdValue::Duration(dur) = xv else {
                     return false;
                 };
                 // Raw componentwise accumulation — no `Duration::new` call, no
@@ -2023,7 +2032,7 @@ impl NumericFold {
     /// `i128`), the `decimal`/`float`/`double`-tower total, or (PurRDF
     /// extension) the group's duration total, rendered through the same
     /// [`crate::expr::xsd_literal_value`] [`Self::Ok`] uses. A duration-typed
-    /// group is never `Self::Empty` at finish: [`Self::step`] only creates
+    /// group is never `Self::Empty` at finish: [`Self::step_xsd`] only creates
     /// [`Self::Dur`] on the FIRST folded duration, so the empty-group `0` row
     /// above is reached only when literally nothing was folded, exactly as
     /// SPARQL's `SUM(empty) = 0` requires regardless of the group's would-be
@@ -2037,8 +2046,8 @@ impl NumericFold {
     /// deferred all the way to here rather than applied at every fold step.
     /// `Self::Empty`/`Self::Int`/`Self::Ok` remain unconditionally infallible,
     /// exactly as before [`Self::Dur`]'s raw-component representation existed:
-    /// nothing past `step`'s own poisoning (already handled by the wrapper,
-    /// see [`SumAccumulator`]) can make one of those three unrepresentable.
+    /// nothing past `step_xsd`'s own poisoning (already handled by the chain,
+    /// see [`fold_numeric`]) can make one of those three unrepresentable.
     fn finish_sum(self) -> Option<TermValue> {
         match self {
             Self::Empty => Some(integer_value(0)),
@@ -2146,36 +2155,37 @@ impl NumericFold {
     /// Merge `a` and `b` — `a` the earlier (in source/chunk order) partial
     /// fold, `b` the later one — returning `None` when the merge itself
     /// poisons (a `decimal`-tier promotion or `numeric_add` failure; see
-    /// [`int_sum_promote_base`]). `Commutative` per
-    /// [`crate::agg_fn::AlgebraicClass`]: `BigInt` addition is exact and
-    /// associative/commutative with no caveat at all — a pure-integer group's
-    /// chunked total agrees with its sequential total, and with every OTHER
-    /// chunking of the same group, byte for byte, because [`BigInt`] cannot
-    /// overflow. `numeric_add` (once the fold is at `decimal`/`float`/`double`
-    /// tier) is likewise associative/commutative in the real-number sense, so
-    /// combining chunk partials in chunk order produces the same total
-    /// `op:numeric-add` would folding the whole group sequentially — modulo
-    /// `decimal`'s own documented `i128`-mantissa bound and `float`/`double`'s
-    /// IEEE rounding, neither of which this module changes.
+    /// [`int_sum_promote_base`]).
     ///
-    /// [`Self::Dur`] is `Commutative` too, and — thanks to the raw-component
-    /// representation [`Self::Dur`]'s own doc describes — WITHOUT caveat:
-    /// componentwise `+` over the raw `(months, seconds)` pair is ordinary
-    /// integer/decimal addition over the free abelian group `ℤ × Decimal`,
-    /// genuinely associative/commutative with no partiality anywhere in the
-    /// accumulation itself (an earlier revision of this fold validated sign
-    /// coherence at every intermediate `step`/`combine`, which made the
-    /// answer depend on chunk boundaries — exactly the nondeterminism this
-    /// representation exists to rule out). Combining chunk partials in chunk
-    /// order therefore agrees with folding the whole group sequentially on
-    /// the RAW total, byte for byte, before the one sign-coherence check
-    /// either path defers to `finish`.
+    /// This is NOT, by itself, the SPARQL answer for the rows `a` and `b`
+    /// cover. §18.5.1.3 defines `Sum(S)` as the chain `op:numeric-add(S1,
+    /// Sum(S2..n))` of single additions, and adding two partial sums is a
+    /// different expression tree: over `xsd:float`/`xsd:double` it rounds
+    /// differently (over `{−3, −2^53, −1, −0.7}` every chain gives
+    /// `−9007199254740996`, the tree `(a+b)+(c+d)` gives `−9007199254740998`),
+    /// and over `xsd:decimal` it can miss an `i128`-mantissa overflow a chain
+    /// prefix hits. The only caller,
+    /// [`NumericSummary::append`], therefore calls this solely where the
+    /// merge provably equals the chain: `b` holds no `float`/`double` operand
+    /// (the summary stops its exact fold at the first one), and either both
+    /// sides are pure-integer ([`BigInt`] addition is exact and cannot
+    /// overflow, so every order of it is the chain) or the
+    /// [`MagnitudeBound`] over every operand either side absorbed shows no
+    /// chain prefix, operand alignment or total can leave the `i128`
+    /// mantissa, in which case every decimal addition on the way was exact and
+    /// the merged value — mantissa AND scale, since `decimal_add`'s result
+    /// scale is the maximum of its operands' — is the chain's.
+    ///
+    /// [`Self::Dur`]'s raw-component representation (see its own doc) sums
+    /// the free abelian group `ℤ × Decimal`, so the same two conditions make
+    /// its merge the chain's too: `months` cannot overflow `i128` for any
+    /// realistic row count, and the seconds decimals are covered by the bound.
     ///
     /// [`crate::parallel::par_chunk_reduce_init`] chunks through
     /// [`crate::parallel::aggregate_chunk_size_for`], which is a pure function of the
     /// group's row count — never of `rayon::current_num_threads()` — so for a given
     /// (query, data) pair there is exactly ONE chunking in production, reproduced
-    /// identically on every host and every run, on top of the exactness above.
+    /// identically on every host and every run.
     fn combine_owned(a: Self, b: Self) -> Option<Self> {
         match (a, b) {
             (Self::Empty, other) | (other, Self::Empty) => Some(other),
@@ -2320,10 +2330,12 @@ fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
 /// decimal cannot be represented as a `Decimal` either — `None` (the caller
 /// poisons), exactly as today's overflow behavior already would have, just
 /// reached later. A `joining` float/double, however, is IEEE and never exact
-/// regardless of magnitude, so the sum can be cast (lossily, precisely as the
-/// existing `i128 → f64`/`f32` promotion already is — see `purrdf_xsd::numeric`)
-/// with no representability question at all: this is the one case where a
-/// running total that has escaped `i128` still avoids poisoning.
+/// regardless of magnitude, so the sum is converted — correctly rounded, straight
+/// to the joining type ([`BigInt::to_f64`] for `double`, [`BigInt::to_f32`] for
+/// `float`, never `double` then narrowed, which would round twice), exactly as
+/// the `i128 → f64`/`f32` casts in `purrdf_xsd::numeric` round an in-range
+/// integer — with no representability question at all: this is the one case
+/// where a running total that has escaped `i128` still avoids poisoning.
 fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
     if let Some(value) = sum.to_i128() {
         return Some(XsdValue::Integer {
@@ -2332,7 +2344,7 @@ fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
         });
     }
     match joining {
-        XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f64() as f32)),
+        XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f32())),
         XsdValue::Double(_) => Some(XsdValue::Double(sum.to_f64())),
         _ => None,
     }
@@ -2384,9 +2396,9 @@ fn int_sum_value(sum: &BigInt, datatype: XsdDatatype) -> TermValue {
 // [`fold_builtin`], never a runtime `Err` this crate's own built-in fold has to
 // handle: `combine`'s trait signature takes `Box<dyn AggregateAccumulator>`, so the
 // ONLY way to recover a typed value is [`crate::agg_fn::downcast_combine_partial`]'s
-// `downcast::<Self>()` — for `SumAccumulator`, say, that can only ever produce a
-// `SumAccumulator`, because no OTHER built-in type is ever boxed and handed to
-// `SumAccumulator::combine` (`fold_builtin`'s `combine` closure boxes the SAME
+// `downcast::<Self>()` — for `CountAccumulator`, say, that can only ever produce a
+// `CountAccumulator`, because no OTHER built-in type is ever boxed and handed to
+// `CountAccumulator::combine` (`fold_builtin`'s `combine` closure boxes the SAME
 // concrete `A` its own `init` just produced, one line above, every time — see that
 // function's doc comment) — so every `?` below on `downcast_combine_partial`'s
 // `Result` is unreachable in practice for a built-in, exactly as unreachable as the
@@ -2426,98 +2438,366 @@ impl crate::agg_fn::AggregateAccumulator for CountAccumulator {
     }
 }
 
-/// `SUM` — wraps [`NumericFold`], `None` meaning the fold has poisoned (a
-/// non-numeric value, or an arithmetic failure — see [`NumericFold::step`]) and
-/// stays `None` from then on (`step`/`combine` on an already-poisoned
-/// accumulator are no-ops, mirroring the prior materializing implementation's
-/// "poisoned state ignores every further step"). `Default` seeds
-/// `Some(NumericFold::Empty)`, NOT `None`: a fresh accumulator has folded
-/// nothing, which is a valid (zero-answering) state, not a poisoned one.
-struct SumAccumulator(Option<NumericFold>);
-
-impl Default for SumAccumulator {
-    fn default() -> Self {
-        Self(Some(NumericFold::Empty))
-    }
+#[cfg(test)]
+std::thread_local! {
+    /// Test-only observation of [`NumericSummary::append`]: how many chunk
+    /// partials merged exactly (the parallel path doing parallel work), and
+    /// how many rows were re-parsed and replayed through the chain. `append`
+    /// runs on the thread that called [`crate::parallel::par_chunk_reduce_init`]
+    /// (its reduce loop is sequential), so a thread-local sees every append of
+    /// a fold the test itself started.
+    static NUMERIC_FOLD_TRACE: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
 }
 
-impl crate::agg_fn::AggregateAccumulator for SumAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        let Some(value) = args.first() else {
-            return Ok(());
-        };
-        if let Some(state) = self.0.as_mut()
-            && !state.step(value)
-        {
-            self.0 = None;
+#[cfg(test)]
+fn note_numeric_exact_merge() {
+    NUMERIC_FOLD_TRACE.with(|cell| {
+        let (merges, replayed) = cell.get();
+        cell.set((merges + 1, replayed));
+    });
+}
+
+#[cfg(test)]
+fn note_numeric_replay(rows: usize) {
+    NUMERIC_FOLD_TRACE.with(|cell| {
+        let (merges, replayed) = cell.get();
+        cell.set((merges, replayed + rows));
+    });
+}
+
+/// Reset the [`NUMERIC_FOLD_TRACE`] observation and return what it held.
+#[cfg(test)]
+fn take_numeric_fold_trace() -> (usize, usize) {
+    NUMERIC_FOLD_TRACE.with(|cell| cell.replace((0, 0)))
+}
+
+/// Which finish [`fold_numeric`] applies to the folded [`NumericFold`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NumericAggregate {
+    /// `SUM` — [`NumericFold::finish_sum`].
+    Sum,
+    /// `AVG` — [`NumericFold::finish_avg`].
+    Avg,
+}
+
+/// `SUM`/`AVG` over `values` (already `DISTINCT`-resolved, in row order): the
+/// value of the §18.5.1.3 chain `op:numeric-add(S1, Sum(S2..n))` folded left
+/// to right, bit for bit, whether the group is folded sequentially or in
+/// parallel chunks.
+///
+/// # The law
+///
+/// The answer is ALWAYS the sequential chain's — [`NumericFold::step_xsd`]
+/// applied to every value in source order, `None` (unbound) from the first
+/// refused value on. At or below [`crate::parallel::PARALLEL_MIN_ROWS`] that
+/// chain is exactly what runs. Above it, [`crate::parallel::par_chunk_reduce_init`]
+/// folds each chunk into a [`NumericSummary`] and appends the summaries in
+/// chunk order; [`NumericSummary`]'s doc proves the appended summary finishes
+/// to the chain's state. What stays parallel is everything that is exact: a
+/// pure-integer group ([`BigInt`]) and a decimal/duration group whose
+/// [`MagnitudeBound`] rules out every `i128`-mantissa overflow merge chunk
+/// partials exactly, while a `float`/`double` operand switches the rest of the
+/// group onto the chain — its operands parsed in parallel, its additions
+/// replayed one by one in source order.
+fn fold_numeric(
+    values: &[TermValue],
+    aggregate: NumericAggregate,
+) -> Result<Option<TermValue>, EvalError> {
+    let fold = if crate::parallel::should_parallelize(values.len()) {
+        crate::parallel::par_chunk_reduce_init(
+            values,
+            || Ok(NumericSummary::default()),
+            |summary, value| {
+                summary.step(value);
+                Ok(())
+            },
+            |summary, next| {
+                summary.append(next, values);
+                Ok(())
+            },
+        )?
+        .finish()
+    } else {
+        numeric_chain(values)
+    };
+    Ok(fold.and_then(|fold| match aggregate {
+        NumericAggregate::Sum => fold.finish_sum(),
+        NumericAggregate::Avg => fold.finish_avg(),
+    }))
+}
+
+/// The sequential chain itself: every value folded left to right through
+/// [`NumericFold::step_xsd`], `None` from the first refused value on.
+fn numeric_chain(values: &[TermValue]) -> Option<NumericFold> {
+    let mut fold = NumericFold::Empty;
+    for value in values {
+        if !xsd_of(value).is_some_and(|xv| fold.step_xsd(&xv)) {
+            return None;
         }
-        Ok(())
     }
-
-    fn combine(
-        &mut self,
-        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
-    ) -> Result<(), EvalError> {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
-        self.0 = match (self.0.take(), other.0) {
-            (Some(a), Some(b)) => NumericFold::combine_owned(a, b),
-            _ => None,
-        };
-        Ok(())
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
-    }
-
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(self.0.and_then(NumericFold::finish_sum))
-    }
+    Some(fold)
 }
 
-/// `AVG` — the [`SumAccumulator`] twin, differing only in which
-/// [`NumericFold`] finish it calls (`finish_avg`, which — like `finish_sum`
-/// — can still answer unbound at FINISH time even over a fold that never
-/// poisoned in `step`; see that method's docs).
-struct AvgAccumulator(Option<NumericFold>);
-
-impl Default for AvgAccumulator {
-    fn default() -> Self {
-        Self(Some(NumericFold::Empty))
-    }
+/// A conservative upper bound on `Σ |x| × 10^scale` over every operand an
+/// exact [`NumericSummary`] fold absorbed, `scale` the largest decimal scale
+/// among them (`xsd:integer` operands count at scale `0`, a duration by its
+/// seconds decimal). Saturating: `u128::MAX` means "not provably small".
+///
+/// When the bound [`fits`](Self::fits) `i128`, no step of ANY left-to-right
+/// chain over those operands can overflow: every prefix sum, every operand
+/// scaled up by `align_decimals` to the running scale, and every aligned
+/// running total has magnitude at most `Σ |x| × 10^scale`. So each
+/// `decimal_add` on the way is exact, a pure-integer prefix promoted through
+/// `int_sum_promote_base` fits `i128`, and the chain equals the exact sum at
+/// the maximum scale — which is what [`NumericFold::combine_owned`] computes.
+/// When it does not fit, nothing is concluded: the rows are replayed through
+/// the chain instead.
+#[derive(Clone, Copy, Debug, Default)]
+struct MagnitudeBound {
+    /// `Σ |x| × 10^scale`, saturating.
+    magnitude: u128,
+    /// The largest scale absorbed so far.
+    scale: u8,
 }
 
-impl crate::agg_fn::AggregateAccumulator for AvgAccumulator {
-    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        let Some(value) = args.first() else {
-            return Ok(());
-        };
-        if let Some(state) = self.0.as_mut()
-            && !state.step(value)
-        {
-            self.0 = None;
+impl MagnitudeBound {
+    /// `magnitude × 10^(to − from)`, saturating (`to ≥ from`, both `≤ 18`).
+    fn rescale(magnitude: u128, from: u8, to: u8) -> u128 {
+        magnitude.saturating_mul(10u128.pow(u32::from(to - from)))
+    }
+
+    /// Account for a magnitude `|x| × 10^scale`.
+    fn add_parts(&mut self, magnitude: u128, scale: u8) {
+        let target = self.scale.max(scale);
+        self.magnitude = Self::rescale(self.magnitude, self.scale, target)
+            .saturating_add(Self::rescale(magnitude, scale, target));
+        self.scale = target;
+    }
+
+    /// Account for one absorbed operand (never a `float`/`double` — an exact
+    /// fold stops before those).
+    fn add(&mut self, xv: &XsdValue) {
+        match xv {
+            XsdValue::Integer { value, .. } => self.add_parts(value.unsigned_abs(), 0),
+            XsdValue::Decimal(d) => self.add_parts(d.mantissa().unsigned_abs(), d.scale()),
+            XsdValue::Duration(dur) => {
+                let seconds = dur.seconds();
+                self.add_parts(seconds.mantissa().unsigned_abs(), seconds.scale());
+            }
+            _ => {}
         }
-        Ok(())
     }
 
-    fn combine(
-        &mut self,
-        other: Box<dyn crate::agg_fn::AggregateAccumulator>,
-    ) -> Result<(), EvalError> {
-        let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
-        self.0 = match (self.0.take(), other.0) {
-            (Some(a), Some(b)) => NumericFold::combine_owned(a, b),
-            _ => None,
-        };
-        Ok(())
+    /// The bound over both operand sets.
+    fn merge(self, other: Self) -> Self {
+        let mut merged = self;
+        merged.add_parts(other.magnitude, other.scale);
+        merged
     }
 
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
-        self
+    /// Whether the bound proves every chain over the absorbed operands exact.
+    fn fits(self) -> bool {
+        self.magnitude <= i128::MAX.unsigned_abs()
+    }
+}
+
+/// One chunk's — or, after [`Self::append`], one source-order prefix's —
+/// contribution to [`fold_numeric`].
+///
+/// A summary covers `rows()` consecutive values. It folds them exactly into
+/// `head` until the first value it will not absorb — a `float`/`double`
+/// operand, or any value [`NumericFold::step_xsd`] refuses (non-numeric,
+/// mixed with a duration, an overflow) — and from that value on it only
+/// parses: `tail` holds every later value's [`xsd_of`] parse, in order.
+///
+/// # Proof that the appended summary finishes to the chain
+///
+/// Invariant P for a summary whose first row is the group's first row:
+/// replaying `tail` onto `head` through [`NumericFold::step_xsd`] (poisoning
+/// at the first refusal) is the chain's state after `rows()` values, and
+/// `head` alone is the chain's state after the `absorbed` values it folded.
+///
+/// * The first chunk satisfies P: its `head` IS the chain over its absorbed
+///   prefix (one fold, in order, from `Empty`), and its `tail` starts at the
+///   row the chain reaches next.
+/// * [`Self::append`] preserves P. If the prefix already stopped, the next
+///   chunk's absorbed values are re-parsed from the group and pushed onto
+///   `tail` in order, then its own `tail` follows — the replay is the chain
+///   over every row. If the prefix has not stopped, its `head` is the chain's
+///   state and the next chunk's absorbed values follow it: when
+///   [`merge_exact`] proves the merge equals the chain (see
+///   [`NumericFold::combine_owned`] and [`MagnitudeBound`]) the merged value
+///   is the new `head`; when both sides are exact but of incompatible
+///   families (a duration and a number) the chain poisons at the first of the
+///   next chunk's values, and so does the summary; otherwise every one of
+///   those values is re-parsed and stepped through [`Self::push`] — the chain
+///   itself. Either way the next chunk's `tail` then follows, in order.
+/// * [`Self::finish`] replays `tail` onto `head`, which by P is the chain's
+///   final state.
+///
+/// Stopping early is always sound (the replay IS the chain), so the stop rule
+/// only decides speed, never the answer. `float`/`double` operands stop the
+/// fold because their additions do not reassociate; `integer`/`decimal`/
+/// duration operands stay exact and parallel.
+#[derive(Debug)]
+struct NumericSummary {
+    /// The exact fold of the first `absorbed` rows.
+    head: NumericFold,
+    /// Whether the prefix is already known to poison (only [`Self::append`]
+    /// concludes that); every later row is then irrelevant.
+    poisoned: bool,
+    /// [`MagnitudeBound`] over the operands folded into `head`.
+    bound: MagnitudeBound,
+    /// Rows folded into `head`.
+    absorbed: usize,
+    /// Whether the exact fold has stopped; from then on rows go to `tail`.
+    stopped: bool,
+    /// Every row after the stop, parsed, in source order.
+    tail: Vec<Option<XsdValue>>,
+}
+
+impl Default for NumericSummary {
+    fn default() -> Self {
+        Self {
+            head: NumericFold::Empty,
+            poisoned: false,
+            bound: MagnitudeBound::default(),
+            absorbed: 0,
+            stopped: false,
+            tail: Vec::new(),
+        }
+    }
+}
+
+/// What [`merge_exact`] concluded about two exact partial folds.
+enum ExactMerge {
+    /// The merge equals the chain: the new head and bound.
+    Merged(NumericFold, MagnitudeBound),
+    /// The chain poisons inside the later partial's rows.
+    Poisoned,
+    /// Nothing proven; the later rows must be replayed.
+    Unproven,
+}
+
+/// Merge the exact partial fold `b` (with bound `b_bound`) after `a`, where
+/// `a` is the chain's state — see [`NumericSummary`]'s proof for when the
+/// merge is the chain's.
+fn merge_exact(
+    a: NumericFold,
+    a_bound: MagnitudeBound,
+    b: NumericFold,
+    b_bound: MagnitudeBound,
+) -> ExactMerge {
+    match (&a, &b) {
+        (_, NumericFold::Empty) => ExactMerge::Merged(a, a_bound),
+        (NumericFold::Empty, _) => ExactMerge::Merged(b, b_bound),
+        (NumericFold::Dur { .. }, NumericFold::Int { .. } | NumericFold::Ok { .. })
+        | (NumericFold::Int { .. } | NumericFold::Ok { .. }, NumericFold::Dur { .. }) => {
+            ExactMerge::Poisoned
+        }
+        (NumericFold::Int { .. }, NumericFold::Int { .. }) => {
+            let bound = a_bound.merge(b_bound);
+            NumericFold::combine_owned(a, b).map_or(ExactMerge::Unproven, |merged| {
+                ExactMerge::Merged(merged, bound)
+            })
+        }
+        _ => {
+            let bound = a_bound.merge(b_bound);
+            if !bound.fits() {
+                return ExactMerge::Unproven;
+            }
+            NumericFold::combine_owned(a, b).map_or(ExactMerge::Unproven, |merged| {
+                ExactMerge::Merged(merged, bound)
+            })
+        }
+    }
+}
+
+impl NumericSummary {
+    /// Rows this summary covers.
+    fn rows(&self) -> usize {
+        self.absorbed + self.tail.len()
     }
 
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(self.0.and_then(NumericFold::finish_avg))
+    /// Fold one row of the chunk this summary is folding.
+    fn step(&mut self, value: &TermValue) {
+        self.push(xsd_of(value));
+    }
+
+    /// Fold one parsed row: absorb it exactly if the fold has not stopped and
+    /// the value is exact-tier and accepted, else stop and record it.
+    fn push(&mut self, parsed: Option<XsdValue>) {
+        if !self.stopped {
+            if let Some(xv) = &parsed
+                && !matches!(xv, XsdValue::Float(_) | XsdValue::Double(_))
+                && self.head.step_xsd(xv)
+            {
+                self.bound.add(xv);
+                self.absorbed += 1;
+                return;
+            }
+            self.stopped = true;
+        }
+        self.tail.push(parsed);
+    }
+
+    /// Append `next`, the summary of the chunk that immediately follows the
+    /// rows `self` covers; `values` is the whole group, so `next`'s absorbed
+    /// rows are `values[self.rows()..][..next.absorbed]`.
+    fn append(&mut self, next: Self, values: &[TermValue]) {
+        if self.poisoned {
+            return;
+        }
+        let start = self.rows();
+        let next_absorbed = &values[start..start + next.absorbed];
+        if self.stopped {
+            self.tail.extend(next_absorbed.iter().map(xsd_of));
+            #[cfg(test)]
+            note_numeric_replay(next.absorbed);
+        } else {
+            let head = std::mem::replace(&mut self.head, NumericFold::Empty);
+            match merge_exact(head.clone(), self.bound, next.head, next.bound) {
+                ExactMerge::Merged(merged, bound) => {
+                    self.head = merged;
+                    self.bound = bound;
+                    self.absorbed += next.absorbed;
+                    #[cfg(test)]
+                    note_numeric_exact_merge();
+                }
+                ExactMerge::Poisoned => {
+                    // The chain is `None` from inside `next`'s rows on.
+                    self.poisoned = true;
+                    return;
+                }
+                ExactMerge::Unproven => {
+                    self.head = head;
+                    for value in next_absorbed {
+                        self.step(value);
+                    }
+                    #[cfg(test)]
+                    note_numeric_replay(next.absorbed);
+                }
+            }
+        }
+        if next.stopped {
+            self.stopped = true;
+            self.tail.extend(next.tail);
+        }
+    }
+
+    /// The chain's final state: `tail` replayed onto `head`.
+    fn finish(self) -> Option<NumericFold> {
+        if self.poisoned {
+            return None;
+        }
+        let mut fold = self.head;
+        for parsed in &self.tail {
+            if !parsed.as_ref().is_some_and(|xv| fold.step_xsd(xv)) {
+                return None;
+            }
+        }
+        Some(fold)
     }
 }
 
@@ -2695,7 +2975,7 @@ impl crate::agg_fn::AggregateAccumulator for GroupConcatAccumulator {
             // of either is a SPARQL type error (§17.4.2.2/§21 of the
             // relevant Query spec), so GROUP_CONCAT poisons rather than
             // silently dropping the value, mirroring how SUM/AVG poison
-            // on a non-numeric value (see `NumericFold::step`).
+            // on a non-numeric value (see `NumericFold::step_xsd`).
             None => {
                 self.poisoned = true;
                 self.buf.clear();
@@ -5777,6 +6057,349 @@ mod tests {
         assert_eq!(
             sequential, "2999 2998 2997",
             "the true top 3 of 0..2999, descending"
+        );
+    }
+}
+
+/// `SUM`/`AVG` are the §18.5.1.3 chain, bit for bit, on the parallel path too —
+/// see [`fold_numeric`]'s law and [`NumericSummary`]'s proof.
+#[cfg(test)]
+mod numeric_chain_tests {
+    use super::*;
+    use crate::test_rng::splitmix64_next;
+
+    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+    const XDBL: &str = "http://www.w3.org/2001/XMLSchema#double";
+    const XFLT: &str = "http://www.w3.org/2001/XMLSchema#float";
+    const XDTD: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
+    const XSTR: &str = "http://www.w3.org/2001/XMLSchema#string";
+
+    fn lit(lexical: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// The sequential chain's answer: every fork gate held shut.
+    fn sequential(aggregate: ValueAggregate, values: &[TermValue]) -> Option<TermValue> {
+        let _guard = crate::parallel::force_sequential_operation();
+        fold_values(aggregate, values).expect("fold")
+    }
+
+    /// The chunked answer, forced parallel at `chunk` rows per chunk (`None`:
+    /// the production chunk plan).
+    fn parallel(
+        aggregate: ValueAggregate,
+        values: &[TermValue],
+        chunk: Option<usize>,
+    ) -> Option<TermValue> {
+        let _parallel = crate::parallel::force_parallel_for_test(true);
+        let _chunk = chunk.map(crate::parallel::force_chunk_size_for_test);
+        fold_values(aggregate, values).expect("fold")
+    }
+
+    /// What the pre-fix implementation answered: each chunk folded on its own,
+    /// the partials added through `combine_owned` in chunk order — the tree of
+    /// partial sums this module no longer computes. The observing oracle for
+    /// the property test below: it must disagree with the chain somewhere, or
+    /// the test could not tell the fix from the defect.
+    fn partial_sum_tree(
+        values: &[TermValue],
+        chunk: usize,
+        aggregate: ValueAggregate,
+    ) -> Option<TermValue> {
+        let mut acc = Some(NumericFold::Empty);
+        for part in values.chunks(chunk.max(1)) {
+            acc = match (acc, numeric_chain(part)) {
+                (Some(a), Some(b)) => NumericFold::combine_owned(a, b),
+                _ => None,
+            };
+        }
+        acc.and_then(|fold| match aggregate {
+            ValueAggregate::Avg => fold.finish_avg(),
+            _ => fold.finish_sum(),
+        })
+    }
+
+    fn double_bits(value: Option<&TermValue>) -> u64 {
+        match value.and_then(xsd_of) {
+            Some(XsdValue::Double(d)) => d.to_bits(),
+            other => panic!("expected an xsd:double answer, got {other:?}"),
+        }
+    }
+
+    /// The witness: over `{−3, −2^53, −1, −0.7}` every left-to-right chain
+    /// gives `−9007199254740996`; the tree `(a+b)+(c+d)` gives
+    /// `−9007199254740998`.
+    fn witness() -> [TermValue; 4] {
+        [
+            lit("-3.0e0", XDBL),
+            lit("-9007199254740992.0e0", XDBL),
+            lit("-1.0e0", XDBL),
+            lit("-0.7e0", XDBL),
+        ]
+    }
+
+    const CHAIN_VALUE: f64 = -9_007_199_254_740_996.0;
+
+    #[test]
+    fn the_witness_group_sums_to_the_chain_value() {
+        let group = witness();
+        let answer = sequential(ValueAggregate::Sum, &group);
+        assert_eq!(double_bits(answer.as_ref()), CHAIN_VALUE.to_bits());
+        // Two chunks of two: the tree the old combine built.
+        assert_eq!(
+            double_bits(parallel(ValueAggregate::Sum, &group, Some(2)).as_ref()),
+            CHAIN_VALUE.to_bits()
+        );
+        // The refused side of the pair: the partial-sum tree really is a
+        // different number here.
+        let tree = partial_sum_tree(&group, 2, ValueAggregate::Sum);
+        assert_eq!(
+            double_bits(tree.as_ref()),
+            (-9_007_199_254_740_998.0_f64).to_bits()
+        );
+    }
+
+    /// The witness inside a group above `PARALLEL_MIN_ROWS`, straddling a
+    /// production chunk boundary, so the real parallel path runs unforced.
+    #[test]
+    fn a_large_group_containing_the_witness_sums_to_the_chain_value() {
+        const ROWS: usize = 2048;
+        const { assert!(ROWS > crate::parallel::PARALLEL_MIN_ROWS) };
+        let chunk = crate::parallel::planned_aggregate_chunk_count(ROWS);
+        let chunk_size = ROWS / chunk;
+        let mut group = vec![lit("0.0e0", XDBL); ROWS];
+        let [a, b, c, d] = witness();
+        group[chunk_size - 2] = a;
+        group[chunk_size - 1] = b;
+        group[chunk_size] = c;
+        group[chunk_size + 1] = d;
+        let answer = fold_values(ValueAggregate::Sum, &group).expect("fold");
+        assert_eq!(double_bits(answer.as_ref()), CHAIN_VALUE.to_bits());
+        assert_eq!(answer, sequential(ValueAggregate::Sum, &group));
+        assert_ne!(
+            double_bits(partial_sum_tree(&group, chunk_size, ValueAggregate::Sum).as_ref()),
+            CHAIN_VALUE.to_bits(),
+            "the production chunk plan splits the witness"
+        );
+        assert_eq!(
+            fold_values(ValueAggregate::Avg, &group).expect("fold"),
+            sequential(ValueAggregate::Avg, &group)
+        );
+    }
+
+    /// A decimal group whose chain overflows the `i128` mantissa at a prefix a
+    /// partial-sum tree steps around: `1e38 + 1e38` overflows, while the tree
+    /// `1e38 + (1e38 + −1e38)` does not. The chain poisons, so the parallel
+    /// fold must too; the neighbouring group without the second `1e38` is
+    /// valid and must still answer.
+    #[test]
+    fn a_decimal_overflow_the_chain_hits_is_hit_in_parallel_too() {
+        const ROWS: usize = 2048;
+        let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(ROWS);
+        let big = "100000000000000000000000000000000000000";
+        let mut group = vec![lit("0", XDEC); ROWS];
+        group[chunk_size - 1] = lit(big, XDEC);
+        group[chunk_size] = lit(big, XDEC);
+        group[chunk_size + 1] = lit(&format!("-{big}"), XDEC);
+        assert_eq!(sequential(ValueAggregate::Sum, &group), None);
+        assert!(
+            partial_sum_tree(&group, chunk_size, ValueAggregate::Sum).is_some(),
+            "the tree dodges the overflow the chain hits"
+        );
+        assert_eq!(
+            fold_values(ValueAggregate::Sum, &group).expect("fold"),
+            None
+        );
+
+        let mut neighbour = group.clone();
+        neighbour[chunk_size] = lit("0", XDEC);
+        let expected = sequential(ValueAggregate::Sum, &neighbour);
+        assert_eq!(expected, Some(lit("0", XDEC)));
+        assert_eq!(
+            fold_values(ValueAggregate::Sum, &neighbour).expect("fold"),
+            expected
+        );
+    }
+
+    /// The exact tiers stay on the parallel path: an integer group and a
+    /// decimal group above the threshold merge every chunk partial exactly and
+    /// replay no row, while a group whose magnitudes defeat the bound replays
+    /// — and all three agree with the chain.
+    #[test]
+    fn exact_tiers_merge_in_parallel_and_only_unprovable_rows_replay() {
+        const ROWS: usize = 4096;
+        let chunks = crate::parallel::planned_aggregate_chunk_count(ROWS);
+        assert!(chunks > 1);
+
+        let integers: Vec<TermValue> = (0..ROWS)
+            .map(|i| lit(&(i as i64 - 1000).to_string(), XINT))
+            .collect();
+        let decimals: Vec<TermValue> = (0..ROWS)
+            .map(|i| lit(&format!("{}.{:02}", i % 97, i % 100), XDEC))
+            .collect();
+        for (group, label) in [(&integers, "integer"), (&decimals, "decimal")] {
+            for aggregate in [ValueAggregate::Sum, ValueAggregate::Avg] {
+                let expected = sequential(aggregate, group);
+                take_numeric_fold_trace();
+                let observed = fold_values(aggregate, group).expect("fold");
+                let (merges, replayed) = take_numeric_fold_trace();
+                assert_eq!(observed, expected, "{label} {aggregate:?}");
+                assert_eq!(merges, chunks - 1, "{label}: every chunk merged exactly");
+                assert_eq!(replayed, 0, "{label}: no row replayed");
+            }
+        }
+
+        // 1e20 at scale 18 is 1e38: two of them overflow the bound (and the
+        // chain), so their chunks replay row by row.
+        let mut huge = decimals;
+        huge[ROWS - 1] = lit("100000000000000000000", XDEC);
+        huge[ROWS - 2] = lit("-99999999999999999999.999999999999999999", XDEC);
+        let expected = sequential(ValueAggregate::Sum, &huge);
+        take_numeric_fold_trace();
+        let observed = fold_values(ValueAggregate::Sum, &huge).expect("fold");
+        let (_, replayed) = take_numeric_fold_trace();
+        assert_eq!(observed, expected);
+        assert!(
+            replayed > 0,
+            "the unprovable chunk replays through the chain"
+        );
+    }
+
+    /// An integer sum that has escaped `i128` promoted into an `xsd:float` sum
+    /// rounds once, straight to `f32`: `(2^127 − 1) + (2^103 + 2)` is
+    /// `(2^24 + 1) × 2^103 + 1`, just above an `f32` halfway point, so the sum
+    /// is `(2^24 + 2) × 2^103`, not the `2^127` a detour through `f64` gives.
+    #[test]
+    fn an_escaped_integer_sum_joins_a_float_sum_correctly_rounded() {
+        let group = [
+            lit(&i128::MAX.to_string(), XINT),
+            lit(&((1_i128 << 103) + 2).to_string(), XINT),
+            lit("0", XFLT),
+        ];
+        let answer = sequential(ValueAggregate::Sum, &group);
+        match answer.as_ref().and_then(xsd_of) {
+            Some(XsdValue::Float(f)) => assert_eq!(f.to_bits(), (254 << 23) | 1),
+            other => panic!("expected an xsd:float answer, got {other:?}"),
+        }
+    }
+
+    /// One random numeric-ish literal. `mode` shapes the group's tier mix.
+    fn draw(state: &mut u64, mode: u64) -> TermValue {
+        let r = splitmix64_next(state);
+        let pick = splitmix64_next(state);
+        let small = (r % 2001) as i64 - 1000;
+        let kind = match mode {
+            0 => 0,        // integers only
+            1 => pick % 3, // integers and decimals
+            2 => pick % 8, // every tier
+            3 => {
+                // exact tiers with a rare float/double
+                if pick.is_multiple_of(97) {
+                    4 + pick % 2
+                } else {
+                    pick % 3
+                }
+            }
+            4 => 4 + pick % 2,                         // doubles and floats
+            _ => [0, 1, 4, 5, 6][(pick % 5) as usize], // every tier, nothing that poisons
+        };
+        match kind {
+            0 => lit(&small.to_string(), XINT),
+            1 => {
+                let scale = (r >> 20) % 19;
+                let mantissa = (r >> 8) as i64 % 1_000_000_000_000;
+                lit(&decimal_lexical(i128::from(mantissa), scale as u32), XDEC)
+            }
+            2 => {
+                // near the i128 ceiling: BigInt territory, and overflow-prone
+                // once a decimal joins
+                let magnitude = i128::MAX - i128::from(r % 1000);
+                let value = if pick.is_multiple_of(2) {
+                    magnitude
+                } else {
+                    -magnitude
+                };
+                lit(&value.to_string(), XINT)
+            }
+            4 => {
+                // doubles around 2^53 and small fractions: rounding-sensitive
+                let base =
+                    [9_007_199_254_740_992.0_f64, 0.7, 3.0, 1.0e16, 1.0e-3][(r % 5) as usize];
+                let sign = if pick.is_multiple_of(3) { -1.0 } else { 1.0 };
+                let jitter = ((r >> 32) % 7) as f64;
+                lit(&format!("{:e}", sign * (base + jitter)), XDBL)
+            }
+            5 => lit(&format!("{:e}", (small as f32) * 0.37), XFLT),
+            6 => lit(&format!("{:e}", f64::from_bits(r >> 2) * 0.0), XDBL),
+            _ => {
+                if pick.is_multiple_of(5) {
+                    lit("P1D", XDTD)
+                } else if pick.is_multiple_of(7) {
+                    lit("not a number", XSTR)
+                } else {
+                    lit(&small.to_string(), XINT)
+                }
+            }
+        }
+    }
+
+    fn decimal_lexical(mantissa: i128, scale: u32) -> String {
+        let sign = if mantissa < 0 { "-" } else { "" };
+        let digits = mantissa.unsigned_abs().to_string();
+        let scale = scale as usize;
+        if scale == 0 {
+            return format!("{sign}{digits}");
+        }
+        let padded = format!("{digits:0>width$}", width = scale + 1);
+        let (int_part, frac_part) = padded.split_at(padded.len() - scale);
+        format!("{sign}{int_part}.{frac_part}")
+    }
+
+    /// Property: over random mixed-tier groups of sizes around and above the
+    /// threshold, the parallel `SUM`/`AVG` (production chunk plan and several
+    /// forced chunk sizes) equals the sequential chain, bit for bit — and the
+    /// partial-sum tree disagrees with the chain on some of those same groups,
+    /// so the comparison observes the defect it guards against.
+    #[test]
+    fn parallel_sum_and_avg_equal_the_sequential_chain_bit_for_bit() {
+        let mut state = 0x005E_ED5A_u64;
+        let mut tree_disagreements = 0usize;
+        let mut cases = 0usize;
+        for &rows in &[1000_usize, 1024, 1025, 1100, 2048, 3001] {
+            for mode in 0..6_u64 {
+                for _ in 0..3 {
+                    let group: Vec<TermValue> = (0..rows).map(|_| draw(&mut state, mode)).collect();
+                    for aggregate in [ValueAggregate::Sum, ValueAggregate::Avg] {
+                        let chain = sequential(aggregate, &group);
+                        let unforced = fold_values(aggregate, &group).expect("fold");
+                        assert_eq!(unforced, chain, "{rows} rows, mode {mode}, {aggregate:?}");
+                        for chunk in [None, Some(1), Some(7), Some(100), Some(333)] {
+                            let observed = parallel(aggregate, &group, chunk);
+                            assert_eq!(
+                                observed, chain,
+                                "{rows} rows, mode {mode}, {aggregate:?}, chunk {chunk:?}"
+                            );
+                        }
+                        for chunk in [7_usize, 100] {
+                            if partial_sum_tree(&group, chunk, aggregate) != chain {
+                                tree_disagreements += 1;
+                            }
+                        }
+                        cases += 1;
+                    }
+                }
+            }
+        }
+        assert!(cases > 0);
+        assert!(
+            tree_disagreements > 0,
+            "no generated group separates the partial-sum tree from the chain"
         );
     }
 }

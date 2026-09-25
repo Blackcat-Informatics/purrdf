@@ -35,11 +35,12 @@
 //! [`digest_serial`]); this crate's batch schedule and level formula are specified here
 //! for the first time, so there is no external target to reproduce.
 
+use purrdf_core::distance::Exact;
 use purrdf_sparql_eval::knn::Kernel;
 
-use crate::builder;
 use crate::graph::VectorMatrix;
 use crate::params::Params;
+use crate::{Compiled, builder};
 
 /// The number of rows in the digest corpus.
 pub const CORPUS_ROWS: usize = 5_000;
@@ -86,9 +87,14 @@ pub fn digest_serial() -> u64 {
 /// path with an explicit schedule without re-implementing the builder.
 #[must_use]
 pub fn digest_with_batch(batch: Option<usize>) -> u64 {
-    let index =
-        builder::build_with_batch(corpus(), Kernel::SquaredEuclidean, digest_params(), batch)
-            .expect("the digest corpus is valid and builds");
+    let index = builder::build_with_batch(
+        corpus(),
+        Kernel::SquaredEuclidean,
+        digest_params(),
+        batch,
+        Compiled::<Exact>::here(),
+    )
+    .expect("the digest corpus is valid and builds");
     fnv1a_64(&index.canonical_image())
 }
 

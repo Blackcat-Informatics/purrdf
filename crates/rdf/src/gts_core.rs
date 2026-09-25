@@ -191,7 +191,7 @@ fn blob_metadata(
 ) -> BTreeMap<String, RdfMetadataValue> {
     blob_meta
         .get(digest)
-        .map(|value| match metadata_value_from_cbor(value) {
+        .map_or_default(|value| match metadata_value_from_cbor(value) {
             RdfMetadataValue::Map(map) => map,
             value => {
                 let mut map = BTreeMap::new();
@@ -199,7 +199,6 @@ fn blob_metadata(
                 map
             }
         })
-        .unwrap_or_default()
 }
 
 fn lookaside_kind_from_metadata(metadata: &BTreeMap<String, RdfMetadataValue>) -> RdfLookasideKind {

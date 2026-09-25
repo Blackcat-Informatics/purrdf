@@ -114,6 +114,15 @@
 //! itself and keeps the `xsd:float`, `xsd:double` and `xsd:decimal` value spaces
 //! disjoint.
 //!
+//! # Binary floating-point arithmetic
+//!
+//! [`ieee`] is the workspace's one implementation of binary64 and binary32 `+`, `−`,
+//! `×`, `÷` and `√`, each correctly rounded on every target -- the x87 included, where
+//! a precision guard and a subnormal scaling make the unit round once. The
+//! `xsd:double`/`xsd:float` operators here compute with it, and so does every other
+//! crate whose floating-point results reach a query answer, serialized bytes or an
+//! identity. Everywhere but the x87 each operation is the bare operator.
+//!
 //! # Hard-fail
 //!
 //! Malformed lexical input is a hard error ([`XsdError`]), never a silent default.
@@ -156,11 +165,16 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
-#![forbid(unsafe_code)]
+// `deny`, not `forbid`: the one exception is `ieee::x87`, the x87 control word and the
+// correctly rounded x87 sequences, which are inline assembly and exist only on a 32-bit
+// `x86` build without SSE2. Every other module is unsafe-free.
+#![deny(unsafe_code)]
 
 pub mod bigint;
 pub mod binary;
 pub mod datatype;
+mod decimal_float;
+pub mod ieee;
 pub mod numeric;
 pub mod ops;
 pub mod range;

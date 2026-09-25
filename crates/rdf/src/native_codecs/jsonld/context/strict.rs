@@ -32,16 +32,16 @@ pub(super) fn parse_strict_json(
     }
     let remaining = Cell::new(limits.values);
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let value = StrictJsonSeed {
-        remaining: &remaining,
-        depth: 0,
-        max_depth: limits.depth,
-    }
-    .deserialize(&mut deserializer)
+    let value = crate::json_number::read_json(|| {
+        let value = StrictJsonSeed {
+            remaining: &remaining,
+            depth: 0,
+            max_depth: limits.depth,
+        }
+        .deserialize(&mut deserializer)?;
+        deserializer.end().map(|()| value)
+    })
     .map_err(|source| error(format!("parse {description}: {source}")))?;
-    deserializer
-        .end()
-        .map_err(|source| error(format!("parse {description}: {source}")))?;
     Ok(value)
 }
 

@@ -1136,12 +1136,30 @@ where
 /// in chunk-index order**, via `combine` — never reassociated, never merged
 /// out of order. That fixed order is what makes this primitive safe for a
 /// NON-commutative fold (string concatenation, "first value wins", a running
-/// extreme under a non-total order): the result is byte-identical to a plain
-/// sequential `init(); for item in items { step(&mut s, item); }` fold over
-/// the same `items` in source order, for every accumulator regardless of its
-/// algebraic class — see `crate::agg_fn::AlgebraicClass`'s module docs, whose
-/// `combine`-in-chunk-order contract this primitive is the evaluator-side
-/// counterpart of.
+/// extreme under a non-total order).
+///
+/// # The law
+///
+/// Order is all this primitive preserves; association is the accumulator's
+/// business. The result is byte-identical to a plain sequential
+/// `init(); for item in items { step(&mut s, item); }` fold over the same
+/// `items` in source order EXACTLY when the accumulator satisfies
+/// `combine(fold(A), fold(B)) == fold(A ++ B)` for adjacent runs `A`, `B` —
+/// true for a count, a list join, a first-wins sample, a running extreme, and
+/// exact (`BigInt`, overflow-free decimal) addition, and FALSE for a combine
+/// that adds two rounded partial sums: over `xsd:double`, `(a+b)+(c+d)` is not
+/// the value of any left-to-right chain in general. `SUM`/`AVG`
+/// (`crate::modifier::fold_numeric`) therefore do not fold through a partial-
+/// sum combine: their chunk state (`crate::modifier`'s `NumericSummary`)
+/// satisfies the law by construction — it merges only exact partials whose
+/// merge provably equals the chain, and hands every row from the first
+/// `float`/`double` operand on to an in-order replay — so the parallel and
+/// sequential `SUM`/`AVG` agree bit for bit. See
+/// `crate::agg_fn::AlgebraicClass`'s module docs, whose `combine`-in-chunk-order
+/// contract this primitive is the evaluator-side counterpart of; a registered
+/// custom aggregate whose `combine` breaks the law gets a chunk-dependent
+/// answer, which is why the chunk plan below is a pure function of
+/// `items.len()`.
 ///
 /// Used by `modifier::eval_aggregate`/`eval_custom_aggregate` to fold ONE
 /// `GROUP BY` group's (already-evaluated, already-`DISTINCT`-deduped) values

@@ -270,11 +270,7 @@ fn check(position: &str, body: &str) {
                     &result.focus_node.to_term_value(),
                     "the focus node",
                 ),
-                result
-                    .value
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_default(),
+                result.value.as_ref().map_or_default(ToString::to_string),
             )
         })
         .collect();

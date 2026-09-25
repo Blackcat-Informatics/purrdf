@@ -9,6 +9,9 @@ use purrdf_core::ir::pack::bits::{read_varint, write_varint};
 use structured_zstd::decoding::FrameDecoder;
 use structured_zstd::encoding::{CompressionLevel, compress_slice_to_vec};
 
+use std::borrow::Cow;
+
+use crate::column::{Int64Column, Presence};
 use crate::compact::{CompactField, CompactReader, CompactWriter, StructState, TYPE_STRUCT};
 use crate::{ColumnSchema, ColumnarError, PhysicalType, Repetition, Table};
 
@@ -34,6 +37,11 @@ const PAGE_TYPE_DATA_V2: i32 = 3;
 // turn a small compressed input into an allocator-sized request.
 const MAX_DECODED_TABLE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_INITIAL_ROW_CAPACITY: usize = 65_536;
+// What the decoded-table budget charges each INT64 row: a value word and a
+// presence word. The charge is part of the profile's accept/refuse boundary, so
+// it is stated here rather than read off the in-memory layout, which packs
+// presence into a bitmap and would otherwise move the boundary with it.
+const INT64_ROW_BUDGET_BYTES: usize = 2 * size_of::<i64>();
 
 /// Page compression selected for one deterministic five-table write.
 ///
@@ -70,12 +78,12 @@ impl Compression {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ColumnValues {
-    Int64(Vec<Option<i64>>),
+    Int64(Int64Column),
     ByteArray(Vec<Option<Vec<u8>>>),
 }
 
 impl ColumnValues {
-    pub(crate) fn int64(values: Vec<Option<i64>>) -> Self {
+    pub(crate) fn int64(values: Int64Column) -> Self {
         Self::Int64(values)
     }
 
@@ -99,42 +107,25 @@ impl ColumnValues {
 
     fn null_count(&self) -> usize {
         match self {
-            Self::Int64(values) => values.iter().filter(|value| value.is_none()).count(),
+            Self::Int64(values) => values.null_count(),
             Self::ByteArray(values) => values.iter().filter(|value| value.is_none()).count(),
         }
     }
 
-    fn definition_levels(&self) -> impl Iterator<Item = bool> + '_ {
-        enum Iter<'a> {
-            Int(std::slice::Iter<'a, Option<i64>>),
-            Bytes(std::slice::Iter<'a, Option<Vec<u8>>>),
-        }
-        impl Iterator for Iter<'_> {
-            type Item = bool;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                match self {
-                    Self::Int(values) => values.next().map(Option::is_some),
-                    Self::Bytes(values) => values.next().map(Option::is_some),
-                }
-            }
-        }
+    /// The column's definition levels: the INT64 column's own bitmap, or one
+    /// built from the BYTE_ARRAY rows.
+    fn presence(&self) -> Cow<'_, Presence> {
         match self {
-            Self::Int64(values) => Iter::Int(values.iter()),
-            Self::ByteArray(values) => Iter::Bytes(values.iter()),
+            Self::Int64(values) => Cow::Borrowed(values.presence()),
+            Self::ByteArray(values) => Cow::Owned(values.iter().map(Option::is_some).collect()),
         }
     }
 
     fn encode_plain(&self) -> Result<Vec<u8>, ColumnarError> {
-        let mut out = Vec::new();
         match self {
-            Self::Int64(values) => {
-                out.reserve(values.len().saturating_sub(self.null_count()) * size_of::<i64>());
-                for value in values.iter().flatten() {
-                    out.extend_from_slice(&value.to_le_bytes());
-                }
-            }
+            Self::Int64(values) => Ok(encode_int64_plain(values.values())),
             Self::ByteArray(values) => {
+                let mut out = Vec::new();
                 for value in values.iter().flatten() {
                     let len =
                         i32::try_from(value.len()).map_err(|_| ColumnarError::LimitExceeded {
@@ -145,16 +136,16 @@ impl ColumnValues {
                     out.extend_from_slice(&len.to_le_bytes());
                     out.extend_from_slice(value);
                 }
+                Ok(out)
             }
         }
-        Ok(out)
     }
 
     fn plain_len(&self) -> Result<usize, ColumnarError> {
         match self {
             Self::Int64(values) => values
+                .values()
                 .len()
-                .saturating_sub(self.null_count())
                 .checked_mul(size_of::<i64>())
                 .ok_or_else(table_budget_overflow),
             Self::ByteArray(values) => values.iter().flatten().try_fold(0usize, |total, value| {
@@ -264,7 +255,7 @@ fn validate_decoded_table_budget(
         .iter()
         .try_fold(0usize, |total, column| {
             let slot = match column.physical_type {
-                PhysicalType::Int64 => size_of::<Option<i64>>(),
+                PhysicalType::Int64 => INT64_ROW_BUDGET_BYTES,
                 PhysicalType::ByteArray => size_of::<Option<Vec<u8>>>(),
             };
             total.checked_add(slot).ok_or_else(table_budget_overflow)
@@ -400,7 +391,7 @@ fn encode_column(
     compression: Compression,
 ) -> Result<EncodedPage, ColumnarError> {
     let definitions = if schema.repetition == Repetition::Optional {
-        encode_definition_levels(values.definition_levels())
+        encode_definition_levels(&values.presence())
     } else {
         Vec::new()
     };
@@ -458,16 +449,13 @@ fn encode_column(
     })
 }
 
-fn encode_definition_levels(levels: impl Iterator<Item = bool>) -> Vec<u8> {
-    let mut levels = levels.peekable();
+/// The RLE runs of the definition levels: each maximal run of equal presence
+/// as its length (shifted left one, the RLE-run tag bit clear) then its level.
+fn encode_definition_levels(presence: &Presence) -> Vec<u8> {
     let mut out = Vec::new();
-    while let Some(level) = levels.next() {
-        let mut run_len = 1u64;
-        while levels.next_if_eq(&level).is_some() {
-            run_len += 1;
-        }
-        write_varint(&mut out, run_len << 1);
-        out.push(u8::from(level));
+    for (present, run_len) in presence.runs() {
+        write_varint(&mut out, (run_len as u64) << 1);
+        out.push(u8::from(present));
     }
     out
 }
@@ -655,7 +643,7 @@ pub(crate) fn read_table(bytes: &[u8], table: Table) -> Result<TableData, Column
             .columns
             .iter()
             .map(|column| match column.physical_type {
-                PhysicalType::Int64 => ColumnValues::Int64(Vec::new()),
+                PhysicalType::Int64 => ColumnValues::Int64(Int64Column::default()),
                 PhysicalType::ByteArray => ColumnValues::ByteArray(Vec::new()),
             })
             .collect();
@@ -1458,7 +1446,7 @@ fn decode_page(
                     format!("has {} bytes, expected {plain_len}", encoded_values.len()),
                 ));
             }
-            encoded_values.to_vec()
+            Cow::Borrowed(encoded_values)
         }
         Compression::Zstd => {
             let mut plain = vec![0; plain_len];
@@ -1473,15 +1461,16 @@ fn decode_page(
                     format!("decoded {written} bytes, expected {plain_len}"),
                 ));
             }
-            plain
+            Cow::Owned(plain)
         }
     };
-    let definitions = if schema.repetition == Repetition::Optional {
+    let presence = if schema.repetition == Repetition::Optional {
         decode_definition_levels(definitions_bytes, row_count)?
     } else {
-        vec![true; row_count]
+        Presence::full(row_count)
     };
-    let observed_nulls = definitions.iter().filter(|present| !**present).count();
+    let present = presence.count();
+    let observed_nulls = row_count - present;
     if observed_nulls != data.num_nulls as usize {
         return Err(ColumnarError::malformed(
             "definition levels",
@@ -1491,12 +1480,12 @@ fn decode_page(
             ),
         ));
     }
-    decode_plain(&plain, schema.physical_type, &definitions)
+    decode_plain(&plain, schema.physical_type, presence, present)
 }
 
-fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Vec<bool>, ColumnarError> {
+fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Presence, ColumnarError> {
     let mut pos = 0usize;
-    let mut levels = Vec::with_capacity(bounded_row_capacity(row_count));
+    let mut levels = Presence::with_capacity(bounded_row_capacity(row_count));
     while levels.len() < row_count {
         let header = read_varint(bytes, &mut pos)
             .map_err(|error| ColumnarError::malformed("definition-level RLE", error.to_string()))?;
@@ -1525,7 +1514,7 @@ fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Vec<bool>,
                 format!("level is {level}, expected 0 or 1"),
             ));
         }
-        levels.extend(std::iter::repeat_n(level == 1, run_len));
+        levels.push_run(level == 1, run_len);
     }
     if pos != bytes.len() {
         return Err(ColumnarError::malformed(
@@ -1536,42 +1525,88 @@ fn decode_definition_levels(bytes: &[u8], row_count: usize) -> Result<Vec<bool>,
     Ok(levels)
 }
 
+/// PLAIN `INT64` value bytes: each present value as eight little-endian bytes,
+/// in row order. Nulls contribute nothing, so the body is exactly the column's
+/// dense value vector in little-endian order.
+///
+/// One counted copy with no branch: each value's `to_le_bytes` is the identity
+/// on a little-endian target, so the loop is a plain word copy, which LLVM
+/// lowers to one `memcpy` call (`memory.copy` on wasm32); on a big-endian
+/// target it is a byte swap per word.
+/// The collect writes into exactly sized storage, so no byte is zeroed first,
+/// and `into_flattened` reinterprets the words as bytes without copying.
+///
+/// Out of line so the PLAIN loop is its own compiled function rather than a
+/// fragment of the column encoder it is called from once per column.
+#[inline(never)]
+pub(crate) fn encode_int64_plain(values: &[i64]) -> Vec<u8> {
+    values
+        .iter()
+        .map(|value| value.to_le_bytes())
+        .collect::<Vec<[u8; size_of::<i64>()]>>()
+        .into_flattened()
+}
+
+/// The column a PLAIN `INT64` value body holds under `presence`, whose
+/// `present` rows hold values, or the error the one-value-at-a-time decode
+/// reports.
+///
+/// The count of present rows decides the body's length exactly, so the length
+/// checks happen once, before any value is read: a short body is
+/// [`ColumnarError::Truncated`] at the end offset of the first value that does
+/// not fit, and a long one is the trailing-bytes [`ColumnarError::Malformed`],
+/// the two answers the per-value loop gives at the value it fails on. Then the
+/// body, which is the dense value vector in little-endian bytes, is read as one
+/// counted copy (`from_le_bytes` is the identity on a little-endian target, so
+/// LLVM lowers it to one `memcpy` call, `memory.copy` on wasm32; a big-endian
+/// target swaps each word). The present rows were counted by the caller, a
+/// popcount over the bitmap, before the page's null count was checked.
+///
+/// Out of line for the reason [`encode_int64_plain`] is.
+#[inline(never)]
+pub(crate) fn decode_int64_plain(
+    bytes: &[u8],
+    presence: Presence,
+    present: usize,
+) -> Result<Int64Column, ColumnarError> {
+    const WIDTH: usize = size_of::<i64>();
+    let needed = present.checked_mul(WIDTH);
+    if needed.is_none_or(|needed| bytes.len() < needed) {
+        // The per-value loop reads whole words from offset 0 and stops at the
+        // first one that runs past the body: the word after the last whole one.
+        let end = (bytes.len() / WIDTH)
+            .checked_add(1)
+            .and_then(|words| words.checked_mul(WIDTH))
+            .ok_or_else(|| ColumnarError::malformed("PLAIN INT64", "offset overflows usize"))?;
+        return Err(ColumnarError::truncated("PLAIN INT64", end, bytes.len()));
+    }
+    if needed != Some(bytes.len()) {
+        return Err(ColumnarError::malformed(
+            "PLAIN INT64",
+            "trailing bytes after values",
+        ));
+    }
+    let (words, _) = bytes.as_chunks::<WIDTH>();
+    let values = words.iter().map(|word| i64::from_le_bytes(*word)).collect();
+    Ok(Int64Column::from_parts(presence, values))
+}
+
+/// The rows of a PLAIN value body under `presence`, whose `present` rows
+/// hold values.
 fn decode_plain(
     bytes: &[u8],
     physical_type: PhysicalType,
-    definitions: &[bool],
+    presence: Presence,
+    present: usize,
 ) -> Result<ColumnValues, ColumnarError> {
-    let mut pos = 0usize;
     match physical_type {
         PhysicalType::Int64 => {
-            let mut values = Vec::with_capacity(bounded_row_capacity(definitions.len()));
-            for &present in definitions {
-                if !present {
-                    values.push(None);
-                    continue;
-                }
-                let end = pos.checked_add(8).ok_or_else(|| {
-                    ColumnarError::malformed("PLAIN INT64", "offset overflows usize")
-                })?;
-                let raw = bytes
-                    .get(pos..end)
-                    .ok_or_else(|| ColumnarError::truncated("PLAIN INT64", end, bytes.len()))?;
-                values.push(Some(i64::from_le_bytes(
-                    raw.try_into().expect("eight-byte INT64"),
-                )));
-                pos = end;
-            }
-            if pos != bytes.len() {
-                return Err(ColumnarError::malformed(
-                    "PLAIN INT64",
-                    "trailing bytes after values",
-                ));
-            }
-            Ok(ColumnValues::Int64(values))
+            decode_int64_plain(bytes, presence, present).map(ColumnValues::Int64)
         }
         PhysicalType::ByteArray => {
-            let mut values = Vec::with_capacity(bounded_row_capacity(definitions.len()));
-            for &present in definitions {
+            let mut pos = 0usize;
+            let mut values = Vec::with_capacity(bounded_row_capacity(presence.len()));
+            for present in presence.iter() {
                 if !present {
                     values.push(None);
                     continue;
@@ -1632,14 +1667,18 @@ fn nonnegative_usize(value: i64, context: &'static str) -> Result<usize, Columna
 mod tests {
     use super::*;
 
+    fn ints(rows: &[Option<i64>]) -> ColumnValues {
+        ColumnValues::int64(rows.iter().copied().collect())
+    }
+
     fn quads() -> TableData {
         TableData::new(
             Table::Quads,
             vec![
-                ColumnValues::int64(vec![Some(1), Some(4), Some(7)]),
-                ColumnValues::int64(vec![Some(2), Some(5), Some(8)]),
-                ColumnValues::int64(vec![Some(3), Some(6), Some(9)]),
-                ColumnValues::int64(vec![None, Some(10), None]),
+                ints(&[Some(1), Some(4), Some(7)]),
+                ints(&[Some(2), Some(5), Some(8)]),
+                ints(&[Some(3), Some(6), Some(9)]),
+                ints(&[None, Some(10), None]),
             ],
         )
         .unwrap()
@@ -1678,10 +1717,10 @@ mod tests {
             TableData::new(
                 Table::Quads,
                 vec![
-                    ColumnValues::int64(vec![None]),
-                    ColumnValues::int64(vec![Some(1)]),
-                    ColumnValues::int64(vec![Some(2)]),
-                    ColumnValues::int64(vec![None]),
+                    ints(&[None]),
+                    ints(&[Some(1)]),
+                    ints(&[Some(2)]),
+                    ints(&[None]),
                 ],
             )
             .is_err()
@@ -1689,12 +1728,7 @@ mod tests {
         assert!(
             TableData::new(
                 Table::Quads,
-                vec![
-                    ColumnValues::int64(vec![Some(0)]),
-                    ColumnValues::int64(Vec::new()),
-                    ColumnValues::int64(vec![Some(0)]),
-                    ColumnValues::int64(vec![None]),
-                ],
+                vec![ints(&[Some(0)]), ints(&[]), ints(&[Some(0)]), ints(&[None]),],
             )
             .is_err()
         );
@@ -1718,7 +1752,7 @@ mod tests {
             decode_definition_levels(&[3, 0], 8),
             Err(ColumnarError::Unsupported { .. })
         ));
-        let mut encoded = encode_definition_levels([true, true, false].into_iter());
+        let mut encoded = encode_definition_levels(&[true, true, false].into_iter().collect());
         encoded.push(0);
         assert!(decode_definition_levels(&encoded, 3).is_err());
     }
@@ -1766,5 +1800,236 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// PLAIN `INT64` encode as it was written: one value at a time, nulls
+    /// skipped. Kept as the byte oracle of the chunked encode.
+    fn reference_encode_int64_plain(values: &[Option<i64>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for value in values.iter().flatten() {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out
+    }
+
+    /// PLAIN `INT64` decode as it was written: one row at a time, each present
+    /// row reading the next eight bytes, then the trailing-bytes check. Kept as
+    /// the oracle of the chunked decode, errors included.
+    fn reference_decode_int64_plain(
+        bytes: &[u8],
+        definitions: &[bool],
+    ) -> Result<Vec<Option<i64>>, ColumnarError> {
+        let mut pos = 0usize;
+        let mut values = Vec::with_capacity(bounded_row_capacity(definitions.len()));
+        for &present in definitions {
+            if !present {
+                values.push(None);
+                continue;
+            }
+            let end = pos
+                .checked_add(8)
+                .ok_or_else(|| ColumnarError::malformed("PLAIN INT64", "offset overflows usize"))?;
+            let raw = bytes
+                .get(pos..end)
+                .ok_or_else(|| ColumnarError::truncated("PLAIN INT64", end, bytes.len()))?;
+            values.push(Some(i64::from_le_bytes(
+                raw.try_into().expect("eight-byte INT64"),
+            )));
+            pos = end;
+        }
+        if pos != bytes.len() {
+            return Err(ColumnarError::malformed(
+                "PLAIN INT64",
+                "trailing bytes after values",
+            ));
+        }
+        Ok(values)
+    }
+
+    use crate::test_rng::mix;
+
+    /// A value whose eight bytes all differ, so a word written to the wrong
+    /// slot, or with its bytes in the wrong order, changes the output.
+    fn int64(state: &mut u64) -> i64 {
+        mix(state).cast_signed()
+    }
+
+    /// The null patterns the codec must treat alike: all null, no null,
+    /// alternating (both phases), runs of random length, and random density.
+    fn int64_columns(len: usize, state: &mut u64) -> Vec<Vec<Option<i64>>> {
+        let mut columns = vec![
+            vec![None; len],
+            (0..len).map(|_| Some(int64(state))).collect(),
+            (0..len)
+                .map(|i| (i % 2 == 0).then(|| int64(state)))
+                .collect(),
+            (0..len)
+                .map(|i| (i % 2 == 1).then(|| int64(state)))
+                .collect(),
+        ];
+        let mut runs = Vec::with_capacity(len);
+        let mut present = true;
+        while runs.len() < len {
+            let run = 1 + (mix(state) % 19) as usize;
+            for _ in 0..run.min(len - runs.len()) {
+                runs.push(present.then(|| int64(state)));
+            }
+            present = !present;
+        }
+        columns.push(runs);
+        for density in [1_u64, 3, 7] {
+            columns.push(
+                (0..len)
+                    .map(|_| (mix(state) % 8 < density).then(|| int64(state)))
+                    .collect(),
+            );
+        }
+        // A column that is full but for one null, with the null at every
+        // position of a short column (so every chunk offset breaks a run) and
+        // at one seeded position of a long one.
+        let positions: Vec<usize> = if len <= 70 {
+            (0..len).collect()
+        } else {
+            vec![(mix(state) as usize) % len]
+        };
+        for at in positions {
+            columns.push((0..len).map(|i| (i != at).then(|| int64(state))).collect());
+        }
+        columns
+    }
+
+    fn definitions(values: &[Option<i64>]) -> Vec<bool> {
+        values.iter().map(Option::is_some).collect()
+    }
+
+    /// The split-layout decode under `definitions`, as `decode_page` calls it.
+    fn decode_split(bytes: &[u8], definitions: &[bool]) -> Result<Vec<Option<i64>>, ColumnarError> {
+        let presence: Presence = definitions.iter().copied().collect();
+        let present = presence.count();
+        decode_int64_plain(bytes, presence, present).map(|column| column.rows().collect())
+    }
+
+    /// Definition levels as they were written: one row at a time, a run
+    /// extended while the next row's level matches. Kept as the byte oracle of
+    /// the bitmap-run encode.
+    fn reference_encode_definition_levels(levels: &[bool]) -> Vec<u8> {
+        let mut levels = levels.iter().copied().peekable();
+        let mut out = Vec::new();
+        while let Some(level) = levels.next() {
+            let mut run_len = 1u64;
+            while levels.next_if_eq(&level).is_some() {
+                run_len += 1;
+            }
+            write_varint(&mut out, run_len << 1);
+            out.push(u8::from(level));
+        }
+        out
+    }
+
+    const LENGTHS: [usize; 4] = [256, 1_000, 4_099, 65_541];
+
+    /// The split-layout encode writes the bytes the one-value-at-a-time encode
+    /// wrote over the `Option<i64>` rows, for every null pattern at every length
+    /// 0 through 70 and at larger lengths; the definition levels are the bytes
+    /// the one-row-at-a-time run encode wrote; and the decode reads both back
+    /// to the rows the old decode read.
+    #[test]
+    fn int64_plain_matches_the_one_value_codec() {
+        let mut state = 0x0C01_u64;
+        for len in (0..=70).chain(LENGTHS) {
+            for values in int64_columns(len, &mut state) {
+                let column: Int64Column = values.iter().copied().collect();
+                let bytes = encode_int64_plain(column.values());
+                assert_eq!(
+                    bytes,
+                    reference_encode_int64_plain(&values),
+                    "len {len}: {values:?}"
+                );
+                assert_eq!(ints(&values).encode_plain().unwrap(), bytes);
+                let definitions = definitions(&values);
+                assert_eq!(
+                    encode_definition_levels(column.presence()),
+                    reference_encode_definition_levels(&definitions),
+                    "len {len}"
+                );
+                let levels = reference_encode_definition_levels(&definitions);
+                assert_eq!(
+                    decode_definition_levels(&levels, len).unwrap(),
+                    *column.presence()
+                );
+                let decoded = decode_split(&bytes, &definitions);
+                assert_eq!(decoded, reference_decode_int64_plain(&bytes, &definitions));
+                assert_eq!(decoded.unwrap(), values, "len {len}");
+                let present = column.presence().count();
+                assert_eq!(
+                    decode_plain(
+                        &bytes,
+                        PhysicalType::Int64,
+                        column.presence().clone(),
+                        present
+                    )
+                    .unwrap(),
+                    ints(&values)
+                );
+            }
+        }
+    }
+
+    /// A body that is short or long by any amount is refused with the error the
+    /// old decode gave: the same variant, context and offsets.
+    #[test]
+    fn int64_plain_refuses_bad_bodies_as_the_one_value_decode_did() {
+        let mut state = 0xBAD_u64;
+        for len in (0..=70).chain([256, 1_000]) {
+            for values in int64_columns(len, &mut state) {
+                let definitions = definitions(&values);
+                let bytes = reference_encode_int64_plain(&values);
+                let mut bodies: Vec<Vec<u8>> = Vec::new();
+                for cut in 1..=bytes.len().min(25) {
+                    bodies.push(bytes[..bytes.len() - cut].to_vec());
+                }
+                bodies.push(Vec::new());
+                for extra in 1..=17 {
+                    let mut long = bytes.clone();
+                    long.extend(std::iter::repeat_n(0xA5, extra));
+                    bodies.push(long);
+                }
+                for body in bodies {
+                    let got = decode_split(&body, &definitions);
+                    let want = reference_decode_int64_plain(&body, &definitions);
+                    assert_eq!(got, want, "len {len}, body {} bytes", body.len());
+                    if body.len() != bytes.len() {
+                        assert!(want.is_err(), "len {len}: a {}-byte body", body.len());
+                    }
+                }
+            }
+        }
+    }
+
+    /// The refusals' neighbour: a body of exactly the counted length decodes,
+    /// including the empty body of an all-null or empty column.
+    #[test]
+    fn int64_plain_accepts_the_exact_length_neighbour() {
+        for definitions in [vec![], vec![false; 9], vec![true; 9], vec![false, true]] {
+            let present = definitions.iter().filter(|present| **present).count();
+            let body: Vec<u8> = (0..present * 8).map(|i| i as u8).collect();
+            let decoded = decode_split(&body, &definitions).unwrap();
+            assert_eq!(
+                decoded,
+                reference_decode_int64_plain(&body, &definitions).unwrap()
+            );
+            assert_eq!(decoded.len(), definitions.len());
+        }
+        assert_eq!(
+            decode_split(&[0; 7], &[true]),
+            Err(ColumnarError::truncated("PLAIN INT64", 8, 7))
+        );
+        assert_eq!(
+            decode_split(&[0; 17], &[true, false, true]),
+            Err(ColumnarError::malformed(
+                "PLAIN INT64",
+                "trailing bytes after values"
+            ))
+        );
     }
 }

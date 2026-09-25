@@ -66,7 +66,8 @@ use purrdf_retrieval::{
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EmbeddingKnnRelation, EmbeddingSpace, EvalError, ExclusionBasis,
     KnnGuard, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    RankArithmetic, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    Volatility,
 };
 
 /// The fixture namespace. A bench mints no vocabulary of its own, and a
@@ -269,6 +270,7 @@ fn registry(shape: Shape, rows: u64) -> PropertyFunctionRegistry {
                 candidate_position: CANDIDATE_POSITION,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
+                arithmetic: RankArithmetic::FloatFree,
                 domains: CandidateDomains::within([block.clone()]),
                 block_position: None,
                 exclusion: if shape.asking {

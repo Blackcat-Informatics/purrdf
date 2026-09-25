@@ -11,7 +11,6 @@ license.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-cdt"
 rust-version.workspace = true
-readme = "README.md"
 keywords = ["sparql", "rdf", "rdf-12", "cdt", "value-space"]
 categories = ["parser-implementations", "data-structures"]
 

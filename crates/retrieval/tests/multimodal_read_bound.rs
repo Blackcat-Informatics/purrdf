@@ -66,8 +66,8 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
-    ServiceLevel, TermKind, TermPattern, TermPlacement, Volatility,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankArithmetic, RankedDeclaration,
+    RequestFacet, ServiceLevel, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -905,6 +905,7 @@ fn generational_registry(
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
+                arithmetic: RankArithmetic::FloatFree,
                 domains: domains[index].clone(),
                 block_position: None,
                 exclusion: config.exclusion,
@@ -2043,6 +2044,7 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry {
                 candidate_position: 0,
                 duplicates: entry.duplicates,
                 fidelity: RankFidelity::EXACT,
+                arithmetic: RankArithmetic::FloatFree,
                 domains: entry.domains(),
                 block_position: None,
                 exclusion: ExclusionBasis::Unavailable,

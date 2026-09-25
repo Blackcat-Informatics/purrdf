@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_envelope_probe::{Metric, PROFILES, Profile, WORKLOADS, profile, run};
+use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -45,22 +46,11 @@ fn rss_kb() -> u64 {
     }
 }
 
+/// A report string's JSON body: the workspace's one JSON escape law,
+/// [`purrdf_iri::json_escape`], in its [`JsonEscapes::Minimal`] spelling.
 fn json_escape(text: &str) -> String {
-    use std::fmt::Write as _;
     let mut escaped = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            control if (control as u32) < 0x20 => {
-                let _ = write!(escaped, "\\u{:04x}", control as u32);
-            }
-            ordinary => escaped.push(ordinary),
-        }
-    }
+    push_body(&mut escaped, text, JsonEscapes::Minimal);
     escaped
 }
 

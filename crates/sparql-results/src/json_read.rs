@@ -15,6 +15,7 @@
 //! `std::io`** — symmetric with the hand-rolled writers and keeping the crate
 //! wasm-clean and oxigraph-free.
 
+use purrdf_core::terminals::find_first_json_string_special;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
 use crate::error::Error;
@@ -826,7 +827,91 @@ impl<'a> JsonParser<'a> {
         Ok(Json::Object(entries))
     }
 
+    /// Parse one JSON string, positioned at its opening quote.
+    ///
+    /// RFC 8259 §7: a string body is `unescaped` scalars and escapes, and
+    /// `unescaped` excludes the quotation mark, the reverse solidus and every C0
+    /// control (U+0000-U+001F). A raw control is refused, never copied into the
+    /// value; the same scalar written as an escape (`\u0001`, `\t`) is lawful.
+    ///
+    /// Each clean run up to the next `"`, `\\` or C0 control is found by one
+    /// chunked scan of exactly that class, validated as UTF-8 once, and copied
+    /// whole. Invalid UTF-8 inside a run is reported by the per-scalar decoder at
+    /// the first invalid sequence, with the same message as before.
     fn parse_string(&mut self) -> Result<String, Error> {
+        self.pos += 1; // consume opening '"'
+        let mut s = String::new();
+        loop {
+            let rest = &self.bytes[self.pos..];
+            let run = find_first_json_string_special(rest).unwrap_or(rest.len());
+            if run > 0 {
+                match core::str::from_utf8(&rest[..run]) {
+                    Ok(text) => {
+                        s.push_str(text);
+                        self.pos += run;
+                    }
+                    Err(error) => {
+                        let valid = error.valid_up_to();
+                        s.push_str(
+                            core::str::from_utf8(&rest[..valid])
+                                .expect("the prefix before the first invalid sequence is UTF-8"),
+                        );
+                        self.pos += valid;
+                        let ch = self.next_utf8_char()?;
+                        s.push(ch);
+                        continue;
+                    }
+                }
+            }
+            let Some(c) = self.peek() else {
+                return Err(fmt("unterminated string"));
+            };
+            match c {
+                b'"' => {
+                    self.pos += 1;
+                    return Ok(s);
+                }
+                b'\\' => {
+                    self.pos += 1;
+                    self.parse_escape(&mut s)?;
+                }
+                control => {
+                    return Err(fmt(&format!(
+                        "unescaped control character U+{control:04X} in string"
+                    )));
+                }
+            }
+        }
+    }
+
+    /// Decode the escape after a `\\` into `s`.
+    fn parse_escape(&mut self, s: &mut String) -> Result<(), Error> {
+        let Some(esc) = self.peek() else {
+            return Err(fmt("unterminated escape"));
+        };
+        self.pos += 1;
+        match esc {
+            b'"' => s.push('"'),
+            b'\\' => s.push('\\'),
+            b'/' => s.push('/'),
+            b'b' => s.push('\u{0008}'),
+            b'f' => s.push('\u{000C}'),
+            b'n' => s.push('\n'),
+            b'r' => s.push('\r'),
+            b't' => s.push('\t'),
+            b'u' => s.push(self.parse_unicode_escape()?),
+            other => {
+                return Err(fmt(&format!("bad escape \\{}", other as char)));
+            }
+        }
+        Ok(())
+    }
+
+    /// The string parser [`parse_string`](Self::parse_string) replaced, kept
+    /// verbatim as the oracle: identical on every input that holds no raw C0
+    /// control, which it copied into the value instead of refusing.
+    #[cfg(test)]
+    fn parse_string_reference(&mut self) -> Result<String, Error> {
         self.pos += 1; // consume opening '"'
         let mut s = String::new();
         loop {
@@ -979,6 +1064,191 @@ mod tests {
         Ok((value, parser.pos))
     }
 
+    fn parse_string_reference_at(input: &[u8]) -> Result<(String, usize), Error> {
+        let mut parser = JsonParser::new(input);
+        let value = parser.parse_string_reference()?;
+        Ok((value, parser.pos))
+    }
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            crate::test_rng::splitmix64_next(&mut self.0)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
+        }
+    }
+
+    /// The chunked string parser agrees with the per-byte one it replaced —
+    /// value, end position, or error message — on every fixed-seed input that
+    /// holds no raw C0 control, and refuses every input whose string body does.
+    /// The alphabet carries every special byte, whole escapes (surrogate pairs
+    /// among them), valid non-ASCII in every UTF-8 width, and invalid UTF-8
+    /// (a bare continuation, a truncated lead, an overlong form).
+    #[test]
+    fn chunked_string_parser_agrees_with_the_per_byte_parser() {
+        const PIECES: &[&[u8]] = &[
+            b"\"",
+            b"\\",
+            b"\\\"",
+            b"\\\\",
+            b"\\/",
+            b"\\n",
+            b"\\t",
+            b"\\u0001",
+            b"\\u00e9",
+            b"\\ud83d\\ude00",
+            b"\\ud83d",
+            b"\\x",
+            b"\x01",
+            b"\t",
+            b"\n",
+            b"\x1f",
+            b"\x7f",
+            b" ",
+            "\u{e9}".as_bytes(),
+            "\u{85}".as_bytes(),
+            "\u{4e2d}".as_bytes(),
+            "\u{1f600}".as_bytes(),
+            b"\x80",
+            b"\xc3",
+            b"\xe0\x80\x80",
+        ];
+        let mut rng = SplitMix(0x0150_0DEC_0DE0_0001);
+        let (mut agreed_ok, mut agreed_err, mut refused) = (0_usize, 0_usize, 0_usize);
+        for len in (0..=70).chain([127, 128, 129, 1000]) {
+            for round in 0..40 {
+                let density = if round % 2 == 0 { 3 } else { 40 };
+                let mut input = vec![b'"'];
+                for _ in 0..len {
+                    if rng.below(density) == 0 {
+                        input.extend_from_slice(PIECES[rng.below(PIECES.len())]);
+                    } else {
+                        input.push(b's');
+                    }
+                }
+                if round % 5 != 0 {
+                    input.push(b'"');
+                }
+                input.extend_from_slice(b",1]");
+                let got = parse_string_at(&input);
+                let expected = parse_string_reference_at(&input);
+                // Where the reference stopped: its end on success, else nowhere
+                // it reached a raw control is known, so find the body's first
+                // raw control directly by walking the reference's own grammar.
+                let raw_control_first = first_raw_control(&input);
+                match (&got, &expected, raw_control_first) {
+                    (Err(Error::Format(message)), _, Some(at)) => {
+                        assert!(
+                            message.contains("unescaped control character") || expected.is_err(),
+                            "{input:02X?}: {message} (raw control at {at})"
+                        );
+                        refused += 1;
+                    }
+                    (_, _, Some(at)) => panic!("{input:02X?}: raw control at {at} accepted"),
+                    (Ok(got), Ok(expected), None) => {
+                        assert_eq!(got, expected, "{input:02X?}");
+                        agreed_ok += 1;
+                    }
+                    (Err(Error::Format(got)), Err(Error::Format(expected)), None) => {
+                        assert_eq!(got, expected, "{input:02X?}");
+                        agreed_err += 1;
+                    }
+                    (got, expected, None) => {
+                        panic!("{input:02X?}: {got:?} vs {expected:?}");
+                    }
+                }
+            }
+        }
+        assert!(
+            agreed_ok > 0 && agreed_err > 0 && refused > 0,
+            "{agreed_ok} {agreed_err} {refused}"
+        );
+    }
+
+    /// The offset of the first raw C0 control inside the string body that
+    /// starts at `input[0]`, before the reference parser would have stopped at
+    /// its closing quote or at an error it reports first; `None` when there is
+    /// none. Escapes are skipped whole, so the `0x01` of a `\u0001` is never a
+    /// raw control.
+    fn first_raw_control(input: &[u8]) -> Option<usize> {
+        let mut at = 1;
+        while let Some(&b) = input.get(at) {
+            match b {
+                b'"' => return None,
+                b'\\' => {
+                    // A malformed escape is an error the reference reports
+                    // first; a well-formed one is skipped whole.
+                    match input.get(at + 1) {
+                        Some(b'u') => at += 6,
+                        Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => at += 2,
+                        _ => return None,
+                    }
+                }
+                b if b < 0x20 => return Some(at),
+                _ => at += 1,
+            }
+        }
+        None
+    }
+
+    /// A raw C0 control inside a JSON string is refused (RFC 8259 §7), both in a
+    /// value that is decoded and in one that is only skipped.
+    #[test]
+    fn a_raw_control_character_in_a_string_is_refused() {
+        for raw in [0x01_u8, b'\t', b'\n', 0x1F] {
+            let mut input = b"\"a".to_vec();
+            input.push(raw);
+            input.extend_from_slice(b"b\"");
+            let error = parse_string_at(&input).expect_err("a raw control is refused");
+            assert!(
+                matches!(&error, Error::Format(message)
+                    if message.contains("unescaped control character")),
+                "{raw:#04X}: {error:?}"
+            );
+            // Through the whole reader, in a binding value.
+            let mut document = br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"literal","value":"a"#.to_vec();
+            document.push(raw);
+            document.extend_from_slice(br#"b"}}]}}"#);
+            assert!(from_json(&document).is_err(), "{raw:#04X}");
+            // And in a member the reader only skips.
+            let mut skipped = br#"{"head":{"vars":[],"note":"a"#.to_vec();
+            skipped.push(raw);
+            skipped.extend_from_slice(br#"b"},"boolean":true}"#);
+            assert!(from_json_boolean(&skipped).is_err(), "{raw:#04X}");
+        }
+    }
+
+    /// The valid neighbours: the same scalars written as escapes parse, and DEL
+    /// (not a C0 control) is lawful raw.
+    #[test]
+    fn an_escaped_control_character_still_parses() {
+        assert_eq!(
+            parse_string_at(br#""a\u0001b",1"#).expect("escaped U+0001"),
+            ("a\u{1}b".to_owned(), 10)
+        );
+        assert_eq!(
+            parse_string_at(br#""a\tb\nc\u001f""#).expect("escaped controls"),
+            ("a\tb\nc\u{1f}".to_owned(), 15)
+        );
+        assert_eq!(
+            parse_string_at(b"\"a\x7fb\"").expect("raw DEL"),
+            ("a\u{7f}b".to_owned(), 5)
+        );
+        let document = br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"literal","value":"a\u0001b"}}]}}"#;
+        let parsed = from_json(document).expect("an escaped control parses");
+        let Some(TermValue::Literal { lexical_form, .. }) = parsed.rows[0][0].clone() else {
+            panic!("expected a literal");
+        };
+        assert_eq!(lexical_form, "a\u{1}b");
+        let skipped = br#"{"head":{"vars":[],"note":"a\u0001b"},"boolean":true}"#;
+        assert!(from_json_boolean(skipped).expect("an escaped control in a skipped member"));
+    }
+
     /// The ASCII bulk-copy fast path must splice correctly around escapes,
     /// raw multibyte UTF-8, and the terminator, leaving `pos` just past the
     /// closing quote so the enclosing parser resumes at the right byte.
@@ -1001,7 +1271,9 @@ mod tests {
                 "\"ascii \u{e9} \\\" more \\u0041 \u{1f431}\\n tail\"".as_bytes(),
                 "ascii \u{e9} \" more A \u{1f431}\n tail",
             ),
-            (b"\"raw\x01control\"", "raw\u{1}control"),
+            // RFC 8259 §7: a control rides as an escape; raw, it is refused
+            // (`a_raw_control_character_in_a_string_is_refused`).
+            (b"\"raw\\u0001control\"", "raw\u{1}control"),
             (b"\"end\" trailing", "end"),
         ];
         for (input, expected) in cases {

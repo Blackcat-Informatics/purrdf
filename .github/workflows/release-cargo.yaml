@@ -49,7 +49,7 @@ jobs:
       # Nightly is named in rust-toolchain.toml for its sharper lint surface;
       # that buys nothing for an artifact a consumer installs, and shipping one
       # compiled by an unreleased compiler is risk without upside. The workspace
-      # uses no nightly features (the `msrv` CI job holds that floor at 1.96),
+      # uses no nightly features (the `msrv` CI job holds that floor at 1.98),
       # so stable always builds. See the workflow-level `env` above for why
       # RUSTUP_TOOLCHAIN, not this input, is what actually selects stable.
       - name: Install Rust (stable)

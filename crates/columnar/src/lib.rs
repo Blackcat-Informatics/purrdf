@@ -20,12 +20,17 @@
 )]
 #![forbid(unsafe_code)]
 
+mod column;
 mod compact;
 pub mod error;
 mod files;
 mod parquet;
+#[doc(hidden)]
+pub mod plain_bench;
 mod reader;
 pub mod schema;
+#[doc(hidden)]
+pub mod test_rng;
 mod writer;
 
 pub use error::ColumnarError;

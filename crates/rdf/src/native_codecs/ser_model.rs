@@ -11,8 +11,8 @@
 
 use std::borrow::Cow;
 
-use purrdf_core::iri_escape::is_iriref_escape_required;
 use purrdf_core::sink::TextOut;
+use purrdf_core::terminals::{ByteClass, byte_run_count};
 use purrdf_iri::BaseIri;
 
 use crate::{FastHasher, FastMap, RdfDiagnostic};
@@ -281,92 +281,40 @@ fn is_literal_direction(direction: &str) -> bool {
     matches!(direction, "ltr" | "rtl")
 }
 
-/// Bytes that pass through an `IRIREF` body untouched: printable ASCII
-/// (`0x21..=0x7E`) minus the nine grammar-forbidden delimiters
-/// (`<`, `>`, `"`, `{`, `}`, `|`, `^`, `` ` ``, `\`). Space (`0x20`), every control
-/// (C0/DEL), and any byte `>= 0x80` (which may lead a C1 control) are `false`, so they
-/// fall through to per-char classification.
-const IRI_CLEAN: [bool; 256] = {
-    let mut t = [false; 256];
-    let mut i = 0x21usize;
-    while i <= 0x7E {
-        t[i] = !matches!(
-            i as u8,
-            b'"' | b'<' | b'>' | b'\\' | b'^' | b'`' | b'{' | b'|' | b'}'
-        );
-        i += 1;
-    }
-    t
-};
-
 /// Uppercase hex-nibble lookup table for `push_uchar_00`.
 const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
-/// Bytes that pass through a literal lexical form untouched: printable ASCII
-/// (`0x20..=0x7E`) minus `"` and `\`. C0/DEL controls, the two ASCII escapables, and
-/// any byte `>= 0x80` (which may lead a C1 control that must ride as `\uXXXX`) are
-/// `false`, so they fall through to per-char classification.
-const LITERAL_CLEAN: [bool; 256] = {
-    let mut t = [false; 256];
-    let mut i = 0x20usize;
-    while i <= 0x7E {
-        t[i] = i != b'"' as usize && i != b'\\' as usize;
+/// The bytes that can begin a scalar a literal lexical form escapes, as a class
+/// table: `"`, `\`, the C0 controls, DEL, and `0xC2`, the UTF-8 lead byte of
+/// U+0080-U+00BF, the block that holds the C1 controls. Every other byte belongs
+/// to a scalar that rides verbatim, so the scan copies it as part of a run.
+const LITERAL_ESCAPE_TABLE: [u8; 256] = {
+    let mut t = [0_u8; 256];
+    let mut i = 0;
+    while i < 0x20 {
+        t[i] = 1;
         i += 1;
     }
+    t[b'"' as usize] = 1;
+    t[b'\\' as usize] = 1;
+    t[0x7F] = 1;
+    t[0xC2] = 1;
     t
 };
 
-/// Scan-first escape: copy maximal runs of `clean` bytes wholesale (one `push_str`),
-/// routing only each boundary char through `escape_one` (the per-char escape logic).
-///
-/// This is byte-identical to a per-char loop whose clean arm is `out.push(c)`: the
-/// clean run — the vast majority of every production IRI / literal — is batched
-/// instead of pushed a char at a time, and every non-clean char takes the exact same
-/// `escape_one` decision it would have taken per-char. `clean` marks only single-byte
-/// ASCII as clean, so the first non-clean byte is always a UTF-8 char boundary.
-///
-/// When every byte of `s` is `clean` (the stated common case: every production IRI,
-/// numeric/plain literals), this borrows `s` directly rather than allocating and
-/// copying — a single linear scan replaces the wasted `String::with_capacity` + copy.
-#[inline]
-fn escape_scan<'a>(
-    s: &'a str,
-    clean: &[bool; 256],
-    escape_one: impl Fn(&mut String, char),
-) -> Cow<'a, str> {
-    let bytes = s.as_bytes();
-    if bytes.iter().all(|&b| clean[b as usize]) {
-        return Cow::Borrowed(s);
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut run_start = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if clean[bytes[i] as usize] {
-            i += 1;
-            continue;
-        }
-        if run_start < i {
-            out.push_str(&s[run_start..i]);
-        }
-        let c = s[i..]
-            .chars()
-            .next()
-            .expect("first non-clean byte is a char boundary");
-        escape_one(&mut out, c);
-        i += c.len_utf8();
-        run_start = i;
-    }
-    if run_start < bytes.len() {
-        out.push_str(&s[run_start..]);
-    }
-    Cow::Owned(out)
+const LITERAL_ESCAPES: ByteClass<{ byte_run_count(&LITERAL_ESCAPE_TABLE) }> =
+    ByteClass::from_table(LITERAL_ESCAPE_TABLE);
+
+/// The offset of the first byte of `bytes` that can begin an escaped literal
+/// scalar: a byte candidate, since at `0xC2` only a C1 control is escaped.
+#[inline(never)]
+fn find_first_literal_escape(bytes: &[u8]) -> Option<usize> {
+    LITERAL_ESCAPES.find_first(bytes)
 }
 
 /// Push the `\u00XX` UCHAR escape for a code point known to be `<= 0xFF`
-/// (every escapable byte here: C0/DEL/C1 controls, space, and the IRIREF
-/// grammar delimiters). Byte-identical to `write!(out, "\\u{:04X}", v)` for
-/// `v <= 0xFF`, without the `fmt` machinery.
+/// (every escapable byte here: C0/DEL/C1 controls). Byte-identical to
+/// `write!(out, "\\u{:04X}", v)` for `v <= 0xFF`, without the `fmt` machinery.
 #[inline]
 fn push_uchar_00<W: TextOut + ?Sized>(out: &mut W, v: u32) {
     debug_assert!(v <= 0xFF);
@@ -377,23 +325,15 @@ fn push_uchar_00<W: TextOut + ?Sized>(out: &mut W, v: u32) {
 
 /// Escape an IRI body for an N-Triples / Turtle / TriG `<…>` `IRIREF`.
 ///
-/// Which scalars ride as a `\uXXXX` `UCHAR` (the text parser decodes them back) is decided
-/// by [`purrdf_core::iri_escape::is_iriref_escape_required`] and by nothing written here —
-/// see that module for the production
+/// Which scalars ride as a `\uXXXX` `UCHAR` (the text parser decodes them back), and
+/// how, is [`purrdf_core::iri_escape::escape`] and nothing written here — see that
+/// module for the production
 /// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5 `[18t]`) and
-/// for why egress escapes DEL and the C1 block, which the grammar permits raw. A clean
-/// ASCII IRI (every production IRI) passes through byte-for-byte unchanged.
-///
-/// [`IRI_CLEAN`] is the byte-shaped fast path for the same law and is proved to agree with
-/// it scalar by scalar; every byte it does not call clean is routed here.
+/// for why egress escapes DEL and the C1 block, which the grammar permits raw. A value
+/// with nothing to escape (every production IRI, non-ASCII ones included) is borrowed
+/// byte-for-byte; one chunked scan finds each escape and copies the runs between.
 pub(crate) fn escape_iri(iri: &str) -> Cow<'_, str> {
-    escape_scan(iri, &IRI_CLEAN, |out, ch| {
-        if is_iriref_escape_required(ch) {
-            push_uchar_00(out, ch as u32);
-        } else {
-            out.push(ch);
-        }
-    })
+    purrdf_core::iri_escape::escape(iri)
 }
 
 /// Escape a literal lexical form for N-Triples. Escapes `\` and `"`, emits the readable ECHAR
@@ -404,18 +344,48 @@ pub(crate) fn escape_iri(iri: &str) -> Cow<'_, str> {
 /// parser normalizes/replaces raw C1 code points on read — so the payload only survives an XML
 /// round-trip if the full control range rides as ASCII `\uXXXX`. The canonical form answers to
 /// RDFC-1.0 byte-conformance; this one answers to XML transport.
+///
+/// One chunked scan ([`find_first_literal_escape`]) stops only where an escape can
+/// begin; the runs between are copied whole, and a value with nothing to escape —
+/// non-ASCII text included — is borrowed.
 pub(crate) fn escape_literal(lex: &str) -> Cow<'_, str> {
-    escape_scan(lex, &LITERAL_CLEAN, |out, ch| match ch {
-        '\\' => out.push_str("\\\\"),
-        '"' => out.push_str("\\\""),
-        '\n' => out.push_str("\\n"),
-        '\r' => out.push_str("\\r"),
-        '\t' => out.push_str("\\t"),
-        c if c.is_control() => {
-            push_uchar_00(out, c as u32);
+    let bytes = lex.as_bytes();
+    let mut out: Option<String> = None;
+    let mut run_start = 0;
+    let mut at = 0;
+    while let Some(offset) = find_first_literal_escape(&bytes[at..]) {
+        let hit = at + offset;
+        let ch = lex[hit..]
+            .chars()
+            .next()
+            .expect("the literal scan stops on char boundaries");
+        at = hit + ch.len_utf8();
+        // `Some` is a readable ECHAR, `None` a `\u00XX` UCHAR.
+        let echar = match ch {
+            '\\' => Some("\\\\"),
+            '"' => Some("\\\""),
+            '\n' => Some("\\n"),
+            '\r' => Some("\\r"),
+            '\t' => Some("\\t"),
+            c if c.is_control() => None,
+            // A scalar led by 0xC2 that is not a C1 control rides in the run.
+            _ => continue,
+        };
+        let out = out.get_or_insert_with(|| String::with_capacity(lex.len() + 8));
+        out.push_str(&lex[run_start..hit]);
+        match echar {
+            Some(echar) => out.push_str(echar),
+            None => push_uchar_00(out, u32::from(ch)),
         }
-        c => out.push(c),
-    })
+        run_start = at;
+    }
+    match out {
+        Some(mut out) => {
+            out.push_str(&lex[run_start..]);
+            Cow::Owned(out)
+        }
+        None => Cow::Borrowed(lex),
+    }
 }
 
 /// Render a term-id as an N-Triples token.
@@ -1007,7 +977,7 @@ mod tests {
                 render_term(g, a),
                 render_term(g, b),
                 render_term(g, c),
-                d.map(|x| render_term(g, x)).unwrap_or_default(),
+                d.map_or_default(|x| render_term(g, x)),
             ]
         };
         let mut expected = g.quads.clone();
@@ -1573,6 +1543,78 @@ mod tests {
         assert_eq!(escape_literal("a\u{E9}b"), "a\u{E9}b"); // clean unicode
         assert_eq!(escape_literal("clean text 123"), "clean text 123");
         assert_eq!(escape_literal("x\"y\\z\n"), "x\\\"y\\\\z\\n"); // mixed
+    }
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
+        }
+    }
+
+    /// The chunked escapers agree with the frozen per-char oracles on dense
+    /// fixed-seed inputs: every ASCII scalar (every special byte), the whole block
+    /// led by `0xC2` (the C1 controls and their verbatim neighbours), non-ASCII in
+    /// every UTF-8 width, at lengths 0-70 and past several chunks, from every
+    /// starting offset 0-3. A value is borrowed exactly when nothing changed.
+    #[test]
+    fn chunked_escapers_agree_with_the_per_char_oracles() {
+        let mut alphabet: Vec<char> = (0_u8..0x80).map(char::from).collect();
+        alphabet.extend(('\u{80}'..='\u{BF}').chain([
+            '\u{C0}',
+            '\u{E9}',
+            '\u{FF}',
+            '\u{2028}',
+            '\u{FFFD}',
+            '\u{1F408}',
+            '\u{10FFFF}',
+        ]));
+        let mut rng = SplitMix(0x05E2_0E5C_A9E0_0001);
+        let (mut borrowed, mut owned) = (0_usize, 0_usize);
+        for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
+            for round in 0..40 {
+                let density = if round % 2 == 0 { 4 } else { 40 };
+                let value: String = (0..len)
+                    .map(|_| {
+                        if rng.below(density) == 0 {
+                            alphabet[rng.below(alphabet.len())]
+                        } else {
+                            'q'
+                        }
+                    })
+                    .collect();
+                for (skip, _) in value.char_indices().take(4) {
+                    let input = &value[skip..];
+                    for (got, expected) in [
+                        (escape_iri(input), escape_iri_oracle(input)),
+                        (escape_literal(input), escape_literal_oracle(input)),
+                    ] {
+                        assert_eq!(got.as_ref(), expected, "{input:?}");
+                        match got {
+                            Cow::Borrowed(_) => {
+                                assert_eq!(expected, input);
+                                borrowed += 1;
+                            }
+                            Cow::Owned(_) => {
+                                assert_ne!(expected, input);
+                                owned += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(borrowed > 0 && owned > 0, "{borrowed} {owned}");
     }
 
     proptest! {

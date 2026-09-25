@@ -43,14 +43,81 @@ replaced with a fixed rule:
   condition rather than by keeping the nearest `M`. Nearest-`M` truncation spends
   every edge in one direction and leaves the graph unnavigable.
 * **Distances** come from the exact path's kernels, consumed from
-  `purrdf_sparql_eval::knn::{Kernel, Ranked}` rather than re-implemented.
+  `purrdf_sparql_eval::knn::{Kernel, Ranked}` rather than re-implemented, and
+  computed under `purrdf_core::distance::Exact` — sixteen binary64 lanes, a fixed
+  pairwise tree, a sequential tail, the same bits on every target and dispatch
+  path. The image header records that arithmetic (format version 2); a version-1
+  image is refused by name.
+* **The float environment is checked before any distance.** Every build,
+  decode, rebuild and search resolves its arithmetic on the calling thread
+  first and refuses a flush-to-zero or re-rounding environment with
+  `HnswError::FloatEnvironment`. The public per-pair methods
+  (`VectorMatrix::distance`, `distance_from_query`, `distance_bounded`) take
+  the `Resolved<A>` handle that resolving returns, so there is no way to
+  compute a distance that skips the check. The norm a cosine index divides by
+  is arithmetic too: `VectorMatrix::norm_of_row` and
+  `guard::read_effective_matrix` take a `Resolved<Exact>`, obtained from any
+  resolved handle with `Resolved::exact`, since the norm is PURREMB's one-order
+  fold whatever arithmetic ranks the distances.
+* **The check belongs to the thread that computes.** The float environment is
+  per-thread control state, so a `Resolved<A>` handle is neither `Send` nor
+  `Sync` and cannot be carried to another thread. An index stores only the
+  thread-free `Selected<A>` path (`HnswIndex::arithmetic`), and every search,
+  membership lookup and rebuild verification resolves it on the thread that
+  runs it; `search_batch` resolves once inside each rayon worker. An index built
+  on a clean thread and searched from one that flushes subnormals is refused
+  there by name.
 * **The digest** committed by a guard is a hand-rolled FNV-1a fold of the
   canonical payload bytes, stable across toolchain bumps; it is never
   `DefaultHasher` (SipHash, unspecified) or a randomly seeded map.
 
 The result is a **canonical byte image** that is identical at 1, 2, 4 and 8
-rayon workers and identical across `wasm32-unknown-unknown`. `rayon` runs
+rayon workers and identical across `wasm32-unknown-unknown`, with or without
+`+simd128`. `rayon` runs
 inline-sequentially on wasm, so that build is slower but not different.
+
+## The reassociated index
+
+`HnswIndex` is generic over its distance arithmetic, `HnswIndex<A = Exact>`, and
+everything above describes the exact default. `HnswIndex::build_reassociated`
+(or `purrdf_hnsw::build_reassociated`) builds the same algorithm as a separate
+type, `HnswIndex<Reassociated>`, whose distances run through
+`purrdf_core::distance::Reassociated`: sums may be reassociated and contracted to
+fused multiply-add along the dispatch path the build resolves, the widest this
+process runs.
+
+* **One distance per pair.** Build, neighbour selection and search compute a
+  pair through the same compiled kernel on one path, so the graph is still a
+  pure function of its input there, and identical across worker counts.
+* **Bound to its build and its path.** Its last bits may differ from the exact
+  index's and between dispatch paths or builds, so near-tied candidates may link
+  or rank differently. The image header records the path's code, the guard names
+  the `hnsw-reassociated-v2` implementation with evidence that names the path,
+  and `decode_reassociated`, `verify_rebuild` and every search run the recorded
+  path, whichever path is widest here: an image built on `x86_64`'s SSE2 or
+  AVX2+FMA path runs on that path on an AVX-512F processor. Only a process that
+  cannot run the recorded path (another target's compilation, or a processor
+  without a feature it needs) is refused with
+  `HnswError::ArithmeticPathUnavailable` rather than answered with other bits.
+* **The path is not the whole compilation.** Each path is also compiled under
+  the consumer build's own `-C target-cpu`/`-C target-feature`, compiler and
+  optimisation level, so one path can contract to FMA, run SVE instead of NEON,
+  or vectorize differently in one build and not another. The header therefore
+  records the build's `BuildShape` too -- the target architecture and the
+  target features that decide the reassociated code, then the digest of its
+  `BuildIdentity`: the compiler release and LLVM version, the resolved target
+  CPU, the optimisation level, debug assertions and the codegen flags, which
+  `purrdf-core`'s build script reads -- and a build of another shape is refused
+  with `HnswError::ArithmeticBuildMismatch`, naming both feature sets and both
+  identities. In a build of the recorded shape, on the recorded path, the
+  rebuild compiles to the code that built the image, so a rebuild that differs
+  is `false`, the same tamper evidence an exact image's rebuild gives.
+* **Graded against the exact oracle.** Its recall is measured against the exact
+  scan exactly as the exact index's is, and meets the exact index's pinned recall
+  on the conformance family.
+* **The loss contract is unchanged.** The arithmetic transforms no stored vector,
+  so the guard stays `transforms_vectors: false`; the choice is recorded in the
+  image field, the implementation identifier and its evidence revision.
 
 ## The approximation contract, stated honestly
 
@@ -183,6 +250,7 @@ cargo test -p purrdf-hnsw                 # unit, invariant, guard and oracle su
 make wasm                                 # builds the crate for wasm32-unknown-unknown
 make hnsw-determinism                     # proves native and wasm32 bytes are identical
 cargo bench -p purrdf-hnsw --bench recall # recall/work/latency against the exact oracle
+cargo bench -p purrdf-hnsw --bench build  # build cost, exact and reassociated, report-only
 ```
 
 ## License

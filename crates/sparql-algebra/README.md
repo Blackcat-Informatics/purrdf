@@ -75,7 +75,7 @@ under `purrdf::sparql`; depend on `purrdf-sparql-algebra` directly only when
 you want the parser/algebra layer alone.
 
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
-follows the workspace `rust-version` (currently 1.96, stable toolchain only).
+follows the workspace `rust-version` (currently 1.98, stable toolchain only).
 
 ## License
 

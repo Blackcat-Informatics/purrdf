@@ -76,7 +76,7 @@
 //! | `(s,p,?)`    | subject-led: same, then yield the whole `So` slice              |
 //! | `(s,?,o)`    | subject-led: walk `s`'s whole `Sp` slice, binary-search `o` in each position's `So` slice |
 //! | `(s,?,?)`    | subject-led: walk `s`'s whole `Sp` slice and every position's `So` slice |
-//! | `(?,p,o)`    | intersect the predicate index for `p` with the object index for `o` (both ascending `Sp`-position lists — a linear merge) |
+//! | `(?,p,o)`    | decode the SHORTER of the predicate index for `p` and the object index for `o` (both ascending `Sp`-position lists, lengths read from their count vectors): keep an object-index position whose `Sp` entry is `p`, or a predicate-index position whose `So` slice holds `o` (binary search) |
 //! | `(?,p,?)`    | predicate index for `p`: for each position, derive the subject via `rank1` on `Bp` and yield the whole `So` slice |
 //! | `(?,?,o)`    | object index for `o`: for each position, derive `(s, p)` via `rank1`/`Sp.get`  |
 //! | `(?,?,?)`    | full scan: every local subject, its whole `Sp` slice, every position's whole `So` slice |
@@ -842,20 +842,29 @@ fn subject_triple_count(part: &PartitionRef<'_>, local_s: u64) -> usize {
     o_last_end - o_first_start
 }
 
-/// Decode a FoQ index's delta list for local id `local_id`, already validated
-/// at [`PartitionRef::from_bytes`] time (so every `.expect` here is a
+/// Decode a FoQ index's delta list for local id `local_id`, lazily, already
+/// validated at [`PartitionRef::from_bytes`] time (so every `.expect` here is a
 /// broken-invariant bug, not a data-dependent error).
+fn foq_list<'a>(
+    data: &'a [u8],
+    offsets: IntVectorRef<'_>,
+    counts: IntVectorRef<'_>,
+    local_id: u64,
+) -> impl Iterator<Item = u64> + 'a {
+    let count = counts.get(local_id as usize) as usize;
+    let offset = offsets.get(local_id as usize) as usize;
+    DeltaListRef::new(&data[offset..], count)
+        .map(|r| r.expect("validated at PartitionRef::from_bytes time"))
+}
+
+/// [`foq_list`], collected.
 fn foq_positions(
     data: &[u8],
     offsets: IntVectorRef<'_>,
     counts: IntVectorRef<'_>,
     local_id: u64,
 ) -> Vec<u64> {
-    let count = counts.get(local_id as usize) as usize;
-    let offset = offsets.get(local_id as usize) as usize;
-    DeltaListRef::new(&data[offset..], count)
-        .map(|r| r.expect("validated at PartitionRef::from_bytes time"))
-        .collect()
+    foq_list(data, offsets, counts, local_id).collect()
 }
 
 /// Iterate one partition's triples, as LOCAL `(local_s, local_p, local_o)`
@@ -927,32 +936,38 @@ fn partition_rows<'a>(
             }))
         }
         (None, Some(lp), Some(lo)) => {
-            let p_positions = foq_positions(
-                part.pred_index_data,
-                part.pred_offsets,
-                part.pred_counts,
-                lp,
-            );
-            let o_positions =
-                foq_positions(part.obj_index_data, part.obj_offsets, part.obj_counts, lo);
-            let mut common = Vec::new();
-            let (mut i, mut j) = (0usize, 0usize);
-            while i < p_positions.len() && j < o_positions.len() {
-                match p_positions[i].cmp(&o_positions[j]) {
-                    Ordering::Less => i += 1,
-                    Ordering::Greater => j += 1,
-                    Ordering::Equal => {
-                        common.push(p_positions[i]);
-                        i += 1;
-                        j += 1;
-                    }
-                }
-            }
-            Box::new(
-                common
-                    .into_iter()
+            // The answer is the `Sp` positions both FoQ lists hold, and either list
+            // alone can decide it: an object-index position is in the predicate list
+            // exactly when `Sp` holds `lp` there, and a predicate-index position is in
+            // the object list exactly when `lo` is in that position's `So` slice. So
+            // only the SHORTER list is decoded, each entry is tested, and the
+            // positions come out ascending, as a merge of the two would give them.
+            // The lengths are rarely alike: on the WatDiv and LUBM query sets one
+            // list was at least 32 times the other in 1,090 of 1,520 calls, and a
+            // merge decoded every entry of the long list to answer them.
+            let p_count = part.pred_counts.get(lp as usize);
+            let o_count = part.obj_counts.get(lo as usize);
+            if o_count <= p_count {
+                Box::new(
+                    foq_list(part.obj_index_data, part.obj_offsets, part.obj_counts, lo)
+                        .filter(move |&pos| part.sp.get(pos as usize) == lp)
+                        .map(move |pos| (subject_of(&part, pos), lp, lo)),
+                )
+            } else {
+                Box::new(
+                    foq_list(
+                        part.pred_index_data,
+                        part.pred_offsets,
+                        part.pred_counts,
+                        lp,
+                    )
+                    .filter(move |&pos| {
+                        let (ostart, oend) = sp_pair_slice(&part, pos);
+                        binary_search_range(part.so, ostart, oend, lo).is_some()
+                    })
                     .map(move |pos| (subject_of(&part, pos), lp, lo)),
-            )
+                )
+            }
         }
         (None, Some(lp), None) => {
             let positions = foq_positions(
@@ -1532,5 +1547,101 @@ mod tests {
             err,
             PackTriplesError::Truncated { .. } | PackTriplesError::Malformed(_)
         ));
+    }
+
+    /// The `(?,p,o)` access path as it was before the shorter-list probe: both FoQ
+    /// lists decoded whole and merged. Kept as the oracle for [`partition_rows`].
+    fn merge_intersect_rows(part: &PartitionRef<'_>, lp: u64, lo: u64) -> Vec<(u64, u64, u64)> {
+        let p_positions = foq_positions(
+            part.pred_index_data,
+            part.pred_offsets,
+            part.pred_counts,
+            lp,
+        );
+        let o_positions = foq_positions(part.obj_index_data, part.obj_offsets, part.obj_counts, lo);
+        let mut common = Vec::new();
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < p_positions.len() && j < o_positions.len() {
+            match p_positions[i].cmp(&o_positions[j]) {
+                Ordering::Less => i += 1,
+                Ordering::Greater => j += 1,
+                Ordering::Equal => {
+                    common.push(p_positions[i]);
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        common
+            .into_iter()
+            .map(|pos| (subject_of(part, pos), lp, lo))
+            .collect()
+    }
+
+    #[test]
+    fn predicate_object_probe_of_the_shorter_list_equals_the_merge_intersect() {
+        // Two partitions whose lists are skewed both ways: a dense predicate that
+        // reaches every object, predicates that reach one object each, an object
+        // every subject reaches through several predicates, and objects reached
+        // once. Every (local predicate, local object) pair of each partition is
+        // compared with the merge, rows and order.
+        let mut b = RdfDatasetBuilder::new();
+        let graph = b.intern_iri("http://example.org/g");
+        let dense = b.intern_iri("http://example.org/dense");
+        let hub = b.intern_iri("http://example.org/hub");
+        let preds: Vec<_> = (0..9)
+            .map(|k| b.intern_iri(&format!("http://example.org/p{k}")))
+            .collect();
+        let objs: Vec<_> = (0..13)
+            .map(|k| b.intern_iri(&format!("http://example.org/o{k}")))
+            .collect();
+        for s in 0..300_usize {
+            let subject = b.intern_iri(&format!("http://example.org/s{s}"));
+            let g = (s % 4 == 3).then_some(graph);
+            b.push_quad(subject, dense, objs[s % 13], g);
+            b.push_quad(subject, dense, hub, g);
+            b.push_quad(subject, preds[s % 9], hub, g);
+            if s % 37 == 0 {
+                b.push_quad(subject, preds[s % 5], objs[s % 7], g);
+            }
+            if s % 101 == 0 {
+                b.push_quad(subject, preds[8], objs[12], g);
+            }
+        }
+        let dataset = b.freeze().expect("valid dataset");
+        let (_dict, bytes) = build_and_open(&dataset);
+        let triples = TriplesRef::from_bytes(&bytes).expect("opens");
+
+        let (mut object_side, mut predicate_side, mut hits) = (0, 0, 0);
+        for part in &triples.partitions {
+            for lp in 0..part.local_p.len() as u64 {
+                for lo in 0..part.local_o.len() as u64 {
+                    let p_count = part.pred_counts.get(lp as usize);
+                    let o_count = part.obj_counts.get(lo as usize);
+                    if o_count <= p_count {
+                        object_side += 1;
+                    } else {
+                        predicate_side += 1;
+                    }
+                    let expected = merge_intersect_rows(part, lp, lo);
+                    hits += expected.len();
+                    let local_p = Some(part.local_p.get(lp as usize));
+                    let local_o = Some(part.local_o.get(lo as usize));
+                    let actual: Vec<_> = partition_rows(part, None, local_p, local_o).collect();
+                    assert_eq!(
+                        actual, expected,
+                        "partition {:?}, p {lp}, o {lo}",
+                        part.graph_id
+                    );
+                }
+            }
+        }
+        assert_eq!(triples.partitions.len(), 2);
+        // Both probes ran, and the pairs were not all empty.
+        assert!(
+            object_side > 0 && predicate_side > 0,
+            "{object_side} / {predicate_side}"
+        );
+        assert!(hits > 0);
     }
 }

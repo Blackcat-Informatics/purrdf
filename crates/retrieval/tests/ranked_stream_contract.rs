@@ -16,7 +16,7 @@ use purrdf_retrieval::{
     CandidateDomains, Completeness, DomainTag, DuplicatePolicy, ExclusionBasis, OrderFidelity,
     RankFidelity, StreamContract,
 };
-use purrdf_sparql_eval::{RankedDeclaration, TermKind, TermPattern};
+use purrdf_sparql_eval::{RankArithmetic, RankedDeclaration, TermKind, TermPattern};
 
 /// Prose a producer might really publish, carrying the characters that the
 /// canonical `<byte-len>:<bytes>` framing has to survive and that a delimiter
@@ -35,6 +35,7 @@ fn declaration(fidelity: RankFidelity) -> RankedDeclaration {
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity,
+        arithmetic: RankArithmetic::FloatFree,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         exclusion: ExclusionBasis::Unavailable,

@@ -11,6 +11,7 @@
 use std::error::Error;
 use std::fmt;
 
+use purrdf_xsd::ieee::Binary64Scope;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 
@@ -76,11 +77,18 @@ impl CompiledSchemaCatalog {
                 limits.input_bytes
             )));
         }
-        let document = if let Some(limits) = limits {
-            parse_bounded_document(&compiled.schema_json, limits)?
-        } else {
-            serde_json::from_str(&compiled.schema_json)
-                .map_err(|error| invalid_json_error(&error))?
+        // The catalog's numbers are the bounds instance validation compares against: read
+        // them inside a binary64 scope so the x87 rounds `serde_json`'s exact fast path
+        // once, like every other unit (the workspace's `float_roundtrip` makes the rest
+        // correctly rounded).
+        let document = {
+            let _binary64 = Binary64Scope::enter();
+            if let Some(limits) = limits {
+                parse_bounded_document(&compiled.schema_json, limits)?
+            } else {
+                serde_json::from_str(&compiled.schema_json)
+                    .map_err(|error| invalid_json_error(&error))?
+            }
         };
         let root = document.as_object().ok_or_else(|| {
             SchemaCatalogError::new("CompiledSchema.schema_json root must be a JSON object")
@@ -508,6 +516,51 @@ mod tests {
             schema_json: serde_json::to_string(schema).expect("fixture serializes"),
             openapi_json: "{}\n".to_owned(),
             losses: LossLedger::new(),
+        }
+    }
+
+    /// Both catalog readers, bounded and unbounded, give every schema number the value
+    /// its decimal spells: the witnesses are numbers a reader that is not correctly
+    /// rounded (or the x87's double-rounded fast path) reads as a neighbour.
+    #[test]
+    fn catalog_numbers_are_correctly_rounded() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        let mut lexicals = soft::misread_decimals(30);
+        lexicals.extend(soft::x87_fast_path_decimals(30));
+        let properties = lexicals
+            .iter()
+            .enumerate()
+            .map(|(index, lexical)| format!(r#""ex:v{index}":{{"minimum":{lexical}}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let fixture = CompiledSchema {
+            schema_json: format!(r#"{{"$defs":{{"Probe":{{"properties":{{{properties}}}}}}}}}"#),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        let limits = SchemaCatalogLimits {
+            input_bytes: fixture.schema_json.len(),
+            definitions: 1,
+            depth: 8,
+            nodes: 1_000,
+            string_bytes: 1_000,
+        };
+        for catalog in [
+            CompiledSchemaCatalog::parse(&fixture).expect("unbounded"),
+            CompiledSchemaCatalog::parse_with_limits(&fixture, limits).expect("bounded"),
+        ] {
+            let properties = &catalog.definitions()["Probe"]["properties"];
+            for (index, lexical) in lexicals.iter().enumerate() {
+                let correct: f64 = lexical.parse().expect("decimal");
+                assert_eq!(
+                    properties[format!("ex:v{index}")]["minimum"]
+                        .as_f64()
+                        .map(f64::to_bits),
+                    Some(correct.to_bits()),
+                    "{lexical}"
+                );
+            }
         }
     }
 

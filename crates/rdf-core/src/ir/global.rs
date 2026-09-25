@@ -1046,9 +1046,19 @@ mod tests {
 
     #[test]
     fn global_term_id_index_round_trips() {
-        for raw in [0u64, 1, 42, u64::MAX - 1] {
+        let widest = u64::try_from(usize::MAX - 1).expect("usize fits u64");
+        for raw in [0u64, 1, 42, widest, u64::MAX - 1] {
             let id = GlobalTermId::from_index(raw);
-            assert_eq!(u64::try_from(id.index()).expect("index fits u64"), raw);
+            if usize::try_from(raw).is_ok() {
+                assert_eq!(u64::try_from(id.index()).expect("index fits u64"), raw);
+            } else {
+                // A 32-bit `usize` (wasm32, i686) cannot address this index, and `index`
+                // hard-fails rather than truncating, as documented.
+                assert!(
+                    std::panic::catch_unwind(|| id.index()).is_err(),
+                    "index {raw} does not fit usize and must not be truncated"
+                );
+            }
         }
     }
 

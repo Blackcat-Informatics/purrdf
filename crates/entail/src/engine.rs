@@ -1386,45 +1386,118 @@ fn write_surface(value: &TermValue, out: &mut String) {
 /// `<<( … )>>` triple term apart. A spec `rdf:`/`rdfs:`/`owl:` IRI contains none of them,
 /// so a clause constant's surface is its plain bracketed text.
 ///
-/// The membership question is [`purrdf_core::iri_escape::is_iriref_escape_required`],
-/// which is the one place this workspace answers it. This function once spelled the
-/// set out for itself as `is_control() || ' '` plus the nine delimiters — the same
-/// set, reached independently, and one of five such transcriptions. Five agreeing
-/// tables are not five confirmations; they are five chances to disagree later.
+/// Both the membership question and the emission are
+/// [`purrdf_core::iri_escape::push_escaped`], the one place this workspace answers
+/// them and the writer canonical N-Quads uses. This function once spelled the set out
+/// for itself as `is_control() || ' '` plus the nine delimiters, and then its own
+/// per-`char` emission loop — the same law, reached independently. Agreeing copies are
+/// not confirmations; they are chances to disagree later.
 fn write_iri_escaped(iri: &str, out: &mut String) {
-    for ch in iri.chars() {
-        if purrdf_core::iri_escape::is_iriref_escape_required(ch) {
-            write_u_escape(ch, out);
-        } else {
-            out.push(ch);
-        }
-    }
+    purrdf_core::iri_escape::push_escaped(iri, out);
 }
 
 /// Escape a literal's lexical form for a `"…"` surface, matching canonical N-Quads.
+///
+/// The canonical N-Quads literal law is
+/// [`purrdf_core::ir::canon::write_literal_escaped`], and this surface is defined
+/// to match it, so it delegates rather than transcribing the `ECHAR` table again.
 fn write_literal_escaped(value: &str, out: &mut String) {
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => write_u_escape(c, out),
-            c => out.push(c),
-        }
-    }
+    purrdf_core::ir::canon::write_literal_escaped(value, out);
 }
 
-/// Write `\uXXXX` (or `\UXXXXXXXX` beyond the BMP) for `ch`.
-fn write_u_escape(ch: char, out: &mut String) {
-    let cp = ch as u32;
-    if cp <= 0xFFFF {
-        let _ = write!(out, "\\u{cp:04X}");
-    } else {
-        let _ = write!(out, "\\U{cp:08X}");
+#[cfg(test)]
+mod escape_tests {
+    use super::{write_iri_escaped, write_literal_escaped};
+    use std::fmt::Write as _;
+
+    /// The per-`char` writers this module carried before it delegated, kept
+    /// verbatim as the oracle: every surface key is whatever these produced.
+    fn reference_iri(iri: &str, out: &mut String) {
+        for ch in iri.chars() {
+            if purrdf_core::iri_escape::is_iriref_escape_required(ch) {
+                reference_u_escape(ch, out);
+            } else {
+                out.push(ch);
+            }
+        }
+    }
+
+    fn reference_literal(value: &str, out: &mut String) {
+        for ch in value.chars() {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\u{08}' => out.push_str("\\b"),
+                '\u{0c}' => out.push_str("\\f"),
+                c if (c as u32) < 0x20 || c as u32 == 0x7f => reference_u_escape(c, out),
+                c => out.push(c),
+            }
+        }
+    }
+
+    fn reference_u_escape(ch: char, out: &mut String) {
+        let cp = ch as u32;
+        if cp <= 0xFFFF {
+            let _ = write!(out, "\\u{cp:04X}");
+        } else {
+            let _ = write!(out, "\\U{cp:08X}");
+        }
+    }
+
+    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
+    struct SplitMix(u64);
+
+    impl SplitMix {
+        const fn next(&mut self) -> u64 {
+            crate::test_rng::splitmix64_next(&mut self.0)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).expect("below n")
+        }
+    }
+
+    #[test]
+    fn delegated_writers_agree_with_the_per_char_writers() {
+        // Every ASCII scalar (every special byte), the whole block led by 0xC2
+        // (the C1 controls), and non-ASCII in every UTF-8 width.
+        let mut alphabet: Vec<char> = (0_u8..0x80).map(char::from).collect();
+        alphabet.extend(('\u{80}'..='\u{BF}').chain([
+            '\u{E9}',
+            '\u{2028}',
+            '\u{FFFD}',
+            '\u{FFFF}',
+            '\u{1F408}',
+            '\u{10FFFF}',
+        ]));
+        let mut rng = SplitMix(0x00E7_7A11_E5CA_9E00);
+        let mut changed = 0_usize;
+        for len in (0..=70).chain([127, 128, 129, 1000]) {
+            for _ in 0..40 {
+                let value: String = (0..len)
+                    .map(|_| {
+                        if rng.below(5) == 0 {
+                            alphabet[rng.below(alphabet.len())]
+                        } else {
+                            'q'
+                        }
+                    })
+                    .collect();
+                let (mut got, mut expected) = (String::new(), String::new());
+                write_iri_escaped(&value, &mut got);
+                reference_iri(&value, &mut expected);
+                assert_eq!(got, expected, "iri {value:?}");
+                changed += usize::from(got != value);
+                let (mut got, mut expected) = (String::new(), String::new());
+                write_literal_escaped(&value, &mut got);
+                reference_literal(&value, &mut expected);
+                assert_eq!(got, expected, "literal {value:?}");
+            }
+        }
+        assert!(changed > 0, "escapes were exercised");
     }
 }
 

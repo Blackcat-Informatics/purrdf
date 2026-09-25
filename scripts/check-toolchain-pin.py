@@ -38,7 +38,7 @@ Two escapes exist, and both must be explicit:
 
 * `RUSTUP_TOOLCHAIN` outranks `rust-toolchain.toml`, so a workflow that sets it
   really does use the toolchain it names. That is how the `msrv` job holds the
-  1.96 floor and how the release lanes stay on stable.
+  1.98 floor and how the release lanes stay on stable.
 * Anything else -- an install step naming a toolchain the pin does not name,
   with no `RUSTUP_TOOLCHAIN` to back it -- is drift, and fails here.
 
@@ -204,19 +204,19 @@ def self_test() -> None:
         "jobs:\n  a:\n    steps:\n"
         "      - uses: dtolnay/rust-toolchain@abc # v1\n"
         "        with:\n"
-        '          toolchain: "1.96"\n'
+        '          toolchain: "1.98"\n'
     )
     assert audit(drifting, pin), "a drifting step must be caught"
     assert not audit(
-        drifting + '        env:\n          RUSTUP_TOOLCHAIN: "1.96"\n', pin
+        drifting + '        env:\n          RUSTUP_TOOLCHAIN: "1.98"\n', pin
     ), "an escape on the install step itself must pass"
     assert not audit(
         drifting + "\n      - name: Check\n        run: cargo check\n"
-        '        env:\n          RUSTUP_TOOLCHAIN: "1.96"\n',
+        '        env:\n          RUSTUP_TOOLCHAIN: "1.98"\n',
         pin,
     ), "an escape on the following run step must pass"
     assert not audit(
-        'env:\n  RUSTUP_TOOLCHAIN: "1.96"\n\n' + drifting, pin
+        'env:\n  RUSTUP_TOOLCHAIN: "1.98"\n\n' + drifting, pin
     ), "a workflow-level escape must pass"
     # An `env:` block that never reaches a `RUSTUP_TOOLCHAIN` is the worst case for
     # the file-escape regex: it must fail, and it must fail in linear time. With the
@@ -237,7 +237,7 @@ def self_test() -> None:
         "      - name: Also unrelated\n        run: true\n"
         "      - name: Still unrelated\n        run: true\n"
         "      - name: Far away\n        run: true\n"
-        '        env:\n          RUSTUP_TOOLCHAIN: "1.96"\n'
+        '        env:\n          RUSTUP_TOOLCHAIN: "1.98"\n'
     )
     assert audit(far_away, pin), "a distant job's env must NOT excuse this step"
     implicit = "jobs:\n  a:\n    steps:\n      - uses: dtolnay/rust-toolchain@abc # v1\n\n"

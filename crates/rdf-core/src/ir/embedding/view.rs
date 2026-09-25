@@ -6,6 +6,8 @@
 use core::mem::size_of;
 
 use crate::ContentDigest;
+use crate::distance::binary64::{Binary64, Precision};
+use crate::distance::{Exact, Resolved};
 
 use super::contract::{
     DistanceMetric, PrefixPostprocessing, TlvEntryRef, TlvWireType, VectorDtype, canonical_tlv,
@@ -693,7 +695,22 @@ impl<'a> EffectiveMatrixView<'a> {
     }
 
     /// Allocation-free logical `f32` projection row.
-    pub fn f32_row(self, row: u64) -> Result<EffectiveF32Row<'a>, EmbeddingError> {
+    ///
+    /// Under [`PrefixPostprocessing::DeterministicL2`] the row is divided by its norm,
+    /// PURREMB §13.2's normative fold, and both are binary64 arithmetic whose bits a
+    /// thread that flushes subnormals or rounds other than to nearest would change.
+    /// `arithmetic` is the handle `Exact::resolve` returned after checking this thread's
+    /// float environment, resolved once per scan rather than per row. It is taken under
+    /// every policy, because a caller does not know statically which one a projection
+    /// declares: code that reads a raw projection today reads a normalized one the day
+    /// the artifact changes, and must already hold the proof. Exact stored bytes, which
+    /// involve no arithmetic, are read without it through
+    /// [`EffectiveMatrixView::raw_prefix_bytes`] and [`EffectiveMatrixView::native_f32_row`].
+    pub fn f32_row(
+        self,
+        row: u64,
+        arithmetic: Resolved<Exact>,
+    ) -> Result<EffectiveF32Row<'a>, EmbeddingError> {
         if self.matrix.dtype()? != VectorDtype::F32 {
             return Err(EmbeddingError::UnsupportedCode {
                 field: "projection dtype for f32 row",
@@ -708,13 +725,22 @@ impl<'a> EffectiveMatrixView<'a> {
                     self.raw_prefix_bytes(row)?,
                     row,
                     self.projection.effective_dimension(),
+                    arithmetic,
                 )?))
             }
         }
     }
 
     /// Allocation-free logical `f64` projection row.
-    pub fn f64_row(self, row: u64) -> Result<EffectiveF64Row<'a>, EmbeddingError> {
+    ///
+    /// `arithmetic` is taken for the reason [`EffectiveMatrixView::f32_row`] gives; exact
+    /// stored bytes are read without it through [`EffectiveMatrixView::raw_prefix_bytes`]
+    /// and [`EffectiveMatrixView::native_f64_row`].
+    pub fn f64_row(
+        self,
+        row: u64,
+        arithmetic: Resolved<Exact>,
+    ) -> Result<EffectiveF64Row<'a>, EmbeddingError> {
         if self.matrix.dtype()? != VectorDtype::F64 {
             return Err(EmbeddingError::UnsupportedCode {
                 field: "projection dtype for f64 row",
@@ -729,6 +755,7 @@ impl<'a> EffectiveMatrixView<'a> {
                     self.raw_prefix_bytes(row)?,
                     row,
                     self.projection.effective_dimension(),
+                    arithmetic,
                 )?))
             }
         }
@@ -765,7 +792,7 @@ pub struct F32Scalars<'a> {
 }
 
 impl<'a> F32Scalars<'a> {
-    const fn new(bytes: &'a [u8], row: u64, first_column: u32) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8], row: u64, first_column: u32) -> Self {
         Self {
             bytes,
             position: 0,
@@ -804,6 +831,109 @@ impl Iterator for F32Scalars<'_> {
 
 impl ExactSizeIterator for F32Scalars<'_> {}
 
+/// Scalars per block of the bulk finite fold: 64 bytes of `f32`.
+const F32_FOLD_BLOCK: usize = 16;
+
+/// The exponent field of a binary32: all ones exactly when the value is an
+/// infinity or a NaN.
+const F32_EXPONENT: u32 = 0x7F80_0000;
+
+/// The index of the first non-finite scalar of `words` (little-endian
+/// binary32 encodings), or `None` when every scalar is finite.
+///
+/// Sixteen scalars per block: each lane is a `0x0000_0000`/`0xFFFF_FFFF` word
+/// from one masked comparison of the exponent field (the finiteness test of
+/// [`f32::is_finite`], on the bits), and a branch-free OR of the lanes is the
+/// clean-block test. Only a block holding a non-finite scalar is searched again
+/// for its first one, out of line. The scalars after the last whole block are
+/// tested one at a time.
+///
+/// Out of line on purpose: [`F32Scalars::check_finite`] and
+/// [`F32Scalars::decode_into`] share this one kernel rather than each carrying a
+/// copy of it.
+#[inline(never)]
+fn first_non_finite_f32(words: &[[u8; 4]]) -> Option<usize> {
+    let (blocks, tail) = words.as_chunks::<F32_FOLD_BLOCK>();
+    for (k, block) in blocks.iter().enumerate() {
+        let mut lanes = [0_u32; F32_FOLD_BLOCK];
+        for (lane, word) in lanes.iter_mut().zip(block) {
+            let exponent = u32::from_le_bytes(*word) & F32_EXPONENT;
+            *lane = u32::from(exponent == F32_EXPONENT).wrapping_neg();
+        }
+        if lanes.iter().fold(0, |any, &lane| any | lane) != 0 {
+            return Some(k * F32_FOLD_BLOCK + first_non_finite_in_block(block));
+        }
+    }
+    tail.iter()
+        .position(|word| u32::from_le_bytes(*word) & F32_EXPONENT == F32_EXPONENT)
+        .map(|i| blocks.len() * F32_FOLD_BLOCK + i)
+}
+
+/// The first non-finite scalar of a block the fold found one in.
+#[cold]
+#[inline(never)]
+fn first_non_finite_in_block(block: &[[u8; 4]; F32_FOLD_BLOCK]) -> usize {
+    block
+        .iter()
+        .position(|word| u32::from_le_bytes(*word) & F32_EXPONENT == F32_EXPONENT)
+        .unwrap_or(F32_FOLD_BLOCK)
+}
+
+impl F32Scalars<'_> {
+    /// The whole scalars not yet yielded, as little-endian encodings. A final
+    /// partial scalar is not one, exactly as [`Iterator::next`] never yields it.
+    fn remaining_words(&self) -> &[[u8; 4]] {
+        self.bytes
+            .get(self.position..)
+            .map_or(&[], |rest| rest.as_chunks::<4>().0)
+    }
+
+    /// The error [`Iterator::next`] yields for the non-finite scalar `index`
+    /// scalars past the current position.
+    fn non_finite_at(&self, index: usize) -> EmbeddingError {
+        let column = self
+            .first_column
+            .saturating_add(u32::try_from(self.position / 4 + index).unwrap_or(u32::MAX));
+        EmbeddingError::NonFiniteScalar {
+            row: self.row,
+            column,
+        }
+    }
+
+    /// Check that every remaining scalar is finite, in one pass with no
+    /// per-scalar branch.
+    ///
+    /// The result is the one the iterator gives when drained with `?`: `Ok`
+    /// when every scalar is finite, and otherwise the
+    /// [`EmbeddingError::NonFiniteScalar`] of the first non-finite scalar, at
+    /// the same column.
+    pub fn check_finite(self) -> Result<(), EmbeddingError> {
+        match first_non_finite_f32(self.remaining_words()) {
+            None => Ok(()),
+            Some(index) => Err(self.non_finite_at(index)),
+        }
+    }
+
+    /// Append every remaining scalar to `out`, in order.
+    ///
+    /// Exactly `for value in self { out.push(value?) }`, in bulk: the finite
+    /// fold of [`check_finite`](Self::check_finite) runs first, then the
+    /// scalars are decoded with one `from_le_bytes` each and no per-scalar
+    /// branch. When a scalar is not finite, the scalars before it are appended
+    /// and its [`EmbeddingError::NonFiniteScalar`] is returned, at the same
+    /// column the iterator reports.
+    pub fn decode_into(self, out: &mut Vec<f32>) -> Result<(), EmbeddingError> {
+        let words = self.remaining_words();
+        let first_bad = first_non_finite_f32(words);
+        let clean = &words[..first_bad.unwrap_or(words.len())];
+        out.extend(clean.iter().map(|word| f32::from_le_bytes(*word)));
+        match first_bad {
+            None => Ok(()),
+            Some(index) => Err(self.non_finite_at(index)),
+        }
+    }
+}
+
 /// Portable little-endian `f64` decoder that rejects non-finite values lazily.
 #[derive(Debug, Clone)]
 pub struct F64Scalars<'a> {
@@ -814,7 +944,7 @@ pub struct F64Scalars<'a> {
 }
 
 impl<'a> F64Scalars<'a> {
-    const fn new(bytes: &'a [u8], row: u64, first_column: u32) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8], row: u64, first_column: u32) -> Self {
         Self {
             bytes,
             position: 0,
@@ -882,6 +1012,32 @@ impl Iterator for EffectiveF32Row<'_> {
 
 impl ExactSizeIterator for EffectiveF32Row<'_> {}
 
+impl EffectiveF32Row<'_> {
+    /// Append every remaining logical value to `out`, in order.
+    ///
+    /// Exactly `for value in self { out.push(value?) }`, in bulk: a raw row is
+    /// [`F32Scalars::decode_into`]; a normalized row decodes the same way and
+    /// then divides each appended value by the row's normative norm in binary64,
+    /// rounding once to binary32, as [`Iterator::next`] does.
+    pub fn decode_into(self, out: &mut Vec<f32>) -> Result<(), EmbeddingError> {
+        match self {
+            Self::Raw(values) => values.decode_into(out),
+            Self::Normalized(values) => {
+                let start = out.len();
+                let decoded = values.raw.decode_into(out);
+                // One correctly rounded binary64 quotient per value on every target, the
+                // x87 included, exactly as `next` computes it.
+                let precision = Precision::enter();
+                let ops = precision.binary64();
+                for value in &mut out[start..] {
+                    *value = ops.div(f64::from(*value), values.norm) as f32;
+                }
+                decoded
+            }
+        }
+    }
+}
+
 /// Logical `f64` prefix values, raw or deterministically L2-normalized.
 #[derive(Debug, Clone)]
 pub enum EffectiveF64Row<'a> {
@@ -919,8 +1075,13 @@ pub struct L2F32Scalars<'a> {
 }
 
 impl<'a> L2F32Scalars<'a> {
-    fn new(bytes: &'a [u8], row: u64, dimension: u32) -> Result<Self, EmbeddingError> {
-        let norm = deterministic_norm_f32(bytes, row, dimension)?;
+    fn new(
+        bytes: &'a [u8],
+        row: u64,
+        dimension: u32,
+        arithmetic: Resolved<Exact>,
+    ) -> Result<Self, EmbeddingError> {
+        let norm = deterministic_norm_f32(bytes, row, dimension, arithmetic)?;
         Ok(Self {
             raw: F32Scalars::new(bytes, row, 0),
             norm,
@@ -932,9 +1093,14 @@ impl Iterator for L2F32Scalars<'_> {
     type Item = Result<f32, EmbeddingError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.raw
-            .next()
-            .map(|value| value.map(|value| (f64::from(value) / self.norm) as f32))
+        self.raw.next().map(|value| {
+            value.map(|value| {
+                // One correctly rounded binary64 quotient on every target, the x87
+                // included, then one rounding to binary32.
+                let precision = Precision::enter();
+                (precision.binary64().div(f64::from(value), self.norm)) as f32
+            })
+        })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -952,8 +1118,13 @@ pub struct L2F64Scalars<'a> {
 }
 
 impl<'a> L2F64Scalars<'a> {
-    fn new(bytes: &'a [u8], row: u64, dimension: u32) -> Result<Self, EmbeddingError> {
-        let norm = deterministic_norm_f64(bytes, row, dimension)?;
+    fn new(
+        bytes: &'a [u8],
+        row: u64,
+        dimension: u32,
+        arithmetic: Resolved<Exact>,
+    ) -> Result<Self, EmbeddingError> {
+        let norm = deterministic_norm_f64(bytes, row, dimension, arithmetic)?;
         Ok(Self {
             raw: F64Scalars::new(bytes, row, 0),
             norm,
@@ -965,9 +1136,14 @@ impl Iterator for L2F64Scalars<'_> {
     type Item = Result<f64, EmbeddingError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.raw
-            .next()
-            .map(|value| value.map(|value| value / self.norm))
+        self.raw.next().map(|value| {
+            value.map(|value| {
+                // One correctly rounded binary64 quotient on every target, the x87
+                // included.
+                let precision = Precision::enter();
+                precision.binary64().div(value, self.norm)
+            })
+        })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -4395,7 +4571,16 @@ fn validate_relation_endpoints(
     Ok(())
 }
 
-fn deterministic_norm_f32(bytes: &[u8], row: u64, dimension: u32) -> Result<f64, EmbeddingError> {
+// `_arithmetic` is the proof, not an input: holding it means this thread's float
+// environment was checked, so the fold below computes the bits §13.2 defines.
+fn deterministic_norm_f32(
+    bytes: &[u8],
+    row: u64,
+    dimension: u32,
+    _arithmetic: Resolved<Exact>,
+) -> Result<f64, EmbeddingError> {
+    let precision = Precision::enter();
+    let ops = precision.binary64();
     let mut scale = 0.0f64;
     let mut ssq = 1.0f64;
     let (chunks, _rest) = bytes.as_chunks::<4>();
@@ -4407,12 +4592,21 @@ fn deterministic_norm_f32(bytes: &[u8], row: u64, dimension: u32) -> Result<f64,
                 column: u32::try_from(column).unwrap_or(u32::MAX),
             });
         }
-        norm_fold(f64::from(value).abs(), &mut scale, &mut ssq);
+        norm_fold(ops, f64::from(value).abs(), &mut scale, &mut ssq);
     }
-    finish_norm(scale, ssq, row, dimension)
+    finish_norm(ops, scale, ssq, row, dimension)
 }
 
-fn deterministic_norm_f64(bytes: &[u8], row: u64, dimension: u32) -> Result<f64, EmbeddingError> {
+// `_arithmetic` is the proof, not an input: holding it means this thread's float
+// environment was checked, so the fold below computes the bits §13.2 defines.
+fn deterministic_norm_f64(
+    bytes: &[u8],
+    row: u64,
+    dimension: u32,
+    _arithmetic: Resolved<Exact>,
+) -> Result<f64, EmbeddingError> {
+    let precision = Precision::enter();
+    let ops = precision.binary64();
     let mut scale = 0.0f64;
     let mut ssq = 1.0f64;
     let (chunks, _rest) = bytes.as_chunks::<8>();
@@ -4424,35 +4618,48 @@ fn deterministic_norm_f64(bytes: &[u8], row: u64, dimension: u32) -> Result<f64,
                 column: u32::try_from(column).unwrap_or(u32::MAX),
             });
         }
-        norm_fold(value.abs(), &mut scale, &mut ssq);
+        norm_fold(ops, value.abs(), &mut scale, &mut ssq);
     }
-    finish_norm(scale, ssq, row, dimension)
+    finish_norm(ops, scale, ssq, row, dimension)
 }
 
-// PURREMB v1 prescribes separate rounded multiply and add operations; fusing
-// them would change portable projection bytes.
-#[allow(clippy::suboptimal_flops)]
-fn norm_fold(value: f64, scale: &mut f64, ssq: &mut f64) {
+/// One step of PURREMB's normative scaled L2 fold (§13.2): fold the magnitude `value`
+/// into the running `scale` and sum of squared ratios `ssq`.
+///
+/// The single copy of that order in the workspace. `Resolved::<Exact>::norm` folds a
+/// whole vector through it, and the artifact writer normalizes through that, so the kNN
+/// and HNSW norms, the writer's and this reader's cannot drift apart.
+///
+/// PURREMB v1 prescribes separate rounded multiply and add operations; fusing them would
+/// change portable projection bytes. Each is a [`Binary64`] operation, so it is the one
+/// correctly rounded binary64 operation on every target, the x87 included.
+pub(crate) fn norm_fold(ops: Binary64<'_>, value: f64, scale: &mut f64, ssq: &mut f64) {
     if value == 0.0 {
         return;
     }
     if *scale < value {
-        let ratio = *scale / value;
-        let square = ratio * ratio;
-        *ssq = 1.0 + *ssq * square;
+        let ratio = ops.div(*scale, value);
+        let square = ops.mul(ratio, ratio);
+        *ssq = ops.add(1.0, ops.mul(*ssq, square));
         *scale = value;
     } else {
-        let ratio = value / *scale;
-        let square = ratio * ratio;
-        *ssq += square;
+        let ratio = ops.div(value, *scale);
+        let square = ops.mul(ratio, ratio);
+        *ssq = ops.add(*ssq, square);
     }
 }
 
-fn finish_norm(scale: f64, ssq: f64, row: u64, dimension: u32) -> Result<f64, EmbeddingError> {
+fn finish_norm(
+    ops: Binary64<'_>,
+    scale: f64,
+    ssq: f64,
+    row: u64,
+    dimension: u32,
+) -> Result<f64, EmbeddingError> {
     if scale == 0.0 {
         return Err(EmbeddingError::ZeroNorm { row, dimension });
     }
-    let norm = scale * ssq.sqrt();
+    let norm = ops.mul(scale, ops.sqrt(ssq));
     if !norm.is_finite() || norm == 0.0 {
         return Err(EmbeddingError::ContentMismatch(
             "invalid deterministic L2 norm",
@@ -5023,9 +5230,179 @@ fn validate_external_lookup_index(
 mod tests {
     use super::super::contract::push_tlv;
     use super::*;
+    use crate::distance::Arithmetic;
+
+    /// The exact handle a normalized row is computed under.
+    fn exact() -> Resolved<Exact> {
+        Exact::resolve().expect("the test thread runs the default float environment")
+    }
 
     fn test_tlv(output: &mut Vec<u8>, tag: u16, wire: TlvWireType, value: &[u8]) {
         push_tlv(output, tag, wire, true, value).expect("test TLV");
+    }
+
+    /// What draining the iterator with `?` gives: the values appended before
+    /// the first error, and the error. The oracle of the bulk helpers.
+    fn drain_f32(
+        values: impl Iterator<Item = Result<f32, EmbeddingError>>,
+    ) -> (Vec<u32>, Result<(), EmbeddingError>) {
+        let mut out = Vec::new();
+        for value in values {
+            match value {
+                Ok(value) => out.push(value.to_bits()),
+                Err(error) => return (out, Err(error)),
+            }
+        }
+        (out, Ok(()))
+    }
+
+    fn bulk_f32(values: F32Scalars<'_>) -> (Vec<u32>, Result<(), EmbeddingError>) {
+        let checked = values.clone().check_finite();
+        let mut out = Vec::new();
+        let decoded = values.decode_into(&mut out);
+        assert_eq!(checked, decoded, "check_finite and decode_into agree");
+        (out.into_iter().map(f32::to_bits).collect(), decoded)
+    }
+
+    /// Every non-finite class (both infinities, quiet and signalling NaNs of
+    /// both signs, and a NaN with a payload) at every position of rows of every
+    /// length around the sixteen-scalar block, with a second non-finite value
+    /// after it so only the first may be reported; the iterator advanced first
+    /// and a nonzero first column, so the reported column carries both offsets;
+    /// and a trailing partial scalar, which neither path yields.
+    #[test]
+    fn bulk_f32_decode_matches_the_iterator_at_every_position() {
+        let non_finite = [
+            f32::INFINITY.to_bits(),
+            f32::NEG_INFINITY.to_bits(),
+            f32::NAN.to_bits(),
+            (-f32::NAN).to_bits(),
+            0x7F80_0001, // signalling NaN
+            0xFFC0_1234, // negative quiet NaN with a payload
+        ];
+        // Finite values that share bits with the exponent test: the largest
+        // finite, the smallest subnormal, signed zeros.
+        let finite = [f32::MAX, f32::MIN, f32::from_bits(1), -0.0, 0.0, 1.5, -2.25];
+        for len in 0..=40_usize {
+            let clean: Vec<u32> = (0..len)
+                .map(|i| finite[i % finite.len()].to_bits())
+                .collect();
+            let mut rows = vec![clean.clone()];
+            for position in 0..len {
+                for &bad in &non_finite {
+                    let mut row = clean.clone();
+                    row[position] = bad;
+                    rows.push(row.clone());
+                    if position + 1 < len {
+                        row[len - 1] = f32::INFINITY.to_bits();
+                        rows.push(row);
+                    }
+                }
+            }
+            for row in rows {
+                let mut bytes: Vec<u8> = row.iter().flat_map(|bits| bits.to_le_bytes()).collect();
+                for trailing in [0_usize, 3] {
+                    bytes.resize(len * 4 + trailing, 0xFF);
+                    for skip in [0_usize, 1, 17] {
+                        let mut values = F32Scalars::new(&bytes, 7, 5);
+                        let mut iter = values.clone();
+                        for _ in 0..skip {
+                            let _ = values.next();
+                            let _ = iter.next();
+                        }
+                        assert_eq!(
+                            bulk_f32(values),
+                            drain_f32(iter),
+                            "len {len} trailing {trailing} skip {skip} row {row:08x?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The normalized row's bulk decode divides exactly as its iterator does.
+    #[test]
+    fn bulk_effective_f32_decode_matches_the_iterator() {
+        let values = [
+            3.0_f32, -4.0, 0.1, 1e-30, 7.5e30, -0.0, 12.0, 0.333, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0,
+            11.0, 13.0, 14.0, 15.0, 16.0,
+        ];
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let dimension = values.len() as u32;
+        for row in [
+            EffectiveF32Row::Raw(F32Scalars::new(&bytes, 0, 0)),
+            EffectiveF32Row::Normalized(
+                L2F32Scalars::new(&bytes, 0, dimension, exact()).expect("nonzero"),
+            ),
+        ] {
+            let mut out = vec![42.0_f32];
+            let decoded = row.clone().decode_into(&mut out);
+            let (expected, result) = drain_f32(row);
+            assert_eq!(decoded, result);
+            assert_eq!(out[0], 42.0, "decode_into appends");
+            assert_eq!(
+                out[1..].iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    /// Both reads of a normalized row are one binary64 quotient per value, correctly
+    /// rounded, then narrowed to binary32 -- the integer reference's result. The rows are
+    /// witnesses: each holds a value whose correctly rounded binary64 quotient is exactly
+    /// a binary32 midpoint (a tie, to even) while the exact quotient is not, so a read that
+    /// divides with the bare operator on the x87 -- rounding the quotient to the register's
+    /// 64 bits and narrowing that straight to binary32 -- gives the other neighbour. They
+    /// were found by searching two-component rows `[b, c]` for such a quotient.
+    #[test]
+    fn both_normalized_f32_reads_divide_as_the_software_reference() {
+        use purrdf_xsd::ieee::reference as soft;
+
+        for (row, witness) in [
+            ([0x3fb7_c000_u32, 0x3f34_c8d7], 0_usize),
+            ([0x3fb8_4000, 0x3f19_1dab], 1),
+        ] {
+            let values = row.map(f32::from_bits);
+            let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let normalized = L2F32Scalars::new(&bytes, 0, 2, exact()).expect("nonzero");
+            let norm = normalized.norm;
+            // PURREMB's fold over `[b, c]`, `b > c`, in the reference's arithmetic.
+            let (b, c) = (f64::from(values[0]), f64::from(values[1]));
+            let ratio = soft::div(c, b);
+            let reference_norm = soft::mul(b, soft::sqrt(soft::add(1.0, soft::mul(ratio, ratio))));
+            assert_eq!(
+                norm.to_bits(),
+                reference_norm.to_bits(),
+                "{row:08x?}: the norm"
+            );
+            let expected: Vec<u32> = values
+                .iter()
+                .map(|&value| {
+                    soft::div64_to32_via(f64::from(value), norm, soft::BINARY64).to_bits()
+                })
+                .collect();
+            // The observing oracle: narrowed from 64 bits, the witness value differs.
+            let value = f64::from(values[witness]);
+            assert_ne!(
+                soft::div64_to32_via(value, norm, soft::X87_EXTENDED).to_bits(),
+                expected[witness],
+                "{row:08x?}: a witness"
+            );
+            let effective = EffectiveF32Row::Normalized(normalized);
+            let mut out = Vec::new();
+            effective.clone().decode_into(&mut out).expect("finite");
+            assert_eq!(
+                out.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected,
+                "{row:08x?}: decode_into"
+            );
+            assert_eq!(
+                drain_f32(effective),
+                (expected, Ok(())),
+                "{row:08x?}: the iterator"
+            );
+        }
     }
 
     #[test]
@@ -5057,7 +5434,7 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&3.0f32.to_bits().to_le_bytes());
         bytes.extend_from_slice(&4.0f32.to_bits().to_le_bytes());
-        let values = L2F32Scalars::new(&bytes, 0, 2)
+        let values = L2F32Scalars::new(&bytes, 0, 2, exact())
             .expect("nonzero row")
             .collect::<Result<Vec<_>, _>>()
             .expect("finite normalized row");
@@ -5068,7 +5445,7 @@ mod tests {
     fn deterministic_l2_rejects_zero_norm() {
         let bytes = [0u8; 16];
         assert_eq!(
-            L2F64Scalars::new(&bytes, 3, 2).expect_err("zero row"),
+            L2F64Scalars::new(&bytes, 3, 2, exact()).expect_err("zero row"),
             EmbeddingError::ZeroNorm {
                 row: 3,
                 dimension: 2,

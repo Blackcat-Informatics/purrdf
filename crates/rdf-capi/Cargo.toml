@@ -10,7 +10,6 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-readme = "README.md"
 keywords = ["rdf", "rdf-12", "ffi", "c-abi", "sparql"]
 publish = false
 

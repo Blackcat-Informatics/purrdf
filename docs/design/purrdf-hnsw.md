@@ -131,7 +131,7 @@ invented; the adapter is `purrdf_hnsw::guard` over `purrdf-core`'s existing
 
 | field | value |
 |---|---|
-| implementation identifier | `hnsw-v1` |
+| implementation identifier | `hnsw-v2` (`hnsw-reassociated-v2` for the reassociated index, §3.1) |
 | implementation media type | `application/vnd.blackcatinformatics.purrdf.hnsw.profile-v1` |
 | parameter encoding | `application/vnd.blackcatinformatics.purrdf.hnsw.parameters+tlv-v1` |
 | payload media type | `application/vnd.blackcatinformatics.purrdf.hnsw` |
@@ -139,7 +139,9 @@ invented; the adapter is `purrdf_hnsw::guard` over `purrdf-core`'s existing
 
 The implementation identity's digest is a domain-separated SHA-256 of a stable,
 human-readable profile declaration (no host layout, no version-dependent
-serialization). Its revision bytes are the approximation evidence string, so
+serialization). The declaration names the distance arithmetic
+(`arithmetic=binary64-lane16-tree-v1`), so the digest binds the law every recorded
+distance was folded under as well as the algorithm. Its revision bytes are the approximation evidence string, so
 the guard digest commits **what the index does not promise**, not merely the
 algorithm name.
 
@@ -196,7 +198,15 @@ header:
   ef_search  u64
   node_count u64
   max_level  u32
-  reserved   u32       0
+  arithmetic u32       the distance arithmetic's image code: 1 = Exact
+                       (binary64-lane16-tree-v1); 2..=8 = Reassociated
+                       (binary64-reassociated-v1) on the dispatch path the
+                       build ran; 0 is refused
+  shape      u64       Reassociated codes only: the BuildShape bits of the
+                       build that computed the distances (§3.1); absent
+                       from an Exact image
+  identity   u64       Reassociated codes only: that build's BuildIdentity
+                       digest (§3.1); absent from an Exact image
   entry      u64       row, or u64::MAX for an empty graph
 node records, in ascending row order:
   row        u64       must equal the record's position
@@ -217,6 +227,48 @@ distances are derived. Decoding re-sorts by rank, so the two are views of one
 graph. The layout is fixed **before** any borrowed view is added precisely so a
 zero-copy `HnswView<'a>` can be introduced later without a wire-format change.
 
+`IMAGE_VERSION` (and `INDEX_VERSION`) is 2. Version 2 is the first whose recorded
+distances are folded by `purrdf_core::distance::Exact` — sixteen binary64 lanes, the
+pairwise tree `(l, l+8)`, `(l, l+4)`, `(l, l+2)`, `(0, 1)`, then a sequential tail —
+and the first whose header records that arithmetic, in the `u32` version 1 reserved as
+zero. A version-1 image's distances were folded sequentially, so its bits are not the
+ones this build computes: `decode`, `guard::load` and `guard::verify_rebuild` refuse it
+with the named `HnswError::VersionMismatch`, never with an `Ok(false)` that would read
+as tampering. A header whose arithmetic field is not `1` is refused by the exact decoder with
+`HnswError::ArithmeticMismatch`; the reassociated index records its path's code there
+instead (§3.1). The exact canonical image is byte-identical across worker counts,
+across the exact arithmetic's dispatch paths (portable, AVX2 and AVX-512F on x86-64),
+and across `wasm32-unknown-unknown` with and without `+simd128`; `make hnsw-determinism` executes
+all three wasm-side and native digests against the one golden; the `shape` and
+`identity` fields are never written into an exact image, so its bytes are the ones
+version 2 always had. A reassociated image is byte-identical across worker counts and
+bound to its build shape and dispatch path.
+
+Every build, rebuild, decode and search resolves the exact arithmetic on its own thread
+first, which refuses a flush-to-zero or re-rounding float environment with
+`HnswError::FloatEnvironment`, and a beam expands each node by one call to the batch
+kernel over its unvisited neighbours. The public per-pair methods follow the same law:
+`VectorMatrix::distance`, `distance_from_query` and `distance_bounded` take the
+`Resolved<A>` handle that `A::resolve` (or `A::resolve_recorded`) returns, so no pair
+distance is computed on a thread whose environment was not checked. So do the norms a
+cosine index divides by: `VectorMatrix::norm_of_row` takes a `Resolved<Exact>`, which an
+index under either arithmetic obtains from its own handle with `Resolved::exact` (the
+norm is PURREMB's one-order fold, never reassociated), and `guard::read_effective_matrix`
+takes one for the deterministic-L2 rows it reads. `HnswSpace::from_artifact` resolves the
+exact arithmetic before it verifies the artifact, so a flushing thread is refused as
+`EvalError::FloatEnvironment` rather than as an artifact that failed to verify.
+
+The check is the calling thread's, and the type keeps it there. The float environment is
+per-thread control state (MXCSR, FPCR), so `Resolved<A>` is neither `Send` nor `Sync`: a
+handle resolved on a clean thread cannot be carried to one that flushes subnormals. An
+index is shared across threads, so it never stores one. It stores the thread-free
+`Selected<A>` path its image records (`HnswIndex::arithmetic`), and every search,
+membership lookup (`row_distance`) and rebuild verification resolves that path on the
+thread that computes. `search_batch` checks the calling thread and then resolves once
+inside each rayon worker, per worker's share of the batch rather than per query or pair,
+so a worker thread that flushes subnormals refuses its queries by name while a clean one
+answers with the single-thread bits.
+
 ### 2.5 What a binding proves before a search runs
 
 `guard::load` is the strict entry point, in order: the guard declares this
@@ -231,7 +283,11 @@ coordinate.
 *is this payload the canonical image of building the given matrix under the
 given parameters?* It recomputes the graph and compares. The canonical image is
 the same bytes the determinism digest folds, so rebuildability and determinism
-are one claim rather than two.
+are one claim rather than two. For an exact payload a `false` is evidence of a stale
+or altered payload. A reassociated payload is reproducible only by a build of the shape
+that made it, so another build's shape is the named `HnswError::ArithmeticBuildMismatch`;
+under its recorded path and build shape the rebuild compiles to the code that built it,
+and a `false` there is the same evidence (§3.1).
 
 ---
 
@@ -250,6 +306,109 @@ The validation matrix is fail-closed at construction: `M >= 2`, `M0 >= M`,
 count arithmetic, and a 32-bit address-space admission check on wasm32. There is
 no `Default` and no query-time override, because the four numbers are the index
 identity rather than tuning.
+
+### 3.1 The reassociated index
+
+The index is generic over its distance arithmetic: `HnswIndex<A: Arithmetic = Exact>`,
+with `HnswSpace<A>` and `HnswRelation<A>` over it. `HnswIndex::build` and
+`HnswIndex::decode` (and `hnsw::build`) are unchanged and exact.
+`HnswIndex::build_reassociated` (and `hnsw::build_reassociated`) builds the same
+algorithm under `purrdf_core::distance::Reassociated`, whose sums may be reassociated
+and contracted to fused multiply-add along the dispatch path the build resolves, the
+widest this process runs;
+`HnswIndex::decode_reassociated`, `guard::load_reassociated` and
+`HnswSpace::from_artifact_reassociated` read it back. It is a second type, not a mode:
+neither index ever computes a distance under the other's law, and there is no runtime
+branch per distance.
+
+**One distance per pair.** Build, neighbour selection, repair and search all reach a
+pair's distance through the reassociated kernels, which exist exactly once per
+dispatch path and stored-width pair, out of line. So on one path every call site
+computes one pair's distance with the same compiled copy and gets the same bits; the
+bounded form a selection uses returns the full value's bits whenever it returns one,
+because its checkpoints are true prefixes. The graph a reassociated build produces is
+therefore still a pure function of its input *on that path*, and byte-identical across
+worker counts.
+
+**What it gives up.** Its distances may differ in the last bits from the exact index's,
+and between dispatch paths and builds, so wherever two candidates nearly tie the graph
+may link or rank them differently. Its recall is graded against the exact oracle
+exactly as the exact index's is, and on the conformance family it meets the exact
+index's pinned recall on every regime.
+
+**Where the choice is recorded.**
+
+| record | exact index | reassociated index |
+|---|---|---|
+| image header `arithmetic` field | `1` | the code of the dispatch path the build resolved: `2` sse2, `3` avx2+fma, `4` avx512f, `5` neon, `6` wasm-simd128, `7` wasm-scalar, `8` portable (every target other than x86-64, aarch64 and wasm) |
+| image header `shape` and `identity` fields | absent | the build's `BuildShape`: target architecture and the target features that decide the reassociated body's code, then its `BuildIdentity` digest (compiler, target CPU, optimisation level, debug assertions, codegen flags) |
+| implementation identifier | `hnsw-v2` | `hnsw-reassociated-v2` |
+| evidence revision | `LOSS_EVIDENCE` | `LOSS_EVIDENCE`, `"; "`, the reassociated evidence for the path, and "Its canonical image is reproducible only by a build of the shape that made it, running the same dispatch path: the image records that build's target architecture and features and the identity of its compiler, target CPU, optimisation level and codegen flags, and a build of another shape refuses it." (`profile::loss_evidence_reassociated`) |
+| profile declaration | `arithmetic=binary64-lane16-tree-v1` | `arithmetic=binary64-reassociated-v1`, the path's revision, `build-shape=<bits>` and `build-identity=<digest>` |
+| `IndexLossContract` | `transforms_vectors: false` | `transforms_vectors: false` |
+| ranked declaration | `RankArithmetic::float_distance::<Exact>()` | `RankArithmetic::float_distance::<Reassociated>()` |
+| relation fidelity | `Lossy` with `LOSS_EVIDENCE`; order faithful | `Lossy` with the reassociated revision; order `Perturbed` with the arithmetic's evidence |
+
+The loss contract does not change, deliberately: an arithmetic decides how a distance
+is rounded and transforms no stored vector, and `purrdf-core` requires
+`loss_encoding: None` for a non-transforming index. The image field, the
+implementation and its revision carry the choice instead. The guard's legal
+(identifier, revision, image codes) rows are derived from `Exact` and `Reassociated`
+themselves: the exact identifier with a reassociated revision, the reassociated
+identifier with the exact revision, and a reassociated revision naming another path
+than the payload records are each a `GuardProfile` failure.
+
+**Bound to its build and its path.** A reassociated image is reproducible only on the
+dispatch path that built it, so `decode_reassociated`, `verify_rebuild` and every search
+resolve *the recorded path* through `Arithmetic::resolve_recorded`, not the widest one
+this process runs. A processor runs every compilation its binary holds whose features it
+reports: an image built on `x86_64`'s SSE2 or AVX2+FMA path is decoded, searched and
+rebuilt on that path by an AVX-512F processor, and the decoded index re-encodes its own
+code. Only a path this process cannot run -- its compilation belongs to another target,
+or the processor does not report a feature it needs -- is refused, with
+`HnswError::ArithmeticPathUnavailable { recorded, available }`, where `available` is the
+widest path this process runs (the one a new build here would record). The refusal is
+named, never an `Ok(false)` that would read as tampering, and never a search run with
+bits from another compilation. A header naming a code that is not one of the index type's
+own is `HnswError::ArithmeticMismatch`, in both directions.
+
+**The path does not pin the code that ran.** Each path is compiled under the consumer
+build's own `-C target-cpu`/`-C target-feature` as well as its `#[target_feature]`, and
+the asm audit (`distance.reassociated.dot` in `docs/design/purrdf-simd.md`) measures what
+that does: the AVX-512F path is `zmm` FMA under generic tuning and `ymm` under
+x86-64-v4, the SSE2 path is FMA code in any build compiled with `fma` (so in every
+`target-cpu=native` build on an FMA processor), and the NEON path is SVE under a
+neoverse-v1 target. Two builds recording one path can compute different bits. So the
+header also records the build's `purrdf_core::distance::BuildShape`: a versioned `u64`
+naming the target architecture and the `cfg(target_feature)` set that decides the
+reassociated body's vector and FMA code, then a `u64` `BuildIdentity` digest for what no
+`cfg` exposes. `rustc` has no `cfg` for `-C target-cpu`, CPU tuning is not a target
+feature, and neither the compiler release nor the optimisation level is a `cfg`, so
+`purrdf-core`'s build script records them: the compiler's release, commit hash and LLVM
+version (`rustc -vV` on `RUSTC`, never through a wrapper), the resolved target CPU,
+every `-C target-feature` (tuning features included), any `-C llvm-args`,
+`codegen-units`, `lto` or `overflow-checks` in the rustflags, and the optimisation level,
+with the crate's own `cfg(debug_assertions)` appended. `decode_reassociated`,
+`guard::load_reassociated`, `verify_rebuild` and `guard::verify_rebuild` refuse another
+build's shape, bits or identity, with `HnswError::ArithmeticBuildMismatch { recorded,
+here }`, whose message lists both feature sets and both identities and says which half
+differs. The path is checked first, so an image of another target reads as the
+unavailable path it is.
+
+Under an equal path and shape the rebuild compiles the reassociated body to the code
+that computed the image, so a rebuild that produces another image answers `false` from
+`HnswIndex::verify_rebuild` and `guard::verify_rebuild` alike (`None` from
+`verify_bytes_against`): the same tamper evidence as an exact index's. What no build
+script can see is named on `BuildIdentity`: a `[profile]` table's own `lto`,
+`codegen-units` and `overflow-checks`, flags a `cargo rustc --` invocation appends, and a
+compiler whose `rustc -vV` does not tell it apart from another. Builds that differ only
+there share an identity.
+
+**Compiled in this crate.** The search traversal and the graph build are held by the
+index as walks its non-generic constructors instantiate, so both are compiled in
+`purrdf-hnsw` for both arithmetics -- the copies the asm evidence gate measures
+(`hnsw.search-build` in `docs/design/purrdf-simd.md`) -- and every search, batch and
+rebuild verification runs those copies, whichever crate calls the generic method.
 
 ---
 

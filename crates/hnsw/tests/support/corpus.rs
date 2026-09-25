@@ -216,6 +216,32 @@ impl Stream {
     }
 }
 
+/// One step of the "linear counter" SplitMix64 variant behind
+/// [`linear_unit_values`]. Unlike [`Stream`], whose internal state IS the
+/// previous mixed output (a self-composed stream), this generator's `state`
+/// is a plain incrementing counter and every draw re-mixes it from scratch —
+/// a different stream from the same seed. It exists because a caller's
+/// deterministic expectations were built against exactly this construction.
+fn linear_step(state: &mut u64) -> f64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a 53-bit mantissa is ample for a coordinate draw"
+    )]
+    let value = ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
+    if value == 0.0 { 0.125 } else { value }
+}
+
+/// `count` values from the linear-counter SplitMix64 stream seeded by `seed`.
+pub(crate) fn linear_unit_values(seed: u64, count: usize) -> Vec<f64> {
+    let mut state = seed;
+    (0..count).map(|_| linear_step(&mut state)).collect()
+}
+
 /// Scale `values` to unit L2 norm. A zero vector is left alone; `Stream::unit` cannot
 /// produce one, and a caller-supplied degenerate vector is the caller's to refuse.
 pub(crate) fn normalize(values: &mut [f64]) {

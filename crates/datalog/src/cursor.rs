@@ -39,7 +39,7 @@ use core::fmt;
 use std::collections::BinaryHeap;
 
 use crate::id::{RowId, TermId};
-use crate::store::{Batch, Bound, Relation};
+use crate::store::{Batch, Bound, Relation, Tail};
 
 /// The sealing supertrait: only types in THIS module can implement
 /// [`LendingIterator`], so the cursor contract cannot be re-implemented — or its `next`
@@ -230,7 +230,7 @@ impl LendingIterator for RowCursor<'_> {
                 Inner::Tail { pos } => {
                     let tail = rel.tail();
                     while *pos < tail.len() {
-                        let (s, o, r) = tail[*pos];
+                        let (s, o, r) = tail.row(*pos);
                         *pos += 1;
                         if Self::tail_matches(bound, s, o) {
                             return Some((s, o, r));
@@ -279,7 +279,7 @@ enum OrderedSource<'a, const COLUMN: u8> {
     /// positions are sorted ONCE per cursor; the rows themselves are never copied.
     Tail {
         /// The relation's tail rows.
-        tail: &'a [(TermId, TermId, RowId)],
+        tail: &'a Tail,
         /// The matching tail indices, in projected `(value, row)` order.
         positions: Box<[u32]>,
         /// The next index into `positions`.
@@ -318,8 +318,8 @@ impl<const COLUMN: u8> OrderedSource<'_, COLUMN> {
 
     /// The projected `(value, row)` pair at a tail index.
     #[inline]
-    fn tail_row(tail: &[(TermId, TermId, RowId)], position: usize) -> (TermId, RowId) {
-        let (subject, object, row) = tail[position];
+    fn tail_row(tail: &Tail, position: usize) -> (TermId, RowId) {
+        let (subject, object, row) = tail.row(position);
         (Self::project(subject, object), row)
     }
 
@@ -467,14 +467,14 @@ impl<'a, const COLUMN: u8> ValueCursor<'a, COLUMN> {
                 .tail()
                 .iter()
                 .enumerate()
-                .filter_map(|(position, &(subject, object, _))| {
+                .filter_map(|(position, (subject, object, _))| {
                     other
                         .is_none_or(|bound| Self::other_matches(bound, subject, object))
                         .then_some(position as u32)
                 })
                 .collect();
             positions.sort_unstable_by_key(|&position| {
-                let (subject, object, row) = rel.tail()[position as usize];
+                let (subject, object, row) = rel.tail().row(position as usize);
                 (Self::project(subject, object), row)
             });
             if !positions.is_empty() {

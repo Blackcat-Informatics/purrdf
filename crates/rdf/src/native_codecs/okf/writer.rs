@@ -858,9 +858,12 @@ impl<'a> Projector<'a> {
                 serde_yaml::to_value(value).map_err(|error| yaml_value_error(&error))
             }
             datatype if datatype == self.config.json_datatype() => {
-                let json: serde_json::Value = serde_json::from_str(lexical).map_err(|error| {
-                    OkfError::new(format!("invalid OKF JSON literal `{lexical}`: {error}"))
-                })?;
+                let json: serde_json::Value =
+                    crate::json_number::read_json(|| serde_json::from_str(lexical)).map_err(
+                        |error| {
+                            OkfError::new(format!("invalid OKF JSON literal `{lexical}`: {error}"))
+                        },
+                    )?;
                 let canonical = serde_json::to_string(&json).map_err(|error| {
                     OkfError::new(format!("cannot canonicalize OKF JSON: {error}"))
                 })?;
