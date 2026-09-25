@@ -625,7 +625,9 @@ def parse_asm(text: str, arch: str, unit: str, want=None) -> list[tuple[str, lis
     lines = text.splitlines()
     declared = {m.group(1) for line in lines if (m := _ELF_TYPE.match(line))}
     functions: list[tuple[str, list[Instruction]]] = []
-    current: tuple[str, list[Instruction]] | None = None
+    # A function the caller does not want is tracked with no instruction list, so its
+    # body is skipped until its end marker.
+    current: tuple[str, list[Instruction] | None] | None = None
     for index, raw in enumerate(lines):
         label = _LABEL.match(raw)
         if label and not raw.startswith((" ", "\t")):
@@ -1519,7 +1521,7 @@ EMPTY_CELL = {"", "—", "-", "n/a"}
 # function with a manifest entry.
 ROSTER = (
     "intern", "pack_bits", "pack_index_compare", "pack_query", "ir_layout",
-    "bgp-join-probe", "solution_row", "regex_eval", "paged_cross_page_bgp", "datalog-seminaive",
+    "bgp-join-probe", "solution_row", "sparql-aggregate", "regex_eval", "paged_cross_page_bgp", "datalog-seminaive",
     "entail-chase", "entail-classify",
     "shapes-pattern_lookup", "shapes-pattern_validate", "shex-pattern_validate",
     "text-search", "retrieval-fusion",
@@ -1847,13 +1849,14 @@ _X86_FAST_FMA = _X86_FAST.replace("vmulpd\t%ymm2, %ymm1, %ymm1", "vfmadd231pd\t%
 _X86_FAST_DUP = _X86_FAST_FMA + _X86_FAST_FMA.replace("1111111111111111", "2222222222222222")
 
 
+_FIXTURE_MEASURE = Measure(
+    configs=CONFIG_NAMES, crate="demo", symbol="kernel::dot", label="", min_vector_ops=1,
+    require_mnemonics=(), max_fma=0, min_fma=None, forbid_relaxed=True, single_copy=False,
+)
+
+
 def _measure(**kw) -> Measure:
-    base = dict(
-        configs=CONFIG_NAMES, crate="demo", symbol="kernel::dot", label="", min_vector_ops=1,
-        require_mnemonics=(), max_fma=0, min_fma=None, forbid_relaxed=True, single_copy=False,
-    )
-    base.update(kw)
-    return Measure(**base)
+    return dataclasses.replace(_FIXTURE_MEASURE, **kw)
 
 
 def _problems(asm: str, arch: str, measure: Measure) -> tuple[str, ...]:
@@ -2082,10 +2085,10 @@ def self_test() -> int:
     v3 = CONFIG_BY_NAME["x86_64-v3"]
     good = "     Running `kache rustc --crate-name memchr --emit=dep-info,metadata,link -C opt-level=3 --target x86_64-unknown-linux-gnu --emit=asm -D warnings -C target-cpu=x86-64-v3`"
     expect(not verify_command_lines(good, v3), "a correctly flagged unit must pass")
-    expect(verify_command_lines(good.replace(" --emit=asm", ""), v3), "a unit without --emit=asm must fail")
-    expect(verify_command_lines(good.replace(" -D warnings", ""), v3), "a unit without -D warnings must fail")
+    expect(bool(verify_command_lines(good.replace(" --emit=asm", ""), v3)), "a unit without --emit=asm must fail")
+    expect(bool(verify_command_lines(good.replace(" -D warnings", ""), v3)), "a unit without -D warnings must fail")
     expect("-D warnings" in v3.rustflags() and "--emit=asm" in v3.rustflags(), "the per-target rustflags carry --emit=asm and -D warnings")
-    expect(verify_command_lines(good[:-1] + " -C target-cpu=native`", v3), "a second target-cpu must fail")
+    expect(bool(verify_command_lines(good[:-1] + " -C target-cpu=native`", v3)), "a second target-cpu must fail")
     expect(not verify_command_lines(good.replace("--crate-name memchr", "--crate-name build_script_build").replace(" --target x86_64-unknown-linux-gnu", ""), v3), "host units are out of scope")
     cross = config_env(
         CONFIG_BY_NAME["aarch64"], {"CFLAGS": "-march=native", "CC_aarch64_unknown_linux_gnu": "my-cc"},
@@ -2155,9 +2158,9 @@ def self_test() -> int:
     expect(failure_tail(noisy) == "error: linking with `cc` failed", f"progress lines are dropped, the error kept: {failure_tail(noisy)!r}")
 
     # -- identity scan
-    expect(identity_scan({"crates/rdf-core/src/canon.rs": "let s = a.algebraic_add(b);"}), "algebraic_add in canon.rs must fail")
+    expect(bool(identity_scan({"crates/rdf-core/src/canon.rs": "let s = a.algebraic_add(b);"})), "algebraic_add in canon.rs must fail")
     expect(not identity_scan({"crates/rdf-core/src/distance/exact.rs": "let s = a.algebraic_add(b);"}), "algebraic_add under distance/ must pass")
-    expect(identity_scan({"crates/gts/src/lib.rs": "type A = Reassociated;"}), "Reassociated in gts must fail")
+    expect(bool(identity_scan({"crates/gts/src/lib.rs": "type A = Reassociated;"})), "Reassociated in gts must fail")
     expect(not identity_scan({"crates/rdf-core/src/canon.rs": "fn algebraic_class(&self) -> AlgebraicClass;"}), "algebraic_class (an aggregate property) must pass")
     expect(not identity_scan({"crates/hnsw/tests/fast.rs": "Reassociated"}), "hnsw tests may name Reassociated")
 
@@ -2254,7 +2257,7 @@ def self_test() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     parser.add_argument("--self-test", action="store_true", help="exercise every refusal and neighbour on fixtures; builds nothing")
     parser.add_argument("--doc", action="store_true", help="also check the audit document's parity and coverage")
     parser.add_argument("--write-doc", action="store_true", help="regenerate the document's measured cells, then check it")

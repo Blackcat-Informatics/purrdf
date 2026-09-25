@@ -52,18 +52,32 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     bit-identical AVX2 path chosen once per scan. They come with `RowsRef`,
     `Measure`, `EXACT_LANES` and a `norm` that delegates to the one normative
     PURREMB norm fold;
-  - the float-environment refusal. `FloatEnvironmentError::FlushToZero` and
-    `RoundingMode` name a thread that flushes subnormal results or operands to
-    zero, or rounds by any rule other than to nearest, ties to even. Each carries
-    a `FloatEnvironmentEvidence`: `Register { name, bits }` where the control
-    register was read (MXCSR on x86_64, FPCR on aarch64), or
+  - the float-environment refusal. `FloatEnvironmentError::FlushToZero`,
+    `RoundingMode` and `DoubleRounding` name a thread that flushes subnormal
+    results or operands to zero, rounds by any rule other than to nearest, ties
+    to even, or rounds a binary64 result twice through a wider format. Each
+    carries a `FloatEnvironmentEvidence`: `Register { name, bits }` where the
+    control register was read (MXCSR on x86_64, FPCR on aarch64, the x87 control
+    word where the x87 is the binary64 unit), or
     `Probe { operation, expected, observed }` for a binary64 operation whose
     bits differed from the IEEE-754 result. The environment is proven by that
-    probe on every target: eight operations through `core::hint::black_box`,
-    covering flushed results, flushed operands, all three directed roundings and
-    ties-to-even. So i686, armv7, riscv64, powerpc64le, s390x, loongarch64 and
-    any other target run both arithmetics, and are refused only when a departure
-    is observed.
+    probe on every target: thirteen operations through `core::hint::black_box`,
+    covering flushed results, flushed operands, all three directed roundings,
+    ties-to-even, and five double-rounding witnesses (two sums and a product in
+    the normal range, a product and a quotient in the subnormal range). So
+    i686, i586, armv7, riscv64, powerpc64le, s390x, loongarch64 and any other
+    target run both arithmetics, and are refused only when a departure is
+    observed;
+  - binary64 on the x87. Where `f64` arithmetic runs on the x87 (`i586`, or
+    `i686` built without SSE2), each result is rounded to the register's 64-bit
+    significand and again when stored, and kept at its 15-bit exponent. Both
+    arithmetics, the norm and the probe compute there under a guard that sets
+    the precision-control field to 53 bits and restores the caller's control
+    word on exit, unwinding included; each operation stores its result as
+    binary64, and a product or quotient is scaled by 2⁻¹⁵³⁶⁰ and back so a
+    subnormal result is rounded once. `Exact` returns the same bits there as on
+    every other target, proven against an integer software reference, and a
+    thread where the guard does not take hold is refused as `DoubleRounding`.
 
 - **sparql-eval:** `Kernel::distance_reassociated` and
   `Kernel::distance_bounded_reassociated` are named entry points for the
@@ -111,11 +125,32 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (x86/x86_64 `x87` through `avx512vl` and `soft-float`; aarch64 `neon`, `fp16`,
   `fcma`, `rdm`, `dotprod`, `f64mm`, `sve`, `sve2`; wasm `simd128` and
   `relaxed-simd`; rows for every other `target_arch`). `BuildShape::here()` is
-  this build's, `BuildShape::encode(arch, features)` is the pure encoder, and its
-  `Display` lists the architecture and features. `Reassociated` returns this
-  build's shape and `Exact` returns `None`, because its bits are the same in every
-  build. `rustc` exposes no `cfg` for `-C target-cpu`, so CPU tuning and the
-  compiler version are not captured, and the documentation says so.
+  this build's, `BuildShape::encode(arch, features, identity)` is the pure
+  encoder, `BuildShape::from_parts(bits, identity)` rebuilds a recorded one, and
+  its `Display` lists the architecture, the features and the identity.
+  `Reassociated` returns this build's shape and `Exact` returns `None`, because
+  its bits are the same in every build.
+
+- **core:** `purrdf_core::distance::BuildIdentity` and `BuildInputs`, the half
+  of a `BuildShape` that no `cfg` exposes. `rustc` has no `cfg` for
+  `-C target-cpu`, and neither CPU tuning (x86-64-v4's 256-bit preference, a
+  Neoverse scheduling model), the compiler release nor the optimisation level is
+  one, yet each can change what the reassociated body compiles to. A new
+  `purrdf-core` build script records them as one line of text: `rustc -vV`'s
+  release, commit hash and LLVM version (run on `RUSTC`, never through a
+  `RUSTC_WRAPPER`), the target CPU (`-C target-cpu` as named, `native` resolved
+  to the host CPU `rustc` reports, else the target's default from
+  `rustc --print target-cpus`), every `-C target-feature` as `rustc` applies
+  them, any `-C llvm-args`, `codegen-units`, `lto` or `overflow-checks` in
+  `CARGO_ENCODED_RUSTFLAGS`, and the optimisation level; the crate appends its
+  own `cfg(debug_assertions)`. Flags that change no code, such as `-D warnings`,
+  are not recorded. The identity is the text's FNV-1a 64-bit digest.
+  `BuildIdentity::here()` is this build's, `BuildIdentity::encode(inputs,
+  debug_assertions)` and `BuildIdentity::describe` are the pure encoder over
+  explicit `BuildInputs`, and `text()` returns this build's line. What no build
+  script sees is documented on the type: a `[profile]` table's own `lto`,
+  `codegen-units` and `overflow-checks`, flags appended by `cargo rustc --`, and
+  a compiler whose `rustc -vV` does not tell it apart from another.
 
 - **iri:** byte-class scanners in `purrdf_iri::terminals`:
   `find_first_trivia`, `find_first_iri_body_special`,
@@ -373,6 +408,47 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **sparql-eval:** `SUM`/`AVG` over a group of more than 1024 values added chunk
+  partial sums together, so an `xsd:float`/`xsd:double` total could be a value no
+  SPARQL 1.1 §18.5.1.3 chain of single additions gives: over {−3, −2^53, −1, −0.7}
+  every chain answers −9007199254740996 and the chunked fold answered
+  −9007199254740998. A decimal total could likewise miss an overflow the chain hits.
+  The parallel fold now merges chunk partials only where the merge equals the chain:
+  integer partials, and decimal or duration partials whose magnitudes cannot overflow.
+  From the first float or double value on, the values are added one at a time in
+  row order. Parallel and sequential `SUM`/`AVG` now give the same bits, and integer
+  and decimal groups still fold in parallel.
+
+- **xsd:** `BigInt::to_f64` folded its base-10^9 limbs through a `mul_add` loop that
+  rounded at every limb, so an integer sum beyond `i128` promoted into an
+  `xsd:double` sum could be one ulp off. `xsd:float` went through `f64` first and
+  rounded twice. Both conversions are now correctly rounded, ties to even, with
+  `±INF` past the largest finite value (`BigInt::to_f32` is new). Adding decimals of
+  different scales scaled the lower-scale mantissa without an overflow check, so
+  `1e30 + 0.000000000000000001` panicked in debug builds and wrapped to a wrong
+  sum in release. That case is now the same out-of-range error as any other decimal
+  overflow.
+
+- **xsd:** `Decimal::to_f64` computed `mantissa as f64 / 10^scale`, which rounded in
+  the cast once the mantissa passed 2^53 and again in the division, so a decimal
+  promoted to `xsd:double` could be one ulp off: `72922151633738826.80` became
+  `7.292215163373882e16` instead of `7.292215163373883e16`, and `=` against the
+  correctly rounded double was false. `xsd:float` promotion went through `f64` first
+  and rounded twice. Both conversions now round the exact decimal once, ties to even
+  (`Decimal::to_f32` is new), and they serve every promotion, comparison and cast.
+  The SPARQL cast of a decimal to `xsd:integer` or a derived integer type went
+  through `f64` too, so `xsd:integer("12345678901234567.5"^^xsd:decimal)` gave
+  `12345678901234568`. It now truncates exactly, and an integer or decimal cast to
+  `xsd:float` rounds once.
+
+- **core:** on a build whose binary64 unit is the x87 (`i586`, or `i686` without
+  SSE2), PURREMB's deterministic L2 norm and the division of a projection by it
+  rounded each result twice -- to the register's 64-bit significand and again to
+  binary64 -- so the normalized projection bytes and their digest could differ from
+  every other target's. The norm fold and the division now compute under the same
+  precision guard as the distance kernels, each operation correctly rounded, so the
+  bytes are the same on every target.
 
 - **slice:** the DSL statistics emitter, pinned byte-for-byte to Python's
   `json.dumps`, escaped only `"` and `\` in set file names, so a control character
@@ -1979,26 +2055,28 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   not only the dispatch path. Two builds recording one path could compute
   different bits, and a mismatched pair used to pass the path check and then
   answer `verify_rebuild` with a bare `Ok(false)`, which reads as tampering.
-  - The header of a reassociated image (codes 2 to 8) carries a `u64` build
-    shape (`purrdf_core::distance::BuildShape`) right after the arithmetic code.
-    Exact images carry no shape, so their bytes do not change and
-    `GOLDEN_DIGEST` and `GOLDEN_SERIAL_DIGEST` do not move. No reassociated
-    golden is pinned. An image from an intermediate build of this cycle, which
-    has no shape field, is refused as a truncated payload.
+  - The header of a reassociated image (codes 2 to 8) carries the build shape
+    (`purrdf_core::distance::BuildShape`, layout 2) right after the arithmetic
+    code: a `u64` of target architecture and feature bits, then the `u64`
+    digest of the build's `BuildIdentity`. Exact images carry neither, so their
+    bytes do not change and `GOLDEN_DIGEST` and `GOLDEN_SERIAL_DIGEST` do not
+    move. No reassociated golden is pinned. An image from an intermediate build
+    of this cycle, with no shape or a layout-1 shape, is refused.
   - `HnswError` gains `ArithmeticBuildMismatch { recorded, here }`. Decode,
     `guard::load_reassociated`, `HnswIndex::verify_rebuild` and
     `guard::verify_rebuild` raise it for an image recorded by a build of another
-    shape, and its message lists both feature sets.
-  - `HnswError` gains `ArithmeticRebuildDiverged { recorded, shape }`. A
-    rebuild on the recorded path and shape can still differ, because CPU tuning
-    and the compiler version are not recorded. That result is now this error,
-    from both `verify_rebuild`s, and never `Ok(false)`. For an exact image,
-    `Ok(false)` still means the payload was altered.
-  - The reassociated profile declaration ends with a `build-shape=<bits>` line,
-    so the implementation digest binds the build. The evidence revision now
-    says the image is reproducible only by the compiled build that made it, on
-    the same dispatch path, and that CPU tuning and the compiler version may also
-    change its bits.
+    shape: other feature bits, or another compiler, target CPU, optimisation
+    level, debug-assertion state or codegen flags. Its message lists both feature
+    sets and both identities, and says which half differs.
+  - Under an equal path and shape the rebuild compiles to the code that built
+    the image, so a rebuild that produces another image is `Ok(false)` from both
+    `verify_rebuild`s (`None` from `verify_bytes_against`), the same tamper
+    evidence an exact image gives.
+  - The reassociated profile declaration ends with `build-shape=<bits>` and
+    `build-identity=<digest>` lines, so the implementation digest binds the
+    build. The evidence revision now says the image is reproducible only by a
+    build of the shape that made it, on the same dispatch path, and that a build
+    of another shape refuses it.
 
 - **BREAKING** **sparql-eval:** `Scalar` is sealed and implemented for `f32` and
   `f64` only. `RankedDeclaration` gains the public `arithmetic` field, a

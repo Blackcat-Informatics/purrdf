@@ -227,25 +227,39 @@ The choice of arithmetic is recorded wherever it outlives the call:
   search and rebuild verification refuse another build's shape with the named
   `HnswError::ArithmeticBuildMismatch`, whose message lists both feature sets. `Exact`
   has no shape and its image carries none: its bytes are the same in every build.
-  Equal path and shape are still necessary, not sufficient: `rustc` exposes no `cfg`
-  for `-C target-cpu`, CPU tuning (x86-64-v4's 256-bit preference, a Neoverse
-  scheduling model) is not a target feature, and the compiler version is invisible to
-  the source. A reassociated image is therefore reproducible only by the compiled
-  artifact that built it, and a rebuild that diverges under a matching path and shape
-  is the named `HnswError::ArithmeticRebuildDiverged`, never the `false` that is an
-  exact image's tamper evidence;
+  The feature bits are not the whole build: `rustc` exposes no `cfg` for
+  `-C target-cpu`, CPU tuning (x86-64-v4's 256-bit preference, a Neoverse
+  scheduling model) is not a target feature, and neither the compiler release nor the
+  optimisation level is a `cfg`. So the shape also carries a `BuildIdentity`, recorded
+  as a second `u64` after the bits: the FNV-1a digest of one line of text that
+  `purrdf-core`'s build script writes from what `cargo` hands it -- `rustc -vV`'s
+  release, commit hash and LLVM version (run on `RUSTC`, never through a wrapper), the
+  target CPU (`-C target-cpu` as named, `native` resolved to the host CPU `rustc`
+  reports, else the target's default from `rustc --print target-cpus`), every
+  `-C target-feature` as `rustc` applies them (tuning features such as
+  `prefer-256-bit` included), any `-C llvm-args`, `codegen-units`, `lto` or
+  `overflow-checks` in the rustflags, and the optimisation level -- followed by the
+  crate's own `cfg(debug_assertions)`. A build of another identity is the same named
+  `ArithmeticBuildMismatch`, whose message shows both identities and says which half of
+  the shape differs. Under an equal path and shape the rebuild compiles the body to the
+  code that computed the image, so a rebuild that differs is `false`, the same tamper
+  evidence as an exact image's. What no build script sees is named on `BuildIdentity`:
+  a `[profile]` table's own `lto`, `codegen-units` and `overflow-checks`, flags a
+  `cargo rustc --` invocation appends, and a compiler whose `rustc -vV` does not tell it
+  apart from another; builds that differ only there share an identity;
 - the HNSW profile declaration folds the arithmetic identifier, so the profile
   digest binds the law, and a reassociated declaration ends with a
-  `build-shape=<bits>` line, so its digest binds the build too;
+  `build-shape=<bits>` line and a `build-identity=<digest>` line, so its digest binds
+  the build too;
 - HNSW is `HnswIndex<A: Arithmetic = Exact>`, with `HnswSpace<A>` and
   `HnswRelation<A>` over it: `build` and `decode` stay exact, and
   `build_reassociated` / `decode_reassociated` are the reassociated index. A
   reassociated index publishes its own implementation, `hnsw-reassociated-v2`, whose
   evidence revision is `LOSS_EVIDENCE` followed by the reassociated evidence for the
   path the build ran and the sentence that its canonical image is reproducible only by
-  the compiled build that made it, running the same dispatch path, since CPU tuning and
-  the compiler version may change its bits beyond what the image records
-  (`profile::loss_evidence_reassociated`). The
+  a build of the shape that made it, running the same dispatch path, since the image
+  records that build's target, features and identity and a build of another shape
+  refuses it (`profile::loss_evidence_reassociated`). The
   guard's legal (identifier, revision, image codes) rows are derived from `Exact` and
   `Reassociated`, and a cross pairing is a profile failure. `HnswSpace::evidence()`
   returns that text, `HnswRelation::fidelity` carries it into `Completeness::Lossy`
@@ -296,12 +310,40 @@ has no reassociated sibling.
 Both arithmetics assume IEEE round-to-nearest, ties-to-even, with subnormals
 preserved. A thread that has set flush-to-zero or denormals-are-zero, or another
 rounding direction (MXCSR on x86_64, FPCR on aarch64, `frm` on RISC-V, FPSCR on
-32-bit Arm and POWER), would compute different bits from the same code.
+32-bit Arm and POWER), would compute different bits from the same code. So would a
+unit that rounds twice: where `f64` arithmetic runs on the x87 (`i586`, or `i686`
+built without SSE2), each result is rounded to the register's 64-bit significand and
+again when it is stored, and a value kept in a register has a 15-bit exponent, so it
+neither overflows nor becomes subnormal where binary64 would.
+
+The x87 is made correct, not refused. Every operation of both arithmetics, the PURREMB
+norm and the probe is a `Binary64` method, available only inside a `Precision` scope
+(`distance::binary64`). On every other target the methods are the language's operators
+(and the `algebraic_*` operations for the reassociated body) and the scope is empty. On
+the x87 the scope saves the control word and sets its precision-control field to 53
+bits, restoring the caller's word on exit, unwinding included; each operation is one
+`asm!` block that loads binary64 operands, performs one instruction and stores a
+binary64 result, so no value outlives its operation at the register's range. That
+makes `+`, `−` and `√` correctly rounded: a normal result already has 53 bits, an
+overflow is stored as the infinity IEEE gives, and a sum or difference in the
+subnormal range is exact. It does not make `×` and `÷` correct in the subnormal range,
+where a 53-bit result is rounded again by the store (Monniaux, *The pitfalls of
+verifying floating-point computations*, 2008). The technique `HotSpot` used for Java's
+`strictfp` closes that: one operand is scaled by 2⁻¹⁵³⁶⁰, the distance between the
+x87's smallest normal exponent and binary64's, so the x87 denormalizes the result onto
+binary64's subnormal grid (scaled) and rounds once; scaling back by 2¹⁵³⁶⁰ and storing
+are exact. On the x87 the reassociated body runs these same operations in written
+order: the licence permits reassociation and requires none, and every value the fold
+holds is then binary64, as its evidence claims. An integer software reference that
+rounds without any floating-point unit is the oracle: the operations, the probe
+constants, the exact kernels and the norm equal it bit for bit on every target, and
+the CI runs the distance, kNN and HNSW suites on `i586`.
 
 The law is behavioural, and it holds on every target. Resolving an arithmetic runs a
-probe of eight binary64 operations whose correctly rounded results under the assumed
-environment are known constants, with every operand passed through
-`core::hint::black_box` so none is folded at compile time:
+probe of thirteen binary64 operations whose correctly rounded results under the
+assumed environment are known constants, computed through the same `Binary64`
+operations and inside the same `Precision` scope as every kernel, with every operand
+passed through `core::hint::black_box` so none is folded at compile time:
 
 | Operation (`ulp` = 2⁻⁵²) | IEEE-754 result | A mismatch shows |
 |---|---|---|
@@ -313,18 +355,33 @@ environment are known constants, with every operand passed through
 | `−1 − 0.25 ulp` | `−1` | rounding down |
 | `1 + 0.5 ulp` | `1` | a tie rounded away from zero, or up |
 | `(1 + ulp) + 0.5 ulp` | `1 + 2 ulp` | a tie rounded toward zero, or down |
+| `1 + (2⁻⁵³ + 2⁻⁷⁸)` | `1 + ulp` | a sum rounded twice |
+| `(1 + ulp) + (2⁻⁵³ − 2⁻⁷⁸)` | `1 + ulp` | a sum rounded twice |
+| `(1 − 0.5 ulp) × (1 + 2 ulp)` | `1 + ulp` | a product rounded twice |
+| `2⁻⁵¹²(1 + 4 ulp) × 2⁻⁵¹¹(1 − ulp)` | subnormal `2⁻¹⁰²³ + 2⁻¹⁰⁷⁴` | a subnormal product rounded twice |
+| `2⁻⁵¹² ÷ 2⁵¹¹(1 − ulp)` | subnormal `2⁻¹⁰²³ + 2⁻¹⁰⁷⁴` | a subnormal quotient rounded twice |
 
-The first row whose bits differ is refused as `FloatEnvironmentError::FlushToZero` or
-`RoundingMode`, with `FloatEnvironmentEvidence::Probe` naming the operation and both
-bit patterns. The probe is binary64 only because binary64 is the only precision the
+The last five rows are double-rounding witnesses: each exact result lies within a
+64-bit rounding of a binary64 midpoint without being one, so rounding it first to the
+x87's 64 bits lands on the midpoint and the tie then goes to the wrong neighbour.
+Precision control at 53 bits closes the three normal-range rows; only the scaling
+closes the two subnormal ones. Every unit that rounds once passes all five, and the
+software reference shows that none of the first eight rows can tell double rounding
+apart. The first row whose bits differ is refused as `FloatEnvironmentError::FlushToZero`,
+`RoundingMode` or `DoubleRounding`, with `FloatEnvironmentEvidence::Probe` naming the
+operation and both bit patterns; a thread where the precision guard did not take hold
+is refused as `DoubleRounding` rather than handed doubly rounded distances. The probe is binary64 only because binary64 is the only precision the
 arithmetics execute: `f32` operands are widened per component before any operation.
 
-Where this build reads the control register — MXCSR on x86_64, FPCR on aarch64 — it
-reads it first, so a refusal names the register and its value
-(`FloatEnvironmentEvidence::Register`), and then runs the probe as well, which proves
-the environment rather than the bits the build knows the meaning of. WebAssembly's
+Where this build reads the control register — MXCSR on x86_64, FPCR on aarch64, and the
+x87 control word where the x87 is the binary64 unit — it reads it first, so a refusal
+names the register and its value (`FloatEnvironmentEvidence::Register`), and then runs
+the probe as well, which proves the environment rather than the bits the build knows
+the meaning of. The x87 control word is refused for a directed rounding-control field
+only: its precision-control field is the guard's to set, so a caller that left it at 24
+or 64 bits is served correctly rounded binary64, not refused. WebAssembly's
 numeric instructions are specified to round to nearest-even and preserve subnormals;
-the probe runs there too, since it is eight operations and an engine departing from
+the probe runs there too, since it is thirteen operations and an engine departing from
 the specification is then refused by name rather than trusted. No target is refused
 for being unread: an environment is refused only when it has been observed to depart.
 
@@ -340,6 +397,32 @@ is computed on it; `crates/hnsw/tests/float_environment.rs` executes that refusa
 its valid neighbour, every pair entry point in the default environment agreeing bit for
 bit with the batch kernel on a pair whose distance is subnormal, so a flushing thread
 would have returned zero for it.
+
+Nor can it be bypassed by choosing a different thread. The environment is per-thread
+control state: MXCSR and FPCR are saved and restored with the thread, so a handle
+resolved on a clean thread proves nothing about another. `Resolved<A>` is therefore
+neither `Send` nor `Sync` (a `PhantomData<*const ()>` marker beside the path), and the
+compiler refuses to move one, or share a reference to one, across threads; two
+`compile_fail` doctests on the type pin both refusals, beside a passing one that sends
+the thread-free selection instead. What outlives a thread is `Selected<A>`, the
+arithmetic and its dispatch path with no environment proof, which is `Send`, `Sync` and
+computes nothing: `Selected::resolve` repeats the environment check on the calling
+thread (the path was selected once, from the process's processor features) before it
+hands out a handle. Every long-lived structure stores that: `HnswIndex` its recorded
+path (`HnswIndex::arithmetic`), and the kNN relation and its cursor the path a
+reassociated relation selected at construction (`EmbeddingKnnRelation::selected`).
+Every compute entry resolves on the thread that computes: HNSW search, `search_batch`,
+`row_distance`, `verify_rebuild` and the kNN scan and membership lookup once per call,
+and `search_batch` and the build's parallel proposals once inside each rayon worker,
+per worker's share rather than per query or pair.
+`crates/hnsw/tests/float_environment.rs` builds every index and relation on the test
+thread and executes the refusal from a worker thread that set flush-to-zero on itself
+(`search_batch` and `row_distance` on both indexes, the scan and the membership lookup
+on both kNN relations), with the same calls from a clean worker answering the test
+thread's bits as the valid neighbour; `crates/hnsw/tests/float_environment_rayon.rs`
+makes rayon's global pool flush-to-zero and shows a batch called from a clean thread
+refused by its workers, while the same batch on a clean pool answers the single-thread
+bits.
 
 The L2 norm a cosine kernel divides by is arithmetic too, and follows the same law. Its
 only public form is `Resolved::<Exact>::norm` in `purrdf-core` (re-exported through
@@ -360,8 +443,9 @@ entry point returning the reference fold's nonzero bits once the register is res
 verifier and the normalized row, with a raw artifact written and verified under the
 flushed register as the neighbour.
 
-The probe runs on every resolve, which is once per scan, relation, index, search or pair
-call site, never once per pair: the handle is `Copy`, and a loop passes the one it holds.
+The probe runs on every resolve, which is once per scan, search, lookup, rebuild, pair
+call site or rayon worker's share of a batch, never once per pair: the handle is `Copy`,
+and a loop on one thread passes the one it holds.
 A resolve is a handful of operations and no allocation. The `cross-arch` CI job checks the kernels on
 i686, armv7, riscv64, powerpc64le, s390x and loongarch64 and executes the distance,
 kNN and HNSW suites on i686, and `cross-arch-riscv64` executes them on riscv64 under
@@ -442,6 +526,7 @@ floor of 0 and says so. A crate-level row names no function and has no cells.
 | `eval.solution-compatible` | `purrdf-sparql-eval` | `solution::compatible`, `bgp::bind_row` | `crates/sparql-eval/src/solution.rs:372` | `solution_row`, `exists_decorrelation`, `lateral_service`, `lateral_substitution`, `query_eval`, `relation_attestation_alloc` | solution_row | I | `Option` equality over at most four shared columns | leave | a gather over at most four columns, exited on the first mismatch | scalar on both builds | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 |
 | `eval.bgp-cost-planner` | `purrdf-sparql-eval` | `bgp::cost_order_dp` | `crates/sparql-eval/src/bgp.rs:778` | `cost_based_bgp_planner`, `query_eval` | — | FR | f64 plan arithmetic over a handful of patterns, once per query | leave | not a loop over data; the count is bitset and index bookkeeping in the dynamic program | integer lane ops in the bookkeeping under +simd128; the cost arithmetic is scalar on both builds | v26·f0·r0 | v40·f0·r0 | v40·f0·r0 | v17·f0·r0 | v5·f0·r0 | v0·f0·r0 | v15·f0·r0 |
 | `eval.bgp-join-probe` | `purrdf-sparql-eval` | `bgp::eval_bgp` inner loop | `crates/sparql-eval/src/bgp.rs:99` | `query_eval`, `construct_builder`, `cost_based_bgp_planner`, `exists_decorrelation`, `governed_eval`, `paged_cross_page_bgp`, `path_range`, `prepared_admission`, `prepared_reuse`, `relation_attestation_alloc`, `query_engine_reuse` | bgp-join-probe | I | enum dispatch per candidate quad and a `SmallVec` binding per row | leave | the per-candidate work is a dependent chain of dispatch and binding, not a lane-parallel loop | scalar on both builds | v14·f0·r0 | v60·f0·r0 | v57·f0·r0 | v10·f0·r0 | v10·f0·r0 | v0·f0·r0 | v10·f0·r0 |
+| `eval.aggregate-fold` | `purrdf-sparql-eval` | `NumericFold::step_xsd`, `NumericFold::combine_owned` (behind `fold_numeric`/`NumericSummary`), `numeric_add`, `BigInt::add_i128`, `BigInt::add_assign` | `crates/sparql-eval/src/modifier.rs:1939` | `query_eval` | sparql-aggregate | FI | one `TermValue` per row through the promotion tower (`BigInt` integer tier, `i128`-mantissa decimal tier, IEEE float/double tier) with poisoning; no slice of doubles exists to fill a lane | leave | SPARQL 1.1 §18.5.1.3 defines `Sum` as the chain `op:numeric-add(S1, Sum(S2..n))` over `ToList`, whose order is free but whose shape is a chain. Regime 2 makes the `xsd:double` bits depend on the target, and regime 3's lane tree gives bits no chain gives: over {−3, −2^53, −1, −0.7} every chain order answers −9007199254740996 and the pairwise tree −9007199254740998. So neither regime is admissible, and the same holds for chunking a group across threads: the parallel fold merges chunk partials only where the merge provably equals the chain (pure-integer `BigInt` partials, or decimal and duration partials whose magnitude bound rules out every `i128`-mantissa overflow) and replays every row from the first float/double operand on in source order, so the parallel and sequential answers are the same bits. The integer tier is an exact carry chain and the decimal tier a scale-aligned `i128` add, one value per row. The integer-to-float/double promotion is `BigInt::to_f64`/`to_f32`: one correctly rounded integer cast of the top 64 bits with a sticky bit, scaled by an exact power of two, with no multiply-add, so no configuration fuses anything (the earlier per-limb `mul_add` Horner conversion contracted to hardware FMA and could misround by an ulp); the `x86_64` vector ops are `xorps` sign flips | scalar on both builds | step v2·f0·r0<br>combine v2·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v2·f18·r0<br>combine v2·f18·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v2·f18·r0<br>combine v2·f18·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f2·r0<br>combine v0·f2·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f10·r0<br>combine v0·f10·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 |
 | `datalog.relation-contains` | `purrdf-datalog` | `Relation::contains` (tail probe `Tail::contains`, inlined) | `crates/datalog/src/store.rs:726` | `seminaive` | datalog-seminaive | I | — | rewrite | the mutable tail is held as structure-of-arrays columns (`Tail`: subjects, objects, row ids, one row per index) and the duplicate probe OR-folds `(s == subject) & (o == object)` over the two key columns with no exit on a hit. The same branch-free fold over the `(TermId, TermId, RowId)` tuples was measured first: v0 on x86_64, an unrolled scalar `xor`/`sete`/`orb` loop, because the tuple layout puts consecutive keys three words apart; over the columns it packs on every SIMD configuration. The cursor legs read the tail through `Tail::row` and `Tail::iter` in insertion order, and sealing drains it with `Tail::take_rows` in that order, so the batch built from it is unchanged. The galloping batch probe is unchanged and is the rest of the function. The tuple scan is kept under test as the oracle, compared on seeded tails of every length 0 to 64 (keys drawn from a small id space so they collide), with a hit at every position, a lone hit among one-column near misses at every position, swapped and absent keys, and the columns' round trip in insertion order | +simd128: `i32x4.eq` compares answered by `v128.any_true`; baseline: a scalar loop with no exit | sse2 v13·f0·r0·req✓ | avx2 v34·f0·r0·req✓ | avx512 masks v10·f0·r0·req✓ | neon v43·f0·r0·req✓ | sve v15·f0·r0·req✓ | scalar v0·f0·r0 | simd128 v7·f0·r0·req✓ |
 | `datalog.gallop-leapfrog` | `purrdf-datalog` | `gallop_lower_bound` (in `Batch::subject_run`), `LeapfrogValueCursor::seek` | `crates/datalog/src/store.rs:341` | `seminaive` | datalog-seminaive | I | exponential then binary search; each probe depends on the previous comparison | leave | loop-carried search | scalar on both builds | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 |
 | `datalog.chase` | `purrdf-datalog` | `chase::chase_until` | `crates/datalog/src/chase.rs:1325` | `chase` | entail-chase | I | a fixpoint over relation probes; each round depends on the last | leave | loop-carried fixpoint; the probes are the relation rows above | scalar on both builds | v1·f0·r0 | v11·f0·r0 | v3·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 |
@@ -572,7 +657,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/sparql-eval/benches/path_range.rs` | eval.bgp-join-probe, core.dataset-scan-filter |
 | `crates/sparql-eval/benches/prepared_admission.rs` | eval.bgp-join-probe |
 | `crates/sparql-eval/benches/prepared_reuse.rs` | eval.bgp-join-probe |
-| `crates/sparql-eval/benches/query_eval.rs` | eval.bgp-join-probe, eval.bgp-cost-planner, eval.solution-compatible |
+| `crates/sparql-eval/benches/query_eval.rs` | eval.bgp-join-probe, eval.bgp-cost-planner, eval.solution-compatible, eval.aggregate-fold |
 | `crates/sparql-eval/benches/regex_eval.rs` | core.xsd-regex-scan, eval.regex-row-alloc |
 | `crates/sparql-eval/benches/relation_attestation_alloc.rs` | eval.solution-compatible, eval.bgp-join-probe |
 | `crates/sparql-eval/benches/solution_row.rs` | eval.solution-compatible |
@@ -617,7 +702,7 @@ when a member has no row.
 | `purrdf-slice` | `crates/slice` | present | `slice.ownership`, `slice.prefix-json-string`, `slice.dsl-stats-json-string` |
 | `purrdf-sparql-algebra` | `crates/sparql-algebra` | present | `memchr.sparql-lex-string`, `sparql.lexer-trivia`, `sparql.lexer-iri`, `sparql.lexer-cursor` |
 | `purrdf-sparql-conformance` | `crates/sparql-conformance` | absent | `sparql-conformance.crate` |
-| `purrdf-sparql-eval` | `crates/sparql-eval` | present | `eval.regex-row-alloc`, `eval.solution-compatible`, `eval.bgp-cost-planner`, `eval.bgp-join-probe` |
+| `purrdf-sparql-eval` | `crates/sparql-eval` | present | `eval.regex-row-alloc`, `eval.solution-compatible`, `eval.bgp-cost-planner`, `eval.bgp-join-probe`, `eval.aggregate-fold` |
 | `purrdf-sparql-results` | `crates/sparql-results` | present | `results.xml-escape`, `results.csv-field`, `results.json-escape` |
 | `purrdf-text` | `crates/text` | present | `text.bm25f` |
 | `purrdf-validate` | `crates/validate` | absent | `validate.crate` |

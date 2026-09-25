@@ -2514,6 +2514,72 @@ summary = "`bgp::eval_bgp`, the index-nested-loop join probe loop"
   forbid_relaxed = true
 
 [[site]]
+id = "eval.aggregate-fold"
+summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_xsd` per row (the `BigInt` integer tier, the `numeric_add` decimal/float/double tier) and `NumericFold::combine_owned` per provably exact chunk-partial merge"
+
+  # `NumericFold::step_xsd` is the one per-row fold step: the sequential chain, each
+  # chunk's exact prefix (`NumericSummary::push`) and the in-order replay of every row
+  # from the first float/double operand on all reach it out of line. The
+  # integer-to-float/double promotion it inlines is `BigInt::to_f64`/`to_f32`, a
+  # single correctly rounded integer-to-float cast scaled by an exact power of two:
+  # no multiply-add, fused or otherwise, so the ceiling is 0 on every configuration
+  # (the earlier per-limb `mul_add` Horner fold contracted to hardware FMA on
+  # x86_64-v3/v4 and aarch64, and misrounded).
+  [[site.measure]]
+  label = "step"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "<purrdf_sparql_eval::modifier::NumericFold>::step_xsd"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The chunk-partial merge, `O(chunks)` per group above `PARALLEL_MIN_ROWS`, taken
+  # only where it provably equals the chain (both partials pure-integer, or the
+  # decimal/duration magnitude bound fits `i128`); never over a float/double operand.
+  # The same inlined `to_f64` promotion, so no FMA anywhere.
+  [[site.measure]]
+  label = "combine"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_sparql_eval"
+  symbol = "<purrdf_sparql_eval::modifier::NumericFold>::combine_owned"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The decimal/float/double tier's per-row addition (and the duration tier's
+  # seconds): one promotion-tower `op:numeric-add`, out of line in `purrdf_xsd`.
+  # Scalar everywhere.
+  [[site.measure]]
+  label = "numeric_add"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::numeric::numeric_add"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The integer tier's per-row addition: an `i128` into the limb vector, carry chain.
+  [[site.measure]]
+  label = "add_i128"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "<purrdf_xsd::bigint::BigInt>::add_i128"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The integer tier's chunk-partial merge: limb vector plus limb vector, carry chain.
+  [[site.measure]]
+  label = "add_assign"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "<purrdf_xsd::bigint::BigInt>::add_assign"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
 id = "datalog.relation-contains"
 summary = "`Relation::contains`, the galloping batch probe plus the tail's duplicate probe (`Tail::contains`, inlined): a branch-free OR-fold of `(s == subject) & (o == object)` over the tail's structure-of-arrays key columns"
 
