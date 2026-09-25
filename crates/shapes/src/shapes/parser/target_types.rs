@@ -148,7 +148,7 @@ impl Parser<'_> {
             .ok_or_else(|| {
                 format!("sh:SPARQLTargetType <{iri}> is missing a sh:select string literal")
             })?;
-        let select = format!("{}{raw_select}", self.prefix_header(&[id]));
+        let select = format!("{}{raw_select}", self.prefix_header(&[id])?);
         match SparqlParser::new().parse_query(&select) {
             Ok(Query::Select { .. }) => {}
             Ok(_) => {

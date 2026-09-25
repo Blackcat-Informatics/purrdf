@@ -75,6 +75,28 @@ def _violating_person(name: str) -> str:
 # ── blank-node scoping ──────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("container", [purrdf.Store, purrdf.MutableDataset])
+def test_load_returns_the_documents_own_prefix_map(container: type) -> None:
+    """``load`` returns the prefix map the parser recorded, from the same parse.
+
+    Sorted by prefix, each namespace resolved against the base in force where it was
+    declared, the last declaration of a prefix winning — and a ``PREFIX`` quoted in a
+    string literal is text, not a declaration. N-Triples declares nothing.
+    """
+    ttl = (
+        "@prefix b: <http://example.org/first#> .\n"
+        "PREFIX a: <rel#>\n"
+        'b:s b:p """\nPREFIX quoted: <http://example.org/quoted#>\n""" .\n'
+        "@prefix b: <http://example.org/b#> .\n"
+    )
+    assert container().load(ttl, format=RdfFormat.TURTLE, base="http://example.org/doc") == [
+        ("a", "http://example.org/rel#"),
+        ("b", "http://example.org/b#"),
+    ]
+    nt = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n"
+    assert container().load(nt, format=RdfFormat.N_TRIPLES) == []
+
+
 def test_one_blank_label_loaded_twice_is_two_nodes_and_loaded_once_is_one() -> None:
     """The document-local scope of a blank label, from both sides.
 

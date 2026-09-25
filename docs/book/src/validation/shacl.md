@@ -104,6 +104,36 @@ ignored. The prepared-product packer that the WebAssembly and C-ABI hosts call
 applies the same rule, so every host agrees on which shapes graphs are
 complete.
 
+## Prefixes in SHACL-SPARQL queries
+
+A SPARQL query in a shapes graph (`sh:select`, `sh:ask`, `sh:construct`,
+`sh:sparqlExpr`, a validator, a target or a function body) gets a `PREFIX`
+header before it is compiled. The header follows SHACL 1.2 SPARQL Extensions,
+"Prefix Declarations for SPARQL Queries":
+
+- **A query with `sh:prefixes`** uses the prefix declarations on the path
+  `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`. The path is read
+  from the query node and from the shape or component that carries it.
+- **A query without `sh:prefixes`** uses every `sh:declare` of every SHACL
+  instance of `owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or
+  `sh:RulesGraph` in the shapes graph. A subclass of one of those classes
+  counts too.
+- **Two different namespaces for one prefix** in the declarations a query
+  reaches make the shapes graph ill-formed. The load fails, and the error names
+  the prefix and both namespaces. The same prefix declared twice with the same
+  namespace is fine. Declarations that no query reaches are not checked.
+- **A malformed declaration** that a query reaches also fails the load. A
+  declaration needs exactly one `xsd:string` `sh:prefix` and exactly one
+  `sh:namespace`.
+
+The shapes document's own `@prefix` / `PREFIX` directives are a fallback. They
+only supply a prefix the declarations above leave unbound, and they never
+replace one the declarations bind. They come from the Turtle parser's own
+record of the document, so a `PREFIX` line inside a query's string literal is
+never mistaken for a directive. If the document declares a prefix twice, the
+fallback uses the last declaration. A `PREFIX` in a query's own text applies to
+that query only.
+
 ## The SHACL 1.2 reifier-shape draft scope
 
 The crate implements a **scoped** SHACL 1.2 Working Draft feature:

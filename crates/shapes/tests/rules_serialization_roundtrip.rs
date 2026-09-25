@@ -14,7 +14,7 @@
 use purrdf::{SerializeGraph, canonicalize, parse_dataset, serialize_dataset};
 use purrdf_shapes::rules::entail_dataset;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
-use purrdf_shapes::text_ingest::{extract_prefixes, parse_turtle_to_dataset};
+use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
 
 /// A shapes document whose rule CONSTRUCTs a real SHACL property shape onto
 /// each focus node, through an anonymous (bracketed) template blank.
@@ -42,7 +42,9 @@ fn sparql_rule_entailment_roundtrips_through_text_serialization() {
     let data = parse_turtle_to_dataset(DATA_TTL, None).expect("data Turtle must parse");
     let shapes_dataset =
         parse_turtle_to_dataset(SHAPES_TTL, None).expect("shapes Turtle must parse");
-    let prefixes = extract_prefixes(SHAPES_TTL);
+    let prefixes = parse_turtle_document(SHAPES_TTL, None)
+        .expect("fixture parses")
+        .prefixes;
     let shapes = from_dataset_with_prefixes(&shapes_dataset, &prefixes).expect("shapes must load");
 
     let entailed = entail_dataset(data.as_ref(), &shapes).expect("entailment must succeed");

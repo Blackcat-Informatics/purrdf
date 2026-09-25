@@ -45,9 +45,10 @@
 //!
 //! [`ParseProvenance::doc_prefixes`] hands back the pairs in exactly the order the
 //! parser received them, whatever that order is. It is NOT necessarily the order
-//! the document wrote them in: the text entry point folds the document scan through
-//! [`crate::text_ingest::extract_prefixes`], which resolves last-writer-wins
-//! duplicates and therefore emits prefix-sorted pairs, while a caller entering at
+//! the document wrote them in: the text entry point hands on the Turtle codec's own
+//! record ([`crate::text_ingest::TurtleDocument::prefixes`]), which resolves
+//! last-writer-wins duplicates and therefore emits prefix-sorted pairs, while a caller
+//! entering at
 //! [`crate::shapes::from_dataset_with_prefixes`] supplies whatever order it built.
 //!
 //! Re-sorting here would be the wrong layer either way. The list the parser
@@ -361,7 +362,10 @@ mod tests {
         // re-sorted copy is a different list that nothing could invert.
         assert_eq!(
             provenance.doc_prefixes(),
-            crate::text_ingest::extract_prefixes(SHAPES_TTL).as_slice(),
+            crate::text_ingest::parse_turtle_document(SHAPES_TTL, None)
+                .expect("fixture parses")
+                .prefixes
+                .as_slice(),
             "the retained map is the parser's own list, unreordered"
         );
     }
@@ -405,7 +409,9 @@ mod tests {
         let vocab = BoxRoleVocab::for_namespace("http://example.org/roles#");
         let shapes = from_dataset_with_config_and_graph(
             &dataset,
-            &crate::text_ingest::extract_prefixes(SHAPES_TTL),
+            &crate::text_ingest::parse_turtle_document(SHAPES_TTL, None)
+                .expect("fixture parses")
+                .prefixes,
             Some(vocab.clone()),
             Some("http://example.org/shapes-graph".to_owned()),
         )

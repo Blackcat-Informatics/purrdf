@@ -55,7 +55,7 @@ use purrdf_shapes::product::{
     HostBindings, ProductDimension, ShapesProduct, ShapesProductError, ShapesProfile,
 };
 use purrdf_shapes::shapes::{Shapes, from_dataset_with_config_and_graph};
-use purrdf_shapes::text_ingest::{extract_prefixes, parse_turtle_to_dataset};
+use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
 use purrdf_sparql_eval::user_fn::{self, FnPopulation};
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
@@ -1035,7 +1035,9 @@ fn shapes_with_graph(iri: Option<&str>) -> Shapes {
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("the fixture parses");
     from_dataset_with_config_and_graph(
         &dataset,
-        &extract_prefixes(&ttl),
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
         None,
         iri.map(ToOwned::to_owned),
     )
@@ -1284,8 +1286,15 @@ fn accepts_base_neighbour() {
 fn vocab_shapes(vocab: Option<BoxRoleVocab>) -> Shapes {
     let ttl = format!("{PREFIXES}{ROLE_SHAPES}");
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("the role fixture parses");
-    from_dataset_with_config_and_graph(&dataset, &extract_prefixes(&ttl), vocab, None)
-        .expect("the role fixture shapes parse")
+    from_dataset_with_config_and_graph(
+        &dataset,
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
+        vocab,
+        None,
+    )
+    .expect("the role fixture shapes parse")
 }
 
 /// The six box-role terms of [`ROLE_NS`], written in a different field order from

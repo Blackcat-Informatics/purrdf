@@ -73,7 +73,9 @@ mod codec;
 mod stream;
 
 pub use media_type::{NativeRdfFormat, classify};
-pub use parse::{ParseOutcome, parse_dataset, parse_dataset_with};
+pub use parse::{
+    ParseFailure, ParseOutcome, parse_dataset, parse_dataset_reporting_failure, parse_dataset_with,
+};
 pub use source_format::{GTS_EXTENSIONS, PACK_EXTENSIONS, SourceFormat, classify_source};
 pub use span::{ParseOptions, SpanTable};
 pub use stream::parse_dataset_from_reader;

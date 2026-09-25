@@ -407,7 +407,9 @@ mod tests {
     fn shapes_from(dataset: &Arc<RdfDataset>, ttl: &str) -> Shapes {
         crate::shapes::from_dataset_with_config_and_graph(
             dataset,
-            &crate::text_ingest::extract_prefixes(ttl),
+            &crate::text_ingest::parse_turtle_document(ttl, None)
+                .expect("fixture parses")
+                .prefixes,
             None,
             Some(SHAPES_GRAPH_IRI.to_owned()),
         )
@@ -719,7 +721,9 @@ mod tests {
     #[test]
     fn restored_shapes_graph_is_queryable() {
         let source = dataset_of(SHAPES_GRAPH_QUERY_SHAPES);
-        let prefixes = crate::text_ingest::extract_prefixes(SHAPES_GRAPH_QUERY_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(SHAPES_GRAPH_QUERY_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
 
         let before = crate::shapes::from_dataset_with_config_and_graph(
             &source,

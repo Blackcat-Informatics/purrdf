@@ -175,9 +175,12 @@ pub fn pack_shapes_product(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
-    let (dataset, document_base) =
-        purrdf_shapes::text_ingest::parse_turtle_document(shapes_ttl, shapes_base)
-            .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
+    let purrdf_shapes::text_ingest::TurtleDocument {
+        dataset,
+        base: document_base,
+        prefixes,
+    } = purrdf_shapes::text_ingest::parse_turtle_document(shapes_ttl, shapes_base)
+        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
     // The document's own IRIs: the base the host parsed it under, and the base an
     // in-document `@base` established. An import of either names this very document.
     let loaded: Vec<&str> = shapes_base
@@ -207,7 +210,6 @@ pub fn pack_shapes_product(
             ),
         )));
     }
-    let prefixes = purrdf_shapes::text_ingest::extract_prefixes(shapes_ttl);
     pack_shapes_product_from_dataset(&dataset, &prefixes, shapes_base, None, None)
 }
 
@@ -961,7 +963,7 @@ mod tests {
     };
     use crate::SarifOptions;
     use purrdf_shapes::product::ProductDimension;
-    use purrdf_shapes::text_ingest::{extract_prefixes, parse_turtle_to_dataset};
+    use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\
@@ -1101,7 +1103,9 @@ mod tests {
         let via_text = pack_shapes_product(SHAPES, None).expect("text entry point");
 
         let dataset = parse_turtle_to_dataset(SHAPES, None).expect("dataset parse");
-        let prefixes = extract_prefixes(SHAPES);
+        let prefixes = parse_turtle_document(SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let via_dataset = pack_shapes_product_from_dataset(&dataset, &prefixes, None, None, None)
             .expect("dataset entry point");
 
@@ -1120,7 +1124,9 @@ mod tests {
         let via_text = pack_shapes_product(SHAPES, base).expect("text entry point");
 
         let dataset = parse_turtle_to_dataset(SHAPES, base).expect("dataset parse");
-        let prefixes = extract_prefixes(SHAPES);
+        let prefixes = parse_turtle_document(SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let via_dataset = pack_shapes_product_from_dataset(&dataset, &prefixes, base, None, None)
             .expect("dataset entry point");
 
@@ -1273,7 +1279,9 @@ mod tests {
         let mut shapes = purrdf_shapes::shapes::from_dataset_with_base(
             &dataset,
             None,
-            &extract_prefixes(SHAPES),
+            &parse_turtle_document(SHAPES, None)
+                .expect("fixture parses")
+                .prefixes,
             None,
             None,
         )

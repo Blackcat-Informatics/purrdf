@@ -31,7 +31,7 @@ use crate::engine::{PreparedShapes, parse_shapes};
 use crate::model::BoxRoleVocab;
 use crate::report::ValidationReport;
 use crate::shapes::{Shapes, from_dataset_with_config_and_graph};
-use crate::text_ingest::{extract_prefixes, parse_turtle_to_dataset};
+use crate::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
 
 // ── Fixtures (example.org, per the repository's fixture rule) ───────────────────
 
@@ -685,7 +685,9 @@ fn role_shapes() -> Shapes {
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("role fixture parses");
     from_dataset_with_config_and_graph(
         &dataset,
-        &extract_prefixes(&ttl),
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
         Some(BoxRoleVocab::for_namespace(ROLE_NS)),
         None,
     )
@@ -751,8 +753,15 @@ fn admit_restores_box_role_vocab() {
 fn admit_under_none_vocab_restores_none() {
     let ttl = format!("{PREFIXES}{ROLE_SHAPES}");
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("parses");
-    let parsed = from_dataset_with_config_and_graph(&dataset, &extract_prefixes(&ttl), None, None)
-        .expect("shapes parse");
+    let parsed = from_dataset_with_config_and_graph(
+        &dataset,
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
+        None,
+        None,
+    )
+    .expect("shapes parse");
     assert!(parsed.box_role_vocab.is_none());
     assert_eq!(
         box_roles(&parsed),
@@ -1245,7 +1254,9 @@ fn disagreeing_carriers_refuse() {
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("parses");
     let shapes = from_dataset_with_config_and_graph(
         &dataset,
-        &extract_prefixes(&ttl),
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
         None,
         Some("http://example.org/shapes".to_owned()),
     )

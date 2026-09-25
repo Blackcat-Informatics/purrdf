@@ -2926,15 +2926,17 @@ pub fn parse_shapes_with_config(
     base: Option<&str>,
     box_role_vocab: Option<crate::model::BoxRoleVocab>,
 ) -> Result<Shapes, String> {
-    // Parse the shapes graph via the native purrdf codecs — no
-    // the oxigraph `io` parser. The native codec drops document prefixes once it folds to
-    // the IR, so we recover the `@prefix`/SPARQL `PREFIX` map by scanning the
-    // source text: SHACL-AF sh:select queries (and pySHACL) rely on prefixed
-    // names. Syntax failures are accumulated per independently recoverable
+    // Parse the shapes graph via the native purrdf codecs. The document's prefix map
+    // comes back from the SAME parse — the codec's own record of its `@prefix` /
+    // `PREFIX` directives, never a scan of the text — because SHACL-SPARQL queries
+    // fall back to it. Syntax failures are accumulated per independently recoverable
     // statement so a SHACL author sees the complete actionable set in one pass.
-    let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(shapes_ttl, base)
+    let crate::text_ingest::TurtleDocument {
+        dataset: shapes_dataset,
+        prefixes: doc_prefixes,
+        ..
+    } = crate::text_ingest::parse_turtle_document(shapes_ttl, base)
         .map_err(|errors| errors.join("\n"))?;
-    let doc_prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
 
     // `base` and `doc_prefixes` are handed on rather than consumed and dropped:
     // this is the only seam that ever sees them, and both decided what the source

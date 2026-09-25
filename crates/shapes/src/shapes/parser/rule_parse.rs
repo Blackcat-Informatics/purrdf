@@ -370,7 +370,7 @@ impl Parser<'_> {
                 )
             })?;
         // SHACL-AF sh:prefixes may be declared on the shape or the rule node.
-        let construct = format!("{}{raw}", self.prefix_header(&[shape_id, rule_node]));
+        let construct = format!("{}{raw}", self.prefix_header(&[shape_id, rule_node])?);
 
         let schedule = match SparqlParser::new().parse_query(&construct) {
             Ok(query @ Query::Construct { .. }) => {
