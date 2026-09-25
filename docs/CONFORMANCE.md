@@ -54,9 +54,9 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 258 | 4 | 4 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
-| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 314 | 233 | 233 | 0 | GREEN |
-| SHACL (first-party corpus) | first-party frozen reports | 72 | 0 | 0 | 0 | GREEN |
-| SHACL prepared-product equivalence | W3C data-shapes + shacl12-test-suite + first-party corpus | 361 | 0 | 0 | 0 | GREEN |
+| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 324 | 223 | 223 | 0 | GREEN |
+| SHACL (first-party corpus) | first-party frozen reports | 73 | 0 | 0 | 0 | GREEN |
+| SHACL prepared-product equivalence | W3C data-shapes + shacl12-test-suite + first-party corpus | 363 | 0 | 0 | 0 | GREEN |
 | XSD/XPath regExp (first-party corpus) | first-party, XSD G + F&O 5.6 | 292 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 19 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
@@ -105,8 +105,8 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** · 0 ledgered |
-| SHACL (first-party corpus) | `crates/shapes/corpus/` | **72 / 72** frozen expected reports |
-| SHACL prepared-product equivalence | the three SHACL corpora, `vectors/shacl/` (129) + the `sht:Validate` entries of `vectors/shacl12/tests/` (174) + `crates/shapes/corpus/` (72) | **361 / 361** shapes graphs whose validation report is byte-identical when the shapes graph is parsed from source, packed and admitted, and packed and rebuilt from the dataset the product carries · 0 ledgered refusals. Not a second SHACL grading: the two rows above already decide whether the engine's answer is right, and a case whose answer is wrong is wrong identically in all three lanes. This row decides whether the prepared-product codec CHANGES the answer, which neither of those rows can see because each runs exactly one lane. The comparison surface is the report graph's N-Triples compared as bytes, so `sh:sourceShape` and `sh:resultMessage` are both in it and a restore that attributed a violation to the wrong shape fails here even when every focus node, path and component still matched. The ledger column is the **over-refusal** guard, and an empty ledger is the measurement: every shapes graph any of the three corpora contains that parses at all can be packed and restored, so the product format is not a subset of what the validator accepts. The 14 cases outside the comparison are the 12 entries the two vendored suites mark `sht:Failure` — inputs a validator is required to reject, so there is nothing to pack — and the 2 SHACL 1.2 entries whose shapes graph this engine refuses at load, each named with its reason; that correspondence is enforced case by case rather than counted |
+| SHACL (first-party corpus) | `crates/shapes/corpus/` | **73 / 73** frozen expected reports |
+| SHACL prepared-product equivalence | the three SHACL corpora, `vectors/shacl/` (129) + the `sht:Validate` entries of `vectors/shacl12/tests/` (174) + `crates/shapes/corpus/` (73) | **363 / 363** shapes graphs whose validation report is byte-identical when the shapes graph is parsed from source, packed and admitted, and packed and rebuilt from the dataset the product carries · 0 ledgered refusals. Not a second SHACL grading: the two rows above already decide whether the engine's answer is right, and a case whose answer is wrong is wrong identically in all three lanes. This row decides whether the prepared-product codec CHANGES the answer, which neither of those rows can see because each runs exactly one lane. The comparison surface is the report graph's N-Triples compared as bytes, so `sh:sourceShape` and `sh:resultMessage` are both in it and a restore that attributed a violation to the wrong shape fails here even when every focus node, path and component still matched. The ledger column is the **over-refusal** guard, and an empty ledger is the measurement: every shapes graph any of the three corpora contains that parses at all can be packed and restored, so the product format is not a subset of what the validator accepts. The 13 cases outside the comparison are the 12 entries the two vendored suites mark `sht:Failure` — inputs a validator is required to reject, so there is nothing to pack — and the 1 SHACL 1.2 entry whose shapes graph this engine refuses at load, each named with its reason; that correspondence is enforced case by case rather than counted |
 | XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **292 / 292** cases · 0 ledgered. The dialect `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified in, graded once at the shared compiler (`purrdf_core::xsd_regex`) instead of three times at the call sites. Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Seven construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, quantifiers (including F&O §5.6.1's reluctant forms), the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the shared compiler's back-reference refusal, trailing-newline differences for both multiline anchors, and case-variant differences under `i`, and [the recognizer boundary and the liberal edges](#xsdxpath-regex-the-recognizer-boundary-and-the-liberal-edges) for what the compiler now rejects outright and what it deliberately accepts more liberally |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **264 / 264** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 67, turtle 110) · 0 gaps. The RDF 1.2 `syntax/` + `eval/` sub-suites, plus the `iri/` sub-suite: the `IRI-resolution-01/02/07/08`, `IRIREF_datatype` and `IRI_with_*_numeric_escape` cases, which exist only in the RDF 1.1 Turtle/TriG suites upstream because RDF 1.2 publishes no base-resolution eval tests — this is the end-to-end half of the base-IRI contract `crates/iri/tests/` pins unit-by-unit against RFC 3986 §5.4 |
@@ -157,7 +157,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   governed query, byte-frozen and content-addressed as
   `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST`. See its README for the band
   matrix and for what the corpus deliberately does not pin.
-- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 72 cases with
+- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 73 cases with
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
@@ -263,7 +263,7 @@ make conformance                                      # the single matrix (all o
 cargo test -p purrdf-iri                               # IRI + RFC 3986 resolution
 cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
-cargo test -p purrdf-shapes --test conformance         # the 72-case frozen corpus
+cargo test -p purrdf-shapes --test conformance         # the 73-case frozen corpus
 cargo run -p purrdf-shapes --example schema_reverse --locked        # all five schema readers
 make pydantic-oracle linkml-oracle typescript-oracle graphql-oracle # independent schema runtimes
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL
@@ -826,16 +826,21 @@ The node-expression kinds split into two tiers:
   XPath/XQuery-functions-namespace
   (`http://www.w3.org/2005/xpath-functions#…`) builtins lowered to their SPARQL
   1.1 keyword (e.g. `fn:string-length` → `STRLEN`, `fn:contains` → `CONTAINS`).
-- **PurRDF-owned extensions** — `sh:if`/`sh:then`/`sh:else`, the aggregations
-  `sh:count`/`sh:distinct`/`sh:min`/`sh:max`/`sh:sum`, the paging/ordering
-  wrappers `sh:orderby`/`sh:limit`/`sh:offset`, and `sh:exists`. These are
-  DASH/TopBraid conventions with no stable public RDF definition, so their triple
-  layouts are PurRDF's adopted reading, not a normative surface. Notably
-  `sh:orderby` names a per-element sort-**key** node expression (evaluated with
-  each element as focus) and orders ascending by default; direction is the
-  separate boolean `sh:desc` flag. The owned semantics are pinned by the
-  first-party corpus and unit tests, while the vendored `vectors/shacl/af/`
-  suite provides additional coverage for the overlapping normative surface.
+- **SHACL 1.2 Node Expressions kinds in the `sh:` spelling** — `sh:if`/`sh:then`/`sh:else`,
+  the aggregations `sh:count`/`sh:distinct`/`sh:min`/`sh:max`/`sh:sum`, the
+  paging/ordering wrappers `sh:orderby`/`sh:limit`/`sh:offset`, and `sh:exists`.
+  Each is the same kind SHACL 1.2 Node Expressions defines in the `shnex:`
+  namespace, evaluated by the same arm with that specification's semantics:
+  `sh:if` takes `sh:then` only when its condition is the list `( true )` (no
+  effective-boolean-value coercion), `sh:distinct` keeps first occurrences in
+  input order, and `sh:orderby` names a per-element sort-**key** node expression
+  (evaluated with each element as focus) whose FIRST output node is the key, an
+  unbound key sorting first; direction is the separate boolean `sh:desc` flag,
+  and descending is the ascending sequence reversed. Every kind declares the
+  order-and-multiplicity contract its evaluation clause defines
+  (`NodeExpr::sequence_contract`), and `crates/shapes/tests/node_expr_reference.rs`
+  holds the evaluator to a clause-by-clause reference interpreter over generated
+  expressions.
 - **rdflib drop-in residuals** — 5 rdflib-suite + 4 compat-parity strict
   xfails. All 5 rdflib-suite entries are PurRDF being **stricter** than rdflib
   rather than PurRDF gaps: 1 upstream test typo that projects a non-group-key

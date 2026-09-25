@@ -89,7 +89,7 @@ pub(crate) const W3C_TOTAL_CASES: usize = 129;
 /// Asserted rather than merely non-empty so a removed or renamed corpus
 /// directory fails fast instead of silently reducing coverage. Bump this when
 /// adding a case.
-pub(crate) const FIRST_PARTY_TOTAL_CASES: usize = 72;
+pub(crate) const FIRST_PARTY_TOTAL_CASES: usize = 73;
 
 // ── Vocabulary ────────────────────────────────────────────────────────────────
 

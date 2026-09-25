@@ -654,7 +654,9 @@ pub(crate) enum LoweredConstraint {
 #[derive(Debug, Default)]
 pub(crate) struct LoweredExpr {
     /// The slot holding the dataset identity of the class this expression selects
-    /// the instances of (`shnex:instancesOf`); `None` for every other kind.
+    /// the instances of — a `shnex:instancesOf` whose operand is a constant IRI;
+    /// `None` for every other kind, and for a `shnex:instancesOf` whose classes are
+    /// computed at evaluation.
     class: Option<TermSlot>,
     /// The position of the shape index this expression resolves shape IRIs against
     /// (`shnex:conformsToShape` with a computed shape argument); `None` otherwise.
@@ -1759,17 +1761,26 @@ fn constraint_kind(constraint: &Constraint) -> &'static str {
 // ── The lowered node expression, as the expression evaluator reads it ───────────
 
 impl LoweredExpr {
-    /// The slot holding the identity of the class this expression selects the
-    /// instances of.
+    /// Whether this lowering recorded a CONSTANT class — a `shnex:instancesOf`
+    /// whose operand is an IRI, resolved at bind — rather than one computed at
+    /// evaluation.
+    #[inline]
+    pub(crate) const fn has_constant_class(&self) -> bool {
+        self.class.is_some()
+    }
+
+    /// The identity of the constant class this lowering recorded, or `None` when
+    /// the data graph interns no such class (which has no instances).
     ///
     /// # Errors
-    /// Returns an error when the lowering beside a `shnex:instancesOf` expression
-    /// records no class, which is a defect in the walk.
+    /// Returns an error when this lowering recorded no constant class (see
+    /// [`Self::has_constant_class`]), or when its slot is not one the binding
+    /// holds — both defects in the walk.
     #[inline]
-    pub(crate) fn class_id(&self, plan: ShapePlan<'_>) -> Result<Option<TermId>, String> {
+    pub(crate) fn constant_class_id(&self, plan: ShapePlan<'_>) -> Result<Option<TermId>, String> {
         let slot = self.class.ok_or_else(|| {
-            "internal validation-plan defect: a shnex:instancesOf expression was evaluated \
-             against a lowering that records no class, so its class identity was never resolved"
+            "internal validation-plan defect: a constant shnex:instancesOf class was read from a \
+             lowering that records none"
                 .to_owned()
         })?;
         plan.binding.term(slot)
@@ -2713,11 +2724,16 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
             ..LoweredExpr::default()
         },
         // `shnex:instancesOf` (Node Expressions §4.5.1) selects the SHACL instances
-        // of a class, so that class must be resolved in the validation plan exactly
-        // like an `sh:class` constraint or the membership view answers "no
-        // instances" for it.
-        NodeExpr::InstancesOf(class) => LoweredExpr {
-            class: Some(walk.class_slot(class)),
+        // of the classes its operand produces. The authored constant form names
+        // its class outright, so that class is resolved in the validation plan
+        // exactly like an `sh:class` constraint; a computed operand is lowered like
+        // any other operand and resolves its classes at evaluation.
+        NodeExpr::InstancesOf(types) => LoweredExpr {
+            class: match types.as_ref() {
+                NodeExpr::Constant(Term::NamedNode(class)) => Some(walk.class_slot(class)),
+                _ => None,
+            },
+            operands: Box::new([lower_expression(types, walk)]),
             ..LoweredExpr::default()
         },
         NodeExpr::Filter { nodes, shape }
@@ -3245,70 +3261,70 @@ ex:FlagShape a sh:NodeShape ;
         }
     }
 
-    /// A `shnex:instancesOf` the walk lowered really carries its class slot, and a
-    /// lowering that carries none refuses loudly rather than answering "no
-    /// instances".
+    /// A `shnex:instancesOf` over a CONSTANT class the walk lowered really carries
+    /// that class's slot, and one whose classes are COMPUTED carries none and
+    /// resolves them at evaluation instead.
     ///
-    /// The believed-INVALID direction of the refusal: a term the lowering never
-    /// recorded is a defect in this crate, and it is an `Err` rather than a `None`
-    /// because a silent `None` here would make a `shnex:instancesOf` expression
-    /// select nothing at all — a constraint that stopped constraining, with every
-    /// existing test still green.
+    /// The slot is the constant form's fast path, not its only path: a lowering
+    /// that records no class sends the evaluator through the operand, which for a
+    /// constant IRI yields the same class. So a missing slot costs a lookup, never
+    /// an answer — which is why the two readings are checked against each other
+    /// here rather than one of them being a refusal.
     #[test]
-    fn an_expression_lowering_without_its_class_is_refused_loudly() {
-        let lowering = lower_standalone_expression(&NodeExpr::InstancesOf(
-            NamedNode::new_unchecked("http://example.org/ns#Selected"),
-        ));
-        let shapes = every_route_shapes();
+    fn a_constant_instances_of_carries_its_class_and_a_computed_one_does_not() {
+        let constant =
+            lower_standalone_expression(&NodeExpr::InstancesOf(Box::new(NodeExpr::Constant(
+                Term::NamedNode(NamedNode::new_unchecked("http://example.org/ns#Selected")),
+            ))));
         let data = crate::text_ingest::parse_turtle_to_dataset(
             "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
              <http://example.org/ns#Selected> .",
             None,
         )
         .expect("the fixture data parses");
-        let binding = lowering.bind(data.as_ref());
-        let plan = lowering.plan(&binding);
-
-        // The lowering the walk really made answers, and answers with an identity.
-        assert!(
-            lowering
-                .expr()
-                .class_id(plan)
-                .expect("a lowered shnex:instancesOf carries its class")
-                .is_some(),
-            "the fixture data interns the class, so the identity must be present"
-        );
-
-        // A DIFFERENT expression's lowering carries no class at all. Asking it for
-        // one is the defect, and it is loud.
-        let empty = lower_standalone_expression(&NodeExpr::This);
-        let empty_binding = empty.bind(data.as_ref());
-        let error = empty
+        let binding = constant.bind(data.as_ref());
+        assert!(constant.expr().has_constant_class());
+        let resolved = constant
             .expr()
-            .class_id(empty.plan(&empty_binding))
-            .expect_err("a lowering that records no class cannot answer for one");
+            .constant_class_id(constant.plan(&binding))
+            .expect("a lowered slot is one the binding holds");
         assert!(
-            error.contains("shnex:instancesOf") && error.contains("never resolved"),
-            "the refusal must name what was asked for and why it could not be answered, got: \
-             {error}"
+            resolved.is_some(),
+            "the fixture data interns the class, so the constant form carries its identity"
         );
 
-        // …and the neighbouring VALID case: the same lowered expression over a data
-        // graph that interns no such class is a soft `None`, never a refusal. A
-        // shapes graph is entitled to name a class its data lacks.
+        // A computed class operand records no constant slot; the class it will
+        // produce is not known until evaluation.
+        let computed = lower_standalone_expression(&NodeExpr::InstancesOf(Box::new(
+            NodeExpr::Var("class".to_owned()),
+        )));
+        let computed_binding = computed.bind(data.as_ref());
+        assert!(
+            !computed.expr().has_constant_class(),
+            "a computed class operand has no bind-time identity"
+        );
+        let error = computed
+            .expr()
+            .constant_class_id(computed.plan(&computed_binding))
+            .expect_err("asking a computed lowering for a constant class is a defect");
+        assert!(error.contains("records none"), "got: {error}");
+
+        // …and the neighbouring case: the constant form over a data graph that
+        // interns no such class is a soft "no identity", never a refusal. A shapes
+        // graph is entitled to name a class its data lacks.
         let bare = crate::text_ingest::parse_turtle_to_dataset(
             "<http://example.org/ns#a> <http://example.org/ns#p> <http://example.org/ns#b> .",
             None,
         )
         .expect("the fixture data parses");
-        let bare_binding = lowering.bind(bare.as_ref());
+        let bare_binding = constant.bind(bare.as_ref());
         assert_eq!(
-            lowering.expr().class_id(lowering.plan(&bare_binding)),
+            constant
+                .expr()
+                .constant_class_id(constant.plan(&bare_binding)),
             Ok(None),
             "a class the data graph never names is 'nothing is an instance', not a refusal"
         );
-
-        let _ = &shapes;
     }
 
     /// A lowering that describes a DIFFERENT constraint kind from the one beside it

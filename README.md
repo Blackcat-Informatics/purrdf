@@ -749,7 +749,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,105 / 1,105** attempted, 0 xfail |
 | ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
 | SHACL | W3C data-shapes (`vectors/shacl/`) | **129 / 129**, 0 ledgered |
-| SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **72 / 72** |
+| SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **73 / 73** |
 | SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **19 / 19** |
 | Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC toRDF + compaction (`crates/rdf/tests/fixtures/jsonld-w3c-rec/`) | **73 / 73** applicable toRDF · **13 / 13** exact compaction |

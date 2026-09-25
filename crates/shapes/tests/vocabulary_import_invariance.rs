@@ -67,13 +67,13 @@ const VOCABULARY_LIST_FUNCTIONS: usize = 78;
 /// in a way the vocabulary's declarations can reach.
 const INVARIANCE_EXCEPTIONS: &[(&str, &str)] = &[];
 
-/// Every case the three corpora contribute (129 + 72 + 174).
-const TOTAL_CASES: usize = 375;
+/// Every case the three corpora contribute (129 + 73 + 174).
+const TOTAL_CASES: usize = 376;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
-/// the three corpora except the 12 declared `sht:Failure` inputs and the 4 SHACL
-/// 1.2 entries this engine refuses at load (the same partition the product
+/// the three corpora except the 12 declared `sht:Failure` inputs and the SHACL 1.2
+/// entries this engine refuses at load (the same partition the product
 /// equivalence harness pins).
 ///
 /// Moved from 335 to 338 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
@@ -115,7 +115,16 @@ const TOTAL_CASES: usize = 375;
 /// are compared too, and the refused-at-load entries went from 4 to 2. The merged
 /// vocabulary declares `sh:defaultValue` itself (and no `sh:values`), never as a
 /// statement about a shape, so the merge changes no computed value node.
-const COMPARED_ON_REPORT: usize = 361;
+///
+/// Moved from 361 to 362 when `shnex:instancesOf` took a node-expression
+/// argument: `sparql/functions/instanceCount-example` now loads, so its report is
+/// compared too, and the refused-at-load entries went from 2 to 1. The merged
+/// vocabulary declares `shnex:InstancesOfExpression` as a function, never as a
+/// statement about the case's custom function, so the merge changes no count.
+///
+/// Moved from 362 to 363 when the first-party corpus gained
+/// `73-expr-if-list-true`, whose report is compared too.
+const COMPARED_ON_REPORT: usize = 363;
 
 /// One case, reduced to what both parses need.
 struct Input {

@@ -334,7 +334,7 @@ fn sample_node_exprs(func: &Arc<CustomFunction>) -> Vec<NodeExpr> {
             nodes: this(),
             shape: Box::new(leaf_shape("AllShape")),
         },
-        NodeExpr::InstancesOf(ex("Person")),
+        NodeExpr::InstancesOf(Box::new(NodeExpr::Constant(Term::NamedNode(ex("Person"))))),
         NodeExpr::NodesMatching(Box::new(leaf_shape("MatchingShape"))),
         NodeExpr::ConformsToShape {
             node: this(),

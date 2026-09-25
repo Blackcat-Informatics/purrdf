@@ -592,7 +592,6 @@ impl ShapeIndexWalk<'_> {
             | NodeExpr::Empty
             | NodeExpr::Var(_)
             | NodeExpr::List(_)
-            | NodeExpr::InstancesOf(_)
             | NodeExpr::Select { .. } => {}
             NodeExpr::Filter { nodes, shape }
             | NodeExpr::FindFirst { nodes, shape }
@@ -619,6 +618,7 @@ impl ShapeIndexWalk<'_> {
             | NodeExpr::Sum(of)
             | NodeExpr::Limit { of, .. }
             | NodeExpr::Offset { of, .. }
+            | NodeExpr::InstancesOf(of)
             | NodeExpr::Exists(of) => self.node_expr(of)?,
             NodeExpr::OrderBy { of, key, .. } => {
                 self.node_expr(of)?;

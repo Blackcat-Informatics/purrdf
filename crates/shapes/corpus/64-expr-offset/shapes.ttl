@@ -1,11 +1,12 @@
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix ex: <http://example.org/ns#> .
+@prefix sparql: <http://www.w3.org/ns/sparql#> .
 
 ex:OffsetShape
     a sh:NodeShape ;
     sh:targetClass ex:C ;
     sh:expression [
-        sh:if [ sh:count [ sh:path ex:p ; sh:offset 2 ] ] ;
+        sh:if [ sparql:greater-than ( [ sh:count [ sh:path ex:p ; sh:offset 2 ] ] 0 ) ] ;
         sh:then true ;
         sh:else false
     ] .
