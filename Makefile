@@ -688,6 +688,13 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
 	@grep -qE '^import \* as [A-Za-z_$$][A-Za-z0-9_$$]* from "\./purrdf_jspi\.mjs"$$' crates/rdf-wasm/js/pkg/purrdf_wasm.js || { \
 		echo "ERROR: the wasm-bindgen glue does not import ./purrdf_jspi.mjs (expected: import * as <name> from \"./purrdf_jspi.mjs\")"; exit 1; }
+	@# A trap out of an asynchronous job kills the instance, and every entry point —
+	@# synchronous calls and objects created before the trap included — must refuse from
+	@# then on. The glue reaches the instance through one variable; this binds it to the
+	@# runtime's poison gate, and fails the build when the glue's layout is not the one
+	@# it rewrites. Its own fixtures run first.
+	python3 scripts/bind-wasm-glue.py --self-test
+	python3 scripts/bind-wasm-glue.py crates/rdf-wasm/js/pkg/purrdf_wasm.js
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
 	@# The --enable flags cover the post-MVP features rustc emits by default
 	@# for wasm32-unknown-unknown; older binaryen builds (e.g. Ubuntu's apt

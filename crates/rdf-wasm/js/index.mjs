@@ -113,6 +113,7 @@ import init, {
 } from "./pkg/purrdf_wasm.js";
 import {
   assertAsyncQueries,
+  assertNotPoisoned,
   asyncYieldPrimitive as jspiAsyncYieldPrimitive,
   configureAsync as jspiConfigureAsync,
   hasAsyncQueries as jspiHasAsyncQueries,
@@ -990,6 +991,7 @@ const utf8 = new TextDecoder();
  * before touching wasm, and the synchronous API is unaffected.
  */
 export function hasAsyncQueries() {
+  assertNotPoisoned();
   return jspiHasAsyncQueries();
 }
 
@@ -999,6 +1001,7 @@ export function hasAsyncQueries() {
  * environment has none.
  */
 export function asyncYieldPrimitive() {
+  assertNotPoisoned();
   return jspiAsyncYieldPrimitive();
 }
 
@@ -1008,6 +1011,7 @@ export function asyncYieldPrimitive() {
  * rejects. Unknown keys are refused.
  */
 export function configureAsync(options) {
+  assertNotPoisoned();
   jspiConfigureAsync(options);
 }
 
@@ -1016,9 +1020,12 @@ export function configureAsync(options) {
  * colocated file; in a browser, pass the bytes/URL (or omit to fetch the colocated
  * `.wasm`); in a Worker, pass the compiled `WebAssembly.Module` its bundler imports from
  * `@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm`. Must be awaited once before any
- * other API is used.
+ * other API is used. There is one instance per JavaScript realm: once a trap has poisoned
+ * it, this rejects with the poison error like every other entry point, and only a fresh
+ * realm (a new page, Worker isolate or process) can load the package again.
  */
 export async function ready(wasmBytesOrUrl) {
+  assertNotPoisoned();
   if (_ready) return;
   let exports;
   if (wasmBytesOrUrl !== undefined) {
@@ -1475,6 +1482,7 @@ export async function ready(wasmBytesOrUrl) {
  * synchronous; the async wrapper is the RDF/JS Stream contract.)
  */
 export function datasetToStream(dataset) {
+  assertNotPoisoned();
   const quads = dataset.quads();
   return (async function* () {
     for (const quad of quads) yield quad;
@@ -1486,6 +1494,7 @@ export function datasetToStream(dataset) {
  * Sink (the purrdf-events ingestion protocol + its finish() resolution).
  */
 export async function streamToDataset(quadStream) {
+  assertNotPoisoned();
   const sink = new Sink();
   for await (const quad of quadStream) sink.push(quad);
   return sink.finish();

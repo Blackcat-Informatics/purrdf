@@ -98,7 +98,11 @@
 //! stop signal fire, the evaluator winds down through its ordinary governor path, and the
 //! run stores the fault as the job's error — discarding whatever outcome it reached, and
 //! never committing an update. The host's own trap handling (poisoning the instance) is
-//! the only answer to a genuine trap.
+//! the only answer to a genuine trap. Nothing on this side repairs one: a trap unwinds
+//! past the run's restore of the caller's stack context and leaves whatever `RefCell`
+//! its frames borrowed still borrowed, so the host bars every entry point of the
+//! instance — synchronous ones and objects created before the trap included — for the
+//! rest of the JavaScript realm's life.
 //!
 //! Statuses returned by `purrdf_jspi_suspend`: 0 the effect was answered, 1 the host
 //! abandoned it on the job's stop signal, 2 a fault was latched. Statuses of the delivery

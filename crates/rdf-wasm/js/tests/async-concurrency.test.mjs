@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import * as packageRoot from "../index.mjs";
 import { Dataset, QueryEngine, configureAsync, ready } from "../index.mjs";
 import init from "../pkg/purrdf_wasm.js";
 
@@ -444,7 +445,7 @@ test("the deepest parenthesised FILTER the parser admits answers on the smallest
   assert.equal(stackPointer(), IDLE);
 });
 
-test("a trap poisons the instance with a clear error", () => {
+test("a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing", () => {
   const child = spawnSync(
     process.execPath,
     ["--wasm-stack-switching-stack-size=32", fileURLToPath(new URL("./fixtures/trap-child.mjs", import.meta.url))],
@@ -453,19 +454,79 @@ test("a trap poisons the instance with a clear error", () => {
   assert.equal(child.status, 0, `the child exited ${child.status}: ${child.stderr}`);
   const report = JSON.parse(child.stdout.trim());
   const POISON =
-    "the wasm instance trapped (RangeError: Maximum call stack size exceeded) and must be re-instantiated";
+    "the wasm instance trapped (RangeError: Maximum call stack size exceeded) and cannot be used again; " +
+    "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
+  const REJECTED = { settled: "rejected", name: "Error", message: POISON };
+  const THREW = { settled: "threw", name: "Error", message: POISON };
 
-  assert.deepEqual(report.asyncBefore, { settled: "resolved", rowCount: 1 });
-  // The valid neighbour: synchronously, the same query is the parser's own typed refusal
-  // — twice, so it is an error and not a trap that poisoned anything.
+  // The valid neighbours, on the very objects the trap later poisons: a job that
+  // finishes, one that faults and one whose host reports a typed failure each settle as
+  // their own job's answer or error, and afterwards every lane answers exactly — the
+  // committed update included — on those objects and on new ones.
+  assert.deepEqual(report.asyncBefore, { settled: "resolved", subjects: [`${EX}a`] });
+  assert.deepEqual(report.faulted, {
+    settled: "rejected",
+    name: "Error",
+    message: "resolveService rejected: Error: the example.org endpoint refused",
+  });
+  assert.deepEqual(report.typedFailure, {
+    settled: "rejected",
+    name: "Error",
+    message:
+      "error native-sparql-query-eval: SERVICE federation error: SERVICE <http://example.org/sparql>: " +
+      "transport: the example.org endpoint is unreachable",
+  });
+  assert.deepEqual(report.updateBefore, { settled: "resolved" });
+  assert.deepEqual(report.syncBefore, { settled: "resolved", subjects: [`${EX}a`, `${EX}b`] });
+  assert.deepEqual(report.asyncAfterFaults, { settled: "resolved", subjects: [`${EX}a`, `${EX}b`] });
+  assert.deepEqual(report.newEngineBefore, { settled: "resolved", subjects: [`${EX}c`] });
+  assert.deepEqual(report.sizeBefore, { settled: "returned", value: 2 });
+  // Synchronously, the query that traps asynchronously is the parser's own typed refusal
+  // — twice, so it is an error and not a trap that poisoned anything, and the
+  // synchronous lane's stack is its own after the jobs above.
   for (const sync of [report.syncDeep, report.syncDeepAgain]) {
     assert.equal(sync.settled, "rejected");
     assert.match(sync.message, /group graph pattern nesting exceeds the safety limit of 128/);
   }
-  assert.deepEqual(report.trapped, { settled: "rejected", name: "Error", message: POISON });
-  assert.deepEqual(report.inFlight, { settled: "rejected", name: "Error", message: POISON });
-  assert.deepEqual(report.asyncAfter, { settled: "rejected", name: "Error", message: POISON });
-  assert.deepEqual(report.updateAfter, { settled: "rejected", name: "Error", message: POISON });
+
+  // The trap: the job and the one in flight reject with the poison, and so does every
+  // later call — asynchronous, synchronous, on objects created before the trap, new
+  // objects, statics, free functions and `ready()` itself.
+  for (const name of ["trapped", "inFlight", "asyncAfter", "updateAfter", "readyAfter"]) {
+    assert.deepEqual(report[name], REJECTED, name);
+  }
+  for (const name of [
+    "syncAfter",
+    "syncDeepAfter",
+    "sizeAfter",
+    "addAfter",
+    "iterateAfter",
+    "quadAfter",
+    "newEngineAfter",
+    "newDatasetAfter",
+    "parseAfter",
+    "versionAfter",
+  ]) {
+    assert.deepEqual(report[name], THREW, name);
+  }
+  // Releasing is the one call that does not throw: it releases nothing.
+  assert.deepEqual(report.freeAfter, { settled: "returned" });
+
+  // The enumerated surface: every entry refuses with the poison, and the enumeration
+  // reached every function the package root exports, so it cannot pass by being empty.
+  const { surface } = report;
+  for (const [name, outcome] of Object.entries(surface)) {
+    assert.deepEqual(outcome, REJECTED, name);
+  }
+  for (const [name, value] of Object.entries(packageRoot)) {
+    if (typeof value !== "function") continue;
+    const source = Function.prototype.toString.call(value);
+    if (!/^class\b/.test(source)) assert.ok(name in surface, `${name} was not called`);
+    else if (/\n\s*constructor\(/.test(source)) assert.ok(`new ${name}` in surface, `new ${name} was not called`);
+  }
+  for (const name of ["new QueryEngine", "new Dataset", "Dataset.parse", "version", "ready", "dataset.size", "engine.query()"]) {
+    assert.ok(name in surface, `${name} is missing from the enumerated surface`);
+  }
 });
 
 test("beginAsync beyond maxConcurrentJobs is refused", async () => {

@@ -172,7 +172,9 @@ ownership, and all limits. Complete examples are in
 ## API surface
 
 - `ready(bytesOrUrl?)` — one-time async wasm instantiation, from bytes, a URL, or a
-  compiled `WebAssembly.Module` (what a Cloudflare Worker's `.wasm` import yields).
+  compiled `WebAssembly.Module` (what a Cloudflare Worker's `.wasm` import yields). There
+  is one instance per JavaScript realm; a poisoned one (see
+  [Stack regions and faults](#stack-regions-and-faults)) is never replaced.
 - `DataFactory` — `namedNode`, `blankNode`, `literal`, `typedLiteral`,
   `directionalLiteral`, `variable`, `defaultGraph`, `quad`, `quotedTriple`,
   `fromTerm`, `fromQuad`.
@@ -468,10 +470,17 @@ Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by defau
 least 524 288). `evidence.async.stackHighWaterBytes` reports the deepest the job went, so
 the region can be sized from a real run. A request that nests deeper than the region
 allows fails with a typed error that says to raise `stackBytes`. The job fails and the
-instance stays usable. If a job's frames ever run past the guard zone below its region,
-memory outside the job may have been overwritten. The instance is then *poisoned*: every
-in-flight job rejects, and every later asynchronous call refuses with the same error,
-until the module is instantiated again in a fresh page, Worker isolate or process.
+instance stays usable. If a job traps, or its frames ever run past the guard zone below
+its region, the instance's state can no longer be trusted: the trap leaves the job's
+stack context in place of the caller's and anything the job was mutating half-changed,
+and an overrun may have overwritten memory outside the job. The instance is then
+*poisoned*, and it cannot be used again: every in-flight job rejects, and every later
+call — synchronous or asynchronous, a constructor, a static, a free function, or a
+method of an object created before the trap — throws the same error. `ready()` rejects
+with it too, because there is one instance per JavaScript realm; only a fresh realm (a
+new page, Worker isolate or process) can load the package again. `free()` is the one
+call that does not throw: it releases nothing, because the instance's memory is
+abandoned whole.
 
 ### The Cloudflare adapter
 

@@ -7,7 +7,9 @@
 // The wasm-bindgen glue imports this module by relative path (`./purrdf_jspi.mjs`) and
 // hands `purrdf_jspi_suspend` to the instance as a raw import, so this file ships next
 // to the glue in `pkg/`. It imports nothing: the package root passes the instance's
-// exports in through `installAsync` once `ready()` has instantiated it.
+// exports in through `installAsync` once `ready()` has instantiated it. The glue itself
+// hands this module its handle on those exports (`purrdf_jspi_bind_glue`, which
+// `make wasm-pkg` wires into the glue), so a trap can bar every entry point at once.
 //
 // # The protocol (the Rust side is `crates/rdf-wasm/src/async_query.rs`)
 //
@@ -99,11 +101,18 @@ const HAS_JSPI =
   typeof WebAssembly.Suspending === "function" &&
   typeof WebAssembly.promising === "function";
 
+// A poisoned instance's release functions (`__wbg_<class>_free`) do nothing: the glue calls
+// them from `free()`, `[Symbol.dispose]()` and its finalization registries, and a
+// finalization callback has no caller to report an error to. The instance's memory is
+// abandoned whole, so there is nothing left for them to release.
+const RELEASE_EXPORT = /^__wbg_[a-z0-9_]+_free$/;
+
 // ---------------------------------------------------------------------------
 // Instance state (one module instance per wasm instance: the glue imports this module
 // once, and the package root instantiates the wasm once)
 // ---------------------------------------------------------------------------
 
+let glue = null; // { exports, retarget }: the glue's handle on the instance's exports
 let installed = null; // { exports, promisingRun, addToStackPointer }
 let idleTop = 0;
 let poisonReason = null;
@@ -163,10 +172,35 @@ function chooseYield() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Bind the wasm-bindgen glue's handle on the instance's exports to the poison gate.
+ *
+ * `make wasm-pkg` rewrites the glue's `wasm = instance.exports;` into a call of this
+ * function, so every call the glue makes into the instance — a constructor, a method, a
+ * getter, a static, a free function, a finalizer — reads the exports through the one
+ * variable `retarget` reassigns. Poisoning retargets it at an object that refuses every
+ * call, which bars the whole package surface at once, synchronous calls and objects
+ * created before the trap included, while a live instance pays nothing per call.
+ * Returns `exports`, which the glue keeps as its handle.
+ */
+export function purrdf_jspi_bind_glue(exports, retarget) {
+  if (glue !== null) {
+    throw new Error("the wasm-bindgen glue bound a second instance; one module instance drives one wasm instance");
+  }
+  if (exports == null || typeof exports !== "object") {
+    throw new TypeError("purrdf_jspi_bind_glue expects the wasm instance's exports");
+  }
+  if (typeof retarget !== "function") {
+    throw new TypeError("purrdf_jspi_bind_glue expects a function that reassigns the glue's exports");
+  }
+  glue = { exports, retarget };
+  return exports;
+}
+
+/**
  * Install the scheduler over the instance's raw exports (the object the glue's `init`
  * returns). Called once by `ready()`. Throws when the exports lack the runtime's entry
  * points — an artifact built without the asynchronous lane is a build defect, not a
- * mode.
+ * mode — or when the glue did not bind them to the poison gate.
  */
 export function installAsync(exports) {
   if (installed !== null) {
@@ -175,6 +209,12 @@ export function installAsync(exports) {
   }
   if (exports == null || typeof exports !== "object") {
     throw new TypeError("installAsync expects the wasm instance's exports");
+  }
+  if (glue === null || glue.exports !== exports) {
+    throw new Error(
+      "the wasm-bindgen glue did not bind these exports to the poison gate " +
+        "(purrdf_jspi_bind_glue); the package artifact was not built by make wasm-pkg",
+    );
   }
   for (const name of ["memory", "__wbindgen_add_to_stack_pointer", "purrdf_jspi_run"]) {
     if (!(name in exports)) {
@@ -203,6 +243,15 @@ export function assertAsyncQueries() {
   if (!HAS_JSPI) throw new Error(NO_JSPI_MESSAGE);
   if (yielder === null) throw new Error(NO_YIELD_MESSAGE);
   if (installed === null) throw new Error(NOT_INSTALLED_MESSAGE);
+  if (poisonReason !== null) throw poisonError();
+}
+
+/**
+ * Throw the poison error when a trap has poisoned the instance, or return. The package
+ * root's own entry points that reach no wasm export call this first; every other entry
+ * point is barred by the glue's retargeted exports.
+ */
+export function assertNotPoisoned() {
   if (poisonReason !== null) throw poisonError();
 }
 
@@ -342,6 +391,9 @@ async function suspendImpl(rawJob, rawSeq, rawOut) {
   try {
     status = await answer(record, seq);
   } catch (error) {
+    // A poisoned instance refuses every call, `job.fault` included, and its suspended
+    // runs are never resumed.
+    if (poisonReason !== null) return never();
     // `answer` catches everything itself; this is the last line that keeps a rejection
     // out of the suspended frame.
     status = latchFault(record, `the asynchronous bridge failed: ${describe(error)}`);
@@ -886,13 +938,18 @@ function setSp(value) {
 // ---------------------------------------------------------------------------
 
 /**
- * A trap out of a run leaves the instance's memory and stack in an unknown state: every
- * in-flight job is rejected, and every later asynchronous call refuses with the same
- * error. Suspended runs are never resumed.
+ * A trap out of a run leaves the instance in an unknown state: the job's stack context is
+ * still in place of the caller's, every `RefCell` its frames borrowed stays borrowed, and
+ * linear memory may hold a half-applied mutation. Nothing repairs that, so the instance
+ * is dead: the glue's exports are retargeted at an object that refuses every call —
+ * synchronous calls, constructors, and objects created before the trap included — every
+ * in-flight job is rejected, and every later call refuses with the same error. Suspended
+ * runs are never resumed.
  */
 function poison(reason) {
   if (poisonReason !== null) return;
   poisonReason = reason;
+  glue.retarget(poisonedExports());
   const error = poisonError();
   for (const record of records.values()) {
     record.reject?.(error);
@@ -900,7 +957,25 @@ function poison(reason) {
 }
 
 function poisonError() {
-  return new Error(`the wasm instance trapped (${poisonReason}) and must be re-instantiated`);
+  return new Error(
+    `the wasm instance trapped (${poisonReason}) and cannot be used again; ` +
+      "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)",
+  );
+}
+
+/**
+ * What the glue reads the instance's exports through once it is poisoned: reading any
+ * export throws the poison error, so no call reaches the instance, except the release
+ * functions (see `RELEASE_EXPORT`), which do nothing.
+ */
+function poisonedExports() {
+  const releaseNothing = () => undefined;
+  return new Proxy(Object.freeze(Object.create(null)), {
+    get(_target, name) {
+      if (typeof name === "string" && RELEASE_EXPORT.test(name)) return releaseNothing;
+      throw poisonError();
+    },
+  });
 }
 
 function never() {
