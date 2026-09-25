@@ -136,8 +136,10 @@ flate2 = "1"
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
 getrandom = "0.3"
-# `HashTable` requires >= 0.14.2 (introduced there); tracked on 0.15.
-hashbrown = "0.15"
+# Only the raw `HashTable` is used; every caller supplies its own fixed-key ahash,
+# so the default hasher (foldhash) and allocator-api2 stay OFF. Tracks the same
+# major `indexmap` (via serde_yaml_ng) resolves, so the graph holds one hashbrown.
+hashbrown = { version = "0.17", default-features = false }
 insta = "1.48"
 # Browser wall clock + entropy for SPARQL NOW()/RAND() on wasm32 (see
 # crates/sparql-eval's target-gated dependency section).
