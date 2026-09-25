@@ -735,9 +735,7 @@ mod tests {
                 "http://example.org/PersonShape",
             )),
             severity,
-            messages: message
-                .map(|m| vec![Literal::new_simple_literal(m)])
-                .unwrap_or_default(),
+            messages: message.map_or_default(|m| vec![Literal::new_simple_literal(m)]),
             source_box_roles: vec![],
             path_box_roles: vec![],
             result_box_roles: vec![],
