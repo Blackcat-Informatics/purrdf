@@ -271,6 +271,56 @@ fn iri_valued_pairs_record_their_declared_codes() {
     );
 }
 
+/// `sh:uniqueValuesFor` compares a node's values with every other target node,
+/// which a schema judging one instance alone cannot state: on a node shape and on
+/// a property shape it records its declared code against its shape and leaves a
+/// `$comment`; the same shapes without it record nothing.
+#[test]
+fn unique_values_for_records_its_declared_code() {
+    let with_unique = compile_ttl(
+        r"
+        ex:RecordShape a sh:NodeShape ;
+            sh:targetClass ex:Record ;
+            sh:uniqueValuesFor ( ex:notation ex:scheme ) ;
+            sh:property [ sh:path ex:id ; sh:minCount 1 ; sh:uniqueValuesFor ex:code ] .
+        ",
+    );
+    let mut codes = recorded_codes(&with_unique);
+    codes.sort_unstable();
+    assert_eq!(codes, vec!["sh:uniqueValuesFor", "sh:uniqueValuesFor"]);
+    assert_eq!(
+        with_unique
+            .losses
+            .render_json()
+            .matches("https://example.org/RecordShape")
+            .count(),
+        2,
+        "each loss is recorded against its shape: {}",
+        with_unique.losses.render_json()
+    );
+    assert_ledger_sound(&with_unique.losses, "shacl", "json-schema");
+    assert!(
+        with_unique.schema_json.contains(
+            "a node-level sh:uniqueValuesFor (<https://example.org/notation> \
+             <https://example.org/scheme>) constraint was dropped"
+        ),
+        "{}",
+        with_unique.schema_json
+    );
+    let without_unique = compile_ttl(
+        r"
+        ex:RecordShape a sh:NodeShape ;
+            sh:targetClass ex:Record ;
+            sh:property [ sh:path ex:id ; sh:minCount 1 ] .
+        ",
+    );
+    assert!(
+        without_unique.losses.is_empty(),
+        "{:?}",
+        recorded_codes(&without_unique)
+    );
+}
+
 #[test]
 fn lossless_shape_compiles_with_empty_ledger() {
     let compiled = compile_ttl(

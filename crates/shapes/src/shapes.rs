@@ -407,6 +407,18 @@ pub enum Constraint {
     /// `sh:someValue <shape>` (SHACL 1.2 Core §7.8.3): at least one value node
     /// conforms to the shape.
     SomeValue(Box<Shape>),
+    /// One `sh:uniqueValuesFor` value (SHACL 1.2 Core §7.9.5): no value node
+    /// shares exactly the same values for every listed property with another
+    /// target node of the shape that declares it.
+    UniqueValuesFor {
+        /// The property IRI (one member) or the members of the SHACL list.
+        properties: Vec<NamedNode>,
+        /// The target declarations of the shape node that declares the
+        /// constraint — `$targetNodes` is "the target nodes of S", a fact about
+        /// that shape node however the evaluation reached it (a nested
+        /// `sh:node` shape or a property shape keeps its own targets here).
+        targets: Vec<Target>,
+    },
     /// A SHACL-SPARQL custom constraint component usage.
     ///
     /// Emitted when a shape node carries values for all required parameters of a

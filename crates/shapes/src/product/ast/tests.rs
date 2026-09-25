@@ -427,6 +427,13 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
             Path::Predicate(ex("p")),
             Path::ZeroOrOne(Box::new(Path::Predicate(ex("q")))),
         ])),
+        Constraint::UniqueValuesFor {
+            properties: vec![ex("notation"), ex("scheme")],
+            targets: vec![
+                Target::Class(ex("Concept")),
+                Target::SubjectsOf(ex("notation")),
+            ],
+        },
     ]
 }
 

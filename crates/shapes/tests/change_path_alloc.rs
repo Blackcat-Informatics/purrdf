@@ -1338,6 +1338,23 @@ const CASES: &[ConstraintCase] = &[
             emit.quad(target, "limit", limit);
         },
     },
+    ConstraintCase {
+        name: "unique_values_for",
+        // CROSS-FOCUS: every violating focus node shares one code, so each one
+        // collides with another target node whether or not the request names
+        // that other node — the grouping is the shape's full target set, built
+        // once per binding (in the warm-up, outside every window).
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:uniqueValuesFor ex:code .",
+        emit: |emit, violating| {
+            if violating {
+                emit.text("code", "shared");
+            } else {
+                let index = emit.index;
+                emit.text("code", &format!("code-{index}"));
+            }
+        },
+    },
 ];
 
 /// Cases held out of the EXACT-EQUALITY allocation assertions, each with the

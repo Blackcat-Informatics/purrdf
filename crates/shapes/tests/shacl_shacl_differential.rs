@@ -73,13 +73,6 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
          does not classify, because an unread parameter checks nothing",
     ),
     (
-        "unimplemented-component",
-        "which is a SHACL 1.2 Core component this engine does not implement",
-        5,
-        "a well-formed use of a declared SHACL 1.2 Core component this engine does not \
-         evaluate (sh:uniqueValuesFor) is refused rather than silently conforming",
-    ),
-    (
         "root-class-value",
         "rootClass> on shape",
         1,
@@ -564,7 +557,7 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
 const BASE_INPUTS: usize = 375;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 180 literal-for-IRI, 99
+/// mutation kind that finds a statement to rewrite): 185 literal-for-IRI, 99
 /// non-integer counts, 149 lists-for-single-values, 34 non-boolean flags and 230
 /// misspelled predicates.
 ///
@@ -584,7 +577,13 @@ const BASE_INPUTS: usize = 375;
 /// `lessThanOrEquals-002` also load now, but `shacl-shacl.ttl` still flags each
 /// (see `path-valued-property-pair`), so none is a base both sides accept and
 /// none is mutated.
-const MUTANT_INPUTS: usize = 692;
+///
+/// Moved from 692 to 697 when `sh:uniqueValuesFor` became evaluated:
+/// `uniqueValuesFor-001` to `-005` now load, so each is a base both sides accept.
+/// The literal-for-IRI kind rewrites each one's `sh:targetClass` or
+/// `sh:targetSubjectsOf`, the first matching statement in canonical order (+5).
+/// None has a property shape, so none gains a misspelled predicate.
+const MUTANT_INPUTS: usize = 697;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -680,7 +679,7 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 180),
+        ("literal-where-an-IRI-is-required", 185),
         ("non-integer-count", 99),
         ("list-where-a-single-value-is-required", 149),
         ("non-boolean-flag", 34),

@@ -44,7 +44,7 @@
 use std::sync::LazyLock;
 
 use super::ValueRule;
-use super::table::{self, ComponentStatus, Implementation};
+use super::table::{self, Implementation};
 use crate::model::{sh, shnex};
 
 /// A SHACL-namespace IRI the census names but [`crate::model`] does not, because
@@ -430,10 +430,6 @@ static EXPLICIT: &[CensusRow] = &[
 
 // ── The census ────────────────────────────────────────────────────────────────
 
-/// Why a parameter of a declared-but-unimplemented component is refused.
-const UNIMPLEMENTED_COMPONENT: &str =
-    "a parameter of a SHACL 1.2 Core constraint component this engine does not evaluate";
-
 /// Every classified term: the explicit rows, then every row derived from the
 /// spec symbol table for a term not already listed. One row per IRI.
 fn build() -> Vec<CensusRow> {
@@ -450,16 +446,13 @@ fn build() -> Vec<CensusRow> {
     for component in table::COMPONENTS {
         push(structural(component.iri, Role::Builtin));
         for p in component.params {
-            push(match component.status {
-                ComponentStatus::Native => row(
-                    p.path,
-                    TermClass::ConstraintParameter {
-                        component: component.iri,
-                        value: p.value,
-                    },
-                ),
-                ComponentStatus::Unimplemented => unimplemented(p.path, UNIMPLEMENTED_COMPONENT),
-            });
+            push(row(
+                p.path,
+                TermClass::ConstraintParameter {
+                    component: component.iri,
+                    value: p.value,
+                },
+            ));
         }
     }
     for function in table::FUNCTIONS {

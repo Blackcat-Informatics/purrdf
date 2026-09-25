@@ -1020,6 +1020,19 @@ fn evaluate_shape_focus_nodes(
     //    whichever row happened to reach it first.
     let bound_functions = crate::sparql::bind_in_current_env(&shapes.functions)?;
 
+    // Every `sh:uniqueValuesFor` grouping, built HERE, on this thread and before
+    // any worker exists: a grouping reads the declaring shape's whole target set,
+    // so building it lazily from inside the chunked fan-out would have several
+    // workers enumerate the same target set at once. Under the same function and
+    // aggregate scopes a worker installs, because a SHACL-SPARQL target resolved
+    // here may call a registered function exactly as it would there.
+    // A shapes graph without the component skips even the scopes.
+    if plan.has_unique_values() {
+        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&bound_functions));
+        let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
+        plan.warm_unique_values(data)?;
+    }
+
     // One validation owns one ordered governor ledger. Letting focus workers charge that
     // shared state directly would make the first trip and its consumed vector depend on
     // rayon scheduling rather than focus order. Governed validation is therefore serial;
@@ -1746,6 +1759,22 @@ impl PreparedValidator {
     /// the data graph into an owned snapshot first, so it is linear in the graph by
     /// construction.
     ///
+    /// # `sh:uniqueValuesFor` reads the whole target set, not the request
+    ///
+    /// SHACL 1.2 Core §7.9.5 compares a value node with "another node in
+    /// $targetNodes", and "Let $targetNodes be the target nodes of S" names every
+    /// target node of the declaring shape in the bound data graph — not the focus
+    /// nodes a request happens to list. A requested node that shares its values
+    /// with a target the request did not name therefore still violates, exactly as
+    /// it does under [`Self::validate`]. The shape's full target set is grouped by
+    /// value tuple once per binding, the first time a validation reaches the
+    /// constraint, and every later request against the same binding reuses that
+    /// grouping; the request that builds it pays a cost linear in the target set,
+    /// and the requests after it pay only their lookups, so the bounded-allocation
+    /// guarantee above holds for every request that finds the grouping built.
+    /// [`Self::affected_focus_node_ids`] expands a change to a listed property, or
+    /// to the target set, to every focus node of the shape, for the same reason.
+    ///
     /// # Errors
     ///
     /// Returns an error when a constraint evaluation hard-fails.
@@ -1800,6 +1829,10 @@ impl PreparedValidator {
     /// This is the crate's headline realtime surface, so the claim is stated where
     /// it is called rather than only in a design note: a caller sizing a latency
     /// budget around "re-validate only what changed" is relying on it.
+    ///
+    /// `sh:uniqueValuesFor` compares each requested node with the declaring
+    /// shape's FULL target set in the bound data graph, not with the other ids
+    /// supplied — see [`Self::validate_focus_nodes`] for the rule and its cost.
     ///
     /// # Errors
     ///
@@ -2041,6 +2074,41 @@ impl PreparedValidator {
                             }
                         }
                     }
+                }
+            }
+        }
+        // The cross-focus reads (`sh:uniqueValuesFor`): a changed row whose
+        // predicate one of them names moves verdicts across the whole target set,
+        // so every focus node of the top-level shape it sits under is expanded —
+        // resolved against THIS binding, i.e. after the change. A focus node that
+        // left the set is expanded by that shape's own target reads above. Each
+        // shape is enumerated at most once however many of its broadcasts fire.
+        let mut broadcast_shapes: Vec<usize> = Vec::new();
+        for broadcast in self.bound.footprint().broadcasts() {
+            if broadcast_shapes.contains(&broadcast.shape) {
+                continue;
+            }
+            // A predicate this dataset never interned names no changed row.
+            let Some(predicate) = core.term_id_by_iri(broadcast.predicate.as_str()) else {
+                continue;
+            };
+            if !changed.iter().any(|quad| quad.p == predicate) {
+                continue;
+            }
+            broadcast_shapes.push(broadcast.shape);
+            let targets = self.bound.targets.get(broadcast.shape).ok_or_else(|| {
+                format!(
+                    "internal change-path defect: a cross-focus read names top-level shape {} of \
+                     a binding indexing {}",
+                    broadcast.shape,
+                    self.bound.targets.len()
+                )
+            })?;
+            for focus in targets.resolve_all(&self.data) {
+                if let Some(id) = focus.id()
+                    && seen.insert(id)
+                {
+                    affected.push(FocusId::new(dataset, id));
                 }
             }
         }

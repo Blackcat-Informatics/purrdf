@@ -314,7 +314,7 @@ const TAGS_TARGET: u8 = 6;
 /// The number of [`ComponentValidator`] tags.
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
-const TAGS_CONSTRAINT: u8 = 39;
+const TAGS_CONSTRAINT: u8 = 40;
 /// The number of [`NodeExpr`] tags.
 const TAGS_NODE_EXPR: u8 = 32;
 /// The number of [`ShapeArg`] tags.
@@ -1239,6 +1239,20 @@ impl AstWriter {
                 self.tag(38);
                 self.path(path)?;
             }
+            Constraint::UniqueValuesFor {
+                properties,
+                targets,
+            } => {
+                self.tag(39);
+                self.count(properties.len());
+                for property in properties {
+                    self.named_node(property);
+                }
+                self.count(targets.len());
+                for target in targets {
+                    self.target(target)?;
+                }
+            }
         }
         self.leave();
         Ok(())
@@ -2002,7 +2016,11 @@ impl<'a> AstReader<'a> {
             35 => Constraint::SingleLine(self.flag()?),
             36 => Constraint::RootClass(self.seq(Self::named_node)?),
             37 => Constraint::SomeValue(Box::new(self.shape()?)),
-            _ => Constraint::SubsetOf(self.path()?),
+            38 => Constraint::SubsetOf(self.path()?),
+            _ => Constraint::UniqueValuesFor {
+                properties: self.seq(Self::named_node)?,
+                targets: self.seq(Self::target)?,
+            },
         };
         self.leave();
         Ok(constraint)
@@ -2311,6 +2329,7 @@ impl FnTable {
             | Constraint::UniqueMembers(_)
             | Constraint::SingleLine(_)
             | Constraint::RootClass(_)
+            | Constraint::UniqueValuesFor { .. }
             | Constraint::Component { .. } => {}
             Constraint::Not(shape)
             | Constraint::Node(shape)

@@ -49,27 +49,6 @@ impl Parser<'_> {
     ) -> Result<Vec<Constraint>, String> {
         let mut constraints: Vec<Constraint> = Vec::new();
 
-        // A parameter of a component the SHACL 1.2 vocabulary declares and this
-        // engine does not evaluate. Reading past it would let the shape silently
-        // conform, so it is a load error — unless the shapes graph itself supplies
-        // the component with a validator, in which case the custom-component
-        // registry below evaluates it like any other.
-        for (parameter, component) in crate::spec::unimplemented_component_params() {
-            if self.first_object_of(id, parameter).is_some()
-                && !self
-                    .component_registry
-                    .by_parameter_path
-                    .contains_key(parameter)
-            {
-                return Err(format!(
-                    "shape {id} uses <{parameter}>, a parameter of <{}>, which is a SHACL 1.2 \
-                     Core component this engine does not implement; the shape is refused rather \
-                     than silently conforming",
-                    component.iri()
-                ));
-            }
-        }
-
         // sh:class — each value is one constraint: a class IRI, or a SHACL list of
         // class IRIs read as a disjunction (SHACL 1.2 Core §4.1.1). Sorted for
         // determinism.
@@ -349,6 +328,31 @@ impl Parser<'_> {
         root_classes.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
         for roots in root_classes {
             constraints.push(Constraint::RootClass(roots));
+        }
+
+        // sh:uniqueValuesFor — SHACL 1.2 Core §7.9.5: its values are "An IRI of a
+        // property, or a SHACL list where each member is an IRI of a property", and
+        // "$properties is the set of the members of that list", so members are
+        // sorted and deduplicated. "Let $targetNodes be the target nodes of S":
+        // the constraint carries the target declarations of THIS shape node,
+        // which is what they are however the evaluation arrives here. Each value
+        // is one constraint, sorted for determinism.
+        let mut unique_values_for: Vec<Vec<NamedNode>> = Vec::new();
+        for value in self.objects_of(id, sh::UNIQUE_VALUES_FOR) {
+            let mut properties = self.iri_or_iri_list(&value, id, sh::UNIQUE_VALUES_FOR)?;
+            properties.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            properties.dedup();
+            unique_values_for.push(properties);
+        }
+        if !unique_values_for.is_empty() {
+            unique_values_for.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
+            let targets = self.parse_targets(id)?;
+            for properties in unique_values_for {
+                constraints.push(Constraint::UniqueValuesFor {
+                    properties,
+                    targets: targets.clone(),
+                });
+            }
         }
 
         // sh:someValue — SHACL 1.2 Core §7.8.3: "The values of sh:someValue in a

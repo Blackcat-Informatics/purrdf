@@ -65,6 +65,7 @@ impl<'a> MetadataSubjects<'a> {
             sh::MEMBER_SHAPE,
             sh::SOME_VALUE,
             sh::ROOT_CLASS,
+            sh::UNIQUE_VALUES_FOR,
             sh::EQUALS,
             sh::DISJOINT,
             sh::SUBSET_OF,

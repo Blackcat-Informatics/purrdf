@@ -44,7 +44,7 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::{FastMap, FastSet, IdSet, TermId};
 
-use crate::data::resolve_id;
+use crate::data::{ShaclData, resolve_id};
 use crate::data_view::ShaclRead;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
@@ -52,6 +52,7 @@ use crate::shapes::{
     ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
 };
 use crate::term::{NamedNode, Term};
+use crate::unique_values::{UniqueGroups, UniqueSpec};
 
 // ── Slots ───────────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,10 @@ pub(crate) type TermSlot = u32;
 
 /// The position of one id SET in a [`DatasetBinding`]'s set row.
 type SetSlot = u32;
+
+/// The position of one `sh:uniqueValuesFor` constraint's [`UniqueSpec`] in a
+/// lowering, and of its grouping in a [`DatasetBinding`].
+pub(crate) type UniqueSlot = u32;
 
 // ── The class catalog ───────────────────────────────────────────────────────────
 
@@ -218,6 +223,9 @@ pub(crate) struct LoweredShapes {
     /// be a second transcription of that rule — the drift this module exists to
     /// prevent.
     footprint: Footprint,
+    /// Every `sh:uniqueValuesFor` constraint the walk reached, by [`UniqueSlot`]:
+    /// what the grouping of its shape's target set is built from.
+    unique_values: Box<[UniqueSpec]>,
 }
 
 impl LoweredShapes {
@@ -286,11 +294,16 @@ impl LoweredShapes {
                     .collect()
             })
             .collect();
+        // One EMPTY cell per `sh:uniqueValuesFor` constraint: a grouping is
+        // built on first use (see `crate::unique_values`), so the bind does no
+        // data-sized work for it and a shapes graph without one pays nothing.
+        let unique_values = self.unique_values.iter().map(|_| OnceLock::new()).collect();
         DatasetBinding {
             terms,
             sets,
             class_ids,
             indexes,
+            unique_values,
         }
     }
 
@@ -559,6 +572,10 @@ pub(crate) enum LoweredConstraint {
     RootClass(SetSlot),
     /// `sh:someValue` — the lowering of the shape one value node must meet.
     SomeValue(Box<LoweredShape>),
+    /// `sh:uniqueValuesFor` — the position of its [`UniqueSpec`] in
+    /// [`LoweredShapes::unique_values`], which is also the position of the
+    /// grouping a binding builds for it.
+    UniqueValuesFor(UniqueSlot),
     /// A SHACL-SPARQL custom constraint component — the validator is a query.
     Component,
 }
@@ -636,6 +653,9 @@ pub(crate) struct DatasetBinding {
     /// keyed by. Empty for a shapes graph that names no shape index, so the row
     /// costs a shapes graph without one nothing at all.
     indexes: Box<[FastMap<TermId, Term>]>,
+    /// The grouping of each `sh:uniqueValuesFor` constraint's target set, by
+    /// [`UniqueSlot`] — empty until first use, then built once for this binding.
+    unique_values: Box<[OnceLock<UniqueGroups>]>,
 }
 
 impl DatasetBinding {
@@ -785,6 +805,69 @@ impl<'a> ShapePlan<'a> {
     #[inline]
     pub(crate) fn binding(&self) -> &'a DatasetBinding {
         self.binding
+    }
+
+    /// The grouping of the `slot`-th `sh:uniqueValuesFor` constraint's target
+    /// set in this binding, building it on first use.
+    ///
+    /// Built outside any lock and published with `OnceLock::set`, so a caller
+    /// that reaches a grouping while another is being built — including one
+    /// reached again from inside the build, through a target that evaluates —
+    /// builds its own and keeps whichever was published first; the two are the
+    /// same derivation over the same binding. The validation entry points warm
+    /// every grouping before fanning out ([`Self::warm_unique_values`]), so the
+    /// parallel path only ever reads.
+    ///
+    /// # Errors
+    /// Returns an error when the slot is not one the lowering allocated, or when
+    /// the shape's target set cannot be resolved.
+    pub(crate) fn unique_groups(
+        &self,
+        data: &ShaclData,
+        slot: UniqueSlot,
+    ) -> Result<&'a UniqueGroups, String> {
+        let cell = self
+            .binding
+            .unique_values
+            .get(slot as usize)
+            .ok_or_else(|| slot_defect("unique-values", slot))?;
+        if let Some(groups) = cell.get() {
+            return Ok(groups);
+        }
+        let spec = self
+            .graph
+            .unique_values
+            .get(slot as usize)
+            .ok_or_else(|| slot_defect("unique-values", slot))?;
+        let built = UniqueGroups::build(data, spec, self.binding, self.classes)?;
+        // A lost race publishes nothing and reads the winner's grouping.
+        let _ = cell.set(built);
+        cell.get().ok_or_else(|| slot_defect("unique-values", slot))
+    }
+
+    /// Whether the lowering this plan belongs to holds any `sh:uniqueValuesFor`
+    /// constraint.
+    #[inline]
+    pub(crate) fn has_unique_values(&self) -> bool {
+        !self.graph.unique_values.is_empty()
+    }
+
+    /// Build every `sh:uniqueValuesFor` grouping of the whole lowering this plan
+    /// belongs to, if it is not built yet.
+    ///
+    /// Called once per shape evaluation, on the orchestrating thread and before
+    /// focus nodes are handed to workers, so the workers find every grouping
+    /// built. A shapes graph without the component returns at once.
+    ///
+    /// # Errors
+    /// As [`Self::unique_groups`].
+    pub(crate) fn warm_unique_values(&self, data: &ShaclData) -> Result<(), String> {
+        for slot in 0..self.graph.unique_values.len() {
+            // Slots were handed out as `u32` at lowering time, so every position
+            // of this row fits one.
+            self.unique_groups(data, slot as UniqueSlot)?;
+        }
+        Ok(())
     }
 
     /// This shape's node-level constraints, each paired with its lowering.
@@ -1181,6 +1264,9 @@ pub(crate) enum PlannedConstraint<'a> {
     },
     /// `sh:someValue` — the plan of the shape at least one value node must meet.
     SomeValue(ShapePlan<'a>),
+    /// `sh:uniqueValuesFor` — the slot of the grouping of its shape's target set,
+    /// which [`ShapePlan::unique_groups`] resolves against the bound dataset.
+    UniqueValuesFor(UniqueSlot),
     /// A SHACL-SPARQL custom constraint component usage.
     Component {
         /// The component IRI.
@@ -1253,6 +1339,9 @@ impl<'a> ShapePlan<'a> {
             }
             (Constraint::SomeValue(shape), LoweredConstraint::SomeValue(lowered)) => {
                 PlannedConstraint::SomeValue(self.nested(shape, lowered))
+            }
+            (Constraint::UniqueValuesFor { .. }, LoweredConstraint::UniqueValuesFor(slot)) => {
+                PlannedConstraint::UniqueValuesFor(*slot)
             }
             (Constraint::MinCount(n), LoweredConstraint::MinCount) => {
                 PlannedConstraint::MinCount(*n)
@@ -1502,6 +1591,7 @@ fn constraint_kind(constraint: &Constraint) -> &'static str {
         Constraint::SingleLine(_) => "sh:singleLine",
         Constraint::RootClass(_) => "sh:rootClass",
         Constraint::SomeValue(_) => "sh:someValue",
+        Constraint::UniqueValuesFor { .. } => "sh:uniqueValuesFor",
         Constraint::Component { .. } => "a SHACL-SPARQL constraint component",
     }
 }
@@ -1694,6 +1784,8 @@ struct ShapeWalk {
     /// recursion of its own: every visit below hands it what the lowering walk
     /// just reached, at the node the lowering walk is standing on.
     footprint: FootprintWalk,
+    /// Every `sh:uniqueValuesFor` constraint lowered so far, in slot order.
+    unique_values: Vec<UniqueSpec>,
 }
 
 impl ShapeWalk {
@@ -1780,6 +1872,7 @@ impl ShapeWalk {
             bodies: self.bodies,
             no_targets: PreparedTargets::default(),
             footprint,
+            unique_values: self.unique_values.into_boxed_slice(),
         }
     }
 
@@ -1833,7 +1926,11 @@ pub(crate) fn lower_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> L
     let mut walk = ShapeWalk::default();
     let lowered: Vec<LoweredShape> = shapes
         .into_iter()
-        .map(|shape| lower_shape(shape, &mut walk))
+        .enumerate()
+        .map(|(position, shape)| {
+            walk.footprint.enter_root(position);
+            lower_shape(shape, &mut walk)
+        })
         .collect();
     walk.finish(lowered)
 }
@@ -2217,6 +2314,30 @@ fn lower_constraint(
         // The shape judges each value node itself, as `sh:node`'s does.
         Constraint::SomeValue(shape) => {
             LoweredConstraint::SomeValue(Box::new(lower_shape(shape, walk)))
+        }
+        // The grouping is built from the declaring shape's OWN target
+        // declarations, so their classes are planned exactly as a top-level
+        // shape's are: target resolution asks the catalog for them by IRI.
+        Constraint::UniqueValuesFor {
+            properties,
+            targets,
+        } => {
+            for target in targets {
+                if let Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) = target
+                {
+                    walk.classes.insert(class.clone());
+                }
+            }
+            let properties = properties
+                .iter()
+                .map(|property| walk.slot(Term::NamedNode(property.clone())))
+                .collect();
+            let slot = walk.unique_values.len();
+            walk.unique_values.push(UniqueSpec {
+                targets: targets.clone().into_boxed_slice(),
+                properties,
+            });
+            LoweredConstraint::UniqueValuesFor(slot as UniqueSlot)
         }
         Constraint::Component { .. } => LoweredConstraint::Component,
     }
@@ -2773,6 +2894,7 @@ ex:FlagShape a sh:NodeShape ;
             | LoweredConstraint::UniqueMembers
             | LoweredConstraint::SingleLine
             | LoweredConstraint::RootClass(_)
+            | LoweredConstraint::UniqueValuesFor(_)
             | LoweredConstraint::MinCount
             | LoweredConstraint::MaxCount
             | LoweredConstraint::In(_)
@@ -3134,6 +3256,7 @@ ex:Inner a sh:NodeShape ;
         PlannedConstraint::SingleLine(_) => "single_line",
         PlannedConstraint::RootClass { .. } => "root_class",
         PlannedConstraint::SomeValue(_) => "some_value",
+        PlannedConstraint::UniqueValuesFor(_) => "unique_values_for",
         PlannedConstraint::Component { .. } => "component",
     }
 
@@ -3186,6 +3309,7 @@ ex:Inner a sh:NodeShape ;
         "subset_of",
         "unique_lang",
         "unique_members",
+        "unique_values_for",
         "xone",
     ];
 

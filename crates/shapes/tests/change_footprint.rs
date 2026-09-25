@@ -844,6 +844,66 @@ ex:ParentageShape a sh:NodeShape ;
     naive_misses: true,
 };
 
+// ── Cross-focus: sh:uniqueValuesFor ─────────────────────────────────────────────
+//
+// SHACL 1.2 Core §7.9.5 compares a value node with "another node in $targetNodes",
+// so a change at ONE target node moves the verdict of ANOTHER that no path joins
+// to it. Both cases defeat the subjects-of-delta expansion by construction: the
+// node whose verdict moves beside the changed one is never a changed subject.
+
+/// A shapes graph with a uniqueness constraint and an unrelated second shape
+/// whose target (`ex:zed`) is the untouched control.
+const UNIQUE_VALUES_FOR_SHAPES: &str = r"
+ex:RecordShape a sh:NodeShape ;
+    sh:targetClass ex:Record ;
+    sh:uniqueValuesFor ex:id .
+ex:OtherShape a sh:NodeShape ;
+    sh:targetNode ex:zed ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+";
+
+/// Changing ONE target node's value makes it collide with another target node:
+/// `ex:bob`'s id goes from "B" to "A", and `ex:alice` — whose own data did not
+/// change — gains a violation.
+const UNIQUE_VALUES_FOR_VALUE: Case = Case {
+    name: "sh:uniqueValuesFor, a listed property changed on one target node",
+    shapes: UNIQUE_VALUES_FOR_SHAPES,
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#id> \"A\" .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#id> \"B\" .\n",
+        "<http://example.org/ns#carl> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#carl> <http://example.org/ns#id> \"C\" .\n",
+        "<http://example.org/ns#zed> <http://example.org/ns#name> \"Zed\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("bob", "http://example.org/ns#id", Obj::Lit("A"))],
+    removals: &[("bob", "http://example.org/ns#id", Obj::Lit("B"))],
+    untouched: "zed",
+    naive_misses: true,
+};
+
+/// Changing the TARGET SET: `ex:dana` already carries id "A" but is not a
+/// `ex:Record`; typing her one makes `ex:alice` collide with her.
+const UNIQUE_VALUES_FOR_TARGET_SET: Case = Case {
+    name: "sh:uniqueValuesFor, a node joins the target set",
+    shapes: UNIQUE_VALUES_FOR_SHAPES,
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#id> \"A\" .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Record> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#id> \"B\" .\n",
+        "<http://example.org/ns#dana> <http://example.org/ns#id> \"A\" .\n",
+        "<http://example.org/ns#zed> <http://example.org/ns#name> \"Zed\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("dana", RDF_TYPE, Obj::Ex("Record"))],
+    removals: &[],
+    untouched: "zed",
+    naive_misses: true,
+};
+
 /// Every case, so one failure names the form it belongs to.
 const CASES: &[&Case] = &[
     &FORWARD_PREDICATE,
@@ -860,6 +920,8 @@ const CASES: &[&Case] = &[
     &PROPERTY_PAIR_COMPARAND,
     &CLASS_CONSTRAINT,
     &CLOSED_SHAPE,
+    &UNIQUE_VALUES_FOR_VALUE,
+    &UNIQUE_VALUES_FOR_TARGET_SET,
 ];
 
 #[test]

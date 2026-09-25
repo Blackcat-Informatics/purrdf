@@ -2049,6 +2049,42 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
+        // ── UniqueValuesFor (SHACL 1.2 Core §7.9.5; per value node, CROSS-FOCUS) ─
+        //
+        // "Let $targetNodes be the target nodes of S. For each value node V for
+        // which there exists another node in $targetNodes that has exactly the same
+        // values for all properties in $properties as V there is a validation
+        // result. No result is produced if V has no values for any of the
+        // properties in $properties."
+        //
+        // The target set is the declaring shape's FULL target set in the bound
+        // data graph, grouped once per binding (`crate::unique_values`) — never the
+        // focus nodes a bounded request happened to name. A value node the data
+        // graph does not intern is the subject of no triple, so it has no values
+        // and produces nothing.
+        //
+        // On a node shape the value node IS the focus node, and the result names
+        // no `sh:value` — the W3C SHACL 1.2 tests `core/node/uniqueValuesFor-001`
+        // to `-005` expect exactly that. On a property shape several value nodes
+        // of one focus node can each collide, so the result names the colliding
+        // value node as `sh:value` (§6.7.2.3: "at most one RDF term that has
+        // caused the result"), which keeps those results distinct.
+        PlannedConstraint::UniqueValuesFor(slot) => {
+            let groups = context.plan.unique_groups(store, slot)?;
+            for value in value_nodes {
+                let duplicated = value
+                    .as_id(ds)
+                    .is_some_and(|id| groups.is_duplicated(ds, id));
+                if duplicated {
+                    emit!(result!(
+                        sh::UNIQUE_VALUES_FOR_CONSTRAINT_COMPONENT,
+                        path.map(|_| value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
         // ── In (per value node) ────────────────────────────────────────────────
         //
         // The CONSTANT-FOLDED branch: `sh:in ()` permits nothing, so every value

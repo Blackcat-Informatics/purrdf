@@ -34,9 +34,8 @@
 //! [`crate::expression::sparql_ns_lowering`] resolves `NAME` — the one resolver the
 //! call sites already use, not a second list.
 //!
-//! A declared-but-unimplemented component (see [`ComponentStatus::Unimplemented`])
-//! binds as such: its bare declaration loads, and a shape that USES one of its
-//! parameters is a load error naming it, instead of silently conforming.
+//! Every component the vocabulary declares is a row the engine evaluates
+//! natively, so no declared component is left to bind as a signature alone.
 //!
 //! # SPARQL registration (SHACL 1.2 SPARQL Extensions §7.3)
 //!
@@ -75,8 +74,8 @@ pub(crate) use link::{
 };
 pub(crate) use table::ExprKind;
 pub use table::{
-    AliasSource, Carrier, ComponentParam, ComponentRow, ComponentStatus, FunctionClass,
-    FunctionParam, FunctionRow, KeyAlias, SPEC_TEXT_OPTIONALITY, SparqlAlias, TargetRow, ValueRule,
+    AliasSource, Carrier, ComponentParam, ComponentRow, FunctionClass, FunctionParam, FunctionRow,
+    KeyAlias, SPEC_TEXT_OPTIONALITY, SparqlAlias, TargetRow, ValueRule,
 };
 pub use vocab::{DeclaredFunction, DeclaredParam, Vocabulary, declared, declared_terms};
 
@@ -320,16 +319,6 @@ pub(crate) fn single_valued_params() -> &'static [&'static str] {
         out
     });
     &PARAMS
-}
-
-/// The parameters of every declared component this engine does not evaluate,
-/// each with its component.
-pub(crate) fn unimplemented_component_params()
--> impl Iterator<Item = (&'static str, &'static ComponentRow)> {
-    table::COMPONENTS
-        .iter()
-        .filter(|row| row.status == ComponentStatus::Unimplemented)
-        .flat_map(|row| row.params.iter().map(move |p| (p.path, row)))
 }
 
 #[cfg(test)]

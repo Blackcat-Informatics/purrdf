@@ -653,7 +653,7 @@ independent of the focus-node count.** Cost is proportional to the violations
 found, not to the focus nodes examined: a focus node is carried as its interned
 identity and materialized as an owned term only where a result is built.
 
-The growth term is gone — a slope of zero, not a smaller slope — across the **52**
+The growth term is gone — a slope of zero, not a smaller slope — across the **53**
 measured constraint and path cases, all but one of which are held to exact
 equality (`sh:pattern` is the exception, for the reason below, and is held to the
 same slope on one thread). Measured on the revision that removed it, a conforming

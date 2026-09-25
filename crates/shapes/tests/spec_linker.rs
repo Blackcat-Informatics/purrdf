@@ -7,11 +7,11 @@
 //!
 //! 1. **The ratchet.** What the vendored W3C SHACL 1.2 vocabularies DECLARE and
 //!    what the table IMPLEMENTS agree exactly — every component, every function,
-//!    every key parameter and every parameter set — with the one gap there is
-//!    pinned by name.
+//!    every key parameter and every parameter set — and the declared-vs-implemented
+//!    component gap is empty.
 //! 2. **The linker's outcomes.** A built-in's bare declaration binds and indexes
-//!    nothing; a second definition, a kind or signature mismatch, a key clash and a
-//!    parameter of an unimplemented component are refused. Every refusal is proven
+//!    nothing; a second definition, a kind or signature mismatch and a key clash
+//!    are refused. Every refusal is proven
 //!    next to a VALID neighbour whose outcome differs from the refusal's.
 //! 3. **The resolution report.** Every call site names what it bound to.
 //!
@@ -26,9 +26,7 @@ use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::function_resolution::FunctionBinding;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::shapes::{__linked_declarations, Constraint};
-use purrdf_shapes::spec::{
-    ComponentStatus, FunctionClass, SPEC_TEXT_OPTIONALITY, declared, implemented,
-};
+use purrdf_shapes::spec::{Carrier, FunctionClass, SPEC_TEXT_OPTIONALITY, declared, implemented};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = r"
@@ -47,12 +45,6 @@ const VOCABULARY_FILES: [&str; 3] = [
     include_str!("../spec/shnex.ttl"),
     include_str!("../spec/shnex-sparql.ttl"),
 ];
-
-/// The SHACL 1.2 Core components the vocabulary declares and this engine does not
-/// evaluate — the declared-vs-implemented gap, pinned by name. A shape using one
-/// of their parameters is a load error, never a silent conformance.
-const UNIMPLEMENTED_DECLARED_COMPONENTS: [&str; 1] =
-    ["http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent"];
 
 const SPARQL_NS: &str = "http://www.w3.org/ns/sparql#";
 
@@ -211,8 +203,9 @@ fn every_declared_function_binds_with_its_declared_signature() {
 }
 
 /// Every component the vocabulary declares is a table row with the SAME parameter
-/// set and optionality, and the rows the engine does not evaluate are EXACTLY the
-/// pinned gap.
+/// set and optionality, and the engine evaluates every one of them: the
+/// declared-vs-implemented gap is EMPTY, and a row that stopped naming its
+/// carrier in the parsed model would reopen it.
 #[test]
 fn every_declared_component_is_a_row_and_the_gap_is_exactly_pinned() {
     let vocab = declared().expect("the vendored vocabularies read");
@@ -239,15 +232,23 @@ fn every_declared_component_is_a_row_and_the_gap_is_exactly_pinned() {
             row.params().iter().map(|p| (p.path, p.optional)).collect();
         assert_eq!(row_params, declared_params, "<{}>: parameters", row.iri());
     }
-    let native: BTreeSet<&str> = table
+    let implemented_iris: BTreeSet<&str> = table
         .components()
         .iter()
-        .filter(|row| row.status() == ComponentStatus::Native)
+        .filter(|row| match row.carrier() {
+            Carrier::Constraint(variants) => !variants.is_empty(),
+            Carrier::ShapeField(field) => !field.is_empty(),
+        })
         .map(purrdf_shapes::spec::ComponentRow::iri)
         .collect();
-    let gap: BTreeSet<&str> = declared_iris.difference(&native).copied().collect();
-    let pinned: BTreeSet<&str> = UNIMPLEMENTED_DECLARED_COMPONENTS.into_iter().collect();
-    assert_eq!(gap, pinned, "declared − implemented components");
+    let gap: BTreeSet<&str> = declared_iris
+        .difference(&implemented_iris)
+        .copied()
+        .collect();
+    assert!(
+        gap.is_empty(),
+        "declared − implemented components must be empty: {gap:?}"
+    );
 }
 
 /// The table's canonical text is deterministic and names every row.
@@ -587,7 +588,7 @@ fn a_builtin_redefined_as_a_sparql_function_is_a_duplicate_definition() {
     .expect("a SPARQL function under its own IRI loads");
 }
 
-// ── Declared-but-unimplemented components ────────────────────────────────────
+// ── sh:uniqueValuesFor, the last declared component, is native ─────────────
 
 const UNIQUE_VALUES_FOR_DECLARATION: &str = r"
 sh:UniqueValuesForConstraintComponent a sh:ConstraintComponent ;
@@ -597,70 +598,58 @@ sh:UniqueValuesForConstraintComponent-uniqueValuesFor a sh:Parameter ;
 ";
 
 const UNIQUE_VALUES_FOR_SHAPE: &str = r"
-ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-  sh:property [ sh:path ex:text ; sh:uniqueValuesFor ex:allowed ] .
+ex:S a sh:NodeShape ; sh:targetClass ex:Record ; sh:uniqueValuesFor ex:id .
 ";
 
+/// The bare W3C declaration of `sh:UniqueValuesForConstraintComponent` binds to
+/// the native evaluator and registers nothing: a shape using the parameter is
+/// evaluated natively with or without the declaration, and the two data rows
+/// below differ, so the parameter is honoured rather than dropped.
 #[test]
-fn a_shape_using_an_unimplemented_component_is_refused() {
+fn the_unique_values_for_declaration_binds_natively() {
     for shapes in [
         UNIQUE_VALUES_FOR_SHAPE.to_owned(),
         format!("{UNIQUE_VALUES_FOR_DECLARATION}{UNIQUE_VALUES_FOR_SHAPE}"),
     ] {
-        let error = load_error(&shapes);
-        assert!(
-            error.contains("UniqueValuesForConstraintComponent")
-                && error.contains("does not implement"),
-            "{error}"
+        let clash = validate(
+            &shapes,
+            "ex:a a ex:Record ; ex:id \"1\" . ex:b a ex:Record ; ex:id \"1\" .",
         );
+        assert_eq!(
+            focus_nodes(&clash),
+            vec![
+                "<http://example.org/ns#a>".to_owned(),
+                "<http://example.org/ns#b>".to_owned()
+            ]
+        );
+        let distinct = validate(
+            &shapes,
+            "ex:a a ex:Record ; ex:id \"1\" . ex:b a ex:Record ; ex:id \"2\" .",
+        );
+        assert!(distinct.conforms, "{:?}", distinct.results);
     }
-}
-
-/// The bare declaration of an unimplemented component loads and registers
-/// nothing; a shape that does not use its parameter validates as usual.
-#[test]
-fn a_bare_unimplemented_component_declaration_loads() {
-    let report = validate(
-        &format!(
-            "{UNIQUE_VALUES_FOR_DECLARATION}
-             ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-               sh:property [ sh:path ex:text ; sh:minCount 1 ] ."
-        ),
-        "",
-    );
-    assert_eq!(
-        focus_nodes(&report),
-        vec!["<http://example.org/ns#a>".to_owned()]
-    );
     assert_eq!(
         linked(UNIQUE_VALUES_FOR_DECLARATION).registered_components,
         Vec::<String>::new()
     );
 }
 
-/// A shapes graph that IMPLEMENTS the component itself — a SHACL-SPARQL validator
-/// on the spec IRI — has it evaluated like any custom component: the two data
-/// rows below differ, so the parameter is honoured, not dropped.
+/// A shapes graph that supplies its own validator for the native component is
+/// refused as a duplicate definition; the bare declaration beside it loads (see
+/// the test above).
 #[test]
-fn a_user_implemented_unimplemented_component_is_evaluated() {
-    let shapes = format!(
+fn a_validator_on_unique_values_for_is_a_duplicate_definition() {
+    let error = load_error(&format!(
         r#"{UNIQUE_VALUES_FOR_DECLARATION}
         sh:UniqueValuesForConstraintComponent sh:validator [
           a sh:SPARQLAskValidator ;
-          sh:ask """ASK {{ $this $uniqueValuesFor $value }}"""
+          sh:ask """ASK {{ FILTER (true) }}"""
         ] .
         {UNIQUE_VALUES_FOR_SHAPE}"#
-    );
-    let outside = validate(&shapes, "ex:a ex:text \"two\" ; ex:allowed \"one\" .");
-    let inside = validate(&shapes, "ex:a ex:text \"one\" ; ex:allowed \"one\" .");
-    assert_eq!(
-        focus_nodes(&outside),
-        vec!["<http://example.org/ns#a>".to_owned()]
-    );
-    assert!(inside.conforms, "a value the validator accepts conforms");
-    assert_eq!(
-        linked(&shapes).registered_components,
-        vec!["http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent".to_owned()]
+    ));
+    assert!(
+        error.contains("UniqueValuesForConstraintComponent"),
+        "{error}"
     );
 }
 
