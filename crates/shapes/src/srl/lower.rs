@@ -236,7 +236,7 @@ struct ClauseBuilder<'m, 'r, 'a> {
 }
 
 /// What lowering a pattern's positions produced: the atom, and the triple-term patterns
-/// it deferred to guards.
+/// it moved into guards.
 struct PendingTriples(Vec<(String, LoweredTriple)>);
 
 impl ClauseBuilder<'_, '_, '_> {
@@ -280,7 +280,7 @@ impl ClauseBuilder<'_, '_, '_> {
     }
 
     /// Lower a body position: a triple term with variables becomes a fresh variable and a
-    /// deferred take-apart guard.
+    /// take-apart guard evaluated after the atom.
     fn body_position(
         &mut self,
         position: &PatternTerm,

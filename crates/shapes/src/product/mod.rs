@@ -211,16 +211,16 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// which re-derives.
 ///
 /// Derived, never hand-incremented. `crates/shapes/tests/product_model_census.rs`
-/// computes it from the live sources with `syn` and pins the result as
-/// `STAGE_ID_GOLDEN`; the bytes here are that digest. Re-derive them from a
-/// failing `stage_id_matches_golden` rather than editing either by hand. A
+/// computes it from the live sources with `syn`, and
+/// `stage_id_matches_shipped_constant` asserts it equals these bytes. Re-derive
+/// them from that test's failure message rather than editing them by hand. A
 /// hand-maintained version counter is precisely how an authenticated cache serves
 /// stale-but-verified wrong answers: the bytes verify, the counter matches, and
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0xd7, 0x17, 0x40, 0xac, 0x95, 0xaa, 0x74, 0x19, 0x91, 0x7f, 0xfc, 0x8e, 0xa0, 0x86, 0x8c, 0x84,
-    0xa1, 0x52, 0x80, 0x2b, 0xaa, 0x0a, 0x75, 0xa3, 0x68, 0xa9, 0xc4, 0x9a, 0xcf, 0x7c, 0x0c, 0x92,
+    0x11, 0xce, 0x88, 0x6c, 0x7d, 0xec, 0x84, 0x68, 0xdc, 0xaa, 0x44, 0x3c, 0x7b, 0x3c, 0xcf, 0x39,
+    0x28, 0x4e, 0xdb, 0x2b, 0xc7, 0x8b, 0x7a, 0x7a, 0xe9, 0x38, 0xbb, 0xd5, 0x01, 0x4e, 0xeb, 0x04,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.

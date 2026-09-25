@@ -658,7 +658,7 @@ measured constraint and path cases, all but one of which are held to exact
 equality (`sh:pattern` is the exception, for the reason below, and is held to the
 same slope on one thread). Measured on the revision that removed it, a conforming
 validation costs the same six or seven allocations at 2,048 and at 4,096 focus
-nodes, where it cost 6,171 and 12,320 before; binding the seam dataset costs 61
+nodes, where it cost 6,171 and 12,320 before; binding the seam dataset costs 59
 either way, where it cost 94 against 97 — flat in the data graph beyond the class
 catalog. `PreparedShapes::bind_dataset` is the one deliberate exception, and it is
 excluded by construction rather than by tolerance: it projects the graph into an

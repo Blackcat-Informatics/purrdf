@@ -1466,7 +1466,7 @@ impl<'s> Parser<'s> {
         self.component_registry = ComponentRegistry::parse(self.data, &self.prefix_resolver)?;
 
         // Every shape of the shapes graph, checked against the census before any
-        // is parsed: an unknown or unimplemented term, or an ill-typed parameter
+        // is parsed: an unknown or refused term, or an ill-typed parameter
         // value, is a load error rather than a silent no-op.
         self.check_well_formed()?;
 

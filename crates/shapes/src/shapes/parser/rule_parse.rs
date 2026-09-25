@@ -20,7 +20,7 @@
 //!
 //! Every `sh:` predicate of a rule node, of a rule set and of a SPARQL rule template is
 //! looked up in the census ([`crate::spec::census`]): a term the census does not know, a
-//! term it classifies as unimplemented, and a term that belongs on some other kind of node
+//! term it classifies as refused, and a term that belongs on some other kind of node
 //! (a constraint parameter on a rule) are load errors naming the term and the node, never
 //! silently walked past.
 
@@ -301,7 +301,7 @@ impl Parser<'_> {
                      ignored"
                 ));
             };
-            if let TermClass::Unimplemented(why) = row.class {
+            if let TermClass::Refused(why) = row.class {
                 return Err(format!(
                     "{kind} {node} uses <{p}>, which is not evaluated by this engine: {why}"
                 ));

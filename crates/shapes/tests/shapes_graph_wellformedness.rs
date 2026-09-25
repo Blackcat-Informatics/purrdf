@@ -85,7 +85,7 @@ fn results(report: &ValidationReport) -> Vec<(String, String)> {
     out
 }
 
-// ── Unknown and unimplemented terms ──────────────────────────────────────────
+// ── Unknown and refused terms ────────────────────────────────────────────────
 
 #[test]
 fn a_misspelled_parameter_is_refused_and_the_real_one_loads() {

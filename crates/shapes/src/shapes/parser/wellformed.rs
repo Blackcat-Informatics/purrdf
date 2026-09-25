@@ -21,7 +21,7 @@
 //!   shapes. Nothing else: a data node, an ontology header or a rule is never
 //!   judged here.
 //! * On each, every `sh:` / `shnex:` predicate is looked up in the census
-//!   ([`crate::spec::census`]): an unknown term, an unimplemented term, and a
+//!   ([`crate::spec::census`]): an unknown term, a refused term, and a
 //!   term that does not belong on a shape are load errors naming the term and
 //!   the node; a constraint parameter's value must meet its value rule, and a
 //!   parameter SHACL forbids on node shapes must not appear on one.
@@ -161,7 +161,7 @@ impl Parser<'_> {
                          ignored"
                     ));
                 };
-                if let TermClass::Unimplemented(why) = row.class {
+                if let TermClass::Refused(why) = row.class {
                     return Err(format!(
                         "{kind} {node} uses <{p}>, which is not evaluated by this engine: {why}"
                     ));
@@ -385,7 +385,7 @@ impl Parser<'_> {
                 // (`sh:defaultValue` on a parameter declaration): any value.
                 continue;
             }
-            if let TermClass::Unimplemented(why) = row.class {
+            if let TermClass::Refused(why) = row.class {
                 return Err(format!(
                     "shape {shape} uses <{p}>, which is not evaluated by this engine: {why}; the \
                      shape is refused rather than validated as if it were absent"
@@ -428,7 +428,7 @@ impl Parser<'_> {
                     self.check_computed_values_site(shape, p, is_parameter)?;
                 }
                 TermClass::Structural(_) | TermClass::Rule => {}
-                TermClass::Unimplemented(_) => {}
+                TermClass::Refused(_) => {}
             }
         }
         Ok(())
@@ -548,14 +548,14 @@ impl Parser<'_> {
         self.statement_annotation(shape, p, object).map(|_| ())
     }
 
-    /// A shape's `rdf:type`: an unimplemented SHACL class is refused.
+    /// A shape's `rdf:type`: a SHACL class the census refuses is a load error.
     fn check_shape_type(&self, shape: &Term, class: &Term) -> Result<(), String> {
         let Term::NamedNode(class) = class else {
             return Ok(());
         };
         if census::is_census_namespace(class.as_str())
             && let Some(row) = census::classify(class.as_str())
-            && let TermClass::Unimplemented(why) = row.class
+            && let TermClass::Refused(why) = row.class
         {
             return Err(format!(
                 "shape {shape} is typed <{}>, which is not evaluated by this engine: {why}",
@@ -731,7 +731,7 @@ impl Parser<'_> {
                     ));
                 };
                 if let Some(row) = census::classify(level.as_str())
-                    && let TermClass::Unimplemented(why) = row.class
+                    && let TermClass::Refused(why) = row.class
                 {
                     return Err(format!(
                         "sh:severity on shape {shape} is <{}>, which is not evaluated by this \
@@ -808,7 +808,7 @@ fn describe_class(class: TermClass) -> &'static str {
         TermClass::NonValidating => "a non-validating shape characteristic",
         TermClass::Target => "target vocabulary",
         TermClass::Rule => "rule vocabulary",
-        TermClass::Unimplemented(_) => "a term this engine does not evaluate",
+        TermClass::Refused(_) => "a term this engine does not evaluate",
         TermClass::Structural(role) => match role {
             Role::ShapeCharacteristic => "a shape characteristic",
             Role::Path => "SHACL property-path vocabulary",

@@ -8,7 +8,7 @@
 //! 1. **The ratchet.** What the vendored W3C SHACL 1.2 vocabularies DECLARE and
 //!    what the table IMPLEMENTS agree exactly — every component, every function,
 //!    every key parameter and every parameter set — and the declared-vs-implemented
-//!    component gap is empty.
+//!    gap is empty for functions and for components alike.
 //! 2. **The linker's outcomes.** A built-in's bare declaration binds and indexes
 //!    nothing; a second definition, a kind or signature mismatch and a key clash
 //!    are refused. Every refusal is proven
@@ -130,6 +130,16 @@ fn every_declared_function_binds_with_its_declared_signature() {
         "the RDF reader and the text scan disagree on how many functions are declared"
     );
     let table = implemented();
+    let function_gap: BTreeSet<&str> = vocab
+        .functions
+        .keys()
+        .map(String::as_str)
+        .filter(|iri| table.function(iri).is_none())
+        .collect();
+    assert!(
+        function_gap.is_empty(),
+        "declared − implemented functions must be empty: {function_gap:?}"
+    );
     let optionality_overrides: BTreeSet<(&str, &str)> =
         SPEC_TEXT_OPTIONALITY.iter().copied().collect();
     let mut overrides_used: BTreeSet<(&str, &str)> = BTreeSet::new();

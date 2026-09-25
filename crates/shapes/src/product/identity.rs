@@ -251,7 +251,7 @@ use super::error::{ProductDimension, ShapesProductError};
 /// The census mixes the SAME string into its stage id under its own `PROFILE_ID`.
 /// It is an integration test and cannot see a `pub(crate)` item, so the two
 /// declarations are necessarily separate; they name one profile and must be changed
-/// together. `stage_id_matches_golden` fails the moment the census's copy moves, so
+/// together. `stage_id_matches_shipped_constant` fails the moment the census's copy moves, so
 /// a divergence is loud rather than silent.
 pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 
