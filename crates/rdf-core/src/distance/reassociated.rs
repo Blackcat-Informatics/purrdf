@@ -220,6 +220,16 @@ const AVX2_FMA: [Feature; 2] = [Feature::Avx2, Feature::Fma];
 #[cfg(target_arch = "x86_64")]
 const AVX512F: [Feature; 3] = [Feature::Avx512f, Feature::Avx2, Feature::Fma];
 
+/// Whether the processor reports every feature a [`Path::Avx512f`] compilation needs.
+///
+/// One rule for both arithmetics' AVX-512F paths: [`path`] and [`recorded`] select the
+/// reassociated one by it, and `dispatch::exact_path` the exact one, so the path name
+/// means the same detection whichever law runs along it.
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn runs_avx512f() -> bool {
+    first_missing(&AVX512F).is_none()
+}
+
 /// The path [`Reassociated`](super::Reassociated) runs on this process: the widest the
 /// processor reports, or the build's compile-time path. Every target has one.
 ///
@@ -228,7 +238,7 @@ const AVX512F: [Feature; 3] = [Feature::Avx512f, Feature::Avx2, Feature::Fma];
 pub(crate) fn path() -> Path {
     #[cfg(target_arch = "x86_64")]
     {
-        if first_missing(&AVX512F).is_none() {
+        if runs_avx512f() {
             return Path::Avx512f;
         }
         if first_missing(&AVX2_FMA).is_none() {

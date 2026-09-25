@@ -237,8 +237,8 @@ with the named `HnswError::VersionMismatch`, never with an `Ok(false)` that woul
 as tampering. A header whose arithmetic field is not `1` is refused by the exact decoder with
 `HnswError::ArithmeticMismatch`; the reassociated index records its path's code there
 instead (§3.1). The exact canonical image is byte-identical across worker counts,
-across the exact arithmetic's dispatch paths (portable and AVX2 on x86-64), and across
-`wasm32-unknown-unknown` with and without `+simd128`; `make hnsw-determinism` executes
+across the exact arithmetic's dispatch paths (portable, AVX2 and AVX-512F on x86-64),
+and across `wasm32-unknown-unknown` with and without `+simd128`; `make hnsw-determinism` executes
 all three wasm-side and native digests against the one golden; the `shape` and
 `identity` fields are never written into an exact image, so its bytes are the ones
 version 2 always had. A reassociated image is byte-identical across worker counts and

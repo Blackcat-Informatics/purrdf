@@ -25,10 +25,16 @@ pub(super) fn host_paths() -> Vec<Resolved<Exact>> {
     let portable = Resolved::on(Path::Portable);
     #[cfg(target_arch = "x86_64")]
     {
+        let mut paths = vec![portable];
         if std::is_x86_feature_detected!("avx2") {
-            return vec![portable, Resolved::on(Path::Avx2)];
+            paths.push(Resolved::on(Path::Avx2));
         }
+        if reassociated::runs_avx512f() {
+            paths.push(Resolved::on(Path::Avx512f));
+        }
+        paths
     }
+    #[cfg(not(target_arch = "x86_64"))]
     vec![portable]
 }
 
@@ -36,7 +42,7 @@ pub(super) fn host_paths() -> Vec<Resolved<Exact>> {
 pub(super) fn exact_compiled() -> &'static [Path] {
     #[cfg(target_arch = "x86_64")]
     {
-        &[Path::Portable, Path::Avx2]
+        &[Path::Portable, Path::Avx2, Path::Avx512f]
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -709,7 +715,12 @@ fn the_exact_identity_is_pinned() {
         "zero was the reserved value of older images"
     );
     assert_eq!(EXACT_LANES, 16);
-    for path in [Path::Portable, Path::Avx2] {
+    for path in [Path::Portable, Path::Avx2, Path::Avx512f] {
+        assert_eq!(
+            Exact::image_code(path),
+            Some(Exact::IMAGE_CODE),
+            "every exact path records the one code"
+        );
         assert_eq!(
             Exact::evidence(path),
             None,
@@ -822,7 +833,9 @@ fn default_float_environment_resolves() {
     );
     #[cfg(target_arch = "x86_64")]
     {
-        let expected = if std::is_x86_feature_detected!("avx2") {
+        let expected = if reassociated::runs_avx512f() {
+            Path::Avx512f
+        } else if std::is_x86_feature_detected!("avx2") {
             Path::Avx2
         } else {
             Path::Portable
@@ -838,6 +851,65 @@ fn default_float_environment_resolves() {
     println!(
         "default_float_environment_resolves resolved path: {}",
         resolved.path()
+    );
+}
+
+/// The exact arithmetic's one image code resolves on every host, whichever exact path
+/// the processor runs: hiding AVX-512F moves resolution to the AVX2 (or portable) path,
+/// and the recorded code still resolves there, to the same bits the reference model
+/// gives. Unhidden, the host's own report selects its widest exact path again.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn the_exact_code_resolves_without_avx512f() {
+    use super::reassociated::{Feature, hidden};
+
+    let mut stream = Stream(0x5EED_0000_0000_0512);
+    let a = stream.vector(4_099);
+    let b = stream.vector(4_099);
+    let want = Some((-reference_dot(&a, &b)).to_bits());
+    let dot = |handle: Resolved<Exact>| {
+        handle
+            .distance(Measure::NegativeDot, &a, 0.0, &b, 0.0)
+            .map(f64::to_bits)
+    };
+    let narrower = if std::is_x86_feature_detected!("avx2") {
+        Path::Avx2
+    } else {
+        Path::Portable
+    };
+    {
+        let _hidden = hidden::hide(Feature::Avx512f);
+        let resolved = Exact::resolve().expect("the default environment is the IEEE one");
+        assert_eq!(
+            resolved.path(),
+            narrower,
+            "no AVX-512F, so the next exact path"
+        );
+        let recorded =
+            Exact::resolve_recorded(Exact::IMAGE_CODE).expect("the exact code runs anywhere");
+        assert_eq!(recorded, resolved);
+        assert_eq!(dot(recorded), want, "{narrower} computes the law's bits");
+    }
+    let widest = Exact::resolve().expect("the default environment is the IEEE one");
+    let expected = if reassociated::runs_avx512f() {
+        Path::Avx512f
+    } else {
+        narrower
+    };
+    assert_eq!(
+        widest.path(),
+        expected,
+        "unhidden, the host's report decides"
+    );
+    assert_eq!(
+        Exact::resolve_recorded(Exact::IMAGE_CODE),
+        Ok(widest),
+        "the recorded code resolves the widest exact path"
+    );
+    assert_eq!(dot(widest), want, "{expected} computes the law's bits");
+    println!(
+        "the_exact_code_resolves_without_avx512f: hidden {narrower}, unhidden {}",
+        widest.path()
     );
 }
 

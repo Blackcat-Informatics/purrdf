@@ -1524,7 +1524,8 @@ mod tests {
         // Every exact path computes the same bits, so an exact path this build compiles is
         // held by `purrdf-core`'s tests rather than by an index.
         let exact_here = |path: Path| {
-            path == Path::Portable || (cfg!(target_arch = "x86_64") && path == Path::Avx2)
+            path == Path::Portable
+                || (cfg!(target_arch = "x86_64") && matches!(path, Path::Avx2 | Path::Avx512f))
         };
         for path in required_paths() {
             let refusal = match Reassociated::image_code(path) {

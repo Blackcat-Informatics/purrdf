@@ -4,9 +4,9 @@
 //! The one body of the [`Exact`](super::Exact) law.
 //!
 //! Every function here is `#[inline(always)]` and generic, and none is called directly
-//! by a consumer: `dispatch` compiles each of them once per path (portable, and AVX2 on
-//! `x86_64`) by inlining the same source into differently-featured wrappers. So there
-//! is one source order, and every path is a compilation of it.
+//! by a consumer: `dispatch` compiles each of them once per path (portable, and AVX2 and
+//! AVX-512F on `x86_64`) by inlining the same source into differently-featured wrappers.
+//! So there is one source order, and every path is a compilation of it.
 //!
 //! The formulation is load-bearing. A fold written `acc[l] += a[16 * c + l] * b[..]`
 //! hides the lanes' independence behind index arithmetic and compiles to scalar code;

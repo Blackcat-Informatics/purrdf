@@ -574,7 +574,7 @@ fn the_reassociated_identity_is_pinned() {
         (Path::Avx2, Some(1), None),
         (Path::Sse2, None, Some(2)),
         (Path::Avx2Fma, None, Some(3)),
-        (Path::Avx512f, None, Some(4)),
+        (Path::Avx512f, Some(1), Some(4)),
         (Path::Neon, None, Some(5)),
         (Path::WasmSimd128, None, Some(6)),
         (Path::WasmScalar, None, Some(7)),

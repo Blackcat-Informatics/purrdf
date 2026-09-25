@@ -44,12 +44,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     exactly one out-of-line copy, so every call site on a path gets the same bits.
     Its image codes are 2 (sse2), 3 (avx2+fma), 4 (avx512f), 5 (neon),
     6 (wasm-simd128), 7 (wasm-scalar) and 8 (portable); `Exact`'s is 1;
-  - `Path` (`#[non_exhaustive]`), with one variant per dispatch path: `Portable`
-    and `Avx2` for `Exact`; `Portable`, `Sse2`, `Avx2Fma`, `Avx512f`, `Neon`,
-    `WasmSimd128` and `WasmScalar` for `Reassociated`. `Portable` names each
-    arithmetic's own body compiled for the target's baseline features;
-  - the batch kernels, which are the unit of dispatch. `Exact` has a
-    bit-identical AVX2 path chosen once per scan. They come with `RowsRef`,
+  - `Path` (`#[non_exhaustive]`), with one variant per dispatch path: `Portable`,
+    `Avx2` and `Avx512f` for `Exact`; `Portable`, `Sse2`, `Avx2Fma`, `Avx512f`,
+    `Neon`, `WasmSimd128` and `WasmScalar` for `Reassociated`. `Portable` names each
+    arithmetic's own body compiled for the target's baseline features, and
+    `Avx512f` each one's body compiled with AVX-512F, selected for both by one rule
+    (the processor reports AVX-512F, AVX2 and FMA);
+  - the batch kernels, which are the unit of dispatch. `Exact` has bit-identical
+    AVX-512F and AVX2 paths on x86_64, chosen in that order once per scan. The
+    AVX-512F compilation is kept on its emitted asm, not on an argument: under
+    generic tuning it holds the sixteen lanes in two `zmm` registers where AVX2
+    uses four `ymm`, so a sixteen-element block of the squared-Euclidean fold is
+    two `vsubpd`, two `vmulpd` and two `vaddpd` rather than four of each, with no
+    FMA, and the `f64` pair kernel is 117 vector instructions against AVX2's 157.
+    It is executed, and held to the reference model bit for bit, by the
+    `avx512-sde` CI job. They come with `RowsRef`,
     `Measure`, `EXACT_LANES` and a `norm` that delegates to the one normative
     PURREMB norm fold;
   - the float-environment refusal. `FloatEnvironmentError::FlushToZero`,
@@ -429,6 +438,22 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **rdf, shapes, shex:** a JSON number read through `serde_json` could become the
+  neighbour of the binary64 its decimal spells. Without its `float_roundtrip` feature
+  `serde_json` scales a `u64` significand by a binary64 power of ten, rounding at each
+  step and dropping every digit past the nineteenth, so JSON-LD wrote
+  `122.416294033786585` as `"1.224162940337866E2"^^xsd:double` instead of
+  `"1.2241629403378658E2"`, and the same misreading reached CSVW literals and datatype
+  bounds, OKF rdf:JSON literals (whose writer then refused as non-canonical a literal
+  its reader had produced), research-object record rows, JSON Schema bounds imported
+  as SHACL, compiled-schema catalogs and ShExJ numeric facets. The workspace now
+  enables `float_roundtrip`, whose reader is correctly rounded. On the x87 its exact
+  fast path still rounded twice (`8.64759627780072e32` read as its successor), so
+  every one of those reads now runs under the binary64 precision scope; elsewhere the
+  scope is empty. A non-integral JSON Schema number imported under a decimal carrier
+  was written in `serde_json`'s exponent form (`2.2e-230`), outside the
+  `xsd:decimal` lexical space; it is now written positionally.
 
 - **sparql-eval:** `SUM`/`AVG` over a group of more than 1024 values added chunk
   partial sums together, so an `xsd:float`/`xsd:double` total could be a value no

@@ -66,12 +66,19 @@
 //! [`Arithmetic::resolve`] is called once per scan or call and returns a [`Resolved`]
 //! handle naming the dispatch [`Path`] this process will run, for the calling thread; a
 //! relation or index that outlives the call stores the thread-free [`Selected`] path. On
-//! `x86_64`, `Exact` has two: a portable compilation of the generic body and an
-//! AVX2 compilation of the *same* body. They are two compilations of one source order,
-//! so they return the same bits, and a test holds every path the host can execute to
-//! a scalar reference model. `aarch64` NEON and wasm `simd128` are compile-time
-//! features of the one portable path. There is no exact AVX-512 path: at sixteen
-//! binary64 lanes AVX2 already holds the fold in four registers.
+//! `x86_64`, `Exact` has three: a portable compilation of the generic body, and an
+//! AVX2 and an AVX-512F compilation of the *same* body, chosen AVX-512F, then AVX2, then
+//! portable by what the processor reports. They are three compilations of one source
+//! order, so they return the same bits, and a test holds every path the host can execute
+//! to a scalar reference model. `aarch64` NEON and wasm `simd128` are compile-time
+//! features of the one portable path. The AVX-512F compilation is there because it was
+//! measured to be narrower code, not argued to be: in the emitted asm of a baseline
+//! `x86_64` build (under generic tuning) it holds the sixteen lanes in two `zmm`
+//! registers where AVX2 needs four `ymm`, so each sixteen-element block of the squared
+//! Euclidean fold is two `vsubpd`, two `vmulpd` and two `vaddpd` rather than four of each
+//! -- the same shape, no fused multiply-add -- and the out-of-line pair kernel over
+//! `f64` is 117 vector instructions against AVX2's 157 (`docs/design/purrdf-simd.md`
+//! §4.1 carries every count).
 //!
 //! `Reassociated` compiles its own body and never runs a compilation of `Exact`'s: on
 //! `x86_64` an AVX-512F, an AVX2+FMA and a baseline SSE2 compilation, chosen in that
@@ -280,11 +287,12 @@ pub enum Measure {
 ///
 /// A path is a compilation of an arithmetic's body, never a different arithmetic: every
 /// path of one arithmetic honours that arithmetic's whole contract. For [`Exact`] every
-/// path returns the same bits. [`Exact`] runs `Portable` and `Avx2`, and
-/// [`Reassociated`] runs `Portable` and the other six. `Portable` names the same kind of
-/// compilation for both, each arithmetic's own body compiled for the target's baseline
-/// features, and an image code is always read against its arithmetic, so the shared
-/// name never makes one arithmetic's results read as the other's.
+/// path returns the same bits. [`Exact`] runs `Portable`, `Avx2` and `Avx512f`, and
+/// [`Reassociated`] runs `Portable`, `Avx512f` and the other five. `Portable` and
+/// `Avx512f` each name the same kind of compilation for both, each arithmetic's own body
+/// compiled for the target's baseline features or with AVX-512F enabled, and an image
+/// code is always read against its arithmetic, so the shared name never makes one
+/// arithmetic's results read as the other's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Path {
@@ -298,15 +306,17 @@ pub enum Path {
     Portable,
     /// [`Exact`]: the same generic body compiled with
     /// `#[target_feature(enable = "avx2")]`, selected on `x86_64` when the processor
-    /// reports AVX2.
+    /// reports AVX2 but not everything [`Path::Avx512f`] needs.
     Avx2,
     /// [`Reassociated`] on `x86_64`: the body compiled for the baseline, SSE2.
     Sse2,
     /// [`Reassociated`] on `x86_64`: the body compiled with AVX2 and FMA enabled,
     /// selected when the processor reports both.
     Avx2Fma,
-    /// [`Reassociated`] on `x86_64`: the body compiled with AVX-512F enabled, selected
-    /// when the processor reports it along with AVX2 and FMA.
+    /// Both arithmetics on `x86_64`: the arithmetic's own body compiled with
+    /// `#[target_feature(enable = "avx512f")]`, selected when the processor reports
+    /// AVX-512F along with AVX2 and FMA, which that feature implies. For [`Exact`] it is
+    /// one more compilation of the same generic body, with the same bits.
     Avx512f,
     /// [`Reassociated`] on `aarch64`: the body compiled for NEON, the baseline.
     Neon,
@@ -978,7 +988,7 @@ impl Arithmetic for Exact {
     const IMAGE_CODES: &'static [u32] = &[Self::IMAGE_CODE];
 
     fn image_code(path: Path) -> Option<u32> {
-        matches!(path, Path::Portable | Path::Avx2).then_some(Self::IMAGE_CODE)
+        matches!(path, Path::Portable | Path::Avx2 | Path::Avx512f).then_some(Self::IMAGE_CODE)
     }
 
     fn evidence(_path: Path) -> Option<&'static str> {

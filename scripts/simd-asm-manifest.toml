@@ -3400,9 +3400,9 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   forbid_relaxed = true
 
   # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
-  # run time. Measured v157. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # run time. Measured v157. On x86-64-v3 the callers already have AVX2, so LLVM
   # inlines it into the dispatch wrapper and the portable symbol below is itself the
-  # AVX2 code.
+  # AVX2 code; on x86-64-v4 it is the AVX-512F code.
   [[site.measure]]
   label = "batch f64×f64 avx2"
   configs = ["x86_64"]
@@ -3413,15 +3413,44 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157
-  # (x86_64-v3), v133 (x86_64-v4).
+  # The `#[target_feature(enable = "avx512f")]` compilation of the same body, selected at
+  # run time ahead of AVX2. The sixteen lanes are two `zmm` registers, so each
+  # sixteen-element block issues half the packed arithmetic of the AVX2 compilation's
+  # four `ymm`, with no FMA, and the `%zmm` operand is required as the proof of width.
+  # Out of line in a baseline and an x86-64-v3 build; in an x86-64-v4 build the callers
+  # already have AVX-512F, so it is inlined into the portable symbol, measured below.
+  # Measured v117 (x86_64), v133 (x86_64-v3); AVX2 v157 (x86_64).
+  [[site.measure]]
+  label = "batch f64×f64 avx512f"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx512f::distances::<f64, f64>"
+  min_vector_ops = 58
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses): the AVX2
+  # compilation is inlined into the portable symbol. Measured v157 (x86_64-v3).
   [[site.measure]]
   label = "batch f64×f64"
-  configs = ["x86_64-v3", "x86_64-v4"]
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances::<f64, f64>"
+  min_vector_ops = 78
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX-512F: the AVX-512F compilation is inlined into the portable
+  # symbol, and it keeps the two `zmm` lanes under this CPU's tuning. Measured v133.
+  [[site.measure]]
+  label = "batch f64×f64"
+  configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::distance::dispatch::portable::distances::<f64, f64>"
   min_vector_ops = 66
-  require_mnemonics = ["vaddpd", "vmulpd"]
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -3472,9 +3501,9 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   forbid_relaxed = true
 
   # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
-  # run time. Measured v149. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # run time. Measured v149. On x86-64-v3 the callers already have AVX2, so LLVM
   # inlines it into the dispatch wrapper and the portable symbol below is itself the
-  # AVX2 code.
+  # AVX2 code; on x86-64-v4 it is the AVX-512F code.
   [[site.measure]]
   label = "indexed f64×f32 avx2"
   configs = ["x86_64"]
@@ -3485,15 +3514,44 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v197
-  # (x86_64-v3), v161 (x86_64-v4).
+  # The `#[target_feature(enable = "avx512f")]` compilation of the same body, selected at
+  # run time ahead of AVX2. The sixteen lanes are two `zmm` registers, so each
+  # sixteen-element block issues half the packed arithmetic of the AVX2 compilation's
+  # four `ymm`, with no FMA, and the `%zmm` operand is required as the proof of width.
+  # Out of line in a baseline and an x86-64-v3 build; in an x86-64-v4 build the callers
+  # already have AVX-512F, so it is inlined into the portable symbol, measured below.
+  # Measured v137 (x86_64), v161 (x86_64-v3); AVX2 v149 (x86_64).
+  [[site.measure]]
+  label = "indexed f64×f32 avx512f"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx512f::distances_indexed::<f64, f32>"
+  min_vector_ops = 68
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses): the AVX2
+  # compilation is inlined into the portable symbol. Measured v197 (x86_64-v3).
   [[site.measure]]
   label = "indexed f64×f32"
-  configs = ["x86_64-v3", "x86_64-v4"]
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f64, f32>"
+  min_vector_ops = 98
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX-512F: the AVX-512F compilation is inlined into the portable
+  # symbol, and it keeps the two `zmm` lanes under this CPU's tuning. Measured v161.
+  [[site.measure]]
+  label = "indexed f64×f32"
+  configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f64, f32>"
   min_vector_ops = 80
-  require_mnemonics = ["vaddpd", "vmulpd"]
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -3544,9 +3602,9 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   forbid_relaxed = true
 
   # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
-  # run time. Measured v173. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # run time. Measured v173. On x86-64-v3 the callers already have AVX2, so LLVM
   # inlines it into the dispatch wrapper and the portable symbol below is itself the
-  # AVX2 code.
+  # AVX2 code; on x86-64-v4 it is the AVX-512F code.
   [[site.measure]]
   label = "indexed f32×f32 avx2"
   configs = ["x86_64"]
@@ -3557,15 +3615,44 @@ summary = "`exact::dot`, the sixteen-lane exact dot fold, in the batch kernels t
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v237
-  # (x86_64-v3), v189 (x86_64-v4).
+  # The `#[target_feature(enable = "avx512f")]` compilation of the same body, selected at
+  # run time ahead of AVX2. The sixteen lanes are two `zmm` registers, so each
+  # sixteen-element block issues half the packed arithmetic of the AVX2 compilation's
+  # four `ymm`, with no FMA, and the `%zmm` operand is required as the proof of width.
+  # Out of line in a baseline and an x86-64-v3 build; in an x86-64-v4 build the callers
+  # already have AVX-512F, so it is inlined into the portable symbol, measured below.
+  # Measured v157 (x86_64), v189 (x86_64-v3); AVX2 v173 (x86_64).
+  [[site.measure]]
+  label = "indexed f32×f32 avx512f"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx512f::distances_indexed::<f32, f32>"
+  min_vector_ops = 78
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses): the AVX2
+  # compilation is inlined into the portable symbol. Measured v237 (x86_64-v3).
   [[site.measure]]
   label = "indexed f32×f32"
-  configs = ["x86_64-v3", "x86_64-v4"]
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f32, f32>"
+  min_vector_ops = 118
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX-512F: the AVX-512F compilation is inlined into the portable
+  # symbol, and it keeps the two `zmm` lanes under this CPU's tuning. Measured v189.
+  [[site.measure]]
+  label = "indexed f32×f32"
+  configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::distance::dispatch::portable::distances_indexed::<f32, f32>"
   min_vector_ops = 94
-  require_mnemonics = ["vaddpd", "vmulpd"]
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -3620,9 +3707,9 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   forbid_relaxed = true
 
   # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
-  # run time. Measured v157. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # run time. Measured v157. On x86-64-v3 the callers already have AVX2, so LLVM
   # inlines it into the dispatch wrapper and the portable symbol below is itself the
-  # AVX2 code.
+  # AVX2 code; on x86-64-v4 it is the AVX-512F code.
   [[site.measure]]
   label = "bounded f64×f64 avx2"
   configs = ["x86_64"]
@@ -3633,15 +3720,44 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157
-  # (x86_64-v3), v133 (x86_64-v4).
+  # The `#[target_feature(enable = "avx512f")]` compilation of the same body, selected at
+  # run time ahead of AVX2. The sixteen lanes are two `zmm` registers, so each
+  # sixteen-element block issues half the packed arithmetic of the AVX2 compilation's
+  # four `ymm`, with no FMA, and the `%zmm` operand is required as the proof of width.
+  # Out of line in a baseline and an x86-64-v3 build; in an x86-64-v4 build the callers
+  # already have AVX-512F, so it is inlined into the portable symbol, measured below.
+  # Measured v117 (x86_64), v133 (x86_64-v3); AVX2 v157 (x86_64).
+  [[site.measure]]
+  label = "bounded f64×f64 avx512f"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx512f::distance_bounded::<f64, f64>"
+  min_vector_ops = 58
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses): the AVX2
+  # compilation is inlined into the portable symbol. Measured v157 (x86_64-v3).
   [[site.measure]]
   label = "bounded f64×f64"
-  configs = ["x86_64-v3", "x86_64-v4"]
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f64, f64>"
+  min_vector_ops = 78
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX-512F: the AVX-512F compilation is inlined into the portable
+  # symbol, and it keeps the two `zmm` lanes under this CPU's tuning. Measured v133.
+  [[site.measure]]
+  label = "bounded f64×f64"
+  configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f64, f64>"
   min_vector_ops = 66
-  require_mnemonics = ["vaddpd", "vmulpd"]
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -3692,9 +3808,9 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   forbid_relaxed = true
 
   # The `#[target_feature(enable = "avx2")]` compilation of the same body, selected at
-  # run time. Measured v125. On x86-64-v3/v4 the callers already have AVX2, so LLVM
+  # run time. Measured v125. On x86-64-v3 the callers already have AVX2, so LLVM
   # inlines it into the dispatch wrapper and the portable symbol below is itself the
-  # AVX2 code.
+  # AVX2 code; on x86-64-v4 it is the AVX-512F code.
   [[site.measure]]
   label = "bounded f32×f32 avx2"
   configs = ["x86_64"]
@@ -3705,15 +3821,44 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v125
-  # (x86_64-v3), v89 (x86_64-v4).
+  # The `#[target_feature(enable = "avx512f")]` compilation of the same body, selected at
+  # run time ahead of AVX2. The sixteen lanes are two `zmm` registers, so each
+  # sixteen-element block issues half the packed arithmetic of the AVX2 compilation's
+  # four `ymm`, with no FMA, and the `%zmm` operand is required as the proof of width.
+  # Out of line in a baseline and an x86-64-v3 build; in an x86-64-v4 build the callers
+  # already have AVX-512F, so it is inlined into the portable symbol, measured below.
+  # Measured v89 (x86_64), v89 (x86_64-v3); AVX2 v125 (x86_64).
+  [[site.measure]]
+  label = "bounded f32×f32 avx512f"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx512f::distance_bounded::<f32, f32>"
+  min_vector_ops = 44
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses): the AVX2
+  # compilation is inlined into the portable symbol. Measured v125 (x86_64-v3).
   [[site.measure]]
   label = "bounded f32×f32"
-  configs = ["x86_64-v3", "x86_64-v4"]
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f32, f32>"
+  min_vector_ops = 62
+  require_mnemonics = ["vaddpd", "vmulpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX-512F: the AVX-512F compilation is inlined into the portable
+  # symbol, and it keeps the two `zmm` lanes under this CPU's tuning. Measured v89.
+  [[site.measure]]
+  label = "bounded f32×f32"
+  configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::distance::dispatch::portable::distance_bounded::<f32, f32>"
   min_vector_ops = 44
-  require_mnemonics = ["vaddpd", "vmulpd"]
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -3783,15 +3928,44 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2 (and FMA, which the exact fold never uses). Measured v157
-  # (x86_64-v3), v133 (x86_64-v4).
+  # The `#[target_feature(enable = "avx512f")]` compilation of the same body, selected at
+  # run time ahead of AVX2. The sixteen lanes are two `zmm` registers, so each
+  # sixteen-element block issues half the packed arithmetic of the AVX2 compilation's
+  # four `ymm`, with no FMA, and the `%zmm` operand is required as the proof of width.
+  # Out of line in a baseline and an x86-64-v3 build; in an x86-64-v4 build the callers
+  # already have AVX-512F, so it is inlined into the portable symbol, measured below.
+  # Measured v117 (x86_64), v133 (x86_64-v3); AVX2 v157 (x86_64).
+  [[site.measure]]
+  label = "pair f64×f64 avx512f"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx512f::distance::<f64, f64>"
+  min_vector_ops = 58
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm", "vsubpd %zmm"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses): the AVX2
+  # compilation is inlined into the portable symbol. Measured v157 (x86_64-v3).
   [[site.measure]]
   label = "pair f64×f64"
-  configs = ["x86_64-v3", "x86_64-v4"]
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f64>"
+  min_vector_ops = 78
+  require_mnemonics = ["vaddpd", "vmulpd", "vsubpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX-512F: the AVX-512F compilation is inlined into the portable
+  # symbol, and it keeps the two `zmm` lanes under this CPU's tuning. Measured v133.
+  [[site.measure]]
+  label = "pair f64×f64"
+  configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::distance::dispatch::portable::distance::<f64, f64>"
   min_vector_ops = 66
-  require_mnemonics = ["vaddpd", "vmulpd", "vsubpd"]
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm", "vsubpd %zmm"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -3853,14 +4027,44 @@ summary = "`exact::squared_euclidean_bounded`, the sixteen-lane exact squared-Eu
   max_fma = 0
   forbid_relaxed = true
 
-  # A consumer build with AVX2. Measured v125 (x86_64-v3), v89 (x86_64-v4).
+  # The `#[target_feature(enable = "avx512f")]` compilation of the same body, selected at
+  # run time ahead of AVX2. The sixteen lanes are two `zmm` registers, so each
+  # sixteen-element block issues half the packed arithmetic of the AVX2 compilation's
+  # four `ymm`, with no FMA, and the `%zmm` operand is required as the proof of width.
+  # Out of line in a baseline and an x86-64-v3 build; in an x86-64-v4 build the callers
+  # already have AVX-512F, so it is inlined into the portable symbol, measured below.
+  # Measured v89 (x86_64), v89 (x86_64-v3); AVX2 v125 (x86_64).
+  [[site.measure]]
+  label = "pair f32×f32 avx512f"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::avx512f::distance::<f32, f32>"
+  min_vector_ops = 44
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm", "vsubpd %zmm"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX2 (and FMA, which the exact fold never uses): the AVX2
+  # compilation is inlined into the portable symbol. Measured v125 (x86_64-v3).
   [[site.measure]]
   label = "pair f32×f32"
-  configs = ["x86_64-v3", "x86_64-v4"]
+  configs = ["x86_64-v3"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::distance::dispatch::portable::distance::<f32, f32>"
+  min_vector_ops = 62
+  require_mnemonics = ["vaddpd", "vmulpd", "vsubpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # A consumer build with AVX-512F: the AVX-512F compilation is inlined into the portable
+  # symbol, and it keeps the two `zmm` lanes under this CPU's tuning. Measured v89.
+  [[site.measure]]
+  label = "pair f32×f32"
+  configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::distance::dispatch::portable::distance::<f32, f32>"
   min_vector_ops = 44
-  require_mnemonics = ["vaddpd", "vmulpd", "vsubpd"]
+  require_mnemonics = ["vaddpd %zmm", "vmulpd %zmm", "vsubpd %zmm"]
   max_fma = 0
   forbid_relaxed = true
 

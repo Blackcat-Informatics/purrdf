@@ -2341,8 +2341,10 @@ fn assert_required_paths_ran(ran: purrdf_core::distance::Path) {
     let widest =
         Reassociated::resolve().expect("the test thread runs the default float environment");
     assert_eq!(ran, widest.path(), "the relation runs the widest path");
-    let exact_here =
-        |path: Path| path == Path::Portable || (cfg!(target_arch = "x86_64") && path == Path::Avx2);
+    let exact_here = |path: Path| {
+        path == Path::Portable
+            || (cfg!(target_arch = "x86_64") && matches!(path, Path::Avx2 | Path::Avx512f))
+    };
     for path in required_paths() {
         let refusal = match Reassociated::image_code(path) {
             Some(code) => match Reassociated::resolve_recorded(code) {

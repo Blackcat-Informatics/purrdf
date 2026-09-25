@@ -54,10 +54,10 @@ closed structurally rather than hoped about:
 
 Fixing the order as sixteen independent lanes is what lets the fold vectorize without
 licensing the compiler to reorder anything: the lanes are sixteen separate add chains,
-and LLVM packs them into whatever vector width the target has (SSE2 and AVX2 on x86-64,
+and LLVM packs them into whatever vector width the target has (SSE2, AVX2 and AVX-512F on x86-64,
 NEON on aarch64, `f64x2` under wasm `+simd128`). On `x86_64` the exact scan dispatches
-once per search between a portable compilation of the body and an AVX2 compilation of
-the same body; `purrdf_core`'s tests hold every path the host can execute to a scalar
+once per search between a portable compilation of the body and AVX2 and AVX-512F
+compilations of the same body; `purrdf_core`'s tests hold every path the host can execute to a scalar
 reference model of the lanes, the tree and the tail, bit for bit. A vector shorter than
 one chunk folds exactly as the old ascending sequential loop did, since the tree of
 sixteen zero lanes is zero.
