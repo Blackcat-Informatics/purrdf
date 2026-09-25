@@ -108,7 +108,7 @@ pub const MAX_GRAPH_PATTERN_DEPTH: usize = MAX_NESTING_DEPTH;
 /// taller — and the tree's height is the recursion depth of every walk over it,
 /// including its own `Drop`. Unbounded, a 100 000-operator chain aborted a 2 MiB native
 /// stack. Each operator, relational wrapper, path modifier and `NOT EXISTS` is charged
-/// here instead, through [`Parser::account_height`]. A chain costs no parser stack, only
+/// here instead, through [`Parser::charge_height`]. A chain costs no parser stack, only
 /// the walkers' much smaller frames (the parse of a 512-tall chain needs 48 KiB natively
 /// and 6 KiB on wasm32), so the budget is wider than the recursion budget. Evaluating
 /// the tallest chain it admits takes about 0.92 KiB of wasm32 shadow stack per operator,
@@ -960,7 +960,7 @@ impl<'a> Parser<'a, '_> {
 
     /// Parse one operand of a tree-building production and report how tall the tree
     /// it built may be: the number of levels its [`Self::nested`] constructs and
-    /// [`Self::account_height`] charges reached below the current depth. An upper
+    /// [`Self::charge_height`] charges reached below the current depth. An upper
     /// bound, never an under-count.
     fn measured<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<(T, usize)> {
         let outer_peak = std::mem::replace(&mut self.nesting_peak, self.nesting_depth);
@@ -980,7 +980,7 @@ impl<'a> Parser<'a, '_> {
     /// everything that walks it afterwards, its own `Drop` included. Every node the
     /// expression and property-path productions build above an operand they measured
     /// is charged here before it is built.
-    fn account_height(&mut self, construct: &'static str, height: usize) -> Result<()> {
+    fn charge_height(&mut self, construct: &'static str, height: usize) -> Result<()> {
         let reach = self.nesting_depth + height;
         if reach > MAX_EXPRESSION_HEIGHT {
             return Err(ParseError::syntax(
@@ -3762,7 +3762,7 @@ impl<'a> Parser<'a, '_> {
         while self.eat(&Token::Pipe) {
             let (right, right_height) = self.measured(Self::parse_path_sequence)?;
             height = 1 + height.max(right_height);
-            self.account_height("property path", height)?;
+            self.charge_height("property path", height)?;
             left = PropertyPathExpression::Alternative(Box::new(left), Box::new(right));
         }
         Ok(left)
@@ -3773,7 +3773,7 @@ impl<'a> Parser<'a, '_> {
         while self.eat(&Token::Slash) {
             let (right, right_height) = self.measured(Self::parse_path_elt_or_inverse)?;
             height = 1 + height.max(right_height);
-            self.account_height("property path", height)?;
+            self.charge_height("property path", height)?;
             left = PropertyPathExpression::Sequence(Box::new(left), Box::new(right));
         }
         Ok(left)
@@ -3782,7 +3782,7 @@ impl<'a> Parser<'a, '_> {
     fn parse_path_elt_or_inverse(&mut self) -> Result<PropertyPathExpression> {
         if self.eat(&Token::Caret) {
             let (elt, height) = self.measured(Self::parse_path_elt)?;
-            self.account_height("property path", height + 1)?;
+            self.charge_height("property path", height + 1)?;
             Ok(PropertyPathExpression::Reverse(Box::new(elt)))
         } else {
             self.parse_path_elt()
@@ -3796,7 +3796,7 @@ impl<'a> Parser<'a, '_> {
             Some(Token::Star | Token::Plus | Token::Question | Token::LBrace)
         ) {
             // A postfix modifier wraps the primary in one more level.
-            self.account_height("property path", height + 1)?;
+            self.charge_height("property path", height + 1)?;
         }
         Ok(match self.peek() {
             Some(Token::Star) => {
@@ -4468,7 +4468,7 @@ impl<'a> Parser<'a, '_> {
         while self.eat(&Token::Or) {
             let (right, right_height) = self.measured(|p| p.parse_and(aggs))?;
             height = 1 + height.max(right_height);
-            self.account_height("expression", height)?;
+            self.charge_height("expression", height)?;
             left = Expression::Or(Box::new(left), Box::new(right));
         }
         Ok(left)
@@ -4479,7 +4479,7 @@ impl<'a> Parser<'a, '_> {
         while self.eat(&Token::And) {
             let (right, right_height) = self.measured(|p| p.parse_relational(aggs))?;
             height = 1 + height.max(right_height);
-            self.account_height("expression", height)?;
+            self.charge_height("expression", height)?;
             left = Expression::And(Box::new(left), Box::new(right));
         }
         Ok(left)
@@ -4504,7 +4504,7 @@ impl<'a> Parser<'a, '_> {
             let (right, right_height) = self.measured(|p| p.parse_additive(aggs))?;
             // `!=` builds two levels: `Not(Equal(l, r))`.
             let levels = if op == "!=" { 2 } else { 1 };
-            self.account_height("expression", levels + left_height.max(right_height))?;
+            self.charge_height("expression", levels + left_height.max(right_height))?;
             let (l, r) = (Box::new(left), Box::new(right));
             return Ok(match op {
                 "=" => Expression::Equal(l, r),
@@ -4518,13 +4518,13 @@ impl<'a> Parser<'a, '_> {
         if self.peek_kw("IN") {
             self.pos += 1;
             let (list, list_height) = self.measured(|p| p.parse_expression_list(aggs))?;
-            self.account_height("expression", 1 + left_height.max(list_height))?;
+            self.charge_height("expression", 1 + left_height.max(list_height))?;
             return Ok(Expression::In(Box::new(left), list));
         }
         if self.peek_kw("NOT") && self.peek2_kw("IN") {
             self.pos += 2;
             let (list, list_height) = self.measured(|p| p.parse_expression_list(aggs))?;
-            self.account_height("expression", 2 + left_height.max(list_height))?;
+            self.charge_height("expression", 2 + left_height.max(list_height))?;
             return Ok(Expression::Not(Box::new(Expression::In(
                 Box::new(left),
                 list,
@@ -4548,7 +4548,7 @@ impl<'a> Parser<'a, '_> {
             };
             let (right, right_height) = self.measured(|p| p.parse_multiplicative(aggs))?;
             height = 1 + height.max(right_height);
-            self.account_height("expression", height)?;
+            self.charge_height("expression", height)?;
             let (l, r) = (Box::new(left), Box::new(right));
             left = if add {
                 Expression::Add(l, r)
@@ -4574,7 +4574,7 @@ impl<'a> Parser<'a, '_> {
             };
             let (right, right_height) = self.measured(|p| p.parse_unary(aggs))?;
             height = 1 + height.max(right_height);
-            self.account_height("expression", height)?;
+            self.charge_height("expression", height)?;
             let (l, r) = (Box::new(left), Box::new(right));
             left = if multiply {
                 Expression::Multiply(l, r)
@@ -4829,7 +4829,7 @@ impl<'a> Parser<'a, '_> {
                 let (body, height) =
                     self.measured(|p| p.nested("NOT EXISTS", Self::parse_exists_body))?;
                 // `Not(Exists(…))`: one level above the one `nested` charged.
-                self.account_height("expression", height + 1)?;
+                self.charge_height("expression", height + 1)?;
                 Ok(Expression::Not(Box::new(Expression::Exists(Box::new(
                     body,
                 )))))
