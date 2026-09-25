@@ -178,7 +178,7 @@ impl Parser<'_> {
                 self.annotation_index
                     .rows
                     .get(reifier)
-                    .map(|rows| {
+                    .map_or_default(|rows| {
                         rows.iter()
                             .filter_map(|&(p, o)| match self.data.resolve(p) {
                                 TermRef::Iri(iri) => Some((
@@ -192,7 +192,6 @@ impl Parser<'_> {
                             })
                             .collect()
                     })
-                    .unwrap_or_default()
             })
             .collect()
     }

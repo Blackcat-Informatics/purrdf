@@ -1779,8 +1779,7 @@ fn first_messages(candidates: &[&Vec<Literal>]) -> Vec<Literal> {
     candidates
         .iter()
         .find(|messages| !messages.is_empty())
-        .map(|messages| (*messages).clone())
-        .unwrap_or_default()
+        .map_or_default(|messages| (*messages).clone())
 }
 
 /// One `sh:reifierShape` result: the enclosing property shape's focus node and
