@@ -324,6 +324,7 @@ impl Walk<'_> {
             | NodeExpr::Sum(of)
             | NodeExpr::Limit { of, .. }
             | NodeExpr::Offset { of, .. }
+            | NodeExpr::InstancesOf(of)
             | NodeExpr::Exists(of) => self.node_expr(of, owner),
             NodeExpr::OrderBy { of, key, .. } => {
                 self.node_expr(of, owner);
@@ -352,8 +353,7 @@ impl Walk<'_> {
             | NodeExpr::Empty
             | NodeExpr::Var(_)
             | NodeExpr::Arg(_)
-            | NodeExpr::List(_)
-            | NodeExpr::InstancesOf(_) => {}
+            | NodeExpr::List(_) => {}
         }
     }
 

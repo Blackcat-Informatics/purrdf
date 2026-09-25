@@ -1182,6 +1182,15 @@ impl Parser<'_> {
         owner: &str,
         node: &Term,
     ) -> Result<Shape, String> {
+        // The one node that is a shape without saying anything: a blank node that
+        // is the subject of no triple — the authored empty shape `[]`. A blank node
+        // exists only where it is written, so it cannot be a misspelled reference
+        // to a shape defined elsewhere; it is the well-formed shape with no
+        // constraints, and every node conforms to it by definition rather than by
+        // accident.
+        if self.is_bare_blank_node(&shape_ref) {
+            return self.parse_inline_shape(shape_ref);
+        }
         if !self.node_is_a_shape(&shape_ref) {
             return Err(format!(
                 "{owner} node expression on {node} names {shape_ref}, which the shapes graph does \
@@ -1190,6 +1199,13 @@ impl Parser<'_> {
             ));
         }
         self.parse_inline_shape(shape_ref)
+    }
+
+    /// Whether `node` is a blank node that is the subject of no triple of the
+    /// shapes graph — the Turtle `[]`.
+    fn is_bare_blank_node(&self, node: &Term) -> bool {
+        matches!(node, Term::BlankNode(_))
+            && native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph).is_empty()
     }
 
     /// Refuse a node-expression key that the SELECTED expression kind does not
@@ -1582,14 +1598,18 @@ impl Parser<'_> {
                     NodeExpr::MatchAll { nodes, shape }
                 })
             }
-            // §4.5.1 InstancesOf expression: the class is constrained to
-            // `sh:nodeKind sh:IRI`.
-            ExprKind::InstancesOf => match object {
-                Term::NamedNode(class) => Ok(NodeExpr::InstancesOf(class)),
-                other => Err(format!(
-                    "shnex:instancesOf on {node} must be an IRI, got {other}"
-                )),
-            },
+            // §4.5.1 InstancesOf expression: "A well-formed node expression. A node
+            // expression returning the class(es) that the output nodes must be
+            // instances of." An IRI is the constant IRI expression; a blank node is
+            // any other expression (`[ shnex:arg 0 ]` in a custom function body). A
+            // literal is a well-formed constant expression too: it produces a
+            // member of types that is not an IRI, which §4.5.1 makes an EVALUATION
+            // failure — raised if and when the expression is evaluated, as it is for
+            // a computed operand, and not a reason to refuse a shapes graph whose
+            // evaluation may never reach it (an untaken `shnex:if` branch).
+            ExprKind::InstancesOf => Ok(NodeExpr::InstancesOf(Box::new(
+                self.parse_node_expr(&object)?,
+            ))),
             // §4.5.2 NodesMatching expression.
             ExprKind::NodesMatching => Ok(NodeExpr::NodesMatching(Box::new(
                 self.parse_shape_operand(object, "shnex:nodesMatching", node)?,

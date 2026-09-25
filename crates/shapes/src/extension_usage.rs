@@ -492,6 +492,7 @@ fn walk_node_expr(
         | NodeExpr::Sum(of)
         | NodeExpr::Limit { of, .. }
         | NodeExpr::Offset { of, .. }
+        | NodeExpr::InstancesOf(of)
         | NodeExpr::Exists(of) => walk_node_expr(of, owner, usage, env, flight),
         NodeExpr::OrderBy { of, key, .. } => {
             walk_node_expr(of, owner, usage, env, flight);
@@ -569,8 +570,7 @@ fn walk_node_expr(
         | NodeExpr::Empty
         | NodeExpr::Var(_)
         | NodeExpr::Arg(_)
-        | NodeExpr::List(_)
-        | NodeExpr::InstancesOf(_) => {}
+        | NodeExpr::List(_) => {}
         NodeExpr::NodesMatching(shape) => walk_shape(shape, usage, env, flight),
     }
 }

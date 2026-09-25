@@ -39,6 +39,15 @@
 //! pays, and the two computed rows show what an expression evaluation per focus
 //! node costs beside it.
 //!
+//! `shacl_focus_sequence_operators` is the order-preserving node-expression list
+//! operators under an `sh:expression` evaluated at every focus node. Each focus
+//! node carries `tags` values, and the operand is `shnex:concat` of its path
+//! values with themselves — every node twice, in order: `distinct` keeps the first
+//! occurrences (SHACL 1.2 Node Expressions §4.2.1) and `filter` keeps every
+//! conforming node, duplicates and order included (§4.2.5), where `control`
+//! evaluates the path alone. The two `tags` sizes sit either side of the length
+//! at which `shnex:distinct` stops scanning its output and hashes instead.
+//!
 //! `shacl_change_path_contrast` is the conforming-versus-violating pair over ONE
 //! dataset and ONE binding: the change path materializes a focus node only where a
 //! result is built, so a conforming request should cost a constant whatever the
@@ -117,6 +126,8 @@ const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
 const UNIQUE_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const COMPUTED_VALUES_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const TARGET_WHERE_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const SEQUENCE_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
+const SEQUENCE_TAGS: &[usize] = &[8, 24];
 const REALTIME_FOCUS_SIZES: &[usize] = &[1, 8, 64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -507,6 +518,59 @@ ex:RectangleShape a sh:NodeShape ;
     }
 }
 
+/// `focus_nodes` items, each with `tags` distinct IRI values of `ex:tag`, under one
+/// `sh:expression` whose operand is the item's tags concatenated with themselves:
+/// `control` evaluates the path alone, `distinct` the first occurrences of the
+/// doubled list, and `filter` the doubled list's members that conform to an
+/// IRI-kind shape — every one of them, in order. Each form wraps its operand in
+/// `shnex:exists`, which is `true` for every item, so the report is empty.
+fn sequence_focus_fixture(focus_nodes: usize, tags: usize, form: &str) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let item = builder.intern_iri(&format!("{BENCH_EX}Item"));
+    let tag = builder.intern_iri(&format!("{BENCH_EX}tag"));
+    let tag_values: Vec<TermId> = (0..tags)
+        .map(|index| builder.intern_iri(&format!("{BENCH_EX}tag{index}")))
+        .collect();
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}item{index}"));
+        builder.push_quad(focus, rdf_type, item, None);
+        for &value in &tag_values {
+            builder.push_quad(focus, tag, value, None);
+        }
+    }
+    let dataset = builder
+        .freeze()
+        .expect("sequence focus fixture must freeze");
+    let doubled = "[ shnex:concat ( [ shnex:pathValues ex:tag ] [ shnex:pathValues ex:tag ] ) ]";
+    let operand = match form {
+        "control" => "[ shnex:pathValues ex:tag ]".to_owned(),
+        "distinct" => format!("[ shnex:distinct {doubled} ]"),
+        _ => format!("[ shnex:filterShape ex:IriShape ; shnex:nodes {doubled} ]"),
+    };
+    let shapes = parse_shapes(
+        &format!(
+            r"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix ex: <{BENCH_EX}> .
+
+ex:IriShape a sh:NodeShape ; sh:nodeKind sh:IRI .
+ex:ItemShape a sh:NodeShape ;
+    sh:targetClass ex:Item ;
+    sh:expression [ shnex:exists {operand} ] .
+"
+        ),
+        None,
+    )
+    .expect("sequence focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
 /// A `sh:targetWhere` fixture: `focus_nodes` concepts, each with a notation, and
 /// as many unrelated nodes beside them, so a where target that scans every node of
 /// the graph has twice the candidates one that narrows to the class does.
@@ -839,6 +903,33 @@ fn bench_focus_computed_values(c: &mut Criterion) {
                     bencher.iter(|| validate_fixture(black_box(fixture)));
                 },
             );
+        }
+    }
+    group.finish();
+}
+
+fn bench_focus_sequence_operators(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_sequence_operators");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in SEQUENCE_FOCUS_SIZES {
+        for &tags in SEQUENCE_TAGS {
+            for form in ["control", "distinct", "filter"] {
+                let fixture = sequence_focus_fixture(focus_nodes, tags, form);
+                let probe = Once::new();
+                group.throughput(Throughput::Elements(focus_nodes as u64));
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{form}_tags{tags}"), focus_nodes),
+                    &fixture,
+                    move |bencher, fixture| {
+                        probe.call_once(|| {
+                            print_validation_probe(&format!("sequence_{form}_tags{tags}"), fixture);
+                        });
+                        bencher.iter(|| validate_fixture(black_box(fixture)));
+                    },
+                );
+            }
         }
     }
     group.finish();
@@ -1692,6 +1783,7 @@ criterion_group!(
     bench_focus_unique_values,
     bench_focus_target_where,
     bench_focus_computed_values,
+    bench_focus_sequence_operators,
     bench_focus_realtime,
     bench_change_path_contrast,
     bench_subclass_membership,

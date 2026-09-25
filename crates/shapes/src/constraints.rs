@@ -3326,7 +3326,17 @@ fn eval_constraint<'a, S: ResultSink>(
 
                 match &produced {
                     crate::expression::ShapeNodes::Terms(terms) => {
-                        for shape_node in terms.as_ref() {
+                        // §7.2 checks v against "each output node" s of the
+                        // expression, and a validation result is keyed by (v, s):
+                        // the node shapes form a SET, so a shape an order-preserving
+                        // expression yields twice (`shnex:concat ( ex:S ex:S )`) is
+                        // checked, and reported, once. The scan is over the prefix
+                        // already visited, so it allocates nothing.
+                        let terms = terms.as_ref();
+                        for (position, shape_node) in terms.iter().enumerate() {
+                            if terms[..position].contains(shape_node) {
+                                continue;
+                            }
                             check_against!(
                                 context.plan.indexed(index, shape_node, resolved)?,
                                 shape_node

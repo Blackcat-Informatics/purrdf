@@ -158,22 +158,13 @@ const W3C12_DECLARED_FAILURES: usize = 5;
 /// as unevaluated, where the engine's answer is a load error rather than a report. There is no shapes graph to pack, so the codec has nothing to say
 /// about them. The ledger runs both ways: an entry whose shapes graph starts
 /// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
-const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
-    (
-        "w3c12/sparql/functions/instanceCount-example",
-        R_INSTANCES_OF_EXPR,
-    ),
-    (
-        "w3c12/inference-rules/rules-entailment-validation",
-        R_ENTAILMENT,
-    ),
-];
+const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[(
+    "w3c12/inference-rules/rules-entailment-validation",
+    R_ENTAILMENT,
+)];
 
 const R_ENTAILMENT: &str = "declares sh:entailment, and SHACL requires a processor to signal a \
      failure for an entailment regime it does not support";
-
-const R_INSTANCES_OF_EXPR: &str = "a custom function body passes a node-expression argument to \
-     shnex:instancesOf, which the parser refuses because it requires an IRI";
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
 
@@ -262,7 +253,18 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// `property-select-001` and `property-sparqlExpr-001` now load and agree on a
 /// report (+2) — a property shape's two node expressions travel in the product —
 /// and [`W3C12_REFUSED_AT_LOAD`] went from 4 entries to 2.
-const AGREED_ON_REPORT_CASES: usize = 361;
+///
+/// Moved from 361 to 362 when `shnex:instancesOf` took a node-expression
+/// argument, as SHACL 1.2 Node Expressions §4.5.1 declares it:
+/// `sparql/functions/instanceCount-example`, whose custom function body reads its
+/// class from `[ shnex:arg 0 ]`, now loads and agrees on a report (+1) — the
+/// expression operand travels in the product — and [`W3C12_REFUSED_AT_LOAD`] went
+/// from 2 entries to 1.
+///
+/// Moved from 362 to 363 when the first-party corpus gained
+/// `73-expr-if-list-true`, which pins SHACL 1.2 Node Expressions §4.1.6 — `then`
+/// only for the condition list `( true )` — and agrees on a report (+1).
+const AGREED_ON_REPORT_CASES: usize = 363;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -362,7 +364,20 @@ const AGREED_ON_REPORT_CASES: usize = 361;
 /// is now the Turtle codec's own record, and the first constraint takes `test:` from
 /// the `sh:ShapesGraph`'s implicit `sh:declare`; the lanes agree on the violation
 /// the suite expects (+1).
-const AGREED_WITH_RESULTS_CASES: usize = 341;
+///
+/// # Why it moved from 341 to 342
+///
+/// `sparql/functions/instanceCount-example` loads now that `shnex:instancesOf`
+/// takes a node-expression argument, and its `sh:select` constraint reports the
+/// `sh:Warning` result carrying the computed instance count 2 that the suite
+/// expects (+1).
+///
+/// # Why it moved from 342 to 343
+///
+/// The first-party corpus gained `73-expr-if-list-true`, whose `xsd:integer`
+/// condition `1` is not the list `( true )` and so takes `shnex:else`: the lanes
+/// agree on that one violation, and on none for the `true` control (+1).
+const AGREED_WITH_RESULTS_CASES: usize = 343;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

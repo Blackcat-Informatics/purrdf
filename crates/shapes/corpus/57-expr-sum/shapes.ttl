@@ -1,11 +1,12 @@
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix ex: <http://example.org/ns#> .
+@prefix sparql: <http://www.w3.org/ns/sparql#> .
 
 ex:SumShape
     a sh:NodeShape ;
     sh:targetClass ex:C ;
     sh:expression [
-        sh:if [ sh:sum [ sh:path ex:amt ] ] ;
+        sh:if [ sparql:greater-than ( [ sh:sum [ sh:path ex:amt ] ] 0 ) ] ;
         sh:then true ;
         sh:else false
     ] .

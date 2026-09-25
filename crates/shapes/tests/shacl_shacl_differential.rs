@@ -67,7 +67,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        234,
+        235,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -118,17 +118,10 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "sparql-constraint-severity",
         "sh:severity on <",
-        3,
+        4,
         "a SPARQL-based constraint's sh:severity names a severity, an IRI, exactly as a shape's \
          does (SHACL 1.2 Core §3.6.2.4); shacl-shacl.ttl checks sh:severity on shapes only, and \
          the object of sh:sparql is not one",
-    ),
-    (
-        "instances-of-expression-argument",
-        "shnex:instancesOf on",
-        1,
-        "a node-expression argument to shnex:instancesOf is a SHACL 1.2 Node Expressions form \
-         this engine does not evaluate; node expressions are outside shacl-shacl.ttl entirely",
     ),
 ];
 
@@ -562,14 +555,14 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
     }
 }
 
-/// The exact number of shapes graphs the three corpora contribute: 72 first-party
+/// The exact number of shapes graphs the three corpora contribute: 73 first-party
 /// cases, 129 W3C SHACL 1.0 cases and 174 W3C SHACL 1.2 `sht:Validate` entries, each
 /// with its own shapes file.
-const BASE_INPUTS: usize = 375;
+const BASE_INPUTS: usize = 376;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 189 literal-for-IRI, 101
-/// non-integer counts, 155 lists-for-single-values, 35 non-boolean flags and 232
+/// mutation kind that finds a statement to rewrite): 192 literal-for-IRI, 101
+/// non-integer counts, 157 lists-for-single-values, 35 non-boolean flags and 235
 /// misspelled predicates.
 ///
 /// Moved from 683 to 690 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
@@ -624,7 +617,18 @@ const BASE_INPUTS: usize = 375;
 /// `sh:targetClass` (+1), and each property shape gains a misspelled predicate
 /// (+2); `property-sparqlExpr-001` targets by `sh:targetNode`, which no kind
 /// rewrites.
-const MUTANT_INPUTS: usize = 717;
+///
+/// Moved from 717 to 719 when `shnex:instancesOf` took a node-expression
+/// argument: `sparql/functions/instanceCount-example` now loads, so it is a base
+/// both sides accept. The literal-for-IRI kind rewrites its SPARQL constraint's
+/// `sh:severity` (+1, refused under `sparql-constraint-severity`), and its shape
+/// gains a misspelled predicate (+1, refused under `unknown-term`).
+///
+/// Moved from 719 to 720 when the first-party corpus gained
+/// `73-expr-if-list-true`, a base both sides accept: the literal-for-IRI kind
+/// rewrites its `sh:targetClass` (+1). Its one shape is a node shape with no
+/// property shape, so it gains no misspelled predicate.
+const MUTANT_INPUTS: usize = 720;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -716,11 +720,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 190),
+        ("literal-where-an-IRI-is-required", 192),
         ("non-integer-count", 101),
         ("list-where-a-single-value-is-required", 157),
         ("non-boolean-flag", 35),
-        (UNKNOWN_TERM, 234),
+        (UNKNOWN_TERM, 235),
     ]
     .into_iter()
     .collect();

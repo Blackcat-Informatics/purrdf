@@ -28,6 +28,7 @@ const PREFIXES: &str = r"
 @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix sh:    <http://www.w3.org/ns/shacl#> .
 @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix sparql: <http://www.w3.org/ns/sparql#> .
 @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
 ";
 
@@ -1197,4 +1198,262 @@ fn a_computed_shape_argument_must_produce_exactly_one_iri() {
             "at {count} produced IRIs, got: {err}"
         );
     }
+}
+
+// ── Per-arm sequence contracts (the fixes that came with them) ─────────────────
+
+/// As [`outputs`], but returning the evaluation failure instead of asserting its
+/// absence.
+fn try_outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Result<Vec<String>, String> {
+    let expr = expression_of(shapes_ttl);
+    let data: Arc<_> =
+        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
+    let shapes_ds: Arc<_> = parse_turtle_to_dataset(&format!("{PREFIXES}{shapes_ttl}"), None)
+        .expect("shapes data parse");
+    let store = ShaclData::new(Arc::clone(&data), shapes_ds, None);
+    let focus_term = Term::NamedNode(purrdf_shapes::term::NamedNode::new_unchecked(format!(
+        "http://example.org/ns#{focus}"
+    )));
+    let mut guard = RecursionGuard::new();
+    eval_node_expr(&store, &focus_term, &expr, &mut guard)
+        .map(|out| out.iter().map(ToString::to_string).collect())
+}
+
+/// The canonical rendering of an `xsd:integer` literal.
+fn integer(lexical: &str) -> String {
+    format!(r#""{lexical}"^^<http://www.w3.org/2001/XMLSchema#integer>"#)
+}
+
+/// §4.2.5: "the output nodes of evalExpr(nodes, …) except those that do not
+/// conform to the shape filterShape, preserving the order in the list". The
+/// survivors keep their input ORDER and their MULTIPLICITY: `3` passes twice and
+/// stays in front of `1`, and the non-integer `2.5` is the only node dropped.
+#[test]
+fn filter_shape_preserves_input_order_and_duplicates() {
+    let out = outputs(
+        "",
+        "ex:Integers a sh:NodeShape ; sh:datatype xsd:integer .
+         ex:S a sh:NodeShape ;
+             sh:expression [ shnex:filterShape ex:Integers ;
+                             shnex:nodes [ shnex:concat ( ( 3 1 ) ( 2.5 3 ) ) ] ] .",
+        "a",
+    );
+    assert_eq!(out, vec![integer("3"), integer("1"), integer("3")]);
+}
+
+/// §4.2.1: "the list of nodes in input in the same order but with duplicates
+/// eliminated (the first occurrences of each node shall be kept, the others
+/// removed). Nodes are compared using term equality". So `4 2 4 1 2` is `4 2 1`
+/// — not the sorted `1 2 4` — and `"04"^^xsd:integer` is a different term from
+/// `4`, so it survives beside it.
+#[test]
+fn distinct_keeps_first_occurrences_by_term_equality() {
+    let shapes =
+        |list: &str| format!("ex:S a sh:NodeShape ; sh:expression [ shnex:distinct {list} ] .");
+    assert_eq!(
+        outputs("", &shapes("( 4 2 4 1 2 )"), "a"),
+        vec![integer("4"), integer("2"), integer("1")]
+    );
+    assert_eq!(
+        outputs("", &shapes(r#"( 4 "04"^^xsd:integer 4 )"#), "a"),
+        vec![integer("4"), integer("04")]
+    );
+}
+
+/// `shnex:findFirst` and `shnex:matchAll` take "A well-formed shape", and the
+/// authored empty shape `[]` — a blank node that is the subject of no triple — is
+/// one: a shape with no constraints, to which every node conforms. It loads, and
+/// it answers as that shape does.
+///
+/// The neighbouring refusal stands: an IRI the shapes graph never describes as a
+/// shape is still refused, because an undefined IRI may be a misspelled reference
+/// to a real shape, where a `[]` is written in place and can be nothing else.
+#[test]
+fn find_first_and_match_all_accept_the_empty_shape_but_not_an_undefined_iri() {
+    for (kind, expected) in [
+        ("shnex:findFirst", vec![integer("3")]),
+        ("shnex:matchAll", vec![bool_lit(true)]),
+        (
+            "shnex:filterShape",
+            vec![integer("3"), integer("1"), integer("3")],
+        ),
+    ] {
+        assert_eq!(
+            outputs(
+                "",
+                &format!(
+                    "ex:S a sh:NodeShape ; sh:expression [ {kind} [] ; shnex:nodes ( 3 1 3 ) ] ."
+                ),
+                "a",
+            ),
+            expected,
+            "{kind} over the empty shape"
+        );
+        let err = load_error(&format!(
+            "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+                 sh:expression [ {kind} ex:Undefined ; shnex:nodes ( 3 1 3 ) ] ."
+        ));
+        assert!(
+            err.contains("does not describe as a shape"),
+            "{kind} must still refuse an undefined shape IRI, got: {err}"
+        );
+    }
+}
+
+/// SHACL 1.2 Node Expressions §5 passes each argument's node to the SPARQL
+/// function, and an argument that produces NO node reaches SPARQL as an unbound
+/// variable — which is what makes `sparql:bound` answer `false` and
+/// `sparql:coalesce` fall through to its next argument. The neighbours bind the
+/// same argument and get the other answer, so the two runs differ only in
+/// whether the argument produced a node.
+#[test]
+fn an_argument_that_produces_no_node_reaches_sparql_as_unbound() {
+    let expression = |body: &str| format!("ex:S a sh:NodeShape ; sh:expression {body} .");
+    assert_eq!(
+        outputs(
+            "",
+            &expression(r#"[ sparql:bound ( [ shnex:var "absent" ] ) ]"#),
+            "a"
+        ),
+        vec![bool_lit(false)]
+    );
+    assert_eq!(
+        outputs(
+            "",
+            &expression(r#"[ sparql:bound ( [ shnex:var "focusNode" ] ) ]"#),
+            "a"
+        ),
+        vec![bool_lit(true)]
+    );
+    assert_eq!(
+        outputs(
+            "",
+            &expression(r#"[ sparql:coalesce ( [ shnex:var "absent" ] "fallback" ) ]"#),
+            "a"
+        ),
+        vec![r#""fallback""#.to_owned()]
+    );
+    assert_eq!(
+        outputs(
+            "",
+            &expression(r#"[ sparql:coalesce ( "given" "fallback" ) ]"#),
+            "a"
+        ),
+        vec![r#""given""#.to_owned()]
+    );
+}
+
+/// A SPARQL function is a LIST parameter function (§3.2.2): "An evaluation
+/// failure must be produced if there is more than one output node" for an
+/// argument. The neighbour passes the same function a one-node argument and gets
+/// its value.
+#[test]
+fn a_sparql_function_argument_producing_two_nodes_is_an_evaluation_failure() {
+    let expression =
+        |arg: &str| format!("ex:S a sh:NodeShape ; sh:expression [ sparql:abs ( {arg} ) ] .");
+    let err = try_outputs("", &expression("( -1 -2 )"), "a")
+        .expect_err("a two-node argument to a SPARQL function must fail");
+    assert!(
+        err.contains("produced 2 nodes") && err.contains("list parameter function"),
+        "the failure must say which argument produced how many nodes, got: {err}"
+    );
+    assert_eq!(outputs("", &expression("( -1 )"), "a"), vec![integer("1")]);
+}
+
+/// §6.2 evaluates a custom LIST parameter expression's body "where an evaluation
+/// failure is reported when there is more than 1 output node". A NAMED parameter
+/// function has no such bound, and a list parameter function whose body produces
+/// one node is fine — the two neighbours run the same two-node body and the same
+/// function shape respectively.
+#[test]
+fn a_list_parameter_function_body_producing_two_nodes_is_an_evaluation_failure() {
+    let list_fn = |body: &str| {
+        format!(
+            "ex:pair a sh:ListParameterExpressionFunction ;
+               rdfs:subClassOf sh:ListParameterExpression ;
+               sh:bodyExpression {body} .
+             ex:S a sh:NodeShape ; sh:expression [ ex:pair () ] ."
+        )
+    };
+    let err = try_outputs("", &list_fn("( 1 2 )"), "a")
+        .expect_err("a list parameter function producing two nodes must fail");
+    assert!(
+        err.contains("produced 2 output nodes"),
+        "the failure must name the count, got: {err}"
+    );
+    assert_eq!(outputs("", &list_fn("( 1 )"), "a"), vec![integer("1")]);
+
+    let named = "ex:PairExpression a sh:NamedParameterExpressionFunction ;
+           rdfs:subClassOf sh:NamedParameterExpression ;
+           sh:parameter [ sh:path ex:pairOf ; sh:keyParameter true ] ;
+           sh:bodyExpression [ shnex:concat ( [ shnex:arg ex:pairOf ] [ shnex:arg ex:pairOf ] ) ] .
+         ex:S a sh:NodeShape ; sh:expression [ ex:pairOf 7 ] .";
+    assert_eq!(outputs("", named, "a"), vec![integer("7"), integer("7")]);
+}
+
+/// §4.5.1 makes the class operand a node expression ("A node expression returning
+/// the class(es) that the output nodes must be instances of"), and the output is
+/// "the distinct nodes that are SHACL instances in the focus graph of each member
+/// of types" — so two computed classes sharing an instance yield it once. A
+/// computed member that is not an IRI is the evaluation failure the clause names.
+#[test]
+fn instances_of_takes_a_computed_class_expression() {
+    let data = "ex:a ex:kind ex:Cat, ex:Dog .
+         ex:tom a ex:Cat .
+         ex:rex a ex:Dog .
+         ex:both a ex:Cat, ex:Dog .
+         ex:b ex:kind \"Cat\" .";
+    let shapes = "ex:S a sh:NodeShape ;
+         sh:expression [ shnex:instancesOf [ shnex:pathValues ex:kind ] ] .";
+    assert_eq!(
+        outputs(data, shapes, "a"),
+        vec![ex("both"), ex("rex"), ex("tom")]
+    );
+    let err = try_outputs(data, shapes, "b").expect_err("a literal class must fail");
+    assert!(err.contains("not an IRI"), "got: {err}");
+    // A literal written as the operand is a well-formed constant expression, so
+    // the shapes graph loads — an untaken `shnex:if` branch never evaluates it —
+    // and evaluating it is the same §4.5.1 failure.
+    let literal = "ex:S a sh:NodeShape ; sh:expression [ shnex:instancesOf \"Cat\" ] .";
+    let err = try_outputs(data, literal, "a").expect_err("a literal class must fail");
+    assert!(err.contains("not an IRI"), "got: {err}");
+    assert_eq!(
+        outputs(
+            data,
+            "ex:S a sh:NodeShape ;
+                 sh:expression [ shnex:if false ;
+                                 shnex:then [ shnex:instancesOf \"Cat\" ] ;
+                                 shnex:else ex:fine ] .",
+            "a"
+        ),
+        vec![ex("fine")],
+        "a literal operand in a branch that is never taken is never a failure"
+    );
+}
+
+/// §7.2 checks each value node against "each output node" of the expression, and
+/// a validation result is keyed by the value node and the shape: the node shapes
+/// form a set. An order-preserving expression that yields the same shape twice is
+/// therefore checked, and reported, once; the neighbour yields two DIFFERENT
+/// failing shapes and gets two results.
+#[test]
+fn node_by_expression_checks_a_repeated_shape_once() {
+    let data = "<http://example.org/ns#a> <http://example.org/ns#p> <http://example.org/ns#v> .\n";
+    let shapes = |shapes: &str| {
+        format!(
+            "{PREFIXES}
+            ex:S a sh:NodeShape ;
+                sh:targetNode ex:a ;
+                sh:property [ sh:path ex:p ; sh:nodeByExpression [ shnex:concat {shapes} ] ] .
+            ex:NeedsName a sh:NodeShape ; sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+            ex:NeedsLabel a sh:NodeShape ; sh:property [ sh:path ex:label ; sh:minCount 1 ] .
+            "
+        )
+    };
+    let repeated =
+        validate_graphs(data, &shapes("( ex:NeedsName ex:NeedsName )"), None).expect("validates");
+    assert_eq!(repeated.results.len(), 1, "one shape, one result");
+    let distinct =
+        validate_graphs(data, &shapes("( ex:NeedsName ex:NeedsLabel )"), None).expect("validates");
+    assert_eq!(distinct.results.len(), 2, "two shapes, two results");
 }

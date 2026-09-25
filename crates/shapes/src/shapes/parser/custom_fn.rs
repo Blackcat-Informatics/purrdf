@@ -541,12 +541,21 @@ fn collect_arg_keys(expr: &crate::expression::NodeExpr, out: &mut Vec<ArgKey>) {
         NodeExpr::Filter { nodes, .. }
         | NodeExpr::FindFirst { nodes, .. }
         | NodeExpr::MatchAll { nodes, .. } => collect_arg_keys(nodes, out),
-        NodeExpr::ConformsToShape { node, .. } => collect_arg_keys(node, out),
+        NodeExpr::ConformsToShape { node, shape } => {
+            collect_arg_keys(node, out);
+            // A COMPUTED shape argument is a node expression evaluated in the same
+            // scope as the node argument (§4.5.3), so an argument it reads is read
+            // by this body.
+            if let crate::expression::ShapeArg::Computed { expr, .. } = shape {
+                collect_arg_keys(expr, out);
+            }
+        }
         NodeExpr::PathValues { focus, .. } => collect_arg_keys(focus, out),
         NodeExpr::Count { of, .. } | NodeExpr::Limit { of, .. } | NodeExpr::Offset { of, .. } => {
             collect_arg_keys(of, out);
         }
         NodeExpr::Distinct(inner)
+        | NodeExpr::InstancesOf(inner)
         | NodeExpr::Min(inner)
         | NodeExpr::Max(inner)
         | NodeExpr::Sum(inner)
@@ -558,7 +567,6 @@ fn collect_arg_keys(expr: &crate::expression::NodeExpr, out: &mut Vec<ArgKey>) {
         | NodeExpr::Empty
         | NodeExpr::Var(_)
         | NodeExpr::List(_)
-        | NodeExpr::InstancesOf(_)
         | NodeExpr::NodesMatching(_)
         | NodeExpr::Select { .. } => {}
     }

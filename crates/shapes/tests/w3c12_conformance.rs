@@ -74,9 +74,6 @@ use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_f
 /// Why every SPARQL 1.2 RL entry fails today.
 const NO_SRL: &str = "no SPARQL 1.2 RL implementation";
 
-const R_INSTANCES_OF_EXPR: &str = "shnex:instancesOf refuses a node-expression argument (shnex:arg) and requires an \
-     IRI, so the function body is rejected at load";
-
 const R_RULES_ENTAILMENT: &str = "sh:entailment sh:RulesEntailment is not supported, so the shapes graph is refused \
      at load, as SHACL requires for an entailment regime a processor does not support";
 
@@ -97,18 +94,6 @@ const R_RULE_TEMPLATE: &str = "sh:SPARQLRuleTemplate is not implemented: templat
 const R_RULE_PROCESSOR: &str = "sh:ruleProcessor is not validated: an unknown processor at rule or rule-set level \
      runs instead of being refused";
 
-const R_UNBOUND_ARG: &str = "an unbound shnex:var argument makes the sparql: call yield nothing instead of \
-     reaching BOUND/COALESCE as unbound";
-
-const R_SEQUENCE_ORDER: &str = "node-expression output is set-shaped and canonically sorted: shnex:filterShape / \
-     shnex:distinct do not keep input order (distinct must keep first occurrences)";
-
-const R_EMPTY_SHAPE: &str = "shnex:findFirst / shnex:matchAll refuse the well-formed empty shape [] as an \
-     undefined shape";
-
-const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key is unbound; the spec sorts such nodes \
-     first";
-
 /// Entries the engine currently fails, with the reason: `(test id, reason)`,
 /// where the id is the entry's IRI relative to `vectors/shacl12/tests` (see
 /// `shacl12::entry_id` for the SPARQL 1.2 RL evaluation entries). Grouped by
@@ -117,11 +102,6 @@ const R_ORDER_BY_UNBOUND: &str = "shnex:orderBy errors on a node whose sort key 
 /// A ledgered entry MUST fail; when engine work fixes it the harness errors with
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[
-    // ── SPARQL surface ──
-    (
-        "sparql/functions/instanceCount-example",
-        R_INSTANCES_OF_EXPR,
-    ),
     // ── SHACL rules (sht:Infer and the rules entailment regime) ──
     (
         "inference-rules/rules-entailment-validation",
@@ -167,19 +147,6 @@ const XFAIL: &[(&str, &str)] = &[
         "inference-rules/ruleProcessor-unknown-at-ruleset",
         R_RULE_PROCESSOR,
     ),
-    // ── Node expressions ──
-    ("node-expr/shnex-sparql/bound-example", R_UNBOUND_ARG),
-    ("node-expr/shnex-sparql/coalesce-example", R_UNBOUND_ARG),
-    ("node-expr/shnex/filterShape-integers", R_SEQUENCE_ORDER),
-    (
-        "node-expr/shnex/filterShape-unconstrained",
-        R_SEQUENCE_ORDER,
-    ),
-    ("node-expr/shnex/distinct-list", R_SEQUENCE_ORDER),
-    ("node-expr/shnex/distinct-termEquality", R_SEQUENCE_ORDER),
-    ("node-expr/shnex/findFirst-empty", R_EMPTY_SHAPE),
-    ("node-expr/shnex/matchAll-empty", R_EMPTY_SHAPE),
-    ("node-expr/shnex/orderBy-height", R_ORDER_BY_UNBOUND),
     // ── SPARQL 1.2 RL (every srlt: test type) ──
     ("sparql-rl/eval/eval-basic-01", NO_SRL),
     ("sparql-rl/eval/eval-basic-02", NO_SRL),

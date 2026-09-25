@@ -1041,9 +1041,9 @@ impl AstWriter {
                 self.node_expr(nodes)?;
                 self.shape(shape)?;
             }
-            NodeExpr::InstancesOf(class) => {
+            NodeExpr::InstancesOf(types) => {
                 self.tag(28);
-                self.named_node(class);
+                self.node_expr(types)?;
             }
             NodeExpr::NodesMatching(shape) => {
                 self.tag(29);
@@ -2084,7 +2084,7 @@ impl<'a> AstReader<'a> {
                 nodes: Box::new(self.node_expr()?),
                 shape: Box::new(self.shape()?),
             },
-            28 => NodeExpr::InstancesOf(self.named_node()?),
+            28 => NodeExpr::InstancesOf(Box::new(self.node_expr()?)),
             29 => NodeExpr::NodesMatching(Box::new(self.shape()?)),
             30 => NodeExpr::ConformsToShape {
                 node: Box::new(self.node_expr()?),
@@ -2606,8 +2606,8 @@ impl FnTable {
             | NodeExpr::Empty
             | NodeExpr::Var(_)
             | NodeExpr::List(_)
-            | NodeExpr::InstancesOf(_)
             | NodeExpr::Select { .. } => {}
+            NodeExpr::InstancesOf(types) => self.node_expr(types)?,
             NodeExpr::Filter { nodes, shape }
             | NodeExpr::FindFirst { nodes, shape }
             | NodeExpr::MatchAll { nodes, shape } => {
