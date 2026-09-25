@@ -164,6 +164,25 @@ pub enum EvalError {
     /// [`RemoteError::Denied`](crate::RemoteError::Denied), which `SILENT` never swallows.
     ServiceDenied(crate::service::ServiceDenial),
 
+    /// A [`ServiceResolver`](crate::ServiceResolver) refused a `SERVICE` request as its
+    /// own host-policy decision, with **no catalog capability** disclosed as the cause —
+    /// see [`crate::remote::RemoteError::HostDenied`], which this carries the fields of.
+    ///
+    /// Distinct from [`Self::ServiceDenied`] because the two are different facts and
+    /// conflating them would report a capability the host never named: [`Self::ServiceDenied`]
+    /// names a capability an installed [`ServiceCatalog`](crate::service::ServiceCatalog)
+    /// withheld; this variant is what a host resolver's own policy (a rate limit, an
+    /// allowlist the host keeps outside any catalog, …) refuses on its own, independent of
+    /// any catalog. Structurally distinct for the same reason [`Self::ServiceDenied`] is —
+    /// it must survive an in-process resolver's nested `SERVICE` body without decaying
+    /// into endpoint-failure text that `SERVICE SILENT` is entitled to swallow.
+    ServiceHostDenied {
+        /// The service IRI that was refused.
+        endpoint: String,
+        /// The host's own denial message, verbatim.
+        message: String,
+    },
+
     /// The dataset carries structurally malformed RDF that a builtin cannot
     /// interpret — e.g. a cyclic `rdf:List` (a cell reachable from itself) or a
     /// list cell missing its `rdf:first`/`rdf:rest` edge. Distinct from
@@ -343,6 +362,7 @@ impl EvalError {
             | Self::Internal(_)
             | Self::Remote(_)
             | Self::ServiceDenied(_)
+            | Self::ServiceHostDenied { .. }
             | Self::Data(_)
             | Self::Function(_)
             | Self::ExistsScopeCollision { .. }
@@ -435,6 +455,12 @@ impl core::fmt::Display for EvalError {
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
             Self::ServiceDenied(denial) => {
                 write!(f, "SERVICE federation denied: {denial}")
+            }
+            Self::ServiceHostDenied { endpoint, message } => {
+                write!(
+                    f,
+                    "SERVICE <{endpoint}>: the host denied the request: {message}"
+                )
             }
             Self::Data(msg) => write!(f, "malformed RDF input: {msg}"),
             Self::ExistsScopeCollision { variable, intro } => write!(

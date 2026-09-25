@@ -118,6 +118,31 @@ pub enum RemoteError {
     /// inside a forwarded body can be recognized and re-raised as this variant instead of
     /// decaying into a silenceable endpoint failure.
     Denied(ServiceDenial),
+    /// A [`ServiceResolver`] refused the service by its own policy, with **no catalog
+    /// capability** to name as the cause — e.g. a host resolver's own rules (a rate
+    /// limit, an allowlist the host keeps outside any installed [`ServiceCatalog`], …)
+    /// rather than a withheld [`ServiceCapability`](crate::service::ServiceCapability).
+    ///
+    /// Its own variant rather than folded into [`Self::Denied`], because [`Self::Denied`]
+    /// carries a [`ServiceDenial`] naming a specific withheld capability — that is a fact
+    /// about the *catalog's* configuration, and reusing it here would invent a capability
+    /// cause the host never stated. Reported instead as "the host denied the request",
+    /// which is exactly what is known: a decision, not a reason drawn from policy this
+    /// engine can see.
+    ///
+    /// **Not silenceable**, for the identical reason [`Self::Denied`] is not: the refusal
+    /// is decided on this side of the seam, deterministically, before any endpoint was
+    /// consulted, so it is grouped with the governors rather than the endpoint failures.
+    /// Structured (not folded into a formatted [`EvalError::Remote`]) so a denial raised
+    /// by a nested `SERVICE` inside a forwarded body survives being recognized and
+    /// re-raised as this variant rather than decaying into a silenceable endpoint failure —
+    /// see [`Self::Denied`]'s identical concern.
+    HostDenied {
+        /// The service IRI that was refused.
+        endpoint: String,
+        /// The host's own denial message, verbatim.
+        message: String,
+    },
     /// **This engine's own** governor stopped the exchange: the caller's stop signal
     /// fired, or a ceiling was crossed inside the forwarded evaluation.
     ///
@@ -153,6 +178,9 @@ impl core::fmt::Display for RemoteError {
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
             Self::Denied(denial) => write!(f, "denied: {denial}"),
+            Self::HostDenied { endpoint, message } => {
+                write!(f, "<{endpoint}>: the host denied the request: {message}")
+            }
             Self::Governed(governor) => write!(f, "governed: {governor}"),
             Self::GovernedAfterCompletion(governor) => {
                 write!(f, "governed after completed exchange: {governor}")
@@ -1047,6 +1075,14 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         Err(RemoteError::Denied(denial)) => {
             return Err(EvalError::ServiceDenied(denial));
         }
+        // The host's own resolver refused it with no catalog capability to name — same
+        // non-silenceable precedence as the capability denial above, and for the same
+        // reason: decided on this side of the seam before any endpoint was consulted.
+        // Kept a distinct arm (rather than folded into the one above) so the reported
+        // cause is never a capability the host never stated.
+        Err(RemoteError::HostDenied { endpoint, message }) => {
+            return Err(EvalError::ServiceHostDenied { endpoint, message });
+        }
         // The forwarded body ran out of stack inside an in-process source: not the
         // endpoint's failure, so — like a denial — never swallowed under `SILENT`, and
         // re-raised as the same typed refusal it was, however deep the nesting of
@@ -1161,17 +1197,23 @@ fn ingest<D: DatasetView + Sync>(
 /// Reclassify an error raised by a forwarded in-memory evaluation for the resolver seam.
 ///
 /// Everything the inner evaluation can fail with is, from the OUTER query's point of view,
-/// this endpoint failing to produce a decodable answer — with exactly one exception. A
+/// this endpoint failing to produce a decodable answer — with exactly two exceptions. A
 /// nested `SERVICE` clause resolved through the same (gated) resolver raises
-/// [`EvalError::ServiceDenied`], and that is a refusal decided on this side of the seam,
-/// not an endpoint that did not answer. It must cross back as
-/// [`RemoteError::Denied`] so `eval_service` classifies it identically at every depth: a
-/// denial `SERVICE SILENT` never swallows. Mapping it to [`RemoteError::Decode`] would
-/// make a nested denial silenceable when the same denial one level up is not, and the
-/// resulting answer would look complete, be wrong, and be wrong the same way on every run.
+/// [`EvalError::ServiceDenied`] (a withheld catalog capability) or
+/// [`EvalError::ServiceHostDenied`] (the host's own refusal, no capability to name), and
+/// both are a refusal decided on this side of the seam, not an endpoint that did not
+/// answer. Each must cross back as its own [`RemoteError`] variant — [`RemoteError::Denied`]
+/// or [`RemoteError::HostDenied`] respectively — so `eval_service` classifies it
+/// identically, with the same wording, at every depth: neither denial `SERVICE SILENT`
+/// ever swallows. Mapping either to [`RemoteError::Decode`] would make a nested denial
+/// silenceable when the same denial one level up is not, and the resulting answer would
+/// look complete, be wrong, and be wrong the same way on every run.
 fn remote_error_for(error: EvalError) -> RemoteError {
     match error {
         EvalError::ServiceDenied(denial) => RemoteError::Denied(denial),
+        EvalError::ServiceHostDenied { endpoint, message } => {
+            RemoteError::HostDenied { endpoint, message }
+        }
         EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
         other => RemoteError::Decode(other.to_string()),
     }
@@ -1397,6 +1439,84 @@ mod tests {
                 vec!["<http://ex/a>".to_owned(), "<http://ex/y>".to_owned()],
             ]
         );
+    }
+
+    // ── `RemoteError::HostDenied`: a raw host policy refusal, no catalog capability ────
+
+    #[test]
+    fn a_host_denial_nested_inside_a_forwarded_body_reaches_the_outer_seam_intact() {
+        const OUTER_EP: &str = "http://ep/outer";
+        const INNER_EP: &str = "http://ep/inner";
+
+        /// Forwards `OUTER_EP`'s body in-process (so the nested `SERVICE <INNER_EP>`
+        /// inside it is resolved through `self` again, exactly as
+        /// [`InProcessServiceResolver`] routes a nested clause), and refuses `INNER_EP`
+        /// itself with a raw host-policy denial — no catalog capability to name, the
+        /// shape [`RemoteError::HostDenied`] exists for.
+        struct DenyingInner;
+        impl ServiceResolver for DenyingInner {
+            fn resolve(
+                &self,
+                request: ServiceRequest<'_>,
+            ) -> Result<ResolvedBindings, RemoteError> {
+                if request.endpoint == INNER_EP {
+                    return Err(RemoteError::HostDenied {
+                        endpoint: request.endpoint.to_owned(),
+                        message: "tenant blocked".to_owned(),
+                    });
+                }
+                evaluate_in_memory(&local(), request, &Self)
+            }
+        }
+
+        for silent in [false, true] {
+            let query = format!(
+                "SELECT ?n WHERE {{ SERVICE {}<{OUTER_EP}> {{ \
+                 SERVICE <{INNER_EP}> {{ ?x <http://ex/name> ?n }} }} }}",
+                if silent { "SILENT " } else { "" },
+            );
+            let err = run_with_source(&local(), &DenyingInner, &query)
+                .expect_err("a nested host denial must survive intact, SILENT or not");
+            let message = err.to_string();
+            assert!(
+                message.contains("the host denied the request: tenant blocked"),
+                "silent={silent}: {message}"
+            );
+            assert!(
+                !message.contains("withholds"),
+                "silent={silent}: a raw host denial must never read as a catalog-capability \
+                 one: {message}"
+            );
+            match err {
+                EvalError::ServiceHostDenied { endpoint, .. } => assert_eq!(endpoint, INNER_EP),
+                other => panic!("expected ServiceHostDenied, got {other:?}"),
+            }
+        }
+
+        // The neighbouring VALID case: the identical nested shape, but the inner
+        // endpoint answers instead of being denied — proving the denial above is about
+        // the denial, not about nested `SERVICE` never working through this resolver.
+        struct BothForward;
+        impl ServiceResolver for BothForward {
+            fn resolve(
+                &self,
+                request: ServiceRequest<'_>,
+            ) -> Result<ResolvedBindings, RemoteError> {
+                let ds = if request.endpoint == INNER_EP {
+                    endpoint()
+                } else {
+                    local()
+                };
+                evaluate_in_memory(&ds, request, &Self)
+            }
+        }
+        let query = format!(
+            "SELECT ?n WHERE {{ SERVICE <{OUTER_EP}> {{ \
+             SERVICE <{INNER_EP}> {{ ?x <http://ex/name> ?n }} }} }}"
+        );
+        let result = run_with_source(&local(), &BothForward, &query)
+            .expect("the identical nested shape answers when the inner endpoint is not denied");
+        assert_eq!(row_strings(&result), vec![vec!["X".to_owned()]]);
     }
 
     #[test]

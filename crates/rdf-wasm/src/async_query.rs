@@ -122,7 +122,7 @@
 //! | signal fired, bindings delivered | `RemoteError::GovernedAfterCompletion` — a completed response discarded |
 //! | bindings | the SPARQL Results JSON, decoded (bounded by the cell ceiling) natively |
 //! | transport failure | `RemoteError::Transport` |
-//! | denied | `RemoteError::Denied` (the endpoint, withheld capability `network`) |
+//! | denied | `RemoteError::HostDenied` (the host's own policy, no catalog capability named) — a catalog capability denial never reaches this delivery: it is decided natively before the host is ever asked, and surfaces as `RemoteError::Denied` instead |
 //! | nothing delivered | a latched fault ("resolver returned without a delivery") |
 //!
 //! From there the evaluator's own contract decides, unchanged (see
@@ -134,9 +134,11 @@
 //! A `LOAD` effect answered with a transport failure becomes the evaluator's
 //! `native-sparql-load-failed`, which `LOAD SILENT` swallows exactly as it swallows an
 //! unreachable document. A denial becomes
-//! [`LOAD_DENIED`](purrdf_sparql_eval::LOAD_DENIED), which fails the request even under
-//! `LOAD SILENT`, as a denied `SERVICE` does. A host fault is latched and so trips the
-//! request.
+//! [`LOAD_DENIED`](purrdf_sparql_eval::LOAD_DENIED), whose message reads "the host denied
+//! the request: …" (there is no native catalog gate for `LOAD` the way there is for
+//! `SERVICE`, so every `LOAD` denial is, from this evaluator's point of view, the host's
+//! own decision — see [`load_answer`]); it fails the request even under `LOAD SILENT`, as
+//! a denied `SERVICE` does. A host fault is latched and so trips the request.
 //!
 //! # Yielding: poll-count slicing, and where it happens
 //!
@@ -207,8 +209,8 @@ use purrdf_sparql_eval::{
     HttpRemoteQuerySource, HttpRequest, HttpTransport, InProcessServiceResolver,
     NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError, ResolvedBindings,
     ServiceCapabilities, ServiceCapability, ServiceCatalog as NativeServiceCatalog,
-    ServiceCredential, ServiceDenial, ServiceProfile, ServiceRequest, ServiceResolver,
-    ServiceRouter, StopCause, StopSignal, TrippedGovernor, WallDeadline,
+    ServiceCredential, ServiceProfile, ServiceRequest, ServiceResolver, ServiceRouter, StopCause,
+    StopSignal, TrippedGovernor, WallDeadline,
 };
 use purrdf_sparql_results::ProvenanceNamespace;
 use serde::Deserialize;
@@ -1254,14 +1256,19 @@ fn service_answer(
             kind: FailureKind::Transport,
             message,
         }) => Err(RemoteError::Transport(message)),
+        // A host resolver's own policy refusal, reached only when no NATIVE catalog
+        // already denied the request — see `HttpRemoteQuerySource::resolve`, which
+        // applies an installed `ServiceCatalog` (and returns `RemoteError::Denied`, a real
+        // withheld capability) BEFORE this transport is ever reached. Whatever the host
+        // reports here is therefore its own decision, not a capability this engine's
+        // catalog withheld, so it must not be reported as one — see `RemoteError::HostDenied`.
         Some(Delivered::Failure {
             kind: FailureKind::Denied,
             message,
-        }) => Err(RemoteError::Denied(ServiceDenial::new(
-            endpoint,
-            ServiceCapability::Network,
+        }) => Err(RemoteError::HostDenied {
+            endpoint: endpoint.to_owned(),
             message,
-        ))),
+        }),
         Some(Delivered::Governed) => {
             slots.latch_fault(format!(
                 "the host abandoned the SERVICE <{endpoint}> effect, but the job's stop signal \
@@ -1308,12 +1315,17 @@ fn load_answer(
             "native-sparql-load-failed",
             format!("LOAD <{iri}>: {message}"),
         )),
+        // Unlike a `SERVICE` denial, there is no native catalog gate for `LOAD` (see this
+        // module's doc comment): `ServiceCatalog::authorizeLoad` is a check the HOST makes
+        // of its own accord, before it ever calls back here, so whatever this delivery
+        // reports is, from this evaluator's point of view, always the host's own decision
+        // — reported as such rather than assumed to be a catalog-capability cause.
         Some(Delivered::Failure {
             kind: FailureKind::Denied,
             message,
         }) => Err(RdfDiagnostic::error(
             purrdf_sparql_eval::LOAD_DENIED,
-            format!("LOAD <{iri}>: {message}"),
+            format!("LOAD <{iri}>: the host denied the request: {message}"),
         )),
         other => {
             let message = match other {
@@ -3881,6 +3893,10 @@ mod tests {
             ),
             Err(RemoteError::Transport("HTTP 503".to_owned()))
         );
+        // A host `"denied"` delivery is the host's own policy, never a catalog capability
+        // this engine withheld — see `RemoteError::HostDenied`'s docs. Only the native
+        // catalog gate in `HttpRemoteQuerySource::resolve` produces `RemoteError::Denied`,
+        // and that path never reaches `service_answer` at all.
         let denied = service_answer(
             ENDPOINT,
             None,
@@ -3890,12 +3906,13 @@ mod tests {
             }),
             &slots,
         );
-        let Err(RemoteError::Denied(denial)) = denied else {
-            panic!("a denial stays a denial: {denied:?}");
-        };
-        assert_eq!(denial.endpoint(), ENDPOINT);
-        assert_eq!(denial.withheld(), ServiceCapability::Network);
-        assert_eq!(denial.detail(), "not on the list");
+        assert_eq!(
+            denied,
+            Err(RemoteError::HostDenied {
+                endpoint: ENDPOINT.to_owned(),
+                message: "not on the list".to_owned(),
+            })
+        );
         assert!(slots.fault().is_none());
     }
 
@@ -3950,6 +3967,16 @@ mod tests {
         )
         .expect_err("a denial");
         assert_eq!(denied.code, purrdf_sparql_eval::LOAD_DENIED);
+        assert_eq!(
+            denied.message,
+            "LOAD <http://example.org/doc>: the host denied the request: policy"
+        );
+        assert!(
+            !denied.message.contains("withholds the"),
+            "a LOAD denial reports the host's own decision, never an invented catalog cause: \
+             {}",
+            denied.message
+        );
         assert!(slots.fault().is_none(), "failures are answers, not faults");
         let missing =
             load_answer("http://example.org/doc", None, None, &slots).expect_err("no delivery");

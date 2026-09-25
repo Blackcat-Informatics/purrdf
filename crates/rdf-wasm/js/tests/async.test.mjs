@@ -241,7 +241,7 @@ test("a resolver that throws is a job fault even under SILENT", async () => {
   assert.deepEqual(rowsOf(neighbour), IDENTITY);
 });
 
-test("a denied failure is never silenced", async () => {
+test("a host denial with no catalog installed is never silenced, and never invents a catalog cause", async () => {
   const engine = new QueryEngine();
   for (const silent of [false, true]) {
     const error = await rejection(
@@ -249,10 +249,18 @@ test("a denied failure is never silenced", async () => {
         resolveService: async () => ({ kind: "denied", message: "tenant may not federate" }),
       }),
     );
+    // No `catalog` option is installed at all: whatever this host reports is its own
+    // policy, never a capability a catalog withheld — see the neighbour below, which
+    // installs a real catalog and keeps the OLD "withholds the ... capability" wording.
     assert.match(
       error.message,
-      /SERVICE federation denied: <http:\/\/example\.org\/sparql> withholds the network capability: tenant may not federate/,
+      /SERVICE <http:\/\/example\.org\/sparql>: the host denied the request: tenant may not federate/,
       `silent=${silent}`,
+    );
+    assert.doesNotMatch(
+      error.message,
+      /withholds the .* capability/,
+      `silent=${silent}: a bare host denial must not invent a catalog-capability cause`,
     );
   }
   // The neighbour: a transport failure under the same SILENT is the identity.
@@ -279,13 +287,20 @@ test("a catalog denies an endpoint it does not list, before any host call", asyn
     }),
   );
   const unlisted = recordingResolver(async () => REMOTE_OX);
-  const denied = await rejection(
-    engine.queryAsync(local(), joinQuery(false, `${EX}elsewhere`), { catalog, resolveService: unlisted.resolveService }),
-  );
-  assert.match(
-    denied.message,
-    /SERVICE federation denied: <http:\/\/example\.org\/elsewhere> withholds the query capability: no profile is configured for this service/,
-  );
+  for (const silent of [false, true]) {
+    const denied = await rejection(
+      engine.queryAsync(local(), joinQuery(silent, `${EX}elsewhere`), { catalog, resolveService: unlisted.resolveService }),
+    );
+    // A real catalog refusal keeps its own wording — distinct from a bare host denial's
+    // "the host denied the request" (see the neighbour test above) — and SILENT never
+    // swallows it either.
+    assert.match(
+      denied.message,
+      /SERVICE federation denied: <http:\/\/example\.org\/elsewhere> withholds the query capability: no profile is configured for this service/,
+      `silent=${silent}`,
+    );
+    assert.doesNotMatch(denied.message, /the host denied the request/, `silent=${silent}`);
+  }
   assert.equal(unlisted.calls.length, 0, "the host is never asked about a denied endpoint");
 
   // The neighbour: the listed endpoint is forwarded, with the profile's headers in order
@@ -938,6 +953,50 @@ test("LOAD without resolveLoad fails unless SILENT", async () => {
   assert.equal(target.canonicalize(), before);
 });
 
+test("LOAD: a host policy denial reads distinctly from a catalog capability denial, and neither is silenced", async () => {
+  const engine = new QueryEngine();
+
+  // A bare host denial: no catalog anywhere, the host's own resolveLoad decides on its
+  // own. Must never invent a catalog-capability cause — see the catalog neighbour below,
+  // which keeps the "withholds the ... capability" wording because a real catalog is
+  // what decided it.
+  for (const silent of [false, true]) {
+    const target = new Dataset();
+    const error = await rejection(
+      engine.updateAsync(target, silent ? `LOAD SILENT <${DOC}>` : `LOAD <${DOC}>`, {
+        resolveLoad: async () => ({ kind: "denied", message: "tenant may not fetch" }),
+      }),
+    );
+    assert.match(
+      error.message,
+      /LOAD <http:\/\/example\.org\/doc>: the host denied the request: tenant may not fetch/,
+      `silent=${silent}`,
+    );
+    assert.doesNotMatch(error.message, /withholds the .* capability/, `silent=${silent}`);
+  }
+
+  // The neighbour: a real catalog refusal. `resolveLoad` consults
+  // `ServiceCatalog.authorizeLoad` itself (the same pattern the Cloudflare LOAD resolver
+  // uses) — the profile for DOC withholds the network capability, so the catalog's own
+  // wording survives into the message, and it too is never silenced.
+  const catalog = new ServiceCatalog();
+  catalog.addService(DOC, JSON.stringify({ capabilities: ["query"] }));
+  const resolveLoad = async (request) => {
+    const authorization = catalog.authorizeLoad(request.iri);
+    const denial = authorization.denial;
+    authorization.free();
+    if (denial !== undefined) return { kind: "denied", message: denial };
+    throw new Error("unreachable: this test only exercises the denial branch");
+  };
+  for (const silent of [false, true]) {
+    const target = new Dataset();
+    const error = await rejection(
+      engine.updateAsync(target, silent ? `LOAD SILENT <${DOC}>` : `LOAD <${DOC}>`, { resolveLoad }),
+    );
+    assert.match(error.message, /withholds the network capability/, `silent=${silent}`);
+  }
+});
+
 test("a LOAD parse error is a LOAD failure", async () => {
   const engine = new QueryEngine();
   const resolveLoad = async () => ({ text: "this is not turtle", mediaType: "text/turtle" });
@@ -1336,7 +1395,8 @@ test("refusal pair: a failure kind \"nope\" is a fault, \"denied\" is a denial",
   const denied = await rejection(
     engine.queryAsync(local(), joinQuery(true), { resolveService: async () => ({ kind: "denied", message: "policy" }) }),
   );
-  assert.match(denied.message, /SERVICE federation denied: .* withholds the network capability: policy/);
+  assert.match(denied.message, /SERVICE <.*>: the host denied the request: policy/);
+  assert.doesNotMatch(denied.message, /withholds the .* capability/);
   assert.notEqual(nope.message, denied.message);
 });
 
