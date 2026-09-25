@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 
-use crate::components::{Component, ValidatorKind, severity_from_term};
+use crate::components::{Component, ValidatorKind};
 use crate::data::{GraphFilter, native_quads};
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -70,41 +70,33 @@ impl Parser<'_> {
             }
         }
 
-        // sh:class — sorted for determinism
-        let mut classes: Vec<NamedNode> = self
-            .objects_of(id, sh::CLASS)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::NamedNode(n) => Some(n),
-                _ => None,
-            })
-            .collect();
-        classes.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        for n in classes {
-            constraints.push(Constraint::Class(n));
+        // sh:class — each value is one constraint: a class IRI, or a SHACL list of
+        // class IRIs read as a disjunction (SHACL 1.2 Core §4.1.1). Sorted for
+        // determinism.
+        let mut classes: Vec<Vec<NamedNode>> = Vec::new();
+        for value in self.objects_of(id, sh::CLASS) {
+            classes.push(self.iri_or_iri_list(&value, id, sh::CLASS)?);
+        }
+        classes.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
+        for members in classes {
+            constraints.push(Constraint::Class(members));
         }
 
-        // sh:datatype
-        let mut datatypes: Vec<NamedNode> = self
-            .objects_of(id, sh::DATATYPE)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::NamedNode(n) => Some(n),
-                _ => None,
-            })
-            .collect();
-        datatypes.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        for n in datatypes {
-            constraints.push(Constraint::Datatype(n));
+        // sh:datatype — an IRI or a SHACL list of IRIs (SHACL 1.2 Core §4.1.2);
+        // at most one value, which the cardinality check has already enforced.
+        let mut datatypes: Vec<Vec<NamedNode>> = Vec::new();
+        for value in self.objects_of(id, sh::DATATYPE) {
+            datatypes.push(self.iri_or_iri_list(&value, id, sh::DATATYPE)?);
+        }
+        datatypes.sort_by(|a, b| iri_list_key(a).cmp(&iri_list_key(b)));
+        for members in datatypes {
+            constraints.push(Constraint::Datatype(members));
         }
 
-        // sh:nodeKind
-        for t in self.objects_of(id, sh::NODE_KIND) {
-            if let Term::NamedNode(n) = &t {
-                let nk = parse_node_kind(n.as_str())
-                    .ok_or_else(|| format!("unknown sh:nodeKind value <{}> on {id}", n.as_str()))?;
-                constraints.push(Constraint::NodeKind(nk));
-            }
+        // sh:nodeKind — one of the seven sh:NodeKind IRIs, or a SHACL list of the
+        // four basic kinds (SHACL 1.2 Core §4.1.3).
+        for value in self.objects_of(id, sh::NODE_KIND) {
+            constraints.push(Constraint::NodeKind(self.node_kinds(&value, id)?));
         }
 
         // sh:minCount
@@ -175,17 +167,28 @@ impl Parser<'_> {
         }
 
         // sh:closed (+ sh:ignoredProperties) — node-shape-level closed-world check.
-        // Only emit the constraint when sh:closed is true.
-        let is_closed = self
-            .first_object_of(id, sh::CLOSED)
-            .is_some_and(|t| match &t {
-                Term::Literal(lit) => lit.value() == "true",
-                _ => false,
-            });
+        // The value is a well-typed xsd:boolean or sh:ByTypes (SHACL 1.2 Core
+        // §4.8.1); an ill-typed value is refused, and only the term `true` emits
+        // the constraint (see `boolean_value`).
+        let is_closed = match self.first_object_of(id, sh::CLOSED) {
+            None => false,
+            Some(Term::NamedNode(n)) if n.as_str() == sh::BY_TYPES => {
+                return Err(format!(
+                    "shape {id} uses sh:closed sh:ByTypes, which is not evaluated by this \
+                     engine; the shape is refused rather than validated as if it were open"
+                ));
+            }
+            Some(value) => boolean_value(&value).ok_or_else(|| {
+                format!(
+                    "sh:closed on shape {id} must be an xsd:boolean literal or sh:ByTypes, got \
+                     {value}"
+                )
+            })?,
+        };
+        let mut ignored_lists: Vec<Term> = self.objects_of(id, sh::IGNORED_PROPERTIES);
+        crate::term::sort_terms_canonical(&mut ignored_lists);
         if is_closed {
             let mut ignored: Vec<NamedNode> = Vec::new();
-            let mut ignored_lists: Vec<Term> = self.objects_of(id, sh::IGNORED_PROPERTIES);
-            crate::term::sort_terms_canonical(&mut ignored_lists);
             for list_head in ignored_lists {
                 for item in self.walk_rdf_list(&list_head, id)? {
                     match item {
@@ -206,12 +209,12 @@ impl Parser<'_> {
             constraints.push(Constraint::Closed { ignored });
         }
 
-        // sh:uniqueLang
+        // sh:uniqueLang — a well-typed xsd:boolean; only the term `true` activates it.
         for t in self.objects_of(id, sh::UNIQUE_LANG) {
-            if let Term::Literal(lit) = &t {
-                let flag = lit.value() == "true";
-                constraints.push(Constraint::UniqueLang(flag));
-            }
+            let flag = boolean_value(&t).ok_or_else(|| {
+                format!("sh:uniqueLang on shape {id} must be an xsd:boolean literal, got {t}")
+            })?;
+            constraints.push(Constraint::UniqueLang(flag));
         }
 
         // sh:minInclusive / sh:maxInclusive
@@ -255,30 +258,74 @@ impl Parser<'_> {
             constraints.push(Constraint::In(items));
         }
 
-        // sh:pattern + optional sh:flags
-        let mut patterns: Vec<String> = self
-            .objects_of(id, sh::PATTERN)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::Literal(lit) => Some(lit.value().to_owned()),
-                _ => None,
-            })
-            .collect();
+        // sh:pattern + optional sh:flags — both xsd:string literals, at most one
+        // of each (the cardinality check has already refused a second value).
+        let mut patterns: Vec<String> = Vec::new();
+        for t in self.objects_of(id, sh::PATTERN) {
+            patterns.push(string_value(&t).ok_or_else(|| {
+                format!("sh:pattern on shape {id} must be an xsd:string literal, got {t}")
+            })?);
+        }
         patterns.sort();
-        let flags_val: Option<String> = self
-            .objects_of(id, sh::FLAGS)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::Literal(lit) => Some(lit.value().to_owned()),
-                _ => None,
-            })
-            .min(); // take the lexicographically smallest if multiple
+        let mut flags_values: Vec<String> = Vec::new();
+        for t in self.objects_of(id, sh::FLAGS) {
+            flags_values.push(string_value(&t).ok_or_else(|| {
+                format!("sh:flags on shape {id} must be an xsd:string literal, got {t}")
+            })?);
+        }
+        if flags_values.len() > 1 {
+            return Err(format!(
+                "shape {id} has {} values for sh:flags; a shape has at most one",
+                flags_values.len()
+            ));
+        }
+        let flags_val: Option<String> = flags_values.pop();
         for regex in patterns {
             constraints.push(Constraint::Pattern {
                 regex,
                 flags: flags_val.clone(),
                 compiled: Arc::new(OnceLock::new()),
             });
+        }
+
+        // The SHACL 1.2 Core list components (§4.9). Each value node must be a
+        // SHACL list; the arms in `crate::constraints` report one that is not.
+        for t in self.objects_of(id, sh::MIN_LIST_LENGTH) {
+            let n = crate::shapes::parse_u64(&t).ok_or_else(|| {
+                format!(
+                    "sh:minListLength on shape {id} must be a non-negative xsd:integer, got {t}"
+                )
+            })?;
+            constraints.push(Constraint::MinListLength(n));
+        }
+        for t in self.objects_of(id, sh::MAX_LIST_LENGTH) {
+            let n = crate::shapes::parse_u64(&t).ok_or_else(|| {
+                format!(
+                    "sh:maxListLength on shape {id} must be a non-negative xsd:integer, got {t}"
+                )
+            })?;
+            constraints.push(Constraint::MaxListLength(n));
+        }
+        for t in self.objects_of(id, sh::UNIQUE_MEMBERS) {
+            let flag = boolean_value(&t).ok_or_else(|| {
+                format!("sh:uniqueMembers on shape {id} must be an xsd:boolean literal, got {t}")
+            })?;
+            constraints.push(Constraint::UniqueMembers(flag));
+        }
+        let mut member_shapes: Vec<Term> = self.objects_of(id, sh::MEMBER_SHAPE);
+        crate::term::sort_terms_canonical(&mut member_shapes);
+        for member_ref in member_shapes {
+            // SHACL 1.2 Core §4.9.1: "The values of sh:memberShape must be
+            // well-formed node shapes" — the argument is judged at each list
+            // member, never along a path.
+            if self.first_object_of(&member_ref, sh::PATH).is_some() {
+                return Err(format!(
+                    "sh:memberShape on shape {id} names {member_ref}, which has sh:path; the \
+                     values of sh:memberShape must be node shapes"
+                ));
+            }
+            let inner = self.parse_inline_shape(member_ref)?;
+            constraints.push(Constraint::MemberShape(Box::new(inner)));
         }
 
         // sh:and / sh:or / sh:xone — each is an RDF list of shape nodes
@@ -360,22 +407,9 @@ impl Parser<'_> {
                 }
             }
 
-            // Optional per-constraint sh:message override.
-            let mut messages: Vec<String> = self
-                .objects_of(&c_node, sh::MESSAGE)
-                .into_iter()
-                .filter_map(|t| match t {
-                    Term::Literal(lit) => Some(lit.value().to_owned()),
-                    _ => None,
-                })
-                .collect();
-            messages.sort();
-            let message = messages.into_iter().next();
-
-            // Optional per-constraint sh:severity override.
-            let severity = self
-                .first_object_of(&c_node, sh::SEVERITY)
-                .and_then(|t| severity_from_term(&t));
+            // Optional per-constraint sh:message / sh:severity overrides.
+            let message = self.message_of(&c_node)?;
+            let severity = self.severity_of(&c_node)?;
 
             constraints.push(Constraint::Sparql {
                 select,
@@ -393,20 +427,8 @@ impl Parser<'_> {
         for expr_node in expr_nodes {
             let expr = self.parse_node_expr(&expr_node)?;
 
-            let mut messages: Vec<String> = self
-                .objects_of(&expr_node, sh::MESSAGE)
-                .into_iter()
-                .filter_map(|t| match t {
-                    Term::Literal(lit) => Some(lit.value().to_owned()),
-                    _ => None,
-                })
-                .collect();
-            messages.sort();
-            let message = messages.into_iter().next();
-
-            let severity = self
-                .first_object_of(&expr_node, sh::SEVERITY)
-                .and_then(|t| severity_from_term(&t));
+            let message = self.message_of(&expr_node)?;
+            let severity = self.severity_of(&expr_node)?;
 
             constraints.push(Constraint::Expression {
                 expr,
@@ -428,20 +450,8 @@ impl Parser<'_> {
             // reach the constraint. See `Parser::node_by_expr_constants`.
             self.record_node_by_expr_constants(id, &expr);
 
-            let mut messages: Vec<String> = self
-                .objects_of(&expr_node, sh::MESSAGE)
-                .into_iter()
-                .filter_map(|t| match t {
-                    Term::Literal(lit) => Some(lit.value().to_owned()),
-                    _ => None,
-                })
-                .collect();
-            messages.sort();
-            let message = messages.into_iter().next();
-
-            let severity = self
-                .first_object_of(&expr_node, sh::SEVERITY)
-                .and_then(|t| severity_from_term(&t));
+            let message = self.message_of(&expr_node)?;
+            let severity = self.severity_of(&expr_node)?;
 
             constraints.push(Constraint::NodeByExpression {
                 expr,
@@ -495,19 +505,8 @@ impl Parser<'_> {
         // order. Each parameter instance is independent. Scope-specific
         // validators take precedence over generic validators; if none apply,
         // SHACL-SPARQL requires that the component be ignored.
-        let shape_severity = self
-            .first_object_of(id, sh::SEVERITY)
-            .and_then(|t| severity_from_term(&t));
-        let mut shape_messages: Vec<String> = self
-            .objects_of(id, sh::MESSAGE)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::Literal(lit) => Some(lit.value().to_owned()),
-                _ => None,
-            })
-            .collect();
-        shape_messages.sort();
-        let shape_message = shape_messages.into_iter().next();
+        let shape_severity = self.severity_of(id)?;
+        let shape_message = self.message_of(id)?;
 
         let mut components: Vec<&Component> = self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
@@ -1040,8 +1039,46 @@ impl Parser<'_> {
                      SHACL 1.2 Node Expressions vocabulary"
                 ));
             }
+            self.check_node_expression_term(node, p)?;
         }
         Ok(())
+    }
+
+    /// Refuse a `sh:` / `shnex:` predicate on a node-expression node that the
+    /// census does not place there: an unknown term, a term this engine does not
+    /// evaluate, or vocabulary of another kind (a constraint parameter, a rule's
+    /// `sh:subject`, …). A custom function's own key or IRI is the shapes graph's
+    /// declaration, whatever its namespace, and is left to the call parser.
+    fn check_node_expression_term(&self, node: &Term, p: &str) -> Result<(), String> {
+        if !crate::spec::census::is_census_namespace(p)
+            || p.starts_with(shnex::ARG)
+            || self.custom_fns.get(p).is_some()
+            || self.custom_fns.by_key_parameter(p).is_some()
+        {
+            return Ok(());
+        }
+        let iri = Term::NamedNode(NamedNode::from(p));
+        if self.has_type(&iri, sh::SPARQL_FUNCTION) || self.has_type(&iri, sh::FUNCTION) {
+            return Ok(());
+        }
+        match crate::spec::census::classify(p) {
+            None => Err(format!(
+                "node expression on {node} carries <{p}>, which is not a term of SHACL 1.2, SHACL \
+                 Advanced Features or SHACL 1.2 Node Expressions; the expression is refused \
+                 rather than silently ignoring it"
+            )),
+            Some(row) => match row.class {
+                crate::spec::census::TermClass::Unimplemented(why) => Err(format!(
+                    "node expression on {node} uses <{p}>, which is not evaluated by this engine: \
+                     {why}"
+                )),
+                _ if row.on_node_expression() => Ok(()),
+                _ => Err(format!(
+                    "node expression on {node} carries <{p}>, which is not node-expression \
+                     vocabulary"
+                )),
+            },
+        }
     }
 
     /// The prefixed spelling of a node-expression key, for a diagnostic that quotes
@@ -1553,6 +1590,30 @@ impl Parser<'_> {
             .collect();
         candidates.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
         candidates.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+        // A candidate in the SHACL namespaces is a call only when the shapes graph
+        // declares it a function; otherwise the census decides what it is, and no
+        // census term is a function IRI (the built-in ones are keyed, above).
+        for (predicate, _) in &candidates {
+            self.check_node_expression_term(node, predicate.as_str())?;
+            if crate::spec::census::is_census_namespace(predicate.as_str())
+                && !predicate.as_str().starts_with(shnex::ARG)
+                && crate::spec::census::classify(predicate.as_str()).is_some()
+                && self.custom_fns.get(predicate.as_str()).is_none()
+                && self
+                    .custom_fns
+                    .by_key_parameter(predicate.as_str())
+                    .is_none()
+            {
+                let iri = Term::NamedNode(predicate.clone());
+                if !self.has_type(&iri, sh::SPARQL_FUNCTION) && !self.has_type(&iri, sh::FUNCTION) {
+                    return Err(format!(
+                        "node expression on {node} carries <{}>, which is SHACL vocabulary and \
+                         not a function",
+                        predicate.as_str()
+                    ));
+                }
+            }
+        }
 
         if candidates.is_empty() {
             // The node bears triples, but every one of them is a structural key or
@@ -1741,16 +1802,115 @@ fn single_projected_variable(query: &Query) -> Result<String, String> {
 /// stay ignorable everywhere.
 static CALL_SITE_ANNOTATIONS: &[&str] = &[sh::MESSAGE, sh::SEVERITY, sh::DEACTIVATED];
 
-/// Parse `sh:nodeKind` object IRI into a [`NodeKindValue`].
-fn parse_node_kind(iri: &str) -> Option<NodeKindValue> {
-    match iri {
-        "http://www.w3.org/ns/shacl#IRI" => Some(NodeKindValue::Iri),
-        "http://www.w3.org/ns/shacl#BlankNode" => Some(NodeKindValue::BlankNode),
-        "http://www.w3.org/ns/shacl#Literal" => Some(NodeKindValue::Literal),
-        "http://www.w3.org/ns/shacl#BlankNodeOrIRI" => Some(NodeKindValue::BlankNodeOrIri),
-        "http://www.w3.org/ns/shacl#BlankNodeOrLiteral" => Some(NodeKindValue::BlankNodeOrLiteral),
-        "http://www.w3.org/ns/shacl#IRIOrLiteral" => Some(NodeKindValue::IriOrLiteral),
+/// Whether a SHACL boolean parameter value IS `true`, or `None` when the value is
+/// not a well-typed `xsd:boolean` literal (another datatype, an ill-typed lexical
+/// form, a non-literal), which the caller refuses.
+///
+/// SHACL states its boolean parameters as "if $uniqueLang is true", and the
+/// W3C test suites pin what that comparison is: `core/property/uniqueLang-002`
+/// ("Test uniqueLang with other boolean literal for true", approved in both the
+/// SHACL 1.0 and the SHACL 1.2 suite) gives `sh:uniqueLang "1"^^xsd:boolean` and
+/// expects the data to CONFORM — the parameter is compared as the RDF term
+/// `true`, not by its value. So `"1"^^xsd:boolean` is well-typed (accepted) and
+/// is not `true` (inactive), exactly as `"false"` is.
+pub(crate) fn boolean_value(term: &Term) -> Option<bool> {
+    let Term::Literal(lit) = term else {
+        return None;
+    };
+    if lit.datatype_str() != crate::model::xsd::BOOLEAN {
+        return None;
+    }
+    match purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()) {
+        Ok(Some(purrdf_xsd::XsdValue::Boolean(_))) => Some(lit.value() == "true"),
         _ => None,
+    }
+}
+
+/// The lexical form of an `xsd:string` literal; `None` for anything else.
+pub(crate) fn string_value(term: &Term) -> Option<String> {
+    match term {
+        Term::Literal(lit)
+            if lit.datatype_str() == crate::model::xsd::STRING && lit.language().is_none() =>
+        {
+            Some(lit.value().to_owned())
+        }
+        _ => None,
+    }
+}
+
+/// A deterministic sort key for one `sh:class` / `sh:datatype` value.
+fn iri_list_key(members: &[NamedNode]) -> Vec<&str> {
+    members.iter().map(NamedNode::as_str).collect()
+}
+
+impl Parser<'_> {
+    /// One `sh:class` / `sh:datatype` value: an IRI (a one-member set), or a blank
+    /// node that is a well-formed SHACL list whose members are all IRIs (SHACL 1.2
+    /// Core §4.1.1 / §4.1.2). Anything else is refused, naming the value.
+    fn iri_or_iri_list(
+        &self,
+        value: &Term,
+        id: &Term,
+        predicate: &str,
+    ) -> Result<Vec<NamedNode>, String> {
+        match value {
+            Term::NamedNode(n) => Ok(vec![n.clone()]),
+            Term::BlankNode(_) => {
+                let members = self.walk_rdf_list(value, id)?;
+                let mut out = Vec::with_capacity(members.len());
+                for member in members {
+                    match member {
+                        Term::NamedNode(n) => out.push(n),
+                        other => {
+                            return Err(format!(
+                                "<{predicate}> list on shape {id} contains a non-IRI member \
+                                 {other}; the members must be IRIs"
+                            ));
+                        }
+                    }
+                }
+                Ok(out)
+            }
+            other => Err(format!(
+                "<{predicate}> on shape {id} must be an IRI or a SHACL list of IRIs, got {other}"
+            )),
+        }
+    }
+
+    /// One `sh:nodeKind` value: a `sh:NodeKind` IRI, or a blank node that is a
+    /// well-formed SHACL list of the four basic kinds (SHACL 1.2 Core §4.1.3).
+    fn node_kinds(&self, value: &Term, id: &Term) -> Result<Vec<NodeKindValue>, String> {
+        match value {
+            Term::NamedNode(n) => {
+                let kind = NodeKindValue::from_iri(n.as_str())
+                    .ok_or_else(|| format!("unknown sh:nodeKind value <{}> on {id}", n.as_str()))?;
+                Ok(vec![kind])
+            }
+            Term::BlankNode(_) => {
+                let members = self.walk_rdf_list(value, id)?;
+                let mut out = Vec::with_capacity(members.len());
+                for member in members {
+                    let kind = match &member {
+                        Term::NamedNode(n) => NodeKindValue::from_iri(n.as_str()),
+                        _ => None,
+                    }
+                    .filter(NodeKindValue::is_basic)
+                    .ok_or_else(|| {
+                        format!(
+                            "sh:nodeKind list on shape {id} contains {member}; the members of a \
+                             sh:nodeKind list are sh:BlankNode, sh:IRI, sh:Literal or \
+                             sh:TripleTerm"
+                        )
+                    })?;
+                    out.push(kind);
+                }
+                Ok(out)
+            }
+            other => Err(format!(
+                "sh:nodeKind on shape {id} must be a sh:NodeKind IRI or a SHACL list of them, got \
+                 {other}"
+            )),
+        }
     }
 }
 

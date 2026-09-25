@@ -56,6 +56,54 @@ pub enum NodeKindValue {
     BlankNodeOrLiteral,
     /// `sh:IRIOrLiteral`
     IriOrLiteral,
+    /// `sh:TripleTerm` (SHACL 1.2 Core §4.1.3): an RDF 1.2 triple term, which
+    /// matches no other node kind.
+    TripleTerm,
+}
+
+impl NodeKindValue {
+    /// The `sh:NodeKind` instance IRI this value is spelled with.
+    #[must_use]
+    pub const fn iri(&self) -> &'static str {
+        match self {
+            Self::Iri => sh::IRI,
+            Self::BlankNode => sh::BLANK_NODE,
+            Self::Literal => sh::LITERAL,
+            Self::BlankNodeOrIri => sh::BLANK_NODE_OR_IRI,
+            Self::BlankNodeOrLiteral => sh::BLANK_NODE_OR_LITERAL,
+            Self::IriOrLiteral => sh::IRI_OR_LITERAL,
+            Self::TripleTerm => sh::TRIPLE_TERM,
+        }
+    }
+
+    /// The node kind `iri` names, if it is one of the seven `sh:NodeKind`
+    /// instances.
+    #[must_use]
+    pub fn from_iri(iri: &str) -> Option<Self> {
+        [
+            Self::Iri,
+            Self::BlankNode,
+            Self::Literal,
+            Self::BlankNodeOrIri,
+            Self::BlankNodeOrLiteral,
+            Self::IriOrLiteral,
+            Self::TripleTerm,
+        ]
+        .into_iter()
+        .find(|kind| kind.iri() == iri)
+    }
+
+    /// Whether this is one of the four BASIC node kinds — the only ones SHACL 1.2
+    /// Core §4.1.3 permits as members of a `sh:nodeKind` list ("members of those
+    /// lists in a shape are one of the following four instances of the class
+    /// sh:NodeKind: sh:BlankNode, sh:IRI, sh:Literal, and sh:TripleTerm").
+    #[must_use]
+    pub const fn is_basic(&self) -> bool {
+        matches!(
+            self,
+            Self::Iri | Self::BlankNode | Self::Literal | Self::TripleTerm
+        )
+    }
 }
 
 /// A SHACL property path (spec §2.3.1 — all six path forms are modelled).
@@ -148,12 +196,24 @@ pub enum ComponentValidator {
 /// A single SHACL constraint on a shape or property shape.
 #[derive(Debug, Clone)]
 pub enum Constraint {
-    /// `sh:class ex:C`
-    Class(NamedNode),
-    /// `sh:datatype xsd:integer`
-    Datatype(NamedNode),
-    /// `sh:nodeKind sh:IRI` etc.
-    NodeKind(NodeKindValue),
+    /// One `sh:class` value: a single class IRI (`sh:class ex:C`, one member) or a
+    /// SHACL list of class IRIs (`sh:class ( ex:C ex:D )`).
+    ///
+    /// SHACL 1.2 Core §4.1.1: "when $class is a blank node SHACL list then the set
+    /// consists of exactly the members of the list. For each value node that is
+    /// either a literal, or a non-literal that is not a SHACL instance of any of
+    /// the classes in the data graph, there is a validation result". So a value
+    /// node conforms when it is an instance of ANY member; separate `sh:class`
+    /// values stay separate constraints (a conjunction). Never empty.
+    Class(Vec<NamedNode>),
+    /// One `sh:datatype` value: a single datatype IRI or a SHACL list of them
+    /// (SHACL 1.2 Core §4.1.2 — a value node conforms when its datatype matches
+    /// ANY member). Never empty.
+    Datatype(Vec<NamedNode>),
+    /// One `sh:nodeKind` value: a single `sh:NodeKind` IRI or a SHACL list of the
+    /// four basic kinds (SHACL 1.2 Core §4.1.3 — a value node conforms when it
+    /// matches ANY member). Never empty.
+    NodeKind(Vec<NodeKindValue>),
     /// `sh:minCount 1`
     MinCount(u64),
     /// `sh:maxCount 5`
@@ -201,9 +261,9 @@ pub enum Constraint {
     /// `sh:closed true` (with optional `sh:ignoredProperties`).
     ///
     /// A node-shape-level constraint: every predicate used on the focus node must
-    /// be declared by one of the shape's `sh:property` simple-predicate paths, be
-    /// listed in `ignored`, or be `rdf:type` (always allowed). Only emitted when
-    /// `sh:closed true`.
+    /// be declared by one of the shape's `sh:property` simple-predicate paths or
+    /// be listed in `ignored`. `rdf:type` is not implicitly permitted (SHACL Core
+    /// §4.8.1). Only emitted when `sh:closed true`.
     Closed {
         /// Predicates explicitly exempted from the closed-world check
         /// (`sh:ignoredProperties`), in addition to the implicit `rdf:type`.
@@ -317,6 +377,18 @@ pub enum Constraint {
         /// expression node).
         severity: Option<Severity>,
     },
+    /// `sh:minListLength n` (SHACL 1.2 Core §4.9.2): every value node is a SHACL
+    /// list with at least `n` members.
+    MinListLength(u64),
+    /// `sh:maxListLength n` (SHACL 1.2 Core §4.9.3): every value node is a SHACL
+    /// list with at most `n` members.
+    MaxListLength(u64),
+    /// `sh:uniqueMembers true` (SHACL 1.2 Core §4.9.4): every value node is a
+    /// SHACL list with no member occurring twice. `false` checks nothing.
+    UniqueMembers(bool),
+    /// `sh:memberShape <shape>` (SHACL 1.2 Core §4.9.1): every value node is a
+    /// SHACL list whose every member conforms to the shape.
+    MemberShape(Box<Shape>),
     /// A SHACL-SPARQL custom constraint component usage.
     ///
     /// Emitted when a shape node carries values for all required parameters of a
@@ -840,6 +912,12 @@ pub(crate) struct Parser<'s> {
     current_shape: Option<Term>,
 }
 
+/// `rdf:langString`, a permitted datatype of `sh:message`.
+const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+
+/// `rdf:dirLangString`, a permitted datatype of `sh:message`.
+const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+
 // ── Prefix-header helper (used by shapes and component registry) ───────────────
 
 /// Return all objects for `(subject, predicate, ?)`.
@@ -1011,6 +1089,11 @@ impl<'s> Parser<'s> {
         // Custom SHACL-SPARQL constraint components are parsed up-front; any
         // malformed component, parameter, or validator query is a hard failure.
         self.component_registry = ComponentRegistry::parse(self.data, &self.doc_prefixes)?;
+
+        // Every shape of the shapes graph, checked against the census before any
+        // is parsed: an unknown or unimplemented term, or an ill-typed parameter
+        // value, is a load error rather than a silent no-op.
+        self.check_well_formed()?;
 
         // SHACL-AF parameterized target types are parsed up-front so that
         // `sh:target` blank nodes can be instantiated during shape target parsing.
@@ -1262,21 +1345,25 @@ impl<'s> Parser<'s> {
     /// Collect deterministic graph-box role annotations from a shape node via
     /// the caller-supplied [`BoxRoleVocab`]. With no vocab configured the
     /// box-role feature is inactive and this returns an empty list.
-    fn box_roles_of(&self, subject: &Term) -> Vec<NamedNode> {
+    fn box_roles_of(&self, subject: &Term) -> Result<Vec<NamedNode>, String> {
         let Some(vocab) = &self.box_role_vocab else {
-            return vec![];
+            return Ok(vec![]);
         };
-        let mut roles: Vec<NamedNode> = self
-            .objects_of(subject, &vocab.graph_box_role)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::NamedNode(n) => Some(n),
-                _ => None,
-            })
-            .collect();
+        let mut roles: Vec<NamedNode> = Vec::new();
+        for value in self.objects_of(subject, &vocab.graph_box_role) {
+            match value {
+                Term::NamedNode(n) => roles.push(n),
+                other => {
+                    return Err(format!(
+                        "the graph-box role <{}> on {subject} must be an IRI, got {other}",
+                        vocab.graph_box_role
+                    ));
+                }
+            }
+        }
         roles.sort_unstable();
         roles.dedup();
-        roles
+        Ok(roles)
     }
 
     /// Build the SPARQL `PREFIX` header prepended to a SHACL-AF `sh:select` query.
@@ -1295,6 +1382,69 @@ impl<'s> Parser<'s> {
     /// it deterministic and one-entry-per-prefix). Empty when nothing is declared.
     fn prefix_header(&self, owners: &[&Term]) -> String {
         build_prefix_header(self.data, &self.doc_prefixes, owners)
+    }
+
+    /// The `sh:message` of `node`: the smallest of its values, each of which must
+    /// be a literal with datatype `xsd:string`, `rdf:langString` or
+    /// `rdf:dirLangString` (SHACL 1.2 Core §3.6.2.3). A value of any other kind
+    /// is refused rather than skipped.
+    pub(crate) fn message_of(&self, node: &Term) -> Result<Option<String>, String> {
+        let mut messages: Vec<String> = Vec::new();
+        for value in self.objects_of(node, sh::MESSAGE) {
+            match &value {
+                Term::Literal(lit)
+                    if matches!(
+                        lit.datatype_str(),
+                        crate::model::xsd::STRING | RDF_LANG_STRING | RDF_DIR_LANG_STRING
+                    ) =>
+                {
+                    messages.push(lit.value().to_owned());
+                }
+                other => {
+                    return Err(format!(
+                        "sh:message on {node} must be an xsd:string, rdf:langString or \
+                         rdf:dirLangString literal, got {other}"
+                    ));
+                }
+            }
+        }
+        messages.sort();
+        Ok(messages.into_iter().next())
+    }
+
+    /// The `sh:severity` of `node`, which must be an IRI (SHACL 1.2 Core
+    /// §3.6.2.4); a literal or blank node is refused rather than skipped.
+    pub(crate) fn severity_of(&self, node: &Term) -> Result<Option<Severity>, String> {
+        match self.first_object_of(node, sh::SEVERITY) {
+            None => Ok(None),
+            Some(value) => severity_from_term(&value)
+                .map(Some)
+                .ok_or_else(|| format!("sh:severity on {node} must be an IRI, got {value}")),
+        }
+    }
+
+    /// Whether `node` is deactivated: its `sh:deactivated` value must be a
+    /// well-typed `xsd:boolean` literal, and only the term `true` deactivates (see
+    /// [`parser::node_expr::boolean_value`] for why the comparison is by term). A
+    /// node-expression value is a SHACL 1.2 form this engine does not evaluate,
+    /// and is refused rather than read as `false`.
+    pub(crate) fn deactivated_of(&self, node: &Term) -> Result<bool, String> {
+        match self.first_object_of(node, sh::DEACTIVATED) {
+            None => Ok(false),
+            Some(value) => parser::node_expr::boolean_value(&value).ok_or_else(|| {
+                format!(
+                    "sh:deactivated on {node} must be an xsd:boolean literal, got {value}; a \
+                     node-expression value of sh:deactivated is not evaluated by this engine"
+                )
+            }),
+        }
+    }
+
+    /// Whether `node` is the EMPTY node expression: a blank node that is the
+    /// subject of no triple (SHACL 1.2 Node Expressions §4.1.1).
+    pub(crate) fn is_empty_expression(&self, node: &Term) -> bool {
+        matches!(node, Term::BlankNode(_))
+            && native_quads(self.data, Some(node), None, None, GraphFilter::AnyGraph).is_empty()
     }
 
     /// Parse a top-level node shape.
@@ -1327,30 +1477,13 @@ impl<'s> Parser<'s> {
     /// Inner parse logic shared between top-level and anonymous/inline shapes.
     fn parse_shape_inner(&mut self, id: &Term) -> Result<Shape, String> {
         // -- Severity --
-        let severity = self
-            .first_object_of(id, sh::SEVERITY)
-            .and_then(|t| severity_from_term(&t))
-            .unwrap_or(Severity::Violation);
+        let severity = self.severity_of(id)?.unwrap_or(Severity::Violation);
 
         // -- Message (take first by stable sort of string representation) --
-        let mut messages: Vec<String> = self
-            .objects_of(id, sh::MESSAGE)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::Literal(lit) => Some(lit.value().to_owned()),
-                _ => None,
-            })
-            .collect();
-        messages.sort();
-        let message = messages.into_iter().next();
+        let message = self.message_of(id)?;
 
         // -- Deactivated --
-        let deactivated = self
-            .first_object_of(id, sh::DEACTIVATED)
-            .is_some_and(|t| match &t {
-                Term::Literal(lit) => lit.value() == "true",
-                _ => false,
-            });
+        let deactivated = self.deactivated_of(id)?;
 
         // -- Targets (only for top-level node shapes; anonymous shapes have none) --
         let targets = self.parse_targets(id)?;
@@ -1365,7 +1498,7 @@ impl<'s> Parser<'s> {
 
         // -- Node-level constraints --
         let constraints = self.parse_constraints(id, false)?;
-        let box_roles = self.box_roles_of(id);
+        let box_roles = self.box_roles_of(id)?;
         // -- SHACL-AF rules (sh:rule) --
         let rules = self.parse_rules(id)?;
 
@@ -1386,53 +1519,55 @@ impl<'s> Parser<'s> {
     fn parse_targets(&self, id: &Term) -> Result<Vec<Target>, String> {
         let mut targets: Vec<Target> = Vec::new();
 
-        // sh:targetClass
-        let mut tc: Vec<NamedNode> = self
-            .objects_of(id, sh::TARGET_CLASS)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::NamedNode(n) => Some(n),
-                _ => None,
-            })
-            .collect();
-        tc.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        for n in tc {
-            targets.push(Target::Class(n));
+        // sh:targetClass / sh:targetSubjectsOf / sh:targetObjectsOf — each value
+        // must be an IRI (SHACL 1.2 Core §2.1.3); anything else is refused rather
+        // than skipped, since a skipped target silently selects nothing.
+        for (predicate, make) in [
+            (sh::TARGET_CLASS, Target::Class as fn(NamedNode) -> Target),
+            (sh::TARGET_SUBJECTS_OF, Target::SubjectsOf as fn(_) -> _),
+            (sh::TARGET_OBJECTS_OF, Target::ObjectsOf as fn(_) -> _),
+        ] {
+            let mut iris: Vec<NamedNode> = Vec::new();
+            for value in self.objects_of(id, predicate) {
+                match value {
+                    Term::NamedNode(n) => iris.push(n),
+                    other => {
+                        return Err(format!(
+                            "<{predicate}> on shape {id} must be an IRI, got {other}"
+                        ));
+                    }
+                }
+            }
+            iris.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            for n in iris {
+                targets.push(make(n));
+            }
         }
 
-        // sh:targetSubjectsOf
-        let mut tso: Vec<NamedNode> = self
-            .objects_of(id, sh::TARGET_SUBJECTS_OF)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::NamedNode(n) => Some(n),
-                _ => None,
-            })
-            .collect();
-        tso.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        for n in tso {
-            targets.push(Target::SubjectsOf(n));
-        }
-
-        // sh:targetObjectsOf
-        let mut too: Vec<NamedNode> = self
-            .objects_of(id, sh::TARGET_OBJECTS_OF)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::NamedNode(n) => Some(n),
-                _ => None,
-            })
-            .collect();
-        too.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        for n in too {
-            targets.push(Target::ObjectsOf(n));
-        }
-
-        // sh:targetNode
+        // sh:targetNode — SHACL 1.2 Core §2.1.3.1: "Each value of sh:targetNode in
+        // a shape is a well-formed node expression", whose output nodes are the
+        // targets. An IRI, a literal and a triple term are constant expressions
+        // whose output is themselves. A blank node that is the subject of no
+        // triple is the EMPTY expression (Node Expressions §4.1.1: "its output
+        // nodes are the empty list"), so it targets nothing. Any other blank node
+        // is a structured expression this engine does not evaluate as a target,
+        // and is refused rather than mistaken for the blank node itself.
         let mut tn: Vec<Term> = self.objects_of(id, sh::TARGET_NODE);
         crate::term::sort_terms_canonical(&mut tn);
         for t in tn {
-            targets.push(Target::Node(t));
+            match &t {
+                Term::BlankNode(_) if self.is_empty_expression(&t) => {}
+                Term::BlankNode(_) => {
+                    return Err(format!(
+                        "sh:targetNode on shape {id} is the node expression {t}; a structured \
+                         node-expression sh:targetNode value is not evaluated by this engine, so \
+                         the shape is refused rather than targeting the blank node itself"
+                    ));
+                }
+                Term::NamedNode(_) | Term::Literal(_) | Term::Triple(_) => {
+                    targets.push(Target::Node(t));
+                }
+            }
         }
 
         // Implicit class target: shape node is itself typed rdfs:Class
@@ -1584,27 +1719,13 @@ impl<'s> Parser<'s> {
         let path = self.parse_path(&path_node, ps_node, &mut FastSet::default())?;
 
         // severity
-        let severity = self
-            .first_object_of(ps_node, sh::SEVERITY)
-            .and_then(|t| severity_from_term(&t))
-            .unwrap_or(Severity::Violation);
+        let severity = self.severity_of(ps_node)?.unwrap_or(Severity::Violation);
 
         // message
-        let mut messages: Vec<String> = self
-            .objects_of(ps_node, sh::MESSAGE)
-            .into_iter()
-            .filter_map(|t| match t {
-                Term::Literal(lit) => Some(lit.value().to_owned()),
-                _ => None,
-            })
-            .collect();
-        messages.sort();
-        let message = messages.into_iter().next();
+        let message = self.message_of(ps_node)?;
 
         // sh:deactivated — a deactivated property shape validates nothing.
-        let deactivated = self
-            .first_object_of(ps_node, sh::DEACTIVATED)
-            .is_some_and(|t| matches!(&t, Term::Literal(lit) if lit.value() == "true"));
+        let deactivated = self.deactivated_of(ps_node)?;
 
         // constraints on the property shape
         let constraints = self.parse_constraints(ps_node, true)?;
@@ -1638,11 +1759,16 @@ impl<'s> Parser<'s> {
             self.in_flight.remove(&key);
         }
 
-        let box_roles = self.box_roles_of(ps_node);
-        let reification_required = self
-            .objects_of(ps_node, sh::REIFICATION_REQUIRED)
-            .into_iter()
-            .any(|t| matches!(t, Term::Literal(lit) if lit.value() == "true"));
+        let box_roles = self.box_roles_of(ps_node)?;
+        let reification_required = match self.first_object_of(ps_node, sh::REIFICATION_REQUIRED) {
+            None => false,
+            Some(value) => parser::node_expr::boolean_value(&value).ok_or_else(|| {
+                format!(
+                    "sh:reificationRequired on property shape {ps_str} must be an xsd:boolean \
+                     literal, got {value}"
+                )
+            })?,
+        };
 
         let mut reifier_shape_nodes: Vec<Term> = self.objects_of(ps_node, sh::REIFIER_SHAPE);
         crate::term::sort_terms_canonical(&mut reifier_shape_nodes);
@@ -1731,73 +1857,118 @@ impl<'s> Parser<'s> {
             return Ok(Path::Sequence(parts));
         }
 
-        // sh:inversePath
-        if let Some(inner) = self.first_object_of(path_node, sh::INVERSE_PATH) {
-            let inner_path = self.parse_path(&inner, shape_id, in_flight)?;
-            return Ok(Path::Inverse(Box::new(inner_path)));
-        }
-
-        // sh:alternativePath — an RDF list of at least two alternatives.
-        if let Some(list_head) = self.first_object_of(path_node, sh::ALTERNATIVE_PATH) {
-            let items = self.walk_rdf_list(&list_head, shape_id)?;
-            if items.len() < 2 {
-                return Err(format!(
-                    "sh:alternativePath on shape {shape_id} must have at least two \
-                     members, got {}",
-                    items.len()
-                ));
-            }
-            let mut parts = Vec::with_capacity(items.len());
-            for item in &items {
-                parts.push(self.parse_path(item, shape_id, in_flight)?);
-            }
-            return Ok(Path::Alternative(parts));
-        }
-
-        // sh:zeroOrMorePath / sh:oneOrMorePath / sh:zeroOrOnePath
-        for (pred, make) in [
-            (
-                sh::ZERO_OR_MORE_PATH,
-                Path::ZeroOrMore as fn(Box<Path>) -> Path,
-            ),
-            (sh::ONE_OR_MORE_PATH, Path::OneOrMore as fn(_) -> _),
-            (sh::ZERO_OR_ONE_PATH, Path::ZeroOrOne as fn(_) -> _),
-        ] {
-            if let Some(inner) = self.first_object_of(path_node, pred) {
-                let inner_path = self.parse_path(&inner, shape_id, in_flight)?;
-                return Ok(make(Box::new(inner_path)));
+        // The five blank-node path forms (SHACL 1.2 Core §2.3.1.3–§2.3.1.7). Each
+        // is a blank node with EXACTLY ONE triple, whose predicate names the form:
+        // a second triple — another form, a second value, or anything else — makes
+        // the node match none of them, so it is refused rather than read as
+        // whichever form happens to be looked at first.
+        // One statement asserted in several named graphs is still one statement.
+        let mut outgoing: Vec<(NamedNode, Term)> = Vec::new();
+        for (_, predicate, object) in native_quads(
+            self.data,
+            Some(path_node),
+            None,
+            None,
+            GraphFilter::AnyGraph,
+        ) {
+            if !outgoing.contains(&(predicate.clone(), object.clone())) {
+                outgoing.push((predicate, object));
             }
         }
-
-        Err(format!(
-            "unrecognised sh:path blank node structure on shape {shape_id}"
-        ))
+        let [(predicate, inner)] = outgoing.as_slice() else {
+            return Err(format!(
+                "sh:path blank node {path_node} on shape {shape_id} is not a well-formed SHACL \
+                 path: a non-list path node carries exactly one of sh:inversePath, \
+                 sh:alternativePath, sh:zeroOrMorePath, sh:oneOrMorePath or sh:zeroOrOnePath and \
+                 nothing else, and it carries {} triples",
+                outgoing.len()
+            ));
+        };
+        match predicate.as_str() {
+            sh::INVERSE_PATH => {
+                let inner_path = self.parse_path(inner, shape_id, in_flight)?;
+                Ok(Path::Inverse(Box::new(inner_path)))
+            }
+            // sh:alternativePath — an RDF list of at least two alternatives.
+            sh::ALTERNATIVE_PATH => {
+                let items = self.walk_rdf_list(inner, shape_id)?;
+                if items.len() < 2 {
+                    return Err(format!(
+                        "sh:alternativePath on shape {shape_id} must have at least two \
+                         members, got {}",
+                        items.len()
+                    ));
+                }
+                let mut parts = Vec::with_capacity(items.len());
+                for item in &items {
+                    parts.push(self.parse_path(item, shape_id, in_flight)?);
+                }
+                Ok(Path::Alternative(parts))
+            }
+            sh::ZERO_OR_MORE_PATH => Ok(Path::ZeroOrMore(Box::new(
+                self.parse_path(inner, shape_id, in_flight)?,
+            ))),
+            sh::ONE_OR_MORE_PATH => Ok(Path::OneOrMore(Box::new(
+                self.parse_path(inner, shape_id, in_flight)?,
+            ))),
+            sh::ZERO_OR_ONE_PATH => Ok(Path::ZeroOrOne(Box::new(
+                self.parse_path(inner, shape_id, in_flight)?,
+            ))),
+            other => Err(format!(
+                "unrecognised sh:path blank node structure on shape {shape_id}: <{other}> is not \
+                 a SHACL path predicate"
+            )),
+        }
     }
 
-    /// Walk an RDF list (`rdf:first`/`rdf:rest`/`rdf:nil`) and collect items.
+    /// Walk a well-formed SHACL list and collect its members.
+    ///
+    /// SHACL 1.2 Core §1.4: "A SHACL list in an RDF graph G is an IRI or a blank
+    /// node that is either rdf:nil (provided that rdf:nil has no value for either
+    /// rdf:first or rdf:rest), or has exactly one value for the property rdf:first
+    /// in G and exactly one value for the property rdf:rest in G that is also a
+    /// SHACL list in G, and the list does not have itself as a value of the
+    /// property path rdf:rest+ in G." Every clause is enforced: a cell without
+    /// `rdf:first` or `rdf:rest`, with two of either, a literal cell, or a cycle is
+    /// refused rather than read as a shorter list.
     fn walk_rdf_list(&self, head: &Term, shape_id: &Term) -> Result<Vec<Term>, String> {
         let nil = Term::NamedNode(NamedNode::from(rdf::NIL));
         let mut items = Vec::new();
         let mut current = head.clone();
-        let mut seen: FastSet<String> = FastSet::default();
+        let mut seen: FastSet<Term> = FastSet::default();
 
         loop {
+            if !matches!(current, Term::NamedNode(_) | Term::BlankNode(_)) {
+                return Err(format!(
+                    "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: \
+                     {current} is not an IRI or a blank node"
+                ));
+            }
+            let firsts = self.objects_of(&current, rdf::FIRST);
+            let rests = self.objects_of(&current, rdf::REST);
             if current == nil {
+                if !firsts.is_empty() || !rests.is_empty() {
+                    return Err(format!(
+                        "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: \
+                         rdf:nil has an rdf:first or rdf:rest value"
+                    ));
+                }
                 break;
             }
-            let key = current.to_string();
-            if seen.contains(&key) {
+            if !seen.insert(current.clone()) {
                 return Err(format!("cyclic RDF list on shape {shape_id}"));
             }
-            seen.insert(key);
-
-            if let Some(first) = self.first_object_of(&current, rdf::FIRST) {
-                items.push(first);
-            }
-            match self.first_object_of(&current, rdf::REST) {
-                Some(rest) => current = rest,
-                None => break,
-            }
+            let ([first], [rest]) = (firsts.as_slice(), rests.as_slice()) else {
+                return Err(format!(
+                    "the RDF list at {head} on {shape_id} is not a well-formed SHACL list: the \
+                     cell {current} has {} rdf:first and {} rdf:rest values, where a list cell \
+                     has exactly one of each",
+                    firsts.len(),
+                    rests.len()
+                ));
+            };
+            items.push(first.clone());
+            current = rest.clone();
         }
         Ok(items)
     }
@@ -1874,12 +2045,15 @@ pub(crate) fn local_name(iri: &str) -> &str {
     &iri[cut..]
 }
 
-/// Parse a typed integer literal or plain literal integer into a `u64`.
+/// Parse an `xsd:integer` literal into a `u64`; `None` for any other term.
 pub(crate) fn parse_u64(term: &Term) -> Option<u64> {
-    if let Term::Literal(lit) = term {
-        lit.value().parse::<u64>().ok()
-    } else {
-        None
+    // SHACL's count, length and limit parameters are "literals with datatype
+    // xsd:integer": a plain string "1" or a decimal 1.0 is ill-typed, not a count.
+    match term {
+        Term::Literal(lit) if lit.datatype_str() == crate::model::xsd::INTEGER => {
+            lit.value().parse::<u64>().ok()
+        }
+        _ => None,
     }
 }
 
@@ -2617,7 +2791,7 @@ mod tests {
         let has_nk = shape
             .constraints
             .iter()
-            .any(|c| matches!(c, Constraint::NodeKind(NodeKindValue::Iri)));
+            .any(|c| matches!(c, Constraint::NodeKind(kinds) if kinds.as_slice() == [NodeKindValue::Iri]));
         assert!(has_nk, "expected NodeKind(Iri)");
     }
 
@@ -2934,7 +3108,7 @@ mod tests {
             inner
                 .constraints
                 .iter()
-                .any(|c| matches!(c, Constraint::NodeKind(NodeKindValue::Literal))),
+                .any(|c| matches!(c, Constraint::NodeKind(kinds) if kinds.as_slice() == [NodeKindValue::Literal])),
             "nested shape should carry NodeKind(Literal)"
         );
     }
@@ -3234,7 +3408,7 @@ mod tests {
                     shape
                         .constraints
                         .iter()
-                        .any(|c| matches!(c, Constraint::NodeKind(NodeKindValue::Iri)))
+                        .any(|c| matches!(c, Constraint::NodeKind(kinds) if kinds.as_slice() == [NodeKindValue::Iri]))
                 );
             }
             other => panic!("expected Filter, got {other:?}"),

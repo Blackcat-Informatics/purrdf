@@ -207,6 +207,27 @@ pub mod sh {
     /// `sh:IRIOrLiteral` — node kind: IRIs or literals.
     pub const IRI_OR_LITERAL: &str = "http://www.w3.org/ns/shacl#IRIOrLiteral";
 
+    /// `sh:TripleTerm` — node kind: RDF 1.2 triple terms only (SHACL 1.2 Core
+    /// §4.1.3).
+    pub const TRIPLE_TERM: &str = "http://www.w3.org/ns/shacl#TripleTerm";
+
+    /// `sh:ByTypes` — the non-boolean value of `sh:closed` (SHACL 1.2 Core
+    /// §4.8.1).
+    pub const BY_TYPES: &str = "http://www.w3.org/ns/shacl#ByTypes";
+
+    /// `sh:detail` — the nested results of a validation result (SHACL 1.2 Core
+    /// §3.6.2.7).
+    pub const DETAIL: &str = "http://www.w3.org/ns/shacl#detail";
+
+    /// `sh:values` — the node expression computing a property shape's value
+    /// nodes (SHACL 1.2 Core §2.3).
+    pub const VALUES: &str = "http://www.w3.org/ns/shacl#values";
+
+    /// `sh:defaultValue` — the node expression computing a property shape's
+    /// value nodes when no other value exists (SHACL 1.2 Core §2.3), and a
+    /// parameter declaration's documented default.
+    pub const DEFAULT_VALUE: &str = "http://www.w3.org/ns/shacl#defaultValue";
+
     // ── SHACL-AF and advanced constraint predicates ────────────────────────────
 
     /// `sh:sparql` — attaches a SPARQL constraint to a shape.

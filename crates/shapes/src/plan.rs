@@ -452,8 +452,12 @@ pub(crate) type BoundParse = Option<f64>;
 /// constraint it is evaluating.
 #[derive(Debug)]
 pub(crate) enum LoweredConstraint {
-    /// `sh:class` — the slot holding the class's dataset identity.
-    Class(TermSlot),
+    /// `sh:class` — the slot holding the dataset identities of the value's
+    /// classes (one for an IRI value, one per member for a SHACL list value).
+    ///
+    /// A class this data graph does not intern is absent from the resolved set,
+    /// and that is not a loss: a term with no dataset identity has no instance.
+    Class(SetSlot),
     /// `sh:datatype` — compared as a datatype IRI string, never interned.
     Datatype,
     /// `sh:nodeKind` — a discriminant test on the value node.
@@ -533,6 +537,14 @@ pub(crate) enum LoweredConstraint {
         /// The position of the lowered shape index in [`LoweredShapes::indexes`].
         index: u32,
     },
+    /// `sh:minListLength` — a length of the value node's SHACL list.
+    MinListLength,
+    /// `sh:maxListLength` — a length of the value node's SHACL list.
+    MaxListLength,
+    /// `sh:uniqueMembers` — a comparison among the value node's list members.
+    UniqueMembers,
+    /// `sh:memberShape` — the lowering of the shape every list member must meet.
+    MemberShape(Box<LoweredShape>),
     /// A SHACL-SPARQL custom constraint component — the validator is a query.
     Component,
 }
@@ -973,16 +985,17 @@ impl<'a> RangeBound<'a> {
 /// FROM.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PlannedConstraint<'a> {
-    /// `sh:class` — the class's dataset identity, resolved at bind.
+    /// `sh:class` — the dataset identities of the value's classes, resolved at
+    /// bind; a value node conforms when it is an instance of ANY of them.
     ///
-    /// `None` means this data graph interns no term for the class, so nothing can
-    /// be an instance of it and every value node violates. That is a verdict, not
-    /// a failure to compute one.
-    Class(Option<TermId>),
-    /// `sh:datatype` — the required datatype IRI.
-    Datatype(&'a NamedNode),
-    /// `sh:nodeKind` — the required node kind.
-    NodeKind(&'a NodeKindValue),
+    /// An EMPTY set means this data graph interns no term for any of the
+    /// classes, so nothing can be an instance of them and every value node
+    /// violates. That is a verdict, not a failure to compute one.
+    Class(&'a FastSet<TermId>),
+    /// `sh:datatype` — the permitted datatype IRIs (any one matches).
+    Datatype(&'a [NamedNode]),
+    /// `sh:nodeKind` — the permitted node kinds (any one matches).
+    NodeKind(&'a [NodeKindValue]),
     /// `sh:minCount` — the minimum value-node count.
     MinCount(u64),
     /// `sh:maxCount` — the maximum value-node count.
@@ -1107,6 +1120,14 @@ pub(crate) enum PlannedConstraint<'a> {
         /// The per-constraint severity override.
         severity: &'a Option<crate::report::Severity>,
     },
+    /// `sh:minListLength` — the minimum number of list members.
+    MinListLength(u64),
+    /// `sh:maxListLength` — the maximum number of list members.
+    MaxListLength(u64),
+    /// `sh:uniqueMembers` — whether list members must be pairwise distinct.
+    UniqueMembers(bool),
+    /// `sh:memberShape` — the plan of the shape every list member must meet.
+    MemberShape(ShapePlan<'a>),
     /// A SHACL-SPARQL custom constraint component usage.
     Component {
         /// The component IRI.
@@ -1148,13 +1169,25 @@ impl<'a> ShapePlan<'a> {
     ) -> Result<PlannedConstraint<'a>, String> {
         Ok(match (constraint, lowered) {
             (Constraint::Class(_), LoweredConstraint::Class(slot)) => {
-                PlannedConstraint::Class(self.binding.term(*slot)?)
+                PlannedConstraint::Class(self.binding.set(*slot)?)
             }
-            (Constraint::Datatype(datatype), LoweredConstraint::Datatype) => {
-                PlannedConstraint::Datatype(datatype)
+            (Constraint::Datatype(datatypes), LoweredConstraint::Datatype) => {
+                PlannedConstraint::Datatype(datatypes)
             }
-            (Constraint::NodeKind(kind), LoweredConstraint::NodeKind) => {
-                PlannedConstraint::NodeKind(kind)
+            (Constraint::NodeKind(kinds), LoweredConstraint::NodeKind) => {
+                PlannedConstraint::NodeKind(kinds)
+            }
+            (Constraint::MinListLength(n), LoweredConstraint::MinListLength) => {
+                PlannedConstraint::MinListLength(*n)
+            }
+            (Constraint::MaxListLength(n), LoweredConstraint::MaxListLength) => {
+                PlannedConstraint::MaxListLength(*n)
+            }
+            (Constraint::UniqueMembers(unique), LoweredConstraint::UniqueMembers) => {
+                PlannedConstraint::UniqueMembers(*unique)
+            }
+            (Constraint::MemberShape(shape), LoweredConstraint::MemberShape(lowered)) => {
+                PlannedConstraint::MemberShape(self.nested(shape, lowered))
             }
             (Constraint::MinCount(n), LoweredConstraint::MinCount) => {
                 PlannedConstraint::MinCount(*n)
@@ -1393,6 +1426,10 @@ fn constraint_kind(constraint: &Constraint) -> &'static str {
         Constraint::QualifiedValueShape { .. } => "sh:qualifiedValueShape",
         Constraint::Expression { .. } => "sh:expression",
         Constraint::NodeByExpression { .. } => "sh:nodeByExpression",
+        Constraint::MinListLength(_) => "sh:minListLength",
+        Constraint::MaxListLength(_) => "sh:maxListLength",
+        Constraint::UniqueMembers(_) => "sh:uniqueMembers",
+        Constraint::MemberShape(_) => "sh:memberShape",
         Constraint::Component { .. } => "a SHACL-SPARQL constraint component",
     }
 }
@@ -1624,6 +1661,16 @@ impl ShapeWalk {
     fn class_slot(&mut self, class: &NamedNode) -> TermSlot {
         self.classes.insert(class.clone());
         self.slot(Term::NamedNode(class.clone()))
+    }
+
+    /// Record every member of one `sh:class` value as a planned class AND hand
+    /// back the slot of their identity SET — [`Self::class_slot`] for a value
+    /// that names one class or a SHACL list of them.
+    fn class_set_slot(&mut self, classes: &[NamedNode]) -> SetSlot {
+        for class in classes {
+            self.classes.insert(class.clone());
+        }
+        self.set_slot(classes.iter().map(|class| Term::NamedNode(class.clone())))
     }
 
     /// Seal the walk into the lowering it produced.
@@ -1988,7 +2035,7 @@ fn lower_constraint(
     // it reaches is reached again below, by this same walk.
     walk.footprint.record_constraint(constraint);
     match constraint {
-        Constraint::Class(class) => LoweredConstraint::Class(walk.class_slot(class)),
+        Constraint::Class(classes) => LoweredConstraint::Class(walk.class_set_slot(classes)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
         Constraint::NodeKind(_) => LoweredConstraint::NodeKind,
         Constraint::MinCount(_) => LoweredConstraint::MinCount,
@@ -2077,6 +2124,19 @@ fn lower_constraint(
                 expr,
                 index: walk.index_position(shapes),
             }
+        }
+        Constraint::MinListLength(_) => LoweredConstraint::MinListLength,
+        Constraint::MaxListLength(_) => LoweredConstraint::MaxListLength,
+        Constraint::UniqueMembers(_) => LoweredConstraint::UniqueMembers,
+        // The member shape judges each list MEMBER, so its reads are anchored at
+        // the nodes `rdf:rest*/rdf:first` reaches from the value node.
+        Constraint::MemberShape(shape) => {
+            let saved = walk
+                .footprint
+                .enter_values(&crate::footprint::list_member_path());
+            let lowered = lower_shape(shape, walk);
+            walk.footprint.leave(saved);
+            LoweredConstraint::MemberShape(Box::new(lowered))
         }
         Constraint::Component { .. } => LoweredConstraint::Component,
     }
@@ -2598,12 +2658,17 @@ ex:FlagShape a sh:NodeShape ;
     ) {
         match constraint {
             LoweredConstraint::Class(slot) => {
-                let Term::NamedNode(class) = &lowered.terms[*slot as usize] else {
-                    panic!("an sh:class slot holds something other than an IRI");
-                };
-                out.push(class.as_str());
+                let range = lowered.sets[*slot as usize].clone();
+                for term in &lowered.terms[range.start as usize..range.end as usize] {
+                    let Term::NamedNode(class) = term else {
+                        panic!("an sh:class slot holds something other than an IRI");
+                    };
+                    out.push(class.as_str());
+                }
             }
-            LoweredConstraint::Not(shape) | LoweredConstraint::Node(shape) => {
+            LoweredConstraint::Not(shape)
+            | LoweredConstraint::Node(shape)
+            | LoweredConstraint::MemberShape(shape) => {
                 collect_shape_class_slots(lowered, shape, out);
             }
             LoweredConstraint::And(shapes)
@@ -2622,6 +2687,9 @@ ex:FlagShape a sh:NodeShape ;
             // Kinds that name neither a class nor a shape.
             LoweredConstraint::Datatype
             | LoweredConstraint::NodeKind
+            | LoweredConstraint::MinListLength
+            | LoweredConstraint::MaxListLength
+            | LoweredConstraint::UniqueMembers
             | LoweredConstraint::MinCount
             | LoweredConstraint::MaxCount
             | LoweredConstraint::In(_)
@@ -2862,7 +2930,7 @@ ex:Shape a sh:NodeShape ;
                 r"{PREFIXES}
 ex:Outer a sh:NodeShape ;
     sh:targetNode ex:a ;
-    sh:nodeByExpression [ shnex:constant ex:Inner ] .
+    sh:nodeByExpression ex:Inner .
 
 ex:Inner a sh:NodeShape ;
     sh:class ex:Indexed .
@@ -2974,6 +3042,10 @@ ex:Inner a sh:NodeShape ;
         PlannedConstraint::QualifiedValueShape { .. } => "qualified_value_shape",
         PlannedConstraint::Expression { .. } => "expression",
         PlannedConstraint::NodeByExpression { .. } => "node_by_expression",
+        PlannedConstraint::MinListLength(_) => "min_list_length",
+        PlannedConstraint::MaxListLength(_) => "max_list_length",
+        PlannedConstraint::UniqueMembers(_) => "unique_members",
+        PlannedConstraint::MemberShape(_) => "member_shape",
         PlannedConstraint::Component { .. } => "component",
     }
 
@@ -3005,10 +3077,13 @@ ex:Inner a sh:NodeShape ;
         "max_exclusive",
         "max_inclusive",
         "max_length",
+        "max_list_length",
+        "member_shape",
         "min_count",
         "min_exclusive",
         "min_inclusive",
         "min_length",
+        "min_list_length",
         "node",
         "node_by_expression",
         "node_kind",
@@ -3018,6 +3093,7 @@ ex:Inner a sh:NodeShape ;
         "qualified_value_shape",
         "sparql",
         "unique_lang",
+        "unique_members",
         "xone",
     ];
 

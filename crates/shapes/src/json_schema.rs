@@ -2439,7 +2439,12 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     // node-identity discriminator; anything else is not expressible in the
     // object projection and forces the whole negation to a loss.
     for c in &inner.constraints {
-        let Constraint::Class(class) = c else {
+        // A class LIST is a disjunction, which one type discriminator cannot
+        // state; only a single-class value is expressible here.
+        let Constraint::Class(classes) = c else {
+            return None;
+        };
+        let [class] = classes.as_slice() else {
             return None;
         };
         if !ctx.ns.is_known(class.as_str()) {
@@ -2506,6 +2511,25 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     Some(parts)
 }
 
+/// Record that a SHACL 1.2 list component on property `key` is not projected by
+/// this emitter: a loss-ledger entry and a `$comment`, never a silent drop.
+fn record_list_loss(
+    ctx: &mut Ctx<'_>,
+    comments: &mut Vec<String>,
+    term: &str,
+    shape_iri: &str,
+    key: &str,
+) {
+    ctx.record(
+        term,
+        shape_iri,
+        "a SHACL list constraint has no projection in this emitter",
+    );
+    comments.push(format!(
+        "a {term} constraint on property {key} was dropped (no projection in this emitter)"
+    ));
+}
+
 /// Compile one property shape's constraints into `(value_schema, is_required)`.
 ///
 /// `value_schema` already accounts for cardinality: a single value when
@@ -2537,94 +2561,130 @@ fn compile_property(
         match c {
             Constraint::MinCount(n) => min_count = Some(*n),
             Constraint::MaxCount(n) => max_count = Some(*n),
-            Constraint::Datatype(dt) => {
-                alts.push(datatype_value_schema(dt.as_str()));
-            }
-            Constraint::Class(c) => {
-                had_any_class = true;
-                // A `sh:class` pointing at a value-vocabulary class resolves to the
-                // enum `$ref` (projection-only), tightening the open node-ref to the
-                // anchor set WITHOUT touching the validating shape.
-                if let Some(enum_key) = ctx.value_vocab_enums.get(c.as_str()) {
-                    alts.push(json!({ "$ref": format!("#/$defs/{enum_key}") }));
-                    class_enum_key = Some(enum_key.clone());
-                    continue;
+            // A SHACL list value is a disjunction (SHACL 1.2 Core §4.1.2): every
+            // member contributes its alternative, and the alternatives are
+            // emitted together as `anyOf`.
+            Constraint::Datatype(datatypes) => {
+                for dt in datatypes {
+                    alts.push(datatype_value_schema(dt.as_str()));
                 }
-                // Resolve/emit by `def_key` — the SAME key the `$defs` map
-                // (built in `compile`) and `emitted_defs` (PASS 1, above) use.
-                // A bare local name would conflate a primary class with any
-                // non-primary class sharing its local name; `def_key` keeps
-                // them distinct (bare local name for the primary namespace,
-                // full CURIE — e.g. `math:Distribution` — for any other
-                // declared namespace), so the ref written here always matches
-                // an existing `$defs` entry or falls back to a permissive
-                // node-ref, never a dangling `$ref`.
-                let def_key = ctx.ns.def_key(c.as_str());
-                let has_def = ctx.emitted_defs.contains(&def_key);
-                if ctx.ns.is_primary(c.as_str()) {
-                    if has_def {
-                        // The class has a NodeShape ⇒ a `$def` is emitted for it.
-                        // Object property: a node ref OR the class `$ref`.
+            }
+            Constraint::Class(classes) => {
+                had_any_class = true;
+                for c in classes {
+                    // A `sh:class` pointing at a value-vocabulary class resolves to the
+                    // enum `$ref` (projection-only), tightening the open node-ref to the
+                    // anchor set WITHOUT touching the validating shape.
+                    if let Some(enum_key) = ctx.value_vocab_enums.get(c.as_str()) {
+                        alts.push(json!({ "$ref": format!("#/$defs/{enum_key}") }));
+                        class_enum_key = Some(enum_key.clone());
+                        continue;
+                    }
+                    // Resolve/emit by `def_key` — the SAME key the `$defs` map
+                    // (built in `compile`) and `emitted_defs` (PASS 1, above) use.
+                    // A bare local name would conflate a primary class with any
+                    // non-primary class sharing its local name; `def_key` keeps
+                    // them distinct (bare local name for the primary namespace,
+                    // full CURIE — e.g. `math:Distribution` — for any other
+                    // declared namespace), so the ref written here always matches
+                    // an existing `$defs` entry or falls back to a permissive
+                    // node-ref, never a dangling `$ref`.
+                    let def_key = ctx.ns.def_key(c.as_str());
+                    let has_def = ctx.emitted_defs.contains(&def_key);
+                    if ctx.ns.is_primary(c.as_str()) {
+                        if has_def {
+                            // The class has a NodeShape ⇒ a `$def` is emitted for it.
+                            // Object property: a node ref OR the class `$ref`.
+                            alts.push(node_ref_schema());
+                            alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
+                        } else {
+                            // The class has NO NodeShape ⇒ no `$def` is emitted, so a
+                            // `$ref` to it would dangle and make the schema
+                            // uncompilable. Closed-world correct behaviour: instances
+                            // reference such nodes by `@id` only; the node simply is
+                            // not further constrained here. Emit the node-reference
+                            // form WITHOUT the `$ref` branch.
+                            let mut node_ref = node_ref_schema();
+                            if let Value::Object(map) = &mut node_ref {
+                                map.insert(
+                                    "$comment".to_owned(),
+                                    json!(format!(
+                                        "{} has no NodeShape; node reference only",
+                                        ctx.ns.compact_iri(c.as_str())
+                                    )),
+                                );
+                            }
+                            alts.push(node_ref);
+                        }
+                    } else if has_def {
+                        // Non-primary class WITH a NodeShape ⇒ it DOES have a `$def`
+                        // (keyed by its full CURIE — see `Namespaces::def_key`), so
+                        // resolve to it exactly like a primary class, just under the
+                        // CURIE key (e.g. `#/$defs/math:Distribution`). A JSON
+                        // pointer reference segment does not need to escape `:`, so
+                        // this pointer form is valid without further encoding.
                         alts.push(node_ref_schema());
                         alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
                     } else {
-                        // The class has NO NodeShape ⇒ no `$def` is emitted, so a
-                        // `$ref` to it would dangle and make the schema
-                        // uncompilable. Closed-world correct behaviour: instances
-                        // reference such nodes by `@id` only; the node simply is
-                        // not further constrained here. Emit the node-reference
-                        // form WITHOUT the `$ref` branch.
+                        // External (non-primary) class with NO NodeShape: the value
+                        // is still an RDF node reference, never a string literal, but
+                        // a `$ref` would dangle (no `$def` for it), so emit the
+                        // permissive node-reference form that accepts an `@id`
+                        // object, keeping a `$comment` noting the external class.
                         let mut node_ref = node_ref_schema();
                         if let Value::Object(map) = &mut node_ref {
                             map.insert(
                                 "$comment".to_owned(),
-                                json!(format!(
-                                    "{} has no NodeShape; node reference only",
-                                    ctx.ns.compact_iri(c.as_str())
-                                )),
+                                json!(format!("external class {}", c.as_str())),
                             );
                         }
                         alts.push(node_ref);
                     }
-                } else if has_def {
-                    // Non-primary class WITH a NodeShape ⇒ it DOES have a `$def`
-                    // (keyed by its full CURIE — see `Namespaces::def_key`), so
-                    // resolve to it exactly like a primary class, just under the
-                    // CURIE key (e.g. `#/$defs/math:Distribution`). A JSON
-                    // pointer reference segment does not need to escape `:`, so
-                    // this pointer form is valid without further encoding.
-                    alts.push(node_ref_schema());
-                    alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
-                } else {
-                    // External (non-primary) class with NO NodeShape: the value
-                    // is still an RDF node reference, never a string literal, but
-                    // a `$ref` would dangle (no `$def` for it), so emit the
-                    // permissive node-reference form that accepts an `@id`
-                    // object, keeping a `$comment` noting the external class.
-                    let mut node_ref = node_ref_schema();
-                    if let Value::Object(map) = &mut node_ref {
-                        map.insert(
-                            "$comment".to_owned(),
-                            json!(format!("external class {}", c.as_str())),
-                        );
-                    }
-                    alts.push(node_ref);
                 }
             }
-            Constraint::NodeKind(nk) => match nk {
-                NodeKindValue::Literal => {
-                    alts.push(json!({ "type": "string" }));
-                    alts.push(typed_literal_schema());
+            Constraint::NodeKind(kinds) => {
+                for nk in kinds {
+                    match nk {
+                        NodeKindValue::Literal => {
+                            alts.push(json!({ "type": "string" }));
+                            alts.push(typed_literal_schema());
+                        }
+                        NodeKindValue::Iri
+                        | NodeKindValue::BlankNode
+                        | NodeKindValue::BlankNodeOrIri => {
+                            alts.push(node_ref_schema());
+                        }
+                        NodeKindValue::IriOrLiteral | NodeKindValue::BlankNodeOrLiteral => {
+                            alts.push(node_ref_schema());
+                            alts.push(json!({ "type": "string" }));
+                            alts.push(typed_literal_schema());
+                        }
+                        NodeKindValue::TripleTerm => {
+                            ctx.record(
+                                "sh:nodeKind",
+                                shape_iri,
+                                "sh:TripleTerm has no JSON Schema equivalent",
+                            );
+                            comments.push(format!(
+                                "a sh:nodeKind sh:TripleTerm alternative on property {key} was \
+                                 dropped (no JSON Schema equivalent)"
+                            ));
+                        }
+                    }
                 }
-                NodeKindValue::Iri | NodeKindValue::BlankNode | NodeKindValue::BlankNodeOrIri => {
-                    alts.push(node_ref_schema());
-                }
-                NodeKindValue::IriOrLiteral | NodeKindValue::BlankNodeOrLiteral => {
-                    alts.push(node_ref_schema());
-                    alts.push(json!({ "type": "string" }));
-                    alts.push(typed_literal_schema());
-                }
-            },
+            }
+            Constraint::MinListLength(_) => {
+                record_list_loss(ctx, &mut comments, "sh:minListLength", shape_iri, key);
+            }
+            Constraint::MaxListLength(_) => {
+                record_list_loss(ctx, &mut comments, "sh:maxListLength", shape_iri, key);
+            }
+            Constraint::UniqueMembers(_) => {
+                record_list_loss(ctx, &mut comments, "sh:uniqueMembers", shape_iri, key);
+            }
+            Constraint::MemberShape(_) => {
+                record_list_loss(ctx, &mut comments, "sh:memberShape", shape_iri, key);
+            }
             Constraint::In(terms) => {
                 for t in terms {
                     enum_values.push(json!(term_enum_value(t, ctx.ns)));

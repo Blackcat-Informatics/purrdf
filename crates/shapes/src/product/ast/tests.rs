@@ -158,6 +158,7 @@ fn sample_node_kinds() -> Vec<NodeKindValue> {
         NodeKindValue::BlankNodeOrIri,
         NodeKindValue::BlankNodeOrLiteral,
         NodeKindValue::IriOrLiteral,
+        NodeKindValue::TripleTerm,
     ]
 }
 
@@ -343,9 +344,9 @@ fn sample_node_exprs(func: &Arc<CustomFunction>) -> Vec<NodeExpr> {
 /// One [`Constraint`] per tag, in tag order.
 fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
     vec![
-        Constraint::Class(ex("Person")),
-        Constraint::Datatype(ex("integer")),
-        Constraint::NodeKind(NodeKindValue::IriOrLiteral),
+        Constraint::Class(vec![ex("Person"), ex("Agent")]),
+        Constraint::Datatype(vec![ex("integer")]),
+        Constraint::NodeKind(vec![NodeKindValue::IriOrLiteral]),
         Constraint::MinCount(1),
         Constraint::MaxCount(5),
         Constraint::In(vec![ex_term("a"), ex_term("b")]),
@@ -411,6 +412,10 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
             message: None,
             severity: None,
         },
+        Constraint::MinListLength(1),
+        Constraint::MaxListLength(4),
+        Constraint::UniqueMembers(true),
+        Constraint::MemberShape(Box::new(leaf_shape("MemberShape"))),
     ]
 }
 
@@ -616,7 +621,7 @@ fn full_fixture() -> Shapes {
 
     let kind_constraints: Vec<Constraint> = sample_node_kinds()
         .into_iter()
-        .map(Constraint::NodeKind)
+        .map(|kind| Constraint::NodeKind(vec![kind]))
         .collect();
 
     let validator_constraints: Vec<Constraint> = sample_component_validators()

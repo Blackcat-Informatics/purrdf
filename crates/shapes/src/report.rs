@@ -113,6 +113,12 @@ pub struct ValidationResult {
     /// roles in producing this result. An empty vec means no attribution context
     /// is available (e.g. in legacy or unit-test scenarios).
     pub attributions: Vec<Attribution>,
+    /// The nested results that detail this one (`sh:detail`, SHACL 1.2 Core
+    /// §3.6.2.7), in a deterministic order: for `sh:memberShape`, the results of
+    /// each list member that does not conform to the member shape; for
+    /// `sh:uniqueMembers`, one result per duplicated member. Empty for every
+    /// other component.
+    pub details: Vec<Self>,
 }
 
 impl ValidationResult {
@@ -257,99 +263,15 @@ impl ValidationReport {
         );
 
         for (i, r) in self.results.iter().enumerate() {
-            let result_subj = RdfTerm::blank_node(format!("{mint}r{i}"));
-
+            let label = format!("{mint}r{i}");
             // _:report sh:result _:r{i}
             push_triple(
                 &mut builder,
                 report_subj.clone(),
                 sh::RESULT,
-                result_subj.clone(),
+                RdfTerm::blank_node(label.clone()),
             );
-
-            // _:r{i} rdf:type sh:ValidationResult
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                rdf::TYPE,
-                RdfTerm::iri(sh::VALIDATION_RESULT),
-            );
-
-            // sh:focusNode
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                sh::FOCUS_NODE,
-                r.focus_node.to_rdf_term(),
-            );
-
-            // sh:resultSeverity
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                sh::RESULT_SEVERITY,
-                RdfTerm::iri(r.severity.iri()),
-            );
-
-            // sh:sourceConstraintComponent
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                sh::SOURCE_CONSTRAINT_COMPONENT,
-                RdfTerm::iri(r.source_constraint_component.as_str()),
-            );
-
-            // sh:sourceShape
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                sh::SOURCE_SHAPE,
-                r.source_shape.to_rdf_term(),
-            );
-
-            // sh:resultPath (optional). A complex path is a blank node the report
-            // MINTS (see `path::path_to_term`), so it carries the mint prefix
-            // like every other minted node; its full SHACL path structure is
-            // emitted once per distinct root label (two results sharing a path
-            // share the structure bnodes).
-            if let Some(path) = &r.result_path {
-                let root = match (path, &r.path_structure) {
-                    (Term::BlankNode(label), Some(_)) => Some(format!("{mint}{label}")),
-                    _ => None,
-                };
-                push_triple(
-                    &mut builder,
-                    result_subj.clone(),
-                    sh::RESULT_PATH,
-                    root.clone()
-                        .map_or_else(|| path.to_rdf_term(), RdfTerm::blank_node),
-                );
-                if let (Some(root), Some(structure)) = (root, &r.path_structure)
-                    && emitted_paths.insert(root.clone())
-                {
-                    emit_path_structure(&mut builder, &root, structure);
-                }
-            }
-
-            // sh:value (optional)
-            if let Some(value) = &r.value {
-                push_triple(
-                    &mut builder,
-                    result_subj.clone(),
-                    sh::VALUE,
-                    value.to_rdf_term(),
-                );
-            }
-
-            // sh:resultMessage (optional plain string literal)
-            if let Some(msg) = &r.message {
-                push_triple(
-                    &mut builder,
-                    result_subj,
-                    sh::RESULT_MESSAGE,
-                    RdfTerm::Literal(::purrdf::RdfLiteral::simple(msg.as_str())),
-                );
-            }
+            emit_result(&mut builder, &label, r, &mint, &mut emitted_paths);
         }
 
         // `freeze` only rejects structural violations (out-of-range term ids, a
@@ -478,18 +400,26 @@ fn mint_prefix(report: &ValidationReport) -> String {
 fn carried_blank_labels(report: &ValidationReport) -> FastSet<&str> {
     let mut labels = FastSet::default();
     for r in &report.results {
-        collect_blank_labels(&r.focus_node, &mut labels);
-        collect_blank_labels(&r.source_shape, &mut labels);
-        if let Some(value) = &r.value {
-            collect_blank_labels(value, &mut labels);
-        }
-        // A blank `result_path` with no `path_structure` is not a minted complex
-        // path root (see `ValidationResult::result_path`), so it is carried.
-        if let (Some(path), None) = (&r.result_path, &r.path_structure) {
-            collect_blank_labels(path, &mut labels);
-        }
+        collect_result_blank_labels(r, &mut labels);
     }
     labels
+}
+
+/// [`carried_blank_labels`] for one result and every result nested under it.
+fn collect_result_blank_labels<'a>(r: &'a ValidationResult, labels: &mut FastSet<&'a str>) {
+    collect_blank_labels(&r.focus_node, labels);
+    collect_blank_labels(&r.source_shape, labels);
+    if let Some(value) = &r.value {
+        collect_blank_labels(value, labels);
+    }
+    // A blank `result_path` with no `path_structure` is not a minted complex
+    // path root (see `ValidationResult::result_path`), so it is carried.
+    if let (Some(path), None) = (&r.result_path, &r.path_structure) {
+        collect_blank_labels(path, labels);
+    }
+    for detail in &r.details {
+        collect_result_blank_labels(detail, labels);
+    }
 }
 
 /// The root labels of the report's complex paths — blank nodes the report MINTS
@@ -497,14 +427,21 @@ fn carried_blank_labels(report: &ValidationReport) -> FastSet<&str> {
 /// collision check is a hash lookup per carried label rather than a rescan of
 /// every result.
 fn minted_path_roots(report: &ValidationReport) -> FastSet<&str> {
-    report
-        .results
-        .iter()
-        .filter_map(|r| match (&r.result_path, &r.path_structure) {
-            (Some(Term::BlankNode(root)), Some(_)) => Some(root.as_str()),
-            _ => None,
-        })
-        .collect()
+    let mut roots = FastSet::default();
+    for r in &report.results {
+        collect_minted_path_roots(r, &mut roots);
+    }
+    roots
+}
+
+/// [`minted_path_roots`] for one result and every result nested under it.
+fn collect_minted_path_roots<'a>(r: &'a ValidationResult, roots: &mut FastSet<&'a str>) {
+    if let (Some(Term::BlankNode(root)), Some(_)) = (&r.result_path, &r.path_structure) {
+        roots.insert(root.as_str());
+    }
+    for detail in &r.details {
+        collect_minted_path_roots(detail, roots);
+    }
 }
 
 /// Add every blank-node label reachable from `term`, descending through RDF 1.2
@@ -530,17 +467,125 @@ fn collides_with_minted(label: &str, result_count: usize, roots: &FastSet<&str>)
     if label == "report" || roots.contains(label) {
         return true;
     }
-    if let Some(index) = label.strip_prefix('r')
-        && let Ok(index) = index.parse::<usize>()
-        && index < result_count
-    {
-        return true;
+    // A result node is `r{i}`, and a detail node nested under it
+    // `r{i}d{j}d{k}…`: every such label is minted when `i` names a result.
+    if let Some(rest) = label.strip_prefix('r') {
+        let mut parts = rest.split('d');
+        if let Some(index) = parts.next()
+            && let Ok(index) = index.parse::<usize>()
+            && index < result_count
+            && parts.all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return true;
+        }
     }
     // An interior node is `{root}-{n}`; the counter carries no `-`, so the LAST
     // `-` is the one that separates it from the root.
     label
         .rsplit_once('-')
         .is_some_and(|(stem, counter)| counter.parse::<usize>().is_ok() && roots.contains(stem))
+}
+
+/// Emit one validation result rooted at the blank node `label`, and — through
+/// `sh:detail` — every result nested under it, each at `{label}d{j}`.
+fn emit_result(
+    builder: &mut RdfDatasetBuilder,
+    label: &str,
+    r: &ValidationResult,
+    mint: &str,
+    emitted_paths: &mut FastSet<String>,
+) {
+    let result_subj = RdfTerm::blank_node(label.to_owned());
+
+    // _:r rdf:type sh:ValidationResult
+    push_triple(
+        builder,
+        result_subj.clone(),
+        rdf::TYPE,
+        RdfTerm::iri(sh::VALIDATION_RESULT),
+    );
+
+    // sh:focusNode
+    push_triple(
+        builder,
+        result_subj.clone(),
+        sh::FOCUS_NODE,
+        r.focus_node.to_rdf_term(),
+    );
+
+    // sh:resultSeverity
+    push_triple(
+        builder,
+        result_subj.clone(),
+        sh::RESULT_SEVERITY,
+        RdfTerm::iri(r.severity.iri()),
+    );
+
+    // sh:sourceConstraintComponent
+    push_triple(
+        builder,
+        result_subj.clone(),
+        sh::SOURCE_CONSTRAINT_COMPONENT,
+        RdfTerm::iri(r.source_constraint_component.as_str()),
+    );
+
+    // sh:sourceShape
+    push_triple(
+        builder,
+        result_subj.clone(),
+        sh::SOURCE_SHAPE,
+        r.source_shape.to_rdf_term(),
+    );
+
+    // sh:resultPath (optional). A complex path is a blank node the report MINTS
+    // (see `path::path_to_term`), so it carries the mint prefix like every other
+    // minted node; its full SHACL path structure is emitted once per distinct
+    // root label (two results sharing a path share the structure bnodes).
+    if let Some(path) = &r.result_path {
+        let root = match (path, &r.path_structure) {
+            (Term::BlankNode(root_label), Some(_)) => Some(format!("{mint}{root_label}")),
+            _ => None,
+        };
+        push_triple(
+            builder,
+            result_subj.clone(),
+            sh::RESULT_PATH,
+            root.clone()
+                .map_or_else(|| path.to_rdf_term(), RdfTerm::blank_node),
+        );
+        if let (Some(root), Some(structure)) = (root, &r.path_structure)
+            && emitted_paths.insert(root.clone())
+        {
+            emit_path_structure(builder, &root, structure);
+        }
+    }
+
+    // sh:value (optional)
+    if let Some(value) = &r.value {
+        push_triple(builder, result_subj.clone(), sh::VALUE, value.to_rdf_term());
+    }
+
+    // sh:resultMessage (optional plain string literal)
+    if let Some(msg) = &r.message {
+        push_triple(
+            builder,
+            result_subj.clone(),
+            sh::RESULT_MESSAGE,
+            RdfTerm::Literal(::purrdf::RdfLiteral::simple(msg.as_str())),
+        );
+    }
+
+    // sh:detail (optional nested results), in the result's own detail order.
+    for (j, detail) in r.details.iter().enumerate() {
+        let detail_label = format!("{label}d{j}");
+        push_triple(
+            builder,
+            result_subj.clone(),
+            sh::DETAIL,
+            RdfTerm::blank_node(detail_label.clone()),
+        );
+        emit_result(builder, &detail_label, detail, mint, emitted_paths);
+    }
 }
 
 // ── Builder helpers ───────────────────────────────────────────────────────────
@@ -832,6 +877,7 @@ mod tests {
             path_box_roles: vec![],
             result_box_roles: vec![],
             attributions: vec![],
+            details: vec![],
         }
     }
 
@@ -967,6 +1013,7 @@ mod tests {
             path_box_roles: vec![],
             result_box_roles: vec![],
             attributions: vec![],
+            details: vec![],
         };
 
         let mut results = Vec::new();
@@ -1421,6 +1468,7 @@ mod tests {
                     evidence: None,
                 },
             ],
+            details: vec![],
         };
 
         // No value (absence-based) — this is the critical invariant.

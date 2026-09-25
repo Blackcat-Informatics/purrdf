@@ -337,6 +337,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
             path_box_roles: vec![],
             result_box_roles: vec![],
             attributions: vec![],
+            details: vec![],
         });
     };
 
@@ -492,6 +493,7 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
             });
         }
         Ok(results)

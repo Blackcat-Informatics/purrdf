@@ -173,7 +173,11 @@ impl Walk<'_> {
                 Constraint::NodeByExpression { expr, .. } => {
                     self.node_expr(expr, &format!("sh:nodeByExpression on {owner}"));
                 }
-                Constraint::Not(shape) | Constraint::Node(shape) => self.shape(shape),
+                Constraint::Not(shape)
+                | Constraint::Node(shape)
+                | Constraint::MemberShape(shape) => {
+                    self.shape(shape);
+                }
                 Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
                     for shape in shapes {
                         self.shape(shape);
@@ -210,6 +214,9 @@ impl Walk<'_> {
                 | Constraint::Disjoint(_)
                 | Constraint::LessThan(_)
                 | Constraint::LessThanOrEquals(_)
+                | Constraint::MinListLength(_)
+                | Constraint::MaxListLength(_)
+                | Constraint::UniqueMembers(_)
                 | Constraint::Component { .. } => {}
             }
         }

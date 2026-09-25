@@ -253,6 +253,7 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
             });
         }
         Ok(out)

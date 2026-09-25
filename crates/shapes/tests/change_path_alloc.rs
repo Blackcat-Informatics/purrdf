@@ -124,7 +124,9 @@
 //! [`change_path_report_bytes_match_pinned_golden`] failing has found a SEMANTIC
 //! CHANGE in SHACL validation and must stop and diagnose it. Regenerating the
 //! golden to make the test pass is forbidden, and a regenerated golden is
-//! indistinguishable from the bug it exists to catch.
+//! indistinguishable from the bug it exists to catch. A NEW constraint kind adds
+//! its own [`CASES`] entry and, with it, its own section of the golden; the
+//! sections of the existing cases are never rewritten.
 //!
 //! # The instrument, and the trap it is threaded around
 //!
@@ -290,6 +292,15 @@ const NS: &str = "http://example.org/purrdf/change-path#";
 /// `rdf:type`, spelled out because the fixtures are built id-natively.
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
+/// `rdf:first`, the member cell of a SHACL list.
+const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+
+/// `rdf:rest`, the tail cell of a SHACL list.
+const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+
+/// `rdf:nil`, the empty SHACL list.
+const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+
 /// `rdfs:subClassOf`, which the seam fixture needs to reach the class-membership
 /// index at all; see [`seam_dataset`].
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -357,7 +368,17 @@ const SEAM_FOCUS_NODES: usize = 4_096;
 /// load, at any core count, because nothing in binding consults a clock, a source
 /// of randomness or the scheduler. A host-sensitive figure would have no business
 /// being asserted; this one has no business being merely logged.
-const BIND_ALLOC_CONST: u64 = 59;
+///
+/// # Why it moved from 59
+///
+/// `sh:class` now resolves at bind to an identity SET rather than a single slot,
+/// because a SHACL 1.2 `sh:class` value may be a list of classes (a disjunction)
+/// and the evaluator asks whether a value node is an instance of ANY of them. The
+/// seam shapes graph carries one `sh:class` and, before it, no set-valued
+/// constraint at all, so binding now builds the set table it used to skip (+1) and
+/// the one set in it (+1). Both are per shapes graph, not per quad: the figure is
+/// still identical for twice the instance data, which is the assertion beside it.
+const BIND_ALLOC_CONST: u64 = 61;
 
 /// How many allocations one prepared-product `admit` costs.
 ///
@@ -433,7 +454,14 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// used to build for it — when it does not. The seam shapes graph declares no
 /// function, so all three scans end at that lookup: seven allocations fewer than
 /// the two unconditional probes cost before.
-const ADMIT_ALLOC_CONST: u64 = 289;
+///
+/// # Why it moved from 289
+///
+/// The carried model's `sh:class` and `sh:datatype` values are LISTS now — a
+/// SHACL 1.2 value of either may be a SHACL list, read as a disjunction — so the
+/// decoder reads each as a sequence into its own vector. The seam shapes graph
+/// carries one of each: two allocations, once per restore, whatever the data.
+const ADMIT_ALLOC_CONST: u64 = 291;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;
@@ -551,6 +579,21 @@ impl Emit<'_> {
         let reifier = self.scoped("stmt");
         self.builder.push_reifier(reifier, triple);
         reifier
+    }
+
+    /// Attach a SHACL list of `members` to the focus node under `predicate`, its
+    /// cells named per focus node so no two focus nodes share one.
+    fn list(&mut self, predicate: &str, members: &[TermId]) {
+        let first = self.builder.intern_iri(RDF_FIRST);
+        let rest = self.builder.intern_iri(RDF_REST);
+        let mut next = self.builder.intern_iri(RDF_NIL);
+        for (index, member) in members.iter().enumerate().rev() {
+            let cell = self.scoped(&format!("cell{index}"));
+            self.builder.push_quad(cell, first, *member, None);
+            self.builder.push_quad(cell, rest, next, None);
+            next = cell;
+        }
+        self.prop(predicate, next);
     }
 
     /// Attach a per-focus-node target node typed `ex:Target`, returning it.
@@ -1101,6 +1144,63 @@ const CASES: &[ConstraintCase] = &[
             } else {
                 emit.target("next");
             }
+        },
+    },
+    ConstraintCase {
+        name: "min_list_length",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:items ; sh:minListLength 2 ] .",
+        emit: |emit, violating| {
+            let a = emit.scoped("a");
+            let b = emit.scoped("b");
+            if violating {
+                emit.list("items", &[a]);
+            } else {
+                emit.list("items", &[a, b]);
+            }
+        },
+    },
+    ConstraintCase {
+        name: "max_list_length",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:items ; sh:maxListLength 2 ] .",
+        emit: |emit, violating| {
+            let a = emit.scoped("a");
+            let b = emit.scoped("b");
+            let c = emit.scoped("c");
+            if violating {
+                emit.list("items", &[a, b, c]);
+            } else {
+                emit.list("items", &[a, b]);
+            }
+        },
+    },
+    ConstraintCase {
+        name: "unique_members",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:items ; sh:uniqueMembers true ] .",
+        emit: |emit, violating| {
+            let a = emit.scoped("a");
+            let b = emit.scoped("b");
+            if violating {
+                emit.list("items", &[a, b, a]);
+            } else {
+                emit.list("items", &[a, b]);
+            }
+        },
+    },
+    ConstraintCase {
+        name: "member_shape",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:items ; sh:memberShape [ sh:nodeKind sh:IRI ] ] .",
+        emit: |emit, violating| {
+            let a = emit.scoped("a");
+            let b = if violating {
+                emit.lit(RdfLiteral::simple("a literal is not an IRI"))
+            } else {
+                emit.scoped("b")
+            };
+            emit.list("items", &[a, b]);
         },
     },
 ];

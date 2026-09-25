@@ -159,16 +159,6 @@ const W3C12_DECLARED_FAILURES: usize = 5;
 /// about them. The ledger runs both ways: an entry whose shapes graph starts
 /// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
 const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
-    ("w3c12/core/node/in-003", R_LIST_COMPONENTS),
-    ("w3c12/core/node/xone-003", R_LIST_COMPONENTS),
-    ("w3c12/core/node/minListLength-001", R_LIST_COMPONENTS),
-    ("w3c12/core/node/maxListLength-001", R_LIST_COMPONENTS),
-    ("w3c12/core/node/memberShape-001", R_LIST_COMPONENTS),
-    ("w3c12/core/node/uniqueMembers-001", R_LIST_COMPONENTS),
-    ("w3c12/core/property/minListLength-001", R_LIST_COMPONENTS),
-    ("w3c12/core/property/maxListLength-001", R_LIST_COMPONENTS),
-    ("w3c12/core/property/memberShape-001", R_LIST_COMPONENTS),
-    ("w3c12/core/property/uniqueMembers-001", R_LIST_COMPONENTS),
     ("w3c12/core/node/uniqueValuesFor-001", R_UNIQUE_VALUES_FOR),
     ("w3c12/core/node/uniqueValuesFor-002", R_UNIQUE_VALUES_FOR),
     ("w3c12/core/node/uniqueValuesFor-003", R_UNIQUE_VALUES_FOR),
@@ -187,10 +177,50 @@ const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
         "w3c12/sparql/functions/instanceCount-example",
         R_INSTANCES_OF_EXPR,
     ),
+    ("w3c12/core/misc/severity-004", R_DEBUG_TRACE),
+    ("w3c12/core/misc/severity-005", R_DEBUG_TRACE),
+    ("w3c12/core/node/closed-003", R_BY_TYPES),
+    ("w3c12/core/node/closed-004", R_BY_TYPES),
+    ("w3c12/core/targets/targetClassImplicit-002", R_SHAPE_CLASS),
+    ("w3c12/core/targets/targetWhere-001", R_TARGET_WHERE),
+    (
+        "w3c12/inference-rules/rules-entailment-validation",
+        R_ENTAILMENT,
+    ),
+    ("w3c12/sparql/property/property-select-001", R_VALUES),
+    ("w3c12/sparql/property/property-sparqlExpr-001", R_VALUES),
+    (
+        "w3c12/sparql/targets/targetNode-select-001",
+        R_TARGET_NODE_EXPR,
+    ),
+    ("w3c12/core/misc/deactivated-003", R_REIFIER_ANNOTATION),
+    ("w3c12/core/misc/severity-003", R_REIFIER_ANNOTATION),
+    ("w3c12/core/misc/message-002", R_REIFIER_ANNOTATION),
 ];
 
-const R_LIST_COMPONENTS: &str = "uses sh:minListLength / sh:maxListLength / sh:memberShape / \
-     sh:uniqueMembers, SHACL 1.2 Core components the engine refuses at load as unimplemented";
+const R_REIFIER_ANNOTATION: &str = "annotates a (shape, parameter, value) statement's reifier with \
+     sh:deactivated / sh:severity / sh:message, which the engine refuses at load as unevaluated";
+
+const R_DEBUG_TRACE: &str = "gives a shape the sh:Debug / sh:Trace severity, which the engine \
+     refuses at load as unevaluated rather than treating as blocking";
+
+const R_BY_TYPES: &str =
+    "uses sh:closed sh:ByTypes, which the engine refuses at load as unimplemented";
+
+const R_SHAPE_CLASS: &str =
+    "types a shape sh:ShapeClass, whose implicit class target the engine refuses at load";
+
+const R_TARGET_WHERE: &str =
+    "uses sh:targetWhere, which the engine refuses at load as unimplemented";
+
+const R_ENTAILMENT: &str = "declares sh:entailment, and SHACL requires a processor to signal a \
+     failure for an entailment regime it does not support";
+
+const R_VALUES: &str = "uses sh:values on a property shape, which the engine refuses at load \
+     as unimplemented";
+
+const R_TARGET_NODE_EXPR: &str = "gives sh:targetNode a structured node expression, which the \
+     engine refuses at load as unevaluated";
 
 const R_UNIQUE_VALUES_FOR: &str =
     "uses sh:uniqueValuesFor, which the engine refuses at load as unimplemented";
@@ -250,7 +280,12 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// report, including the two whose custom list function is called only from
 /// SPARQL text and which the product writer used to refuse, because the model does
 /// not carry an uncalled declaration and the restore did not re-derive it.
-const AGREED_ON_REPORT_CASES: usize = 338;
+///
+/// Moved from 338 to 335 when the shapes-graph census reached the loader: the ten
+/// SHACL 1.2 list-component cases now load and agree (+10), and thirteen cases now
+/// stop at load on a term the engine does not evaluate (−13), so
+/// [`W3C12_REFUSED_AT_LOAD`] went from 25 entries to 28.
+const AGREED_ON_REPORT_CASES: usize = 335;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -283,7 +318,17 @@ const AGREED_ON_REPORT_CASES: usize = 338;
 /// loadable SHACL 1.2 `sht:Validate` entries expect at least one result (+129) —
 /// the other 15 expect conformance and are agreed on as empty reports, which is
 /// why the two counts moved by different amounts.
-const AGREED_WITH_RESULTS_CASES: usize = 310;
+///
+/// # Why it moved from 310 to 316
+///
+/// The shapes-graph census reached the loader. The ten SHACL 1.2 list-component
+/// cases (`sh:minListLength`, `sh:maxListLength`, `sh:uniqueMembers`,
+/// `sh:memberShape`, and the two that reach `sh:minListLength` through their
+/// shacl-shacl property shapes) now load, and every one of them reports results
+/// (+10); thirteen other cases now stop at load on a term the engine does not
+/// evaluate (see [`W3C12_REFUSED_AT_LOAD`]), and four of those had agreed on a
+/// report carrying a result (−4).
+const AGREED_WITH_RESULTS_CASES: usize = 316;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

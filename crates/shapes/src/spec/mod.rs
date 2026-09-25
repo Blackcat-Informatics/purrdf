@@ -61,6 +61,7 @@
 //! agree exactly, component by component, function by function, parameter by
 //! parameter.
 
+pub mod census;
 mod link;
 mod table;
 mod vocab;
@@ -77,7 +78,7 @@ pub use table::{
     AliasSource, Carrier, ComponentParam, ComponentRow, ComponentStatus, FunctionClass,
     FunctionParam, FunctionRow, KeyAlias, SPEC_TEXT_OPTIONALITY, SparqlAlias, TargetRow, ValueRule,
 };
-pub use vocab::{DeclaredFunction, DeclaredParam, Vocabulary, declared};
+pub use vocab::{DeclaredFunction, DeclaredParam, Vocabulary, declared, declared_terms};
 
 use crate::expression::SparqlCallForm;
 use crate::model::sparql_ns;
@@ -302,6 +303,23 @@ pub(crate) fn reserved_key(path: &str) -> Option<String> {
 /// The target predicates the engine implements, in table order.
 pub(crate) fn target_predicates() -> impl Iterator<Item = &'static str> {
     table::TARGETS.iter().map(|target| target.predicate)
+}
+
+/// Every constraint parameter a shape has at most one value for, in table order
+/// and without repeats (a parameter shared by two components appears once).
+pub(crate) fn single_valued_params() -> &'static [&'static str] {
+    static PARAMS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+        let mut out: Vec<&'static str> = Vec::new();
+        for row in table::COMPONENTS {
+            for p in row.params {
+                if p.single && !out.contains(&p.path) {
+                    out.push(p.path);
+                }
+            }
+        }
+        out
+    });
+    &PARAMS
 }
 
 /// The parameters of every declared component this engine does not evaluate,
