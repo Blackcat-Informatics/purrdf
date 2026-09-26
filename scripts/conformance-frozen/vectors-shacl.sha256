@@ -23,6 +23,8 @@ ce90db5a1a1fc7c9f241f073a1029565776310e586bb5b2bd2d2d8a2cd785407  af/rules/fp-de
 96fd90cbcd20518d5f5a3207f48861964e2fda9ec708aecef1eb83c2af5ecd9a  af/rules/fp-fixpoint-chain/input.ttl
 8d43a355370712e38a92c9b25d9fea36a1ed6231b5a223f828d25171aa7f318a  af/rules/fp-ill-formed-skipped/expected-inferred.ttl
 18d4464f3d6a11ee566fd86a11408568a8d15c603a5e9705667138cbea0b6015  af/rules/fp-ill-formed-skipped/input.ttl
+b4ea5b7c221264c3fea50c355bfb3f484b46109781bebabde8049595fbe2e1d0  af/rules/fp-literal-subject-skipped/expected-inferred.ttl
+02636eb4496c2331bbf1fbea872981f100a435fcd35ea41af933669d20fade1c  af/rules/fp-literal-subject-skipped/input.ttl
 cb5a2f0f6e433232ea03bd226ad792050dcd0e9e652a3303fe3cdc9a6648dd1e  af/rules/fp-named-graph/expected-inferred.ttl
 ca638c81d572167af11491c50e31a70d0a741efc107a903697d8793e71ba0426  af/rules/fp-named-graph/input.trig
 1763edf462b57cd51d27fcf6ee5fe0e6f2e5bb2a9cb0ce61ced130ee77e2e610  af/rules/fp-nonmonotonic/expected-inferred.ttl

@@ -766,7 +766,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | SHACL | W3C data-shapes (`vectors/shacl/`) | **128 / 129** pass · 1 refused: unresolvable import · 0 ledgered |
 | SHACL 1.2 | W3C shacl12-test-suite (`vectors/shacl12/`) | **537 / 544** pass · 6 upstream errata · 1 refused: unresolvable import · 0 ledgered; 3 unlisted vendored files graded apart |
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **73 / 73** |
-| SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **19 / 19** |
+| SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **20 / 20** |
 | Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC toRDF + compaction (`crates/rdf/tests/fixtures/jsonld-w3c-rec/`) | **73 / 73** applicable toRDF · **13 / 13** exact compaction |
 | SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **862** pass · 5 ledgered (upstream errata) |

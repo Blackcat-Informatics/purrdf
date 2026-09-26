@@ -108,6 +108,9 @@ vendored suite does not exercise:
 - **`fp-ill-formed-skipped`** — a triple rule whose subject expression yields a
   literal and an IRI: SHACL 1.2 Inference Rules, "Skip ill-formed triples", so the
   literal combination infers nothing and the IRI combination is inferred.
+- **`fp-literal-subject-skipped`** — a triple rule whose CONSTANT subject is a
+  literal: its one combination is ill-formed and skipped, not an error, while a
+  control rule differing only in its IRI subject infers its triple.
 - **`err-diverging-fresh-term`** — an iterating rule minting a strictly longer IRI
   every pass; `apply_rules` must refuse it with an evaluation-budget error rather
   than loop forever. Under the default term-generating round limit the run is
