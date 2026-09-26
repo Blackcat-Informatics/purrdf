@@ -46,13 +46,14 @@
 //! SPARQL 1.1 §10 says a `SERVICE SILENT` clause whose endpoint cannot be reached "will
 //! be considered to have matched with a single, empty, solution" — the join identity, so
 //! the surrounding query proceeds unchanged. This crate keeps that promise exactly, and
-//! confines it to what it is a promise *about*. Four outcomes, four answers:
+//! confines it to what it is a promise *about*. Five outcomes, five answers:
 //!
 //! | Outcome | Non-silent `SERVICE` | `SERVICE SILENT` |
 //! |---|---|---|
 //! | The endpoint is unreachable, or its response undecodable ([`RemoteError::Transport`], [`RemoteError::Decode`], [`RemoteError::Disabled`]) | [`EvalError::Remote`](crate::EvalError) | join identity |
 //! | A capability was denied ([`RemoteError::Denied`]) | [`EvalError::ServiceDenied`](crate::EvalError) | [`EvalError::ServiceDenied`](crate::EvalError) |
 //! | An in-process source ran out of stack parsing or evaluating the body ([`RemoteError::StackExhausted`]) | [`EvalError::StackExhausted`](crate::EvalError) | [`EvalError::StackExhausted`](crate::EvalError) |
+//! | On `wasm32`, the body nests past the JavaScript engine's call-stack budget ([`RemoteError::HostStackExhausted`]) | [`EvalError::HostStackExhausted`](crate::EvalError) | [`EvalError::HostStackExhausted`](crate::EvalError) |
 //! | This engine's own governor tripped ([`RemoteError::Governed`], [`RemoteError::GovernedAfterCompletion`]) | truncation | truncation |
 //!
 //! The first and last rows are the pre-existing rule, unchanged: `SILENT` is a statement

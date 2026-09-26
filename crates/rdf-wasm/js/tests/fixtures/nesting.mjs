@@ -8,7 +8,14 @@
 
 import assert from "node:assert/strict";
 
-export const STACK_REFUSAL = /SPARQL parse stack exhausted|evaluation stack exhausted|stack region exhausted/;
+export const STACK_REFUSAL =
+  /SPARQL parse stack exhausted|evaluation stack exhausted|stack region exhausted|host call stack budget exceeded/;
+/**
+ * The host-stack refusal: the budget kept under the JavaScript engine's own call stack,
+ * the same on both lanes and on every region, so it names no stackBytes remedy.
+ */
+export const HOST_STACK_REFUSAL =
+  /^error native-sparql-host-stack-exhausted: host call stack budget exceeded: the request's [a-z -]+ nests deeper than the JavaScript engine's own call stack holds \(655360 bytes of it are budgeted for a request, 284 nested graph patterns at most, the same on the synchronous and the asynchronous lane; a larger stackBytes does not raise it\); nest the request less deeply$/;
 export const NUMBERS = [1, 2]
   .map(
     (n) =>
@@ -64,8 +71,13 @@ export async function attempt(run, query, what) {
   }
 }
 
+/** The deepest level of `shape` that answers under `run`, by bisection. */
+export async function realLimit(run, shape) {
+  return (await realEnd(run, shape)).deepest;
+}
+
 /** The deepest level of `shape` that answers under `run`, by bisection, and the refusal one level deeper. */
-export async function realLimit(run, [what, text, expected]) {
+export async function realEnd(run, [what, text, expected]) {
   let [deepest, refused] = [1, 20_000];
   assert.deepEqual((await attempt(run, text(deepest), what)).subjects, expected, `${what}: one level answers`);
   assert.ok((await attempt(run, text(refused), what)).refused, `${what}: 20 000 levels are refused`);
@@ -75,7 +87,8 @@ export async function realLimit(run, [what, text, expected]) {
     else refused = mid;
   }
   assert.deepEqual((await attempt(run, text(deepest), what)).subjects, expected, `${what}: ${deepest} deep answers`);
-  assert.ok((await attempt(run, text(refused), what)).refused, `${what}: ${refused} deep is refused`);
-  return deepest;
+  const refusal = (await attempt(run, text(refused), what)).refused;
+  assert.ok(refusal, `${what}: ${refused} deep is refused`);
+  return { deepest, refusal };
 }
 

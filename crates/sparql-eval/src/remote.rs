@@ -176,6 +176,13 @@ pub enum RemoteError {
     /// is a fact about this host, and swallowing it to the join identity would make the
     /// surrounding join a no-op on exactly the requests that nest deepest.
     StackExhausted(&'static str),
+    /// On `wasm32`, an in-process source's forwarded body nests deeper than the
+    /// JavaScript engine's call stack holds: the [`EvalError::HostStackExhausted`] of its
+    /// evaluation, or the [`purrdf_sparql_algebra::ParseError::HostStackExhausted`] of
+    /// its re-parse, naming the construct.
+    ///
+    /// **Not silenceable**, for the reason [`Self::StackExhausted`] is not.
+    HostStackExhausted(&'static str),
 }
 
 impl core::fmt::Display for RemoteError {
@@ -194,6 +201,9 @@ impl core::fmt::Display for RemoteError {
             }
             Self::StackExhausted(construct) => {
                 write!(f, "{}", EvalError::StackExhausted { construct })
+            }
+            Self::HostStackExhausted(construct) => {
+                write!(f, "{}", EvalError::HostStackExhausted { construct })
             }
         }
     }
@@ -1099,6 +1109,9 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         Err(RemoteError::StackExhausted(construct)) => {
             return Err(EvalError::StackExhausted { construct });
         }
+        Err(RemoteError::HostStackExhausted(construct)) => {
+            return Err(EvalError::HostStackExhausted { construct });
+        }
         Err(e) => {
             // A real endpoint failure outranks a simultaneous stop. Under SILENT the
             // endpoint failure is deliberately erased, so the stop becomes the surviving
@@ -1224,6 +1237,7 @@ fn remote_error_for(error: EvalError) -> RemoteError {
             RemoteError::HostDenied { endpoint, message }
         }
         EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
+        EvalError::HostStackExhausted { construct } => RemoteError::HostStackExhausted(construct),
         other => RemoteError::Decode(other.to_string()),
     }
 }
@@ -1255,6 +1269,9 @@ pub(crate) fn evaluate_in_memory(
         .map_err(|e| match e {
             purrdf_sparql_algebra::ParseError::StackExhausted { construct, .. } => {
                 RemoteError::StackExhausted(construct)
+            }
+            purrdf_sparql_algebra::ParseError::HostStackExhausted { construct, .. } => {
+                RemoteError::HostStackExhausted(construct)
             }
             other => RemoteError::Decode(other.to_string()),
         })?;

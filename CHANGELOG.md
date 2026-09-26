@@ -446,7 +446,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   - `yieldEveryPolls` (default 65 536; `0` yields at every poll). A job gives the
     event loop one turn per that many governor polls, counted rather than timed,
     through the macrotask primitive `asyncYieldPrimitive()` reports;
-  - `stackBytes` (default 2 MiB, at least 524 288), the job's stack region.
+  - `stackBytes` (default 2 MiB, at least 524 288), the job's stack region. It
+    sizes the shadow stack only: V8 gives a job's suspendable call stack the same
+    size as the synchronous lane's, so the host-stack budget (see Fixed) binds at
+    the same depth on both lanes and on every region.
 
   Asynchronous updates on one dataset run one at a time and commit only if the
   dataset was not mutated while they ran; `Dataset.id` and `Dataset.generation`
@@ -497,7 +500,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   offers an `ASK` result only JSON and XML, since CSV and TSV exist only for
   `SELECT`. `EvalError::StackExhausted` (`native-sparql-evaluation-stack-exhausted`)
   and `RemoteError::StackExhausted` report a request too deep for the stack that
-  evaluates it; see Fixed. `NativeSparqlEngine::explain_query_with_stop_signal`
+  evaluates it; on `wasm32`, `ParseError::HostStackExhausted`,
+  `EvalError::HostStackExhausted` (`native-sparql-host-stack-exhausted`, also the code
+  of a parse the budget refuses) and `RemoteError::HostStackExhausted` report one past
+  the budget kept under the JavaScript engine's call stack; see Fixed. `NativeSparqlEngine::explain_query_with_stop_signal`
   explains a query with a host stop signal polled by the measuring run, which is
   still metered and never bounded; a signal that fires is reported on the
   explanation's evidence as the stop it was.
@@ -628,10 +634,16 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   before the shadow stack for some constructs (path groups trapped V8 at about
   2 000 levels), so there each level is also charged its measured V8 cost against
   a 640 KiB budget (`WASM_HOST_STACK_BUDGET`, 65% of V8's stack), and tree height
-  is capped at 2 048 levels: the synchronous lane answers 637 nested parentheses,
-  537 `-(`, 283 groups, 1 133 path groups and 425 built-in calls, and refuses the
-  next level typed. (Some requests the synchronous lane used to answer are now
-  refused there; see the **BREAKING** **wasm** entry under Changed.)
+  is capped at 2 048 levels: both lanes answer 637 nested parentheses, 537 `-(`,
+  283 groups and 1 133 path groups, and refuse the next level with
+  `ParseError::HostStackExhausted` (`native-sparql-host-stack-exhausted`), whose
+  message names the budget and says that a larger `stackBytes` does not raise it.
+  Measured with a recursive wasm function under Node 26 and workerd, V8 runs a JSPI
+  job on a stack the size of the synchronous lane's (20 136 frames against
+  20 927, on 984 KiB): the smaller of the process-wide `--stack-size` and
+  `--wasm-stack-switching-stack-size` flags, which no module or job can change.
+  (Some requests the synchronous lane used to answer are now refused on both lanes;
+  see the **BREAKING** **wasm** entry under Changed.)
 
 - **sparql-eval:** evaluating what the parser admits could still exhaust the stack.
   On the synchronous wasm lane, 62 nested `NOT EXISTS` or about 104 nested `LATERAL`
@@ -2328,15 +2340,28 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 ### Changed
 
 - **BREAKING** **wasm:** the synchronous lane refuses some requests it used to
-  answer. Every recursive level of a synchronous request is now charged its measured
-  cost to V8's call stack against a 640 KiB budget (`WASM_HOST_STACK_BUDGET`), so a
-  request nested between that budget and the depth at which the shadow stack used to
-  trap — 638 to about 950 nested parentheses, which 2.0.2 answered — is now the typed
-  `ParseError::StackExhausted` refusal (it used to trap near 950). On the synchronous
-  lane every stack refusal, the parser's and the evaluator's, keeps its code and
-  message and ends with the remedy: run the request with the asynchronous twin of the
-  call (`selectAsync`, `queryAsync`, `updateAsync`, …) and a larger `stackBytes`
-  region.
+  answer. Every recursive level of a request is now charged its measured cost to V8's
+  call stack against a 640 KiB budget (`WASM_HOST_STACK_BUDGET`), so a request nested
+  between that budget and the depth at which V8's stack used to run out — 638 to
+  about 950 nested parentheses, which 2.0.2 answered — is now refused with
+  `native-sparql-host-stack-exhausted` (it used to trap near 950). No lane answers it:
+  an asynchronous job runs on a V8 stack of the same size, whatever its `stackBytes`,
+  so the refusal names the budget and the remedy is a request nested less deeply.
+  The shadow-stack refusals are the ones a larger stack answers: on the synchronous
+  lane the parser's (`SPARQL parse stack exhausted`) and the evaluator's
+  (`native-sparql-evaluation-stack-exhausted`) keep their code and message and end
+  with the remedy, the asynchronous twin of the call (`selectAsync`, `queryAsync`,
+  `updateAsync`, …) and a larger `stackBytes` region; on the asynchronous lane they
+  name the region's size and a larger `stackBytes`. On `wasm32` neither message
+  says to use a thread with a larger stack any more, which a JavaScript caller
+  cannot do.
+
+- **BREAKING** **sparql-eval:** `UnsupportedKind::GraphPatternDepthExceeded` and its
+  code `native-sparql-graph-pattern-depth-exceeded` are removed (`UnsupportedKind::ALL`
+  has three entries). The `wasm32` graph-pattern depth limit it reported is the
+  host-stack budget, not a construct deferred in scope, and a graph pattern nested
+  past `WASM_GRAPH_PATTERN_DEPTH` is now `EvalError::HostStackExhausted`
+  (`native-sparql-host-stack-exhausted`).
 
 - **release:** under this suite's full-semver rule, the breaking changes below
   make the next release a MAJOR version. Several of them change surfaces that no

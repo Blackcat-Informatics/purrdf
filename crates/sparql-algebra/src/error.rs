@@ -20,6 +20,8 @@
 //!   called with a number of arguments its spec-fixed signature does not admit.
 //! * [`ParseError::StackExhausted`] — the query nests deeper than the stack of the
 //!   thread parsing it can hold (the text itself may be fine).
+//! * [`ParseError::HostStackExhausted`] — on `wasm32`, the query nests deeper than the
+//!   fixed budget kept for the JavaScript engine's own call stack.
 
 use core::fmt;
 
@@ -79,11 +81,11 @@ pub enum ParseError {
     /// The query nests deeper than the stack of the thread parsing it can hold:
     /// `construct` was about to be parsed one level deeper with less than
     /// [`purrdf_stack::MARGIN_BYTES`] of stack left, or a node about to be built there
-    /// would make a tree too tall for the walks over it to fit that stack, or — on
-    /// `wasm32` — the level would spend more of the host engine's call stack than
-    /// [`crate::WASM_HOST_STACK_BUDGET`] allows. [`crate::Query::validate`] and
-    /// [`crate::GraphPattern::validate_height`] refuse a tree too tall for the stack left
-    /// with it too, naming `"query algebra"`.
+    /// would make a tree too tall for the walks over it to fit that stack.
+    /// [`crate::Query::validate`] and [`crate::GraphPattern::validate_height`] refuse a
+    /// tree too tall for the stack left with it too, naming `"query algebra"`. (On
+    /// `wasm32` the host engine's call stack, which no measurement reaches, has its own
+    /// refusal, [`Self::HostStackExhausted`].)
     ///
     /// Its own variant rather than a [`Self::Syntax`] because nothing about the text is
     /// wrong: how deep a request may nest is the stack it runs on, and the same text
@@ -96,6 +98,27 @@ pub enum ParseError {
     StackExhausted {
         /// The construct about to be parsed a level deeper (`"group graph pattern"`,
         /// `"bracketted expression"`, …).
+        construct: &'static str,
+        /// Byte offset of the token that opened it (best-effort).
+        at: usize,
+    },
+    /// On `wasm32`, the query nests deeper than the JavaScript engine's own call stack
+    /// holds: `construct` would spend more of that stack than
+    /// [`crate::WASM_HOST_STACK_BUDGET`] allows, or a node built there would make a tree
+    /// taller than the walks over it may be on that stack. [`crate::Query::validate`]
+    /// and [`crate::GraphPattern::validate_height`] refuse a built tree past those
+    /// bounds with it too, naming `"query algebra"`. Never raised on another target.
+    ///
+    /// Its own variant rather than a [`Self::StackExhausted`] because no stack a caller
+    /// can size answers it. Every wasm call also takes frames on the engine's call
+    /// stack, which no wasm code can read; under V8 (Node.js, Chromium, Cloudflare
+    /// Workers) it is about 984 KiB on the synchronous lane and on an asynchronous
+    /// job's suspendable stack alike, and a job's `stackBytes` sizes only the shadow
+    /// stack in linear memory. The budget is a fixed share of it, the same on every
+    /// lane, so the remedy is a request nested less deeply.
+    HostStackExhausted {
+        /// The construct about to be parsed a level deeper (`"group graph pattern"`,
+        /// `"bracketted expression"`, …), or `"query algebra"` for a built tree.
         construct: &'static str,
         /// Byte offset of the token that opened it (best-effort).
         at: usize,
@@ -126,7 +149,7 @@ impl ParseError {
 
     /// The byte offset the failure was reported at, for the position-bearing
     /// variants ([`Lex`](Self::Lex)/[`Syntax`](Self::Syntax)/[`CdtArity`](Self::CdtArity)/
-    /// [`StackExhausted`](Self::StackExhausted)).
+    /// [`StackExhausted`](Self::StackExhausted)/[`HostStackExhausted`](Self::HostStackExhausted)).
     /// `None` for [`Unsupported`](Self::Unsupported)/[`Iri`](Self::Iri), which are
     /// not tied to a single source position.
     #[must_use]
@@ -135,7 +158,8 @@ impl ParseError {
             Self::Lex { at, .. }
             | Self::Syntax { at, .. }
             | Self::CdtArity { at, .. }
-            | Self::StackExhausted { at, .. } => Some(*at),
+            | Self::StackExhausted { at, .. }
+            | Self::HostStackExhausted { at, .. } => Some(*at),
             Self::Unsupported(_) | Self::Iri { .. } => None,
         }
     }
@@ -180,11 +204,27 @@ impl fmt::Display for ParseError {
                 f,
                 "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}"
             ),
-            Self::StackExhausted { construct, at } => write!(
+            Self::StackExhausted { construct, at } => {
+                write!(
+                    f,
+                    "SPARQL parse stack exhausted at byte {at}: the {construct} opened there \
+                     nests deeper than the stack parsing it can hold"
+                )?;
+                // A wasm caller has no thread to spawn: each wasm lane names its own remedy.
+                if cfg!(target_arch = "wasm32") {
+                    Ok(())
+                } else {
+                    f.write_str("; parse it on a thread with a larger stack")
+                }
+            }
+            Self::HostStackExhausted { construct, at } => write!(
                 f,
-                "SPARQL parse stack exhausted at byte {at}: the {construct} opened there \
-                 nests deeper than the stack parsing it can hold; parse it on a thread with \
-                 a larger stack"
+                "SPARQL nesting exceeds the host call-stack budget at byte {at}: the \
+                 {construct} opened there nests deeper than the JavaScript engine's own call \
+                 stack holds ({} bytes of it are budgeted for a request, the same on the \
+                 synchronous and the asynchronous lane; a larger stackBytes does not raise \
+                 it); nest the request less deeply",
+                crate::WASM_HOST_STACK_BUDGET
             ),
         }
     }
@@ -206,6 +246,37 @@ pub type Result<T> = core::result::Result<T, ParseError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Natively the shadow-stack refusal names a thread with a larger stack; the
+    /// host-stack refusal names the budget and no larger stack, and both carry their
+    /// offset.
+    #[test]
+    fn stack_refusals_name_the_remedy_their_limit_has() {
+        let shadow = ParseError::StackExhausted {
+            construct: "group graph pattern",
+            at: 7,
+        };
+        assert_eq!(
+            shadow.to_string(),
+            "SPARQL parse stack exhausted at byte 7: the group graph pattern opened there \
+             nests deeper than the stack parsing it can hold; parse it on a thread with a \
+             larger stack"
+        );
+        let host = ParseError::HostStackExhausted {
+            construct: "group graph pattern",
+            at: 7,
+        };
+        assert_eq!(
+            host.to_string(),
+            "SPARQL nesting exceeds the host call-stack budget at byte 7: the group graph \
+             pattern opened there nests deeper than the JavaScript engine's own call stack \
+             holds (655360 bytes of it are budgeted for a request, the same on the \
+             synchronous and the asynchronous lane; a larger stackBytes does not raise \
+             it); nest the request less deeply"
+        );
+        assert_eq!(shadow.byte_offset(), Some(7));
+        assert_eq!(host.byte_offset(), Some(7));
+    }
 
     #[test]
     fn byte_offset_only_for_positional_variants() {

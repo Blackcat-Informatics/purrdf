@@ -1655,7 +1655,8 @@ impl JobError {
     }
 
     /// This error with the asynchronous lane's remedy appended when it is the evaluator's
-    /// stack refusal: the code and message stay the synchronous twin's,
+    /// or the parser's stack refusal ([`is_stack_refusal`]): the code and message stay the
+    /// synchronous twin's,
     /// and the hint names the region the job ran on and `stackBytes`, the option that
     /// sizes it. (The synchronous lane appends its own remedy, the asynchronous twin; see
     /// `query::SYNC_STACK_HINT`.) Any other error is returned as it is.
@@ -1815,16 +1816,26 @@ struct OperationInput {
     accept: Option<String>,
 }
 
-/// Whether a job's error text is the evaluator's stack refusal
-/// (`native-sparql-evaluation-stack-exhausted`, the diagnostic's code). The evaluator
-/// measures the job's own region, so a larger `stackBytes` is always its remedy. The
-/// parser's stack refusal gets no hint: on `wasm32` it may be the parser's budget for
-/// the engine's native stack, which no region size changes.
+/// Whether a job's error text is a stack refusal a larger region answers: the
+/// evaluator's (`native-sparql-evaluation-stack-exhausted`, the diagnostic's code) or the
+/// parser's (`SPARQL parse stack exhausted`, under the query or update parse code). Both
+/// measure the job's own region, so a larger `stackBytes` is always their remedy. The
+/// host-stack refusal (`native-sparql-host-stack-exhausted`) is not one: it is the
+/// budget for the JavaScript engine's own call stack, which is the same size on every
+/// lane and which no region size changes.
 fn is_stack_refusal(message: &str) -> bool {
-    message
-        .strip_prefix("error ")
-        .and_then(|rest| rest.strip_prefix(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE))
-        .is_some_and(|rest| rest.starts_with(':'))
+    let Some(rest) = message.strip_prefix("error ") else {
+        return false;
+    };
+    let coded = |code: &str| {
+        rest.strip_prefix(code)
+            .and_then(|rest| rest.strip_prefix(": "))
+    };
+    coded(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE).is_some()
+        || ["native-sparql-query-parse", "native-sparql-update-parse"]
+            .into_iter()
+            .filter_map(coded)
+            .any(|text| text.starts_with("SPARQL parse stack exhausted at byte "))
 }
 
 /// Run an ungoverned query under the metered base and the job's signal.
@@ -4874,27 +4885,42 @@ mod tests {
     }
 
     #[test]
-    fn only_the_evaluators_stack_refusal_gains_the_region_hint() {
-        let refusal = "error native-sparql-evaluation-stack-exhausted: evaluation stack \
-                       exhausted: the request's nesting exceeds what this host's stack can \
-                       evaluate (OPTIONAL needs more stack than this thread has left above \
-                       its 65536-byte reserve); run it on a thread with a larger stack";
-        assert_eq!(
-            JobError::error(refusal).with_stack_hint(524_288).message,
-            format!(
-                "{refusal}; this asynchronous job ran on a stack region of 524288 bytes — \
-                 run it with a larger stackBytes"
-            )
-        );
-        // The neighbours keep their text: the parser's refusal (which may be its budget
-        // for the engine's native stack, which no region changes), another evaluation
-        // error, a code that merely starts the same way, and a fault naming the code.
+    fn only_the_shadow_stack_refusals_gain_the_region_hint() {
+        let hint = "; this asynchronous job ran on a stack region of 524288 bytes — \
+                    run it with a larger stackBytes";
+        // The evaluator's refusal and the parser's, under the query and the update
+        // parse code: each measured the job's region, so a larger one answers it.
+        for refusal in [
+            "error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: \
+             the request's nesting exceeds what this host's stack can evaluate (OPTIONAL \
+             needs more stack than this thread has left above its 65536-byte reserve)",
+            "error native-sparql-query-parse: SPARQL parse stack exhausted at byte 9: the \
+             group graph pattern opened there nests deeper than the stack parsing it can \
+             hold",
+            "error native-sparql-update-parse: SPARQL parse stack exhausted at byte 9: the \
+             group graph pattern opened there nests deeper than the stack parsing it can \
+             hold",
+        ] {
+            assert_eq!(
+                JobError::error(refusal).with_stack_hint(524_288).message,
+                format!("{refusal}{hint}")
+            );
+        }
+        // The neighbours keep their text: the host-stack refusal (the JavaScript
+        // engine's call stack, which no region changes), a parse error that is not a
+        // stack refusal, another evaluation error, a code that merely starts the same
+        // way, and a fault naming the code.
         for (kind, message) in [
             (
                 JobErrorKind::Error,
-                "error native-sparql-query-parse: SPARQL parse stack exhausted at byte 9: \
-                 the group graph pattern opened there nests deeper than the stack parsing \
-                 it can hold; parse it on a thread with a larger stack",
+                "error native-sparql-host-stack-exhausted: SPARQL nesting exceeds the host \
+                 call-stack budget at byte 9: the group graph pattern opened there nests \
+                 deeper than the JavaScript engine's own call stack holds",
+            ),
+            (
+                JobErrorKind::Error,
+                "error native-sparql-query-parse: SPARQL syntax error at byte 9: \
+                 SPARQL parse stack exhausted at byte 9 is not a keyword",
             ),
             (
                 JobErrorKind::Error,

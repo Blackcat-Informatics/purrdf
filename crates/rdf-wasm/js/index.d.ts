@@ -1011,9 +1011,13 @@ export class QueryEngine {
   // missing. Rejections: an option the twin would ignore is a `TypeError`; a parse or
   // evaluation failure (including a `SERVICE`/`LOAD` with no handler, and a result of the
   // wrong kind) is an `Error` with the synchronous twin's message — a request too deep
-  // for the job's stack region included: the evaluator's refusal keeps its code
-  // (`native-sparql-evaluation-stack-exhausted`) and gains the region's size and
-  // `stackBytes` as its remedy; a cancellation through `signal` rejects with
+  // for the job's stack region included: the parser's and the evaluator's refusals keep
+  // their code (`native-sparql-query-parse`/`native-sparql-update-parse`,
+  // `native-sparql-evaluation-stack-exhausted`) and gain the region's size and
+  // `stackBytes` as their remedy, while `native-sparql-host-stack-exhausted` (the fixed
+  // budget kept under the JavaScript engine's call stack, which V8 sizes the same for a
+  // job as for the synchronous lane) is the synchronous twin's refusal unchanged, since
+  // no region raises it; a cancellation through `signal` rejects with
   // `signal.reason` (an `AbortError` without one); a fault — a handler that threw,
   // rejected or answered something unrecognizable, or work no stack check guards
   // reaching its region's guard band — is an `Error` with the fault's text. Errors built by the twin carry
@@ -1406,7 +1410,10 @@ export interface AsyncHostOptions {
   readonly signal?: AbortSignal | null;
   /** Governor polls between yields to the event loop: an integer ≥ 0 (0 yields at every poll). Default 65 536. */
   readonly yieldEveryPolls?: number | null;
-  /** The job's private stack region in bytes: an integer ≥ 524 288. Default 2 MiB. */
+  /**
+   * The job's private shadow-stack region in bytes: an integer ≥ 524 288. Default 2 MiB.
+   * It does not raise the host-stack budget (`native-sparql-host-stack-exhausted`).
+   */
   readonly stackBytes?: number | null;
   /** The policy host-resolved `SERVICE` requests are authorized against. Needs `resolveService`. */
   readonly catalog?: ServiceCatalog | null;

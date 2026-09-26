@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ready, Dataset, QueryEngine, provenanceFromJson, provenanceFromXml } from "../index.mjs";
-import { NESTING_SHAPES, NUMBERS, attempt, realLimit } from "./fixtures/nesting.mjs";
+import { HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
 
 // One-time wasm instantiation before any test runs.
 await ready();
@@ -497,44 +497,63 @@ test("nesting answers on the synchronous lane as deep as its stacks hold it, and
   }
 });
 
+// What the synchronous lane appends to a stack refusal a larger stack answers: the remedy
+// only it has to name. It replaces the native "on a thread with a larger stack", which a
+// JavaScript caller cannot act on.
+const SYNC_STACK_HINT =
+  /(?:above its 65536-byte reserve\)|nests deeper than the stack parsing it can hold); the synchronous lane runs on the instance's own stack — run this request with the asynchronous twin of this call \(selectAsync, queryAsync, updateAsync, …\) and a larger stackBytes region$/;
 // The real limit of every shape on the synchronous lane, found by bisection: the deepest
 // level that answers holds its computed value and one level more is the typed refusal —
 // a refusal pair at the lane's real end. Past the WHERE group's own 2 304 bytes, the
-// host-stack budget admits 637 brackets, 537 negations, 283 groups and 1 133 path groups;
-// nested calls run out of shadow stack in their evaluation first.
+// host-stack budget admits 637 brackets, 537 negations, 283 groups and 1 133 path groups,
+// and the next level is the host-stack refusal, which names no stackBytes remedy: the
+// JavaScript engine's call stack is the same size on the asynchronous lane (see
+// `async-concurrency.test.mjs`, where a 64 MiB region ends at the same levels). Nested
+// calls run out of shadow stack in their evaluation first, and that refusal keeps the
+// synchronous lane's remedy, the asynchronous twin with a larger region.
 test("on the synchronous lane the deepest answer and the first refusal are neighbours", async () => {
   const ds = Dataset.parse(NUMBERS, "nquads");
-  const engine = new QueryEngine();
-  const run = (query) => engine.select(ds, query);
+  const run = (query) => new QueryEngine().select(ds, query);
   const limits = {};
-  for (const shape of NESTING_SHAPES) limits[shape[0]] = await realLimit(run, shape);
+  const refusals = {};
+  for (const shape of NESTING_SHAPES) {
+    ({ deepest: limits[shape[0]], refusal: refusals[shape[0]] } = await realEnd(run, shape));
+  }
   const calls = limits["nested ABS("];
   assert.ok(calls >= 128 && calls <= 463, `nested ABS( answers ${calls} deep`);
+  assert.match(refusals["nested ABS("], /^error native-sparql-evaluation-stack-exhausted: /);
+  assert.match(refusals["nested ABS("], SYNC_STACK_HINT);
   delete limits["nested ABS("];
+  delete refusals["nested ABS("];
   assert.deepEqual(limits, {
     "nested parentheses": 637,
     "nested -(": 537,
     "nested groups": 283,
     "nested property-path groups": 1133,
   });
+  for (const [what, refusal] of Object.entries(refusals)) {
+    assert.match(refusal, HOST_STACK_REFUSAL, what);
+    assert.doesNotMatch(refusal, /asynchronous twin|thread/, what);
+  }
 });
 
-test("a FILTER nested 10 000 parentheses deep is a typed stack refusal, and the engine answers afterwards", () => {
+test("a FILTER nested 10 000 parentheses deep is the host-stack refusal, and the engine answers afterwards", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const engine = new QueryEngine();
   const deep = `SELECT ?s WHERE { ?s ?p ?o FILTER(${"(".repeat(10_000)}?o${")".repeat(10_000)} = ?o) }`;
   // Twice: a trap would have left the instance unusable, so the second call would not
-  // reach the parser to refuse it the same way.
+  // reach the parser to refuse it the same way. The budget kept under the JavaScript
+  // engine's call stack binds first, and its refusal names the limit and no remedy the
+  // caller cannot use: no thread to spawn, and no asynchronous twin, which refuses it
+  // the same way.
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    assert.throws(() => engine.select(ds, deep), /SPARQL parse stack exhausted .*bracketted expression/);
+    assert.throws(() => engine.select(ds, deep), (error) => {
+      assert.match(error.message, HOST_STACK_REFUSAL);
+      assert.match(error.message, /bracketted expression/);
+      assert.doesNotMatch(error.message, SYNC_STACK_HINT);
+      return true;
+    });
   }
-  // The synchronous lane names the remedy: the asynchronous twin with a larger stack
-  // region. The refusal's own text is unchanged in front of it.
-  assert.throws(() => engine.select(ds, deep), (error) => {
-    assert.match(error.message, /^error native-sparql-query-parse: SPARQL parse stack exhausted/);
-    assert.match(error.message, SYNC_STACK_HINT);
-    return true;
-  });
   // The instance is intact: an ordinary query answers exactly.
   const names = engine
     .select(ds, "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
@@ -552,8 +571,6 @@ test("a FILTER nested 10 000 parentheses deep is a typed stack refusal, and the 
 // nested `EXISTS` body is now substituted when it is evaluated rather than copied into
 // every level around it, so 63 levels answer — see the test after this one.)
 const STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*evaluation stack exhausted/;
-// What the synchronous lane appends to a stack refusal: the remedy only it has to name.
-const SYNC_STACK_HINT = /asynchronous twin of this call \(selectAsync, queryAsync, updateAsync, …\) and a larger stackBytes region$/;
 const NEST_DATA = [1, 2, 3, 4]
   .map((n) => `<https://example.org/s${n}> <https://example.org/p> <https://example.org/o${n}> .`)
   .concat(["<https://example.org/s1> <https://example.org/q> <https://example.org/o1> ."])
@@ -646,11 +663,11 @@ const walkAnswer = (engine, ds, depth) => {
         .sort(),
     };
   } catch (error) {
-    // Far past the limit the parser refuses before the evaluator is reached; either is
-    // typed, and the pair below asserts the evaluator's own refusal at the limit.
+    // Far past the limit the parser refuses before the evaluator is reached (the
+    // host-stack budget); either is typed, and the pair below asserts the evaluator's own refusal at the limit.
     assert.match(
       error.message,
-      /native-sparql-evaluation-stack-exhausted|SPARQL parse stack exhausted/,
+      /native-sparql-evaluation-stack-exhausted|SPARQL parse stack exhausted|native-sparql-host-stack-exhausted/,
       `${depth} nested FILTER NOT EXISTS: a typed stack refusal, not a trap`,
     );
     return { refused: error.message };

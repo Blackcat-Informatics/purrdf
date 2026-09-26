@@ -78,7 +78,9 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 /// engine's own call stack, which no wasm code can read. Under V8 (Node.js, Chromium,
 /// Cloudflare Workers) that stack is about 984 KiB for the synchronous lane and for an
 /// asynchronous job's suspendable stack alike, whether the shadow region is 1 MiB or
-/// 64 MiB. Measured on the shipped npm artifact in a 16 MiB job region, where the shadow
+/// 64 MiB: V8 sizes a JSPI stack from process-wide flags (the smaller of `--stack-size`
+/// and `--wasm-stack-switching-stack-size`, both 984 KiB by default), so neither a wasm
+/// module nor a job can enlarge it, and workerd runs with the defaults. Measured on the shipped npm artifact in a 16 MiB job region, where the shadow
 /// stack never binds, with no budget at all, V8's stack is exhausted — a trapped
 /// instance — past 272 written levels of `FILTER EXISTS`, 457 of `LATERAL`, 640 of
 /// `isTRIPLE(<<( … )>>)`, 716 of nested built-in calls, 891 of `-(`, 1 011 of bracketted
@@ -92,8 +94,8 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 /// levels of `FILTER EXISTS` (62%), 284 of `LATERAL` (62%), 465 of built-in calls (65%),
 /// 538 of `-(` (60%), 640 of brackets (63%), 1 137 of path groups (60%) — which leaves
 /// at least a third of the stack to the JavaScript frames below the call. Past the budget
-/// the level is refused with the same [`ParseError::StackExhausted`]: it is a stack the
-/// host has not got, not a malformed request.
+/// the level is refused with [`ParseError::HostStackExhausted`]: it is a stack the host
+/// has not got, not a malformed request, and the same on every lane.
 pub const WASM_HOST_STACK_BUDGET: usize = 640 * 1024;
 
 /// How deeply graph patterns may nest on `wasm32`: as deep as [`WASM_HOST_STACK_BUDGET`]
@@ -933,9 +935,10 @@ impl<'a> Parser<'a, '_> {
     /// on a small thread or deep inside an evaluation that re-parses a forwarded
     /// `SERVICE` body alike. The test is one thread-local load and one comparison.
     ///
-    /// On `wasm32` a level past [`WASM_HOST_STACK_BUDGET`] is the same refusal: the host
-    /// engine's call stack, which the measurement cannot see, is what runs out there. The
-    /// budget is compiled out of every other target.
+    /// On `wasm32` a level past [`WASM_HOST_STACK_BUDGET`] is refused with
+    /// [`ParseError::HostStackExhausted`]: the host engine's call stack, which the
+    /// measurement cannot see, is what runs out there, and no stack a caller sizes
+    /// raises it. The budget is compiled out of every other target.
     ///
     /// No walk over a tree built here needs a check of its own: a level of this
     /// recursion costs the parser more stack than a level of any walk over the node it
@@ -952,10 +955,14 @@ impl<'a> Parser<'a, '_> {
         } else {
             0
         };
-        if purrdf_stack::is_low()
-            || (cfg!(target_arch = "wasm32") && self.host_units + units > WASM_HOST_STACK_BUDGET)
-        {
+        if purrdf_stack::is_low() {
             return Err(ParseError::StackExhausted {
+                construct,
+                at: self.span(),
+            });
+        }
+        if cfg!(target_arch = "wasm32") && self.host_units + units > WASM_HOST_STACK_BUDGET {
+            return Err(ParseError::HostStackExhausted {
                 construct,
                 at: self.span(),
             });
@@ -996,11 +1003,18 @@ impl<'a> Parser<'a, '_> {
     /// on the way out fits too.
     ///
     /// On `wasm32` a node taller than [`WASM_TREE_HEIGHT_LIMIT`] from the outermost
-    /// construct is the same refusal, for the host call stack the walks run on.
+    /// construct is refused with [`ParseError::HostStackExhausted`], for the host call
+    /// stack the walks run on.
     fn charge_height(&mut self, construct: &'static str, height: usize) -> Result<()> {
         let reach = self.nesting_depth + height;
-        if !walkable(height) || (cfg!(target_arch = "wasm32") && reach > WASM_TREE_HEIGHT_LIMIT) {
+        if !walkable(height) {
             return Err(ParseError::StackExhausted {
+                construct,
+                at: self.span(),
+            });
+        }
+        if cfg!(target_arch = "wasm32") && reach > WASM_TREE_HEIGHT_LIMIT {
+            return Err(ParseError::HostStackExhausted {
                 construct,
                 at: self.span(),
             });

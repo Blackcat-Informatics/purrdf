@@ -35,11 +35,9 @@ pub fn is_nondeterministic(query_text: &str) -> bool {
 /// `ground_triple_pattern_to_value`), an unresolved custom SPARQL function IRI
 /// (`expr::eval_function`'s `Function::Custom` fallthrough), `heldIn` called
 /// without a caller-supplied standpoint-predicate configuration
-/// (`expr::eval_held_in`), or a manually constructed graph pattern whose
-/// nesting exceeds the parser's safety bound
-/// (`governor::soundness::validate_graph_pattern_depth`).
+/// (`expr::eval_held_in`).
 ///
-/// This is a CLOSED match on the four stable codes those four sites set —
+/// This is a CLOSED match on the three stable codes those sites set —
 /// never a scrape of `EvalError`'s or `RdfDiagnostic`'s free-form `Display`
 /// text, which carries no classification contract and is free to change
 /// wording at any time (a prior, broader substring match over that prose once

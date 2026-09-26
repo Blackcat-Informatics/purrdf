@@ -66,8 +66,9 @@ report.asyncAfterFaults = await settle(() => engine.queryAsync(data, SHALLOW));
 report.newEngineBefore = await settle(() => new QueryEngine().query(Dataset.parse(`<${EX}c> <${EX}p> <${EX}o> .\n`, "nquads"), SHALLOW));
 report.sizeBefore = settleSync(() => data.size);
 // The synchronous lane's stack context is its own after those jobs: the deep query is
-// the parser's own typed refusal — twice, so it is an error and not a trap that poisoned
-// anything — never a stack exhaustion read off a job's freed region.
+// the parser's own typed refusal (300 nested groups, past the host-stack budget) — twice,
+// so it is an error and not a trap that poisoned anything — never a stack exhaustion read
+// off a job's freed region.
 report.syncDeep = await settle(() => engine.query(data, TOO_DEEP));
 report.syncDeepAgain = await settle(() => engine.query(data, TOO_DEEP));
 

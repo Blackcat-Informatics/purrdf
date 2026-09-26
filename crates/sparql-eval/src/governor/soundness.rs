@@ -827,7 +827,8 @@ where
 ///
 /// On `wasm32` the host engine's call stack, which no measurement reaches, bounds the
 /// evaluation's recursion too, so graph patterns nested deeper than
-/// [`purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well.
+/// [`purrdf_sparql_algebra::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well, with
+/// [`crate::EvalError::HostStackExhausted`].
 ///
 /// Returns how deeply the pattern's triple terms nest, for the reserve walks over them
 /// take ([`crate::stack::reserve_terms`]).
@@ -838,10 +839,9 @@ pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<usize,
         let mut stack = vec![(root, 1_usize)];
         while let Some((node, depth)) = stack.pop() {
             if depth > limit {
-                return Err(crate::EvalError::unsupported_deferred(
-                    crate::error::UnsupportedKind::GraphPatternDepthExceeded,
-                    format!("graph pattern nesting exceeds the safety limit of {limit}"),
-                ));
+                return Err(crate::EvalError::HostStackExhausted {
+                    construct: "graph pattern",
+                });
             }
             visit_classified_children(node, &mut |child, _edge| {
                 stack.push((child, depth + 1));

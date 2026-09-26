@@ -555,10 +555,24 @@ Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by defau
 least 524 288). `evidence.async.stackHighWaterBytes` reports the deepest the job went, so
 the region can be sized from a real run. A request that nests deeper than the region
 allows fails with the parser's or the evaluator's own typed stack refusal, the one its
-synchronous twin gives: the evaluator's keeps its code,
-`native-sparql-evaluation-stack-exhausted`, and its message, and adds the region's size
-and a larger `stackBytes` as the remedy. Both check the stack left above the region's
-base at every recursive step and refuse while 64 KiB remain. Beneath that lies a guard
+synchronous twin gives: the parser's (`SPARQL parse stack exhausted`) and the
+evaluator's (`native-sparql-evaluation-stack-exhausted`) keep their code and message and
+add the region's size and a larger `stackBytes` as the remedy. Both check the stack left
+above the region's base at every recursive step and refuse while 64 KiB remain. On the
+synchronous lane the same two refusals name the asynchronous twin and a larger
+`stackBytes` as the remedy instead.
+
+A region sizes only the shadow stack in linear memory. Every wasm call also takes frames
+on the JavaScript engine's own call stack, which no wasm code can read, and V8 (Node.js,
+Chromium, Cloudflare Workers) gives a job's suspendable stack the same size as the
+synchronous lane's: the smaller of its `--stack-size` and
+`--wasm-stack-switching-stack-size` flags, 984 KiB by default, set for the whole process.
+PurRDF keeps a fixed 640 KiB budget of it for a request, charging each nesting level its
+measured cost, so on both lanes and on every region a request answers at most 637
+nested parentheses, 537 nested `-(`, 283 nested groups and 1 133 nested property-path
+groups. One level more is `native-sparql-host-stack-exhausted`, which names the budget and
+no `stackBytes` remedy, because no region and no lane raises it: the remedy is a request
+nested less deeply. Beneath that lies a guard
 band of 32 KiB, which only work no check guards can reach; it fails the job with
 `asynchronous job stack region exhausted (<bytes> bytes); raise stackBytes`. Either way
 the job fails and the instance stays usable. If a job traps, or its frames ever run past
@@ -583,7 +597,7 @@ poisons anything. Out of PurRDF's own code, the traps left are memory exhaustion
 aborts without running the panic hook, and a Rust panic. V8 reports running out of its
 own native stack as a `RangeError`, which the guard cannot tell apart from a `RangeError`
 the caller's code throws, so it passes one through; PurRDF's parser and evaluator refuse
-nesting before either stack runs out.
+nesting before either stack runs out (the host-stack budget above keeps V8's).
 
 A Rust panic poisons the instance too, in an asynchronous job or in a synchronous call
 alike. A panic aborts on wasm32 and leaves whatever it interrupted half-changed, so the

@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import * as packageRoot from "../index.mjs";
 import { Dataset, QueryEngine, configureAsync, ready } from "../index.mjs";
 import init from "../pkg/purrdf_wasm.js";
-import { NESTING_SHAPES, NUMBERS, attempt, realLimit } from "./fixtures/nesting.mjs";
+import { HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
 import { assertSurfacePoisoned } from "./fixtures/poisoned-surface.mjs";
 
 await ready();
@@ -284,7 +284,7 @@ test("a request too deep for its stack region is the evaluator's typed refusal, 
     // the remedy — never the region's fault.
     assert.match(
       exhausted.message,
-      /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\); run it on a thread with a larger stack/,
+      /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\); this asynchronous job ran on a stack region of 524288 bytes — run it with a larger stackBytes$/,
     );
     assert.ok(exhausted.message.endsWith(SMALL_REGION_HINT), exhausted.message);
     assert.doesNotMatch(exhausted.message, REGION_FAULT);
@@ -490,12 +490,17 @@ test("admitted nesting too deep for the smallest region is a typed error there, 
 // Nesting is bounded by the stacks a job runs on, not by a count: its region's shadow
 // stack, which the parser and evaluator measure, and V8's own suspendable stack, which
 // the host-stack budget stands in for. A FILTER nested 10 000 parentheses deep would
-// recurse through the parser without a poll, far past any region; the parser refuses it
-// typed first, and the instance is not poisoned.
+// recurse through the parser without a poll, far past any region. On the smallest region
+// the parser's measurement of the region refuses it first, naming the region and
+// stackBytes; on a 64 MiB region, where the shadow stack never binds, the host-stack
+// budget refuses it with exactly the synchronous lane's text, naming no stackBytes remedy
+// — V8 gives a job's suspendable stack the same size as the synchronous lane's (the
+// smaller of `--stack-size` and `--wasm-stack-switching-stack-size`, 984 KiB by default),
+// and no region size changes it. Either way the instance is not poisoned.
 const parenthesizedFilter = (depth) =>
   `SELECT ?s WHERE { ?s <${EX}p> ?o FILTER(${"(".repeat(depth)}?o${")".repeat(depth)} = ?o) }`;
 
-test("a FILTER nested 10 000 parentheses deep is a typed stack refusal on the smallest region, and the instance is not poisoned", async () => {
+test("a FILTER nested 10 000 parentheses deep is a typed stack refusal on every region, and the instance is not poisoned", async () => {
   const engine = new QueryEngine();
   const chain = Dataset.parse(CHAIN, "nquads");
   // Twice: a trap or an overrun of the region's zone would poison the instance, and the
@@ -503,8 +508,26 @@ test("a FILTER nested 10 000 parentheses deep is a typed stack refusal on the sm
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await assert.rejects(
       engine.queryAsync(chain, parenthesizedFilter(10_000), { stackBytes: SMALL_REGION }),
-      /SPARQL parse stack exhausted .*bracketted expression/,
+      (error) => {
+        assert.match(error.message, /^error native-sparql-query-parse: SPARQL parse stack exhausted .*bracketted expression/);
+        assert.ok(error.message.endsWith(SMALL_REGION_HINT), error.message);
+        return true;
+      },
     );
+    assert.equal(stackPointer(), IDLE);
+  }
+  let syncText;
+  try {
+    engine.select(chain, parenthesizedFilter(10_000));
+  } catch (error) {
+    syncText = error.message;
+  }
+  assert.match(syncText, HOST_STACK_REFUSAL);
+  for (const stackBytes of [undefined, 64 * 1024 * 1024]) {
+    await assert.rejects(engine.queryAsync(chain, parenthesizedFilter(10_000), { stackBytes }), (error) => {
+      assert.equal(error.message, syncText, `the region of ${stackBytes ?? "the default"} bytes`);
+      return true;
+    });
     assert.equal(stackPointer(), IDLE);
   }
   // The instance is intact on both lanes.
@@ -515,18 +538,29 @@ test("a FILTER nested 10 000 parentheses deep is a typed stack refusal on the sm
 
 // Every shape at 128 levels answers on the default region and on the smallest, with the
 // value its nesting computes. The real limit of every shape on each region is found by
-// bisection — the deepest level that answers, and one level more a typed refusal — and on
-// the default 2 MiB region it is the host-stack budget's for every shape: 637 brackets,
-// 463 calls, 537 negations, 283 groups and 1 133 path groups. On the smallest region the
-// shadow stack ends first for the costlier levels, and every limit is still past 128.
+// bisection — the deepest level that answers, and one level more a typed refusal. On the
+// default 2 MiB region and on a 64 MiB one it is the host-stack budget's for every shape,
+// the same on both: 637 brackets, 463 calls, 537 negations, 283 groups and 1 133 path
+// groups, each refused one level deeper with the host-stack refusal, which names no
+// stackBytes remedy because a larger region answers nothing more. On the smallest region
+// the shadow stack ends first for the costlier levels, and that refusal names the region
+// and stackBytes; every limit is still past 128. Each run is a fresh engine, so no plan
+// cached by another region's run spares a job its parse.
 test("nesting answers on the asynchronous lane as deep as the job's stacks hold it, and is a typed refusal past that", async () => {
-  const engine = new QueryEngine();
   const data = Dataset.parse(NUMBERS, "nquads");
+  const HOST_LIMITS = {
+    "nested parentheses": 637,
+    "nested ABS(": 463,
+    "nested -(": 537,
+    "nested groups": 283,
+    "nested property-path groups": 1133,
+  };
   for (const [region, options] of [
     ["the default region", {}],
+    ["a 64 MiB region", { stackBytes: 64 * 1024 * 1024 }],
     ["the smallest region", { stackBytes: SMALL_REGION }],
   ]) {
-    const run = (query) => engine.queryAsync(data, query, options);
+    const run = (query) => new QueryEngine().queryAsync(data, query, options);
     const limits = {};
     for (const shape of NESTING_SHAPES) {
       const [what, text, expected] = shape;
@@ -535,22 +569,21 @@ test("nesting answers on the asynchronous lane as deep as the job's stacks hold 
         expected,
         `${what} 128 deep answers on ${region}`,
       );
-      limits[what] = await realLimit(run, shape);
-      assert.ok(limits[what] >= 128, `${what} on ${region}: ${limits[what]}`);
+      const { deepest, refusal } = await realEnd(run, shape);
+      limits[what] = deepest;
+      assert.ok(deepest >= 128, `${what} on ${region}: ${deepest}`);
+      if (region === "the smallest region" && deepest < HOST_LIMITS[what]) {
+        // The region ran out first: a refusal a larger region answers, which says so.
+        assert.ok(refusal.endsWith(SMALL_REGION_HINT), `${what} on ${region}: ${refusal}`);
+      } else {
+        assert.match(refusal, HOST_STACK_REFUSAL, `${what} on ${region}`);
+      }
       assert.equal(stackPointer(), IDLE);
     }
-    if (region === "the default region") {
-      assert.deepEqual(limits, {
-        "nested parentheses": 637,
-        "nested ABS(": 463,
-        "nested -(": 537,
-        "nested groups": 283,
-        "nested property-path groups": 1133,
-      });
-    }
+    if (region !== "the smallest region") assert.deepEqual(limits, HOST_LIMITS, region);
   }
   // Not poisoned: the synchronous lane answers after all of it.
-  assert.equal(engine.select(Dataset.parse(CHAIN, "nquads"), nestedOptional(8)).rowCount, 200);
+  assert.equal(new QueryEngine().select(Dataset.parse(CHAIN, "nquads"), nestedOptional(8)).rowCount, 200);
 });
 
 test("a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing", () => {
@@ -594,7 +627,8 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   // synchronous lane's stack is its own after the jobs above.
   for (const sync of [report.syncDeep, report.syncDeepAgain]) {
     assert.equal(sync.settled, "rejected");
-    assert.match(sync.message, /SPARQL parse stack exhausted .*group graph pattern/);
+    assert.match(sync.message, HOST_STACK_REFUSAL);
+    assert.match(sync.message, /group graph pattern/);
   }
 
   // The trap: the job and the one in flight reject with the poison, and so does every

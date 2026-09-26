@@ -578,7 +578,7 @@ impl PlanCache {
         }
         let parsed = parser
             .parse_query_with(query, options)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
+            .map_err(|e| parse_diagnostic(e, "native-sparql-query-parse"))?;
         let planned = admit_algebra(
             &parsed,
             relations,
@@ -1675,7 +1675,7 @@ impl NativeSparqlEngine {
         let options = env.parser_options();
         parser
             .parse_update_with(request.query, options)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-update-parse", e.to_string()))
+            .map_err(|e| parse_diagnostic(e, "native-sparql-update-parse"))
     }
 
     /// The one **ungoverned** options-carrying UPDATE entry, parameterized by
@@ -3616,14 +3616,33 @@ fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
     prepared.query.validate().map_err(algebra_diagnostic)
 }
 
+/// The diagnostic for request text the parser refused: `code` (the query or update parse
+/// code), except that a request past the `wasm32` host-stack budget
+/// ([`purrdf_sparql_algebra::ParseError::HostStackExhausted`]) carries
+/// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`] — no stack a caller sizes answers it,
+/// so a host reads that code rather than a parse failure's.
+fn parse_diagnostic(error: purrdf_sparql_algebra::ParseError, code: &'static str) -> RdfDiagnostic {
+    if matches!(
+        error,
+        purrdf_sparql_algebra::ParseError::HostStackExhausted { .. }
+    ) {
+        let error = crate::error::EvalError::from(error);
+        return RdfDiagnostic::error(eval_diagnostic_code(&error, code), error.to_string());
+    }
+    RdfDiagnostic::error(code, error.to_string())
+}
+
 /// The diagnostic for an algebra [`purrdf_sparql_algebra::Query::validate`] refused: a
 /// tree too tall for the stack left is the evaluation's own stack refusal
 /// ([`crate::EvalError::STACK_EXHAUSTED_CODE`], which tells a host a larger stack answers
-/// it), and every other refusal is `native-sparql-algebra`.
+/// it), one past the `wasm32` host-stack bounds is
+/// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`], and every other refusal is
+/// `native-sparql-algebra`.
 fn algebra_diagnostic(error: purrdf_sparql_algebra::ParseError) -> RdfDiagnostic {
     if matches!(
         error,
         purrdf_sparql_algebra::ParseError::StackExhausted { .. }
+            | purrdf_sparql_algebra::ParseError::HostStackExhausted { .. }
     ) {
         let error = crate::error::EvalError::from(error);
         return RdfDiagnostic::error(

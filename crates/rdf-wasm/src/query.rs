@@ -1628,22 +1628,30 @@ impl QueryEngine {
     }
 }
 
-/// What the synchronous lane appends to a stack refusal: the remedy. The synchronous
-/// lane runs on the instance's own 1 MiB shadow stack and under the host-stack budget,
-/// so a request nested past them answers only on the asynchronous twin of the call
+/// What the synchronous lane appends to a stack refusal a larger stack answers: the
+/// remedy. The synchronous lane runs on the instance's own 1 MiB shadow stack, so a
+/// request nested past it answers only on the asynchronous twin of the call
 /// (`selectAsync`, `updateAsync`, …), whose job runs on a stack region of the size its
-/// `stackBytes` option names.
+/// `stackBytes` option names. The host-stack refusal
+/// (`native-sparql-host-stack-exhausted`) never gains it: the JavaScript engine's call
+/// stack is the same size on both lanes, so the twin refuses the request the same way.
 pub(crate) const SYNC_STACK_HINT: &str = "; the synchronous lane runs on the instance's own \
      stack — run this request with the asynchronous twin of this call (selectAsync, \
      queryAsync, updateAsync, …) and a larger stackBytes region";
 
-/// [`diag_to_err`] for an engine call on the synchronous lane: a stack refusal — the
-/// parser's `StackExhausted` or the evaluator's `native-sparql-evaluation-stack-exhausted`
-/// — keeps its code and message and gains [`SYNC_STACK_HINT`], the remedy only this lane
-/// has to name. Every other diagnostic is [`diag_to_err`]'s.
+/// [`diag_to_err`] for an engine call on the synchronous lane: a shadow-stack refusal —
+/// the parser's `SPARQL parse stack exhausted` under the query or update parse code, or
+/// the evaluator's `native-sparql-evaluation-stack-exhausted` — keeps its code and message
+/// and gains [`SYNC_STACK_HINT`], the remedy only this lane has to name. Every other
+/// diagnostic, the host-stack refusal included, is [`diag_to_err`]'s.
 fn sync_lane_err(diag: &RdfDiagnostic) -> JsError {
+    let parse =
+        diag.code == "native-sparql-query-parse" || diag.code == "native-sparql-update-parse";
     let stack = diag.code == purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
-        || diag.message.contains("SPARQL parse stack exhausted");
+        || (parse
+            && diag
+                .message
+                .starts_with("SPARQL parse stack exhausted at byte "));
     if stack {
         JsError::new(&format!("{diag}{SYNC_STACK_HINT}"))
     } else {

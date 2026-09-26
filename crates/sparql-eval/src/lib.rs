@@ -41,10 +41,8 @@
 //!   evaluated in-engine — none of them is out of scope. What remains a typed
 //!   [`EvalError::Unsupported`] is a narrow, enumerated residue: a variable-bound
 //!   quoted-triple-term component in a BGP or property-path pattern (`convert`), an
-//!   unresolved custom SPARQL function IRI (`expr`), `heldIn` called without a
-//!   caller-supplied standpoint-predicate configuration, and a manually constructed
-//!   graph pattern whose nesting exceeds the parser's safety bound
-//!   (`governor::soundness`). A call into a relation, or an `AGG(<iri>, …)` custom
+//!   unresolved custom SPARQL function IRI (`expr`), and `heldIn` called without a
+//!   caller-supplied standpoint-predicate configuration. A call into a relation, or an `AGG(<iri>, …)` custom
 //!   aggregate, the host did not register — or one no declared access pattern
 //!   admits, for a relation — is not in that residue either: it is a typed
 //!   [`EvalError::Function`], because the construct is supported and the host's

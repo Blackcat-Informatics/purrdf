@@ -165,7 +165,9 @@ for (const row of rows) console.log(row.s.value, row.x.value);
 - 作业每经过 `yieldEveryPolls` 次 governor 轮询就把事件循环让出一轮（默认 65 536；`0` 表示每次轮询都让出），所用的宏任务原语由 `asyncYieldPrimitive()` 报告。只有求值阶段会让出：冻结数据集与序列化结果都会一次运行到底，`evidence.async` 报告每个阶段的耗时。
 - `signal: AbortSignal` 会在作业下一次让出或发出宿主请求时取消它。在受 governor 管控的孪生方法上，`deadlineMs` 包含等待处理函数的时间；一次 governor 触发——包括截止时间与取消——是一个结果，而不是一次 Promise 拒绝。
 - 查询读取自己的快照；同一数据集上的异步更新按调用顺序逐个运行，且只有在其运行期间数据集未被修改时才会应用。`configureAsync({ maxConcurrentJobs })` 限定同时在途的作业数（默认 16）。
-- 每个作业在自己的栈区域上求值，其大小为 `stackBytes` 字节（默认 2 MiB）；`evidence.async.stackHighWaterBytes` 报告它用到了多深，而嵌套深度超出该区域的请求会以与其同步孪生方法相同的带类型栈拒绝错误失败，并指出补救办法是调大 `stackBytes`。若某个作业触发 trap，或其栈帧越过了区域下方的保护区，该实例即被毒化；任何同步调用中发生的 trap 或 Rust panic 也会同样毒化该实例：此后对本包的每一次调用——包括同步调用，以及对 trap 之前创建的对象的调用——都会抛出错误，只有全新的 JavaScript realm（新的页面、Worker isolate 或进程）才能再次加载本包。
+- 每个作业在自己的栈区域上求值，其大小为 `stackBytes` 字节（默认 2 MiB）；`evidence.async.stackHighWaterBytes` 报告它用到了多深，而嵌套深度超出该区域的请求会以与其同步孪生方法相同的带类型栈拒绝错误失败，并指出补救办法是调大 `stackBytes`。
+- 栈区域只决定影子栈的大小。V8 为作业自身的调用栈分配的大小与同步通道相同（默认 984 KiB，由整个进程统一设定），PurRDF 为每个请求保留其中固定的一份预算，因此在两个通道和任意栈区域上，请求最多只能嵌套 637 层圆括号或 283 层组（`{ … }`）。再多一层即返回 `native-sparql-host-stack-exhausted`，任何栈区域或通道都无法提高这一上限：请减少请求的嵌套深度。
+- 若某个作业触发 trap，或其栈帧越过了区域下方的保护区，该实例即被毒化；任何同步调用中发生的 trap 或 Rust panic 也会同样毒化该实例：此后对本包的每一次调用——包括同步调用，以及对 trap 之前创建的对象的调用——都会抛出错误，只有全新的 JavaScript realm（新的页面、Worker isolate 或进程）才能再次加载本包。
 
 ### Cloudflare Workers
 

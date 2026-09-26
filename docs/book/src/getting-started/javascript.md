@@ -250,7 +250,14 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
 - Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by
   default); `evidence.async.stackHighWaterBytes` reports how deep it went, and a
   request too deep for the region fails with the typed stack refusal its
-  synchronous twin gives, naming `stackBytes` as the remedy. A job that traps,
+  synchronous twin gives, naming `stackBytes` as the remedy.
+- A region sizes only the shadow stack. V8 gives a job's own call stack the same
+  size as the synchronous lane's (984 KiB by default, set for the whole process),
+  and PurRDF keeps a fixed budget of it for a request, so on both lanes and every
+  region a request answers at most 637 nested parentheses or 283 nested groups.
+  One level more is `native-sparql-host-stack-exhausted`, which no region and no
+  lane raises: nest the request less deeply.
+- A job that traps,
   or whose frames run past the region's guard zone, poisons the instance, and so
   does a trap or a Rust panic in any synchronous call: from then on every
   call into the package — synchronous ones and objects created before the trap

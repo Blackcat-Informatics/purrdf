@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-26T12:15:12-06:00\n"
+"POT-Creation-Date: 2026-09-26T13:49:40-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1404,27 +1404,46 @@ msgid ""
 "Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by "
 "default); `evidence.async.stackHighWaterBytes` reports how deep it went, and "
 "a request too deep for the region fails with the typed stack refusal its "
-"synchronous twin gives, naming `stackBytes` as the remedy. A job that traps, "
-"or whose frames run past the region's guard zone, poisons the instance, and "
-"so does a trap or a Rust panic in any synchronous call: from then on every "
-"call into the package — synchronous ones and objects created before the trap "
-"included — throws, and only a fresh JavaScript realm (a new page, Worker "
-"isolate or process) can load it again."
+"synchronous twin gives, naming `stackBytes` as the remedy."
 msgstr ""
 "每个作业在自己的栈区域上求值，其大小为 `stackBytes` 字节（默认 2 MiB）；"
 "`evidence.async.stackHighWaterBytes` 报告它用到了多深，而嵌套深度超出该区域的"
 "请求会以与其同步孪生方法相同的带类型栈拒绝错误失败，并指出补救办法是调大 "
-"`stackBytes`。若某个作业触发 trap，或其栈帧越过了区域下方的保护"
-"区，该实例即被毒化；任何同步调用中发生的 trap 或 Rust panic 也会同样毒化该实"
-"例：此后对本包的每一次调用——包括同步调用，以及对 trap 之前创建的对象的调用——"
-"都会抛出错误，只有全新的 JavaScript realm（新的页面、Worker isolate 或进程）"
-"才能再次加载本包。"
+"`stackBytes`。"
+
+#: src/getting-started/javascript.md:254
+msgid ""
+"A region sizes only the shadow stack. V8 gives a job's own call stack the "
+"same size as the synchronous lane's (984 KiB by default, set for the whole "
+"process), and PurRDF keeps a fixed budget of it for a request, so on both "
+"lanes and every region a request answers at most 637 nested parentheses or "
+"283 nested groups. One level more is `native-sparql-host-stack-exhausted`, "
+"which no region and no lane raises: nest the request less deeply."
+msgstr ""
+"栈区域只决定影子栈的大小。V8 为作业自身的调用栈分配的大小与同步通道相同（默认 "
+"984 KiB，由整个进程统一设定），PurRDF 为每个请求保留其中固定的一份预算，因此在"
+"两个通道和任意栈区域上，请求最多只能嵌套 637 层圆括号或 283 层组（`{ … }`）。"
+"再多一层即返回 `native-sparql-host-stack-exhausted`，任何栈区域或通道都无法提高"
+"这一上限：请减少请求的嵌套深度。"
 
 #: src/getting-started/javascript.md:260
+msgid ""
+"A job that traps, or whose frames run past the region's guard zone, poisons "
+"the instance, and so does a trap or a Rust panic in any synchronous call: "
+"from then on every call into the package — synchronous ones and objects "
+"created before the trap included — throws, and only a fresh JavaScript realm "
+"(a new page, Worker isolate or process) can load it again."
+msgstr ""
+"若某个作业触发 trap，或其栈帧越过了区域下方的保护区，该实例即被毒化；任何同步"
+"调用中发生的 trap 或 Rust panic 也会同样毒化该实例：此后对本包的每一次调用——包"
+"括同步调用，以及对 trap 之前创建的对象的调用——都会抛出错误，只有全新的 "
+"JavaScript realm（新的页面、Worker isolate 或进程）才能再次加载本包。"
+
+#: src/getting-started/javascript.md:267
 msgid "Cloudflare Workers"
 msgstr ""
 
-#: src/getting-started/javascript.md:262
+#: src/getting-started/javascript.md:269
 msgid ""
 "`@blackcatinformatics/purrdf/cloudflare` provides "
 "`createFetchServiceResolver`, `createFetchLoadResolver` and "
@@ -1469,7 +1488,7 @@ msgstr ""
 "在对被重定向的 IRI 重新按目录鉴权之后才会跟随每一跳，跳数上限为 "
 "`maxRedirects`（默认 5）。一个完整的 Worker："
 
-#: src/getting-started/javascript.md:286
+#: src/getting-started/javascript.md:293
 msgid ""
 "```js worker-recipe\n"
 "import wasm from \"@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm\";\n"
@@ -1514,7 +1533,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/getting-started/javascript.md:325
+#: src/getting-started/javascript.md:332
 msgid ""
 "Workers limits how many subrequests one invocation may make, and "
 "`maxRemoteRequests` is the exact control for it: every `SERVICE` request and "
@@ -1546,7 +1565,7 @@ msgstr ""
 "同步的 `deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出"
 "和每一次宿主请求时检查截止时间。"
 
-#: src/getting-started/javascript.md:342
+#: src/getting-started/javascript.md:349
 msgid ""
 "The package [README](https://github.com/Blackcat-Informatics/purrdf/tree/"
 "main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
@@ -1556,11 +1575,11 @@ msgstr ""
 "crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
 "adapter) 是这些约定的完整参考。"
 
-#: src/getting-started/javascript.md:346
+#: src/getting-started/javascript.md:353
 msgid "Scope and current limitations"
 msgstr ""
 
-#: src/getting-started/javascript.md:348
+#: src/getting-started/javascript.md:355
 msgid ""
 "**In-memory only.** SPARQL queries run over the in-memory dataset. The "
 "synchronous methods install no `SERVICE` or `LOAD` source, so there a remote "
@@ -1572,7 +1591,7 @@ msgstr ""
 "或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 除非写作 `SILENT`，否则"
 "会显式失败；异步孪生方法只能经由宿主传入的处理函数到达远程端点。"
 
-#: src/getting-started/javascript.md:353
+#: src/getting-started/javascript.md:360
 msgid ""
 "**Triple terms per format.** `serialize` is the writer-native lane: an "
 "object-position quoted-triple term and the RDF 1.2 statement layer survive "
@@ -1584,26 +1603,26 @@ msgid ""
 "alone."
 msgstr ""
 
-#: src/getting-started/javascript.md:362
+#: src/getting-started/javascript.md:369
 msgid "Building from source"
 msgstr ""
 
-#: src/getting-started/javascript.md:364
+#: src/getting-started/javascript.md:371
 msgid ""
 "The Rust cdylib lives in [`crates/rdf-wasm`](https://github.com/Blackcat-"
 "Informatics/purrdf/tree/main/crates/rdf-wasm); the published ESM package is "
 "generated from it:"
 msgstr ""
 
-#: src/getting-started/javascript.md:369
+#: src/getting-started/javascript.md:376
 msgid "# release wasm + wasm-bindgen ESM bindings → js/pkg/\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:370
+#: src/getting-started/javascript.md:377
 msgid "# the above + TypeScript, Node, and packed-tarball gates\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:373
+#: src/getting-started/javascript.md:380
 msgid ""
 "This requires the `wasm32-unknown-unknown` Rust target and a `wasm-bindgen-"
 "cli` pinned to the crate's `wasm-bindgen` version."
@@ -15588,24 +15607,10 @@ msgid "Configure the standpoint predicates before using `heldIn`."
 msgstr ""
 
 #: src/project/diagnostic-codes.md:148
-msgid "`native-sparql-graph-pattern-depth-exceeded`"
-msgstr ""
-
-#: src/project/diagnostic-codes.md:148
-msgid ""
-"A manually constructed graph pattern nests deeper than the parser's safety "
-"bound."
-msgstr ""
-
-#: src/project/diagnostic-codes.md:148
-msgid "Flatten the pattern."
-msgstr ""
-
-#: src/project/diagnostic-codes.md:149
 msgid "`native-sparql-evaluation-stack-exhausted`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:149
+#: src/project/diagnostic-codes.md:148
 msgid ""
 "The request nests deeper than the stack of the thread evaluating it can "
 "hold: the evaluator measures the stack it has left at every recursive step "
@@ -15617,7 +15622,7 @@ msgstr ""
 "量剩余的栈空间，并在耗尽之前拒绝，而不是让进程中止或让 wasm 实例陷入 trap。解"
 "析器已接受该请求，在更大的栈上同一请求可以得到应答。"
 
-#: src/project/diagnostic-codes.md:149
+#: src/project/diagnostic-codes.md:148
 msgid ""
 "Evaluate on a thread with a larger stack (a native thread spawned with more; "
 "an asynchronous wasm job with a larger `stackBytes`), or nest the request "
@@ -15625,6 +15630,28 @@ msgid ""
 msgstr ""
 "在栈更大的线程上求值（原生平台上以更大的栈创建线程；异步 wasm 作业则使用更大"
 "的 `stackBytes`），或减少请求的嵌套深度。"
+
+#: src/project/diagnostic-codes.md:149
+msgid "`native-sparql-host-stack-exhausted`"
+msgstr ""
+
+#: src/project/diagnostic-codes.md:149
+msgid ""
+"wasm only: the request nests deeper than the JavaScript engine's own call "
+"stack holds. PurRDF keeps a fixed budget of that stack for a request (637 "
+"nested parentheses or 283 nested graph patterns, for example), and V8 gives "
+"the synchronous lane and an asynchronous job the same stack, so the limit is "
+"the same on both lanes and a larger `stackBytes` does not raise it."
+msgstr ""
+"仅限 wasm：请求的嵌套深度超出了 JavaScript 引擎自身调用栈所能容纳的范围。"
+"PurRDF 为每个请求保留该栈中固定的一份预算（例如 637 层嵌套圆括号或 283 层嵌套"
+"图模式），而 V8 为同步通道和异步作业分配的栈大小相同，因此两个通道上的上限相"
+"同，调大 `stackBytes` 也无法提高它。"
+
+#: src/project/diagnostic-codes.md:149
+msgid "Nest the request less deeply."
+msgstr ""
+"减少请求的嵌套深度。"
 
 #: src/project/diagnostic-codes.md:150
 msgid "`native-sparql-bnode-mint-prefix`"

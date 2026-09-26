@@ -88,7 +88,7 @@ impl Depth {
                 || self.values > WASM_VALUE_LIMIT
                 || self.terms > WASM_TRIPLE_TERM_DEPTH)
         {
-            return Err(ParseError::StackExhausted {
+            return Err(ParseError::HostStackExhausted {
                 construct: "query algebra",
                 at: 0,
             });
@@ -115,7 +115,8 @@ impl GraphPattern {
     /// [`ParseError::StackExhausted`] when a walk as tall as the pattern (every node
     /// kind counted: patterns, expressions, paths, terms) does not fit the stack left
     /// on the calling thread past [`purrdf_stack::MARGIN_BYTES`], at the parser's
-    /// per-level charge (on `wasm32`, also past the parser's host-stack counts).
+    /// per-level charge; on `wasm32`, [`ParseError::HostStackExhausted`] when it is also
+    /// past the parser's host-stack counts.
     pub fn validate_height(&self) -> Result<usize> {
         let mut stack = vec![(Node::Pattern(self), Depth::ROOT)];
         let mut fits = 0;
@@ -190,8 +191,8 @@ impl Query {
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
     /// collisions, malformed typed calls or ranges, and empty property-path chains; and,
     /// with [`ParseError::StackExhausted`], a tree too tall for the walks over it to fit
-    /// the stack the calling thread has left (on `wasm32`, also one past the parser's
-    /// host-stack counts). How deeply triple terms nest is bounded by that stack alone.
+    /// the stack the calling thread has left (on `wasm32`, one past the parser's
+    /// host-stack counts with [`ParseError::HostStackExhausted`]). How deeply triple terms nest is bounded by that stack alone.
     pub fn validate(&self) -> Result<()> {
         let (pattern, dataset, base) = match self {
             Self::Select {
