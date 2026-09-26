@@ -2326,8 +2326,7 @@ fn analyse_alternative(
         let declared = object
             .get("properties")
             .and_then(Value::as_object)
-            .map(|properties| properties.keys().cloned().collect::<BTreeSet<_>>())
-            .unwrap_or_default()
+            .map_or_default(|properties| properties.keys().cloned().collect::<BTreeSet<_>>())
             .union(&required)
             .cloned()
             .collect();

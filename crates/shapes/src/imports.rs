@@ -400,8 +400,7 @@ pub fn resolve_shapes_imports(
             iri: closure
                 .documents()
                 .first()
-                .map(|(iri, _)| iri.clone())
-                .unwrap_or_default(),
+                .map_or_default(|(iri, _)| iri.clone()),
             reason: format!("the merged shapes graph does not freeze: {error}"),
         })?;
     let Some(merged) = merged else {

@@ -136,8 +136,7 @@ fn insert_class_variants(out: &mut String, frame: &mut VariantFrame) {
             .map(|range| (range.start(), range.end()))
             .collect(),
         regex_syntax::hir::HirKind::Literal(literal) => std::str::from_utf8(&literal.0)
-            .map(|text| text.chars().map(|c| (c, c)).collect())
-            .unwrap_or_default(),
+            .map_or_default(|text| text.chars().map(|c| (c, c)).collect()),
         _ => Vec::new(),
     };
     let mut variants: Vec<char> = super::case_variants::table()
