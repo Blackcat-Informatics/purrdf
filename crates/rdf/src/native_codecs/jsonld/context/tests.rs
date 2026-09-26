@@ -636,16 +636,12 @@ fn options_decoder_is_versioned_closed_and_mode_explicit() {
 #[test]
 fn options_schema_and_decoder_have_identical_mode_field_constraints() {
     fn schema_accepts(instance: &Value) -> bool {
-        let location = "mem:///jsonld-options.schema.json";
-        let mut schemas = boon::Schemas::new();
-        let mut compiler = boon::Compiler::new();
-        compiler
-            .add_resource(location, JsonLdSerializeOptions::json_schema())
-            .expect("register options schema");
-        let compiled = compiler
-            .compile(location, &mut schemas)
-            .expect("compile options schema");
-        schemas.validate(instance, compiled).is_ok()
+        purrdf_jsonschema::Schema::from_document(
+            "mem:///jsonld-options.schema.json",
+            JsonLdSerializeOptions::json_schema(),
+        )
+        .expect("compile options schema")
+        .is_valid(instance)
     }
 
     let cases = [

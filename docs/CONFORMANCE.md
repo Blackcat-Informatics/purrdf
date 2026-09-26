@@ -60,6 +60,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SHACL Rules | DASH + first-party | 19 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 10 | 0 | 0 | 0 | GREEN |
+| JSON Schema draft 2020-12 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1468 | 1 | 1 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 81 | 5 | 5 | 0 | GREEN |
 | Python binding suite | first-party (incl. compat differential vs rdflib) | 1041 | 4 | 4 | 0 | GREEN |

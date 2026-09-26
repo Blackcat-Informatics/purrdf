@@ -7,8 +7,9 @@
 Two independent rules, matched to how each dependency was actually replaced:
 
 * **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``,
-  ``petgraph``, ``tempfile`` and ``proptest`` (with the random-number,
-  fork-mode and bit-set stack it alone pulled in) have a first-party
+  ``petgraph``, ``tempfile``, ``proptest`` (with the random-number,
+  fork-mode and bit-set stack it alone pulled in) and ``boon`` (with the
+  URL, IDNA and ICU4X stack it alone pulled in) have a first-party
   replacement good for every edge kind, so reappearing ANYWHERE in the resolved dependency graph — runtime, build,
   dev/test, or transitive — is a failure. This is read from ``Cargo.lock``
   (never ``Cargo.toml``), which records the full resolved closure, so a
@@ -112,6 +113,44 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "wait-timeout": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
     "quick-error": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
     "fnv": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    "boon": "purrdf-jsonschema (native JSON Schema draft 2020-12 validation)",
+    # boon's own closure: its URL/IDNA stack (url, idna and the ICU4X Unicode
+    # data it normalizes with), its URI parser and its append-only list. Nothing
+    # else in the graph pulled any of them in; purrdf-jsonschema resolves every
+    # reference through purrdf-iri.
+    "appendlist": "purrdf-jsonschema (compiled subschemas live in one arena)",
+    "fluent-uri": "purrdf-iri (the workspace's one RFC 3986 resolver)",
+    "borrow-or-share": "purrdf-iri (the workspace's one RFC 3986 resolver)",
+    "ref-cast": "purrdf-iri (the workspace's one RFC 3986 resolver)",
+    "ref-cast-impl": "purrdf-iri (the workspace's one RFC 3986 resolver)",
+    "base64": "purrdf-jsonschema (contentEncoding is an annotation, never decoded)",
+    "url": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",
+    "form_urlencoded": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",
+    "percent-encoding": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",
+    "idna": "purrdf-iri (RFC 3987 IRIs carry Unicode hosts without IDNA mapping)",
+    "idna_adapter": "purrdf-iri (RFC 3987 IRIs carry Unicode hosts without IDNA mapping)",
+    "utf8_iter": "purrdf-iri (RFC 3987 IRIs carry Unicode hosts without IDNA mapping)",
+    "icu_collections": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_locale_core": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_normalizer": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_normalizer_data": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_properties": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_properties_data": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "icu_provider": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "litemap": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "potential_utf": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "tinystr": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "writeable": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "yoke": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "yoke-derive": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerofrom": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerofrom-derive": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerotrie": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerovec": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "zerovec-derive": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "stable_deref_trait": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "displaydoc": "purrdf-iri (no Unicode normalization on the IRI path)",
+    "synstructure": "purrdf-iri (no Unicode normalization on the IRI path)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency

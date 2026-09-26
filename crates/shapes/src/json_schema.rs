@@ -3090,8 +3090,8 @@ mod tests {
         })
     }
 
-    /// Validate a JSON-LD instance node against the emitted `schema_json` with a
-    /// trusted external JSON-Schema (draft 2020-12) validator, returning whether
+    /// Validate a JSON-LD instance node against the emitted `schema_json` with an
+    /// independent JSON Schema (draft 2020-12) validator, returning whether
     /// the instance is ACCEPTED.
     ///
     /// This is the production-surface observation the acceptance criteria demand:
@@ -3099,18 +3099,10 @@ mod tests {
     /// downstream consumer (e.g. gmeow-ontology) would, rather than asserting the
     /// schema's JSON shape.
     fn validates(schema_json: &str, instance: &Value) -> bool {
-        use boon::{Compiler, Schemas};
         let schema_val: Value = serde_json::from_str(schema_json).expect("schema is valid JSON");
-        let loc = "mem:///instance.schema.json";
-        let mut schemas = Schemas::new();
-        let mut compiler = Compiler::new();
-        compiler
-            .add_resource(loc, schema_val)
-            .expect("schema registers as a boon resource");
-        let sch = compiler
-            .compile(loc, &mut schemas)
-            .expect("emitted schema compiles under draft 2020-12");
-        schemas.validate(instance, sch).is_ok()
+        purrdf_jsonschema::Schema::from_document("mem:///instance.schema.json", schema_val)
+            .expect("emitted schema compiles under draft 2020-12")
+            .is_valid(instance)
     }
 
     #[test]
@@ -4631,7 +4623,7 @@ mod tests {
                 .contains("\"not\""),
             "the vacuous `not` must be GONE from the def, got {pat:?}"
         );
-        // Behavioural (boon): the false-reject is gone — the constraint is
+        // Behavioural (a real validator): the false-reject is gone — the constraint is
         // honestly dropped, so every array-valued node is ACCEPTED.
         assert!(
             validates(
@@ -4682,7 +4674,7 @@ mod tests {
                 .contains("\"not\""),
             "the vacuous `not` must be GONE from the def, got {num:?}"
         );
-        // Behavioural (boon): a node with meta:p = [5] is ACCEPTED — the
+        // Behavioural (a real validator): a node with meta:p = [5] is ACCEPTED — the
         // false-reject is gone.
         assert!(
             validates(
@@ -4727,7 +4719,7 @@ mod tests {
                 .contains("\"not\""),
             "the unsound `not` must be GONE from the def, got {person:?}"
         );
-        // Behavioural (boon): the multivalue + absent cases that expose the
+        // Behavioural (a real validator): the multivalue + absent cases that expose the
         // existential axis — single-value alone would NOT catch it. With the
         // constraint honestly dropped, the node is unconstrained by this sh:not,
         // so every case is ACCEPTED (no false-reject, no unsound `not`).

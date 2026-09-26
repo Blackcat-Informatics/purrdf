@@ -346,10 +346,10 @@ fields, and generated-name collisions. The fixed limits are 16 MiB for the
 input schema, each artifact, and one codec value; 65,536 definitions, fields
 per object, or finite values; depth 128; and 255 bytes per GraphQL name.
 
-The independent dev oracle classifies source values with `boon`, builds the
-SDL with locked official GraphQL.js 16.14.0, and executes real variable
-coercion. It verifies exact agreement, every closed loss family and location,
-the name map and production codec, and deliberate corruption failures:
+The independent dev oracle classifies source values with `purrdf-jsonschema`,
+builds the SDL with locked official GraphQL.js 16.14.0, and executes real
+variable coercion. It verifies exact agreement, every closed loss family and
+location, the name map and production codec, and deliberate corruption failures:
 
 ```bash
 make graphql-oracle
