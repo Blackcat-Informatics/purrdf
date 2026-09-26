@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
-use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag,
     DuplicatePolicy, EvidenceId, ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile,

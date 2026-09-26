@@ -75,7 +75,6 @@ mod tests {
     /// longer has one. Keeping the collecting spelling out of the library is the
     /// point: the only reason it existed was that the SRJ graph arm could not stream,
     /// and a second production path that materializes is exactly what would drift.
-    use pretty_assertions::assert_eq;
     use purrdf_core::{
         BlankScope, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, emit_annotation, emit_quad,
         emit_reifier,

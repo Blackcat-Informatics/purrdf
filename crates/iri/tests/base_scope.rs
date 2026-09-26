@@ -14,7 +14,6 @@
 //! Source of truth: RFC-3986 §5.4.1 (normal examples) and §5.4.2 (abnormal
 //! examples), base `http://a/b/c/d;p?q`. See `tests/PROVENANCE.md`.
 
-use pretty_assertions::assert_eq;
 use purrdf_iri::{BaseInScope, BaseIri, BaseOrigin, BaseScope, IriError, parse};
 
 const BASE: &str = "http://a/b/c/d;p?q";

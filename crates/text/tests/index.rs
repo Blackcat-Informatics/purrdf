@@ -18,7 +18,6 @@
 
 use std::sync::Arc;
 
-use pretty_assertions::assert_eq;
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,

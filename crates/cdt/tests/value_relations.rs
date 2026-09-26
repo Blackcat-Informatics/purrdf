@@ -5,7 +5,6 @@
 
 use core::cmp::Ordering;
 
-use pretty_assertions::assert_eq;
 use purrdf_cdt::{
     CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTypeErrorKind, CdtValue, list_equal, list_less_than,
     map_equal, map_less_than, parse_list, parse_map, term_equal, term_less_than, total_term_cmp,

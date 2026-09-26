@@ -2678,7 +2678,6 @@ fn satisfies_bound(candidate: &XsdValue, side: BoundSide, bound: &XsdValue) -> O
 mod tests {
     use super::*;
     use crate::value::parse;
-    use pretty_assertions::assert_eq;
 
     /// Parse a lexical form that the test knows is valid.
     fn v(lexical: &str, dt: XsdDatatype) -> XsdValue {

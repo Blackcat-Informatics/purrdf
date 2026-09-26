@@ -461,7 +461,6 @@ fn json_binding<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 

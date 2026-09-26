@@ -30,8 +30,6 @@ path = "src/lib.rs"
 name = "purrdf_xsd"
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention). Drop-in per test file.
-pretty_assertions = { workspace = true }
 # Round-trip / canonicalization property tests (lexical -> value -> canonical).
 proptest = { workspace = true }
 # Lexical hot-path baselines. DEV-DEPENDENCY ONLY: the zero-dep leaf gate checks

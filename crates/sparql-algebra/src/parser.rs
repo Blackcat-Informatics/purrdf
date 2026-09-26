@@ -5967,7 +5967,6 @@ fn builtin_function(upper: &str) -> Option<Function> {
 mod tests {
     use super::*;
     use crate::algebra::{PurrdfCall, PurrdfFn};
-    use pretty_assertions::assert_eq;
 
     const GM: &str =
         "PREFIX purrdf: <https://x/>\nPREFIX rdf: <http://r/>\nPREFIX rdfs: <http://s/>\n";

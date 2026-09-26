@@ -1305,7 +1305,6 @@ fn is_numeric_datatype(dt: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn hostile_inputs_error_instead_of_panicking() {

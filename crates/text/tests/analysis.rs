@@ -12,7 +12,6 @@
 
 use std::borrow::Cow;
 
-use pretty_assertions::assert_eq;
 use purrdf_text::{Analyzer, Token, unicode_versions};
 
 /// The token texts of `input`, in order.

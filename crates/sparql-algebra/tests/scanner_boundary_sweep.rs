@@ -96,7 +96,6 @@ mod golden;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use pretty_assertions::assert_eq;
 use purrdf_iri::terminals;
 use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle};
 

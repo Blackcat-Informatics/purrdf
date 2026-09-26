@@ -21,7 +21,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use pretty_assertions::assert_eq;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,

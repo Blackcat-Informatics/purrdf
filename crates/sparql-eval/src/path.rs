@@ -1238,7 +1238,6 @@ fn counting_power_expansions<T>(body: impl FnOnce() -> T) -> (T, u64) {
 mod tests {
     use super::*;
     use crate::governor::{GovernorState, QueryGovernors};
-    use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TrippedGovernor};
     use purrdf_sparql_algebra::{NamedNode, TriplePattern};
 

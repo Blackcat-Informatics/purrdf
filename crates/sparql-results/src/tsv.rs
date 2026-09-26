@@ -173,7 +173,6 @@ fn push_var_header<W: TextOut + ?Sized>(var: &str, out: &mut W) {
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, TermValue};
 
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";

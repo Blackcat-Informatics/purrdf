@@ -258,7 +258,6 @@ mod tests {
     use super::{
         CANDIDATE_TABLE, escape, find_first_candidate, is_iriref_escape_required, push_escaped,
     };
-    use pretty_assertions::assert_eq;
     use std::borrow::Cow;
     use std::fmt::Write as _;
 

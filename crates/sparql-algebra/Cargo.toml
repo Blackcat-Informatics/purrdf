@@ -47,8 +47,6 @@ purrdf-cdt = { workspace = true }
 memchr = { workspace = true }
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention).
-pretty_assertions = { workspace = true }
 # Property tests (lexer round-trips, parser robustness).
 proptest = { workspace = true }
 # Tokenizer hot-path baselines (dev-dep only).

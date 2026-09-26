@@ -30,7 +30,6 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
-use pretty_assertions::assert_eq;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_retrieval::{

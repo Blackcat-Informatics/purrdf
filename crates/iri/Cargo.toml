@@ -30,8 +30,6 @@ path = "src/lib.rs"
 name = "purrdf_iri"
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention). Drop-in per test file.
-pretty_assertions = { workspace = true }
 # Round-trip / idempotency property tests (parse -> serialize, normalize twice).
 proptest = { workspace = true }
 # Parse hot-path baselines. DEV-DEPENDENCY ONLY: the zero-dep leaf gate checks
