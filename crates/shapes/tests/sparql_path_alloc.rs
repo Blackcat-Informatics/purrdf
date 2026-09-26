@@ -55,16 +55,48 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 51 | 1,277,672 | 3,119 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 114 | 16,156 | 6,555 |
-//! | custom `sh:select` component | 2,738 | 64 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 127 | 13,393 | 6,744 |
+//! | `sh:sparql` constraint | 2,695 | 49 | 1,277,672 | 3,119 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 112 | 16,156 | 6,555 |
+//! | custom `sh:select` component | 2,738 | 62 | 1,278,972 | 3,694 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 123 | 13,393 | 6,744 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
 //! cheaper, and the pins move with it.
 //!
-//! # The most recent drop: `$this` is bound by the dataset's own TERM ID
+//! # The most recent drop: the evaluation's height check walks ONE stack
+//!
+//! The four surfaces most recently dropped by **2, 2, 2 and 4** allocations
+//! respectively (from 51, 114, 64 and 127), the governed lane by the same 2, 2, 2
+//! and 4 (from 68, 136, 81 and 152), and the `&str`-door fallback lane below by 4
+//! (from 212), when the height check every evaluation runs before its first
+//! operator stopped allocating a traversal vector per expression.
+//!
+//! That check (`validate_graph_pattern_depth`, reached once per evaluation from
+//! `prepare_query_context`) used to walk graph-pattern nodes only, on a stack of
+//! its own, and reached the `EXISTS` patterns an expression can hide by handing
+//! every expression attached to a pattern node to a SECOND iterative walk, which
+//! allocated a fresh pending-parts vector for it and grew it once as soon as a
+//! function call pushed its name and its argument. That is two allocations per
+//! attached expression — a `FILTER`'s, a projected call's — on every run. The check now measures the tree through
+//! `purrdf_sparql_algebra::GraphPattern::validate_height`, which walks patterns,
+//! expressions, paths and terms together on the one stack it already has, so
+//! those two allocations are gone. Holding expression and term nodes as well costs
+//! that one stack, on every fixture here, one growth at the first node with two
+//! children — a growth the pattern-only stack paid too wherever the pattern itself
+//! branched.
+//!
+//! So the saving is two per EVALUATION, and the split follows the runs again: two
+//! on the two SELECT surfaces, four on the expression call's two argument tuples
+//! and on the fallback lane's two value nodes. The prepared `sh:ask` component
+//! saves one per run rather than two, because its pattern is a lone `FILTER` over
+//! an empty group — a chain the pattern-only stack walked without ever growing —
+//! so there the shared stack's one growth is new and nets against the two it
+//! removes. Restoring the pattern-only walk (with the per-expression one beneath
+//! it) and nothing else reproduces 51 / 114 / 64 / 127, 68 / 136 / 81 / 152 and
+//! 212 exactly.
+//!
+//! # The drop before that: `$this` is bound by the dataset's own TERM ID
 //!
 //! The four surfaces most recently dropped by **1, 4, 1 and 0** allocations
 //! respectively (from 52, 118, 65 and 127) when the focus-node binding stopped
@@ -100,7 +132,7 @@
 //! whenever the answer is no, so the saving is taken exactly where it is sound and
 //! nowhere else.
 //!
-//! # The drop before that: a prepared execution retains its SCRATCH TABLES
+//! # The drop two before that: a prepared execution retains its SCRATCH TABLES
 //!
 //! The four surfaces before that dropped by 2, 4, 2 and 4 allocations
 //! respectively (from 54, 122, 67 and 131) when a prepared execution started
@@ -121,7 +153,7 @@
 //! There is no capacity there to keep. See
 //! `purrdf_sparql_eval`'s `execution::ExecutionWorkspace`.
 //!
-//! # The drop two before that: a prepared execution retains its SUBSTITUTED plan
+//! # The drop three before that: a prepared execution retains its SUBSTITUTED plan
 //!
 //! The four surfaces dropped by 14, 22, 14 and 20 allocations
 //! respectively (from 68, 144, 81 and 151) when a prepared execution started
@@ -538,8 +570,8 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 51,
-        governed_per_focus_node: 68,
+        per_focus_node: 49,
+        governed_per_focus_node: 66,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -558,12 +590,12 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 114,
+        per_focus_node: 112,
         // The validator's `&&` is one node holding its two operands in one vector,
         // where the binary node boxed each: the governed lane's per-run copy of the
         // substituted query allocates once less for it, on each of the two value
         // nodes.
-        governed_per_focus_node: 136,
+        governed_per_focus_node: 134,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -586,8 +618,8 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 64,
-        governed_per_focus_node: 81,
+        per_focus_node: 62,
+        governed_per_focus_node: 79,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -604,8 +636,8 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 127,
-        governed_per_focus_node: 152,
+        per_focus_node: 123,
+        governed_per_focus_node: 148,
         governed_entry: 39,
         footprint_is_boundable: true,
         results_per_violation: 1,
@@ -1381,13 +1413,13 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// exactly as [`SparqlCase::per_focus_node`] is measured for the cases in
 /// [`CASES`] — same harness, same closed form, same two populations.
 ///
-/// It sits well above [`CASES`]'s `114` for the prepared `sh:ask component`
+/// It sits well above [`CASES`]'s `112` for the prepared `sh:ask component`
 /// case: the `&str` door re-probes the plan cache by hashing the whole query
 /// text on every run, re-interns every parameter name, and rebuilds the
 /// pre-binding list from scratch per value node, none of which the prepared
 /// door still pays for. That gap is exactly what this pin makes visible where
 /// nothing did before.
-const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 212;
+const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 208;
 
 /// One dataset and one validator for [`ASK_FALLBACK_SHAPES`], built the same
 /// way [`Fixture::build`] builds each of [`CASES`]'s entries.

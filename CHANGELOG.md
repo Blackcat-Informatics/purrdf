@@ -3427,7 +3427,8 @@ component, and an `sh:expression` function call.
   every run. Combined with retaining the evaluator's scratch interner across runs and deciding
   once, rather than separately at each call site, what a pre-bound value may be used for, the
   per-focus-node allocation cost fell from 96 / 214 / 116 / 194 to 51 / 114 / 64 / 127 across the
-  four surfaces respectively.
+  four surfaces respectively, and to 49 / 112 / 62 / 123 once the evaluation's height check
+  stopped allocating a traversal vector per expression.
 
 - CONSTRUCT template instantiation and SPARQL Update's insert/delete/graph-slot templates
   resolved every variable position by lookup again on every output row; the resolution now
