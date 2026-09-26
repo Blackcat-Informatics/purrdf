@@ -17,6 +17,16 @@
 //! specification does not define is refused the same way — never silently
 //! passed. (The domain of an `email` is RFC 5321's `Domain`, an LDH syntax,
 //! and is checked in full.)
+//!
+//! `ipv4` and `ipv6` are RFC 3986's `IPv4address` and `IPv6address`, which
+//! are the languages of the RFC 2673 dotted quad and the RFC 4291 text form
+//! the specification cites; they are decided by [`purrdf_iri::host`], the
+//! workspace's one implementation of those productions. An `email` address
+//! literal is RFC 5321's own grammar, which admits leading zeros in its
+//! dotted part and lets `::` stand only for two or more zero groups; it is
+//! checked here, over those same productions.
+
+use purrdf_iri::host;
 
 use crate::ecma;
 
@@ -73,8 +83,8 @@ impl Format {
             Self::Time => full_time(text.as_bytes()),
             Self::Duration => duration(text.as_bytes()),
             Self::Email => email(text),
-            Self::Ipv4 => ipv4(text),
-            Self::Ipv6 => ipv6(text),
+            Self::Ipv4 => host::is_ipv4_address(text),
+            Self::Ipv6 => host::is_ipv6_address(text),
             Self::Uri => purrdf_iri::parse_uri(text).is_ok_and(|uri| uri.has_scheme()),
             Self::UriReference => text.is_empty() || purrdf_iri::parse_uri(text).is_ok(),
             Self::Iri => purrdf_iri::parse(text).is_ok_and(|iri| iri.has_scheme()),
@@ -250,62 +260,6 @@ fn domain(text: &str) -> bool {
         })
 }
 
-/// RFC 2673 §3.2 dotted-quad: four decimal octets, no leading zeros.
-fn ipv4(text: &str) -> bool {
-    let parts: Vec<&str> = text.split('.').collect();
-    parts.len() == 4
-        && parts.iter().all(|part| {
-            let bytes = part.as_bytes();
-            !bytes.is_empty()
-                && bytes.len() <= 3
-                && !(bytes.len() > 1 && bytes[0] == b'0')
-                && digits(bytes).is_some_and(|value| value <= 255)
-        })
-}
-
-/// RFC 4291 §2.2 text form: eight 16-bit hex groups, at most one `::`, and an
-/// optional dotted-quad for the last 32 bits. No zone identifier.
-fn ipv6(text: &str) -> bool {
-    let (head, tail, compressed) = match text.split_once("::") {
-        Some((head, tail)) => (head, tail, true),
-        None => (text, "", false),
-    };
-    if compressed && tail.contains("::") {
-        return false;
-    }
-    let groups = |part: &str| -> Option<(usize, bool)> {
-        if part.is_empty() {
-            return Some((0, false));
-        }
-        let pieces: Vec<&str> = part.split(':').collect();
-        let mut count = 0;
-        for (index, piece) in pieces.iter().enumerate() {
-            let last = index + 1 == pieces.len();
-            if last && piece.contains('.') {
-                if !ipv4(piece) {
-                    return None;
-                }
-                return Some((count + 2, true));
-            }
-            if piece.is_empty()
-                || piece.len() > 4
-                || !piece.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return None;
-            }
-            count += 1;
-        }
-        Some((count, false))
-    };
-    if !compressed {
-        return groups(head).is_some_and(|(count, _)| count == 8);
-    }
-    let (Some((head_count, head_v4)), Some((tail_count, _))) = (groups(head), groups(tail)) else {
-        return false;
-    };
-    !head_v4 && head_count + tail_count <= 7
-}
-
 /// RFC 4122 §3 `UUID`: 8-4-4-4-12 hex digits.
 fn uuid(bytes: &[u8]) -> bool {
     bytes.len() == 36
@@ -364,9 +318,48 @@ fn address_literal(text: &str) -> bool {
     };
     // The `IPv6` tag is an ABNF string literal, so it is case-insensitive.
     match inner.get(..5) {
-        Some(tag) if tag.eq_ignore_ascii_case("IPv6:") => ipv6(&inner[5..]),
-        _ => ipv4(inner),
+        Some(tag) if tag.eq_ignore_ascii_case("IPv6:") => address_literal_v6(&inner[5..]),
+        _ => address_literal_v4(inner),
     }
+}
+
+/// RFC 5321 §4.1.3 `IPv4-address-literal = Snum 3("." Snum)`, where `Snum =
+/// 1*3DIGIT` represents 0 through 255. Unlike RFC 3986's `dec-octet`, `Snum`
+/// admits leading zeros.
+fn address_literal_v4(text: &str) -> bool {
+    let mut parts = 0_usize;
+    text.split('.').all(|part| {
+        parts += 1;
+        (1..=3).contains(&part.len()) && digits(part.as_bytes()).is_some_and(|value| value <= 255)
+    }) && parts == 4
+}
+
+/// RFC 5321 §4.1.3 `IPv6-addr`: RFC 3986's `IPv6address`, except that its
+/// last 32 bits, when dotted, are an [`address_literal_v4`], and that a
+/// `::` stands for at least two zero groups ("No more than 6 groups in
+/// addition to the `::` may be present", the dotted part counting as two).
+fn address_literal_v6(text: &str) -> bool {
+    let (hex, dotted) = match text.rsplit_once(':') {
+        Some((hex, last)) if last.contains('.') => (hex, Some(last)),
+        _ => (text, None),
+    };
+    let shape_ok = match dotted {
+        // The dotted part is checked as RFC 5321 spells it; the rest keeps
+        // RFC 3986's shape with that part standing as two groups.
+        Some(dotted) => {
+            address_literal_v4(dotted) && host::is_ipv6_address(&format!("{hex}:0.0.0.0"))
+        }
+        None => host::is_ipv6_address(text),
+    };
+    if !text.contains("::") {
+        return shape_ok;
+    }
+    let explicit = text
+        .split(':')
+        .filter(|group| !group.is_empty())
+        .map(|group| if group.contains('.') { 2 } else { 1 })
+        .sum::<usize>();
+    shape_ok && explicit <= 6
 }
 
 /// RFC 6901 JSON Pointer.
@@ -517,6 +510,31 @@ mod tests {
             ("email", "joe@[127.0.0.300]", "joe@[IPv6:::1]"),
             ("email", "joe@-a.example", "joe@a-b.example"),
             ("email", "joe@a..example", "joe@[ipv6:::1]"),
+            // RFC 5321's `Snum` admits leading zeros, unlike RFC 3986's
+            // `dec-octet`; its value is still at most 255.
+            ("email", "joe@[127.0.0.256]", "joe@[127.0.0.001]"),
+            ("email", "joe@[127.0.0.0001]", "joe@[IPv6:::127.0.0.001]"),
+            // RFC 5321's `::` stands for at least two zero groups.
+            (
+                "email",
+                "joe@[IPv6:1:2:3:4:5:6:7::]",
+                "joe@[IPv6:1:2:3:4:5:6::]",
+            ),
+            (
+                "email",
+                "joe@[IPv6:1:2:3:4:5::1.2.3.4]",
+                "joe@[IPv6:1:2:3:4::1.2.3.4]",
+            ),
+            (
+                "email",
+                "joe@[IPv6:fe80::1%eth0]",
+                "joe@[IPv6:1:2:3:4:5:6:7:8]",
+            ),
+            (
+                "email",
+                "joe@[IPv6:1:2:3:4:5:6:7:8:9]",
+                "joe@[IPv6:1:2:3:4:5:6:1.2.3.4]",
+            ),
             ("ipv4", "127.0.0.01", "127.0.0.1"),
             ("ipv4", "256.0.0.1", "255.0.0.1"),
             ("ipv6", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8"),

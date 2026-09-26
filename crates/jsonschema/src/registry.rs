@@ -27,10 +27,12 @@
 //!
 //! The draft 2020-12, draft 2019-09 and draft-07 meta-schemas are registered in
 //! every [`Registry`] from copies vendored into this crate, so no compilation
-//! ever needs the network.
+//! ever needs the network. They are parsed and scanned once per process and
+//! shared by every registry; each registry's own documents stay its own.
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::OnceLock;
 
 use serde_json::Value;
 
@@ -397,20 +399,83 @@ struct Pending {
     awaiting: String,
 }
 
+/// Scanned documents and the identifiers found in them.
+///
+/// A [`Registry`] reads two of these as one: the vendored meta-schemas,
+/// scanned once per process and shared by every registry, then the documents
+/// registered in that registry. Indices run on across the two — the shared
+/// set holds documents `0..n` and resources `0..m`, and a registry's own
+/// continue from there — so a [`Location`] or resource index means the same
+/// thing whichever table holds it.
+#[derive(Debug, Clone)]
+struct Tables {
+    docs: Vec<Document>,
+    resources: Vec<Resource>,
+    by_uri: BTreeMap<String, usize>,
+    locations: BTreeMap<(usize, String), usize>,
+}
+
+impl Tables {
+    const fn new() -> Self {
+        Self {
+            docs: Vec::new(),
+            resources: Vec::new(),
+            by_uri: BTreeMap::new(),
+            locations: BTreeMap::new(),
+        }
+    }
+}
+
+/// The empty shared set, which the registry that scans the vendored
+/// meta-schemas starts from.
+static NO_BUILTINS: Tables = Tables::new();
+
+/// The vendored meta-schemas, parsed and scanned the first time any
+/// [`Registry`] is made and shared immutably by every registry after it.
+///
+/// `OnceLock` needs no thread or clock, so this is as wasm32-clean as the
+/// rest of the crate. What it holds is a pure function of the vendored text,
+/// so a registry sees exactly the tables it would have built for itself.
+fn builtins() -> &'static Tables {
+    static BUILTINS: OnceLock<Tables> = OnceLock::new();
+    BUILTINS.get_or_init(|| {
+        let mut registry = Registry::empty(&NO_BUILTINS);
+        for (uri, text) in BUILTIN {
+            let value: Value =
+                serde_json::from_str(text).unwrap_or_else(|_| unreachable!("vendored meta-schema"));
+            registry
+                .insert(uri, value, true)
+                .unwrap_or_else(|_| unreachable!("vendored meta-schema"));
+        }
+        debug_assert!(
+            registry.refused.is_empty()
+                && registry.pending.is_empty()
+                && registry.broken.is_empty(),
+            "every vendored meta-schema scans"
+        );
+        registry.own
+    })
+}
+
 /// The registered schema documents. Construct with [`Registry::new`], add
 /// documents with [`Registry::add_resource`], and compile with
 /// [`Registry::compile`].
+///
+/// The vendored meta-schemas are parsed and scanned once per process and
+/// shared by every registry; what a registry adds (documents, custom
+/// meta-schemas, its default dialect) is its own, and no other registry
+/// sees it. Cloning a registry copies only what was added to it.
 #[derive(Clone)]
 pub struct Registry {
-    pub(crate) docs: Vec<Document>,
-    pub(crate) resources: Vec<Resource>,
-    by_uri: BTreeMap<String, usize>,
+    /// The vendored meta-schemas.
+    builtin: &'static Tables,
+    /// The documents registered here, indexed after [`Self::builtin`]'s.
+    own: Tables,
     refused: BTreeMap<String, String>,
     pending: BTreeMap<String, Pending>,
     /// Documents that waited for a meta-schema and failed their scan when it
     /// arrived: the failure is reported to whatever compiles them.
     broken: BTreeMap<String, SchemaError>,
-    locations: BTreeMap<(usize, String), usize>,
     /// The dialect of a document that declares no `$schema`.
     default_dialect: Dialect,
 }
@@ -420,9 +485,23 @@ impl fmt::Debug for Registry {
         f.debug_struct("Registry")
             .field(
                 "documents",
-                &self.docs.iter().map(|doc| &doc.uri).collect::<Vec<_>>(),
+                &self
+                    .builtin
+                    .docs
+                    .iter()
+                    .chain(&self.own.docs)
+                    .map(|doc| &doc.uri)
+                    .collect::<Vec<_>>(),
             )
-            .field("resources", &self.by_uri.keys().collect::<Vec<_>>())
+            .field(
+                "resources",
+                &self
+                    .builtin
+                    .by_uri
+                    .keys()
+                    .chain(self.own.by_uri.keys())
+                    .collect::<Vec<_>>(),
+            )
             .field("default_dialect", &self.default_dialect.metaschema())
             .field("other_dialects", &self.refused)
             .field(
@@ -469,25 +548,68 @@ impl From<SchemaError> for ScanFailure {
 impl Registry {
     /// A registry holding the draft 2020-12, draft 2019-09 and draft-07
     /// meta-schemas.
+    ///
+    /// The meta-schemas are parsed and scanned the first time this is called
+    /// in a process; every later registry shares that result.
     pub fn new() -> Self {
-        let mut registry = Self {
-            docs: Vec::new(),
-            resources: Vec::new(),
-            by_uri: BTreeMap::new(),
+        Self::empty(builtins())
+    }
+
+    /// A registry over `builtin` with nothing registered in it.
+    const fn empty(builtin: &'static Tables) -> Self {
+        Self {
+            builtin,
+            own: Tables::new(),
             refused: BTreeMap::new(),
             pending: BTreeMap::new(),
             broken: BTreeMap::new(),
-            locations: BTreeMap::new(),
             default_dialect: Dialect::Draft2020_12,
-        };
-        for (uri, text) in BUILTIN {
-            let value: Value =
-                serde_json::from_str(text).unwrap_or_else(|_| unreachable!("vendored meta-schema"));
-            registry
-                .insert(uri, value, true)
-                .unwrap_or_else(|_| unreachable!("vendored meta-schema"));
         }
-        registry
+    }
+
+    /// The number of documents, shared and own.
+    fn doc_count(&self) -> usize {
+        self.builtin.docs.len() + self.own.docs.len()
+    }
+
+    /// The number of resources, shared and own.
+    fn resource_count(&self) -> usize {
+        self.builtin.resources.len() + self.own.resources.len()
+    }
+
+    /// The document at index `doc`.
+    pub(crate) fn document(&self, doc: usize) -> &Document {
+        match doc.checked_sub(self.builtin.docs.len()) {
+            None => &self.builtin.docs[doc],
+            Some(own) => &self.own.docs[own],
+        }
+    }
+
+    /// The resource at index `resource`.
+    pub(crate) fn resource(&self, resource: usize) -> &Resource {
+        match resource.checked_sub(self.builtin.resources.len()) {
+            None => &self.builtin.resources[resource],
+            Some(own) => &self.own.resources[own],
+        }
+    }
+
+    /// The resource registered under `uri` (no fragment).
+    pub(crate) fn resource_by_uri(&self, uri: &str) -> Option<usize> {
+        self.own
+            .by_uri
+            .get(uri)
+            .or_else(|| self.builtin.by_uri.get(uri))
+            .copied()
+    }
+
+    /// The resource the scan recorded for `pointer` in document `doc`.
+    fn location_resource(&self, doc: usize, pointer: &str) -> Option<usize> {
+        let tables = if doc < self.builtin.docs.len() {
+            self.builtin
+        } else {
+            &self.own
+        };
+        tables.locations.get(&(doc, pointer.to_owned())).copied()
     }
 
     /// Register `document` under the absolute retrieval URI `uri`.
@@ -521,7 +643,7 @@ impl Registry {
     }
 
     fn claimed(&self, uri: &str) -> bool {
-        self.by_uri.contains_key(uri)
+        self.resource_by_uri(uri).is_some()
             || self.refused.contains_key(uri)
             || self.pending.contains_key(uri)
             || self.broken.contains_key(uri)
@@ -550,8 +672,8 @@ impl Registry {
         if OTHER_DIALECTS.contains(&bare) || self.refused.contains_key(bare) {
             return Lookup::Other(declared.to_owned());
         }
-        match self.by_uri.get(bare) {
-            Some(&meta) => Lookup::Known(self.resources[meta].dialect),
+        match self.resource_by_uri(bare) {
+            Some(meta) => Lookup::Known(self.resource(meta).dialect),
             None => Lookup::Unknown(bare.to_owned()),
         }
     }
@@ -583,7 +705,7 @@ impl Registry {
                 return Ok(());
             }
         };
-        let doc = self.docs.len();
+        let doc = self.doc_count();
         let staged = match Scan::run(self, doc, &uri, &document, dialect) {
             Ok(staged) => staged,
             Err(ScanFailure::Error(error)) => return Err(error),
@@ -608,10 +730,10 @@ impl Registry {
                 });
             }
         }
-        self.by_uri.extend(staged.by_uri);
-        self.locations.extend(staged.locations);
-        self.resources.extend(staged.resources);
-        self.docs.push(Document {
+        self.own.by_uri.extend(staged.by_uri);
+        self.own.locations.extend(staged.locations);
+        self.own.resources.extend(staged.resources);
+        self.own.docs.push(Document {
             uri,
             value: document,
             builtin,
@@ -654,7 +776,7 @@ impl Registry {
             Some((base, fragment)) => (base, Some(fragment)),
             None => (absolute, None),
         };
-        let Some(&resource) = self.by_uri.get(base) else {
+        let Some(resource) = self.resource_by_uri(base) else {
             if let Some(dialect) = self.refused.get(base) {
                 return Err(Locate::OtherDialect(dialect.clone()));
             }
@@ -666,7 +788,7 @@ impl Registry {
             }
             return Err(Locate::Unknown);
         };
-        let resource = &self.resources[resource];
+        let resource = self.resource(resource);
         let fragment = match fragment {
             None | Some("") => {
                 return Ok(Location {
@@ -678,7 +800,7 @@ impl Registry {
         };
         let pointer = if fragment.starts_with('/') {
             let tokens = pointer::tokens(&fragment).ok_or(Locate::Unknown)?;
-            let root = pointer::lookup_str(&self.docs[resource.doc].value, &resource.pointer)
+            let root = pointer::lookup_str(&self.document(resource.doc).value, &resource.pointer)
                 .ok_or(Locate::Unknown)?;
             pointer::lookup(root, &tokens).ok_or(Locate::Unknown)?;
             let mut joined = resource.pointer.clone();
@@ -699,35 +821,30 @@ impl Registry {
         })
     }
 
-    /// The resource registered under `uri` (no fragment).
-    pub(crate) fn resource_by_uri(&self, uri: &str) -> Option<usize> {
-        self.by_uri.get(uri).copied()
-    }
-
     /// The resource that contains `location`: the one the scan recorded for
     /// it, or for its nearest scanned ancestor (a location inside an unknown
     /// keyword belongs to the schema that holds the keyword).
     pub(crate) fn resource_of(&self, location: &Location) -> usize {
         let mut pointer = location.pointer.as_str();
         loop {
-            if let Some(&resource) = self.locations.get(&(location.doc, pointer.to_owned())) {
+            if let Some(resource) = self.location_resource(location.doc, pointer) {
                 return resource;
             }
             match pointer.rfind('/') {
                 Some(cut) => pointer = &pointer[..cut],
-                None => return self.docs[location.doc].root_resource,
+                None => return self.document(location.doc).root_resource,
             }
         }
     }
 
     /// The value at `location`.
     pub(crate) fn value(&self, location: &Location) -> Option<&Value> {
-        pointer::lookup_str(&self.docs[location.doc].value, &location.pointer)
+        pointer::lookup_str(&self.document(location.doc).value, &location.pointer)
     }
 
     /// The location of a resource's root.
     pub(crate) fn root_of(&self, resource: usize) -> Location {
-        let resource = &self.resources[resource];
+        let resource = self.resource(resource);
         Location {
             doc: resource.doc,
             pointer: resource.pointer.clone(),
@@ -737,7 +854,7 @@ impl Registry {
     /// The URI a resource's `$dynamicAnchor` named `name` is reachable at,
     /// if it declares one.
     pub(crate) fn dynamic_anchor(&self, resource: usize, name: &str) -> Option<Location> {
-        let resource = &self.resources[resource];
+        let resource = self.resource(resource);
         resource.dynamic_anchors.get(name).map(|pointer| Location {
             doc: resource.doc,
             pointer: pointer.clone(),
@@ -753,7 +870,7 @@ impl Registry {
     fn vocabularies_at(&self, resource: usize, depth: usize) -> Result<Vocabularies, SchemaError> {
         let mut current = resource;
         let declared = loop {
-            let entry = &self.resources[current];
+            let entry = self.resource(current);
             if let Some(foreign) = &entry.foreign {
                 return Err(SchemaError::UnsupportedDialect {
                     resource: entry.uri.clone(),
@@ -765,11 +882,11 @@ impl Registry {
             }
             match entry.parent {
                 Some(parent) => current = parent,
-                None => return Ok(self.resources[resource].dialect.default_vocabularies()),
+                None => return Ok(self.resource(resource).dialect.default_vocabularies()),
             }
         };
         let refuse = || SchemaError::UnsupportedDialect {
-            resource: self.resources[resource].uri.clone(),
+            resource: self.resource(resource).uri.clone(),
             dialect: declared.clone(),
         };
         let metaschema_uri = declared.strip_suffix('#').unwrap_or(&declared);
@@ -779,7 +896,7 @@ impl Registry {
         // A custom meta-schema must itself be a schema of an implemented
         // dialect: follow its own `$schema` chain, which ends at one of the
         // dialect meta-schemas or is refused.
-        let Some(&meta) = self.by_uri.get(metaschema_uri) else {
+        let Some(meta) = self.resource_by_uri(metaschema_uri) else {
             return Err(refuse());
         };
         if depth > 32 {
@@ -824,9 +941,10 @@ impl Registry {
 
     /// The meta-schema URI a document's root declares, or its dialect's.
     pub(crate) fn document_dialect(&self, doc: usize) -> String {
-        declared_schema(&self.docs[doc].value).map_or_else(
+        let document = self.document(doc);
+        declared_schema(&document.value).map_or_else(
             || {
-                self.resources[self.docs[doc].root_resource]
+                self.resource(document.root_resource)
                     .dialect
                     .metaschema()
                     .to_owned()
@@ -926,7 +1044,7 @@ impl Scan {
             resources: Vec::new(),
             by_uri: BTreeMap::new(),
             locations: BTreeMap::new(),
-            offset: registry.resources.len(),
+            offset: registry.resource_count(),
             doc,
         };
         let identifier = Self::identifier(retrieval, root, "", dialect)?;

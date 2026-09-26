@@ -118,7 +118,7 @@ fn metaschema(dialect: Dialect) -> &'static Schema {
 }
 
 fn check_against_metaschema(registry: &Registry, doc: usize) -> Result<(), SchemaError> {
-    let document = &registry.docs[doc];
+    let document = registry.document(doc);
     if document.builtin {
         return Ok(());
     }
@@ -133,10 +133,13 @@ fn check_against_metaschema(registry: &Registry, doc: usize) -> Result<(), Schem
             &custom
         }
     };
-    let output = meta.evaluate(&document.value);
-    if output.is_valid() {
+    // The verdict alone is the common case, and the flag evaluation computes
+    // it without building an output unit per subschema; the full evaluation
+    // runs only to report why a document is refused.
+    if meta.is_valid(&document.value) {
         return Ok(());
     }
+    let output = meta.evaluate(&document.value);
     Err(SchemaError::InvalidSchema {
         uri: document.uri.clone(),
         errors: output
@@ -216,7 +219,7 @@ impl Compiler<'_> {
         let index = self.resources.len();
         self.resources.push(ResourceScope::default());
         self.resource_index.insert(registry_resource, index);
-        let entry = &self.registry.resources[registry_resource];
+        let entry = self.registry.resource(registry_resource);
         let anchors: Vec<String> = entry.dynamic_anchors.keys().cloned().collect();
         if entry.recursive_anchor {
             let root = self.node(self.registry.root_of(registry_resource));
@@ -243,7 +246,7 @@ impl Compiler<'_> {
     fn build(&mut self, id: NodeId, location: &Location) -> Result<(), SchemaError> {
         let registry = self.registry;
         let registry_resource = registry.resource_of(location);
-        let resource = &registry.resources[registry_resource];
+        let resource = registry.resource(registry_resource);
         let relative = location
             .pointer
             .strip_prefix(resource.pointer.as_str())
@@ -429,7 +432,7 @@ impl Compiler<'_> {
                     let dynamic = self
                         .registry
                         .resource_by_uri(base)
-                        .is_some_and(|resource| self.registry.resources[resource].recursive_anchor);
+                        .is_some_and(|resource| self.registry.resource(resource).recursive_anchor);
                     references.push(Keyword {
                         name: name.clone(),
                         kind: Kind::RecursiveRef { target, dynamic },

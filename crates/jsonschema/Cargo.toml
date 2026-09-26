@@ -42,6 +42,13 @@ purrdf-iri = { workspace = true }
 # The `harness = false` suite runner and the frozen differential vectors.
 # Path-only and unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
+# Compile and validation baselines. DEV-DEPENDENCY ONLY: it never reaches the
+# published library's graph.
+criterion = { workspace = true }
+
+[[bench]]
+name = "validate"
+harness = false
 
 # The official JSON-Schema-Test-Suite, one libtest case per suite test: one
 # target per draft, so each is its own conformance row.

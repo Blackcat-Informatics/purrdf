@@ -45,6 +45,7 @@ it.
 | `property.rs` | Property-based round-trip / idempotence invariants over the RFC 3986/3987 grammar | Generative, not a fixed corpus. |
 | `langtag_corpus.rs` | **RFC 5646 Appendix A** worked examples (well-formed, and the invalid set split along the §2.2.9 well-formed/valid line), the closed **§2.2.8** grandfathered list, and boundary vectors derived from the **§2.1** ABNF | `Language-Tag` well-formedness corpus; every refusal is paired with an accepted neighbor. Every vector here is either a string the RFC itself prints (Appendix A, the §2.2.8 list) or one derived by naming a §2.1 production and stepping one character or one repetition across its bound; no vector is taken from, checked against, or suggested by any implementation's test corpus. See the clean-room note below for the three that once were. |
 | `langtag_differential.rs` + `langtag_differential_vectors.txt` | **Inputs**: generated independently by a systematic sweep over the **RFC 5646 §2.1** ABNF (each of the seven `langtag` sections swept across its admissible shapes, its length/character boundaries and impostors just outside them — as a reduced full cartesian product, as one axis at full breadth in three contexts, and as every adjacent axis pair), plus the closed **§2.2.8** grandfathered list and the **Appendix A** worked examples with case variants, plus structural inputs (empty, hyphen placement, over-length subtags, non-ASCII, C0 controls). **Verdicts**: labelled once by `oxilangtag` 0.1.6 (`LanguageTag::parse(..).is_ok()`) run as a one-time external oracle over those inputs. | Frozen differential acceptance table (3935 vectors) that makes the "same accepted language as the replaced dependency" claim **falsifiable**. See the fidelity note below on what was and was not taken from upstream. |
+| `host_differential.rs` + `host_differential_vectors.txt` | **Inputs**: 20,000 distinct address-shaped strings drawn from the testkit choice stream under a fixed seed (dotted quads whose octets straddle 255 and carry leading zeros; colon-separated hex groups, compressed and not, with dotted tails and zones; point mutations). **Verdicts**: the `ipv4` and `ipv6` format checks `purrdf-jsonschema` carried before it called `purrdf_iri::host`, recorded once while they existed. | Frozen differential acceptance table for **RFC 3986 §3.2.2** `IPv4address` and `IPv6address` (20,000 vectors, two verdicts each). See the note below. |
 
 ## Fidelity statement
 
@@ -105,3 +106,29 @@ limit. The previous negative vector `http://h:99999/` was an incorrect
 first-party restriction, not an RFC requirement. It is now a positive boundary;
 non-digit ports remain negative. IP-literal vectors likewise test the complete
 IPv6address or IPvFuture production, rather than a permissive character bag.
+
+## The host differential table
+
+`host_differential_vectors.txt` freezes the verdicts of the two address
+parsers `purrdf-jsonschema` once carried for its `ipv4` format (the RFC 2673
+§3.2 dotted quad) and its `ipv6` format (the RFC 4291 §2.2 text form), a second
+address parser beside the one this crate validates IP literals with. Both
+formats now call `purrdf_iri::host::is_ipv4_address` and
+`purrdf_iri::host::is_ipv6_address`, and the old parsers are deleted.
+
+* **What was taken.** Their `accept`/`reject` answers, and nothing else. They
+  were first-party code, and none of it was carried into `host`: the
+  predicates there are the RFC 3986 `dec-octet` production and the standard
+  library's address parser.
+* **Disagreements.** None. Replayed against `purrdf_iri::host`, all 20,000
+  records agree on both productions. The languages coincide by the RFC text:
+  RFC 2673's dotted quad is RFC 3986's `IPv4address` (four decimal values
+  0–255, no leading zero), and RFC 4291's text form, with the embedded IPv4
+  part spelled as that `IPv4address` and no zone, is RFC 3986's nine
+  `IPv6address` alternatives. The table exercises both verdicts of both
+  productions at least a thousand times each, and the replay test asserts it.
+
+The same answers decide an address in a URI: an input the table accepts as
+`IPv4address` is a host `parse_uri` accepts, and one it accepts as
+`IPv6address` is an IP-literal `parse_uri` accepts, while one it refuses is
+refused inside brackets unless it begins with the `v` of an `IPvFuture`.

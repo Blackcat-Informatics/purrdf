@@ -697,3 +697,99 @@ fn unevaluated_properties_see_through_every_in_place_applicator() {
         "`dependentSchemas` did not apply"
     );
 }
+
+#[test]
+fn a_custom_metaschema_is_seen_by_its_registry_only() {
+    const META: &str = "https://example.org/meta.json";
+    const SCHEMA: &str = "https://example.org/schema.json";
+    let asserting_meta = json!({
+        "$schema": DRAFT,
+        "$vocabulary": {
+            "https://json-schema.org/draft/2020-12/vocab/core": true,
+            "https://json-schema.org/draft/2020-12/vocab/format-assertion": true
+        },
+        "$dynamicAnchor": "meta"
+    });
+    let annotating_meta = json!({
+        "$schema": DRAFT,
+        "$vocabulary": {
+            "https://json-schema.org/draft/2020-12/vocab/core": true,
+            "https://json-schema.org/draft/2020-12/vocab/format-annotation": true
+        },
+        "$dynamicAnchor": "meta"
+    });
+    let schema = json!({"$schema": META, "format": "ipv6"});
+
+    let mut first = Registry::new();
+    first
+        .add_resource(META, asserting_meta)
+        .expect("the first registry's meta-schema");
+    first
+        .add_resource(SCHEMA, schema.clone())
+        .expect("the first registry's schema");
+
+    // A second registry shares the vendored meta-schemas, not the first
+    // registry's own: its schema waits for a meta-schema it has not seen.
+    let mut second = Registry::new();
+    second
+        .add_resource(SCHEMA, schema)
+        .expect("the second registry's schema");
+    assert!(matches!(
+        second.compile(SCHEMA),
+        Err(SchemaError::UnsupportedDialect { dialect, .. }) if dialect == META
+    ));
+    // The URI the first registry claimed is free in the second.
+    second
+        .add_resource(META, annotating_meta)
+        .expect("the second registry's own meta-schema at the same URI");
+
+    let asserting = first.compile(SCHEMA).expect("the first compiles");
+    let annotating = second.compile(SCHEMA).expect("the second compiles");
+    assert!(asserting.is_valid(&json!("2001:db8::1")));
+    assert!(!asserting.is_valid(&json!("2001:db8::1::2")));
+    assert!(annotating.is_valid(&json!("2001:db8::1")));
+    assert!(
+        annotating.is_valid(&json!("2001:db8::1::2")),
+        "the second registry's meta-schema only annotates"
+    );
+
+    // A clone carries what was added to the original; what is added to the
+    // clone stays in the clone.
+    let mut clone = first.clone();
+    clone
+        .add_resource(
+            "https://example.org/only-in-clone.json",
+            json!({"type": "null"}),
+        )
+        .expect("the clone's own document");
+    assert!(
+        clone
+            .compile("https://example.org/only-in-clone.json")
+            .is_ok()
+    );
+    assert!(matches!(
+        first.compile("https://example.org/only-in-clone.json"),
+        Err(SchemaError::UnresolvedReference { .. })
+    ));
+    assert!(
+        !clone
+            .compile(SCHEMA)
+            .expect("inherited")
+            .is_valid(&json!("x"))
+    );
+
+    // Every registry sees the vendored meta-schemas, and none may re-register
+    // one.
+    for registry in [&mut first, &mut second] {
+        let meta = registry.compile(DRAFT).expect("the vendored meta-schema");
+        assert!(meta.is_valid(&json!({"type": "string"})));
+        assert!(!meta.is_valid(&json!({"type": 5})));
+        assert!(matches!(
+            registry.add_resource(DRAFT, json!({})),
+            Err(SchemaError::DuplicateResource { .. })
+        ));
+        registry
+            .add_resource("https://example.org/fresh.json", json!({}))
+            .expect("a URI no registry has claimed");
+    }
+}
