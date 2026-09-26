@@ -115,8 +115,10 @@ them, `core/node/xone-003`, is graded with one amendment that quotes its clause
 results carry the value node as `sh:value`, as the approved
 `core/property/reifierShape-001` and `-002` state (7.8.5's textual definition
 names both the triple term and the reifier `t`); a non-conforming reifier's own
-results ride along as `sh:detail`. Six node-expression tests are graded
-against the XSD 1.1 canonical `xsd:decimal` form, which PurRDF emits. SPARQL
+results ride along as `sh:detail`. Six node-expression tests are upstream errata,
+reported apart from the passes: each expects a non-canonical `xsd:decimal`
+lexical form and is graded exactly against the XSD 1.1 canonical form, which
+PurRDF emits. SPARQL
 1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
 `data-shapes` suite and a 73-case first-party frozen corpus gate the crate as
 well; `docs/CONFORMANCE.md` has the live numbers.

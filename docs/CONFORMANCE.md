@@ -632,8 +632,10 @@ way the matrix stays honest:
   graded as approved: §7.8.5's textual definition names both the triple term
   and the reifier `t`, and PurRDF follows the approved tests' reading, the value
   node as `sh:value`. Six node-expression expectations spell an integer-valued
-  `xsd:decimal` non-canonically and are graded against the XSD 1.1 canonical
-  form (Part 2 §3.3.3.1 and §E.1), which PurRDF emits. SPARQL 1.2 RL grammar
+  `xsd:decimal` non-canonically; they are reported as **upstream errata**, not
+  passes, and each is graded exactly against the XSD 1.1 canonical form (Part 2
+  §3.3.3.1 and §E.1), which PurRDF emits and which the approved W3C SPARQL
+  `ceil01`/`floor01`/`round01`/`seconds` tests expect. SPARQL 1.2 RL grammar
   rule [2] is implemented as written. Beside the suite,
   `crates/shapes/tests/vocabulary_import_invariance.rs` proves that merging the
   W3C SHACL 1.2 vocabularies into a shapes graph changes no report of three
