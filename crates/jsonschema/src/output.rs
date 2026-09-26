@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The 2020-12 output formats (Core §12): `flag`, `basic` and `detailed`.
+//! The standard output formats (2020-12 Core §12, 2019-09 Core §10): `flag`,
+//! `basic` and `detailed`.
 //!
 //! An evaluation with output records one [`OutputUnit`] per subschema and
 //! per keyword it evaluated, nested as the schema is: a subschema's unit

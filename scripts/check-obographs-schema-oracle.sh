@@ -21,5 +21,6 @@ cargo run --quiet --locked -p purrdf-rdf --example write_obographs_oracle_fixtur
 cargo run --quiet --locked -p purrdf-rdf --example write_obographs_oracle_fixture -- \
   "${tmp}/second.json"
 cmp "${tmp}/first.json" "${tmp}/second.json"
-UV_CACHE_DIR="${UV_CACHE_DIR:-${TMPDIR:-/tmp}/purrdf-obographs-uv-cache}" \
+# uv's cache persists beside the build output too, not under $TMPDIR.
+UV_CACHE_DIR="${UV_CACHE_DIR:-${CARGO_TARGET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target}/uv-cache/obographs-oracle}" \
   uv run --no-project --locked --script scripts/obographs_schema_oracle.py "${tmp}/first.json"

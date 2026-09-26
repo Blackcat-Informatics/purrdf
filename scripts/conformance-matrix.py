@@ -1165,12 +1165,36 @@ def native_suites() -> list[SuiteResult]:
             ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test", "suite"],
             detail=(
                 "every draft 2020-12 test file, optional/ included (optional/format/ is "
-                "format-as-assertion, not vendored), one case per suite test: 1,462 of "
-                "the 1,463 validation cases and all 4 output-format cases pass, plus the "
-                "suite-inventory case and the dialect-refusal case. The one ledgered "
-                "case asks for a draft 2019-09 document to be evaluated; purrdf-jsonschema "
-                "implements 2020-12 only and refuses other dialects, and the "
-                "dialect-refusal case pins that typed refusal"
+                "format-as-assertion, not vendored), one case per suite test: all 1,463 "
+                "validation cases and all 4 output-format cases pass, plus the "
+                "suite-inventory case. optional/cross-draft.json evaluates a $ref into a "
+                "draft 2019-09 document under 2019-09 rules"
+            ),
+        ),
+        _suite_cargo(
+            "JSON Schema draft 2019-09 (official suite)",
+            "JSON-Schema-Test-Suite 5b0ee16",
+            ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test",
+             "suite_draft2019_09"],
+            detail=(
+                "every draft 2019-09 test file, optional/ included (optional/format/ is "
+                "format-as-assertion, not vendored), one case per suite test: all 1,419 "
+                "validation cases and all 4 output-format cases pass, plus the "
+                "suite-inventory case. $recursiveRef, array-form items, and "
+                "optional/cross-draft.json's $refs into 2020-12 and draft-07 documents, "
+                "each evaluated under its own draft"
+            ),
+        ),
+        _suite_cargo(
+            "JSON Schema draft-07 (official suite)",
+            "JSON-Schema-Test-Suite 5b0ee16",
+            ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test",
+             "suite_draft7"],
+            detail=(
+                "every draft-07 test file, optional/ included (optional/format/ is "
+                "format-as-assertion, not vendored), one case per suite test: all 1,047 "
+                "validation cases pass, plus the suite-inventory case; draft-07 has no "
+                "output-format tests"
             ),
         ),
         _suite_gts_vectors(),

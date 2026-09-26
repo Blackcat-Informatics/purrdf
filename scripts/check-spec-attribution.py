@@ -81,6 +81,7 @@ enumerated — the enumeration rule, proven rather than described.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -214,6 +215,17 @@ SELF_PATH = Path(__file__).resolve()
 
 def repo_root() -> Path:
     return SELF_PATH.parent.parent
+
+
+def _scratch_root() -> Path:
+    """The build tree's scratch root, ``target/gate-scratch/`` (or under
+    ``$CARGO_TARGET_DIR``), the convention ``scripts/build-scratch.sh`` sets out.
+    Scratch goes there rather than into the system temporary directory, which is
+    not guaranteed to keep a directory for as long as a gate runs."""
+    target = os.environ.get("CARGO_TARGET_DIR")
+    root = (Path(target) if target else repo_root() / "target") / "gate-scratch"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def normalize_cjk_spacing(text: str) -> str:
@@ -489,7 +501,7 @@ def enumeration_self_test(report: bool) -> list[str]:
     """
     failures: list[str] = []
     violation = _MUST_CATCH[3][1]
-    with tempfile.TemporaryDirectory(prefix="check-spec-attribution-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="check-spec-attribution-", dir=_scratch_root()) as tmp:
         root = Path(tmp)
         subprocess.run(
             ["git", "init", "--quiet", str(root)], check=True, capture_output=True

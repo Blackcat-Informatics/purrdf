@@ -14,7 +14,8 @@
 //! everything, recording one [`OutputUnit`] per subschema and keyword.
 //!
 //! The dynamic scope (Core §7.1) is the stack of schema resources the
-//! evaluation path has entered; `$dynamicRef` searches it outermost first.
+//! evaluation path has entered; `$dynamicRef` (2020-12) and `$recursiveRef`
+//! (2019-09) search it outermost first.
 //! A `$ref` or `$dynamicRef` that re-enters a subschema it is already
 //! evaluating at the same instance location would never terminate, and fails
 //! with an error naming the cycle instead.
@@ -477,10 +478,27 @@ impl<'s> Evaluator<'s> {
                     .as_ref()
                     .and_then(|name| {
                         self.scope.iter().find_map(|&resource| {
-                            self.schema.resources[resource].get(name).copied()
+                            self.schema.resources[resource]
+                                .dynamic_anchors
+                                .get(name)
+                                .copied()
                         })
                     })
                     .unwrap_or(*target);
+                self.follow(target, instance, track, state, children)
+            }
+            Kind::RecursiveRef { target, dynamic } => {
+                // 2019-09 Core §8.2.4.2.2: when the target is a
+                // `$recursiveAnchor`, the outermost resource in the dynamic
+                // scope that is one too is evaluated instead.
+                let target = if *dynamic {
+                    self.scope
+                        .iter()
+                        .find_map(|&resource| self.schema.resources[resource].recursive_root)
+                        .unwrap_or(*target)
+                } else {
+                    *target
+                };
                 self.follow(target, instance, track, state, children)
             }
             Kind::Type(types) => {
@@ -622,6 +640,30 @@ impl<'s> Evaluator<'s> {
                     Err(format!("the string is not a valid {name}"))
                 }
                 _ => annotate(Value::String(name.clone())),
+            },
+            Kind::ContentEncoding(encoding) => match instance {
+                Value::String(text) if encoding.decode(text).is_none() => {
+                    Err(format!("the string is not valid {encoding:?} content"))
+                }
+                _ => Ok(None),
+            },
+            Kind::ContentMediaType { media, encoding } => match instance {
+                Value::String(text) => {
+                    let decoded = match encoding {
+                        // Undecodable content is `contentEncoding`'s failure.
+                        Some(encoding) => match encoding.decode(text) {
+                            Some(bytes) => bytes,
+                            None => return Ok(None),
+                        },
+                        None => text.as_bytes().to_vec(),
+                    };
+                    if media.check(&decoded) {
+                        Ok(None)
+                    } else {
+                        Err(format!("the content is not a {media:?} document"))
+                    }
+                }
+                _ => Ok(None),
             },
             Kind::AllOf(schemas) => {
                 let mut failed = Vec::new();
@@ -798,7 +840,12 @@ impl<'s> Evaluator<'s> {
                     Ok(None)
                 }
             }
-            Kind::Contains { schema, min, max } => {
+            Kind::Contains {
+                schema,
+                min,
+                max,
+                annotates,
+            } => {
                 let Value::Array(items) = instance else {
                     return Ok(None);
                 };
@@ -812,7 +859,7 @@ impl<'s> Evaluator<'s> {
                     let outcome = self.apply(*schema, item, false, &[], Some(&token), children);
                     if outcome.valid {
                         matched.push(index);
-                        if let Some(evaluated) = &mut state.items {
+                        if *annotates && let Some(evaluated) = &mut state.items {
                             evaluated.set(index);
                         }
                     }
@@ -829,6 +876,9 @@ impl<'s> Evaluator<'s> {
                     return Err(format!(
                         "{found} items match the contains schema; at most {max} may"
                     ));
+                }
+                if !annotates {
+                    return Ok(None);
                 }
                 annotate(if matched.len() == items.len() {
                     Value::Bool(true)

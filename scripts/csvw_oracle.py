@@ -73,7 +73,9 @@ def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: csvw_oracle.py PACKAGE_DIRECTORY")
     root = pathlib.Path(sys.argv[1]).resolve()
-    with tempfile.TemporaryDirectory(prefix="purrdf-csvw-oracle-") as tmp:
+    # Beside the package, in the build-tree scratch the calling gate made
+    # (scripts/build-scratch.sh), not in the system temporary directory.
+    with tempfile.TemporaryDirectory(prefix="csvw-oracle-localized.", dir=root.parent) as tmp:
         oracle_root = pathlib.Path(tmp)
         metadata_path = localize_package(root, oracle_root)
         oracle = load_valid(metadata_path)

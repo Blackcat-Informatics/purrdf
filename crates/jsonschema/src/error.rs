@@ -28,9 +28,11 @@ pub enum SchemaError {
         /// The URI claimed twice.
         uri: String,
     },
-    /// A schema declares a `$schema` dialect other than draft 2020-12 (or a
-    /// meta-schema built on it). Earlier drafts and later releases give
-    /// keywords different meanings, and this crate implements 2020-12 only.
+    /// A schema declares a `$schema` dialect this crate does not implement:
+    /// neither draft 2020-12, draft 2019-09 nor draft-07, nor a registered
+    /// meta-schema built on one of them. Other drafts give keywords different
+    /// meanings (draft-06 and earlier spell identifiers `id` and bounds
+    /// differently), so they are refused rather than read as one of these.
     UnsupportedDialect {
         /// The resource whose dialect was refused.
         resource: String,
@@ -106,9 +108,9 @@ impl fmt::Display for SchemaError {
             }
             Self::UnsupportedDialect { resource, dialect } => write!(
                 f,
-                "{resource} declares the dialect {dialect:?}; only JSON Schema draft 2020-12 \
-                 (https://json-schema.org/draft/2020-12/schema) and meta-schemas built on it \
-                 are supported"
+                "{resource} declares the dialect {dialect:?}; the supported dialects are JSON \
+                 Schema draft 2020-12, draft 2019-09 and draft-07, and registered meta-schemas \
+                 built on them"
             ),
             Self::UnsupportedVocabulary {
                 metaschema,

@@ -555,7 +555,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-text`](./crates/text/) | RDF 1.2 字面量上的确定性全文检索：一个内存倒排索引与精确定点 BM25 排名，从 SPARQL 经由调用方提供的属性函数 IRI 调用。 |
 | [`purrdf-validate`](./crates/validate/) | 共享的宿主边界：SARIF 2.1.0 诊断，以及 Python/wasm/C 绑定所调用的蕴涵机制字符串接口。 |
 | [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化编解码器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址 Profile 之下——且这张图可逐字节解码还原为原文档，并以图中自带的源摘要（哈希）为证。由门面 crate 重新导出为 `purrdf::markdown`。 |
-| [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema draft 2020-12 校验：全部词汇表、`$dynamicRef`、`unevaluated*`、`$vocabulary`，以及 flag/basic/detailed 三种标准输出格式；ECMA-262 `pattern` 按 ECMA-262 的精确字符集翻译为 `regex`。以官方 JSON-Schema-Test-Suite 检验；仅依赖 `serde_json`、`regex` 与 `purrdf-iri`，可构建到 wasm32。 |
+| [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema 校验，支持 draft 2020-12、2019-09 与 07，每个 schema 资源按其自身方言处理：全部词汇表、`$dynamicRef`、`$recursiveRef`、`unevaluated*`、`$vocabulary`，以及 flag/basic/detailed 三种标准输出格式；ECMA-262 `pattern` 按 ECMA-262 的精确字符集翻译为 `regex`。以官方 JSON-Schema-Test-Suite 对三个草案逐一检验；仅依赖 `serde_json`、`regex` 与 `purrdf-iri`，可构建到 wasm32。 |
 | [`purrdf-slice`](./crates/slice/) | 切片目录：清单、带类型的工件、所有权/依赖分析。 |
 | [`purrdf-iri`](./crates/iri/) | 零依赖的 IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
 | [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |

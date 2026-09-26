@@ -10,6 +10,7 @@ use std::fmt;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::content::{Encoding, MediaType};
 use crate::format::Format;
 use crate::number::Decimal;
 
@@ -24,8 +25,8 @@ pub(crate) type NodeId = usize;
 #[derive(Clone)]
 pub struct Schema {
     pub(crate) nodes: Vec<Node>,
-    /// Per compiled resource: its `$dynamicAnchor`s.
-    pub(crate) resources: Vec<BTreeMap<String, NodeId>>,
+    /// Per compiled resource: what the dynamic scope can find in it.
+    pub(crate) resources: Vec<ResourceScope>,
     pub(crate) root: NodeId,
 }
 
@@ -36,6 +37,15 @@ impl fmt::Debug for Schema {
             .field("subschemas", &self.nodes.len())
             .finish_non_exhaustive()
     }
+}
+
+/// What a schema resource contributes to the dynamic scope.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResourceScope {
+    /// Its `$dynamicAnchor`s (2020-12).
+    pub(crate) dynamic_anchors: BTreeMap<String, NodeId>,
+    /// Its root, when the root declares `"$recursiveAnchor": true` (2019-09).
+    pub(crate) recursive_root: Option<NodeId>,
 }
 
 /// One compiled subschema.
@@ -122,6 +132,13 @@ pub(crate) enum Kind {
         target: NodeId,
         anchor: Option<String>,
     },
+    /// `$recursiveRef` (2019-09): the statically resolved target, and whether
+    /// that target is a `$recursiveAnchor`, which makes the dynamic scope
+    /// choose the resource evaluated.
+    RecursiveRef {
+        target: NodeId,
+        dynamic: bool,
+    },
     Type(Vec<JsonType>),
     Enum(Vec<Value>),
     Const(Value),
@@ -143,6 +160,14 @@ pub(crate) enum Kind {
     /// `format`: its name, and the check when the Format-Assertion
     /// vocabulary is in force.
     Format(String, Option<Format>),
+    /// Draft-07 `contentEncoding`: the string must decode.
+    ContentEncoding(Encoding),
+    /// Draft-07 `contentMediaType`: the string, decoded by the sibling
+    /// `contentEncoding` when there is one, must be a document of the type.
+    ContentMediaType {
+        media: MediaType,
+        encoding: Option<Encoding>,
+    },
     AllOf(Vec<NodeId>),
     AnyOf(Vec<NodeId>),
     OneOf(Vec<NodeId>),
@@ -153,8 +178,10 @@ pub(crate) enum Kind {
         otherwise: Option<NodeId>,
     },
     DependentSchemas(Vec<(String, NodeId)>),
+    /// `prefixItems`, or the array form of `items` in draft-07 and 2019-09.
     PrefixItems(Vec<NodeId>),
-    /// `items`, and how many leading items `prefixItems` already covers.
+    /// `items`, and how many leading items `prefixItems` already covers; or
+    /// `additionalItems` past an array of `items`.
     Items {
         schema: NodeId,
         skip: usize,
@@ -163,6 +190,8 @@ pub(crate) enum Kind {
         schema: NodeId,
         min: u64,
         max: Option<u64>,
+        /// Whether the matched items are an annotation (2020-12).
+        annotates: bool,
     },
     Properties(BTreeMap<String, NodeId>),
     PatternProperties(Vec<(Pattern, NodeId)>),

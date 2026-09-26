@@ -6,8 +6,13 @@
 //! Subschemas are compiled on demand from a work queue, each location once:
 //! a `$ref` cycle is an edge back to an index already allocated, never a
 //! recursion. Every schema resource a compiled subschema belongs to has its
-//! `$dynamicAnchor`s compiled too, because the dynamic scope of an evaluation
-//! may reach them from any `$dynamicRef`.
+//! `$dynamicAnchor`s — and its root, when that is a `$recursiveAnchor` —
+//! compiled too, because the dynamic scope of an evaluation may reach them
+//! from any `$dynamicRef` or `$recursiveRef`.
+//!
+//! Each subschema compiles under the dialect of its resource: which keywords
+//! exist, and what `items`, `contains`, `$ref` and the content keywords mean,
+//! is decided per resource, so one compiled schema can span dialects.
 //!
 //! After the keywords compile, every non-built-in document the schema reaches
 //! is validated against its own meta-schema; a document that fails is
@@ -18,13 +23,17 @@ use std::sync::OnceLock;
 
 use serde_json::{Map, Value};
 
+use crate::content::{Encoding, MediaType};
 use crate::ecma;
 use crate::error::SchemaError;
 use crate::format::Format;
 use crate::number::Decimal;
 use crate::pointer;
-use crate::registry::{DRAFT_2020_12, Locate, Location, Registry, Vocabularies, Vocabulary};
-use crate::schema::{Body, JsonType, Keyword, Kind, Node, NodeId, Pattern, Schema};
+use crate::registry::{
+    DRAFT_07, DRAFT_2019_09, DRAFT_2020_12, Dialect, Locate, Location, Registry, Vocabularies,
+    Vocabulary,
+};
+use crate::schema::{Body, JsonType, Keyword, Kind, Node, NodeId, Pattern, ResourceScope, Schema};
 
 /// Compile the schema at the absolute URI `uri` (a fragment may select a
 /// subschema by JSON Pointer or anchor).
@@ -86,14 +95,22 @@ fn located(failure: Locate, at: &str, reference: &str, resolved: &str) -> Schema
             resource: resolved.split('#').next().unwrap_or(resolved).to_owned(),
             dialect,
         },
+        Locate::Broken(error) => error,
     }
 }
 
-/// The draft 2020-12 meta-schema, compiled once per process.
-fn metaschema() -> &'static Schema {
-    static META: OnceLock<Schema> = OnceLock::new();
-    META.get_or_init(|| {
-        compile_unchecked(&Registry::new(), DRAFT_2020_12).map_or_else(
+/// A dialect's meta-schema, compiled once per process.
+fn metaschema(dialect: Dialect) -> &'static Schema {
+    static DRAFT_2020_12_META: OnceLock<Schema> = OnceLock::new();
+    static DRAFT_2019_09_META: OnceLock<Schema> = OnceLock::new();
+    static DRAFT_07_META: OnceLock<Schema> = OnceLock::new();
+    let cell = match dialect {
+        Dialect::Draft2020_12 => &DRAFT_2020_12_META,
+        Dialect::Draft2019_09 => &DRAFT_2019_09_META,
+        Dialect::Draft07 => &DRAFT_07_META,
+    };
+    cell.get_or_init(|| {
+        compile_unchecked(&Registry::new(), dialect.metaschema()).map_or_else(
             |error| unreachable!("the vendored meta-schema compiles: {error}"),
             |(schema, _)| schema,
         )
@@ -107,11 +124,14 @@ fn check_against_metaschema(registry: &Registry, doc: usize) -> Result<(), Schem
     }
     let dialect = registry.document_dialect(doc);
     let custom;
-    let meta = if dialect == DRAFT_2020_12 {
-        metaschema()
-    } else {
-        custom = compile(registry, &dialect)?;
-        &custom
+    let meta = match dialect.as_str() {
+        DRAFT_2020_12 => metaschema(Dialect::Draft2020_12),
+        DRAFT_2019_09 => metaschema(Dialect::Draft2019_09),
+        DRAFT_07 => metaschema(Dialect::Draft07),
+        _ => {
+            custom = compile(registry, &dialect)?;
+            &custom
+        }
     };
     let output = meta.evaluate(&document.value);
     if output.is_valid() {
@@ -137,7 +157,7 @@ struct Compiler<'r> {
     nodes: Vec<Node>,
     memo: BTreeMap<Location, NodeId>,
     queue: Vec<(NodeId, Location)>,
-    resources: Vec<BTreeMap<String, NodeId>>,
+    resources: Vec<ResourceScope>,
     resource_index: BTreeMap<usize, usize>,
     vocabularies: BTreeMap<usize, Vocabularies>,
     documents: BTreeSet<usize>,
@@ -187,23 +207,25 @@ impl Compiler<'_> {
     }
 
     /// The compiled resource for a registry resource, compiling its dynamic
-    /// anchors the first time it is seen.
+    /// anchors, and its root when it is a `$recursiveAnchor`, the first time
+    /// it is seen.
     fn resource(&mut self, registry_resource: usize) -> usize {
         if let Some(&index) = self.resource_index.get(&registry_resource) {
             return index;
         }
         let index = self.resources.len();
-        self.resources.push(BTreeMap::new());
+        self.resources.push(ResourceScope::default());
         self.resource_index.insert(registry_resource, index);
-        let anchors: Vec<String> = self.registry.resources[registry_resource]
-            .dynamic_anchors
-            .keys()
-            .cloned()
-            .collect();
+        let entry = &self.registry.resources[registry_resource];
+        let anchors: Vec<String> = entry.dynamic_anchors.keys().cloned().collect();
+        if entry.recursive_anchor {
+            let root = self.node(self.registry.root_of(registry_resource));
+            self.resources[index].recursive_root = Some(root);
+        }
         for name in anchors {
             if let Some(location) = self.registry.dynamic_anchor(registry_resource, &name) {
                 let node = self.node(location);
-                self.resources[index].insert(name, node);
+                self.resources[index].dynamic_anchors.insert(name, node);
             }
         }
         index
@@ -341,6 +363,20 @@ impl Compiler<'_> {
         map: &Map<String, Value>,
     ) -> Result<Body, SchemaError> {
         let vocabularies = context.vocabularies;
+        let dialect = vocabularies.dialect;
+        let draft_07 = dialect == Dialect::Draft07;
+        if draft_07 && let Some(value) = map.get("$ref") {
+            // Draft-07 Core §8.3: an object holding `$ref` is the reference
+            // alone; every other keyword in it is ignored.
+            let (target, _) = self.reference(context, "$ref", value)?;
+            return Ok(Body::Keywords {
+                keywords: vec![Keyword {
+                    name: "$ref".to_owned(),
+                    kind: Kind::Ref(target),
+                }],
+                tracks: false,
+            });
+        }
         let mut references = Vec::new();
         let mut assertions = Vec::new();
         let mut in_place = Vec::new();
@@ -358,7 +394,7 @@ impl Compiler<'_> {
                     });
                     continue;
                 }
-                "$dynamicRef" => {
+                "$dynamicRef" if dialect == Dialect::Draft2020_12 => {
                     let (target, resolved) = self.reference(context, keyword, value)?;
                     let anchor = resolved.split_once('#').and_then(|(base, fragment)| {
                         let name = pointer::percent_decode(fragment)?;
@@ -374,8 +410,38 @@ impl Compiler<'_> {
                     });
                     continue;
                 }
-                "$id" | "$schema" | "$anchor" | "$dynamicAnchor" | "$vocabulary" | "$comment"
-                | "$defs" | "definitions" => continue,
+                "$recursiveRef" if dialect == Dialect::Draft2019_09 => {
+                    // 2019-09 Core §8.2.4.2: defined for `"#"` only, which
+                    // resolves to the root of the enclosing resource; when that
+                    // root is a `$recursiveAnchor`, evaluation re-targets it
+                    // through the dynamic scope.
+                    if value.as_str() != Some("#") {
+                        return Err(invalid(
+                            context.absolute,
+                            keyword,
+                            "must be \"#\", the only value draft 2019-09 defines",
+                        ));
+                    }
+                    let (target, resolved) = self.reference(context, keyword, value)?;
+                    let base = resolved
+                        .split_once('#')
+                        .map_or(resolved.as_str(), |(base, _)| base);
+                    let dynamic = self
+                        .registry
+                        .resource_by_uri(base)
+                        .is_some_and(|resource| self.registry.resources[resource].recursive_anchor);
+                    references.push(Keyword {
+                        name: name.clone(),
+                        kind: Kind::RecursiveRef { target, dynamic },
+                    });
+                    continue;
+                }
+                "$id" | "$schema" | "$vocabulary" | "$comment" | "$defs" | "definitions" => {
+                    continue;
+                }
+                "$anchor" if !draft_07 => continue,
+                "$dynamicAnchor" if dialect == Dialect::Draft2020_12 => continue,
+                "$recursiveAnchor" if dialect == Dialect::Draft2019_09 => continue,
                 _ => keyword,
             };
             let validation = vocabularies.has(Vocabulary::Validation);
@@ -454,11 +520,11 @@ impl Compiler<'_> {
                     &mut assertions,
                     Kind::Required(strings(context, keyword, value)?),
                 )),
-                "dependentRequired" if validation => Some((
+                "dependentRequired" if validation && !draft_07 => Some((
                     &mut assertions,
                     Kind::DependentRequired(dependent_required(context, keyword, value)?),
                 )),
-                "maxContains" | "minContains" if validation => {
+                "maxContains" | "minContains" if validation && !draft_07 => {
                     count(context, keyword, value)?;
                     None
                 }
@@ -477,6 +543,35 @@ impl Compiler<'_> {
                         None
                     };
                     Some((&mut assertions, Kind::Format(format.to_owned(), check)))
+                }
+                // Draft-07 Validation §8: content assertions, for the encoding
+                // and media types this crate checks completely; any other value
+                // is the annotation the keyword otherwise is.
+                "contentEncoding" if draft_07 => {
+                    let Some(name) = value.as_str() else {
+                        return Err(invalid(context.absolute, keyword, "must be a string"));
+                    };
+                    Some(Encoding::from_name(name).map_or_else(
+                        || (&mut annotations, Kind::Annotation(value.clone())),
+                        |encoding| (&mut assertions, Kind::ContentEncoding(encoding)),
+                    ))
+                }
+                "contentMediaType" if draft_07 => {
+                    let Some(name) = value.as_str() else {
+                        return Err(invalid(context.absolute, keyword, "must be a string"));
+                    };
+                    // Content in an encoding this crate cannot decode, or of a
+                    // media type it cannot parse, is an annotation.
+                    let encoding = match map.get("contentEncoding").and_then(Value::as_str) {
+                        None => Some(None),
+                        Some(encoding) => Encoding::from_name(encoding).map(Some),
+                    };
+                    match (MediaType::from_name(name), encoding) {
+                        (Some(media), Some(encoding)) => {
+                            Some((&mut assertions, Kind::ContentMediaType { media, encoding }))
+                        }
+                        _ => Some((&mut annotations, Kind::Annotation(value.clone()))),
+                    }
                 }
                 "allOf" if applicator => Some((
                     &mut in_place,
@@ -512,7 +607,7 @@ impl Compiler<'_> {
                     ))
                 }
                 "then" | "else" if applicator => None,
-                "dependentSchemas" if applicator => Some((
+                "dependentSchemas" if applicator && !draft_07 => Some((
                     &mut in_place,
                     Kind::DependentSchemas(self.schema_map(context, keyword, value)?),
                 )),
@@ -552,15 +647,26 @@ impl Compiler<'_> {
                     }
                     None
                 }
-                "prefixItems" if applicator => Some((
+                "prefixItems" if applicator && dialect == Dialect::Draft2020_12 => Some((
                     &mut children,
                     Kind::PrefixItems(self.schemas(context, keyword, value)?),
                 )),
+                // Draft-07 and 2019-09: an array of `items` is positional, as
+                // `prefixItems` is in 2020-12.
+                "items" if applicator && dialect != Dialect::Draft2020_12 && value.is_array() => {
+                    Some((
+                        &mut children,
+                        Kind::PrefixItems(self.schemas(context, keyword, value)?),
+                    ))
+                }
                 "items" if applicator => {
-                    let skip = map
-                        .get("prefixItems")
-                        .and_then(Value::as_array)
-                        .map_or(0, Vec::len);
+                    let skip = if dialect == Dialect::Draft2020_12 {
+                        map.get("prefixItems")
+                            .and_then(Value::as_array)
+                            .map_or(0, Vec::len)
+                    } else {
+                        0
+                    };
                     Some((
                         &mut children,
                         Kind::Items {
@@ -569,9 +675,23 @@ impl Compiler<'_> {
                         },
                     ))
                 }
+                // Draft-07 and 2019-09: `additionalItems` applies past an
+                // array of `items`, and is ignored otherwise.
+                "additionalItems" if applicator && dialect != Dialect::Draft2020_12 => map
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .map(|positional| {
+                        (
+                            &mut children,
+                            Kind::Items {
+                                schema: self.child(context.location, &[keyword]),
+                                skip: positional.len(),
+                            },
+                        )
+                    }),
                 "contains" if applicator => {
                     let bound = |name: &str| -> Result<Option<u64>, SchemaError> {
-                        if !validation {
+                        if !validation || draft_07 {
                             return Ok(None);
                         }
                         map.get(name)
@@ -586,6 +706,9 @@ impl Compiler<'_> {
                             schema: self.child(context.location, &[keyword]),
                             min,
                             max,
+                            // Only 2020-12 makes the matched items an
+                            // annotation `unevaluatedItems` reads.
+                            annotates: dialect == Dialect::Draft2020_12,
                         },
                     ))
                 }
@@ -630,14 +753,20 @@ impl Compiler<'_> {
                     &mut children,
                     Kind::PropertyNames(self.child(context.location, &[keyword])),
                 )),
-                "unevaluatedItems" if vocabularies.has(Vocabulary::Unevaluated) => Some((
-                    &mut unevaluated,
-                    Kind::UnevaluatedItems(self.child(context.location, &[keyword])),
-                )),
-                "unevaluatedProperties" if vocabularies.has(Vocabulary::Unevaluated) => Some((
-                    &mut unevaluated,
-                    Kind::UnevaluatedProperties(self.child(context.location, &[keyword])),
-                )),
+                "unevaluatedItems" if !draft_07 && vocabularies.has(Vocabulary::Unevaluated) => {
+                    Some((
+                        &mut unevaluated,
+                        Kind::UnevaluatedItems(self.child(context.location, &[keyword])),
+                    ))
+                }
+                "unevaluatedProperties"
+                    if !draft_07 && vocabularies.has(Vocabulary::Unevaluated) =>
+                {
+                    Some((
+                        &mut unevaluated,
+                        Kind::UnevaluatedProperties(self.child(context.location, &[keyword])),
+                    ))
+                }
                 // Meta-data and content keywords, keywords of a vocabulary the
                 // meta-schema does not declare, and unknown keywords: each is an
                 // annotation carrying its value (Core §6.5, §7.7.1).

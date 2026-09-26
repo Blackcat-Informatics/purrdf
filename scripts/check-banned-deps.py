@@ -113,7 +113,7 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "wait-timeout": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
     "quick-error": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
     "fnv": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
-    "boon": "purrdf-jsonschema (native JSON Schema draft 2020-12 validation)",
+    "boon": "purrdf-jsonschema (native JSON Schema 2020-12, 2019-09 and draft-07 validation)",
     # boon's own closure: its URL/IDNA stack (url, idna and the ICU4X Unicode
     # data it normalizes with), its URI parser and its append-only list. Nothing
     # else in the graph pulled any of them in; purrdf-jsonschema resolves every
@@ -123,7 +123,7 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "borrow-or-share": "purrdf-iri (the workspace's one RFC 3986 resolver)",
     "ref-cast": "purrdf-iri (the workspace's one RFC 3986 resolver)",
     "ref-cast-impl": "purrdf-iri (the workspace's one RFC 3986 resolver)",
-    "base64": "purrdf-jsonschema (contentEncoding is an annotation, never decoded)",
+    "base64": "purrdf-jsonschema (the draft-07 contentEncoding check decodes RFC 4648 base64 in-house)",
     "url": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",
     "form_urlencoded": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",
     "percent-encoding": "purrdf-iri (RFC 3986/3987 parsing and reference resolution)",

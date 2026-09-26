@@ -7,12 +7,9 @@
 //! evaluated. Only boon's answers were kept, never its code (see
 //! `PROVENANCE.md`).
 //!
-//! Every record must agree, with exactly three named exceptions:
-//!
-//! * two suite cases where boon's verdict contradicts the official suite, and
-//!   the suite is the authority — this crate must give the suite's answer;
-//! * one suite case that asks for a draft 2019-09 document to be evaluated,
-//!   which boon did and this crate refuses by design with a typed error.
+//! Every record must agree, with exactly two named exceptions: the suite
+//! cases where boon's verdict contradicts the official suite, and the suite is
+//! the authority — this crate must give the suite's answer.
 //!
 //! An exception that stops being needed (the record now agrees) fails too, so
 //! the list cannot outlive its reason.
@@ -39,9 +36,6 @@ const BOON_CONTRADICTS_SUITE: &[(&str, &str)] = &[
     // vocabulary; boon treated `format` as an annotation and answered valid.
     ("suite:optional/format-assertion.json/0/1", "invalid"),
 ];
-
-/// Records this crate refuses by design where boon gave a verdict.
-const DIALECT_REFUSALS: &[&str] = &["suite:optional/cross-draft.json/0/0"];
 
 fn json_files(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
@@ -139,12 +133,6 @@ fn every_boon_verdict_is_reproduced_or_named() {
                 "{source}: boon now agrees with the suite"
             );
             suite_verdict
-        } else if DIALECT_REFUSALS.contains(&source.as_str()) {
-            exceptions_seen.push(source.clone());
-            match ours {
-                Err(SchemaError::UnsupportedDialect { .. }) => continue,
-                other => panic!("{source}: expected the typed dialect refusal, got {other:?}"),
-            }
         } else {
             boon.as_str()
         };
@@ -159,7 +147,7 @@ fn every_boon_verdict_is_reproduced_or_named() {
     assert!(disagreements.is_empty(), "{}", disagreements.join("\n"));
     assert_eq!(
         exceptions_seen.len(),
-        BOON_CONTRADICTS_SUITE.len() + DIALECT_REFUSALS.len(),
+        BOON_CONTRADICTS_SUITE.len(),
         "every named exception must still be recorded: {exceptions_seen:?}"
     );
     assert_eq!(vectors.records().len(), 1599);

@@ -3,14 +3,16 @@
 
 # purrdf-jsonschema
 
-Native **JSON Schema draft 2020-12** validation for PurRDF: every vocabulary,
-dynamic references, unevaluated keywords, and the standard output formats.
+Native **JSON Schema** validation for PurRDF — **draft 2020-12**, **draft
+2019-09** and **draft-07**: every vocabulary, dynamic and recursive references,
+unevaluated keywords, and the standard output formats.
 
 It depends on `serde_json`, `regex` and `purrdf-iri` only, forbids `unsafe`,
 and builds for `wasm32-unknown-unknown` like every other release crate in the
 workspace, so a schema PurRDF emits from SHACL can be checked in the browser
-by the same code that checks it natively. The 2020-12 meta-schemas are
-vendored and registered in every `Registry`, so nothing is fetched.
+by the same code that checks it natively. The meta-schemas of all three
+dialects are vendored and registered in every `Registry`, so nothing is
+fetched.
 
 ```rust
 use purrdf_jsonschema::{OutputFormat, Registry, SchemaError};
@@ -39,27 +41,45 @@ fn main() -> Result<(), SchemaError> {
 
 ## What is implemented
 
-* **Core**: `$id`, `$schema`, `$ref`, `$defs`, `$anchor`, `$dynamicRef` and
-  `$dynamicAnchor` over the dynamic scope, `$vocabulary`, `$comment`; a
-  resource registry (`Registry::add_resource`) for schemas that reference each
-  other.
+Each schema resource is read in the dialect its `$schema` names (or the
+registry's default, 2020-12 unless `Registry::set_default_dialect` says
+otherwise), so a 2020-12 schema may `$ref` a 2019-09 or draft-07 one and the
+referenced resource keeps its own rules.
+
+* **Core**: `$id`, `$schema`, `$ref`, `$defs`, `$anchor`, `$vocabulary`,
+  `$comment`; `$dynamicRef`/`$dynamicAnchor` (2020-12) and
+  `$recursiveRef`/`$recursiveAnchor` (2019-09) over the dynamic scope; in
+  draft-07, `$ref` overriding its siblings and `$id` plain-name fragments as
+  anchors; a resource registry (`Registry::add_resource`) for schemas that
+  reference each other, in which a document may arrive before its custom
+  meta-schema.
 * **Applicator**: `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`,
-  `dependentSchemas`, `prefixItems`, `items`, `contains`, `properties`,
-  `patternProperties`, `additionalProperties`, `propertyNames`.
+  `dependentSchemas`, `contains`, `properties`, `patternProperties`,
+  `additionalProperties`, `propertyNames`; `prefixItems` and `items` in
+  2020-12, array-form `items` and `additionalItems` in 2019-09 and draft-07.
 * **Unevaluated**: `unevaluatedItems` and `unevaluatedProperties`, over the
-  annotations of every in-place applicator.
+  annotations of every in-place applicator, with each dialect's annotations
+  (in 2019-09 `contains` evaluates no items).
 * **Validation**: `type`, `const`, `enum`, the numeric bounds and
   `multipleOf`, code-point string lengths, `pattern`, the array and object
   bounds, `uniqueItems` (JSON equality, so `1` equals `1.0`), `required`,
   `dependentRequired`, `minContains`/`maxContains`.
-* **Meta-data, Content, Format-Annotation**: annotations, as the specification
-  defines them. Unknown keywords are annotations too.
-* **Format-Assertion**, when a meta-schema declares it: every 2020-12 format
-  is checked in full except `hostname`, `idn-hostname` and `idn-email`, whose
-  complete check needs the IDNA2008 tables; asserting one of those is a typed
-  refusal, never a silent pass.
+* **Meta-data, Content, Format-Annotation**: annotations, as the specifications
+  define them. Unknown keywords are annotations too.
+* **Format-Assertion**, when a meta-schema declares the 2020-12 vocabulary or
+  requires the 2019-09 Format vocabulary: every format is checked in full
+  except `hostname`, `idn-hostname` and `idn-email`, whose complete check
+  needs the IDNA2008 tables; asserting one of those is a typed refusal, never
+  a silent pass.
+* **Draft-07 content**: draft-07 lets an implementation assert its content
+  keywords, and this crate does for what it can check completely —
+  `contentEncoding: base64` must decode (RFC 4648 §4) and a JSON
+  `contentMediaType` (`application/json`, `+json`) must parse (RFC 8259).
+  Other encodings and media types, and content in 2019-09 and 2020-12, are
+  annotations.
 * **Output**: `flag`, `basic` and `detailed`.
-* The legacy `dependencies` keyword the 2020-12 meta-schema still describes.
+* The legacy `dependencies` keyword the 2019-09 and 2020-12 meta-schemas still
+  describe.
 
 Numbers are compared and divided exactly, in decimal: `0.0075` is a multiple of
 `0.0001`, and `1e308` is a multiple of `0.5`.
@@ -80,9 +100,10 @@ approximated.
 `SchemaError` is a refusal to *process* a schema, never a verdict on an
 instance:
 
-* a `$schema` naming another dialect (draft-04, -06, -07, 2019-09, …),
-  including through a `$ref` into such a document;
+* a `$schema` naming a dialect this crate does not implement (draft-04,
+  -06, …), including through a `$ref` into such a document;
 * a meta-schema that requires an unknown vocabulary;
+* a `$recursiveRef` other than `"#"`, the only value 2019-09 defines;
 * an unresolvable `$ref`, a malformed `$id` or anchor, a duplicate resource;
 * a schema that fails its own meta-schema;
 * an unrunnable `pattern`, or an asserted format that cannot be checked
@@ -90,13 +111,13 @@ instance:
 
 ## Evidence
 
-* The official JSON-Schema-Test-Suite for draft 2020-12, vendored under
-  `tests/suite/` — every required and optional test except `optional/format/`
-  (format is an annotation under the 2020-12 meta-schema) plus the
-  output-format tests — runs as one libtest case per suite test
-  (`cargo test -p purrdf-jsonschema --test suite`). One case is ledgered: it
-  asks for a draft 2019-09 document to be evaluated, and a separate case pins
-  the typed refusal it receives instead.
+* The official JSON-Schema-Test-Suite, vendored under `tests/suite/`: for
+  draft 2020-12, draft 2019-09 and draft-07, every required and optional test
+  except `optional/format/` (format is an annotation under all three
+  meta-schemas), plus the 2020-12 and 2019-09 output-format tests. Each draft
+  runs as its own target, one libtest case per suite test, with nothing
+  ignored and nothing expected to fail (`cargo test -p purrdf-jsonschema
+  --test suite --test suite_draft2019_09 --test suite_draft7`).
 * `tests/pattern_differential_vectors.txt`: JavaScript's own `RegExp`
   verdicts over the suite's pattern cases, 5,000 seeded pairs and a syntax
   list, recorded by `tests/pattern_oracle.mjs` and replayed against the
@@ -113,6 +134,6 @@ Licensed under any one of the following, at your option:
 - [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
 - [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
 
-The vendored draft 2020-12 meta-schemas under `metaschemas/` are taken under
-BSD-3-Clause, and the vendored JSON-Schema-Test-Suite under `tests/suite/` is
+The vendored draft 2020-12, 2019-09 and draft-07 meta-schemas under
+`metaschemas/` are taken under BSD-3-Clause, and the vendored JSON-Schema-Test-Suite under `tests/suite/` is
 MIT; see `PROVENANCE.md`.

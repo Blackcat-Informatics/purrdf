@@ -4,7 +4,9 @@
 //! The public surface: every refusal next to the valid neighbour it must not
 //! swallow, and the three output formats.
 
-use purrdf_jsonschema::{OutputFormat, Registry, Schema, SchemaError, ecma::PatternError};
+use purrdf_jsonschema::{
+    DRAFT_07, DRAFT_2019_09, OutputFormat, Registry, Schema, SchemaError, ecma::PatternError,
+};
 use serde_json::{Value, json};
 
 const DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -13,41 +15,71 @@ fn compile(document: Value) -> Result<Schema, SchemaError> {
     Schema::from_document("https://example.org/schema.json", document)
 }
 
+/// A tuple schema in each implemented dialect's spelling: one string, then
+/// nothing.
+fn tuple_of_one_string(dialect: &str) -> Value {
+    if dialect.starts_with(DRAFT) {
+        json!({"$schema": dialect, "prefixItems": [{"type": "string"}], "items": false})
+    } else {
+        json!({"$schema": dialect, "items": [{"type": "string"}], "additionalItems": false})
+    }
+}
+
 #[test]
-fn draft_07_is_refused_and_2020_12_is_accepted() {
+fn draft_06_is_refused_and_draft_07_2019_09_and_2020_12_are_accepted() {
     for dialect in [
-        "http://json-schema.org/draft-07/schema#",
+        "http://json-schema.org/draft-06/schema#",
         "http://json-schema.org/draft-04/schema#",
-        "https://json-schema.org/draft/2019-09/schema",
+        "https://json-schema.org/draft/next/schema",
     ] {
         match compile(json!({"$schema": dialect, "type": "string"})) {
             Err(SchemaError::UnsupportedDialect { dialect: got, .. }) => assert_eq!(got, dialect),
             other => panic!("{dialect}: expected a dialect refusal, got {other:?}"),
         }
     }
-    let accepted = compile(json!({"$schema": DRAFT, "type": "string"})).expect("2020-12 compiles");
-    assert!(accepted.is_valid(&json!("text")));
-    assert!(!accepted.is_valid(&json!(1)));
-    let with_hash = compile(json!({"$schema": format!("{DRAFT}#"), "type": "string"}))
-        .expect("the empty fragment spelling is the same dialect");
-    assert!(with_hash.is_valid(&json!("text")));
+    // Each accepted neighbour is read in its own dialect: the same tuple is
+    // spelled `items` + `additionalItems` in draft-07 and 2019-09 and
+    // `prefixItems` + `items` in 2020-12, and each one constrains position.
+    for dialect in [
+        "http://json-schema.org/draft-07/schema#",
+        DRAFT_07,
+        DRAFT_2019_09,
+        DRAFT,
+        "https://json-schema.org/draft/2020-12/schema#",
+    ] {
+        let schema = compile(tuple_of_one_string(dialect))
+            .unwrap_or_else(|error| panic!("{dialect}: {error}"));
+        assert!(schema.is_valid(&json!(["a"])), "{dialect}");
+        assert!(!schema.is_valid(&json!([1])), "{dialect}");
+        assert!(!schema.is_valid(&json!(["a", "b"])), "{dialect}");
+    }
+    // Array-form `items` is not 2020-12: `items` holds one schema there.
+    assert!(matches!(
+        compile(json!({"$schema": DRAFT, "items": [{"type": "string"}]})),
+        Err(SchemaError::InvalidKeyword { .. })
+    ));
+    // In 2019-09 `prefixItems` is an unknown keyword, constraining nothing.
+    let ignored = compile(json!({"$schema": DRAFT_2019_09, "prefixItems": [{"type": "string"}]}))
+        .expect("an unknown keyword is an annotation");
+    assert!(ignored.is_valid(&json!([1])));
     let unstated = compile(json!({"type": "string"})).expect("no $schema means 2020-12");
     assert!(!unstated.is_valid(&json!(1)));
 }
 
 #[test]
-fn a_reference_into_another_dialect_is_refused_and_a_2020_12_reference_is_followed() {
+fn a_reference_into_another_dialect_is_refused_and_one_into_an_implemented_dialect_is_evaluated_in_it()
+ {
     let mut registry = Registry::new();
     registry
         .add_resource(
             "https://example.org/old.json",
-            json!({"$schema": "http://json-schema.org/draft-07/schema#", "type": "string"}),
+            json!({"$schema": "http://json-schema.org/draft-06/schema#", "type": "string"}),
         )
         .expect("registering a foreign document is not using it");
     registry
         .add_resource(
-            "https://example.org/new.json",
-            json!({"$schema": DRAFT, "type": "string"}),
+            "https://example.org/tuple-2019.json",
+            tuple_of_one_string(DRAFT_2019_09),
         )
         .expect("register");
     registry
@@ -58,8 +90,8 @@ fn a_reference_into_another_dialect_is_refused_and_a_2020_12_reference_is_follow
         .expect("register");
     registry
         .add_resource(
-            "https://example.org/uses-new.json",
-            json!({"$ref": "new.json"}),
+            "https://example.org/uses-2019.json",
+            json!({"$schema": DRAFT, "$ref": "tuple-2019.json"}),
         )
         .expect("register");
     assert!(matches!(
@@ -67,10 +99,275 @@ fn a_reference_into_another_dialect_is_refused_and_a_2020_12_reference_is_follow
         Err(SchemaError::UnsupportedDialect { .. })
     ));
     let schema = registry
-        .compile("https://example.org/uses-new.json")
-        .expect("compiles");
-    assert!(schema.is_valid(&json!("a")));
+        .compile("https://example.org/uses-2019.json")
+        .expect("a 2020-12 schema may reference a 2019-09 one");
+    assert!(schema.is_valid(&json!(["a"])));
+    assert!(
+        !schema.is_valid(&json!(["a", "b"])),
+        "additionalItems applies"
+    );
+    assert!(!schema.is_valid(&json!([1])), "array-form items applies");
+}
+
+#[test]
+fn draft_07_ref_overrides_its_siblings_and_2019_09_ref_does_not() {
+    let draft_07 = compile(json!({
+        "$schema": DRAFT_07,
+        "definitions": {"s": {"type": "string"}},
+        "properties": {"a": {"$ref": "#/definitions/s", "maxLength": 1}}
+    }))
+    .expect("compiles");
+    assert!(
+        draft_07.is_valid(&json!({"a": "long"})),
+        "maxLength is ignored"
+    );
+    assert!(!draft_07.is_valid(&json!({"a": 1})));
+    let draft_2019 = compile(json!({
+        "$schema": DRAFT_2019_09,
+        "$defs": {"s": {"type": "string"}},
+        "properties": {"a": {"$ref": "#/$defs/s", "maxLength": 1}}
+    }))
+    .expect("compiles");
+    assert!(
+        !draft_2019.is_valid(&json!({"a": "long"})),
+        "maxLength applies"
+    );
+    assert!(draft_2019.is_valid(&json!({"a": "l"})));
+}
+
+#[test]
+fn a_draft_07_plain_name_id_is_an_anchor() {
+    let schema = compile(json!({
+        "$schema": DRAFT_07,
+        "definitions": {"s": {"$id": "#short", "maxLength": 1}},
+        "items": {"$ref": "#short"}
+    }))
+    .expect("compiles");
+    assert!(schema.is_valid(&json!(["a"])));
+    assert!(!schema.is_valid(&json!(["ab"])));
+    assert!(matches!(
+        compile(json!({"$schema": DRAFT_07, "definitions": {"s": {"$id": "#1bad"}}})),
+        Err(SchemaError::InvalidIdentifier { .. })
+    ));
+}
+
+#[test]
+fn recursive_ref_other_than_the_root_is_refused_and_the_root_follows_the_dynamic_scope() {
+    assert!(matches!(
+        compile(
+            json!({"$schema": DRAFT_2019_09, "$defs": {"a": true}, "$recursiveRef": "#/$defs/a"})
+        ),
+        Err(SchemaError::InvalidKeyword { .. })
+    ));
+    // The extensible tree: `tree.json` recurses through `$recursiveRef`, and
+    // `strict.json` extends it; evaluated from `strict.json`, the recursion
+    // lands on `strict.json`, so nested nodes are strict too.
+    let mut registry = Registry::new();
+    registry
+        .add_resource(
+            "https://example.org/tree.json",
+            json!({
+                "$schema": DRAFT_2019_09,
+                "$recursiveAnchor": true,
+                "type": "object",
+                "properties": {"children": {"type": "array", "items": {"$recursiveRef": "#"}}}
+            }),
+        )
+        .expect("tree");
+    registry
+        .add_resource(
+            "https://example.org/strict.json",
+            json!({
+                "$schema": DRAFT_2019_09,
+                "$recursiveAnchor": true,
+                "$ref": "tree.json",
+                "unevaluatedProperties": false
+            }),
+        )
+        .expect("strict");
+    let tree = registry
+        .compile("https://example.org/tree.json")
+        .expect("tree");
+    let strict = registry
+        .compile("https://example.org/strict.json")
+        .expect("strict");
+    let nested_extra = json!({"children": [{"extra": 1}]});
+    assert!(tree.is_valid(&nested_extra));
+    assert!(!strict.is_valid(&nested_extra), "the recursion is strict");
+    assert!(strict.is_valid(&json!({"children": [{"children": []}]})));
+}
+
+#[test]
+fn only_the_2020_12_contains_evaluates_items_for_unevaluated_items() {
+    let schema = |dialect: &str, extra: Value| {
+        let mut document = json!({
+            "$schema": dialect,
+            "contains": {"type": "string"},
+            "unevaluatedItems": false
+        });
+        if let (Some(document), Some(extra)) = (document.as_object_mut(), extra.as_object()) {
+            document.extend(extra.clone());
+        }
+        compile(document).unwrap_or_else(|error| panic!("{dialect}: {error}"))
+    };
+    assert!(schema(DRAFT, json!({})).is_valid(&json!(["a"])));
+    assert!(
+        !schema(DRAFT, json!({})).is_valid(&json!(["a", 1])),
+        "1 is unevaluated"
+    );
+    assert!(
+        !schema(DRAFT_2019_09, json!({})).is_valid(&json!(["a"])),
+        "`contains` evaluated nothing"
+    );
+    assert!(
+        schema(DRAFT_2019_09, json!({"items": {"type": "string"}})).is_valid(&json!(["a"])),
+        "`items` evaluated it"
+    );
+}
+
+#[test]
+fn anchor_names_follow_their_dialect() {
+    let with_anchor = |dialect: &str, anchor: &str| {
+        compile(json!({
+            "$schema": dialect,
+            "$defs": {"s": {"$anchor": anchor, "type": "string"}},
+            "$ref": format!("#{anchor}")
+        }))
+    };
+    assert!(with_anchor(DRAFT_2019_09, "a:b").is_ok());
+    assert!(matches!(
+        with_anchor(DRAFT, "a:b"),
+        Err(SchemaError::InvalidIdentifier { .. })
+    ));
+    assert!(with_anchor(DRAFT, "_a").is_ok());
+    assert!(matches!(
+        with_anchor(DRAFT_2019_09, "_a"),
+        Err(SchemaError::InvalidIdentifier { .. })
+    ));
+}
+
+#[test]
+fn the_default_dialect_is_settable_to_an_implemented_dialect_only() {
+    let mut registry = Registry::new();
+    assert!(matches!(
+        registry.set_default_dialect("http://json-schema.org/draft-06/schema#"),
+        Err(SchemaError::UnsupportedDialect { .. })
+    ));
+    registry
+        .add_resource(
+            "https://example.org/2020.json",
+            json!({"items": [{"type": "string"}]}),
+        )
+        .expect("register");
+    assert!(
+        matches!(
+            registry.compile("https://example.org/2020.json"),
+            Err(SchemaError::InvalidKeyword { .. })
+        ),
+        "the refused default left 2020-12 in place"
+    );
+    registry
+        .set_default_dialect("http://json-schema.org/draft-07/schema#")
+        .expect("draft-07 is implemented");
+    registry
+        .add_resource(
+            "https://example.org/07.json",
+            json!({"items": [{"type": "string"}], "additionalItems": false}),
+        )
+        .expect("register");
+    let schema = registry
+        .compile("https://example.org/07.json")
+        .expect("draft-07");
+    assert!(schema.is_valid(&json!(["a"])));
+    assert!(!schema.is_valid(&json!(["a", 1])));
+}
+
+#[test]
+fn a_document_registered_before_its_metaschema_waits_for_it() {
+    let mut registry = Registry::new();
+    registry
+        .add_resource(
+            "https://example.org/schema.json",
+            json!({"$schema": "https://example.org/meta.json", "$anchor": "a:b", "minimum": 2}),
+        )
+        .expect("a document may arrive before its meta-schema");
+    assert!(matches!(
+        registry.compile("https://example.org/schema.json"),
+        Err(SchemaError::UnsupportedDialect { dialect, .. })
+            if dialect == "https://example.org/meta.json"
+    ));
+    registry
+        .add_resource(
+            "https://example.org/meta.json",
+            json!({"$schema": DRAFT_2019_09, "$recursiveAnchor": true, "$ref": DRAFT_2019_09}),
+        )
+        .expect("meta");
+    let schema = registry
+        .compile("https://example.org/schema.json#a:b")
+        .expect("scanned as 2019-09 once its meta-schema arrived");
     assert!(!schema.is_valid(&json!(1)));
+    assert!(schema.is_valid(&json!(2)));
+}
+
+#[test]
+fn the_2019_09_format_vocabulary_asserts_only_when_required() {
+    let meta = |required: bool| {
+        json!({
+            "$schema": DRAFT_2019_09,
+            "$vocabulary": {
+                "https://json-schema.org/draft/2019-09/vocab/core": true,
+                "https://json-schema.org/draft/2019-09/vocab/format": required
+            },
+            "$recursiveAnchor": true
+        })
+    };
+    for required in [true, false] {
+        let mut registry = Registry::new();
+        registry
+            .add_resource("https://example.org/meta.json", meta(required))
+            .expect("meta");
+        registry
+            .add_resource(
+                "https://example.org/schema.json",
+                json!({"$schema": "https://example.org/meta.json", "format": "ipv4"}),
+            )
+            .expect("schema");
+        let schema = registry
+            .compile("https://example.org/schema.json")
+            .expect("compiles");
+        assert_eq!(
+            schema.is_valid(&json!("not-an-ipv4")),
+            !required,
+            "{required}"
+        );
+        assert!(schema.is_valid(&json!("127.0.0.1")));
+    }
+}
+
+#[test]
+fn draft_07_content_asserts_what_it_can_decode_and_annotates_the_rest() {
+    let json_in_base64 = compile(json!({
+        "$schema": DRAFT_07,
+        "contentEncoding": "base64",
+        "contentMediaType": "application/json"
+    }))
+    .expect("compiles");
+    assert!(json_in_base64.is_valid(&json!("eyJmb28iOiAiYmFyIn0K")));
+    assert!(
+        !json_in_base64.is_valid(&json!("ezp9Cg==")),
+        "decodes to an object with no key"
+    );
+    assert!(!json_in_base64.is_valid(&json!("{}")), "not base64");
+    let png = compile(json!({"$schema": DRAFT_07, "contentMediaType": "image/png"}))
+        .expect("an unparsed media type is an annotation");
+    assert!(png.is_valid(&json!("anything")));
+    let in_2019 =
+        compile(json!({"$schema": DRAFT_2019_09, "contentMediaType": "application/json"}))
+            .expect("compiles");
+    assert!(
+        in_2019.is_valid(&json!("{\"a\"}")),
+        "2019-09 content is an annotation"
+    );
 }
 
 #[test]
