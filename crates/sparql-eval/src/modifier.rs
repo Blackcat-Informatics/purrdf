@@ -195,7 +195,8 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let evaluated = crate::service_endpoints::eval_projected(inner, variables, ctx)?;
+    let Some(seq) = lift.absorb(0, evaluated) else {
         let schema = VarSchema::interned(variables);
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };

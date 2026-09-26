@@ -629,6 +629,32 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `LOAD_DENIED`, which fails the request even under `LOAD SILENT`, matching how a
   denied `SERVICE` is never silenced. An unreachable source is still swallowed.
 
+- **sparql-eval:** `SERVICE SILENT ?e` swallowed the engine's own refusal of an
+  endpoint variable no solution bound. The clause became the join identity: the
+  query answered the left rows alone, asked no endpoint, and looked complete. That
+  refusal is now an `EvalError::Unsupported` (`SERVICE ?e with no endpoint: …`)
+  under `SILENT` too, because `SILENT` tolerates an endpoint that fails, not a query
+  that names none. Its message names the shapes that evaluate and the rewrite.
+  `SERVICE SILENT ?e` with `?e` bound to a literal or blank node still yields the
+  identity for that solution, since there the endpoint is what fails.
+
+- **sparql-eval:** `SERVICE ?e` was refused wherever `?e` was bound by the left side
+  of an `OPTIONAL`, a `MINUS` or a group join rather than by a pattern earlier in
+  the same group, although `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }` is the same
+  join as the flat form that answered. Those shapes now evaluate: the right side is
+  still evaluated on its own, and the clause is sent once to each distinct IRI the
+  left side binds `?e` to, each answer's rows carrying that `?e`. SPARQL 1.1
+  Federated Query §4 describes `SERVICE` with a variable as one invocation per
+  binding, combined by union, with the endpoints to try allowed to come from
+  evaluation order. The result is exact, because a row from any other endpoint
+  matches no left row. A left row whose endpoint answers nothing keeps its bindings
+  under `OPTIONAL` and is not removed under `MINUS`. Under `SILENT` a failing
+  endpoint contributes one row binding only `?e`, so no other endpoint's rows change.
+  A clause is still refused where `?e` is unbound in some left solution, or where a
+  further `OPTIONAL` or `MINUS` right side, an `EXISTS`, a `LIMIT`/`OFFSET`, an
+  aggregate not grouped by `?e`, or a sub-`SELECT` not projecting `?e` sits between
+  the binding and the clause.
+
 - **rdf, shapes, shex:** a JSON number read through `serde_json` could become the
   neighbour of the binary64 its decimal spells. Without its `float_roundtrip` feature
   `serde_json` scales a `u64` significand by a binary64 power of ten, rounding at each

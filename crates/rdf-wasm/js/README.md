@@ -438,6 +438,43 @@ answer: a cross-origin endpoint that does not allow the page's origin surfaces a
 network error, which the handler above reports as a transport failure. Write
 `SERVICE SILENT` where an endpoint may be unreachable and its rows are optional.
 
+### Variable endpoints: `SERVICE ?e`
+
+A `SERVICE ?e { … }` asks `resolveService` once for each distinct IRI `?e` is bound to,
+and every row an endpoint answers carries that `?e`. `?e` must be bound in every solution
+that reaches the clause, by one of:
+
+- a pattern earlier in the same group — a triple pattern, `VALUES`, `BIND`, or an
+  explicit `LATERAL { SERVICE ?e { … } }`. Each solution's IRI is substituted into the
+  clause;
+- the left side of the `OPTIONAL`, `MINUS` or group join whose right side holds the
+  clause: `?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`,
+  `?g ex:endpoint ?e MINUS { SERVICE ?e { … } }`,
+  `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }`. The right side is still evaluated on its
+  own, as SPARQL evaluates it; the left side supplies only the list of endpoints to ask,
+  and a row from any other endpoint could match no left row anyway. A left row whose
+  endpoint answers nothing keeps its own bindings under `OPTIONAL` and is not removed
+  under `MINUS`.
+
+Under `SERVICE SILENT` an endpoint that fails contributes one row binding only `?e`, so
+its own left rows survive unextended and no other endpoint's rows change. Under `MINUS`
+that row removes its endpoint's left rows, exactly as `FILTER NOT EXISTS { SERVICE SILENT
+?e { … } }` would. An `?e` bound to a literal or a blank node names no endpoint: that is
+the endpoint's failure, an error unless the clause is `SILENT`.
+
+A clause for which no solution binds `?e` is refused, `SILENT` or not: `SILENT` tolerates
+an endpoint that fails, not a query that names none, and an empty answer would look
+complete when nothing was asked. That covers an `?e` bound nowhere, bound in only some of
+the left side's solutions, or bound only outside a further `OPTIONAL` or `MINUS` right
+side, an `EXISTS`, a `LIMIT`/`OFFSET`, an aggregate not grouped by `?e`, or a sub-`SELECT`
+that does not project `?e` between the binding and the clause. The error names the
+rewrite: bind `?e` before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }` or
+`?s ex:endpoint ?e LATERAL { SERVICE ?e { … } }`.
+
+SPARQL 1.1 Federated Query leaves `SERVICE` with a variable informative (§4). This is the
+reading that section describes — one invocation per binding, the results combined by
+union — with the endpoints to try taken from the evaluation order, which it allows.
+
 ### Answering `LOAD`: `resolveLoad`
 
 `resolveLoad({ kind: "load", iri }, { signal })` answers one `LOAD` with any of:

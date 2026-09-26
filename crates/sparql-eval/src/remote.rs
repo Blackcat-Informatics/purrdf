@@ -28,10 +28,16 @@
 //!
 //! # Hard-fail vs SILENT
 //!
-//! With no source configured, a variable endpoint, a transport error, or an
-//! undecodable response: a **non-silent** `SERVICE` raises [`EvalError::Remote`]
-//! (the query aborts), while `SERVICE SILENT` swallows the failure to the join
-//! identity (one empty row) so the surrounding query proceeds unchanged.
+//! With no source configured, a transport error, or an undecodable response: a
+//! **non-silent** `SERVICE` raises [`EvalError::Remote`] (the query aborts), while
+//! `SERVICE SILENT` swallows the failure to the join identity (one empty row) so the
+//! surrounding query proceeds unchanged.
+//!
+//! A variable endpoint (`SERVICE ?e`) is evaluated once per distinct IRI `?e` is bound
+//! to — see [`crate::service_endpoints`] for the shapes that bind it. One that no solution
+//! binds is not an endpoint failure but this engine's refusal, so it is an
+//! [`EvalError::Unsupported`] that `SILENT` does not swallow: `SILENT` tolerates an
+//! endpoint that fails, not a query that names none.
 //!
 //! A [`RemoteError::Denied`] is the exception, and belongs with the governors below
 //! rather than with the endpoint failures above: it is a refusal decided on *this* side
@@ -837,8 +843,10 @@ fn is_join_identity_values(pattern: &GraphPattern) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`EvalError::Remote`] for a non-silent failure (no source, variable
-/// endpoint, transport/decode error).
+/// Returns [`EvalError::Remote`] for a non-silent failure (no source, transport/decode
+/// error, a variable endpoint bound to a non-IRI), and [`EvalError::Unsupported`] — under
+/// `SILENT` too — for a variable endpoint no solution binds (see
+/// [`crate::service_endpoints`]).
 ///
 /// # Under a truncation
 ///
@@ -855,7 +863,6 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     silent: bool,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let _ = node;
     // A `LATERAL` clause inside a forwarded body is refused ONLY under `SERVICE
     // SILENT` — scoped to the hazard it actually guards against, the same
     // treatment the custom-scalar-function refusal further down gets, rather than
@@ -945,16 +952,17 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
              honest remote failure instead",
         ));
     }
-    // Resolve the endpoint IRI. A variable endpoint needs per-row (lateral)
-    // resolution, which the engine defers — so it is a hard error unless SILENT.
+    // Resolve the endpoint IRI. A variable endpoint still unresolved here was not
+    // substituted by a `LATERAL` (a pattern earlier in the same group), so it is answered
+    // over the endpoints an enclosing group join, `OPTIONAL` or `MINUS` lists for it — or
+    // refused, under `SILENT` too: `SILENT` tolerates an endpoint that fails, and a
+    // clause no solution names an endpoint for has not reached one. Swallowing that to
+    // the join identity would return an answer that looks complete when nothing was
+    // asked. See `crate::service_endpoints`.
     let endpoint = match name {
         NamedNodePattern::NamedNode(n) => n.as_str().to_owned(),
-        NamedNodePattern::Variable(_) => {
-            return silent_or_err(silent, || {
-                "SERVICE with a variable endpoint is not supported (needs lateral evaluation)"
-                    .to_owned()
-            })
-            .map(Evaluated::Complete);
+        NamedNodePattern::Variable(variable) => {
+            return crate::service_endpoints::eval_variable_endpoint(node, variable, silent, ctx);
         }
     };
 

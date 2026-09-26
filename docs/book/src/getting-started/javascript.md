@@ -212,6 +212,26 @@ read its answer: an endpoint that does not allow the page's origin surfaces as a
 network error, which the handler above reports as a transport failure. Write
 `SERVICE SILENT` where an endpoint may be unreachable and its rows are optional.
 
+A variable endpoint, `SERVICE ?e { … }`, asks `resolveService` once for each
+distinct IRI `?e` is bound to, and every row an endpoint answers carries that
+`?e`. `?e` must be bound in every solution that reaches the clause: by a pattern
+earlier in the same group (a triple pattern, `VALUES`, `BIND`, or
+`LATERAL { SERVICE ?e { … } }`), or by the left side of the `OPTIONAL`, `MINUS`
+or group join whose right side holds the clause —
+`?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`, and likewise with `MINUS` or
+`{ ?g ex:endpoint ?e } { SERVICE ?e { … } }`. There the right side is still
+evaluated on its own, and the left side supplies only the list of endpoints to
+ask. A left row whose endpoint answers nothing keeps its bindings under
+`OPTIONAL` and is not removed under `MINUS`. Under `SERVICE SILENT`, an endpoint
+that fails contributes one row binding only `?e`, so its own left rows survive
+unextended and no other endpoint's rows change. A clause for which no solution
+binds `?e` — bound nowhere, bound in only some left solutions, or bound only
+outside a further `OPTIONAL` or `MINUS` right side, an `EXISTS`, a
+`LIMIT`/`OFFSET`, an aggregate not grouped by `?e`, or a sub-`SELECT` that does
+not project it — is refused, `SILENT` or not: `SILENT` tolerates an endpoint
+that fails, not a query that names none. The error names the rewrite: bind `?e`
+before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
+
 ### Yielding, cancellation and concurrency
 
 - A job gives the event loop one turn every `yieldEveryPolls` governor polls

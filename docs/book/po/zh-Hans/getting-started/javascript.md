@@ -158,6 +158,8 @@ for (const row of rows) console.log(row.s.value, row.x.value);
 
 在浏览器中，由远程端点的 CORS 策略决定 `fetch` 能否读取其应答：不允许页面所在源的端点会表现为网络错误，上面的处理函数把它报告为传输失败。若某个端点可能不可达、且其结果行可有可无，请写 `SERVICE SILENT`。
 
+变量端点 `SERVICE ?e { … }` 会针对 `?e` 所绑定的每个不同 IRI 各调用一次 `resolveService`，某个端点应答的每一行都带有该 `?e`。到达该子句的每个解都必须绑定 `?e`：可以由同一组中位于其前的模式绑定（三元组模式、`VALUES`、`BIND`，或 `LATERAL { SERVICE ?e { … } }`），也可以由右侧包含该子句的 `OPTIONAL`、`MINUS` 或组连接（group join）的左侧绑定——例如 `?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`，换成 `MINUS` 或 `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }` 亦然。在这些情形下，右侧仍然独立求值，左侧只提供需要询问的端点列表。若某个左侧行的端点没有应答任何结果，该行在 `OPTIONAL` 下保留其原有绑定，在 `MINUS` 下也不会被移除。在 `SERVICE SILENT` 下，失败的端点只贡献一行、且只绑定 `?e`，因此该端点自己的左侧行原样保留、不被扩展，其他端点的结果行也不受影响。若没有任何解为某个子句绑定 `?e`——无处绑定、只在部分左侧解中绑定，或者只在包含该子句的另一个 `OPTIONAL` 或 `MINUS` 右侧、`EXISTS`、`LIMIT`/`OFFSET`、未按 `?e` 分组的聚合或未投影 `?e` 的子 `SELECT` 之外绑定——该子句即被拒绝，无论是否写了 `SILENT`：`SILENT` 容忍的是失败的端点，而不是一个根本没有指明任何端点的查询。错误消息会给出改写方式：在该子句之前绑定 `?e`，例如 `?s ex:endpoint ?e . SERVICE ?e { … }`。
+
 ### 让出、取消与并发
 
 - 作业每经过 `yieldEveryPolls` 次 governor 轮询就把事件循环让出一轮（默认 65 536；`0` 表示每次轮询都让出），所用的宏任务原语由 `asyncYieldPrimitive()` 报告。只有求值阶段会让出：冻结数据集与序列化结果都会一次运行到底，`evidence.async` 报告每个阶段的耗时。

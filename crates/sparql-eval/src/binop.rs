@@ -69,7 +69,10 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
-    let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+    // A variable-endpoint `SERVICE` in the right operand is answered over the endpoints
+    // the left rows bind — see `crate::service_endpoints`.
+    let evaluated = crate::service_endpoints::eval_right_operand(&l, right, ctx)?;
+    let Some(r) = lift.absorb(1, evaluated) else {
         return Ok(lift.withheld());
     };
     Ok(lift.finish(hash_join(&l, &r, ctx)))
@@ -936,7 +939,9 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
     left_join_lift(
         node,
         eval_evaluated(left, ctx)?,
-        |ctx| eval_evaluated(right, ctx),
+        // A variable-endpoint `SERVICE` in the optional side is answered over the
+        // endpoints the left rows bind — see `crate::service_endpoints`.
+        |l, ctx| crate::service_endpoints::eval_right_operand(l, right, ctx),
         expression,
         ctx,
     )
@@ -955,7 +960,7 @@ pub(crate) fn eval_left_join<D: DatasetView + Sync>(
 fn left_join_lift<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: Evaluated<D::Id>,
-    right: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
+    right: impl FnOnce(&SolutionSeq<D::Id>, &mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
     expression: Option<&Expression>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
@@ -970,7 +975,7 @@ fn left_join_lift<D: DatasetView + Sync>(
         // lower bound; a padded row would be a fabricated answer.
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
-    let Some(r) = lift.absorb(1, right(ctx)?) else {
+    let Some(r) = lift.absorb(1, right(&l, ctx)?) else {
         return Ok(lift.withheld());
     };
     // The left arm did not truncate (that returned above), so the lift is truncated here
@@ -1309,7 +1314,14 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     if lift.is_truncated() {
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
-    let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+    // A variable-endpoint `SERVICE` in the subtracted side is answered over the endpoints
+    // the left rows bind. `MINUS` still evaluates that side independently — nothing of a
+    // left row is substituted into it — and only the list of endpoints to invoke comes
+    // from the left: a row from any other endpoint binds the endpoint variable to a
+    // different IRI than every left row, so it could remove none of them. See
+    // `crate::service_endpoints`.
+    let evaluated = crate::service_endpoints::eval_right_operand(&l, right, ctx)?;
+    let Some(r) = lift.absorb(1, evaluated) else {
         return Ok(lift.withheld());
     };
     let shared = l.schema.shared_columns(&r.schema);
@@ -2054,7 +2066,7 @@ mod tests {
         let lifted = left_join_lift(
             &node,
             truncated_left,
-            |_ctx| -> Result<Evaluated<TermId>, EvalError> {
+            |_left, _ctx| -> Result<Evaluated<TermId>, EvalError> {
                 panic!("the right arm must not be evaluated once the left arm truncated")
             },
             None,
@@ -2088,7 +2100,7 @@ mod tests {
         let lifted = left_join_lift(
             &node,
             Evaluated::Complete(left_rows.clone()),
-            move |_ctx| Ok(Evaluated::Truncated(Truncation::origin(empty_right, FUEL))),
+            move |_left, _ctx| Ok(Evaluated::Truncated(Truncation::origin(empty_right, FUEL))),
             None,
             &mut ctx,
         )
@@ -2116,7 +2128,7 @@ mod tests {
         let lifted = left_join_lift(
             &node,
             Evaluated::Complete(left_rows),
-            move |_ctx| Ok(Evaluated::Truncated(Truncation::origin(right_rows, FUEL))),
+            move |_left, _ctx| Ok(Evaluated::Truncated(Truncation::origin(right_rows, FUEL))),
             None,
             &mut ctx,
         )

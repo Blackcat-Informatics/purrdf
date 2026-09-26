@@ -134,6 +134,7 @@ pub mod scratch;
 // host attaches to individual endpoints, and the two resolvers built on it.
 pub mod execution;
 pub mod service;
+mod service_endpoints;
 pub mod solution;
 // The guard every recursive evaluator entry passes through, over `purrdf-stack`'s
 // measurement (a host that switches the stack pointer onto a stack of its own installs

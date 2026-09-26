@@ -362,14 +362,17 @@ test("a variable endpoint bound by VALUES resolves per row", async () => {
   }
 });
 
-test("an unbound variable endpoint is a clear error, not an empty answer", async () => {
+test("an endpoint variable nothing binds is refused, under SILENT too", async () => {
   const engine = new QueryEngine();
-  const MESSAGE =
-    /SERVICE federation error: SERVICE with a variable endpoint is not supported \(needs lateral evaluation\)/;
+  const MESSAGE = /unsupported in sparql-eval \(S6 scope\): SERVICE \?g with no endpoint: .*LATERAL/;
   for (const shape of [
     `SELECT ?g ?x WHERE { SERVICE ?g { ?s ?p ?x } }`,
     // A LATERAL whose left side never binds the endpoint variable.
     `SELECT ?g ?x WHERE { ?a <${EX}p> ?o . LATERAL { SERVICE ?g { ?s ?p ?x } } }`,
+    // SILENT tolerates an endpoint that fails, not a query that names none: before this
+    // was refused, both of these answered the left rows alone and asked nobody.
+    `SELECT ?s ?g ?x WHERE { ?s <${EX}p> ?o . SERVICE SILENT ?g { ?a ?b ?x } }`,
+    `SELECT ?s ?g ?x WHERE { ?s <${EX}p> ?o . OPTIONAL { SERVICE SILENT ?g { ?a ?b ?x } } }`,
   ]) {
     const mock = recordingResolver(answerWithEndpointName);
     const error = await rejection(engine.queryAsync(local(), shape, { resolveService: mock.resolveService }));
@@ -377,13 +380,105 @@ test("an unbound variable endpoint is a clear error, not an empty answer", async
     assert.match(syncThrow(() => engine.query(local(), shape)).message, MESSAGE, "the sync lane says the same");
     assert.equal(mock.calls.length, 0, "an endpoint that was never bound is never asked");
   }
-  // SILENT: the identity, and the host is still not called.
-  const silent = recordingResolver(answerWithEndpointName);
-  const result = await engine.queryAsync(local(), `SELECT ?s ?g ?x WHERE { ?s <${EX}p> ?o . SERVICE SILENT ?g { ?a ?b ?x } }`, {
-    resolveService: silent.resolveService,
-  });
-  assert.deepEqual(rowsOf(result), IDENTITY);
-  assert.equal(silent.calls.length, 0);
+  // The neighbours: the same SILENT clauses with the endpoint bound on the left answer
+  // from the endpoint, not with the left rows alone.
+  for (const shape of [
+    `SELECT ?s ?g ?x WHERE { ?s <${EX}p> ?o . VALUES ?g { <${EX}e1> } SERVICE SILENT ?g { ?a ?b ?x } }`,
+    `SELECT ?s ?g ?x WHERE { ?s <${EX}p> ?o . VALUES ?g { <${EX}e1> } OPTIONAL { SERVICE SILENT ?g { ?a ?b ?x } } }`,
+  ]) {
+    const mock = recordingResolver(answerWithEndpointName);
+    const result = await engine.queryAsync(local(), shape, { resolveService: mock.resolveService });
+    assert.deepEqual(
+      rowsOf(result),
+      [`g=${EX}e1&s=${EX}a&x=answer-from-e1`, `g=${EX}e1&s=${EX}b&x=answer-from-e1`],
+      shape,
+    );
+    assert.deepEqual([...new Set(mock.calls.map((call) => call.request.endpoint))], [`${EX}e1`], shape);
+  }
+});
+
+// A left side binding `?e` to endpoints: `ex:e1` twice, `ex:e2`, `ex:e3` (which answers
+// nothing) and `ex:down` (which fails at the transport).
+const ENDPOINTS_NT = [
+  ["g1", "e1"],
+  ["g2", "e2"],
+  ["g3", "e1"],
+  ["g4", "e3"],
+  ["g5", "down"],
+]
+  .map(([g, e]) => `<${EX}${g}> <${EX}endpoint> <${EX}${e}> .`)
+  .concat([""])
+  .join("\n");
+const endpointsLocal = () => Dataset.parse(ENDPOINTS_NT, "nquads");
+const answerPerEndpoint = async (request) => {
+  const name = request.endpoint.slice(EX.length);
+  if (name === "down") return { kind: "transport", message: "endpoint unreachable" };
+  if (name === "e3") return srj(["x"], []);
+  return srj(["x"], [{ x: `answer-from-${name}` }]);
+};
+const BOUND_LEFT = `VALUES ?e { <${EX}e1> <${EX}e2> <${EX}e3> } ?g <${EX}endpoint> ?e`;
+const distinctEndpoints = (mock) => [...new Set(mock.calls.map((call) => call.request.endpoint))].sort();
+const row = (g, e, x) => [`e=${EX}${e}`, `g=${EX}${g}`].concat(x ? [`x=${x}`] : []).join("&");
+
+test("a variable endpoint bound by an OPTIONAL, group join or MINUS left side is asked once per endpoint", async () => {
+  const engine = new QueryEngine();
+  const cases = [
+    {
+      shape: `${BOUND_LEFT} OPTIONAL { SERVICE ?e { ?s ?p ?x } }`,
+      // ex:g4's endpoint answered nothing: the OPTIONAL keeps its left bindings.
+      rows: [
+        row("g1", "e1", "answer-from-e1"),
+        row("g2", "e2", "answer-from-e2"),
+        row("g3", "e1", "answer-from-e1"),
+        row("g4", "e3"),
+      ],
+    },
+    {
+      shape: `{ ${BOUND_LEFT} } { SERVICE ?e { ?s ?p ?x } }`,
+      rows: [row("g1", "e1", "answer-from-e1"), row("g2", "e2", "answer-from-e2"), row("g3", "e1", "answer-from-e1")],
+    },
+    {
+      // Every row whose endpoint has an answer is removed; ex:g4's has none.
+      shape: `${BOUND_LEFT} MINUS { SERVICE ?e { ?s ?p ?x } }`,
+      rows: [row("g4", "e3")],
+    },
+  ];
+  for (const { shape, rows } of cases) {
+    const query = `SELECT ?g ?e ?x WHERE { ${shape} }`;
+    const mock = recordingResolver(answerPerEndpoint);
+    const result = await engine.queryAsync(endpointsLocal(), query, { resolveService: mock.resolveService });
+    assert.deepEqual(rowsOf(result), [...rows].sort(), shape);
+    assert.equal(mock.calls.length, 3, `${shape}: one request per distinct endpoint`);
+    assert.deepEqual(distinctEndpoints(mock), [`${EX}e1`, `${EX}e2`, `${EX}e3`], shape);
+    for (const call of mock.calls) assert.match(call.request.queryText, /^SELECT/);
+  }
+});
+
+test("SILENT swallows one variable endpoint's failure for that endpoint only", async () => {
+  const engine = new QueryEngine();
+  const left = `?g <${EX}endpoint> ?e`;
+  const answered = [row("g1", "e1", "answer-from-e1"), row("g2", "e2", "answer-from-e2"), row("g3", "e1", "answer-from-e1")];
+  for (const [shape, rows] of [
+    [`${left} OPTIONAL { SERVICE SILENT ?e { ?s ?p ?x } }`, [...answered, row("g4", "e3"), row("g5", "down")]],
+    // The failed endpoint contributes its own left row and pads nobody else's.
+    [`{ ${left} } { SERVICE SILENT ?e { ?s ?p ?x } }`, [...answered, row("g5", "down")]],
+  ]) {
+    const mock = recordingResolver(answerPerEndpoint);
+    const result = await engine.queryAsync(endpointsLocal(), `SELECT ?g ?e ?x WHERE { ${shape} }`, {
+      resolveService: mock.resolveService,
+    });
+    assert.deepEqual(rowsOf(result).sort(), rows.sort(), shape);
+    assert.equal(mock.calls.length, 4, shape);
+    assert.ok(mock.calls.every((call) => call.ctx.silent === true), shape);
+  }
+  // Without SILENT the failure fails the query.
+  const mock = recordingResolver(answerPerEndpoint);
+  const error = await rejection(
+    engine.queryAsync(endpointsLocal(), `SELECT ?g ?e ?x WHERE { ${left} OPTIONAL { SERVICE ?e { ?s ?p ?x } } }`, {
+      resolveService: mock.resolveService,
+    }),
+  );
+  assert.match(error.message, /SERVICE <http:\/\/example\.org\/down>/);
 });
 
 test("a nested SERVICE is forwarded inside the outer request text", async () => {

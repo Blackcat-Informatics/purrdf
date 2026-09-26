@@ -1854,11 +1854,11 @@ mod tests {
         // divergence WITNESS: forcing the probe on it would need this test to actually
         // dispatch a remote call with the endpoint IRI still unbound, which
         // `crate::remote::eval_service` refuses outright before ever reaching a source
-        // (`NamedNodePattern::Variable(_) => silent_or_err(silent, ...)`, "SERVICE with
-        // a variable endpoint is not supported (needs lateral evaluation)") — an
+        // (`crate::service_endpoints::eval_variable_endpoint`: with no enclosing join
+        // listing the variable's endpoints, "SERVICE ?g with no endpoint") — an
         // UNCONDITIONAL refusal, independent of probe/definition strategy, of any
-        // `ctx.remote` configuration, and of `silent`'s value (`silent_or_err` still
-        // requires SOME outcome; without SILENT it hard-errors either way). There is no
+        // `ctx.remote` configuration, and of `silent`'s value (`SILENT` tolerates an
+        // endpoint that fails, not a query that names none). There is no
         // configuration under which forcing the probe reaches different code from the
         // natural (definition) path at all — both refuse identically, before any
         // dispatch a "wrong answer" could be observed in. So this test pins the

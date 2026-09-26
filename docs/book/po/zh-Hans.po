@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-25T22:00:15-06:00\n"
+"POT-Creation-Date: 2026-09-26T00:42:51-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1321,10 +1321,35 @@ msgstr ""
 "可达、且其结果行可有可无，请写 `SERVICE SILENT`。"
 
 #: src/getting-started/javascript.md:215
+msgid ""
+"A variable endpoint, `SERVICE ?e { … }`, asks `resolveService` once for each "
+"distinct IRI `?e` is bound to, and every row an endpoint answers carries "
+"that `?e`. `?e` must be bound in every solution that reaches the clause: by "
+"a pattern earlier in the same group (a triple pattern, `VALUES`, `BIND`, or "
+"`LATERAL { SERVICE ?e { … } }`), or by the left side of the `OPTIONAL`, "
+"`MINUS` or group join whose right side holds the clause — `?g ex:endpoint ?e "
+"OPTIONAL { SERVICE ?e { … } }`, and likewise with `MINUS` or `{ ?g "
+"ex:endpoint ?e } { SERVICE ?e { … } }`. There the right side is still "
+"evaluated on its own, and the left side supplies only the list of endpoints "
+"to ask. A left row whose endpoint answers nothing keeps its bindings under "
+"`OPTIONAL` and is not removed under `MINUS`. Under `SERVICE SILENT`, an "
+"endpoint that fails contributes one row binding only `?e`, so its own left "
+"rows survive unextended and no other endpoint's rows change. A clause for "
+"which no solution binds `?e` — bound nowhere, bound in only some left "
+"solutions, or bound only outside a further `OPTIONAL` or `MINUS` right side, "
+"an `EXISTS`, a `LIMIT`/`OFFSET`, an aggregate not grouped by `?e`, or a sub-"
+"`SELECT` that does not project it — is refused, `SILENT` or not: `SILENT` "
+"tolerates an endpoint that fails, not a query that names none. The error "
+"names the rewrite: bind `?e` before the clause, as in `?s ex:endpoint ?e . "
+"SERVICE ?e { … }`."
+msgstr ""
+"变量端点 `SERVICE ?e { … }` 会针对 `?e` 所绑定的每个不同 IRI 各调用一次 `resolveService`，某个端点应答的每一行都带有该 `?e`。到达该子句的每个解都必须绑定 `?e`：可以由同一组中位于其前的模式绑定（三元组模式、`VALUES`、`BIND`，或 `LATERAL { SERVICE ?e { … } }`），也可以由右侧包含该子句的 `OPTIONAL`、`MINUS` 或组连接（group join）的左侧绑定——例如 `?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`，换成 `MINUS` 或 `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }` 亦然。在这些情形下，右侧仍然独立求值，左侧只提供需要询问的端点列表。若某个左侧行的端点没有应答任何结果，该行在 `OPTIONAL` 下保留其原有绑定，在 `MINUS` 下也不会被移除。在 `SERVICE SILENT` 下，失败的端点只贡献一行、且只绑定 `?e`，因此该端点自己的左侧行原样保留、不被扩展，其他端点的结果行也不受影响。若没有任何解为某个子句绑定 `?e`——无处绑定、只在部分左侧解中绑定，或者只在包含该子句的另一个 `OPTIONAL` 或 `MINUS` 右侧、`EXISTS`、`LIMIT`/`OFFSET`、未按 `?e` 分组的聚合或未投影 `?e` 的子 `SELECT` 之外绑定——该子句即被拒绝，无论是否写了 `SILENT`：`SILENT` 容忍的是失败的端点，而不是一个根本没有指明任何端点的查询。错误消息会给出改写方式：在该子句之前绑定 `?e`，例如 `?s ex:endpoint ?e . SERVICE ?e { … }`。"
+
+#: src/getting-started/javascript.md:235
 msgid "Yielding, cancellation and concurrency"
 msgstr "让出、取消与并发"
 
-#: src/getting-started/javascript.md:217
+#: src/getting-started/javascript.md:237
 msgid ""
 "A job gives the event loop one turn every `yieldEveryPolls` governor polls "
 "(65 536 by default; `0` yields at every poll), through the macrotask "
@@ -1337,7 +1362,7 @@ msgstr ""
 "告。只有求值阶段会让出：冻结数据集与序列化结果都会一次运行到底，"
 "`evidence.async` 报告每个阶段的耗时。"
 
-#: src/getting-started/javascript.md:222
+#: src/getting-started/javascript.md:242
 msgid ""
 "`signal: AbortSignal` cancels a job at its next yield or host effect. On the "
 "governed twins, `deadlineMs` includes the time spent waiting for the "
@@ -1348,7 +1373,7 @@ msgstr ""
 "governor 管控的孪生方法上，`deadlineMs` 包含等待处理函数的时间；一次 "
 "governor 触发——包括截止时间与取消——是一个结果，而不是一次 Promise 拒绝。"
 
-#: src/getting-started/javascript.md:226
+#: src/getting-started/javascript.md:246
 msgid ""
 "A query reads its own snapshot; asynchronous updates on one dataset run one "
 "at a time, in call order, and an update is applied only if the dataset was "
@@ -1359,7 +1384,7 @@ msgstr ""
 "期间数据集未被修改时才会应用。`configureAsync({ maxConcurrentJobs })` 限定同"
 "时在途的作业数（默认 16）。"
 
-#: src/getting-started/javascript.md:230
+#: src/getting-started/javascript.md:250
 msgid ""
 "Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by "
 "default); `evidence.async.stackHighWaterBytes` reports how deep it went, and "
@@ -1378,11 +1403,11 @@ msgstr ""
 "的调用——都会抛出错误，只有全新的 JavaScript realm（新的页面、Worker isolate "
 "或进程）才能再次加载本包。"
 
-#: src/getting-started/javascript.md:239
+#: src/getting-started/javascript.md:259
 msgid "Cloudflare Workers"
 msgstr ""
 
-#: src/getting-started/javascript.md:241
+#: src/getting-started/javascript.md:261
 msgid ""
 "`@blackcatinformatics/purrdf/cloudflare` provides "
 "`createFetchServiceResolver`, `createFetchLoadResolver` and "
@@ -1427,7 +1452,7 @@ msgstr ""
 "在对被重定向的 IRI 重新按目录鉴权之后才会跟随每一跳，跳数上限为 "
 "`maxRedirects`（默认 5）。一个完整的 Worker："
 
-#: src/getting-started/javascript.md:265
+#: src/getting-started/javascript.md:285
 msgid ""
 "```js worker-recipe\n"
 "import wasm from \"@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm\";\n"
@@ -1472,7 +1497,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/getting-started/javascript.md:304
+#: src/getting-started/javascript.md:324
 msgid ""
 "Workers limits how many subrequests one invocation may make, and "
 "`maxRemoteRequests` is the exact control for it: every `SERVICE` request and "
@@ -1491,20 +1516,20 @@ msgid ""
 "there; the asynchronous lane observes the deadline at every yield and every "
 "effect."
 msgstr ""
-"Workers 限制单次调用可以发出的子请求数量，而 `maxRemoteRequests` 正是与之精"
-"确对应的控制项：每个 `SERVICE` 请求和每个 `LOAD` 都在到达处理函数之前计数，"
-"因此一个请求发出的子请求绝不会超过该上限。Cache API 在 `workers.dev` 主机名"
-"上不起任何作用，因此缓存在那里实际上处于关闭状态；在自定义域名上它可以正常工"
-"作。未配置缓存就启动的运行时（例如在本地运行的 workerd）会以\"No Cache was "
+"Workers 限制单次调用可以发出的子请求数量，而 `maxRemoteRequests` 正是与之精确"
+"对应的控制项：每个 `SERVICE` 请求和每个 `LOAD` 都在到达处理函数之前计数，因此"
+"一个请求发出的子请求绝不会超过该上限。Cache API 在 `workers.dev` 主机名上不起"
+"任何作用，因此缓存在那里实际上处于关闭状态；在自定义域名上它可以正常工作。未"
+"配置缓存就启动的运行时（例如在本地运行的 workerd）会以\"No Cache was "
 "configured\"拒绝 `cache.match` 与 `cache.put`，处理函数把它当作优化层的失败，"
 "绝不当作查询的答案：被拒绝的 `match` 视为未命中，被拒绝的 `put` 绝不会丢弃远"
-"端已经返回的答案。`onCacheError(error, { operation, endpoint })` 会报告每一"
-"次这类失败（默认输出一行 `console.warn`），因此失败始终可见，绝不会被悄悄吞"
-"掉，查询也照常作答。在 Workers 上，`Date.now()` 在 CPU 密集执行期间不会前进，"
-"因此同步的 `deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一"
-"次让出和每一次宿主请求时检查截止时间。"
+"端已经返回的答案。`onCacheError(error, { operation, endpoint })` 会报告每一次"
+"这类失败（默认输出一行 `console.warn`），因此失败始终可见，绝不会被悄悄吞掉，"
+"查询也照常作答。在 Workers 上，`Date.now()` 在 CPU 密集执行期间不会前进，因此"
+"同步的 `deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出"
+"和每一次宿主请求时检查截止时间。"
 
-#: src/getting-started/javascript.md:321
+#: src/getting-started/javascript.md:341
 msgid ""
 "The package [README](https://github.com/Blackcat-Informatics/purrdf/tree/"
 "main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
@@ -1514,11 +1539,11 @@ msgstr ""
 "crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
 "adapter) 是这些约定的完整参考。"
 
-#: src/getting-started/javascript.md:325
+#: src/getting-started/javascript.md:345
 msgid "Scope and current limitations"
 msgstr ""
 
-#: src/getting-started/javascript.md:327
+#: src/getting-started/javascript.md:347
 msgid ""
 "**In-memory only.** SPARQL queries run over the in-memory dataset. The "
 "synchronous methods install no `SERVICE` or `LOAD` source, so there a remote "
@@ -1530,7 +1555,7 @@ msgstr ""
 "或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 除非写作 `SILENT`，否则"
 "会显式失败；异步孪生方法只能经由宿主传入的处理函数到达远程端点。"
 
-#: src/getting-started/javascript.md:332
+#: src/getting-started/javascript.md:352
 msgid ""
 "**Triple terms per format.** `serialize` is the writer-native lane: an "
 "object-position quoted-triple term and the RDF 1.2 statement layer survive "
@@ -1542,26 +1567,26 @@ msgid ""
 "alone."
 msgstr ""
 
-#: src/getting-started/javascript.md:341
+#: src/getting-started/javascript.md:361
 msgid "Building from source"
 msgstr ""
 
-#: src/getting-started/javascript.md:343
+#: src/getting-started/javascript.md:363
 msgid ""
 "The Rust cdylib lives in [`crates/rdf-wasm`](https://github.com/Blackcat-"
 "Informatics/purrdf/tree/main/crates/rdf-wasm); the published ESM package is "
 "generated from it:"
 msgstr ""
 
-#: src/getting-started/javascript.md:348
+#: src/getting-started/javascript.md:368
 msgid "# release wasm + wasm-bindgen ESM bindings → js/pkg/\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:349
+#: src/getting-started/javascript.md:369
 msgid "# the above + TypeScript, Node, and packed-tarball gates\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:352
+#: src/getting-started/javascript.md:372
 msgid ""
 "This requires the `wasm32-unknown-unknown` Rust target and a `wasm-bindgen-"
 "cli` pinned to the crate's `wasm-bindgen` version."
@@ -3846,7 +3871,7 @@ msgid ""
 msgstr ""
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
-#: src/sparql/querying.md:1932 src/validation/shacl.md:419
+#: src/sparql/querying.md:1936 src/validation/shacl.md:419
 #: src/validation/shex.md:64 src/entailment.md:289
 msgid "Conformance"
 msgstr ""
@@ -3919,9 +3944,9 @@ msgstr ""
 msgid "Example"
 msgstr ""
 
-#: src/concepts/base-iris.md:27 src/sparql/querying.md:943
-#: src/sparql/querying.md:944 src/sparql/querying.md:945
-#: src/sparql/querying.md:946 src/sparql/querying.md:949
+#: src/concepts/base-iris.md:27 src/sparql/querying.md:947
+#: src/sparql/querying.md:948 src/sparql/querying.md:949
+#: src/sparql/querying.md:950 src/sparql/querying.md:953
 #: src/sparql/embedding-knn.md:47
 msgid "1"
 msgstr ""
@@ -3940,9 +3965,9 @@ msgid ""
 "YAML-LD `@context.@base`"
 msgstr ""
 
-#: src/concepts/base-iris.md:28 src/sparql/querying.md:941
-#: src/sparql/querying.md:942 src/sparql/querying.md:948
-#: src/sparql/querying.md:952 src/sparql/embedding-knn.md:48
+#: src/concepts/base-iris.md:28 src/sparql/querying.md:945
+#: src/sparql/querying.md:946 src/sparql/querying.md:952
+#: src/sparql/querying.md:956 src/sparql/embedding-knn.md:48
 msgid "2"
 msgstr ""
 
@@ -5110,7 +5135,7 @@ msgstr ""
 msgid "Operands"
 msgstr ""
 
-#: src/sparql/querying.md:145 src/sparql/querying.md:936
+#: src/sparql/querying.md:145 src/sparql/querying.md:940
 msgid "Result"
 msgstr ""
 
@@ -5645,19 +5670,24 @@ msgid ""
 "failure from one that does not implement it — surfaces the same way any "
 "other unsupported forwarded construct's rejection would. A variable-endpoint "
 "`SERVICE ?g` is refused only when nothing supplies `?g`'s binding — nothing "
-"in the incoming solution names an IRI for the remote evaluator to resolve. "
-"When an enclosing pattern binds `?g` — a preceding triple pattern in the "
-"same group, or a `LATERAL` left-hand side's per-row correlation — the "
-"endpoint resolves to that IRI before the remote call is made (the same per-"
-"row substitution described under \"Points of disagreement with Jena\" above) "
-"and the query dispatches normally, the same as a `SERVICE` with a fixed IRI."
+"in the incoming solution names an IRI for the remote evaluator to resolve — "
+"and `SERVICE SILENT` does not change that, because `SILENT` tolerates an "
+"endpoint that fails, not a query that names none. When an enclosing pattern "
+"binds `?g` — a preceding triple pattern in the same group, or a `LATERAL` "
+"left-hand side's per-row correlation — the endpoint resolves to that IRI "
+"before the remote call is made (the same per-row substitution described "
+"under \"Points of disagreement with Jena\" above) and the query dispatches "
+"normally, the same as a `SERVICE` with a fixed IRI. When the left side of "
+"the `OPTIONAL`, `MINUS` or group join holding the clause binds `?g` in every "
+"solution, the right side is still evaluated on its own and the clause is "
+"sent once to each distinct IRI that left side binds `?g` to."
 msgstr ""
 
-#: src/sparql/querying.md:494
+#: src/sparql/querying.md:498
 msgid "Per-service context: the `ServiceResolver` seam"
 msgstr ""
 
-#: src/sparql/querying.md:496
+#: src/sparql/querying.md:500
 msgid ""
 "`SERVICE` is answered through one trait, `ServiceResolver`, which receives "
 "the whole request as a `ServiceRequest` — endpoint, forwarded query text, "
@@ -5668,7 +5698,7 @@ msgid ""
 "already in memory."
 msgstr ""
 
-#: src/sparql/querying.md:503
+#: src/sparql/querying.md:507
 msgid ""
 "Everything a resolver needs to know about an _individual_ service — extra "
 "headers, a credential, a timeout, and what it is permitted to do — lives on "
@@ -5679,45 +5709,45 @@ msgid ""
 "travels along with a nested `SERVICE` body."
 msgstr ""
 
-#: src/sparql/querying.md:511
+#: src/sparql/querying.md:515
 msgid ""
 "A `ServiceCatalog` maps each service IRI to a `ServiceProfile`, and each "
 "profile grants an explicit set of capabilities:"
 msgstr ""
 
-#: src/sparql/querying.md:514
+#: src/sparql/querying.md:518
 msgid "Capability"
 msgstr ""
 
-#: src/sparql/querying.md:514
+#: src/sparql/querying.md:518
 msgid "Grants"
 msgstr ""
 
-#: src/sparql/querying.md:516
+#: src/sparql/querying.md:520
 msgid "`Query`"
 msgstr ""
 
-#: src/sparql/querying.md:516
+#: src/sparql/querying.md:520
 msgid "resolving this service at all"
 msgstr ""
 
-#: src/sparql/querying.md:517
+#: src/sparql/querying.md:521
 msgid "`Network`"
 msgstr ""
 
-#: src/sparql/querying.md:517
+#: src/sparql/querying.md:521
 msgid "performing network I/O to resolve it"
 msgstr ""
 
-#: src/sparql/querying.md:518
+#: src/sparql/querying.md:522
 msgid "`Credentials`"
 msgstr ""
 
-#: src/sparql/querying.md:518
+#: src/sparql/querying.md:522
 msgid "attaching the profile's credential to the request"
 msgstr ""
 
-#: src/sparql/querying.md:520
+#: src/sparql/querying.md:524
 msgid ""
 "A catalog denies by default: a service with no entry and no explicitly "
 "configured fallback profile is refused. Gating is opt-in — a resolver with "
@@ -5726,7 +5756,7 @@ msgid ""
 "catalog changes no byte of a request whose profile adds nothing."
 msgstr ""
 
-#: src/sparql/querying.md:526
+#: src/sparql/querying.md:530
 msgid ""
 "Withholding `Network` is what makes an in-process façade _provable_ rather "
 "than promised: `InProcessServiceResolver` owns a dataset map and nothing "
@@ -5740,14 +5770,14 @@ msgid ""
 "catalog refuses at the top level."
 msgstr ""
 
-#: src/sparql/querying.md:536
+#: src/sparql/querying.md:540
 msgid ""
 "The policy is applied _before_ the transport is called, which is the whole "
 "difference between a gate and an audit log: a denied service never has its "
 "socket opened and then discarded."
 msgstr ""
 
-#: src/sparql/querying.md:540
+#: src/sparql/querying.md:544
 msgid ""
 "A service IRI is an IRI like any other, so it is resolved by the workspace's "
 "single RFC 3986 base layer (see [Base IRIs](../concepts/base-iris.md)) and "
@@ -5760,11 +5790,11 @@ msgid ""
 "which is the form a `ServiceCatalog` is keyed on."
 msgstr ""
 
-#: src/sparql/querying.md:549
+#: src/sparql/querying.md:553
 msgid "The `SILENT` contract"
 msgstr ""
 
-#: src/sparql/querying.md:551
+#: src/sparql/querying.md:555
 msgid ""
 "SPARQL 1.1 §10 says a `SERVICE SILENT` clause whose endpoint cannot be "
 "reached \"will be considered to have matched with a single, empty, "
@@ -5773,43 +5803,43 @@ msgid ""
 "_about_:"
 msgstr ""
 
-#: src/sparql/querying.md:556
+#: src/sparql/querying.md:560
 msgid "Outcome"
 msgstr ""
 
-#: src/sparql/querying.md:556
+#: src/sparql/querying.md:560
 msgid "`SERVICE`"
 msgstr ""
 
-#: src/sparql/querying.md:556
+#: src/sparql/querying.md:560
 msgid "`SERVICE SILENT`"
 msgstr ""
 
-#: src/sparql/querying.md:558
+#: src/sparql/querying.md:562
 msgid "The endpoint is unreachable, or its response undecodable"
 msgstr ""
 
-#: src/sparql/querying.md:558 src/sparql/querying.md:559
+#: src/sparql/querying.md:562 src/sparql/querying.md:563
 msgid "query error"
 msgstr ""
 
-#: src/sparql/querying.md:558
+#: src/sparql/querying.md:562
 msgid "join identity"
 msgstr ""
 
-#: src/sparql/querying.md:559
+#: src/sparql/querying.md:563
 msgid "A capability was denied"
 msgstr ""
 
-#: src/sparql/querying.md:560
+#: src/sparql/querying.md:564
 msgid "This engine's own governor tripped"
 msgstr ""
 
-#: src/sparql/querying.md:560
+#: src/sparql/querying.md:564
 msgid "truncation"
 msgstr ""
 
-#: src/sparql/querying.md:562
+#: src/sparql/querying.md:566
 msgid ""
 "The first and last rows are long-standing behaviour: `SILENT` is a statement "
 "about an endpoint the caller does not control, never about the caller's own "
@@ -5817,7 +5847,7 @@ msgid ""
 "a truncation whether or not `SILENT` is written."
 msgstr ""
 
-#: src/sparql/querying.md:567
+#: src/sparql/querying.md:571
 msgid ""
 "The middle row follows from that same principle. A capability denial is a "
 "decision taken on _this_ side of the seam — by the host running the engine, "
@@ -5829,7 +5859,7 @@ msgid ""
 "every run, so nothing would ever surface a symptom."
 msgstr ""
 
-#: src/sparql/querying.md:576
+#: src/sparql/querying.md:580
 msgid ""
 "That row holds at every nesting depth. `InProcessServiceResolver` evaluates "
 "a forwarded body itself, so a denial raised by a `SERVICE` nested inside one "
@@ -5840,7 +5870,7 @@ msgid ""
 "row exists to prevent."
 msgstr ""
 
-#: src/sparql/querying.md:583
+#: src/sparql/querying.md:587
 msgid ""
 "There is deliberately no knob that softens this. A host that genuinely wants "
 "a blocked service to behave like an unreachable one already has an exact way "
@@ -5852,11 +5882,11 @@ msgid ""
 "resolver and getting different answers."
 msgstr ""
 
-#: src/sparql/querying.md:592
+#: src/sparql/querying.md:596
 msgid "EXISTS under SEP-0007"
 msgstr ""
 
-#: src/sparql/querying.md:594
+#: src/sparql/querying.md:598
 msgid ""
 "SPARQL 1.1/1.2 §18.6 defines `EXISTS`/`NOT EXISTS` through two functions: "
 "`substitute`, which rewrites a pattern's variables against the row being "
@@ -5865,7 +5895,7 @@ msgid ""
 "defects at several precise points:"
 msgstr ""
 
-#: src/sparql/querying.md:600
+#: src/sparql/querying.md:604
 msgid ""
 "**Variable-only positions.** `substitute` is stated over variable POSITIONS "
 "in a pattern, with no defined action on a `Bgp`/`Path` leaf term or a "
@@ -5874,7 +5904,7 @@ msgid ""
 "substitution to apply."
 msgstr ""
 
-#: src/sparql/querying.md:605
+#: src/sparql/querying.md:609
 msgid ""
 "**The `MINUS` domain flip.** Rewriting a `MINUS`'s shared variables away as "
 "constants erases the very columns its domain-join compares the two operands "
@@ -5882,7 +5912,7 @@ msgid ""
 "opposite of what substituting the row in was supposed to preserve."
 msgstr ""
 
-#: src/sparql/querying.md:609
+#: src/sparql/querying.md:613
 msgid ""
 "**Blank nodes as variables.** No SPARQL surface syntax can spell a blank "
 "node or a quoted triple as a rewritten constant, so a correlated blank-node "
@@ -5890,7 +5920,7 @@ msgid ""
 "rewriting."
 msgstr ""
 
-#: src/sparql/querying.md:613
+#: src/sparql/querying.md:617
 msgid ""
 "**Disconnected variables.** A correlated variable reachable ONLY through an "
 "expression position inside a nested `EXISTS` — never through that inner's "
@@ -5898,13 +5928,13 @@ msgid ""
 "reading to carry it there."
 msgstr ""
 
-#: src/sparql/querying.md:617
+#: src/sparql/querying.md:621
 msgid ""
 "**The assignment restriction.** §18.6's own text states no rule at all about "
 "an `EXISTS` body rebinding a variable already in scope on the row it filters."
 msgstr ""
 
-#: src/sparql/querying.md:621
+#: src/sparql/querying.md:625
 msgid ""
 "SEP-0007 — a SPARQL-dev proposal, not yet folded into the SPARQL 1.1/1.2 REC "
 "text — repairs the first four by restating `substitute` as `Replace`, a JOIN "
@@ -5912,11 +5942,11 @@ msgid ""
 "`purrdf` implements SEP-0007's repairs in full, including Part 3."
 msgstr ""
 
-#: src/sparql/querying.md:626
+#: src/sparql/querying.md:630
 msgid "The one definition"
 msgstr ""
 
-#: src/sparql/querying.md:632
+#: src/sparql/querying.md:636
 msgid ""
 "`Replace` is **Values Insertion**: the current row `μ` joins into `X` as a "
 "one-row `VALUES` table at each `Bgp`/`Path`/`Graph(Var, ·)` site, rather "
@@ -5932,7 +5962,7 @@ msgid ""
 "variable."
 msgstr ""
 
-#: src/sparql/querying.md:644
+#: src/sparql/querying.md:648
 msgid ""
 "SEP-0007 states `Replace` in terms of `toMultiSet(μ)` — converting the row "
 "to the multiset unit the join needs. `purrdf`'s algebra has no pattern/query "
@@ -5942,7 +5972,7 @@ msgid ""
 "adjudicate."
 msgstr ""
 
-#: src/sparql/querying.md:651
+#: src/sparql/querying.md:655
 msgid ""
 "**The `HAVING` position** is outside SEP-0007's stated coverage — SEP-0007 "
 "only specifies `Replace` for `Bgp`/`Path`/`Graph` Values-Insertion sites and "
@@ -5952,11 +5982,11 @@ msgid ""
 "expression inside it — no special correlation channel is invented for it."
 msgstr ""
 
-#: src/sparql/querying.md:658
+#: src/sparql/querying.md:662
 msgid "Existential Normal Form"
 msgstr ""
 
-#: src/sparql/querying.md:660
+#: src/sparql/querying.md:664
 msgid ""
 "Exactly one bit per row is observed under `EXISTS`: whether the inner "
 "pattern's evaluation is empty. Four rewrite laws replace a node with "
@@ -5965,7 +5995,7 @@ msgid ""
 "`Graph`/`Minus` operand, which read more than emptiness from their child):"
 msgstr ""
 
-#: src/sparql/querying.md:666
+#: src/sparql/querying.md:670
 msgid ""
 "**`LeftJoin(A, B, c) → A`.** `OPTIONAL` emits at least one row per left row "
 "unconditionally — a padded left row, or one row per compatible match — and "
@@ -5973,34 +6003,34 @@ msgid ""
 "`B` or its join condition."
 msgstr ""
 
-#: src/sparql/querying.md:670
+#: src/sparql/querying.md:674
 msgid ""
 "**`OrderBy(P) → P`.** Sorting is a permutation, never a filter: the sort "
 "keys are never even evaluated once emptiness is the only question asked."
 msgstr ""
 
-#: src/sparql/querying.md:672
+#: src/sparql/querying.md:676
 msgid ""
 "**`Distinct(P) → P`, `Reduced(P) → P`.** De-duplication only ever removes "
 "rows, and only when an earlier row already carried the same value, so `P` "
 "non-empty always leaves the first row's value present."
 msgstr ""
 
-#: src/sparql/querying.md:675
+#: src/sparql/querying.md:679
 msgid ""
 "**`Slice(0, len ≥ 1)(P) → P`.** An offset-zero `LIMIT` with room for at "
 "least one row drops rows only from the end of `P`'s bag, so `P` non-empty "
 "always leaves row zero inside the window."
 msgstr ""
 
-#: src/sparql/querying.md:678
+#: src/sparql/querying.md:682
 msgid ""
 "**`Slice(_, Some(0))(P) → false`.** A zero-length `LIMIT` is empty for every "
 "`P` and every row — the whole `EXISTS` folds to constant `false` (`NOT "
 "EXISTS` to `true`) without touching the dataset at all."
 msgstr ""
 
-#: src/sparql/querying.md:682
+#: src/sparql/querying.md:686
 msgid ""
 "Every law above is proved emptiness-equivalent over row SETS, never over "
 "side effects, so each fires only when the portion it erases (`B` and the "
@@ -6012,16 +6042,16 @@ msgid ""
 "written inside one."
 msgstr ""
 
-#: src/sparql/querying.md:690
+#: src/sparql/querying.md:694
 msgid "Two strategies, one answer"
 msgstr ""
 
-#: src/sparql/querying.md:692
+#: src/sparql/querying.md:696
 msgid ""
 "`purrdf` carries exactly two implementations of the one definition above:"
 msgstr ""
 
-#: src/sparql/querying.md:694
+#: src/sparql/querying.md:698
 msgid ""
 "**The definition itself** — per-row substitution via `Replace`, wrapped in a "
 "`Slice{0, Some(1)}` first-witness stop (sound because \"does this bag have a "
@@ -6032,7 +6062,7 @@ msgid ""
 "any inner pattern."
 msgstr ""
 
-#: src/sparql/querying.md:701
+#: src/sparql/querying.md:705
 msgid ""
 "**The memoized probe** — evaluate the inner exactly once, unconstrained, "
 "index it on the columns it shares with the outer schema, and existence-probe "
@@ -6041,7 +6071,7 @@ msgid ""
 "site can see."
 msgstr ""
 
-#: src/sparql/querying.md:707
+#: src/sparql/querying.md:711
 msgid ""
 "A prepare-time analysis decides, once per site per evaluation, which "
 "strategy answers each `EXISTS`/`NOT EXISTS`. `--explain`'s per-algebra-node "
@@ -6063,7 +6093,7 @@ msgid ""
 "that went missing."
 msgstr ""
 
-#: src/sparql/querying.md:726
+#: src/sparql/querying.md:730
 msgid ""
 "**The one named exception**: an `EXISTS`/`NOT EXISTS` inner whose OWN ENF-"
 "normalized top-level shape is a `Project` (a sub-`SELECT`) or a `Union` (a "
@@ -6081,7 +6111,7 @@ msgid ""
 "existed at all, now confined to this one shape instead of the whole feature."
 msgstr ""
 
-#: src/sparql/querying.md:741
+#: src/sparql/querying.md:745
 msgid ""
 "**The performance characteristic, stated plainly**: an uncorrelated inner, "
 "or a correlated one built only from `Bgp`/`Path`/`Values`/`Graph`/`Join`/ "
@@ -6097,11 +6127,11 @@ msgid ""
 "stop above bounding the cost."
 msgstr ""
 
-#: src/sparql/querying.md:754
+#: src/sparql/querying.md:758
 msgid "The Part 3 assignment restriction"
 msgstr ""
 
-#: src/sparql/querying.md:756
+#: src/sparql/querying.md:760
 msgid ""
 "Neither a `BIND`/a sub-`SELECT`'s `(expr AS ?v)` projection target/a `GROUP "
 "BY (expr AS ?v)` grouping target, nor a `VALUES` column, inside an `EXISTS`/"
@@ -6116,7 +6146,7 @@ msgid ""
 "rebind the row)."
 msgstr ""
 
-#: src/sparql/querying.md:768
+#: src/sparql/querying.md:772
 msgid ""
 "```sparql\n"
 "PREFIX : <https://example.org/>\n"
@@ -6130,18 +6160,18 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:788
+#: src/sparql/querying.md:792
 msgid ""
 "The restriction is SEP-0007's own addition, adopted here because it is what "
 "makes `EXISTS`'s substitution semantics defensible at every site — SPARQL "
 "1.1/1.2's own §18.6 text requires no such rule."
 msgstr ""
 
-#: src/sparql/querying.md:792
+#: src/sparql/querying.md:796
 msgid "SHA-3 hashing (SEP-0008)"
 msgstr ""
 
-#: src/sparql/querying.md:794
+#: src/sparql/querying.md:798
 msgid ""
 "SPARQL 1.1 §17.4.4 ships five hash built-ins — `MD5`, `SHA1`, `SHA256`, "
 "`SHA384`, `SHA512`. `purrdf` adds the four SHA-3 (FIPS 202 Keccak) functions "
@@ -6152,67 +6182,67 @@ msgid ""
 "to-another-engine):"
 msgstr ""
 
-#: src/sparql/querying.md:801 src/sparql/querying.md:936
+#: src/sparql/querying.md:805 src/sparql/querying.md:940
 msgid "Call"
 msgstr ""
 
-#: src/sparql/querying.md:801
+#: src/sparql/querying.md:805
 msgid "Digest"
 msgstr ""
 
-#: src/sparql/querying.md:801
+#: src/sparql/querying.md:805
 msgid "Hex characters"
 msgstr ""
 
-#: src/sparql/querying.md:803
+#: src/sparql/querying.md:807
 msgid "`SHA3-224(string)`"
 msgstr ""
 
-#: src/sparql/querying.md:803
+#: src/sparql/querying.md:807
 msgid "SHA3-224"
 msgstr ""
 
-#: src/sparql/querying.md:803
+#: src/sparql/querying.md:807
 msgid "56"
 msgstr ""
 
-#: src/sparql/querying.md:804
+#: src/sparql/querying.md:808
 msgid "`SHA3-256(string)`"
 msgstr ""
 
-#: src/sparql/querying.md:804
+#: src/sparql/querying.md:808
 msgid "SHA3-256"
 msgstr ""
 
-#: src/sparql/querying.md:804 src/sparql/querying.md:1107
+#: src/sparql/querying.md:808 src/sparql/querying.md:1111
 msgid "64"
 msgstr ""
 
-#: src/sparql/querying.md:805
+#: src/sparql/querying.md:809
 msgid "`SHA3-384(string)`"
 msgstr ""
 
-#: src/sparql/querying.md:805
+#: src/sparql/querying.md:809
 msgid "SHA3-384"
 msgstr ""
 
-#: src/sparql/querying.md:805
+#: src/sparql/querying.md:809
 msgid "96"
 msgstr ""
 
-#: src/sparql/querying.md:806
+#: src/sparql/querying.md:810
 msgid "`SHA3-512(string)`"
 msgstr ""
 
-#: src/sparql/querying.md:806
+#: src/sparql/querying.md:810
 msgid "SHA3-512"
 msgstr ""
 
-#: src/sparql/querying.md:806
+#: src/sparql/querying.md:810
 msgid "128"
 msgstr ""
 
-#: src/sparql/querying.md:808
+#: src/sparql/querying.md:812
 msgid ""
 "```sparql\n"
 "SELECT ?s (SHA3-256(?label) AS ?fingerprint)\n"
@@ -6220,11 +6250,11 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:813
+#: src/sparql/querying.md:817
 msgid "The argument contract"
 msgstr ""
 
-#: src/sparql/querying.md:815
+#: src/sparql/querying.md:819
 msgid ""
 "Each function takes **one** argument and hashes the UTF-8 bytes of its "
 "**lexical form**, returning the digest as a lowercase hex `xsd:string` — the "
@@ -6232,7 +6262,7 @@ msgid ""
 "changing anything else about the row."
 msgstr ""
 
-#: src/sparql/querying.md:820
+#: src/sparql/querying.md:824
 msgid ""
 "The accepted arguments are a simple literal, an explicitly `xsd:string`\\-"
 "typed literal, an `rdf:langString`, and an RDF 1.2 `rdf:dirLangString`. A "
@@ -6241,25 +6271,25 @@ msgid ""
 "lexical form."
 msgstr ""
 
-#: src/sparql/querying.md:826
+#: src/sparql/querying.md:830
 msgid ""
 "Anything else is an expression error, which is SPARQL's ordinary \"this row "
 "produces no value\" outcome rather than a query failure:"
 msgstr ""
 
-#: src/sparql/querying.md:829
+#: src/sparql/querying.md:833
 msgid "an **unbound** variable (`SHA3-256(?missing)`),"
 msgstr ""
 
-#: src/sparql/querying.md:830
+#: src/sparql/querying.md:834
 msgid "an IRI or a blank node,"
 msgstr ""
 
-#: src/sparql/querying.md:831
+#: src/sparql/querying.md:835
 msgid "a non-string literal (`SHA3-256(7)`)."
 msgstr ""
 
-#: src/sparql/querying.md:833
+#: src/sparql/querying.md:837
 msgid ""
 "In a `SELECT` projection an errored call leaves the projected variable "
 "**unbound** on that row; under `FILTER` it makes the constraint false; a "
@@ -6269,49 +6299,49 @@ msgid ""
 "not do it implicitly."
 msgstr ""
 
-#: src/sparql/querying.md:840
+#: src/sparql/querying.md:844
 msgid "The hyphen is part of the name"
 msgstr ""
 
-#: src/sparql/querying.md:842
+#: src/sparql/querying.md:846
 msgid ""
 "These are the only built-in names in the language containing a `-`, so the "
 "spacing rule is worth stating outright:"
 msgstr ""
 
-#: src/sparql/querying.md:845
+#: src/sparql/querying.md:849
 msgid "Text"
 msgstr ""
 
-#: src/sparql/querying.md:845
+#: src/sparql/querying.md:849
 msgid "Reading"
 msgstr ""
 
-#: src/sparql/querying.md:847
+#: src/sparql/querying.md:851
 msgid "`SHA3-256(?o)`"
 msgstr ""
 
-#: src/sparql/querying.md:847
+#: src/sparql/querying.md:851
 msgid "the built-in call — one token, hyphen included"
 msgstr ""
 
-#: src/sparql/querying.md:848
+#: src/sparql/querying.md:852
 msgid "`SHA3 - 256`"
 msgstr ""
 
-#: src/sparql/querying.md:848
+#: src/sparql/querying.md:852
 msgid "**a parse error**: `SHA3` alone is no function or keyword"
 msgstr ""
 
-#: src/sparql/querying.md:849
+#: src/sparql/querying.md:853
 msgid "`STRLEN(SHA3-256(?o)) - 4`"
 msgstr ""
 
-#: src/sparql/querying.md:849
+#: src/sparql/querying.md:853
 msgid "subtraction — the `-` follows `)`, not a word character"
 msgstr ""
 
-#: src/sparql/querying.md:851
+#: src/sparql/querying.md:855
 msgid ""
 "The lexer's `PN_PREFIX` scan admits `-` as a name character, so `SHA3-256` "
 "arrives at the parser as a single word. Whitespace around the hyphen makes "
@@ -6321,7 +6351,7 @@ msgid ""
 "call)."
 msgstr ""
 
-#: src/sparql/querying.md:857
+#: src/sparql/querying.md:861
 msgid ""
 "SEP-0008's own text spells the four functions with an **underscore** "
 "(`sha3_256`), so `SHA3_256(?o)` is accepted as an alias for `SHA3-256(?o)`: "
@@ -6331,11 +6361,11 @@ msgid ""
 "whichever spelling was typed."
 msgstr ""
 
-#: src/sparql/querying.md:864
+#: src/sparql/querying.md:868
 msgid "Taking a SHA-3 query to another engine"
 msgstr ""
 
-#: src/sparql/querying.md:866
+#: src/sparql/querying.md:870
 msgid ""
 "Expect a **parse error**. `SHA3-256` is a built-in name here, but the SPARQL "
 "1.1/1.2 grammar offers exactly two ways to name a function — a keyword from "
@@ -6347,7 +6377,7 @@ msgid ""
 "loud and immediate rather than a quietly unbound column."
 msgstr ""
 
-#: src/sparql/querying.md:875
+#: src/sparql/querying.md:879
 msgid ""
 "The portable substitute is one of the SPARQL 1.1 §17.4.4 hashes. `SHA256` "
 "takes the same single argument and returns the same lowercase-hex "
@@ -6357,11 +6387,11 @@ msgid ""
 "`SHA256` when the query text has to run anywhere."
 msgstr ""
 
-#: src/sparql/querying.md:882
+#: src/sparql/querying.md:886
 msgid "Reaching it from other hosts"
 msgstr ""
 
-#: src/sparql/querying.md:884
+#: src/sparql/querying.md:888
 msgid ""
 "There is nothing to configure: unlike the extension-function and custom-"
 "aggregate seams, these are built-ins, so every surface that takes query text "
@@ -6370,11 +6400,11 @@ msgid ""
 "`purrdf_query_json` over the C ABI."
 msgstr ""
 
-#: src/sparql/querying.md:890
+#: src/sparql/querying.md:894
 msgid "Composite datatypes (SEP-0009)"
 msgstr ""
 
-#: src/sparql/querying.md:892
+#: src/sparql/querying.md:896
 msgid ""
 "SPARQL 1.1 and 1.2 have no term that holds several other terms. `purrdf` "
 "implements [SEP-0009](https://github.com/w3c/sparql-dev/blob/main/SEP/"
@@ -6387,27 +6417,27 @@ msgid ""
 "engine)."
 msgstr ""
 
-#: src/sparql/querying.md:902
+#: src/sparql/querying.md:906
 msgid ""
 "The namespace is the SEP's own, recognized and never invented — every "
 "example below is written under this prologue:"
 msgstr ""
 
-#: src/sparql/querying.md:905
+#: src/sparql/querying.md:909
 msgid ""
 "```text\n"
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:909
+#: src/sparql/querying.md:913
 msgid ""
 "A composite is an ordinary RDF literal whose datatype is `cdt:List` or "
 "`cdt:Map` and whose lexical form spells the contents out. These are terms, "
 "not queries:"
 msgstr ""
 
-#: src/sparql/querying.md:913
+#: src/sparql/querying.md:917
 msgid ""
 "```text\n"
 "\"[1,2,3]\"^^cdt:List\n"
@@ -6418,7 +6448,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:921
+#: src/sparql/querying.md:925
 msgid ""
 "List elements may be IRIs, blank nodes, literals, `null`, or nested "
 "composites. Map **keys** may be IRIs or literals — never blank nodes, never "
@@ -6430,11 +6460,11 @@ msgid ""
 "happens to declare."
 msgstr ""
 
-#: src/sparql/querying.md:929
+#: src/sparql/querying.md:933
 msgid "The function library"
 msgstr ""
 
-#: src/sparql/querying.md:931
+#: src/sparql/querying.md:935
 msgid ""
 "The set is **closed**. There is no registry to configure and no way for a "
 "caller to shadow one of these names, so the same query means the same thing "
@@ -6442,160 +6472,160 @@ msgid ""
 "name. Arity is enforced at **parse** time, before any evaluation."
 msgstr ""
 
-#: src/sparql/querying.md:936
+#: src/sparql/querying.md:940
 msgid "Arity"
 msgstr ""
 
-#: src/sparql/querying.md:938
+#: src/sparql/querying.md:942
 msgid "`cdt:List(…)`"
 msgstr ""
 
-#: src/sparql/querying.md:938 src/sparql/querying.md:940
+#: src/sparql/querying.md:942 src/sparql/querying.md:944
 msgid "any"
 msgstr ""
 
-#: src/sparql/querying.md:938
+#: src/sparql/querying.md:942
 msgid "a `cdt:List` of the argument terms"
 msgstr ""
 
-#: src/sparql/querying.md:939
+#: src/sparql/querying.md:943
 msgid "`cdt:Map(…)`"
 msgstr ""
 
-#: src/sparql/querying.md:939
+#: src/sparql/querying.md:943
 msgid "even"
 msgstr ""
 
-#: src/sparql/querying.md:939
+#: src/sparql/querying.md:943
 msgid "a `cdt:Map` from alternating key/value arguments"
 msgstr ""
 
-#: src/sparql/querying.md:940
+#: src/sparql/querying.md:944
 msgid "`cdt:concat(…)`"
 msgstr ""
 
-#: src/sparql/querying.md:940
+#: src/sparql/querying.md:944
 msgid "the argument lists joined end to end"
 msgstr ""
 
-#: src/sparql/querying.md:941
+#: src/sparql/querying.md:945
 msgid "`cdt:contains(list, term)`"
 msgstr ""
 
-#: src/sparql/querying.md:941
+#: src/sparql/querying.md:945
 msgid "`xsd:boolean` — does the list hold an equal term"
 msgstr ""
 
-#: src/sparql/querying.md:942
+#: src/sparql/querying.md:946
 msgid "`cdt:get(coll, n_or_key)`"
 msgstr ""
 
-#: src/sparql/querying.md:942
+#: src/sparql/querying.md:946
 msgid "one element by **1-based** position, or one map value by key"
 msgstr ""
 
-#: src/sparql/querying.md:943
+#: src/sparql/querying.md:947
 msgid "`cdt:head(list)`"
 msgstr ""
 
-#: src/sparql/querying.md:943
+#: src/sparql/querying.md:947
 msgid "the first element"
 msgstr ""
 
-#: src/sparql/querying.md:944
+#: src/sparql/querying.md:948
 msgid "`cdt:tail(list)`"
 msgstr ""
 
-#: src/sparql/querying.md:944
+#: src/sparql/querying.md:948
 msgid "everything but the first element"
 msgstr ""
 
-#: src/sparql/querying.md:945
+#: src/sparql/querying.md:949
 msgid "`cdt:reverse(list)`"
 msgstr ""
 
-#: src/sparql/querying.md:945
+#: src/sparql/querying.md:949
 msgid "the elements in opposite order"
 msgstr ""
 
-#: src/sparql/querying.md:946
+#: src/sparql/querying.md:950
 msgid "`cdt:size(coll)`"
 msgstr ""
 
-#: src/sparql/querying.md:946
+#: src/sparql/querying.md:950
 msgid ""
 "`xsd:integer` element or entry count — the one function that takes either "
 "datatype"
 msgstr ""
 
-#: src/sparql/querying.md:947
+#: src/sparql/querying.md:951
 msgid "`cdt:subseq(list, start[, len])`"
 msgstr ""
 
-#: src/sparql/querying.md:947 src/sparql/querying.md:951
+#: src/sparql/querying.md:951 src/sparql/querying.md:955
 msgid "2–3"
 msgstr ""
 
-#: src/sparql/querying.md:947
+#: src/sparql/querying.md:951
 msgid "a contiguous run, `start` **1-based**"
 msgstr ""
 
-#: src/sparql/querying.md:948
+#: src/sparql/querying.md:952
 msgid "`cdt:containsKey(map, key)`"
 msgstr ""
 
-#: src/sparql/querying.md:948
+#: src/sparql/querying.md:952
 msgid "`xsd:boolean` — is this a key of the map"
 msgstr ""
 
-#: src/sparql/querying.md:949
+#: src/sparql/querying.md:953
 msgid "`cdt:keys(map)`"
 msgstr ""
 
-#: src/sparql/querying.md:949
+#: src/sparql/querying.md:953
 msgid "the map's keys, as a `cdt:List`"
 msgstr ""
 
-#: src/sparql/querying.md:950
+#: src/sparql/querying.md:954
 msgid "`cdt:merge(…)`"
 msgstr ""
 
-#: src/sparql/querying.md:950
+#: src/sparql/querying.md:954
 msgid "≥ 2"
 msgstr ""
 
-#: src/sparql/querying.md:950
+#: src/sparql/querying.md:954
 msgid ""
 "the union of the argument maps; a key held by more than one is resolved by "
 "the **first** map that carries it"
 msgstr ""
 
-#: src/sparql/querying.md:951
+#: src/sparql/querying.md:955
 msgid "`cdt:put(map, key[, value])`"
 msgstr ""
 
-#: src/sparql/querying.md:951
+#: src/sparql/querying.md:955
 msgid ""
 "the map with one entry set; an omitted or erroring value stores the `null` "
 "entry"
 msgstr ""
 
-#: src/sparql/querying.md:952
+#: src/sparql/querying.md:956
 msgid "`cdt:remove(map, key)`"
 msgstr ""
 
-#: src/sparql/querying.md:952
+#: src/sparql/querying.md:956
 msgid "the map without that entry; an absent key leaves it unchanged"
 msgstr ""
 
-#: src/sparql/querying.md:954
+#: src/sparql/querying.md:958
 msgid ""
 "Handing a list function a map (or the reverse) **raises** — it is a type "
 "error, not an unbound column. The indices are 1-based throughout, per the "
 "SEP."
 msgstr ""
 
-#: src/sparql/querying.md:957
+#: src/sparql/querying.md:961
 msgid ""
 "```sparql\n"
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
@@ -6608,17 +6638,17 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:967
+#: src/sparql/querying.md:971
 msgid "`FOLD`: a group becomes one term"
 msgstr ""
 
-#: src/sparql/querying.md:969
+#: src/sparql/querying.md:973
 msgid ""
 "`FOLD` is an aggregate, so it sits wherever `SUM` or `GROUP_CONCAT` sits — "
 "in the `SELECT` list, in `HAVING`, beside other aggregates, under `GROUP BY`."
 msgstr ""
 
-#: src/sparql/querying.md:977
+#: src/sparql/querying.md:981
 msgid ""
 "One expression builds a `cdt:List`; two build a `cdt:Map`, the first being "
 "the key. The optional `ORDER BY` belongs to the aggregate itself and follows "
@@ -6627,15 +6657,15 @@ msgid ""
 "carries an `ORDER BY` where every other aggregate rejects one."
 msgstr ""
 
-#: src/sparql/querying.md:983
+#: src/sparql/querying.md:987
 msgid "Accepted spellings, as a catalogue:"
 msgstr ""
 
-#: src/sparql/querying.md:991
+#: src/sparql/querying.md:995
 msgid "and one whole query:"
 msgstr ""
 
-#: src/sparql/querying.md:993
+#: src/sparql/querying.md:997
 msgid ""
 "```sparql\n"
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
@@ -6645,11 +6675,11 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1000
+#: src/sparql/querying.md:1004
 msgid "Four behaviours are worth knowing before you rely on one:"
 msgstr ""
 
-#: src/sparql/querying.md:1002
+#: src/sparql/querying.md:1006
 msgid ""
 "An **empty group folds to a bound empty composite** — `\"[]\"^^cdt:List` or "
 "`\"{}\"^^cdt:Map` — never to an unbound column. `SUM` over nothing is `0` "
@@ -6657,7 +6687,7 @@ msgid ""
 "than `MIN`'s."
 msgstr ""
 
-#: src/sparql/querying.md:1006
+#: src/sparql/querying.md:1010
 msgid ""
 "A row whose element expression is **unbound or erroring contributes a `null` "
 "element**, which is the opposite of every other aggregate, all of which skip "
@@ -6666,70 +6696,70 @@ msgid ""
 "because there is nothing to file the value under."
 msgstr ""
 
-#: src/sparql/querying.md:1011
+#: src/sparql/querying.md:1015
 msgid "A repeated map key resolves to the **last** binding."
 msgstr ""
 
-#: src/sparql/querying.md:1012
+#: src/sparql/querying.md:1016
 msgid ""
 "`DISTINCT` is RDF-term identity, not value equality, so `\"1\"^^xsd:integer` "
 "and `\"01\"^^xsd:integer` survive as two elements."
 msgstr ""
 
-#: src/sparql/querying.md:1015
+#: src/sparql/querying.md:1019
 msgid ""
 "There is no `; SEPARATOR=` on `FOLD` — that scalar parameter is "
 "`GROUP_CONCAT`'s alone — and `FOLD(*)` is not grammar."
 msgstr ""
 
-#: src/sparql/querying.md:1018
+#: src/sparql/querying.md:1022
 msgid "`UNFOLD`: one term becomes rows"
 msgstr ""
 
-#: src/sparql/querying.md:1020
+#: src/sparql/querying.md:1024
 msgid ""
 "`UNFOLD` is a **graph pattern**, not a function. It is its own "
 "`GraphPatternNotTriples` alternative — structurally where `LATERAL` sits — "
 "and it stacks above the pattern parsed so far:"
 msgstr ""
 
-#: src/sparql/querying.md:1028
+#: src/sparql/querying.md:1032
 msgid "Operand"
 msgstr ""
 
-#: src/sparql/querying.md:1028
+#: src/sparql/querying.md:1032
 msgid "first variable"
 msgstr ""
 
-#: src/sparql/querying.md:1028
+#: src/sparql/querying.md:1032
 msgid "second variable"
 msgstr ""
 
-#: src/sparql/querying.md:1030
+#: src/sparql/querying.md:1034
 msgid "`cdt:List`"
 msgstr ""
 
-#: src/sparql/querying.md:1030
+#: src/sparql/querying.md:1034
 msgid "each element, in list order, duplicates preserved"
 msgstr ""
 
-#: src/sparql/querying.md:1030
+#: src/sparql/querying.md:1034
 msgid "the **1-based** `xsd:integer` index"
 msgstr ""
 
-#: src/sparql/querying.md:1031
+#: src/sparql/querying.md:1035
 msgid "`cdt:Map`"
 msgstr ""
 
-#: src/sparql/querying.md:1031
+#: src/sparql/querying.md:1035
 msgid "each entry's key"
 msgstr ""
 
-#: src/sparql/querying.md:1031
+#: src/sparql/querying.md:1035
 msgid "that entry's value"
 msgstr ""
 
-#: src/sparql/querying.md:1033
+#: src/sparql/querying.md:1037
 msgid ""
 "```sparql\n"
 "SELECT ?elem ?i\n"
@@ -6741,26 +6771,26 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1042
+#: src/sparql/querying.md:1046
 msgid ""
 "Both targets obey `BIND`'s §19.6 scope rule: a variable already in scope in "
 "the group graph pattern is a **syntax error**, not a join, and naming the "
 "same variable twice is likewise refused."
 msgstr ""
 
-#: src/sparql/querying.md:1046
+#: src/sparql/querying.md:1050
 msgid ""
 "The two edges that decide whether an `OPTIONAL` around an `UNFOLD` is doing "
 "what you think:"
 msgstr ""
 
-#: src/sparql/querying.md:1049
+#: src/sparql/querying.md:1053
 msgid ""
 "A **well-formed but empty** composite (`\"[]\"^^cdt:List`, `cdt:Map()`) "
 "yields **zero rows**. The row is gone."
 msgstr ""
 
-#: src/sparql/querying.md:1051
+#: src/sparql/querying.md:1055
 msgid ""
 "An operand that is **not a composite at all** — unbound, erroring, an "
 "`xsd:integer`, a plain string, or a `cdt:`\\-typed literal whose lexical "
@@ -6770,13 +6800,13 @@ msgid ""
 "understand."
 msgstr ""
 
-#: src/sparql/querying.md:1058
+#: src/sparql/querying.md:1062
 msgid ""
 "`FOLD` and `UNFOLD` compose, which is how a query re-orders a list without "
 "leaving the query language:"
 msgstr ""
 
-#: src/sparql/querying.md:1061
+#: src/sparql/querying.md:1065
 msgid ""
 "```sparql\n"
 "PREFIX cdt: <http://w3id.org/awslabs/neptune/SPARQL-CDTs/>\n"
@@ -6785,11 +6815,11 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1067
+#: src/sparql/querying.md:1071
 msgid "Ordering, `MIN` and `MAX`"
 msgstr ""
 
-#: src/sparql/querying.md:1069
+#: src/sparql/querying.md:1073
 msgid ""
 "`ORDER BY`, `MIN`, `MAX` and `FOLD`'s own `ORDER BY` all order composite "
 "literals **by the value they denote**, not by their lexical form, through "
@@ -6799,7 +6829,7 @@ msgid ""
 "`purrdf`'s documented choice."
 msgstr ""
 
-#: src/sparql/querying.md:1076
+#: src/sparql/querying.md:1080
 msgid ""
 "The order `purrdf` exports for composites is **syntactic**, and that is not "
 "an oversight. SEP-0009's value relations are partial and raise on "
@@ -6810,17 +6840,17 @@ msgid ""
 "so a total order is a correctness requirement here, not a nicety."
 msgstr ""
 
-#: src/sparql/querying.md:1084
+#: src/sparql/querying.md:1088
 msgid ""
 "`MEDIAN` and `PERCENTILE` are numeric folds and are **not** composite-aware: "
 "a composite is outside their domain and the aggregate comes back unbound."
 msgstr ""
 
-#: src/sparql/querying.md:1087
+#: src/sparql/querying.md:1091
 msgid "Blank nodes inside a composite"
 msgstr ""
 
-#: src/sparql/querying.md:1089
+#: src/sparql/querying.md:1093
 msgid ""
 "A `_:b` written inside a composite lexical form binds through the **same** "
 "ingress rule as a bare `_:b` token, on every codec — Turtle, TriG, N-"
@@ -6832,57 +6862,57 @@ msgid ""
 "skolemization."
 msgstr ""
 
-#: src/sparql/querying.md:1097
+#: src/sparql/querying.md:1101
 msgid ""
 "Query text gets its own blank scope for the same reason, so a `_:b` you "
 "write inside a composite literal in a query is never the `_:b` in the data."
 msgstr ""
 
-#: src/sparql/querying.md:1100
+#: src/sparql/querying.md:1104
 msgid "Limits, and what a composite refuses"
 msgstr ""
 
-#: src/sparql/querying.md:1102
+#: src/sparql/querying.md:1106
 msgid ""
 "Nesting is bounded, and the bounds are an invariant of the value — the "
 "programmatic constructors enforce them exactly as the parser does:"
 msgstr ""
 
-#: src/sparql/querying.md:1105
+#: src/sparql/querying.md:1109
 msgid "Bound"
 msgstr ""
 
-#: src/sparql/querying.md:1105
+#: src/sparql/querying.md:1109
 msgid "Value"
 msgstr ""
 
-#: src/sparql/querying.md:1107
+#: src/sparql/querying.md:1111
 msgid "Nesting depth"
 msgstr ""
 
-#: src/sparql/querying.md:1108
+#: src/sparql/querying.md:1112
 msgid "Total elements, all levels"
 msgstr ""
 
-#: src/sparql/querying.md:1108
+#: src/sparql/querying.md:1112
 msgid "2²⁰ (1 048 576)"
 msgstr ""
 
-#: src/sparql/querying.md:1109
+#: src/sparql/querying.md:1113
 msgid "Lexical bytes"
 msgstr ""
 
-#: src/sparql/querying.md:1109
+#: src/sparql/querying.md:1113
 msgid "64 MiB"
 msgstr ""
 
-#: src/sparql/querying.md:1111
+#: src/sparql/querying.md:1115
 msgid ""
 "Crossing one at evaluation is a **hard query failure** naming the bound "
 "crossed, never a quietly unbound answer."
 msgstr ""
 
-#: src/sparql/querying.md:1114
+#: src/sparql/querying.md:1118
 msgid ""
 "An **ill-formed composite literal in a document refuses the whole document** "
 "(`cdt-literal-malformed`), where an ill-formed `\"abc\"^^xsd:integer` does "
@@ -6895,11 +6925,11 @@ msgid ""
 "raises."
 msgstr ""
 
-#: src/sparql/querying.md:1123
+#: src/sparql/querying.md:1127
 msgid "Taking a composite query to another engine"
 msgstr ""
 
-#: src/sparql/querying.md:1125
+#: src/sparql/querying.md:1129
 msgid ""
 "Expect a **parse error** for `FOLD` and `UNFOLD`, which are keywords no "
 "unextended grammar admits, and quietly **different answers** for the "
@@ -6912,7 +6942,7 @@ msgid ""
 "all have them."
 msgstr ""
 
-#: src/sparql/querying.md:1134
+#: src/sparql/querying.md:1138
 msgid ""
 "One divergence runs the other way, and it is stated rather than argued. "
 "`purrdf`'s reader admits two element forms the published SEP-0009 lexical "
@@ -6927,11 +6957,11 @@ msgid ""
 "divergence and the scan that bounds its blast radius."
 msgstr ""
 
-#: src/sparql/querying.md:1146
+#: src/sparql/querying.md:1150
 msgid "Quad templates: `CONSTRUCT` into named graphs"
 msgstr ""
 
-#: src/sparql/querying.md:1148
+#: src/sparql/querying.md:1152
 msgid ""
 "A SPARQL 1.1 `CONSTRUCT` template is a set of triples, and the result is one "
 "graph. `purrdf` also accepts a **quad template**, so a template may name the "
@@ -6939,11 +6969,11 @@ msgid ""
 "graphs."
 msgstr ""
 
-#: src/sparql/querying.md:1153
+#: src/sparql/querying.md:1157
 msgid "Provenance: a `purrdf` extension, not a SPARQL 1.2 feature"
 msgstr ""
 
-#: src/sparql/querying.md:1155
+#: src/sparql/querying.md:1159
 msgid ""
 "**SPARQL 1.2 does not define the quad template.** Neither the 1.1 nor the "
 "1.2 grammar admits a `GRAPH` block inside a `CONSTRUCT` template "
@@ -6956,18 +6986,18 @@ msgid ""
 "so the one described here is `purrdf`'s."
 msgstr ""
 
-#: src/sparql/querying.md:1165
+#: src/sparql/querying.md:1169
 msgid ""
 "Declaring `VERSION \"1.2\"` does not subtract the extension: a version "
 "declaration selects semantics, not a feature whitelist. See [The `VERSION` "
 "declaration](#the-version-declaration)."
 msgstr ""
 
-#: src/sparql/querying.md:1169
+#: src/sparql/querying.md:1173
 msgid "Taking one of these queries to another engine"
 msgstr ""
 
-#: src/sparql/querying.md:1171
+#: src/sparql/querying.md:1175
 msgid ""
 "Expect a **parse error**, not a different answer. An engine without the "
 "extension rejects the `GRAPH` keyword as soon as it meets it inside a "
@@ -6977,11 +7007,11 @@ msgid ""
 "may accept only one of the two spellings, since neither is standardized."
 msgstr ""
 
-#: src/sparql/querying.md:1178
+#: src/sparql/querying.md:1182
 msgid "Two portable rewrites:"
 msgstr ""
 
-#: src/sparql/querying.md:1180
+#: src/sparql/querying.md:1184
 msgid ""
 "**If the result is going into a store**, use SPARQL 1.1 Update rather than "
 "`CONSTRUCT`. Update's template has always been a quad template, so `INSERT "
@@ -6990,7 +7020,7 @@ msgid ""
 "per row:"
 msgstr ""
 
-#: src/sparql/querying.md:1186
+#: src/sparql/querying.md:1190
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -6999,7 +7029,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1192
+#: src/sparql/querying.md:1196
 msgid ""
 "**If the result must come back as a document**, issue one ordinary triple-"
 "producing `CONSTRUCT` per target graph and assemble the dataset on the "
@@ -7007,7 +7037,7 @@ msgid ""
 "computed per solution row, which is the gap the quad template closes."
 msgstr ""
 
-#: src/sparql/querying.md:1197
+#: src/sparql/querying.md:1201
 msgid ""
 "Queries that stay inside the triple form are unaffected in either direction: "
 "a template with no `GRAPH` slot is an ordinary SPARQL 1.1 `CONSTRUCT` here "
@@ -7015,11 +7045,11 @@ msgid ""
 "are the ones that will not travel."
 msgstr ""
 
-#: src/sparql/querying.md:1202
+#: src/sparql/querying.md:1206
 msgid "`GRAPH` blocks inside the template"
 msgstr ""
 
-#: src/sparql/querying.md:1204
+#: src/sparql/querying.md:1208
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -7028,17 +7058,17 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1210
+#: src/sparql/querying.md:1214
 msgid "A variable graph name"
 msgstr ""
 
-#: src/sparql/querying.md:1212
+#: src/sparql/querying.md:1216
 msgid ""
 "The graph slot takes a variable as well as an IRI, so the graph a statement "
 "lands in can be decided per solution row:"
 msgstr ""
 
-#: src/sparql/querying.md:1215
+#: src/sparql/querying.md:1219
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -7047,17 +7077,17 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1221
+#: src/sparql/querying.md:1225
 msgid "Several graphs, and mixed default-graph triples"
 msgstr ""
 
-#: src/sparql/querying.md:1223
+#: src/sparql/querying.md:1227
 msgid ""
 "One template may write into more than one graph, and may mix graph-scoped "
 "quads with unscoped triples that land in the default graph:"
 msgstr ""
 
-#: src/sparql/querying.md:1226
+#: src/sparql/querying.md:1230
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -7070,11 +7100,11 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1236
+#: src/sparql/querying.md:1240
 msgid "The whole-template shorthand"
 msgstr ""
 
-#: src/sparql/querying.md:1238
+#: src/sparql/querying.md:1242
 msgid ""
 "`CONSTRUCT GRAPH <iri> { … }` scopes the entire template to one graph "
 "without a `GRAPH` block around it. It also works with the short form "
@@ -7082,7 +7112,7 @@ msgid ""
 "GRAPH ?g { … }`), a prefixed name, or a `BASE`\\-relative IRI:"
 msgstr ""
 
-#: src/sparql/querying.md:1243
+#: src/sparql/querying.md:1247
 msgid ""
 "```sparql\n"
 "PREFIX ex: <http://example.org/>\n"
@@ -7091,7 +7121,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1249
+#: src/sparql/querying.md:1253
 msgid ""
 "The shorthand is a **default, not an override**: it supplies the graph for "
 "every template slot that did not name one itself, so an inner `GRAPH` block "
@@ -7099,18 +7129,18 @@ msgid ""
 "rather than a silently unscoped template."
 msgstr ""
 
-#: src/sparql/querying.md:1254
+#: src/sparql/querying.md:1258
 msgid "Skip semantics"
 msgstr ""
 
-#: src/sparql/querying.md:1256
+#: src/sparql/querying.md:1260
 msgid ""
 "SPARQL §16.2 already skips a template statement whose variables are unbound "
 "or whose instantiation is ill-formed. Ill-formed means \"not a legal RDF 1.2 "
 "statement\", position by position:"
 msgstr ""
 
-#: src/sparql/querying.md:1260
+#: src/sparql/querying.md:1264
 msgid ""
 "the **subject** is an IRI or a blank node — a literal is illegal there, and "
 "so is a triple term (a quoted triple is a value; an asserted statement is "
@@ -7119,23 +7149,23 @@ msgid ""
 "WHERE { ?s ?p ?o }` binds `?o` to a triple term as readily as to a literal;"
 msgstr ""
 
-#: src/sparql/querying.md:1265
+#: src/sparql/querying.md:1269
 msgid "the **predicate** is an IRI, and nothing else;"
 msgstr ""
 
-#: src/sparql/querying.md:1266
+#: src/sparql/querying.md:1270
 msgid ""
 "the **object** may be any term, but when it is a triple term that triple "
 "term's own components carry the same rules recursively (its subject must not "
 "be a literal, its predicate must be an IRI)."
 msgstr ""
 
-#: src/sparql/querying.md:1270
+#: src/sparql/querying.md:1274
 msgid ""
 "The graph slot follows the same rule, and this is worth being explicit about:"
 msgstr ""
 
-#: src/sparql/querying.md:1272
+#: src/sparql/querying.md:1276
 msgid ""
 "**An unresolvable graph name skips its statement.** It is not an error, and "
 "it is _not_ a fallback to the default graph. The graph slot is resolved "
@@ -7146,39 +7176,39 @@ msgid ""
 "template."
 msgstr ""
 
-#: src/sparql/querying.md:1279
+#: src/sparql/querying.md:1283
 msgid ""
 "The skip is **per statement**, not per row: a sibling template quad whose "
 "own graph slot resolves is still emitted for the same solution."
 msgstr ""
 
-#: src/sparql/querying.md:1282
+#: src/sparql/querying.md:1286
 msgid "Which output formats can carry the result"
 msgstr ""
 
-#: src/sparql/querying.md:1284
+#: src/sparql/querying.md:1288
 msgid ""
 "A named graph needs a syntax with somewhere to put a graph name. Six of the "
 "nine RDF syntaxes have one:"
 msgstr ""
 
-#: src/sparql/querying.md:1287
+#: src/sparql/querying.md:1291
 msgid "Carries named graphs"
 msgstr ""
 
-#: src/sparql/querying.md:1287
+#: src/sparql/querying.md:1291
 msgid "Does not"
 msgstr ""
 
-#: src/sparql/querying.md:1289
+#: src/sparql/querying.md:1293
 msgid "TriG, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD"
 msgstr ""
 
-#: src/sparql/querying.md:1289
+#: src/sparql/querying.md:1293
 msgid "Turtle, N-Triples, RDF/XML"
 msgstr ""
 
-#: src/sparql/querying.md:1291
+#: src/sparql/querying.md:1295
 msgid ""
 "The single-graph serializers **drop** graph-scoped statements — they do not "
 "fold them into the default graph — so writing a graph-carrying result to one "
@@ -7190,7 +7220,7 @@ msgid ""
 "loss as a count instead:"
 msgstr ""
 
-#: src/sparql/querying.md:1299
+#: src/sparql/querying.md:1303
 msgid ""
 "**CLI** — `purrdf query … --results-format turtle` exits **2** (a usage "
 "refusal, distinct from an evaluation error) and prints the refusal on "
@@ -7198,7 +7228,7 @@ msgid ""
 "yamlld`."
 msgstr ""
 
-#: src/sparql/querying.md:1303
+#: src/sparql/querying.md:1307
 msgid ""
 "**Python** — the result of a graph-carrying `CONSTRUCT` is a `QueryQuads` "
 "(whose members are `Quad`s with a live `graph_name`) rather than a "
@@ -7206,7 +7236,7 @@ msgid ""
 "`ValueError`, naming `RdfFormat.N_QUADS/TRIG/TRIX/HEXTUPLES/JSON_LD/YAML_LD`."
 msgstr ""
 
-#: src/sparql/querying.md:1307
+#: src/sparql/querying.md:1311
 msgid ""
 "**WebAssembly** — an explicit `serialize(\"turtle\")` / `queryRaw(…, "
 "{format: \"turtle\"})` **throws**, with the same sentence and the same "
@@ -7216,7 +7246,7 @@ msgid ""
 "named graph still gets `turtle`, byte for byte."
 msgstr ""
 
-#: src/sparql/querying.md:1313
+#: src/sparql/querying.md:1317
 msgid ""
 "**C ABI** — the shape is different, and deliberately so. `purrdf_query` "
 "hands back a `PurrdfDataset` handle, which is the frozen IR itself and has "
@@ -7230,7 +7260,7 @@ msgid ""
 "result may carry graphs."
 msgstr ""
 
-#: src/sparql/querying.md:1324
+#: src/sparql/querying.md:1328
 msgid ""
 "The convenience path, `purrdf_query_json`, needs neither: it renders a "
 "`CONSTRUCT`/`DESCRIBE` result as **N-Quads** inside its `{\"graph\": \"...\"}"
@@ -7243,7 +7273,7 @@ msgid ""
 "Quads line with no graph term is the N-Triples line."
 msgstr ""
 
-#: src/sparql/querying.md:1334
+#: src/sparql/querying.md:1338
 msgid ""
 "A result carrying only default-graph statements is untouched everywhere: "
 "every SPARQL 1.1 `CONSTRUCT` and every `DESCRIBE` serializes to Turtle "
@@ -7252,11 +7282,11 @@ msgid ""
 "answer as a complete one."
 msgstr ""
 
-#: src/sparql/querying.md:1340
+#: src/sparql/querying.md:1344
 msgid "The `VERSION` declaration"
 msgstr ""
 
-#: src/sparql/querying.md:1342
+#: src/sparql/querying.md:1346
 msgid ""
 "A query or update prologue may declare `VERSION \"<string>\"` (SPARQL 1.2 "
 "Query specification §4.4). Parsing is syntax-only — any string is accepted, "
@@ -7266,7 +7296,7 @@ msgid ""
 "existing `dataset()`/`base_iri()` accessors."
 msgstr ""
 
-#: src/sparql/querying.md:1348
+#: src/sparql/querying.md:1352
 msgid ""
 "Evaluation is the admission boundary. `VERSION \"1.2\"` and `VERSION \"1.2-"
 "basic\"` are recognized; any other declared string — `VERSION \"1.1\"`, a "
@@ -7275,7 +7305,7 @@ msgid ""
 "spent."
 msgstr ""
 
-#: src/sparql/querying.md:1353
+#: src/sparql/querying.md:1357
 msgid ""
 "`VERSION \"1.2\"` evaluates normally on the full engine. `VERSION \"1.2-"
 "basic\"` is enforced as a narrower profile: the SPARQL 1.2 Query "
@@ -7292,11 +7322,11 @@ msgid ""
 "a `1.2` one would."
 msgstr ""
 
-#: src/sparql/querying.md:1366
+#: src/sparql/querying.md:1370
 msgid "Aggregate determinism: row order, `DISTINCT`, and `GROUP_CONCAT`"
 msgstr ""
 
-#: src/sparql/querying.md:1368
+#: src/sparql/querying.md:1372
 msgid ""
 "SPARQL 1.1/1.2 leave several corners of `GROUP BY`/aggregate evaluation "
 "intentionally underspecified — a conforming engine may pick any answer "
@@ -7307,7 +7337,7 @@ msgid ""
 "happened to produce.\""
 msgstr ""
 
-#: src/sparql/querying.md:1375
+#: src/sparql/querying.md:1379
 msgid ""
 "**Row and group order (§18.6.1 \"Aggregate Algebra\").** `GROUP BY` "
 "partitions the inner solution sequence into groups; this crate keeps groups "
@@ -7319,7 +7349,7 @@ msgid ""
 "order."
 msgstr ""
 
-#: src/sparql/querying.md:1384
+#: src/sparql/querying.md:1388
 msgid ""
 "\"Inner-operator order\" is REPRODUCIBLE (the same query against the same "
 "dataset yields the same order every time) but is not, by itself, a "
@@ -7334,7 +7364,7 @@ msgid ""
 "total order (§15.1), which the specification itself fixes."
 msgstr ""
 
-#: src/sparql/querying.md:1396
+#: src/sparql/querying.md:1400
 msgid ""
 "**`DISTINCT` (inside an aggregate call).** Per §18.6.1's `Aggregation` "
 "definition, `DISTINCT` folds `Dedup(M(Ψ))` rather than `M(Ψ)` — an order-"
@@ -7344,11 +7374,11 @@ msgid ""
 "fold's `step`."
 msgstr ""
 
-#: src/sparql/querying.md:1403
+#: src/sparql/querying.md:1407
 msgid "`GROUP_CONCAT` ordering"
 msgstr ""
 
-#: src/sparql/querying.md:1405
+#: src/sparql/querying.md:1409
 msgid ""
 "§18.6.1.7 defines `GroupConcat` as concatenating the sequence's elements "
 "with `sep` between them, but explicitly leaves the sequence's own order "
@@ -7362,7 +7392,7 @@ msgid ""
 "for a non-numeric running total."
 msgstr ""
 
-#: src/sparql/querying.md:1416
+#: src/sparql/querying.md:1420
 msgid ""
 "Because a plain BGP's own scan order is an implementation detail rather than "
 "a documented guarantee (see above), a `GROUP_CONCAT` fixture that wants to "
@@ -7379,11 +7409,11 @@ msgid ""
 "wrong string instead of coincidentally passing."
 msgstr ""
 
-#: src/sparql/querying.md:1430
+#: src/sparql/querying.md:1434
 msgid "Extending the evaluator: custom aggregates"
 msgstr ""
 
-#: src/sparql/querying.md:1432
+#: src/sparql/querying.md:1436
 msgid ""
 "Beyond the SPARQL 1.1 built-in aggregates (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`/ "
 "`SAMPLE`/`GROUP_CONCAT`), a Rust host may register additional `GROUP BY` "
@@ -7396,7 +7426,7 @@ msgid ""
 "accumulator, exactly as a built-in aggregate does."
 msgstr ""
 
-#: src/sparql/querying.md:1442
+#: src/sparql/querying.md:1446
 msgid ""
 "A registered aggregate implements two traits — `CustomAggregate` (the per-"
 "IRI factory: declared arity, `Volatility`, `AlgebraicClass`, and a declared "
@@ -7406,13 +7436,13 @@ msgid ""
 "`AggregateRegistry` under an IRI of the caller's choosing:"
 msgstr ""
 
-#: src/sparql/querying.md:1456
+#: src/sparql/querying.md:1460
 msgid ""
 "/// A running total over one numeric argument — `example.org`'s own\n"
 "/// `AGG(<https://example.org/agg#total>, ?x)`.\n"
 msgstr ""
 
-#: src/sparql/querying.md:1474
+#: src/sparql/querying.md:1478
 msgid ""
 "// Recover `other`'s real state through `into_any` rather than\n"
 "        // re-deriving it from `finish()`'s lexical form: `finish()` is a\n"
@@ -7425,44 +7455,44 @@ msgid ""
 "        // answer is NOT itself sufficient mergeable state.\n"
 msgstr ""
 
-#: src/sparql/querying.md:1484
+#: src/sparql/querying.md:1488
 msgid "\"combine received a partial accumulator of a different concrete type\""
 msgstr ""
 
-#: src/sparql/querying.md:1492
+#: src/sparql/querying.md:1496
 msgid "// a running total IS its own sufficient merge state\n"
 msgstr ""
 
-#: src/sparql/querying.md:1498
+#: src/sparql/querying.md:1502
 msgid "\"http://www.w3.org/2001/XMLSchema#integer\""
 msgstr ""
 
-#: src/sparql/querying.md:1510
+#: src/sparql/querying.md:1514
 msgid "// eligible for the within-group parallel fold\n"
 msgstr ""
 
-#: src/sparql/querying.md:1516
+#: src/sparql/querying.md:1520
 msgid "// stateless besides the running total\n"
 msgstr ""
 
-#: src/sparql/querying.md:1525
+#: src/sparql/querying.md:1529
 msgid "\"https://example.org/agg#total\""
 msgstr ""
 
-#: src/sparql/querying.md:1527
+#: src/sparql/querying.md:1531
 msgid ""
 "// The environment a query text is read in: `AGG(<iri>, …)` is admitted "
 "against\n"
 "// this registry.\n"
 msgstr ""
 
-#: src/sparql/querying.md:1536
+#: src/sparql/querying.md:1540
 msgid ""
 "\"SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s "
 "<https://example.org/n> ?x }\""
 msgstr ""
 
-#: src/sparql/querying.md:1544
+#: src/sparql/querying.md:1548
 msgid ""
 "An `AGG(<iri>, …)` call to an unregistered IRI, with the wrong argument "
 "count, or with an invalid `; NAME=value` scalarval clause (an unrecognized "
@@ -7475,11 +7505,11 @@ msgid ""
 "state a fold's finished answer alone cannot reconstruct)."
 msgstr ""
 
-#: src/sparql/querying.md:1554
+#: src/sparql/querying.md:1558
 msgid "Named scalar-value parameters"
 msgstr ""
 
-#: src/sparql/querying.md:1556
+#: src/sparql/querying.md:1560
 msgid ""
 "Beyond its positional `args`, `AGG(<iri>, …)` admits zero or more trailing "
 "`; NAME=value` clauses — a named, per-aggregation scalar parameter, "
@@ -7496,7 +7526,7 @@ msgid ""
 "expression the query author merely intends to hold constant."
 msgstr ""
 
-#: src/sparql/querying.md:1570
+#: src/sparql/querying.md:1574
 msgid ""
 "A registered aggregate declares which names it accepts via "
 "`CustomAggregate::scalarvals`, returning a slice of `ScalarvalSpec { name, "
@@ -7508,7 +7538,7 @@ msgid ""
 "presence."
 msgstr ""
 
-#: src/sparql/querying.md:1579
+#: src/sparql/querying.md:1583
 msgid ""
 "`AGG(<iri>, …)` execution is governed like any other fold: profile v6 adds "
 "two charge points — `aggregate-invocation` (once per group per aggregate "
@@ -7519,11 +7549,11 @@ msgid ""
 "main/docs/SPARQL-GOVERNOR-PROFILE.md)."
 msgstr ""
 
-#: src/sparql/querying.md:1586
+#: src/sparql/querying.md:1590
 msgid "The statistical aggregate set"
 msgstr ""
 
-#: src/sparql/querying.md:1588
+#: src/sparql/querying.md:1592
 msgid ""
 "`purrdf-sparql-eval` ships ten exact statistical aggregates — `MEDIAN`, "
 "`PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, "
@@ -7532,17 +7562,17 @@ msgid ""
 "through **one** call: `AggregateRegistry::register_statistical_aggregates`:"
 msgstr ""
 
-#: src/sparql/querying.md:1596
+#: src/sparql/querying.md:1600
 msgid "\"https://example.org/agg#\""
 msgstr ""
 
-#: src/sparql/querying.md:1596
+#: src/sparql/querying.md:1600
 msgid ""
 "// Now reachable: AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …"
 "TOPK…\n"
 msgstr ""
 
-#: src/sparql/querying.md:1600
+#: src/sparql/querying.md:1604
 msgid ""
 "As with every vocabulary PurRDF touches, `namespace` is caller-supplied "
 "configuration with no fabricated default — a host that never calls this "
@@ -7551,11 +7581,11 @@ msgid ""
 "in scalar extension functions."
 msgstr ""
 
-#: src/sparql/querying.md:1606
+#: src/sparql/querying.md:1610
 msgid "Per-member semantics:"
 msgstr ""
 
-#: src/sparql/querying.md:1608
+#: src/sparql/querying.md:1612
 msgid ""
 "**Numeric members** (`STDDEV*`/`VARIANCE*`, `MEDIAN`, `PERCENTILE`) follow "
 "the same `integer ⊂ decimal ⊂ float ⊂ double` promotion tower the built-in "
@@ -7565,7 +7595,7 @@ msgid ""
 "`VARIANCE`/`VAR_POP` never do."
 msgstr ""
 
-#: src/sparql/querying.md:1614
+#: src/sparql/querying.md:1618
 msgid ""
 "**`STDDEV`/`VARIANCE`** are the sample statistics (`n - 1` denominator, "
 "unbound under two values); **`STDDEV_POP`/`VAR_POP`** are the population "
@@ -7573,14 +7603,14 @@ msgid ""
 "convention."
 msgstr ""
 
-#: src/sparql/querying.md:1618
+#: src/sparql/querying.md:1622
 msgid ""
 "**`MEDIAN`** is `PERCENTILE` at `p = 0.5` under linear interpolation between "
 "the two closest ranks — for an even-sized group this is exactly the mean of "
 "the two middle values."
 msgstr ""
 
-#: src/sparql/querying.md:1621
+#: src/sparql/querying.md:1625
 msgid ""
 "**`PERCENTILE`** takes a named scalarval, `AGG(<{NS}PERCENTILE>, ?x; "
 "P=0.95)`: `P` is resolved once for the whole aggregation (never per row — "
@@ -7589,7 +7619,7 @@ msgid ""
 "uses. A missing or non-numeric `P` is refused at prepare time."
 msgstr ""
 
-#: src/sparql/querying.md:1626
+#: src/sparql/querying.md:1630
 msgid ""
 "**`MODE`** works over any term kind, counted by RDF term identity (not value "
 "equality — `\"5\"^^xsd:integer` and `\"05\"^^xsd:integer` count as two "
@@ -7597,11 +7627,11 @@ msgid ""
 "total order `MIN`/`ORDER BY` use."
 msgstr ""
 
-#: src/sparql/querying.md:1630
+#: src/sparql/querying.md:1634
 msgid "**`FIRST`/`LAST`** work over any term kind, in input row order."
 msgstr ""
 
-#: src/sparql/querying.md:1631
+#: src/sparql/querying.md:1635
 msgid ""
 "**`TOPK`** takes a named scalarval, `AGG(<{NS}TOPK>, ?x; K=3)`: `K` must be "
 "a positive `xsd:integer`, resolved once for the whole aggregation (a `K ≤ 0` "
@@ -7612,7 +7642,7 @@ msgid ""
 "single fixed space separator."
 msgstr ""
 
-#: src/sparql/querying.md:1639
+#: src/sparql/querying.md:1643
 msgid ""
 "All ten declare `Volatility::Stable` and merge partial folds through real, "
 "type-recovered structural state (`AggregateAccumulator::into_any`) rather "
@@ -7621,11 +7651,11 @@ msgid ""
 "a result byte-identical to the sequential fold."
 msgstr ""
 
-#: src/sparql/querying.md:1645
+#: src/sparql/querying.md:1649
 msgid "Path witnesses: binding the derivation, not the endpoints"
 msgstr ""
 
-#: src/sparql/querying.md:1647
+#: src/sparql/querying.md:1651
 msgid ""
 "The core grammar's property paths answer a **reachability** question. `?s "
 "ex:p+ ?o` says that some sequence of `ex:p` edges leads from `?s` to `?o`, "
@@ -7634,13 +7664,13 @@ msgid ""
 "nowhere to look."
 msgstr ""
 
-#: src/sparql/querying.md:1652
+#: src/sparql/querying.md:1656
 msgid ""
 "A **path-witness** property function answers the derivation question "
 "instead. A call reads"
 msgstr ""
 
-#: src/sparql/querying.md:1659
+#: src/sparql/querying.md:1663
 msgid ""
 "and emits **one row per hop**. For a walk of `k` hops, row `i` binds `?len = "
 "k`, `?step = i`, `?node` to the node that hop arrived at, and `?edge` to the "
@@ -7651,7 +7681,7 @@ msgid ""
 "`\"2\"`."
 msgstr ""
 
-#: src/sparql/querying.md:1666
+#: src/sparql/querying.md:1670
 msgid ""
 "There is no default relation IRI and no default traversal envelope. PurRDF "
 "mints no vocabulary IRIs, so the name a query spells in predicate position "
@@ -7661,7 +7691,7 @@ msgid ""
 "library."
 msgstr ""
 
-#: src/sparql/querying.md:1672
+#: src/sparql/querying.md:1676
 msgid ""
 "Two relation TYPES, not one with a mode switch: `PathWitnessRelation` "
 "enumerates every simple-prefix walk (exponential in the worst case) and "
@@ -7671,15 +7701,15 @@ msgid ""
 "runtime value the planner cannot see."
 msgstr ""
 
-#: src/sparql/querying.md:1679
+#: src/sparql/querying.md:1683
 msgid "A worked example"
 msgstr ""
 
-#: src/sparql/querying.md:1681
+#: src/sparql/querying.md:1685
 msgid "Over a three-edge chain `ex:a → ex:b → ex:c → ex:d`:"
 msgstr ""
 
-#: src/sparql/querying.md:1692
+#: src/sparql/querying.md:1696
 msgid ""
 "```text\n"
 "end,len,step,node\n"
@@ -7692,7 +7722,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1702
+#: src/sparql/querying.md:1706
 msgid ""
 "`GROUP BY ?pathId` is how the hop rows become walks again. The identifier is "
 "constant across one walk's rows and distinct between walks, so each group IS "
@@ -7700,7 +7730,7 @@ msgid ""
 "grouping by them alongside is free and lets them be projected:"
 msgstr ""
 
-#: src/sparql/querying.md:1716
+#: src/sparql/querying.md:1720
 msgid ""
 "```text\n"
 "end,len,route\n"
@@ -7711,7 +7741,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/sparql/querying.md:1723
+#: src/sparql/querying.md:1727
 msgid ""
 "Swap `?node` for `?edge` and the same grouping reconstructs the STATEMENT "
 "sequence, which is where an aggregate over a walk belongs: a `SUM` of a per-"
@@ -7721,44 +7751,44 @@ msgid ""
 "a list term."
 msgstr ""
 
-#: src/sparql/querying.md:1729
+#: src/sparql/querying.md:1733
 msgid "The same registration from Python:"
 msgstr ""
 
-#: src/sparql/querying.md:1733
+#: src/sparql/querying.md:1737
 msgid "\"SELECT ?end ?len ?step ?node WHERE { <http://example.org/a> \""
 msgstr ""
 
-#: src/sparql/querying.md:1734
+#: src/sparql/querying.md:1738
 msgid ""
 "\"<http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) } \""
 msgstr ""
 
-#: src/sparql/querying.md:1735
+#: src/sparql/querying.md:1739
 msgid "\"ORDER BY ?len ?step\""
 msgstr ""
 
-#: src/sparql/querying.md:1737
+#: src/sparql/querying.md:1741
 msgid "\"http://example.org/pf#walk\""
 msgstr ""
 
-#: src/sparql/querying.md:1738
+#: src/sparql/querying.md:1742
 msgid "\"http://example.org/p\""
 msgstr ""
 
-#: src/sparql/querying.md:1738
+#: src/sparql/querying.md:1742
 msgid "\"forward\""
 msgstr ""
 
-#: src/sparql/querying.md:1739
+#: src/sparql/querying.md:1743
 msgid "\"walk\""
 msgstr ""
 
-#: src/sparql/querying.md:1745
+#: src/sparql/querying.md:1749
 msgid "Under an entailment regime, the walk reads the closure"
 msgstr ""
 
-#: src/sparql/querying.md:1747
+#: src/sparql/querying.md:1751
 msgid ""
 "A path relation is a snapshot of the step's edges, and the dataset it must "
 "be snapshotted from is the one the query is _answered over_. Under `--"
@@ -7768,7 +7798,7 @@ msgid ""
 "beside it. Over"
 msgstr ""
 
-#: src/sparql/querying.md:1759
+#: src/sparql/querying.md:1763
 msgid ""
 "`SELECT ?end WHERE { ex:a ex:p+ ?end }` under `rdfs` answers `ex:b, ex:c`, "
 "and the registered walk seeded at `ex:a` reaches `ex:c` too. Without the "
@@ -7776,7 +7806,7 @@ msgid ""
 "exist to be walked."
 msgstr ""
 
-#: src/sparql/querying.md:1763
+#: src/sparql/querying.md:1767
 msgid ""
 "One pairing is refused rather than answered: `--entailment owl-direct` on an "
 "ontology whose restricted chase mints existential witnesses. Those witnesses "
@@ -7789,7 +7819,7 @@ msgid ""
 "existential rule — is not refused."
 msgstr ""
 
-#: src/sparql/querying.md:1772
+#: src/sparql/querying.md:1776
 msgid ""
 "The Rust surface spells the same thing explicitly: `query_with_entailment` "
 "and `query_with_entailment_governed` take a `ClosureRelations` argument, "
@@ -7799,11 +7829,11 @@ msgid ""
 "closure and returns the registry to answer with."
 msgstr ""
 
-#: src/sparql/querying.md:1778
+#: src/sparql/querying.md:1782
 msgid "Reaching extensions from other hosts"
 msgstr ""
 
-#: src/sparql/querying.md:1780
+#: src/sparql/querying.md:1784
 msgid ""
 "The SHACL-AF function registry and the GENERAL custom-aggregate registry are "
 "**Rust-closure seams**: a registered function or aggregate is arbitrary host "
@@ -7814,7 +7844,7 @@ msgid ""
 "and none of the four host surfaces below expose it."
 msgstr ""
 
-#: src/sparql/querying.md:1788
+#: src/sparql/querying.md:1792
 msgid ""
 "The property-function registry is a closure seam in the same sense — a "
 "`PropertyFunction` is an arbitrary host implementation — but its DATA-SHAPED "
@@ -7831,12 +7861,12 @@ msgid ""
 "all."
 msgstr ""
 
-#: src/sparql/querying.md:1801
+#: src/sparql/querying.md:1805
 msgid ""
 "What a relation attests about itself, and the one lane that can record it"
 msgstr ""
 
-#: src/sparql/querying.md:1803
+#: src/sparql/querying.md:1807
 msgid ""
 "Two facts about an invocation are known to a relation's cursor and to "
 "nothing else: which generation of its index answered, and whether that index "
@@ -7846,7 +7876,7 @@ msgid ""
 "said nothing — which is silence, not a claim that the index was whole."
 msgstr ""
 
-#: src/sparql/querying.md:1810
+#: src/sparql/querying.md:1814
 msgid ""
 "A relation that declares itself **incomplete** is refused at any entry point "
 "with nowhere to put that declaration: the ungoverned `query` and every "
@@ -7857,14 +7887,14 @@ msgid ""
 "and its outcome carries:"
 msgstr ""
 
-#: src/sparql/querying.md:1818
+#: src/sparql/querying.md:1822
 msgid ""
 "# {relation_iri: {\"invocations\": int,\n"
 "#                 \"generations\": [str | None],\n"
 "#                 \"incompleteness\": [str]}}\n"
 msgstr ""
 
-#: src/sparql/querying.md:1824
+#: src/sparql/querying.md:1828
 msgid ""
 "The mapping is always present and may be empty — a governed query that "
 "invoked no relation reports `{}`, which is a fact rather than an absence. "
@@ -7877,7 +7907,7 @@ msgid ""
 "relations attested before it tripped."
 msgstr ""
 
-#: src/sparql/querying.md:1833
+#: src/sparql/querying.md:1837
 msgid ""
 "`invocations` is the one field that does not: it counts entries into host "
 "code, which is a fact about the schedule rather than about the index. Under "
@@ -7892,7 +7922,7 @@ msgid ""
 "receipts."
 msgstr ""
 
-#: src/sparql/querying.md:1844
+#: src/sparql/querying.md:1848
 msgid ""
 "PurRDF's first-party **statistical set** is different, precisely because it "
 "is NOT an arbitrary closure: "
@@ -7907,73 +7937,73 @@ msgid ""
 "configuration:"
 msgstr ""
 
-#: src/sparql/querying.md:1854
+#: src/sparql/querying.md:1858
 msgid ""
 "**Rust** (embedding the engine directly): `QueryOptions.aggregates`, as "
 "shown throughout this page."
 msgstr ""
 
-#: src/sparql/querying.md:1856
+#: src/sparql/querying.md:1860
 msgid ""
 "**Python** (`purrdf.Store` / `purrdf.MutableDataset`): the "
 "`aggregate_namespace` keyword on `query` / `query_governed` / `update` / "
 "`update_governed`."
 msgstr ""
 
-#: src/sparql/querying.md:1862
+#: src/sparql/querying.md:1866
 msgid "\"PREFIX ex: <https://ex.example/> \""
 msgstr ""
 
-#: src/sparql/querying.md:1863
+#: src/sparql/querying.md:1867
 msgid "\"SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) \""
 msgstr ""
 
-#: src/sparql/querying.md:1864
+#: src/sparql/querying.md:1868
 msgid "\"WHERE { ?s ex:value ?v }\""
 msgstr ""
 
-#: src/sparql/querying.md:1865 src/sparql/querying.md:1882
-#: src/sparql/querying.md:1892
+#: src/sparql/querying.md:1869 src/sparql/querying.md:1886
+#: src/sparql/querying.md:1896
 msgid "\"https://ex.example/agg#\""
 msgstr ""
 
-#: src/sparql/querying.md:1869
+#: src/sparql/querying.md:1873
 msgid ""
 "**CLI** (`purrdf query` / `purrdf update`): the `--aggregate-namespace IRI` "
 "flag."
 msgstr ""
 
-#: src/sparql/querying.md:1873
+#: src/sparql/querying.md:1877
 msgid "'https://ex.example/agg#'"
 msgstr ""
 
-#: src/sparql/querying.md:1874
+#: src/sparql/querying.md:1878
 msgid ""
 "'SELECT (AGG(<https://ex.example/agg#MEDIAN>, ?v) AS ?m) WHERE { ?s ?p ?v }'"
 msgstr ""
 
-#: src/sparql/querying.md:1877
+#: src/sparql/querying.md:1881
 msgid ""
 "**WebAssembly** (`QueryEngine.queryGoverned` / `updateGoverned`): the "
 "`aggregateNamespace` option, alongside the other governed-call options."
 msgstr ""
 
-#: src/sparql/querying.md:1886
+#: src/sparql/querying.md:1890
 msgid ""
 "**C ABI** (`purrdf_query_governed` / `purrdf_update_governed`): a nullable "
 "`const char *aggregate_namespace` parameter, the same optional-C-string "
 "convention every other nullable string on this ABI uses."
 msgstr ""
 
-#: src/sparql/querying.md:1891
+#: src/sparql/querying.md:1895
 msgid "/* base_iri */"
 msgstr ""
 
-#: src/sparql/querying.md:1892
+#: src/sparql/querying.md:1896
 msgid "/* … */"
 msgstr ""
 
-#: src/sparql/querying.md:1895
+#: src/sparql/querying.md:1899
 msgid ""
 "`namespace` stays caller-supplied configuration with no fabricated default "
 "on every one of these surfaces: omitting it (`None` / not passing the flag / "
@@ -7982,7 +8012,7 @@ msgid ""
 "existed."
 msgstr ""
 
-#: src/sparql/querying.md:1901
+#: src/sparql/querying.md:1905
 msgid ""
 "The **entailment-aware query lane** (`query_with_entailment`/ "
 "`query_with_entailment_governed`, and every Python/CLI/WebAssembly/C wrapper "
@@ -7993,14 +8023,14 @@ msgid ""
 "view."
 msgstr ""
 
-#: src/sparql/querying.md:1915
+#: src/sparql/querying.md:1919
 msgid ""
 "`purrdf.Store.query_entailment_governed(..., aggregate_namespace=NS)` "
 "answers the same query the same way, and the WebAssembly and C-ABI governed "
 "entailment entry points take the same parameter."
 msgstr ""
 
-#: src/sparql/querying.md:1919
+#: src/sparql/querying.md:1923
 msgid ""
 "One structural limit applies everywhere the statistical set is reachable: "
 "SPARQL UPDATE's grammar admits an aggregate only inside a nested `SELECT … "
@@ -8009,11 +8039,11 @@ msgid ""
 "reaches the statistical set through exactly that nested-subquery shape."
 msgstr ""
 
-#: src/sparql/querying.md:1926
+#: src/sparql/querying.md:1930
 msgid "Entailment regimes"
 msgstr ""
 
-#: src/sparql/querying.md:1928
+#: src/sparql/querying.md:1932
 msgid ""
 "SPARQL queries can be answered under an entailment regime by materializing "
 "the dataset first with [`purrdf-entail`](../entailment.md) — "
@@ -8021,7 +8051,7 @@ msgid ""
 "engine."
 msgstr ""
 
-#: src/sparql/querying.md:1934
+#: src/sparql/querying.md:1938
 msgid ""
 "The full W3C SPARQL 1.1 query + update evaluation suites plus the SPARQL 1.2 "
 "suite are vendored verbatim and run by `purrdf-sparql-conformance`; every "

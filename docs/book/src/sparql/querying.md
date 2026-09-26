@@ -484,12 +484,16 @@ so a Jena-backed endpoint answers it), or an honest failure from one that does
 not implement it — surfaces the same way any other unsupported forwarded
 construct's rejection would. A variable-endpoint `SERVICE ?g` is refused only
 when nothing supplies `?g`'s binding — nothing in the incoming solution names
-an IRI for the remote evaluator to resolve. When an enclosing pattern binds
-`?g` — a preceding triple pattern in the same group, or a `LATERAL` left-hand
-side's per-row correlation — the endpoint resolves to that IRI before the
-remote call is made (the same per-row substitution described under "Points of
-disagreement with Jena" above) and the query dispatches normally, the same as
-a `SERVICE` with a fixed IRI.
+an IRI for the remote evaluator to resolve — and `SERVICE SILENT` does not
+change that, because `SILENT` tolerates an endpoint that fails, not a query
+that names none. When an enclosing pattern binds `?g` — a preceding triple
+pattern in the same group, or a `LATERAL` left-hand side's per-row correlation
+— the endpoint resolves to that IRI before the remote call is made (the same
+per-row substitution described under "Points of disagreement with Jena" above)
+and the query dispatches normally, the same as a `SERVICE` with a fixed IRI.
+When the left side of the `OPTIONAL`, `MINUS` or group join holding the clause
+binds `?g` in every solution, the right side is still evaluated on its own and
+the clause is sent once to each distinct IRI that left side binds `?g` to.
 
 ### Per-service context: the `ServiceResolver` seam
 

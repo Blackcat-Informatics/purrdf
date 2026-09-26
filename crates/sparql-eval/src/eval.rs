@@ -624,6 +624,14 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// single slot merged in place, because both the outer and the inner window's map are
     /// simultaneously live for the whole time the inner one is being evaluated.
     pub(crate) correlated_node_maps: Vec<Arc<crate::expr::SubstitutionSourceMap>>,
+    /// The endpoints enclosing group joins, `OPTIONAL`s and `MINUS`es list for the
+    /// variable-endpoint `SERVICE` clauses in their right operands, innermost last — see
+    /// [`crate::service_endpoints`]. Empty outside such an operand, which is always, for
+    /// a query without a variable endpoint.
+    pub(crate) endpoint_frames: Vec<crate::service_endpoints::EndpointFrame<D::Id>>,
+    /// Whether the query being evaluated has a variable-endpoint `SERVICE` at all, so a
+    /// query without one never analyses a join operand for one.
+    pub(crate) endpoint_scan: crate::service_endpoints::EndpointScan,
     /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
     /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
     /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
@@ -905,6 +913,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             constructed: Vec::new(),
             in_substituted_exists: false,
             correlated_node_maps: Vec::new(),
+            endpoint_frames: Vec::new(),
+            endpoint_scan: crate::service_endpoints::EndpointScan::Unknown,
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
             property_functions: &EMPTY_RELATIONS,
@@ -1968,6 +1978,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // parent would — dropping the stack here would silently reproduce the false-zero
             // attribution this field exists to fix, just scoped to the parallel path.
             correlated_node_maps: self.correlated_node_maps.clone(),
+            // Carried, not reset: a worker evaluating part of a join's right operand (a
+            // `UNION` arm) must answer a variable-endpoint `SERVICE` over the same
+            // endpoints its parent would. The terms are the parent's, and a worker's
+            // scratch is a clone of the parent's, so they read back the same.
+            endpoint_frames: self.endpoint_frames.clone(),
+            endpoint_scan: self.endpoint_scan,
             // The query's effective base IRI is a read-only per-query constant.
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
@@ -2172,6 +2188,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // still see the enclosing window's map for any of ITS OWN charges that legitimately
             // resolve through it.
             correlated_node_maps: self.correlated_node_maps.clone(),
+            // A function body is its own query: no join of the caller's encloses its
+            // clauses, so no endpoint list of the caller's applies to them.
+            endpoint_frames: Vec::new(),
+            endpoint_scan: crate::service_endpoints::EndpointScan::Unknown,
             base_iri: None,
             user_functions: self.user_functions,
             // Inherited with the function table: a function body is SPARQL like any
@@ -2840,6 +2860,7 @@ pub fn eval<D: DatasetView + Sync>(
     // See `crate::blank_scope`.
     let joined = crate::blank_scope::join_shared_blanks(pattern);
     let pattern = joined.as_ref().unwrap_or(pattern);
+    ctx.endpoint_scan = crate::service_endpoints::scan(pattern);
     eval_evaluated(pattern, ctx)?
         .into_complete()
         .map(crate::blank_scope::without_joined_blanks)
@@ -3076,6 +3097,7 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
+    ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query));
     install_answer_cap_pushdown(query, ctx);
     Ok(())
 }

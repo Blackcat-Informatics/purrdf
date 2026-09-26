@@ -2430,6 +2430,23 @@ fn substitute_pattern_impl(
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             };
+            // Bound, but to a term that is not an IRI: there is no endpoint to invoke,
+            // which is an endpoint failure, so under `SILENT` it is the single empty
+            // solution — the enclosing merge keeps the solution's own binding. Left as
+            // a variable otherwise, so a non-silent clause surfaces the refusal an
+            // unresolvable endpoint gets in `crate::service_endpoints`.
+            if *silent
+                && let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = &resolved_name
+                && row.term.iter().any(|(bound, _)| bound == v)
+            {
+                return boxed_and_mapped(
+                    GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    },
+                    pattern,
+                    map,
+                );
+            }
             let inner_sub = substitute_pattern_impl(inner, row, map);
             boxed_and_mapped(
                 GraphPattern::Service {
