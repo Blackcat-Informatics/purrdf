@@ -231,54 +231,117 @@ def _suite_codec() -> SuiteResult:
 
 
 def _suite_shacl_w3c() -> SuiteResult:
+    """The vendored W3C SHACL 1.0 suite plus the `af/` seam: scrape the harness's
+    own `TOTAL` line. A case graded as an exact expected refusal of an
+    unresolvable import is reported in the XFail/Skip column and named in the
+    detail, never folded into Pass."""
     cmd = [
         "cargo", "test", "-p", "purrdf-shapes", "--locked",
         "--test", "w3c_conformance", "--", "--nocapture",
     ]
     rc, out = _run(cmd, _REPO_ROOT)
     _, _, failed = _cargo_tally(out)
-    m = re.search(r"TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)", out)
+    m = re.search(
+        r"TOTAL: passed (\d+), refused-unresolvable-import (\d+), xfailed (\d+), "
+        r"ledger (\d+)",
+        out,
+    )
     if m:
-        passed, xfailed = int(m.group(1)), int(m.group(2))
-        detail = f"{passed} pass · {xfailed} ledgered"
+        passed, refused, xfailed = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        detail = (
+            f"{passed} pass as approved · {refused} refused: unresolvable import · "
+            f"{xfailed} ledgered"
+        )
         return SuiteResult(
             "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
-            passed=passed, xskip=xfailed, failed=0,
+            passed=passed, xskip=refused + xfailed, failed=0,
             detail=detail, ok=(rc == 0 and failed == 0), log=out,
         )
     return _no_scoreboard(
         "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
-        "`TOTAL: passed N, xfailed N, ledger N`", cmd, out,
+        "`TOTAL: passed N, refused-unresolvable-import N, xfailed N, ledger N`", cmd, out,
     )
 
 
 _SHACL12_NAME = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
 _SHACL12_SOURCE = "W3C shacl12-test-suite"
+_SHACL12_UNLISTED_NAME = "SHACL 1.2 unlisted vendored files"
+_SHACL12_UNLISTED_SOURCE = "W3C shacl12-test-suite files no manifest includes"
 
 
 def _suite_shacl12_w3c() -> SuiteResult:
     """The vendored W3C SHACL 1.2 suite, every test type: scrape the harness's
     own `W3C12 TOTAL` line so the row counts suite ENTRIES (sht:Validate,
     sht:EvalNodeExpr, sht:Infer and the seven srlt: types), not the handful of
-    Rust test functions the cargo tally would report."""
+    Rust test functions the cargo tally would report.
+
+    Only the APPROVED suite — the entries an upstream manifest lists — is this
+    row. Pass is the entries that agree with their approved expectation exactly.
+    Upstream errata (graded exactly against the canonical form of a
+    non-canonical expected literal) and expected refusals of an unresolvable
+    import are counted in the XFail/Skip column and named in the detail, never
+    folded into Pass. The entries of vendored files no manifest includes are
+    their own row, `_suite_shacl12_unlisted`."""
     cmd = [
         "cargo", "test", "-p", "purrdf-shapes", "--locked",
         "--test", "w3c12_conformance", "--", "--nocapture",
     ]
     rc, out = _run(cmd, _REPO_ROOT)
     _, _, failed = _cargo_tally(out)
-    m = re.search(r"W3C12 TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)", out)
+    m = re.search(
+        r"W3C12 TOTAL: passed (\d+), upstream-errata (\d+), "
+        r"refused-unresolvable-import (\d+), xfailed (\d+), ledger (\d+)",
+        out,
+    )
     if m:
-        passed, xfailed = int(m.group(1)), int(m.group(2))
-        detail = f"{passed} pass · {xfailed} ledgered"
+        passed, errata, refused, xfailed = (int(m.group(i)) for i in range(1, 5))
+        detail = (
+            f"{passed} pass as approved · {errata} upstream errata (canonical XSD 1.1 "
+            f"decimal) · {refused} refused: unresolvable import · {xfailed} ledgered"
+        )
         return SuiteResult(
             _SHACL12_NAME, _SHACL12_SOURCE,
-            passed=passed, xskip=xfailed, failed=0,
+            passed=passed, xskip=errata + refused + xfailed, failed=0,
             detail=detail, ok=(rc == 0 and failed == 0), log=out,
         )
     return _no_scoreboard(
         _SHACL12_NAME, _SHACL12_SOURCE,
-        "`W3C12 TOTAL: passed N, xfailed N, ledger N`", cmd, out,
+        "`W3C12 TOTAL: passed N, upstream-errata N, refused-unresolvable-import N, "
+        "xfailed N, ledger N`",
+        cmd, out,
+    )
+
+
+def _suite_shacl12_unlisted() -> SuiteResult:
+    """The entries of vendored SHACL 1.2 files that NO upstream manifest
+    includes: graded exactly against their own file (one with a proven delta)
+    by their own test, and reported as their own row so they are never counted
+    among the approved suite's passes."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-shapes", "--locked",
+        "--test", "w3c12_conformance", "--", "--nocapture", "--exact",
+        "w3c_shacl12_unlisted_vendored_files",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(
+        r"W3C12 UNLISTED: passed (\d+), exact (\d+), with-delta (\d+), total (\d+)", out
+    )
+    if m:
+        passed, exact, with_delta, total = (int(m.group(i)) for i in range(1, 5))
+        detail = (
+            f"{total} entries of vendored files no upstream manifest includes, graded "
+            f"apart from the approved suite: {exact} exactly as written · {with_delta} "
+            "with a proven delta"
+        )
+        return SuiteResult(
+            _SHACL12_UNLISTED_NAME, _SHACL12_UNLISTED_SOURCE,
+            passed=passed, xskip=0, failed=total - passed,
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _no_scoreboard(
+        _SHACL12_UNLISTED_NAME, _SHACL12_UNLISTED_SOURCE,
+        "`W3C12 UNLISTED: passed N, exact N, with-delta N, total N`", cmd, out,
     )
 
 
@@ -339,8 +402,9 @@ def _suite_product_equivalence() -> SuiteResult:
         )
         detail = (
             f"{passed}/{total} shapes graphs agree across parse/admit/rebuild; "
-            f"{ledgered} refused by the product writer; {unparsable} whose own RDF the "
-            "suite requires the validator to reject"
+            f"{ledgered} refused by the product writer; {unparsable} whose shapes graph "
+            "the conformance harnesses require the loader to refuse (a declared "
+            "sht:Failure, or an exact expected refusal of an unresolvable import)"
         )
         return SuiteResult(
             "SHACL prepared-product equivalence",
@@ -1162,6 +1226,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_entailment_rl(),
         _suite_shacl_w3c(),
         _suite_shacl12_w3c(),
+        _suite_shacl12_unlisted(),
         _suite_shapes_corpus(),
         _suite_product_equivalence(),
         _suite_xsd_regex_corpus(),
@@ -1435,8 +1500,11 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         _suite_shacl_w3c,
         (
             _noise("W3C SHACL conformance scoreboard (9 tests):"),
-            _noise("  core/node                     passed   4  xfailed   1"),
-            _board("  TOTAL: passed 7, xfailed 2, ledger 2"),
+            _noise(
+                "  core/node                     passed   4  "
+                "refused-unresolvable-import  1  xfailed   1"
+            ),
+            _board("  TOTAL: passed 6, refused-unresolvable-import 1, xfailed 2, ledger 2"),
             _noise(_CARGO_OK),
         ),
     ),
@@ -1444,10 +1512,28 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         _SHACL12_NAME,
         _suite_shacl12_w3c,
         (
-            _noise("W3C SHACL 1.2 conformance scoreboard (9 tests):"),
-            _noise("  core/node                            passed   4  xfailed   1"),
-            _noise("  sht:Validate                         passed   4  xfailed   1"),
-            _board("  W3C12 TOTAL: passed 7, xfailed 2, ledger 2"),
+            _noise(
+                "W3C SHACL 1.2 conformance scoreboard (9 approved tests; 1 entries of "
+                "unlisted vendored files reported apart):"
+            ),
+            _noise(
+                "  core/node                            passed   4  upstream-errata  1  "
+                "refused-unresolvable-import  1  xfailed   1"
+            ),
+            _board(
+                "  W3C12 TOTAL: passed 5, upstream-errata 1, "
+                "refused-unresolvable-import 1, xfailed 2, ledger 2"
+            ),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        _SHACL12_UNLISTED_NAME,
+        _suite_shacl12_unlisted,
+        (
+            _noise("W3C SHACL 1.2 entries of unlisted vendored files:"),
+            _noise("  core/node/example-001                        sht:Validate"),
+            _board("  W3C12 UNLISTED: passed 2, exact 1, with-delta 1, total 2"),
             _noise(_CARGO_OK),
         ),
     ),

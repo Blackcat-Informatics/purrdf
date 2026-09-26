@@ -102,7 +102,9 @@ shapes graph.
 
 **Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL
-tests) passes, 547/547 with an empty expected-failure ledger:
+tests) runs, and of the 544 an upstream manifest lists, 537 pass as approved,
+6 are upstream errata and 1 is refused for an unresolvable import, with an
+empty expected-failure ledger:
 
 ```bash
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
