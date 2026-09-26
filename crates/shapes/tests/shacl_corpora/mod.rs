@@ -269,39 +269,27 @@ pub(crate) const DASH: &str = "http://datashapes.org/dash";
 const DASH_STAND_IN: &str = "<http://datashapes.org/dash> \
     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .\n";
 
-/// The IRIs vendored cases `owl:imports` that name the case document ITSELF — the SHACL
-/// `sh:prefixes/owl:imports*` idiom — each the IRI upstream publishes the document under
-/// (SHACL 1.0) or the node the document hangs its own `sh:declare` on (SHACL 1.2).
-const SELF_IMPORTS: [&str; 2] = [
-    "http://datashapes.org/sh/tests/sparql/node/prefixes-001.test",
-    "http://example.com/ns#",
-];
-
 /// The import table a vendored W3C case's shapes graph loads with: for every
 /// `owl:imports` the graph does not already resolve itself, the document the harness
 /// supplies for it.
 ///
-/// PurRDF refuses a shapes graph whose imports closure is not in hand, and the vendored
-/// suites carry exactly two kinds of import — [`DASH`], and a document importing its own
-/// IRI ([`SELF_IMPORTS`]). A harness is a caller like any other, so it resolves them the
-/// way a caller does: a document for DASH, and a loaded-IRI declaration for a
-/// self-import. An import this ledger does not name panics: a newly vendored case with an
-/// import has to be resolved here on purpose, not skipped.
+/// PurRDF refuses a shapes graph whose imports closure is not in hand. A harness is a
+/// caller like any other, so it resolves imports the way a caller does: by supplying a
+/// document. The prefix idiom the suites use (`owl:imports` of a node the case describes
+/// with `sh:declare`) is resolved by the engine's own rule and needs nothing here. An
+/// import this function does not supply panics: a newly vendored case with an import has
+/// to be resolved here on purpose, not skipped.
 pub(crate) fn w3c_case_imports(dataset: &RdfDataset) -> ShapesImports {
     let mut imports = ShapesImports::new();
-    for iri in purrdf_core::imports::unresolved_imports(dataset, &[]) {
+    for iri in imports.import_map().unresolved_imports(dataset) {
         if iri == DASH {
-            if imports.import_map().get(DASH).is_none() {
-                imports
-                    .insert_turtle(DASH, DASH_STAND_IN)
-                    .expect("the DASH stand-in parses");
-            }
-        } else if SELF_IMPORTS.contains(&iri.as_str()) {
-            imports.declare_loaded(iri);
+            imports
+                .insert_turtle(DASH, DASH_STAND_IN)
+                .expect("the DASH stand-in parses");
         } else {
             panic!(
-                "a vendored case owl:imports <{iri}>, which the harness import ledger does not \
-                 resolve; add it to `w3c_case_imports`"
+                "a vendored case owl:imports <{iri}>, which the harness does not supply a \
+                 document for; add it to `w3c_case_imports`"
             );
         }
     }

@@ -890,8 +890,7 @@ pub(crate) enum Command {
         /// of its `file://` retrieval IRI — the same flag `shacl pack --base` is, for the
         /// shapes document `validate --shapes` parses. It is also the shapes document's own
         /// IRI for `owl:imports`: an import of it names the document being read, so it needs
-        /// no `--import` (SHACL's `sh:prefixes/owl:imports*` idiom points at the document
-        /// itself). An `@base` inside the document still wins over it there, as Turtle
+        /// no `--import`. An `@base` inside the document still wins over it there, as Turtle
         /// specifies. `--shapes-graph` resolves against it too. Stdin has no retrieval IRI,
         /// so this is the only base a `--shapes -` document can have.
         ///
@@ -905,9 +904,10 @@ pub(crate) enum Command {
         /// followed transitively — an imported document's own `owl:imports` are resolved
         /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
         /// import is only ever the document the operator named. An import of the shapes
-        /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), or of an
-        /// already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
-        /// `owl:versionIRI` is `<X>`), needs no pair. Any other `owl:imports` no pair resolves
+        /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), of an
+        /// ontology already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
+        /// `owl:versionIRI` is `<X>`), or of a node the shapes graph describes with
+        /// `sh:declare` (SHACL's `sh:prefixes/owl:imports*/sh:declare` idiom), needs no pair. Any other `owl:imports` no pair resolves
         /// is refused by name (exit 1) rather than validated as if the shapes graph were
         /// complete, and a pair the closure never reaches is refused as unused (exit 2).
         #[arg(long, value_name = "IRI=FILE")]
@@ -1530,9 +1530,10 @@ pub(crate) enum ShaclCommand {
         /// followed transitively — an imported document's own `owl:imports` are resolved
         /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
         /// import is only ever the document the operator named. An import of the shapes
-        /// document's own IRI (`--base`, its `file://` retrieval IRI, or `@base`), or of an
+        /// document's own IRI (`--base`, its `file://` retrieval IRI, or `@base`), of an
         /// ontology already IN the shapes graph (`<X> a owl:Ontology`, or an ontology whose
-        /// `owl:versionIRI` is `<X>`), needs no pair. Any other `owl:imports` no pair resolves
+        /// `owl:versionIRI` is `<X>`), or of a node the shapes graph describes with
+        /// `sh:declare` (SHACL's `sh:prefixes/owl:imports*/sh:declare` idiom), needs no pair. Any other `owl:imports` no pair resolves
         /// is refused by name (exit 1) rather than packed as if the shapes graph were
         /// complete, exactly as `validate --shapes` refuses it, and a pair the closure never
         /// reaches is refused as unused (exit 2).

@@ -609,3 +609,77 @@ fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
         stdout(&restored)
     );
 }
+
+/// SHACL's prefix idiom (the W3C `sparql/node/prefixes-001` shape on `example.org`): the
+/// `owl:imports` target is a node the shapes graph describes with `sh:declare`, so the
+/// command line validates it with no `--import`, and the prefixes declared along
+/// `sh:prefixes/owl:imports*/sh:declare` — `imp:` on the target, `test:` on the importing
+/// node, neither a Turtle `@prefix` — reach the query, which reports `ex:Invalid`. The
+/// neighbour describes the target only with `rdfs:label` and is refused by name.
+#[test]
+fn the_shacl_prefix_idiom_validates_without_an_import_and_a_labelled_target_is_refused() {
+    let idiom = |description: &str| {
+        format!(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+             <http://example.org/ns#> {description} .\n\
+             ex:TestPrefixes owl:imports <http://example.org/ns#> ;\n\
+               sh:declare [ sh:prefix \"test\" ; \
+                            sh:namespace \"http://example.org/test#\"^^xsd:anyURI ] .\n\
+             ex:TestSPARQL sh:prefixes ex:TestPrefixes ;\n\
+               sh:select \"SELECT $this ?value WHERE {{ $this imp:property ?value . \
+                            FILTER (?value = test:Value) }}\" .\n\
+             ex:TestShape a sh:NodeShape ; sh:sparql ex:TestSPARQL ;\n\
+               sh:targetNode ex:Invalid , ex:Valid .\n"
+        )
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let declared = write_file(
+        dir.path(),
+        "declared.ttl",
+        &idiom(
+            "sh:declare [ sh:prefix \"imp\" ; \
+             sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ]",
+        ),
+    );
+    let labelled = write_file(
+        dir.path(),
+        "labelled.ttl",
+        &idiom("rdfs:label \"a namespace\""),
+    );
+    let data = write_file(
+        dir.path(),
+        "data.nt",
+        "<http://example.org/ns#Invalid> <http://example.org/ns#property> \
+         <http://example.org/test#Value> .\n\
+         <http://example.org/ns#Valid> <http://example.org/ns#property> \
+         <http://example.org/test#Other> .\n",
+    );
+
+    let out = run(&["validate", "--shapes", &declared, &data]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "the idiom is in hand: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "one result: {err}"
+    );
+    let report = stdout(&out);
+    assert!(
+        report.contains("<http://www.w3.org/ns/shacl#focusNode> <http://example.org/ns#Invalid>")
+            && report
+                .contains("<http://www.w3.org/ns/shacl#value> <http://example.org/test#Value>"),
+        "the query ran with both declared prefixes: {report}"
+    );
+
+    let out = run(&["validate", "--shapes", &labelled, &data]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 1, "a runtime refusal: {err}");
+    assert!(
+        err.contains("unresolved-import") && err.contains("<http://example.org/ns#>"),
+        "the refusal names the labelled target: {err}"
+    );
+    assert!(stdout(&out).is_empty(), "no report is written");
+}

@@ -506,8 +506,10 @@ refusing. An import is now resolved when it names a document already read (the
 shapes document's own retrieval IRI, `--shapes-base`, `shacl pack --base` or
 `@base`, or an `--import` document), or when the closure already holds the
 ontology it names (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is
-`<X>`). The first case is SHACL's `sh:prefixes/owl:imports*` idiom, which points
-at the document's own IRI. A shapes document that merges the W3C SHACL 1.2 vocabularies is therefore complete as written.
+`<X>`), or — for a shapes graph — when the closure describes `<X>` with
+`sh:declare`. That last case is SHACL's `sh:prefixes/owl:imports*/sh:declare`
+prefix idiom, where the import target is a node the shapes graph declares prefixes
+on; the W3C `prefixes-001` vectors write it, and validate as written. A shapes document that merges the W3C SHACL 1.2 vocabularies is therefore complete as written.
 With that rule in place, the warn-and-continue path could only mean one thing: a
 verdict about a smaller shapes graph than the one named, printed next to a warning
 that does not undo it.
@@ -525,7 +527,7 @@ refuses it with `EntailError::UnresolvedImport`. Pinned by
 `merged_vocabulary_needs_no_import_flag` and `unresolved_import_is_refused` (CLI),
 `merged_vocabulary_packs` and `unresolved_import_refused` (product),
 `import_present_in_graph_is_resolved`, `absent_import_is_unresolved` and
-`self_import_is_resolved` (the rule), `a_self_imported_prefix_document_needs_no_import_flag`
+`self_import_is_resolved` (the rule), `the_w3c_prefix_idiom_needs_no_import_flag_and_a_labelled_target_is_refused`
 (the W3C `prefixes-001` vector), and the cross-host verdict tests
 (`crates/validate/tests/shapes_owl_imports.rs`,
 `every_shapes_lane_gives_the_same_owl_imports_verdict`,

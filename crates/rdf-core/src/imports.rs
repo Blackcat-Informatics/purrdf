@@ -40,9 +40,22 @@
 //! * the closure holds some `O owl:versionIRI X` — an ontology whose VERSION IRI is `X`.
 //!   OWL 2 §3.2 makes a version IRI a name the ontology may be imported by, and
 //!   `owl:versionIRI`'s domain is `owl:Ontology`, so its subject is an ontology whether or
-//!   not it is also typed as one.
+//!   not it is also typed as one; or
+//! * the closure holds a triple `X P o` whose predicate `P` the calling engine registered
+//!   with [`ImportMap::resolve_subjects_of`] — `X` is a node the closure itself describes in
+//!   the one way that engine's language reads an import target. The kernel registers no such
+//!   predicate and names no vocabulary beyond OWL's own; an `ImportMap` built with
+//!   [`ImportMap::new`] applies the three routes above and nothing else.
 //!
 //! Everything else is unresolved.
+//!
+//! The fourth route exists for SHACL. SHACL-SPARQL collects a query's prefix declarations
+//! along `sh:prefixes/owl:imports*/sh:declare` WITHIN the shapes graph, so the target of such
+//! an `owl:imports` is a node the shapes graph describes with `sh:declare`, not a document
+//! that has to be fetched — the W3C SHACL test suite writes exactly that. `purrdf-shapes`
+//! registers `sh:declare`; entailment registers nothing, and its verdict is unchanged. Like
+//! the ontology declarations, a registered description counts wherever in the closure it
+//! occurs, including in a document the closure imported.
 //!
 //! Presence counts because merging a vocabulary INTO the graph that imports it is how an
 //! `owl:imports` is resolved by hand, and it is what a caller who read the W3C SHACL 1.2
@@ -123,6 +136,10 @@ pub struct ImportMap {
     /// The IRIs of the documents the importing graph itself was read from — its retrieval
     /// IRI or base. An import of one of these names a document already in hand.
     loaded: BTreeSet<String>,
+    /// Predicates whose subjects the closure resolves as import targets
+    /// ([`resolve_subjects_of`](Self::resolve_subjects_of)). Empty unless an engine
+    /// registered one.
+    describing: BTreeSet<String>,
 }
 
 impl ImportMap {
@@ -180,6 +197,43 @@ impl ImportMap {
         self.loaded.contains(iri)
     }
 
+    /// Register `predicate` as one that DESCRIBES an import target: an `owl:imports <X>` is
+    /// then also resolved when the closure holds a triple `X predicate ?o`, anywhere in it.
+    /// Returns whether the predicate was new.
+    ///
+    /// This is the extension point an engine uses when its own language reads an import
+    /// target as a node the importing graph describes rather than as a document to fetch —
+    /// SHACL's `sh:prefixes/owl:imports*/sh:declare` path is the case it exists for. It is
+    /// deliberately narrow: one predicate, subject position, IRI subjects only. A target the
+    /// closure mentions some other way (a label, a type other than `owl:Ontology`) stays
+    /// unresolved.
+    ///
+    /// ```
+    /// use purrdf_core::RdfDatasetBuilder;
+    /// use purrdf_core::imports::ImportMap;
+    ///
+    /// let mut b = RdfDatasetBuilder::new();
+    /// let importer = b.intern_iri("http://example.org/p");
+    /// let imports = b.intern_iri("http://www.w3.org/2002/07/owl#imports");
+    /// let target = b.intern_iri("http://example.org/q");
+    /// let describes = b.intern_iri("http://example.org/describes");
+    /// let value = b.intern_iri("http://example.org/v");
+    /// b.push_quad(importer, imports, target, None);
+    /// b.push_quad(target, describes, value, None);
+    /// let graph = b.freeze().expect("freeze");
+    ///
+    /// // Unregistered, the description resolves nothing.
+    /// let mut map = ImportMap::new();
+    /// assert_eq!(map.closure(&graph).unresolved(), ["http://example.org/q".to_owned()]);
+    ///
+    /// // Registered, the target is a node the graph describes.
+    /// map.resolve_subjects_of("http://example.org/describes");
+    /// assert!(map.closure(&graph).unresolved().is_empty());
+    /// ```
+    pub fn resolve_subjects_of(&mut self, predicate: impl Into<String>) -> bool {
+        self.describing.insert(predicate.into())
+    }
+
     /// Walk `graph`'s transitive `owl:imports` closure against this map, to a fixpoint.
     ///
     /// Breadth-first, each IRI visited once, so a cycle terminates. A map-supplied document
@@ -198,7 +252,7 @@ impl ImportMap {
             };
         }
         let mut declared: BTreeSet<String> = self.loaded.clone();
-        declared_ontologies(graph, &mut declared);
+        self.declared_targets(graph, &mut declared);
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut documents: Vec<(String, Arc<RdfDataset>)> = Vec::new();
         let mut unsupplied: Vec<String> = Vec::new();
@@ -210,7 +264,7 @@ impl ImportMap {
                 unsupplied.push(iri);
                 continue;
             };
-            declared_ontologies(document, &mut declared);
+            self.declared_targets(document, &mut declared);
             queue.extend(imported_iris(document));
             documents.push((iri, Arc::clone(document)));
         }
@@ -251,6 +305,43 @@ impl ImportMap {
     #[must_use]
     pub fn unresolved_imports(&self, graph: &RdfDataset) -> Vec<String> {
         self.closure(graph).unresolved
+    }
+
+    /// Add every import target `graph` resolves in place to `into`: each IRI typed
+    /// `owl:Ontology`, each IRI some ontology names as its `owl:versionIRI`, and each IRI
+    /// subject of a predicate registered with [`resolve_subjects_of`](Self::resolve_subjects_of).
+    ///
+    /// One pass over the quads, and none at all when `graph` interns none of the terms the
+    /// rule reads.
+    fn declared_targets(&self, graph: &RdfDataset, into: &mut BTreeSet<String>) {
+        let rdf_type = graph.term_id_by_iri(RDF_TYPE);
+        let ontology = graph.term_id_by_iri(OWL_ONTOLOGY);
+        let version_iri = graph.term_id_by_iri(OWL_VERSIONIRI);
+        let describing: Vec<TermId> = self
+            .describing
+            .iter()
+            .filter_map(|predicate| graph.term_id_by_iri(predicate))
+            .collect();
+        if version_iri.is_none()
+            && (rdf_type.is_none() || ontology.is_none())
+            && describing.is_empty()
+        {
+            return;
+        }
+        for quad in graph.quads() {
+            let named = if Some(quad.p) == rdf_type && Some(quad.o) == ontology {
+                quad.s
+            } else if Some(quad.p) == version_iri {
+                quad.o
+            } else if describing.contains(&quad.p) {
+                quad.s
+            } else {
+                continue;
+            };
+            if let TermValue::Iri(iri) = graph.term_value(named) {
+                into.insert(iri);
+            }
+        }
     }
 }
 
@@ -357,29 +448,6 @@ pub fn imported_iris(graph: &RdfDataset) -> Vec<String> {
             _ => None,
         })
         .collect()
-}
-
-/// Add every ontology IRI `graph` declares to `into`: each IRI typed `owl:Ontology`, and
-/// each IRI some ontology names as its `owl:versionIRI`.
-fn declared_ontologies(graph: &RdfDataset, into: &mut BTreeSet<String>) {
-    let rdf_type = graph.term_id_by_iri(RDF_TYPE);
-    let ontology = graph.term_id_by_iri(OWL_ONTOLOGY);
-    let version_iri = graph.term_id_by_iri(OWL_VERSIONIRI);
-    if version_iri.is_none() && (rdf_type.is_none() || ontology.is_none()) {
-        return;
-    }
-    for quad in graph.quads() {
-        let named = if Some(quad.p) == rdf_type && Some(quad.o) == ontology {
-            quad.s
-        } else if Some(quad.p) == version_iri {
-            quad.o
-        } else {
-            continue;
-        };
-        if let TermValue::Iri(iri) = graph.term_value(named) {
-            into.insert(iri);
-        }
-    }
 }
 
 /// Every term id `graph` holds, in every position [`copy_scoped`] writes: the quads, the
@@ -624,6 +692,62 @@ mod tests {
         let mut other = ImportMap::new();
         other.insert(OTHER, triples(&[]));
         assert_eq!(other.closure(&importer(&[])).unresolved(), [LIB.to_owned()]);
+    }
+
+    /// A registered describing predicate resolves the subject it describes — in the
+    /// importing graph and in a document the closure imported — while an unregistered
+    /// predicate describing the same node resolves nothing, and a map that registered
+    /// nothing keeps the three OWL routes only.
+    #[test]
+    fn a_registered_description_resolves_and_an_unregistered_one_does_not() {
+        const TARGET: &str = "http://example.org/target";
+        const DESCRIBES: &str = "http://example.org/describes";
+        const LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+        const V: &str = "http://example.org/v";
+        let described_by = |predicate: &str| {
+            triples(&[
+                ("http://example.org/shapes", OWL_IMPORTS, TARGET),
+                (TARGET, predicate, V),
+            ])
+        };
+        let mut registered = ImportMap::new();
+        assert!(registered.resolve_subjects_of(DESCRIBES));
+        assert!(
+            !registered.resolve_subjects_of(DESCRIBES),
+            "registered once"
+        );
+
+        assert_eq!(
+            registered.closure(&described_by(DESCRIBES)).unresolved(),
+            NONE
+        );
+        assert_eq!(
+            registered.closure(&described_by(LABEL)).unresolved(),
+            [TARGET.to_owned()]
+        );
+        assert_eq!(
+            ImportMap::new()
+                .closure(&described_by(DESCRIBES))
+                .unresolved(),
+            [TARGET.to_owned()],
+            "the kernel registers no describing predicate of its own"
+        );
+
+        // The description arrives from a document the closure imported.
+        const LIB: &str = "http://example.org/lib";
+        let importer = triples(&[
+            ("http://example.org/shapes", OWL_IMPORTS, LIB),
+            ("http://example.org/shapes", OWL_IMPORTS, TARGET),
+        ]);
+        let mut map = registered.clone();
+        map.insert(LIB, triples(&[(TARGET, DESCRIBES, V)]));
+        assert_eq!(map.closure(&importer).unresolved(), NONE);
+        let mut labelled = registered;
+        labelled.insert(LIB, triples(&[(TARGET, LABEL, V)]));
+        assert_eq!(
+            labelled.closure(&importer).unresolved(),
+            [TARGET.to_owned()]
+        );
     }
 
     /// A supplied document no import reaches is reported; the neighbour whose graph DOES

@@ -122,7 +122,8 @@ use crate::{sink, source};
 ///
 /// An `owl:imports` that names neither the shapes document itself (its `--base`, `file://`
 /// retrieval IRI or `@base`) nor an ontology already in the shapes graph (`<X> a
-/// owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), and that no `--import`
+/// owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`) nor a node the shapes
+/// graph describes with `sh:declare` (SHACL's prefix idiom), and that no `--import`
 /// pair resolves, is refused by name, with the pair that resolves it — the product is never
 /// packed from a shapes graph smaller than the one named. See [`crate::shapes_source`]'s
 /// module documentation for the rule. A pair the closure never reaches is a usage error.

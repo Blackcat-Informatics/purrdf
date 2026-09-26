@@ -150,11 +150,27 @@ Turtle specifies.
 An import whose document or ontology is **already loaded** needs no pair. It
 is resolved when it names a document that was read: the shapes document's
 own base (its `file://` retrieval IRI, `--shapes-base`, or `shacl pack
---base`), an in-document `@base`, or an `--import` document's IRI. SHACL
-relies on this. `sh:prefixes` collects `sh:declare`s along `owl:imports*`, and a document often points that
-path at its own IRI from a node that is not an `owl:Ontology`. An import is
-also resolved when the graph holds `<X> a owl:Ontology`, or an ontology whose
-`owl:versionIRI` is `<X>`, and the rule applies across the whole closure. A
+--base`), an in-document `@base`, or an `--import` document's IRI. An import
+is also resolved when the graph holds `<X> a owl:Ontology`, or an ontology
+whose `owl:versionIRI` is `<X>`.
+
+An import is also resolved when the shapes graph describes its target with
+`sh:declare`. This is SHACL's prefix-declaration idiom: a SHACL-SPARQL query
+collects its prefixes along `sh:prefixes/owl:imports*/sh:declare` within the
+shapes graph, so the target of such an `owl:imports` is a node the shapes graph
+declares prefixes on, not a document to fetch. The W3C test suite writes
+exactly this, and it validates as written:
+
+```turtle
+<http://example.com/ns#> sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.com/ns#"^^xsd:anyURI ] .
+ex:TestPrefixes owl:imports <http://example.com/ns#> ;
+  sh:declare [ sh:prefix "test" ; sh:namespace "http://test.com/ns#"^^xsd:anyURI ] .
+```
+
+Only `sh:declare` counts. A target the shapes graph describes some other way —
+only by an `rdfs:label`, say — is still an unresolved import. Every one of
+these rules applies across the whole closure, so a declaration that arrives in
+an imported document counts too. A
 shapes document that merges the W3C SHACL 1.2 vocabularies — `shnex.ttl`
 imports `sh:`, and `shacl.ttl` beside it declares `sh:` — is complete as
 written.
@@ -162,7 +178,7 @@ written.
 Every **other** `owl:imports` no pair resolves is refused (exit 1). The refusal
 names each missing IRI and the `--import IRI=FILE` pair that resolves it, and
 suggests `--shapes-base IRI` for a document that imports its own published
-IRI — the W3C test vectors are such documents, read here from a local file.
+IRI and is read here from a local file.
 Validating without the imported document would be a verdict about a smaller
 shapes graph than the one named, so there is no warn-and-continue path. A pair
 the closure never reaches is refused as unused (exit 2) rather than read and

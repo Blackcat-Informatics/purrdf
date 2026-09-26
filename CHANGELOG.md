@@ -563,10 +563,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 - **core:** `purrdf_core::imports`, the one rule for when an `owl:imports` is resolved
   and the one merge that folds a resolved closure into a dataset: `ImportMap`
-  (`insert`, `declare_loaded`, `closure`, `unresolved_imports`), `ImportClosure`
+  (`insert`, `declare_loaded`, `resolve_subjects_of`, `closure`,
+  `unresolved_imports`), `ImportClosure`
   (`documents`, `unresolved`, `unreached`, `merge`), `unresolved_imports` and
   `imported_iris`. Entailment and SHACL both take their verdict from it;
-  `purrdf-entail` re-exports it from `entails::imports`.
+  `purrdf-entail` re-exports it from `entails::imports`. `resolve_subjects_of`
+  registers a predicate whose subjects count as import targets in hand; the kernel
+  registers none, and SHACL registers `sh:declare`.
 
 - **shapes:** `purrdf_shapes::imports`: the `ShapesImports` table (`from_turtle`,
   `insert`, `insert_turtle`, `declare_loaded`), the typed `ShapesImportError`
@@ -1468,6 +1471,17 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   when it names a document already loaded, an `owl:Ontology` in the graph or a
   version IRI in the graph, transitively over the closure, and the CLI, the product
   packer and entailment all take their verdict from that one rule.
+
+- **core, shapes:** SHACL's prefix-declaration idiom was refused as an unresolved
+  import. A SHACL-SPARQL query collects its prefixes along
+  `sh:prefixes/owl:imports*/sh:declare` within the shapes graph, so the target of such
+  an `owl:imports` is a node the shapes graph describes with `sh:declare`, not a
+  document to fetch. The approved W3C `sparql/node/prefixes-001` tests (SHACL 1.0 and
+  1.2) write exactly that, and every host refused them unless the caller declared the
+  target loaded. For a shapes graph, an import is now also resolved when the closure
+  holds a `sh:declare` triple whose subject is the import target, anywhere in the
+  closure; a target described any other way (only an `rdfs:label`, say) is still
+  refused. Entailment's rule is unchanged.
 
 - **shapes, rdf, python:** prefixes were recovered by scanning text. The SHACL-AF
   document-prefix fallback scanned the shapes document, so a `PREFIX` line inside one

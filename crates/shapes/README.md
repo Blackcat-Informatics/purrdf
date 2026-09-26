@@ -846,8 +846,13 @@ closure, as the constructor resolved it.
 Every `Shapes` constructor resolves the shapes graph's `owl:imports` closure through
 `imports::resolve_shapes_imports` before it reads a shape: an import is resolved by a
 document in the caller's `ShapesImports` table, by the IRI the shapes document was read
-under, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an ontology
-whose `owl:versionIRI` is `<X>`). The supplied documents are merged in, and an import
+under, by the closure declaring the ontology (`<X> a owl:Ontology`, or an ontology
+whose `owl:versionIRI` is `<X>`), or by the closure describing `<X>` with `sh:declare`.
+The last is SHACL's prefix-declaration idiom: `sh:prefixes` collects prefixes along
+`sh:prefixes/owl:imports*/sh:declare` within the shapes graph, so an import target that
+declares prefixes there is a node the shapes graph holds, not a missing document. A
+target described any other way — only by an `rdfs:label`, say — is still unresolved.
+The supplied documents are merged in, and an import
 nothing resolves — or a table entry nothing imports — is refused with the typed
 `ShapesError::Imports`. So a `Shapes` value is complete by construction, and every
 entry point built on one gives the same verdict on every host. PurRDF fetches nothing.

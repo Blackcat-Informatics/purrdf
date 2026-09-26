@@ -399,3 +399,94 @@ fn a_prepared_preparation_of_the_closure_matches_a_fresh_parse() {
             .expect("validates");
     assert_eq!(direct.to_ntriples(), via_prepared.to_ntriples());
 }
+
+// ── SHACL's prefix idiom ──────────────────────────────────────────────────────
+
+/// The W3C SHACL `sparql/node/prefixes-001` idiom on `example.org`: the query's prefixes are
+/// collected along `sh:prefixes/owl:imports*/sh:declare`, and the `owl:imports` target is a
+/// node this shapes graph describes with `sh:declare`. `imp:` is declared ONLY on that
+/// target and `test:` only on the importing node — neither is a Turtle `@prefix` — so a
+/// result proves the import was followed to the described node and both declarations
+/// reached the query. `description` is what the shapes graph says about the target.
+fn prefix_idiom(description: &str) -> String {
+    format!(
+        "@prefix ex: <http://example.org/ns#> .\n\
+         @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+         @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+         <http://example.org/ns#> {description} .\n\
+         ex:TestPrefixes owl:imports <http://example.org/ns#> ;\n\
+           sh:declare [ sh:prefix \"test\" ; \
+                        sh:namespace \"http://example.org/test#\"^^xsd:anyURI ] .\n\
+         ex:TestSPARQL sh:prefixes ex:TestPrefixes ;\n\
+           sh:select \"SELECT $this ?value WHERE {{ $this imp:property ?value . \
+                        FILTER (?value = test:Value) }}\" .\n\
+         ex:TestShape a sh:NodeShape ; sh:sparql ex:TestSPARQL ;\n\
+           sh:targetNode ex:Invalid , ex:Valid .\n"
+    )
+}
+
+/// The import target declares `imp:` — the idiom.
+const PREFIX_DECLARING: &str = "sh:declare [ sh:prefix \"imp\" ; \
+    sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ]";
+
+/// The neighbour: the import target is described, but only by a label.
+const LABELLED_ONLY: &str = "rdfs:label \"a namespace\"";
+
+/// `ex:Invalid` holds `test:Value`, the one the query reports; `ex:Valid` holds another.
+const PREFIX_IDIOM_DATA: &str = "<http://example.org/ns#Invalid> \
+    <http://example.org/ns#property> <http://example.org/test#Value> .\n\
+    <http://example.org/ns#Valid> \
+    <http://example.org/ns#property> <http://example.org/test#Other> .\n";
+
+#[test]
+fn the_shacl_prefix_idiom_resolves_with_no_table_and_a_labelled_target_does_not() {
+    let shapes = prefix_idiom(PREFIX_DECLARING);
+    let report = engine::validate_graphs(PREFIX_IDIOM_DATA, &shapes, None)
+        .expect("a prefix-declaring import target is in hand");
+    assert!(!report.conforms);
+    let results: Vec<(String, Option<String>)> = report
+        .results
+        .iter()
+        .map(|r| {
+            (
+                r.focus_node.to_string(),
+                r.value.as_ref().map(ToString::to_string),
+            )
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [(
+            "<http://example.org/ns#Invalid>".to_owned(),
+            Some("<http://example.org/test#Value>".to_owned())
+        )],
+        "both declared prefixes reached the query, and only `ex:Invalid` is reported"
+    );
+    let sarif = validate_to_sarif_string(
+        &shapes,
+        None,
+        PREFIX_IDIOM_DATA,
+        &SarifOptions::default(),
+        &[],
+    )
+    .expect("the string boundary agrees");
+    assert!(sarif.contains("SPARQLConstraintComponent"), "{sarif}");
+
+    let neighbour = ShapesImportError::Unresolved {
+        iris: vec!["http://example.org/ns#".to_owned()],
+    };
+    let refused = engine::validate_graphs(PREFIX_IDIOM_DATA, &prefix_idiom(LABELLED_ONLY), None)
+        .expect_err("a target described only by a label is not in hand");
+    assert_eq!(refused.as_imports(), Some(&neighbour), "{refused}");
+    let refused = validate_to_sarif_string(
+        &prefix_idiom(LABELLED_ONLY),
+        None,
+        PREFIX_IDIOM_DATA,
+        &SarifOptions::default(),
+        &[],
+    )
+    .expect_err("the string boundary refuses it too");
+    assert_eq!(refused.as_imports(), Some(&neighbour), "{refused}");
+}

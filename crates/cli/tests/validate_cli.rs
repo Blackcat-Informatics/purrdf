@@ -1378,8 +1378,8 @@ fn a_malformed_shapes_graph_is_a_named_usage_error() {
 //
 // Jena's SHACL validator dereferences `owl:imports` over HTTP. PurRDF ships no HTTP client
 // and must stay wasm32-clean, so the closure is caller-supplied — the same answer `entails
-// --import` and `shex --import` give. An import whose ontology is already IN the shapes graph
-// needs no pair; any other unresolved import is REFUSED, because a shapes graph whose shapes
+// --import` and `shex --import` give. An import whose ontology is already IN the shapes graph,
+// or whose target the shapes graph describes with `sh:declare`, needs no pair; any other unresolved import is REFUSED, because a shapes graph whose shapes
 // all live in an imported document would otherwise report `conforms true / results 0`
 // against no shapes at all.
 
@@ -1551,10 +1551,10 @@ fn unresolved_import_is_refused() {
     assert!(stdout(&out).is_empty(), "no report is written");
 }
 
-/// The vendored W3C `sparql/node/prefixes-001` test: `ex:TestPrefixes owl:imports` the test
-/// document's OWN IRI, which is SHACL's `sh:prefixes/owl:imports*/sh:declare` path reaching
-/// the `test:` prefix the document declares on itself. Nothing needs fetching: the import
-/// names the document being read.
+/// The vendored W3C `sparql/node/prefixes-001` test: `ex:TestPrefixes owl:imports` the IRI
+/// upstream publishes the test under, a node the document describes with `sh:declare` — SHACL's
+/// `sh:prefixes/owl:imports*/sh:declare` path, reaching the `ex:` prefix declared there.
+/// Nothing needs fetching: the import names a node the shapes graph holds.
 const PREFIXES_001: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../vectors/shacl/sparql/node/prefixes-001.ttl"
@@ -1563,8 +1563,8 @@ const PREFIXES_001: &str = concat!(
 const PREFIXES_001_IRI: &str = "http://datashapes.org/sh/tests/sparql/node/prefixes-001.test";
 
 /// The W3C expected report for `prefixes-001`: one violation, on `ex:InvalidResource1`, whose
-/// value is `test:Value` — reachable only if the `test:` prefix the self-import leads to was
-/// honoured by the `sh:select`.
+/// value is `test:Value` — reachable only if the `test:` and `ex:` prefixes the
+/// `sh:prefixes/owl:imports*/sh:declare` path leads to were honoured by the `sh:select`.
 fn assert_prefixes_001_verdict(out: &Output) {
     let err = stderr(out);
     assert_eq!(code(out), 0, "a decided verdict: {err}");
@@ -1591,16 +1591,18 @@ fn assert_prefixes_001_verdict(out: &Output) {
     );
 }
 
-/// A shapes document that `owl:imports` its OWN IRI validates with no `--import` once it is
-/// read under that IRI: `--shapes-base` names the IRI the W3C suite publishes the vector at,
-/// the import then names the document being read, and the run reaches the W3C verdict with
-/// the same file as data.
+/// The W3C `prefixes-001` vector validates as written, with no `--import` and no
+/// `--shapes-base`: its `owl:imports` target is the node the document itself describes with
+/// `sh:declare` — SHACL's `sh:prefixes/owl:imports*/sh:declare` idiom — so the import is in
+/// hand, and the run reaches the W3C verdict with the same file as data. `--shapes-base`
+/// changes nothing about that, and `shacl pack` packs it as written too.
 ///
-/// The neighbour: read under its `file://` retrieval IRI instead, the document is NOT the
-/// document its import names, so the import is refused by name — and the refusal names both
-/// remedies, `--shapes-base` and `--import`.
+/// The neighbour: the same document with the target's `sh:declare` replaced by an
+/// `rdfs:label` describes the target, but not as SHACL reads an import target, so the import
+/// is refused by name — and the refusal names both remedies, `--shapes-base` and `--import`.
 #[test]
-fn a_self_imported_prefix_document_needs_no_import_flag() {
+fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_labelled_target_is_refused() {
+    assert_prefixes_001_verdict(&run(&["validate", "--shapes", PREFIXES_001, PREFIXES_001]));
     assert_prefixes_001_verdict(&run(&[
         "validate",
         "--shapes",
@@ -1610,7 +1612,23 @@ fn a_self_imported_prefix_document_needs_no_import_flag() {
         PREFIXES_001,
     ]));
 
-    let refused = run(&["validate", "--shapes", PREFIXES_001, PREFIXES_001]);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vector = std::fs::read_to_string(PREFIXES_001).expect("the vendored vector");
+    let target = format!("<{PREFIXES_001_IRI}>\n  sh:declare [");
+    assert_eq!(
+        vector.matches(&target).count(),
+        1,
+        "the idiom's target, once"
+    );
+    let labelled = write_file(
+        dir.path(),
+        "prefixes-001-labelled.ttl",
+        &vector.replace(
+            &target,
+            &format!("<{PREFIXES_001_IRI}>\n  rdfs:label \"prefixes-001\" .\n[]\n  sh:declare ["),
+        ),
+    );
+    let refused = run(&["validate", "--shapes", &labelled, PREFIXES_001]);
     let err = stderr(&refused);
     assert_eq!(code(&refused), 1, "{err}");
     assert!(
@@ -1627,9 +1645,8 @@ fn a_self_imported_prefix_document_needs_no_import_flag() {
     );
     assert!(stdout(&refused).is_empty(), "no report is written");
 
-    // `shacl pack --base` is the same flag for the document it packs, and the product it
-    // writes reaches the same verdict.
-    let dir = tempfile::tempdir().expect("tempdir");
+    // `shacl pack` packs the vector as written, and the product it writes reaches the same
+    // verdict.
     let product = dir.path().join("prefixes-001.purrshp");
     let product_path = product.to_str().expect("utf8 path");
     let packed = run(&[
@@ -1637,8 +1654,6 @@ fn a_self_imported_prefix_document_needs_no_import_flag() {
         "pack",
         "--shapes",
         PREFIXES_001,
-        "--base",
-        PREFIXES_001_IRI,
         "--out",
         product_path,
     ]);

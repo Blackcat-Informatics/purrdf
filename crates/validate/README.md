@@ -68,7 +68,8 @@ assert!(sarif.contains("\"version\": \"2.1.0\""));
 Every shapes-graph entry point here takes the shapes graph's `owl:imports` table:
 `(ontology IRI, Turtle document)` pairs, each document parsed under its IRI. A shapes
 graph that imports a document the table does not supply — and does not already
-declare (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`) — is
+declare (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`) or
+describe with `sh:declare` (SHACL's prefix-declaration idiom) — is
 refused with the typed `ShapesError::Imports`, the same refusal the Python,
 WebAssembly and C hosts carry, rather than validated without it. PurRDF fetches
 nothing.

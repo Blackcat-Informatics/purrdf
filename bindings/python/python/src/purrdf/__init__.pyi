@@ -1774,9 +1774,10 @@ class shapes:
     # `imports` is the shapes graph's owl:imports table: (ontology IRI, Turtle
     # document) pairs, each document parsed under its IRI. Every shapes-graph function
     # here takes it. An owl:imports is resolved by a table entry, by `shapes_base` (or
-    # the document's own @base) naming the imported document, or by the closure
+    # the document's own @base) naming the imported document, by the closure
     # declaring the ontology (`<X> a owl:Ontology`, or an ontology whose
-    # owl:versionIRI is `<X>`); anything else — or a table entry no import names —
+    # owl:versionIRI is `<X>`), or by the closure describing `<X>` with sh:declare
+    # (SHACL's prefix-declaration idiom); anything else — or a table entry no import names —
     # raises ShapesImportError. PurRDF fetches nothing; an omitted table still
     # enforces the rule.
     @staticmethod

@@ -68,8 +68,9 @@ use purrdf_validate::{ShapesError, ShapesProductRefusal};
 /// with that IRI as its base; the same convention `entailCertainAnswers` uses. Omitted,
 /// the table is empty, and the rule still applies: an `owl:imports` is resolved by a table
 /// entry, by `shapesBase` (or the document's own `@base`) naming the imported document,
-/// or by the closure declaring the ontology (`<X> a owl:Ontology`, or an ontology whose
-/// `owl:versionIRI` is `<X>`). Anything else rejects with this class rather than
+/// by the closure declaring the ontology (`<X> a owl:Ontology`, or an ontology whose
+/// `owl:versionIRI` is `<X>`), or by the closure describing `<X>` with `sh:declare` —
+/// SHACL's prefix-declaration idiom. Anything else rejects with this class rather than
 /// validating a smaller shapes graph than the one named. PurRDF fetches nothing.
 ///
 /// `kind` is the matchable half — `unresolved-import`, `unreached-import` (a table entry
