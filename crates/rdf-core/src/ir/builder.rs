@@ -1604,7 +1604,7 @@ mod tests {
     use super::*;
     use crate::RdfTextDirection;
     use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     fn lit_simple(s: &str) -> RdfLiteral {
         RdfLiteral::simple(s)
@@ -2178,7 +2178,7 @@ mod tests {
         ]
     }
 
-    proptest! {
+    prop_test! {
         /// Idempotence holds across arbitrary call sequences, and `term_count`
         /// never exceeds the number of distinct values interned.
         ///
@@ -2186,7 +2186,7 @@ mod tests {
         /// literal also interns its datatype IRI, so each literal value contributes
         /// itself plus its (shared) datatype term to the upper bound.
         #[test]
-        fn proptest_idempotence_and_bounded_count(ops in prop::collection::vec(op_strategy(), 0..64)) {
+        fn property_idempotence_and_bounded_count(ops in prop::collection::vec(op_strategy(), 0..64)) {
             use std::collections::HashSet;
 
             let mut b = RdfDatasetBuilder::new();

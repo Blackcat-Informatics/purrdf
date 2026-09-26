@@ -514,7 +514,7 @@ impl MutableDataset {
         self.suppressed.len()
     }
 
-    /// Iterate the effective quads as value-quads — the independent test/proptest
+    /// Iterate the effective quads as value-quads — the independent test/property-test
     /// oracle for the effective set. `freeze` builds the effective set directly (so it
     /// can carry per-base-quad source locations), so this is a test-only helper; the
     /// public surface is [`DatasetMut`].
@@ -1017,7 +1017,7 @@ const _: fn() = || {
 mod tests {
     use super::*;
     use crate::ir::RdfDatasetBuilder;
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
     use std::collections::HashSet;
 
     // -- helpers ----------------------------------------------------------------------
@@ -1528,15 +1528,15 @@ mod tests {
         assert!(m.should_compact()); // 3 * 2 > 5
     }
 
-    // -- differential proptest --------------------------------------------------------
+    // -- differential property test --------------------------------------------------
 
-    // Mirror of `proptest_indexed_pattern_matches_linear_scan`: apply a random
+    // Mirror of `property_indexed_pattern_matches_linear_scan`: apply a random
     // sequence of insert/remove ops to BOTH a `MutableDataset` and a reference
     // `HashSet` model of the effective quad-value set, then assert `contains` and the
     // effective set agree, and that `freeze()`'s quad-value set equals the model.
-    proptest! {
+    prop_test! {
         #[test]
-        fn proptest_mutations_match_hashset_model(
+        fn property_mutations_match_hashset_model(
             ops in prop::collection::vec(
                 // (is_insert, s, p, o) over a small pool; subjects/objects 0..6 so some
                 // collide with the base's a/b/c terms (ids 0..2) and some are new.

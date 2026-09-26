@@ -146,7 +146,10 @@ purrdf-gts = { workspace = true }
 # The SEP-0009 grammar, used by the composite blank-node scoping tests as an
 # independent oracle: the round-tripped lexical form must still parse.
 purrdf-cdt = { workspace = true }
-proptest = { workspace = true }
+# Property tests (round-trips, never-panic, blank-label laws) on the shared
+# property harness. Path-only and unpublished, so it is stripped from the
+# packaged manifest.
+purrdf-testkit = { workspace = true }
 # Acceleration-program baselines; light feature set matching
 # the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
 # off so `make bench` builds fast and the cargo-bench stdout summary is all we need.

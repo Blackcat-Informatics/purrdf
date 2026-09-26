@@ -32,3 +32,18 @@ first-party edge from here would close a cycle through that member.
   `test result: … passed; … failed; … ignored; 0 measured; … filtered out; finished in …s`
   tally line), accepts libtest's flags, runs cases on `--test-threads` workers
   with per-case panic isolation, and refuses any flag it does not implement.
+* **Property-based testing** — `purrdf_testkit::prop` and `prop_test!`.
+  Strategies (ranges, `any::<T>()`, `prop::collection::{vec, btree_set,
+  btree_map}`, `prop::option::of`, `prop::sample::select`, `prop_oneof!`,
+  `Just`, `prop_map`/`prop_filter`/`prop_flat_map`/`prop_recursive`, and
+  `prop::string::regex`, which walks the `regex-syntax` IR so a pattern means
+  what it means to `regex`) draw bounded integers from a recorded choice
+  sequence. A failing input is shrunk by editing that sequence and replaying
+  it, so a shrunk value always satisfies its generator; the failure prints the
+  value and the sequence in hex, and `prop::replay(&strategy, hex)` turns it
+  into an ordinary regression test. `prop::state_machine` checks an
+  implementation against a reference model over generated, shrinkable runs of
+  operations. Every property's seed is derived from its module path and name —
+  never OS entropy — and `PURRDF_PROP_SEED` replaces it for one run;
+  `prop::cases_from_env(n)` reads `PURRDF_PROP_CASES` for properties that offer
+  a deeper search on demand.

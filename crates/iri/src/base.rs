@@ -716,8 +716,7 @@ impl BaseScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
-    use proptest::test_runner::{Config, TestRunner};
+    use purrdf_testkit::prop::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -866,10 +865,10 @@ mod tests {
     /// successfully rather than refuse.
     fn generated_reference() -> impl Strategy<Value = String> {
         let scheme = prop::sample::select(vec!["http", "https", "ftp", "urn", "mailto", "tag"]);
-        let host = "[a-z][a-z0-9-]{0,10}(\\.[a-z][a-z0-9-]{0,10}){0,2}";
-        let seg = "[a-zA-Z0-9._~!$&'()*+,;=-]{0,8}";
-        let segs = prop::collection::vec(seg, 0..4);
-        let part = "[a-zA-Z0-9._~!$&'()*+,;=:@/?-]{0,10}";
+        let host = prop::string::regex("[a-z][a-z0-9-]{0,10}(\\.[a-z][a-z0-9-]{0,10}){0,2}");
+        let seg = prop::string::regex("[a-zA-Z0-9._~!$&'()*+,;=-]{0,8}");
+        let segs = prop::collection::vec(seg.clone(), 0..4);
+        let part = prop::string::regex("[a-zA-Z0-9._~!$&'()*+,;=:@/?-]{0,10}");
         let dot_form = prop::sample::select(vec![
             ".",
             "..",
@@ -906,8 +905,8 @@ mod tests {
                 scheme.clone(),
                 host,
                 segs.clone(),
-                prop::option::of(part),
-                prop::option::of(part)
+                prop::option::of(part.clone()),
+                prop::option::of(part.clone())
             )
                 .prop_map(|(s, h, segs, q, f)| {
                     let mut out = format!("{s}://{h}");
@@ -926,10 +925,10 @@ mod tests {
                     out
                 }),
             // Absolute, opaque (no-authority) IRIs: `scheme:opaque-part`.
-            3 => (scheme.clone(), seg).prop_map(|(s, o)| format!("{s}:{o}")),
+            3 => (scheme.clone(), seg.clone()).prop_map(|(s, o)| format!("{s}:{o}")),
             // Network-path reference: `//host/path...` — relative, has no scheme.
             4 => (
-                "[a-z][a-z0-9-]{0,10}(\\.[a-z][a-z0-9-]{0,10}){0,2}",
+                prop::string::regex("[a-z][a-z0-9-]{0,10}(\\.[a-z][a-z0-9-]{0,10}){0,2}"),
                 segs.clone()
             )
                 .prop_map(|(h, segs)| {
@@ -957,11 +956,11 @@ mod tests {
             // The empty, same-document reference.
             1 => Just(String::new()),
             // Fragment-only and query-only same-document references.
-            2 => part.prop_map(|f| format!("#{f}")),
+            2 => part.clone().prop_map(|f| format!("#{f}")),
             2 => part.prop_map(|q| format!("?{q}")),
             // Percent-encoding stress: a well-formed octet or a malformed one,
             // spliced into a path segment.
-            3 => (prop::bool::ANY, seg).prop_map(|(valid, s)| {
+            3 => (prop::bool::ANY, seg.clone()).prop_map(|(valid, s)| {
                 let pct = if valid { "%41" } else { "%zz" };
                 format!("/{s}{pct}")
             }),
@@ -970,7 +969,7 @@ mod tests {
             3 => ipv6.prop_map(str::to_owned),
             // Non-ASCII / IRI characters (RFC-3987 `ucschar`), which the RFC-3986
             // URI grammar rejects and the RFC-3987 IRI grammar admits.
-            3 => (non_ascii, segs.clone()).prop_map(|(n, segs)| {
+            3 => (non_ascii, segs).prop_map(|(n, segs)| {
                 let mut out = format!("/{n}");
                 for seg in &segs {
                     out.push('/');
@@ -983,7 +982,7 @@ mod tests {
             3 => (boundary_char, seg).prop_map(|(c, s)| format!("/{s}{c}{s}")),
             // A fully-unstructured fallback so nothing the structured arms above
             // happen to miss is systematically excluded.
-            2 => ".{0,30}",
+            2 => prop::string::regex(".{0,30}"),
         ]
     }
 
@@ -1008,43 +1007,44 @@ mod tests {
         let accepted = AtomicUsize::new(0);
         let rejected = AtomicUsize::new(0);
 
-        let mut runner = TestRunner::new(Config {
-            cases: 4096,
-            failure_persistence: None,
-            ..Config::default()
-        });
-        runner
-            .run(&generated_reference(), |reference| {
-                for (name, scope) in [("rooted", &rooted), ("empty", &empty)] {
-                    let resolved = scope.resolve(&reference);
-                    let checked = scope.check(&reference);
-                    if resolved.is_ok() {
-                        accepted.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        rejected.fetch_add(1, Ordering::Relaxed);
-                    }
-                    if resolved.is_ok() != checked.is_ok() {
-                        return Err(TestCaseError::fail(format!(
-                            "{name}: check and resolve disagree on accepting {reference:?}: \
-                             resolve_ok={} check_ok={}",
-                            resolved.is_ok(),
-                            checked.is_ok()
-                        )));
-                    }
-                    if let (Err(expected), Err(actual)) = (&resolved, &checked)
-                        && expected.diagnostic_code() != actual.diagnostic_code()
-                    {
-                        return Err(TestCaseError::fail(format!(
-                            "{name}: check and resolve refuse {reference:?} for different \
-                             reasons: resolve={} check={}",
-                            expected.diagnostic_code(),
-                            actual.diagnostic_code()
-                        )));
-                    }
+        prop::Runner::new(
+            Config::with_cases(4096),
+            concat!(
+                module_path!(),
+                "::check_agrees_with_resolve_over_generated_references"
+            ),
+        )
+        .run(&generated_reference(), |reference| {
+            for (name, scope) in [("rooted", &rooted), ("empty", &empty)] {
+                let resolved = scope.resolve(&reference);
+                let checked = scope.check(&reference);
+                if resolved.is_ok() {
+                    accepted.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    rejected.fetch_add(1, Ordering::Relaxed);
                 }
-                Ok(())
-            })
-            .unwrap_or_else(|error| panic!("{error}"));
+                if resolved.is_ok() != checked.is_ok() {
+                    return Err(TestCaseError::fail(format!(
+                        "{name}: check and resolve disagree on accepting {reference:?}: \
+                             resolve_ok={} check_ok={}",
+                        resolved.is_ok(),
+                        checked.is_ok()
+                    )));
+                }
+                if let (Err(expected), Err(actual)) = (&resolved, &checked)
+                    && expected.diagnostic_code() != actual.diagnostic_code()
+                {
+                    return Err(TestCaseError::fail(format!(
+                        "{name}: check and resolve refuse {reference:?} for different \
+                             reasons: resolve={} check={}",
+                        expected.diagnostic_code(),
+                        actual.diagnostic_code()
+                    )));
+                }
+            }
+            Ok(())
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
 
         let accepted = accepted.load(Ordering::Relaxed);
         let rejected = rejected.load(Ordering::Relaxed);

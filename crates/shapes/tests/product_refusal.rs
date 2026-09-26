@@ -46,7 +46,6 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use proptest::prelude::*;
 use purrdf::{RdfDataset, TermValue};
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactSpec, ArtifactView, Identity};
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
@@ -63,6 +62,7 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, UserFunctionRegistry, Volatility,
     property_function_content_fingerprint,
 };
+use purrdf_testkit::prop::prelude::*;
 
 // ── The container, as a reader outside the crate sees it ───────────────────────
 
@@ -2412,22 +2412,13 @@ fn outcome_is_total(bytes: &[u8]) {
     }
 }
 
-/// The property-test budget, overridable the way this repository's other
-/// proptests are.
-fn config() -> ProptestConfig {
-    let cases = std::env::var("PROPTEST_CASES")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(256);
-    ProptestConfig {
-        cases,
-        failure_persistence: None,
-        ..ProptestConfig::default()
-    }
+/// The property-test budget: 256 cases, or `PURRDF_PROP_CASES` when set.
+fn config() -> Config {
+    Config::with_cases(prop::cases_from_env(256))
 }
 
-proptest! {
-    #![proptest_config(config())]
+prop_test! {
+    #![prop_config(config())]
 
     /// Arbitrary bytes: nothing a caller can hand this boundary may panic it.
     #[test]

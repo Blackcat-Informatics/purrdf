@@ -161,12 +161,6 @@ memchr = "2"
 # dev-dependency demonstrating the mmap seam. Not wasm32-relevant (mmap has no
 # meaning there); `make wasm` builds `--lib` only, so this never reaches it.
 memmap2 = "0.9"
-# Default features OFF, then `std` and `bit-set` back on: that is the default
-# set minus `fork` and `timeout`, which run a case in a forked child process and
-# are never enabled by any test here (no config sets `fork` or `timeout`, no
-# job sets `PROPTEST_FORK`). Those two are what pulled a temporary-file crate
-# into the graph; the workspace's temporary paths come from `purrdf-testkit`.
-proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
 pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
 rayon = "1"
 regex = "1"
@@ -319,7 +313,7 @@ strip = "none"
 # The deleted tables' measured rationale is why the base is opt-3, so it lives
 # on here. At the dev default the zero-copy SPARQL lexer and the id-native
 # string interners pay full un-inlined call overhead on every byte, making the
-# compute-bound parse/proptest suite roughly 300x slower than release (~3 s vs
+# compute-bound parse/property-test suite roughly 300x slower than release (~3 s vs
 # ~10 ms for a ~4350-triple parse) and blowing test timeouts. The OWL-Direct
 # tableau is checked against a naive model-enumeration oracle
 # (`owl_dl::oracle`) that decides satisfiability by enumerating EVERY
@@ -348,7 +342,7 @@ strip = "none"
 #     link step's memory. Release wants them because it ships once; the gate
 #     wants the opposite, because it rebuilds constantly and CI runs it cold.
 #   * no `strip`. At opt-3 inlining already shreds stack frames; deleting the
-#     symbol names as well would leave a failing proptest or conformance case
+#     symbol names as well would leave a failing property test or conformance case
 #     reporting bare addresses, on the one profile whose entire job is finding
 #     bugs.
 [profile.dev]

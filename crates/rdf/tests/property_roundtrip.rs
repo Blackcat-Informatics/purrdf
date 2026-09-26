@@ -39,7 +39,6 @@
 //! * **CLIF / CGIF / XCL** round-trips: depend on the open Common Logic epic
 //!   and do not exist yet.
 
-use proptest::prelude::*;
 use purrdf_rdf::{
     BlankScope, CanonHash, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfLookaside, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, canonical_flat_nquads,
@@ -47,6 +46,7 @@ use purrdf_rdf::{
     flat_dataset_from_quads, flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
     try_canonicalize_flat_view,
 };
+use purrdf_testkit::prop::prelude::*;
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -100,7 +100,7 @@ fn dataset_from_quads(quads: Vec<RdfQuad>) -> std::sync::Arc<RdfDataset> {
 // ── Generators (valid, codec-safe inputs) ───────────────────────────────────────
 
 fn arb_iri() -> impl Strategy<Value = String> {
-    "[a-z][a-z0-9]{0,6}".prop_map(|s| format!("https://example.org/{s}"))
+    prop::string::regex("[a-z][a-z0-9]{0,6}").prop_map(|s| format!("https://example.org/{s}"))
 }
 
 /// A handful of non-ASCII `PN_CHARS_BASE` starters, exercising the exact
@@ -118,18 +118,21 @@ fn arb_pn_chars_base_nonascii() -> impl Strategy<Value = &'static str> {
 fn arb_bnode_label() -> impl Strategy<Value = String> {
     prop_oneof![
         // Plain lowercase ASCII.
-        "[a-z][a-z0-9]{0,6}".prop_map(String::from),
+        prop::string::regex("[a-z][a-z0-9]{0,6}").prop_map(String::from),
         // Leading digit (legal for BLANK_NODE_LABEL, illegal for NCName).
-        "[0-9][a-z0-9]{0,6}".prop_map(String::from),
+        prop::string::regex("[0-9][a-z0-9]{0,6}").prop_map(String::from),
         // Leading underscore (PN_CHARS_U).
-        "_[a-z0-9]{0,6}".prop_map(String::from),
+        prop::string::regex("_[a-z0-9]{0,6}").prop_map(String::from),
         // Interior dot — legal mid-label, never trailing (the tail class
         // excludes '.', so the final character is always PN_CHARS).
-        "[a-z][a-z0-9]{0,2}\\.[a-z0-9]{1,3}".prop_map(String::from),
+        prop::string::regex("[a-z][a-z0-9]{0,2}\\.[a-z0-9]{1,3}").prop_map(String::from),
         // Interior hyphen (PN_CHARS includes '-').
-        "[a-z][a-z0-9]{0,2}-[a-z0-9]{1,3}".prop_map(String::from),
+        prop::string::regex("[a-z][a-z0-9]{0,2}-[a-z0-9]{1,3}").prop_map(String::from),
         // Non-ASCII PN_CHARS_BASE starter with an ASCII tail.
-        (arb_pn_chars_base_nonascii(), "[a-z0-9]{0,4}")
+        (
+            arb_pn_chars_base_nonascii(),
+            prop::string::regex("[a-z0-9]{0,4}")
+        )
             .prop_map(|(head, tail)| format!("{head}{tail}")),
     ]
 }
@@ -137,7 +140,7 @@ fn arb_bnode_label() -> impl Strategy<Value = String> {
 fn arb_text() -> impl Strategy<Value = String> {
     // Printable ASCII without quote/backslash/control chars so GTS and the text codecs
     // escaping cannot diverge.
-    "[A-Za-z0-9._-]{0,12}".prop_map(String::from)
+    prop::string::regex("[A-Za-z0-9._-]{0,12}").prop_map(String::from)
 }
 
 fn arb_lang() -> impl Strategy<Value = String> {
@@ -258,11 +261,14 @@ fn arb_dataset_star() -> impl Strategy<Value = std::sync::Arc<RdfDataset>> {
 /// below asserts these labels reach the document unescaped.
 fn arb_ncname_label() -> impl Strategy<Value = String> {
     prop_oneof![
-        "[a-z][a-z0-9]{0,6}".prop_map(String::from),
-        "_[a-z0-9]{0,6}".prop_map(String::from),
-        "[a-z][a-z0-9]{0,2}-[a-z0-9]{1,3}".prop_map(String::from),
-        "[a-z][a-z0-9]{0,2}\\.[a-z0-9]{1,3}".prop_map(String::from),
-        (arb_pn_chars_base_nonascii(), "[a-z0-9]{0,4}")
+        prop::string::regex("[a-z][a-z0-9]{0,6}").prop_map(String::from),
+        prop::string::regex("_[a-z0-9]{0,6}").prop_map(String::from),
+        prop::string::regex("[a-z][a-z0-9]{0,2}-[a-z0-9]{1,3}").prop_map(String::from),
+        prop::string::regex("[a-z][a-z0-9]{0,2}\\.[a-z0-9]{1,3}").prop_map(String::from),
+        (
+            arb_pn_chars_base_nonascii(),
+            prop::string::regex("[a-z0-9]{0,4}")
+        )
             .prop_map(|(head, tail)| format!("{head}{tail}")),
     ]
 }
@@ -408,25 +414,16 @@ fn arb_diff_sources_no_sentinel() -> impl Strategy<Value = (Vec<RdfQuad>, Vec<Rd
 
 // ── Config ──────────────────────────────────────────────────────────────────────
 
-fn config() -> ProptestConfig {
+fn config() -> Config {
     // Bounded case count keeps each property fast under `cargo test` (and the
-    // CI job timeout); raise locally with PROPTEST_CASES to deepen the search.
-    let cases = std::env::var("PROPTEST_CASES")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(64);
-    ProptestConfig {
-        cases,
-        // No on-disk regression files in a clean checkout / CI tree.
-        failure_persistence: None,
-        ..ProptestConfig::default()
-    }
+    // CI job timeout); raise locally with PURRDF_PROP_CASES to deepen the search.
+    Config::with_cases(prop::cases_from_env(64))
 }
 
 // ── Properties ──────────────────────────────────────────────────────────────────
 
-proptest! {
-    #![proptest_config(config())]
+prop_test! {
+    #![prop_config(config())]
 
     /// N-Quads: serialize → parse round-trips to the same canonical quad set,
     /// including RDF-1.2 quoted triples.
@@ -449,7 +446,7 @@ proptest! {
     /// same canonical quad set.
     #[test]
     fn gts_roundtrip(dataset in arb_dataset()) {
-        let bytes = purrdf_rdf::gts_write::to_gts(dataset.as_ref(), &RdfLookaside::default(), "purrdf-proptest")
+        let bytes = purrdf_rdf::gts_write::to_gts(dataset.as_ref(), &RdfLookaside::default(), "purrdf-property")
             .expect("to_gts should succeed");
         let graph = purrdf_gts::reader::read(&bytes, false, None);
         prop_assert!(graph.diagnostics.is_empty(), "GTS fold diagnostics: {:?}", graph.diagnostics);

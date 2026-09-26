@@ -917,7 +917,7 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     // Collect-into-a-`String` shims. Production has no such function any more: every
     // caller reaches the writers through `RdfCodec::serialize_into` and supplies its own
@@ -1617,7 +1617,7 @@ mod tests {
         assert!(borrowed > 0 && owned > 0, "{borrowed} {owned}");
     }
 
-    proptest! {
+    prop_test! {
         /// The scan-first `escape_iri` equals the frozen per-char oracle on every
         /// arbitrary string (controls, C1, multi-byte unicode, and clean runs).
         #[test]

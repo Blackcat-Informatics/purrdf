@@ -85,7 +85,6 @@ regex-syntax = { workspace = true }
 # only and unpublished, so it is stripped from the packaged manifest; std-only
 # and dependency-free, so it needs no target gate.
 purrdf-alloc-probe = { workspace = true }
-proptest = { workspace = true }
 # Acceleration-program baselines; light feature set matching
 # the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
 # off so `make bench` builds fast and the cargo-bench stdout summary is all we need.
@@ -98,8 +97,9 @@ criterion = { workspace = true }
 # `#![cfg(not(target_arch = "wasm32"))]` gate.
 memmap2 = { workspace = true }
 # Writes the built pack bytes to a real temporary file for `pack_mmap.rs` to
-# mmap, and scratch directories for the other integration tests. Path-only and
-# unpublished, so it is stripped from the packaged manifest.
+# mmap, scratch directories for the other integration tests, and the property
+# harness. Path-only and unpublished, so it is stripped from the packaged
+# manifest.
 purrdf-testkit = { workspace = true }
 
 [[bench]]

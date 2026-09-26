@@ -30,8 +30,8 @@
 //! The validation entry point ([`validate_graphs`]) and the canonical result-set
 //! comparator ([`ValidationReport::result_tuples`]) are re-used, not re-minted.
 
-use proptest::prelude::*;
 use purrdf_shapes::engine::validate_graphs;
+use purrdf_testkit::prop::prelude::*;
 
 /// Shapes over the monotone fragment only: a value-typed property with a datatype
 /// constraint, a lexical pattern, and an upper-bound cardinality.
@@ -91,20 +91,13 @@ fn arb_fact() -> impl Strategy<Value = Fact> {
         (0u8..4, 0..i32::MAX).prop_map(|(s, n)| Fact::IntValue(s, n)),
         // Lowercase letters only: no N-Triples escaping needed, and never a valid
         // xsd:integer lexical form (always a datatype + pattern violation).
-        (0u8..4, "[a-z]{1,4}").prop_map(|(s, t)| Fact::StrValue(s, t)),
+        (0u8..4, prop::string::regex("[a-z]{1,4}")).prop_map(|(s, t)| Fact::StrValue(s, t)),
     ]
 }
 
-fn config() -> ProptestConfig {
-    let cases = std::env::var("PROPTEST_CASES")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(64);
-    ProptestConfig {
-        cases,
-        failure_persistence: None,
-        ..ProptestConfig::default()
-    }
+/// 64 cases, or `PURRDF_PROP_CASES` when set.
+fn config() -> Config {
+    Config::with_cases(prop::cases_from_env(64))
 }
 
 /// Non-vacuity guard: the shapes must actually fire, otherwise the monotonicity
@@ -119,8 +112,8 @@ fn shapes_detect_violations() {
     );
 }
 
-proptest! {
-    #![proptest_config(config())]
+prop_test! {
+    #![prop_config(config())]
 
     /// Adding data never removes a violation in the monotone fragment.
     #[test]

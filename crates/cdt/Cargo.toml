@@ -36,5 +36,7 @@ purrdf-iri = { workspace = true }
 purrdf-xsd = { workspace = true }
 
 [dev-dependencies]
-# Round-trip / injectivity property tests (canonical -> value -> canonical).
-proptest = { workspace = true }
+# Round-trip / injectivity property tests (canonical -> value -> canonical) on
+# the shared property harness. Path-only and unpublished, so it is stripped from
+# the packaged manifest.
+purrdf-testkit = { workspace = true }

@@ -19,6 +19,10 @@
 //! * [`harness`] — a libtest-compatible runner for `harness = false` targets:
 //!   the same console lines, the same tally line, the same flags, parallel
 //!   execution and per-case panic isolation.
+//! * [`prop`] — property-based testing on a recorded choice sequence:
+//!   strategies, [`prop_test!`], shrinking by replaying edited choice
+//!   sequences, regex-driven string generators, stateful model-based testing,
+//!   and a deterministic seed per property.
 //!
 //! The crate depends on no `purrdf-*` crate, and must not: every crate in the
 //! workspace may take it as a dev-dependency, so a first-party edge from here
@@ -29,6 +33,7 @@
 
 pub mod golden;
 pub mod harness;
+pub mod prop;
 mod temp;
 pub mod vectors;
 

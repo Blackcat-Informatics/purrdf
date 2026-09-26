@@ -1166,10 +1166,10 @@ mod tests {
         use super::{PROP_STRINGS, TermValue};
         use crate::RdfTextDirection;
         use crate::ir::term::BlankScope;
-        use proptest::prelude::*;
+        use purrdf_testkit::prop::prelude::*;
 
         fn small_string() -> impl Strategy<Value = String> {
-            proptest::sample::select(PROP_STRINGS).prop_map(str::to_owned)
+            prop::sample::select(PROP_STRINGS).prop_map(str::to_owned)
         }
 
         fn leaf() -> impl Strategy<Value = TermValue> {
@@ -1213,17 +1213,17 @@ mod tests {
         }
     }
 
-    proptest::proptest! {
+    purrdf_testkit::prop_test! {
         /// The whole contract in one line: encodings are equal **iff** the terms
         /// are. Both directions are checked on the same pair, so neither a lossy
         /// encoder (which would make distinct terms collide) nor a
         /// nondeterministic one (which would make equal terms diverge) survives.
         #[test]
-        fn proptest_canonical_bytes_is_injective(
+        fn property_canonical_bytes_is_injective(
             a in strategies::term_value(),
             b in strategies::term_value(),
         ) {
-            proptest::prop_assert_eq!(
+            purrdf_testkit::prop_assert_eq!(
                 a.to_canonical_bytes() == b.to_canonical_bytes(),
                 a == b,
                 "encoding equality must match value equality for {:?} and {:?}",
@@ -1236,7 +1236,7 @@ mod tests {
         /// encodes to the same bytes whether the buffer was empty or already held
         /// another term's encoding.
         #[test]
-        fn proptest_canonical_bytes_is_position_independent(
+        fn property_canonical_bytes_is_position_independent(
             prefix in strategies::term_value(),
             term in strategies::term_value(),
         ) {
@@ -1245,8 +1245,8 @@ mod tests {
             let mut out = prefix_bytes.clone();
             let split = out.len();
             term.canonical_bytes(&mut out);
-            proptest::prop_assert_eq!(&out[..split], prefix_bytes.as_slice());
-            proptest::prop_assert_eq!(&out[split..], term_bytes.as_slice());
+            purrdf_testkit::prop_assert_eq!(&out[..split], prefix_bytes.as_slice());
+            purrdf_testkit::prop_assert_eq!(&out[split..], term_bytes.as_slice());
         }
     }
 }

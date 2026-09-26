@@ -935,7 +935,7 @@ mod tests {
 
     use super::*;
     use ::purrdf::{BlankScope, RdfDatasetBuilder};
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     const EX: &str = "https://example.org/class-membership/";
 
@@ -1348,25 +1348,21 @@ mod tests {
             && g.matches(quad.g)
     }
 
-    fn property_config() -> ProptestConfig {
-        ProptestConfig {
-            cases: 96,
-            failure_persistence: None,
-            ..ProptestConfig::default()
-        }
+    fn property_config() -> Config {
+        Config::with_cases(96)
     }
 
-    proptest! {
-        #![proptest_config(property_config())]
+    prop_test! {
+        #![prop_config(property_config())]
 
         #[test]
         fn every_probe_shape_matches_an_eager_oracle(
             class_count in 1usize..=5,
             subject_count in 1usize..=4,
-            subclass_bits in proptest::collection::vec(any::<bool>(), 25),
-            type_bits in proptest::collection::vec(any::<bool>(), 20),
-            named_subclass_bits in proptest::collection::vec(any::<bool>(), 25),
-            named_type_bits in proptest::collection::vec(any::<bool>(), 20),
+            subclass_bits in prop::collection::vec(any::<bool>(), 25),
+            type_bits in prop::collection::vec(any::<bool>(), 20),
+            named_subclass_bits in prop::collection::vec(any::<bool>(), 25),
+            named_type_bits in prop::collection::vec(any::<bool>(), 20),
             reverse in any::<bool>(),
         ) {
             let mut builder = RdfDatasetBuilder::new();

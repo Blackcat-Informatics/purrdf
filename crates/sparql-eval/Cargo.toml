@@ -106,16 +106,16 @@ purrdf-alloc-probe = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Property-based generation for the governor differential harness
 # (`tests/governor_correctness.rs`): every governed run is checked against the SAME
-# query and data run UNGOVERNED, over generated (dataset, query, budget) triples.
-# Already a workspace dev-dependency of seven sibling crates; version lives in the root
-# `[workspace.dependencies]`.
+# query and data run UNGOVERNED, over generated (dataset, query, budget) triples, on the
+# shared property harness. Path-only and unpublished, so it is stripped from the
+# packaged manifest.
 #
 # Native-only, together with criterion below, because `make wasm-test` builds ONE test
 # target of this crate for wasm32 and cargo builds every declared dev-dependency for
-# any test target. Neither of these two is wasm32-clean (both reach for processes,
-# terminals and wall-clock timing), and neither is wanted there: proptest drives a
-# native-only harness and criterion drives benches, which the wasm lane never runs.
-proptest = { workspace = true }
+# any test target. Neither is wanted there: the property harness drives a native-only
+# test and criterion drives benches, which the wasm lane never runs, and criterion is
+# not wasm32-clean (it reaches for processes, terminals and wall-clock timing).
+purrdf-testkit = { workspace = true }
 # Criterion for the EXISTS-decorrelation perf bench. Defaults off
 # (no plotters/rayon) like the sibling crates, so `make bench` stays lean and no
 # oxigraph-family edge enters the dev tree (gated by `make rdf-core-hygiene`).
