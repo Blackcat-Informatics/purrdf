@@ -982,6 +982,19 @@ impl ImportContext<'_> {
             constraints.push(Constraint::Datatype(vec![datatype]));
             return Ok(());
         }
+        // A datatype's value schema with the value's range bounds and rejections
+        // folded into it, as the compiler writes `sh:datatype` beside a bound.
+        if let Some(datatype_schema) = without_value_bounds(object)
+            && let Some(datatype) = self.value_datatype(&datatype_schema, path)?
+        {
+            constraints.push(Constraint::Datatype(vec![datatype]));
+            let mut handled = BTreeSet::new();
+            self.import_value_bounds(object, path, constraints, &mut handled)?;
+            if object.contains_key("$comment") {
+                self.record("annotation-dropped", &format!("{path}/$comment"));
+            }
+            return Ok(());
+        }
         if let Some(kinds) = node_kind_union(std::slice::from_ref(schema)) {
             constraints.push(Constraint::NodeKind(kinds));
             return Ok(());
@@ -1090,22 +1103,7 @@ impl ImportContext<'_> {
                 handled.insert(keyword);
             }
         }
-        for (keyword, bound_kind) in [
-            ("minimum", BoundKind::Minimum),
-            ("maximum", BoundKind::Maximum),
-            ("exclusiveMinimum", BoundKind::ExclusiveMinimum),
-            ("exclusiveMaximum", BoundKind::ExclusiveMaximum),
-        ] {
-            if let Some(value) = object.get(keyword) {
-                let term = self.numeric_term(value, &format!("{path}/{keyword}"))?;
-                constraints.push(bound_kind.constraint(term));
-                handled.insert(keyword);
-            }
-        }
-        if let Some(negand) = object.get("not") {
-            self.import_rejections(negand, &format!("{path}/not"), constraints)?;
-            handled.insert("not");
-        }
+        self.import_value_bounds(object, path, constraints, &mut handled)?;
         if object.contains_key("multipleOf") {
             self.record(
                 "multiple-of-validation-dropped",
@@ -1142,6 +1140,34 @@ impl ImportContext<'_> {
                     self.record("unknown-keyword-dropped", &location);
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Import a value schema's range-bound keywords (`minimum`, `maximum`,
+    /// `exclusiveMinimum`, `exclusiveMaximum`) and its `not`, marking each handled.
+    fn import_value_bounds(
+        &mut self,
+        object: &Map<String, Value>,
+        path: &str,
+        constraints: &mut Vec<Constraint>,
+        handled: &mut BTreeSet<&'static str>,
+    ) -> Result<(), SchemaImportError> {
+        for (keyword, bound_kind) in [
+            ("minimum", BoundKind::Minimum),
+            ("maximum", BoundKind::Maximum),
+            ("exclusiveMinimum", BoundKind::ExclusiveMinimum),
+            ("exclusiveMaximum", BoundKind::ExclusiveMaximum),
+        ] {
+            if let Some(value) = object.get(keyword) {
+                let term = self.numeric_term(value, &format!("{path}/{keyword}"))?;
+                constraints.push(bound_kind.constraint(term));
+                handled.insert(keyword);
+            }
+        }
+        if let Some(negand) = object.get("not") {
+            self.import_rejections(negand, &format!("{path}/not"), constraints)?;
+            handled.insert("not");
         }
         Ok(())
     }
@@ -1234,6 +1260,7 @@ impl ImportContext<'_> {
         let mut implied_bound = false;
         let mut implied_constant = false;
         let mut typed_bounds: Vec<(String, &Value)> = Vec::new();
+        let mut claimed_bounds: Vec<BoundClaim<'_>> = Vec::new();
         let mut unread: Vec<String> = Vec::new();
         for (index, alternative) in alternatives.iter().enumerate() {
             let location = if alternatives.len() == 1 && alternative_path == path {
@@ -1287,11 +1314,25 @@ impl ImportContext<'_> {
                 Some(Rejection::NonNumeric) => implied_bound = true,
                 Some(Rejection::Implied) => implied_constant = true,
                 Some(Rejection::TypedBound) => typed_bounds.push((location, alternative)),
+                Some(Rejection::Bound(comment, bound)) => {
+                    match claimed_bounds
+                        .iter_mut()
+                        .find(|claim| claim.comment == comment)
+                    {
+                        Some(claim) => claim.claims.push((location, alternative)),
+                        None => claimed_bounds.push(BoundClaim {
+                            comment,
+                            bound: *bound,
+                            claims: vec![(location, alternative)],
+                        }),
+                    }
+                }
                 None => unread.push(location),
             }
         }
         let has_lexical = lexical(constraints) || lexical(&derived);
         constraints.extend(derived);
+        self.recover_range_bounds(claimed_bounds, constraints, &mut unread);
         if implied_constant && !has_lexical && !bounded(constraints) {
             unread.push(path.to_owned());
         }
@@ -1322,6 +1363,116 @@ impl ImportContext<'_> {
             self.record("schema-applicator-dropped", &location);
         }
         Ok(())
+    }
+
+    /// Recover the range bounds a value schema's rejections name in their
+    /// `$comment`s, exactly: the bound each comment names, believed only when the
+    /// rejections that bound projects to — narrowed by the value's `sh:datatype`, as
+    /// the compiler narrows them — are exactly the ones claiming it, and, for numeric
+    /// bounds, when the `minimum` and `maximum` already read are exactly the bare
+    /// integers the recovered bounds admit. Those keyword bounds are then replaced by
+    /// the recovered ones: an order pattern states a bound's language and not its
+    /// value (`< 150` and `≤ 149` admit the same integers), so the comment is what
+    /// makes `sh:maxExclusive 150` read back as itself.
+    ///
+    /// A claim that fails either check is a negation SHACL cannot state here: its
+    /// locations are unread, and the keyword bounds stay as read.
+    fn recover_range_bounds(
+        &self,
+        claimed: Vec<BoundClaim<'_>>,
+        constraints: &mut Vec<Constraint>,
+        unread: &mut Vec<String>,
+    ) {
+        if claimed.is_empty() {
+            return;
+        }
+        let datatypes: Option<BTreeSet<String>> = constraints
+            .iter()
+            .filter_map(|constraint| match constraint {
+                Constraint::Datatype(datatypes) => Some(
+                    datatypes
+                        .iter()
+                        .map(|dt| self.config.namespaces.compact_iri(dt.as_str()))
+                        .collect::<BTreeSet<String>>(),
+                ),
+                _ => None,
+            })
+            .reduce(|left, right| left.intersection(&right).cloned().collect());
+        let mut recovered: Vec<(Constraint, Vec<String>)> = Vec::new();
+        for BoundClaim { bound, claims, .. } in claimed {
+            let locations: Vec<String> = claims
+                .iter()
+                .map(|(location, _)| location.clone())
+                .collect();
+            let expected: Option<Vec<Value>> =
+                crate::json_schema::range_bound_rejections(&bound, &self.config.namespaces).map(
+                    |rejections| {
+                        rejections
+                            .into_iter()
+                            .filter(|rejection| {
+                                datatypes.as_ref().is_none_or(|types| {
+                                    crate::json_schema::typed_rejection_reaches(rejection, types)
+                                })
+                            })
+                            .collect()
+                    },
+                );
+            let exact = expected.is_some_and(|expected| {
+                expected.len() == claims.len()
+                    && expected
+                        .iter()
+                        .all(|rejection| claims.iter().any(|(_, claim)| *claim == rejection))
+                    && claims.iter().all(|(_, claim)| expected.contains(claim))
+            });
+            if exact {
+                recovered.push((bound, locations));
+            } else {
+                unread.extend(locations);
+            }
+        }
+        let is_range = |constraint: &Constraint| {
+            matches!(
+                constraint,
+                Constraint::MinInclusive(_)
+                    | Constraint::MaxInclusive(_)
+                    | Constraint::MinExclusive(_)
+                    | Constraint::MaxExclusive(_)
+            )
+        };
+        // The numeric bounds admit bare integers the `minimum` / `maximum` keywords
+        // state; a temporal bound admits none, so it never touches them.
+        let is_numeric = crate::json_schema::is_numeric_range_bound;
+        let numeric: Vec<&Constraint> = recovered
+            .iter()
+            .map(|(bound, _)| bound)
+            .filter(|bound| is_numeric(bound))
+            .collect();
+        if !numeric.is_empty() {
+            let keyword_bounds: Vec<&Constraint> = constraints
+                .iter()
+                .filter(|constraint| is_range(constraint))
+                .collect();
+            let stated = keyword_integer_bounds(&keyword_bounds);
+            let admitted = crate::json_schema::constraint_bare_integer_bounds(&numeric);
+            let agrees = match admitted {
+                crate::json_schema::BareIntegerBounds::None => keyword_bounds.is_empty(),
+                crate::json_schema::BareIntegerBounds::Range(low, high) => {
+                    stated == Some((low, high))
+                }
+            };
+            if agrees {
+                constraints.retain(|constraint| !is_range(constraint));
+            } else {
+                for (bound, locations) in std::mem::take(&mut recovered) {
+                    if is_numeric(&bound) {
+                        unread.extend(locations);
+                    } else {
+                        recovered.push((bound, locations));
+                    }
+                }
+            }
+        }
+        constraints.extend(recovered.into_iter().map(|(bound, _)| bound));
     }
 
     fn import_reference(
@@ -2440,13 +2591,78 @@ enum Rejection {
     /// A typed literal of an integer-family or decimal datatype a numeric
     /// bound rejects.
     TypedBound,
+    /// A rejection the compiler wrote from one range bound, which its `$comment`
+    /// names (see [`crate::json_schema::range_bound_rejections`]): the comment,
+    /// and the bound it names.
+    Bound(String, Box<Constraint>),
 }
 
 /// The ECMA-262 source a string containing a line break matches.
 const LINE_BREAK_PATTERN: &str = "[\\n\\r\\u000B\\u000C]";
 
+/// The bare-integer range the `minimum` / `maximum` keywords read as `bounds` state:
+/// at most one `sh:minInclusive` and one `sh:maxInclusive`, each an integer. `None`
+/// for any other set, which no compiled value schema writes beside a recovered bound.
+fn keyword_integer_bounds(bounds: &[&Constraint]) -> Option<(Option<i128>, Option<i128>)> {
+    let integer = |term: &Term| match term {
+        Term::Literal(literal) => literal.value().parse::<i128>().ok(),
+        _ => None,
+    };
+    let (mut low, mut high) = (None, None);
+    for bound in bounds {
+        match bound {
+            Constraint::MinInclusive(term) if low.is_none() => low = Some(integer(term)?),
+            Constraint::MaxInclusive(term) if high.is_none() => high = Some(integer(term)?),
+            _ => return None,
+        }
+    }
+    Some((low, high))
+}
+
+/// The rejections of one value schema that name one range bound in their
+/// `$comment`: the comment, the bound it names, and each claiming rejection with its
+/// location.
+struct BoundClaim<'v> {
+    comment: String,
+    bound: Constraint,
+    claims: Vec<(String, &'v Value)>,
+}
+
+/// The keywords `ImportContext::import_value_bounds` reads.
+const VALUE_BOUND_KEYWORDS: [&str; 5] = [
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "not",
+];
+
+/// `object` without its value-bound keywords and `$comment`, when it has at least
+/// one value-bound keyword — the datatype schema the compiler folded them into.
+fn without_value_bounds(object: &Map<String, Value>) -> Option<Value> {
+    if !VALUE_BOUND_KEYWORDS
+        .iter()
+        .any(|keyword| object.contains_key(*keyword))
+    {
+        return None;
+    }
+    let rest: Map<String, Value> = object
+        .iter()
+        .filter(|(key, _)| {
+            key.as_str() != "$comment" && !VALUE_BOUND_KEYWORDS.contains(&key.as_str())
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Some(Value::Object(rest))
+}
+
 fn classify_rejection(value: &Value) -> Option<Rejection> {
     let object = value.as_object()?;
+    if let Some(comment) = object.get("$comment").and_then(Value::as_str)
+        && let Some(bound) = crate::json_schema::range_bound_comment(comment)
+    {
+        return Some(Rejection::Bound(comment.to_owned(), Box::new(bound)));
+    }
     if object.len() == 1 && object.contains_key("const") {
         return Some(Rejection::Implied);
     }
@@ -3927,5 +4143,173 @@ mod tests {
             Ok("https://example.org/Record")
         );
         assert!(namespaces.expand_iri("unqualified").is_err());
+    }
+
+    /// The range-bound constraints of one property shape, as `(facet, N-Triples term)`
+    /// sorted, and its `sh:datatype`s.
+    fn bound_set(shapes: &Shapes) -> (Vec<(String, String)>, Vec<String>) {
+        let mut bounds = Vec::new();
+        let mut datatypes = Vec::new();
+        for shape in &shapes.node_shapes {
+            for property in &shape.property_shapes {
+                for constraint in &property.constraints {
+                    let (facet, term) = match constraint {
+                        Constraint::MinInclusive(term) => ("minInclusive", term),
+                        Constraint::MinExclusive(term) => ("minExclusive", term),
+                        Constraint::MaxInclusive(term) => ("maxInclusive", term),
+                        Constraint::MaxExclusive(term) => ("maxExclusive", term),
+                        Constraint::Datatype(types) => {
+                            datatypes.extend(types.iter().map(|t| t.as_str().to_owned()));
+                            continue;
+                        }
+                        _ => continue,
+                    };
+                    bounds.push((facet.to_owned(), term.to_string()));
+                }
+            }
+        }
+        bounds.sort();
+        (bounds, datatypes)
+    }
+
+    fn typed(lexical: &str, local: &str) -> String {
+        format!("\"{lexical}\"^^<{XSD}{local}>")
+    }
+
+    fn has_code(losses: &LossLedger, code: &str) -> bool {
+        losses.entries().iter().any(|entry| entry.code == code)
+    }
+
+    /// No reverse loss but the property's own `$comment` — the forward note that a
+    /// bound is not checked on `xsd:double` or `xsd:float` values, which has no
+    /// validation meaning to read back.
+    fn reads_exactly(losses: &LossLedger) -> bool {
+        losses.entries().iter().all(|entry| {
+            entry.code == "annotation-dropped"
+                && entry
+                    .location
+                    .as_ref()
+                    .and_then(|location| location.subject.as_deref())
+                    .is_some_and(|subject| subject.ends_with("/properties/ex:v/$comment"))
+        })
+    }
+
+    /// SHACL → JSON Schema → SHACL keeps every range bound exactly — its facet, its
+    /// datatype and its lexical form — over `xsd:date`, `xsd:dateTime`, `xsd:time`,
+    /// `xsd:decimal` and `xsd:integer` (and a double bound, through its integer and
+    /// decimal rejections), with and without `sh:datatype`, and the re-emitted schema
+    /// is byte-identical. `sh:maxExclusive 150` reads back as itself, not as the
+    /// `sh:maxInclusive 149` its `maximum` states.
+    #[test]
+    fn range_bounds_round_trip_exactly() {
+        let cases: &[&str] = &[
+            "sh:minInclusive 5 ; sh:maxExclusive 150",
+            "sh:datatype xsd:integer ; sh:minExclusive 0 ; sh:maxInclusive 99",
+            "sh:minInclusive 1.5 ; sh:maxExclusive 9.25",
+            "sh:datatype xsd:decimal ; sh:minExclusive -0.5 ; sh:maxInclusive 10.125",
+            "sh:minExclusive 1.5 ; sh:maxExclusive 1.9",
+            r#"sh:minInclusive "1.5E0"^^xsd:double"#,
+            r#"sh:minInclusive "2020-01-01"^^xsd:date ; sh:maxExclusive "2021-01-01"^^xsd:date"#,
+            r#"sh:datatype xsd:date ; sh:minExclusive "2020-02-29Z"^^xsd:date"#,
+            r#"sh:minInclusive "2020-01-01T00:00:00Z"^^xsd:dateTime ;
+               sh:maxInclusive "2030-06-30T12:30:00.5"^^xsd:dateTime"#,
+            r#"sh:datatype xsd:dateTime ;
+               sh:maxExclusive "2024-12-31T23:59:59+02:00"^^xsd:dateTime"#,
+            r#"sh:maxInclusive "12:00:00"^^xsd:time ; sh:minExclusive "08:30:00-05:00"^^xsd:time"#,
+            r#"sh:datatype xsd:time ; sh:minInclusive "24:00:00"^^xsd:time"#,
+        ];
+        for body in cases {
+            let source = format!(
+                "ex:S a sh:NodeShape ; sh:targetClass ex:T ; sh:property [ sh:path ex:v ; {body} ] ."
+            );
+            let compiled = compile_turtle(&source);
+            let imported = import_compiled_schema(&compiled, &config()).expect("import schema");
+            assert!(
+                reads_exactly(&imported.losses),
+                "{body}: reverse losses {}",
+                imported.losses.render_json()
+            );
+            let dataset = crate::text_ingest::parse_turtle_to_dataset(
+                &format!(
+                    "@prefix ex: <https://example.org/> .\n\
+                     @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                     @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n{source}"
+                ),
+                None,
+            )
+            .expect("parse shape");
+            let original = crate::shapes::from_dataset(&dataset).expect("type shape");
+            let (bounds, _) = bound_set(&original);
+            assert!(!bounds.is_empty(), "{body}");
+            assert_eq!(bound_set(&imported.shapes), bound_set(&original), "{body}");
+            let recompiled = crate::json_schema::compile(&imported.shapes, config().namespaces())
+                .expect("schema compilation");
+            assert_eq!(recompiled.schema_json, compiled.schema_json, "{body}");
+        }
+    }
+
+    /// A bound comment is believed only when the rejections it claims are exactly the
+    /// ones its bound projects to, and the `minimum` / `maximum` beside it are the
+    /// integers it admits. A comment naming another bound than its pattern states, and
+    /// a `maximum` that disagrees with the comments, are each read as the negation
+    /// SHACL cannot state — the bound is not recovered, and the loss is recorded —
+    /// beside the untouched schema, which reads back exactly.
+    #[test]
+    fn a_bound_comment_is_believed_only_when_its_rejections_agree() {
+        let compiled = compile_turtle(
+            r#"ex:S a sh:NodeShape ; sh:targetClass ex:T ; sh:property [ sh:path ex:v ;
+                sh:maxExclusive 150 ] .
+               ex:D a sh:NodeShape ; sh:targetClass ex:U ; sh:property [ sh:path ex:w ;
+                sh:minInclusive "2020-01-01"^^xsd:date ] ."#,
+        );
+        let exact = import_compiled_schema(&compiled, &config()).expect("import");
+        assert!(
+            !has_code(&exact.losses, "schema-applicator-dropped"),
+            "{}",
+            exact.losses.render_json()
+        );
+        assert_eq!(
+            bound_set(&exact.shapes).0,
+            [
+                ("maxExclusive".to_owned(), typed("150", "integer")),
+                ("minInclusive".to_owned(), typed("2020-01-01", "date")),
+            ]
+        );
+
+        // The date rejections' comments claim 2021; their patterns state 2020.
+        let forged = compiled
+            .schema_json
+            .replace("\\\"2020-01-01\\\"", "\\\"2021-01-01\\\"");
+        assert_ne!(forged, compiled.schema_json, "a comment to forge");
+        let imported = import_json_schema(&forged, &config()).expect("import");
+        assert_eq!(
+            bound_set(&imported.shapes).0,
+            [("maxExclusive".to_owned(), typed("150", "integer"))]
+        );
+        assert!(
+            has_code(&imported.losses, "schema-applicator-dropped"),
+            "{}",
+            imported.losses.render_json()
+        );
+
+        // A `maximum` the comments' bound does not admit: the keyword stands, and the
+        // comments' bound is not recovered.
+        let skewed = compiled
+            .schema_json
+            .replace("\"maximum\": 149", "\"maximum\": 148");
+        assert_ne!(skewed, compiled.schema_json, "a maximum to skew");
+        let imported = import_json_schema(&skewed, &config()).expect("import");
+        assert_eq!(
+            bound_set(&imported.shapes).0,
+            [
+                ("maxInclusive".to_owned(), typed("148", "integer")),
+                ("minInclusive".to_owned(), typed("2020-01-01", "date")),
+            ]
+        );
+        assert!(
+            has_code(&imported.losses, "schema-applicator-dropped"),
+            "{}",
+            imported.losses.render_json()
+        );
     }
 }

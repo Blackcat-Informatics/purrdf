@@ -518,6 +518,21 @@ GraphQL September 2025 packages (`import_*_package`). All five lower through one
 ordered JSON-Schema semantic model and return typed shapes plus an
 always-computed, located reverse `LossLedger`.
 
+A range bound reads back as itself. An order pattern states the set of lexical
+forms on one side of a bound, not the bound, and different bounds can state the
+same set: `< 150` and `≤ 149` admit the same integers. So each rejection the
+compiler writes from a bound carries that bound in its `$comment`, as the
+facet's SHACL term and the bound as an N-Triples term, such as `sh:minInclusive
+"2020-01-01"^^<http://www.w3.org/2001/XMLSchema#date>`. The importer trusts a
+comment only after checking it. It regenerates the rejections the named bound
+projects to, narrowed by the value's `sh:datatype`, and they must be exactly
+the ones that carry the comment. For a numeric bound, the `minimum` and
+`maximum` beside it must also be the integers the bound admits. A comment that
+fails either check is recorded as `schema-applicator-dropped`. So
+`sh:maxExclusive 150`, `sh:minInclusive 1.5` and a bound over `xsd:date`,
+`xsd:dateTime` or `xsd:time` survive the round trip, and the re-emitted schema
+is byte-identical.
+
 Malformed values, open or dangling references, identity collisions, generated
 artifact/map drift, and resource-limit exhaustion fail closed. Valid source
 constructs without an exact SHACL interpretation are ledgered at their native
