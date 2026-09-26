@@ -1789,7 +1789,7 @@ fn the_grader_grades_sh_detail_where_it_is_stated() {
     lost.pop();
     let mut gained = stated5.clone();
     gained.push(stated5[0].clone());
-    let mut changed = stated5.clone();
+    let mut changed = stated5;
     changed[1].tuple.5 = ELSEWHERE.to_owned();
     for (what, details) in [("loses", lost), ("gains", gained), ("changes", changed)] {
         tc.expected_details = with_list5(Some(details));
