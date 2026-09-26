@@ -116,7 +116,9 @@ impl ShapesProductRefusal {
     pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::Shapes(ShapesError::Invalid(message)) => message.as_str().into(),
-            Self::Shapes(error @ ShapesError::Imports(_)) => error.to_string().into(),
+            Self::Shapes(error @ (ShapesError::Imports(_) | ShapesError::ShaclJs(_))) => {
+                error.to_string().into()
+            }
             Self::Admission(error) => error.message().into(),
         }
     }

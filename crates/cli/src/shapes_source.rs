@@ -196,6 +196,9 @@ pub(crate) fn shapes_error(
     let error = match error {
         ShapesError::Imports(error) => error,
         ShapesError::Invalid(message) => return CliError::Runtime(format!("{context}: {message}")),
+        ShapesError::ShaclJs(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
     };
     match error {
         ShapesImportError::Unresolved { iris } => {

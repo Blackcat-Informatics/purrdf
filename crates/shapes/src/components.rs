@@ -121,7 +121,14 @@ impl ComponentRegistry {
     ///
     /// Returns `Err(String)` when a component, parameter, or validator is
     /// malformed or when a validator query violates the pre-binding restrictions.
-    pub(crate) fn parse(data: &RdfDataset, prefixes: &PrefixResolver) -> Result<Self, String> {
+    ///
+    /// A SHACL-JS validator's refusal is also recorded in `shacl_js`, so a parse can
+    /// return it typed (see [`crate::shapes::record_shacl_js`]).
+    pub(crate) fn parse(
+        data: &RdfDataset,
+        prefixes: &PrefixResolver,
+        shacl_js: &ShaclJsSlot,
+    ) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
         let mut seen: FastSet<String> = FastSet::default();
@@ -173,7 +180,7 @@ impl ComponentRegistry {
                     .map(|param| sparql_local_name(param.path))
                     .collect();
                 for (attachment, validator, kind) in
-                    declared_validators(data, &component_term, &mut subclass_memo)?
+                    declared_validators(data, &component_term, &mut subclass_memo, shacl_js)?
                 {
                     parse_validator(
                         data,
@@ -211,6 +218,7 @@ impl ComponentRegistry {
                 &component_term,
                 &component_iri,
                 &mut subclass_memo,
+                shacl_js,
             )?;
             for param in &component.parameters {
                 registry
@@ -737,6 +745,15 @@ fn is_subclass_of(
     result
 }
 
+/// Where a SHACL-JS refusal is recorded for the parse to return typed.
+pub(crate) type ShaclJsSlot = std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>;
+
+/// Record `validator`'s `sh:JSValidator` refusal and return its message.
+fn refuse_js_validator(validator: &Term, shacl_js: &ShaclJsSlot, message: String) -> String {
+    crate::shapes::record_shacl_js(shacl_js, validator, JS_VALIDATOR, &message);
+    message
+}
+
 /// The query form `validator`'s `rdf:type` declarations name, respecting subclasses
 /// of `sh:SPARQLAskValidator` and `sh:SPARQLSelectValidator`.
 ///
@@ -749,6 +766,7 @@ fn validator_kind(
     data: &RdfDataset,
     validator: &Term,
     memo: &mut FastMap<(String, String), bool>,
+    shacl_js: &ShaclJsSlot,
 ) -> Result<ValidatorKind, String> {
     let mut is_ask = false;
     let mut is_select = false;
@@ -767,13 +785,17 @@ fn validator_kind(
         )),
         (true, false) => Ok(ValidatorKind::Ask),
         (false, true) => Ok(ValidatorKind::Select),
-        (false, false) if is_js => Err(format!(
-            "validator {validator} is a sh:JSValidator: {}; the values of sh:validator, \
+        (false, false) if is_js => Err(refuse_js_validator(
+            validator,
+            shacl_js,
+            format!(
+                "validator {validator} is a sh:JSValidator: {}; the values of sh:validator, \
              sh:nodeValidator and sh:propertyValidator must be ASK-based or SELECT-based \
              validators (SHACL 1.2 SPARQL Extensions, \"Validators\"), and a SHACL processor \
              SHOULD produce a failure for an ill-formed shapes graph (SHACL 1.2 Core, \
              \"Handling of Ill-formed Shapes Graphs\")",
-            crate::spec::census::JS
+                crate::spec::census::JS
+            ),
         )),
         (false, false) => Err(format!(
             "validator {validator} must be typed as sh:SPARQLAskValidator or \
@@ -795,6 +817,7 @@ fn declared_validators(
     data: &RdfDataset,
     component: &Term,
     memo: &mut FastMap<(String, String), bool>,
+    shacl_js: &ShaclJsSlot,
 ) -> Result<Vec<(&'static str, Term, ValidatorKind)>, String> {
     let mut out = Vec::new();
     for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
@@ -802,7 +825,7 @@ fn declared_validators(
         crate::term::sort_terms_canonical(&mut nodes);
         let expects_ask = attachment == sh::VALIDATOR;
         for node in nodes {
-            let kind = validator_kind(data, &node, memo)
+            let kind = validator_kind(data, &node, memo, shacl_js)
                 .map_err(|e| format!("component {component} validator {node}: {e}"))?;
             if matches!(kind, ValidatorKind::Ask) != expects_ask {
                 return Err(format!(
@@ -940,6 +963,7 @@ fn parse_component(
     component: &Term,
     component_iri: &str,
     subclass_memo: &mut FastMap<(String, String), bool>,
+    shacl_js: &ShaclJsSlot,
 ) -> Result<Component, String> {
     let param_nodes: Vec<Term> = objects_of(data, component, sh::PARAMETER_PROPERTY);
     let mut parameters = Vec::with_capacity(param_nodes.len());
@@ -966,7 +990,7 @@ fn parse_component(
     let mut node_validators = Vec::new();
     let mut property_validators = Vec::new();
     let mut validators = Vec::new();
-    for (attachment, node, kind) in declared_validators(data, component, subclass_memo)? {
+    for (attachment, node, kind) in declared_validators(data, component, subclass_memo, shacl_js)? {
         let parsed = parse_validator(data, prefixes, component, &node, &param_names, kind)?;
         match attachment {
             sh::NODE_VALIDATOR => node_validators.push(parsed),
@@ -1020,7 +1044,12 @@ mod tests {
     fn load_registry(ttl: &str, base_iri: &str) -> ComponentRegistry {
         let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
         let prefixes = PrefixResolver::new(&document.prefixes);
-        ComponentRegistry::parse(document.dataset.as_ref(), &prefixes).expect("registry parses")
+        ComponentRegistry::parse(
+            document.dataset.as_ref(),
+            &prefixes,
+            &ShaclJsSlot::default(),
+        )
+        .expect("registry parses")
     }
 
     #[test]

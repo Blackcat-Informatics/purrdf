@@ -302,8 +302,12 @@ impl Parser<'_> {
                 ));
             };
             if let TermClass::Refused(why) = row.class {
-                return Err(format!(
-                    "{kind} {node} uses <{p}>, which is not evaluated by this engine: {why}"
+                return Err(self.refuse_shacl_js(
+                    node,
+                    p,
+                    format!(
+                        "{kind} {node} uses <{p}>, which is not evaluated by this engine: {why}"
+                    ),
                 ));
             }
             if !allowed.contains(&p) && row.class != TermClass::NonValidating {
