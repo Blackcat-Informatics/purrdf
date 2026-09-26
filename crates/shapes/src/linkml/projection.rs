@@ -1814,7 +1814,17 @@ impl Renderer<'_> {
         } else {
             format!("{path}/items")
         };
-        let item = self.render_slot_expression(&item_schema, &item_path)?;
+        // An array admitting no item (`maxItems: 0`, the empty list's members)
+        // has no item for a range to judge: the string carrier is exact there,
+        // not a fallback.
+        let empty = object.get("maxItems").and_then(Value::as_u64) == Some(0)
+            && !object.contains_key("items")
+            && !object.contains_key("prefixItems");
+        let item = if empty {
+            Map::from_iter([("range".to_owned(), Value::String("string".to_owned()))])
+        } else {
+            self.render_slot_expression(&item_schema, &item_path)?
+        };
         for (key, value) in item {
             if !matches!(
                 key.as_str(),
@@ -3151,7 +3161,15 @@ mod tests {
 
     #[test]
     fn reserved_carriers_and_semantic_identity_collisions_are_explicit() {
-        for reserved in ["@annotation", "@id", "@language", "@type", "@value"] {
+        for reserved in [
+            "@annotation",
+            "@direction",
+            "@id",
+            "@language",
+            "@list",
+            "@type",
+            "@value",
+        ] {
             let seed = slot_name_seed(&config(), reserved).expect("reserved seed");
             assert_eq!(seed.source_kind, SlotSourceKind::Reserved);
             assert!(!seed.requires_rename());
