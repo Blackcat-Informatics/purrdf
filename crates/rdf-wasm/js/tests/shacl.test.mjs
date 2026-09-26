@@ -112,7 +112,8 @@ ex:PersonShape a sh:NodeShape ;
   ] .
 `;
 
-// The issue's reproducer on wasm: the declaration loads, and the sh:sparqlExpr +
+// On wasm, a shapes graph merged with the SHACL 1.2 vocabulary's own
+// sh:SPARQLExprExpression declaration loads, and the sh:sparqlExpr +
 // sh:prefixes expression is evaluated natively — the result's value is the computed
 // <http://example.org/active>, which only the prefix-expanded expression yields. The
 // Warning result does not conform by default and conforms under sh:Violation alone.
