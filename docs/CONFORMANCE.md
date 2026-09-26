@@ -59,7 +59,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SHACL (first-party corpus) | first-party frozen reports | 73 | 0 | 0 | 0 | GREEN |
 | SHACL prepared-product equivalence | W3C data-shapes + shacl12-test-suite + first-party corpus | 362 | 0 | 0 | 0 | GREEN |
 | XSD/XPath regExp (first-party corpus) | first-party, XSD G + F&O 5.6 | 292 | 0 | 0 | 0 | GREEN |
-| SHACL Rules | DASH + first-party | 19 | 0 | 0 | 0 | GREEN |
+| SHACL Rules | DASH + first-party | 20 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 10 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
