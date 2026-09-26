@@ -172,8 +172,13 @@ impl Parser<'_> {
                     ));
                 };
                 if let TermClass::Refused(why) = row.class {
-                    return Err(format!(
-                        "{kind} {node} uses <{p}>, which is not evaluated by this engine: {why}"
+                    return Err(self.refuse_shacl_js(
+                        node,
+                        p,
+                        format!(
+                            "{kind} {node} uses <{p}>, which is not evaluated by this engine: \
+                             {why}"
+                        ),
                     ));
                 }
                 if row.class == TermClass::NonValidating || (is_shape && row.on_shape()) {
@@ -413,9 +418,13 @@ impl Parser<'_> {
                 continue;
             }
             if let TermClass::Refused(why) = row.class {
-                return Err(format!(
-                    "shape {shape} uses <{p}>, which is not evaluated by this engine: {why}; the \
-                     shape is refused rather than validated as if it were absent"
+                return Err(self.refuse_shacl_js(
+                    shape,
+                    p,
+                    format!(
+                        "shape {shape} uses <{p}>, which is not evaluated by this engine: {why}; \
+                         the shape is refused rather than validated as if it were absent"
+                    ),
                 ));
             }
             let allowed = if is_parameter {
@@ -584,9 +593,13 @@ impl Parser<'_> {
             && let Some(row) = census::classify(class.as_str())
             && let TermClass::Refused(why) = row.class
         {
-            return Err(format!(
-                "shape {shape} is typed <{}>, which is not evaluated by this engine: {why}",
-                class.as_str()
+            return Err(self.refuse_shacl_js(
+                shape,
+                class.as_str(),
+                format!(
+                    "shape {shape} is typed <{}>, which is not evaluated by this engine: {why}",
+                    class.as_str()
+                ),
             ));
         }
         Ok(())
@@ -760,10 +773,14 @@ impl Parser<'_> {
                 if let Some(row) = census::classify(level.as_str())
                     && let TermClass::Refused(why) = row.class
                 {
-                    return Err(format!(
-                        "sh:severity on shape {shape} is <{}>, which is not evaluated by this \
-                         engine: {why}",
-                        level.as_str()
+                    return Err(self.refuse_shacl_js(
+                        shape,
+                        level.as_str(),
+                        format!(
+                            "sh:severity on shape {shape} is <{}>, which is not evaluated by \
+                             this engine: {why}",
+                            level.as_str()
+                        ),
                     ));
                 }
             }

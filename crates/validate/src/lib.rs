@@ -112,7 +112,7 @@ pub use purrdf_shapes::report::ConformanceDisallows;
 /// The shapes-graph error every entry point on this boundary returns, and the typed
 /// `owl:imports` refusal it carries, re-exported so a host binding names them without
 /// depending on the engine crate.
-pub use purrdf_shapes::{ShapesError, ShapesImportError};
+pub use purrdf_shapes::{ShaclJsRefusal, ShapesError, ShapesImportError};
 pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
 
 /// A host's `owl:imports` table for a shapes graph: ORDERED `(ontology IRI, document)`

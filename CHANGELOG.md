@@ -10,6 +10,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **shapes:** a shapes graph that uses the SHACL JavaScript Extensions
+  (`sh:js`, `sh:JSConstraint`, `sh:JSValidator`, `sh:JSRule`, …) is refused
+  with the typed `ShapesError::ShaclJs(ShaclJsRefusal)`, which names the node
+  and the SHACL-JS term, instead of `ShapesError::Invalid`. SHACL-JS is a 2017
+  Working Group Note, not SHACL 1.2. `ShapesError` gains the variant, so an
+  exhaustive match on it must name it; `purrdf-validate` re-exports
+  `ShaclJsRefusal`. The Python, WebAssembly, C and command-line hosts report it
+  with the same message as before.
 - **shapes:** the JSON Schema compiler projects the SHACL 1.2 list components
   onto a list value's `@list` array: `sh:minListLength` as `minItems`,
   `sh:maxListLength` as `maxItems`, `sh:uniqueMembers true` as `uniqueItems`,

@@ -116,15 +116,88 @@ fn an_unknown_term_on_a_node_expression_is_refused_and_an_annotation_loads() {
     );
 }
 
+/// The SHACL JavaScript Extensions are a 2017 Working Group Note, not SHACL 1.2, and
+/// this engine has no JavaScript engine: a shapes graph using them is refused with
+/// the TYPED `purrdf_shapes::ShapesError::ShaclJs`, naming the term and the node. The neighbour is
+/// the same shapes graph with the JS constraint replaced by the equivalent SPARQL
+/// constraint: it loads, and its answer is observed — `ex:a` lacks `ex:p` and is
+/// reported, `ex:b` carries it and is not — so the control differs from a refusal
+/// and from a constraint that checked nothing.
 #[test]
-fn shacl_js_is_refused_and_shacl_sparql_loads() {
-    refused(
-        "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:js [ sh:jsFunctionName \"f\" ] .",
-        "SHACL JavaScript Extensions",
+fn a_shacl_js_constraint_is_a_typed_refusal_and_its_sparql_equivalent_validates() {
+    let shapes = |constraint: &str| {
+        format!("ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ; {constraint} .")
+    };
+    let js = shapes(
+        "sh:js [ a sh:JSConstraint ; sh:message \"needs ex:p\" ;
+                  sh:jsLibrary [ sh:jsLibraryURL \"https://example.org/hasP.js\"^^xsd:anyURI ] ;
+                  sh:jsFunctionName \"hasP\" ]",
     );
-    loads(
-        "ex:S a sh:NodeShape ; sh:targetNode ex:a ;
-           sh:sparql [ sh:select \"SELECT $this WHERE { $this ?p ?o }\" ] .",
+    let error = parse_shapes(&format!("{PREFIXES}{js}"), None)
+        .expect_err("a SHACL-JS constraint is refused at load");
+    let Some(refusal) = error.as_shacl_js() else {
+        panic!("the refusal is typed ShapesError::ShaclJs: {error:?}");
+    };
+    assert_eq!(refusal.term(), "http://www.w3.org/ns/shacl#js");
+    assert_eq!(refusal.node(), "<http://example.org/ns#S>");
+    assert!(
+        error.to_string().contains("SHACL JavaScript Extensions"),
+        "{error}"
+    );
+
+    let sparql = shapes(
+        "sh:sparql [ a sh:SPARQLConstraint ; sh:message \"needs ex:p\" ;
+                     sh:select \"SELECT $this WHERE { FILTER NOT EXISTS { $this <http://example.org/ns#p> ?o } }\" ]",
+    );
+    let report = validate(&sparql, "ex:b ex:p 1 .");
+    // A node shape's SPARQL constraint reports `$this` as the value.
+    assert_eq!(
+        results(&report),
+        vec![(
+            "<http://example.org/ns#a>".to_owned(),
+            "<http://example.org/ns#a>".to_owned()
+        )]
+    );
+}
+
+/// A constraint component whose validator is a SHACL-JS `sh:JSValidator` is refused
+/// with the same typed error, naming the validator; the same component with a SPARQL
+/// ASK validator loads and its constraint is observed failing at `ex:a` only.
+#[test]
+fn a_shacl_js_validator_is_a_typed_refusal_and_its_ask_equivalent_validates() {
+    let component = |validator: &str| {
+        format!(
+            "ex:HasC a sh:ConstraintComponent ;
+               sh:parameter [ sh:path ex:needs ] ;
+               sh:validator ex:V .
+             ex:V {validator} .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+               sh:property [ sh:path ex:p ; ex:needs 1 ] ."
+        )
+    };
+    let js = component(
+        "a sh:JSValidator ; sh:jsFunctionName \"hasC\" ;
+         sh:jsLibrary [ sh:jsLibraryURL \"https://example.org/hasC.js\"^^xsd:anyURI ]",
+    );
+    let error = parse_shapes(&format!("{PREFIXES}{js}"), None)
+        .expect_err("a SHACL-JS validator is refused at load");
+    let Some(refusal) = error.as_shacl_js() else {
+        panic!("the refusal is typed ShapesError::ShaclJs: {error:?}");
+    };
+    assert_eq!(refusal.term(), "http://www.w3.org/ns/shacl#JSValidator");
+    assert_eq!(refusal.node(), "<http://example.org/ns#V>");
+
+    let ask = component(
+        "a sh:SPARQLAskValidator ;
+         sh:ask \"ASK { FILTER ($value >= $needs) }\"",
+    );
+    let report = validate(&ask, "ex:a ex:p 0 . ex:b ex:p 2 .");
+    assert_eq!(
+        results(&report),
+        vec![(
+            "<http://example.org/ns#a>".to_owned(),
+            "\"0\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned()
+        )]
     );
 }
 

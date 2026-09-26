@@ -1009,7 +1009,8 @@ impl LinkedDeclarations {
 #[doc(hidden)]
 pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarations, String> {
     let parser = Parser::new(dataset.as_ref(), None, &[], None, Arc::clone(dataset), None);
-    let registry = ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?;
+    let registry =
+        ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver, &parser.shacl_js)?;
     let linked = parser.discover_custom_functions()?;
     let mut registered_components: Vec<String> = registry.components.keys().cloned().collect();
     registered_components.sort();
@@ -1045,7 +1046,10 @@ pub(crate) fn alternative_validators(
         Arc::clone(dataset),
         None,
     );
-    Ok(ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?.alternatives)
+    Ok(
+        ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver, &parser.shacl_js)?
+            .alternatives,
+    )
 }
 
 /// Parse shapes from a dataset, with the shapes document's `@prefix` declarations
@@ -1164,7 +1168,6 @@ pub fn from_dataset_with_base(
         box_role_vocab,
         shapes_graph,
     )
-    .map_err(ShapesError::Invalid)
 }
 
 /// Parse a shapes graph whose `owl:imports` closure is ALREADY folded in, without
@@ -1180,7 +1183,7 @@ pub(crate) fn from_resolved_dataset(
     doc_prefixes: &[(String, String)],
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
-) -> Result<Shapes, String> {
+) -> Result<Shapes, ShapesError> {
     let mut parser = Parser::new(
         dataset.as_ref(),
         base.map(ToOwned::to_owned),
@@ -1240,7 +1243,7 @@ pub fn from_dataset_with_node_expressions(
     );
     parser
         .parse_with_expressions(roots)
-        .map_err(ShapesError::Invalid)
+        .map_err(|message| parser.load_error(message))
 }
 
 // ── Internal parser ────────────────────────────────────────────────────────────
@@ -1263,6 +1266,12 @@ pub(crate) enum InFlight {
 
 pub(crate) struct Parser<'s> {
     data: &'s RdfDataset,
+    /// The first SHACL-JS refusal a check raised, so the parse's entry point can
+    /// return it typed ([`ShapesError::ShaclJs`]) rather than as a message. Checks
+    /// return their refusal as a `String` like every other load error; one that
+    /// refuses a SHACL-JS term records it here through [`Self::refuse_shacl_js`], and
+    /// [`Self::load_error`] types the parse's error when that error IS this refusal.
+    shacl_js: std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>,
     /// Tracks the shape nodes and node-expression nodes currently being parsed,
     /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
     /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
@@ -1392,6 +1401,47 @@ fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     .collect()
 }
 
+/// Record a SHACL-JS refusal in `slot` unless one is already recorded.
+pub(crate) fn record_shacl_js(
+    slot: &std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>,
+    node: &Term,
+    term: &str,
+    message: &str,
+) {
+    // Only the SHACL-JS reason types a refusal; the census refuses no other terms,
+    // and a term refused for another reason stays an ordinary load error.
+    if !message.contains(crate::spec::census::JS) {
+        return;
+    }
+    let mut slot = slot.borrow_mut();
+    if slot.is_none() {
+        *slot = Some(crate::error::ShaclJsRefusal::new(
+            node.to_string(),
+            term.to_owned(),
+            message.to_owned(),
+        ));
+    }
+}
+
+/// `message` as [`ShapesError::ShaclJs`] when it carries the refusal recorded in
+/// `slot`, else as [`ShapesError::Invalid`]. A recorded refusal the parse recovered
+/// from, and so did not return, does not type an unrelated error.
+fn shacl_js_or_invalid(
+    slot: &std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>,
+    message: String,
+) -> ShapesError {
+    match slot.borrow_mut().take() {
+        Some(refusal) if message.contains(refusal.message()) => {
+            ShapesError::ShaclJs(crate::error::ShaclJsRefusal::new(
+                refusal.node().to_owned(),
+                refusal.term().to_owned(),
+                message,
+            ))
+        }
+        _ => ShapesError::Invalid(message),
+    }
+}
+
 impl<'s> Parser<'s> {
     fn new(
         data: &'s RdfDataset,
@@ -1403,6 +1453,7 @@ impl<'s> Parser<'s> {
     ) -> Self {
         Self {
             data,
+            shacl_js: std::cell::RefCell::new(None),
             in_flight: FastSet::default(),
             base,
             prefix_resolver: prefixes::PrefixResolver::new(doc_prefixes),
@@ -1423,8 +1474,25 @@ impl<'s> Parser<'s> {
         }
     }
 
-    fn parse(&mut self) -> Result<Shapes, String> {
-        self.parse_with_expressions(&[]).map(|(shapes, _)| shapes)
+    fn parse(&mut self) -> Result<Shapes, ShapesError> {
+        self.parse_with_expressions(&[])
+            .map(|(shapes, _)| shapes)
+            .map_err(|message| self.load_error(message))
+    }
+
+    /// Record that a check refused the SHACL-JS term `term` on `node` with `message`,
+    /// and return `message` for the check to fail with. The first refusal recorded
+    /// is the one kept.
+    pub(crate) fn refuse_shacl_js(&self, node: &Term, term: &str, message: String) -> String {
+        record_shacl_js(&self.shacl_js, node, term, &message);
+        message
+    }
+
+    /// The parse's error, typed: [`ShapesError::ShaclJs`] when the error the parse
+    /// returned carries the recorded SHACL-JS refusal (a caller may prefix context
+    /// to it), [`ShapesError::Invalid`] otherwise.
+    fn load_error(&self, message: String) -> ShapesError {
+        shacl_js_or_invalid(&self.shacl_js, message)
     }
 
     /// The whole shapes parse, plus the free-standing node expressions rooted at
@@ -1553,7 +1621,8 @@ impl<'s> Parser<'s> {
 
         // Custom SHACL-SPARQL constraint components are parsed up-front; any
         // malformed component, parameter, or validator query is a hard failure.
-        self.component_registry = ComponentRegistry::parse(self.data, &self.prefix_resolver)?;
+        self.component_registry =
+            ComponentRegistry::parse(self.data, &self.prefix_resolver, &self.shacl_js)?;
 
         // Every shape of the shapes graph, checked against the census before any
         // is parsed: an unknown or refused term, or an ill-typed parameter

@@ -1359,9 +1359,13 @@ impl Parser<'_> {
                  rather than silently ignoring it"
             )),
             Some(row) => match row.class {
-                crate::spec::census::TermClass::Refused(why) => Err(format!(
-                    "node expression on {node} uses <{p}>, which is not evaluated by this engine: \
-                     {why}"
+                crate::spec::census::TermClass::Refused(why) => Err(self.refuse_shacl_js(
+                    node,
+                    p,
+                    format!(
+                        "node expression on {node} uses <{p}>, which is not evaluated by this \
+                         engine: {why}"
+                    ),
                 )),
                 _ if row.on_node_expression() => Ok(()),
                 _ => Err(format!(

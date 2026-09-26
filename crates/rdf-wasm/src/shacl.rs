@@ -136,6 +136,7 @@ fn shapes_rejection(error: ShapesError) -> JsValue {
     match error {
         ShapesError::Imports(error) => ShaclImportError::from(&error).into(),
         ShapesError::Invalid(message) => JsError::new(&message).into(),
+        ShapesError::ShaclJs(refusal) => JsError::new(refusal.message()).into(),
     }
 }
 

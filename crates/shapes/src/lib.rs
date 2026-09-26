@@ -72,7 +72,7 @@ pub mod typescript;
 pub(crate) mod unique_values;
 pub mod validator_alternatives;
 
-pub use error::ShapesError;
+pub use error::{ShaclJsRefusal, ShapesError};
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
