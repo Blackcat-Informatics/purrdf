@@ -308,7 +308,7 @@ mod tests {
             .chars()
             .collect();
         let mut state: u64 = 0x5EED_1234_ABCD_0042;
-        let mut next = || crate::test_rng::splitmix64_next(&mut state);
+        let mut next = || purrdf_testkit::rng::splitmix64_next(&mut state);
         for _ in 0..2_000 {
             let len = usize::try_from(next() % 70).expect("below 70");
             let value: String = (0..len)

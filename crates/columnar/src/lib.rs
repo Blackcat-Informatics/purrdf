@@ -29,8 +29,6 @@ mod parquet;
 pub mod plain_bench;
 mod reader;
 pub mod schema;
-#[doc(hidden)]
-pub mod test_rng;
 mod writer;
 
 pub use error::ColumnarError;

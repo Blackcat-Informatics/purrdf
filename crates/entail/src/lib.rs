@@ -136,8 +136,6 @@ pub mod rif;
 mod rif_xml;
 pub(crate) mod rules;
 pub(crate) mod surrogates;
-#[cfg(test)]
-pub(crate) mod test_rng;
 pub(crate) mod vocab;
 
 pub use calculus::calculus_program;

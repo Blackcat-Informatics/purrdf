@@ -43,7 +43,7 @@ use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterio
 use purrdf_core::distance::{
     Arithmetic, Bound, Exact, Measure, Reassociated, Resolved, RowsRef, Scalar,
 };
-use purrdf_core::test_rng::splitmix64_step;
+use purrdf_testkit::rng::splitmix64_step;
 
 /// The rows in every matrix.
 const ROWS: usize = 4_096;
