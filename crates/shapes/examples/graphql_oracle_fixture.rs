@@ -66,6 +66,17 @@ struct Probe {
     used_codec: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     expected_loss: Option<ExpectedLoss>,
+    /// For a valid source value, the output type and the value a resolver
+    /// returns for it, which GraphQL.js must serialize unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<OutputProbe>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutputProbe {
+    graphql_type: String,
+    graphql_value: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,7 +281,9 @@ fn lossy_schema() -> Value {
                 "contains": { "const": "match" },
                 "unevaluatedItems": false
             },
-            "Union": { "anyOf": [{ "type": "string" }, { "type": "boolean" }] },
+            "Union": {
+                    "anyOf": [{ "type": "string", "minLength": 2 }, { "type": "string", "pattern": "^x" }]
+                },
             "Unique": {
                 "type": "array",
                 "items": { "type": "string" },
@@ -343,26 +356,33 @@ fn probe(
         )
         .into());
     }
+    let types = package
+        .names
+        .definitions
+        .get(definition)
+        .ok_or_else(|| format!("fixture definition {definition:?} has no generated type"))?;
+    let mut output = None;
     let (graphql_value, used_codec) = if let Some(value) = graphql_override {
         (value, false)
     } else {
         let encoded = package.encode_input(definition, &source_value)?;
         if source_valid {
-            let decoded = package.decode_output(definition, &encoded)?;
-            if decoded != source_value {
+            let decoded = package.decode_input(definition, &encoded)?;
+            let returned = package.encode_output(definition, &source_value)?;
+            let read = package.decode_output(definition, &returned)?;
+            if decoded != source_value || read != source_value {
                 return Err(
                     format!("production GraphQL codec did not round-trip probe {label:?}").into(),
                 );
             }
+            output = Some(OutputProbe {
+                graphql_type: format!("{}!", types.output_type),
+                graphql_value: returned,
+            });
         }
         (encoded, true)
     };
-    let input_type = &package
-        .names
-        .definitions
-        .get(definition)
-        .ok_or_else(|| format!("fixture definition {definition:?} has no generated type"))?
-        .input_type;
+    let input_type = &types.input_type;
     Ok(Probe {
         label: label.to_owned(),
         definition: definition.to_owned(),
@@ -372,6 +392,7 @@ fn probe(
         source_valid,
         used_codec,
         expected_loss,
+        output,
     })
 }
 
@@ -764,28 +785,64 @@ fn lossy_fixture(schema: &Value, package: &GraphqlPackage) -> Result<Fixture, Bo
     fixture(package, probes)
 }
 
+/// Where a non-conforming list probe diverges: GraphQL list types carry no
+/// length or uniqueness constraint and GraphQL numeric carriers no bound. A
+/// member of the wrong kind and a value that is no list at all agree: a list
+/// value is a `@oneOf` input of a node reference and a `@list` object, and its
+/// members a `@oneOf` input of their alternatives.
+const LIST_DIVERGENCES: [(&str, &str, &str); 4] = [
+    (
+        "bounded-too-short",
+        "array-cardinality-validation-dropped",
+        "ex:bounded/anyOf/1/properties/@list/minItems",
+    ),
+    (
+        "bounded-too-long",
+        "array-cardinality-validation-dropped",
+        "ex:bounded/anyOf/1/properties/@list/maxItems",
+    ),
+    (
+        "unique-repeated",
+        "unique-items-validation-dropped",
+        "ex:unique/anyOf/1/properties/@list/uniqueItems",
+    ),
+    (
+        "member-negative",
+        "numeric-validation-dropped",
+        "ex:members/anyOf/1/properties/@list/items/minimum",
+    ),
+];
+
 /// The SHACL list-component fixture (see `support/shacl_lists.rs`) emitted as
 /// GraphQL, with the projected instances of real data and their SHACL
-/// verdicts. A list value is a node reference or a `@list` object, and GraphQL
-/// has no input union, so each list property is the custom scalar and its
-/// validation is delegated; GraphQL list types carry no length or uniqueness
-/// constraint either. Every non-conforming probe therefore diverges, at the
-/// delegation located on its property.
+/// verdicts; a probe diverges only where [`LIST_DIVERGENCES`] locates it.
 fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_lists::compiled()?;
     let schema: Value = serde_json::from_str(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
     check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
+    // The verified reverse import restores the list components exactly: the
+    // imported shapes compile back to the same Holder definition.
+    let imported = import_graphql_package(&package, &import_config()?)?;
+    let restored: Value = serde_json::from_str(
+        &purrdf_shapes::json_schema::compile(&imported.shapes, &shacl_lists::namespaces()?)?
+            .schema_json,
+    )?;
+    if restored["$defs"]["Holder"] != schema["$defs"]["Holder"] {
+        return Err("GraphQL reverse import does not restore the SHACL list components".into());
+    }
     let mut probes = Vec::new();
     for case in shacl_lists::cases()? {
-        let property = shacl_lists::VARIANTS
+        let divergence = LIST_DIVERGENCES
             .iter()
             .find(|(label, _, _)| *label == case.label)
-            .map(|(_, property, _)| *property)
-            .ok_or("every case is a variant")?;
-        let location = format!("#/$defs/Holder/properties/{property}");
-        let expected_loss =
-            (!case.conforms).then_some(("custom-scalar-validation-delegated", location.as_str()));
+            .map(|(_, code, location)| (*code, format!("#/$defs/Holder/properties/{location}")));
+        if divergence.is_some() && case.conforms {
+            return Err(format!("conforming list probe {:?} cannot diverge", case.label).into());
+        }
+        let expected_loss = divergence
+            .as_ref()
+            .map(|(code, location)| (*code, location.as_str()));
         probes.push(probe(
             &schema,
             &package,

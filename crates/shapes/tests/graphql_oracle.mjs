@@ -18,7 +18,10 @@ const GRAPHQL_VERSION = "16.14.0";
 const requireFromToolchain = createRequire(path.join(TOOLCHAIN, "package.json"));
 const {
   buildSchema,
+  getNamedType,
   graphql,
+  isObjectType,
+  isUnionType,
   validateSchema,
   valueFromASTUntyped,
   version: graphqlVersion,
@@ -145,9 +148,67 @@ function assertSelfTest() {
   );
 }
 
+/** Flatten nested lists to the non-null values they hold. */
+function leaves(values) {
+  return values.flatMap((value) =>
+    Array.isArray(value) ? leaves(value) : value === null || value === undefined ? [] : [value],
+  );
+}
+
+/**
+ * The selection set that reads back exactly the fields `values` carry: an
+ * object type selects each present field, a union selects `__typename` and
+ * one inline fragment per member the values name.
+ */
+function selection(type, values) {
+  const named = getNamedType(type);
+  const objects = leaves(values).filter((value) => typeof value === "object");
+  if (isUnionType(named)) {
+    const members = new Map();
+    for (const value of objects) {
+      const member = value.__typename;
+      if (typeof member !== "string") {
+        throw new Error(`union ${named.name} output value lacks __typename`);
+      }
+      members.set(member, [...(members.get(member) ?? []), value]);
+    }
+    const fragments = [...members.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([member, group]) => `... on ${member} ${selection(schemaType(named, member), group)}`);
+    return `{ __typename ${fragments.join(" ")} }`;
+  }
+  if (!isObjectType(named)) {
+    return "";
+  }
+  const fieldNames = [...new Set(objects.flatMap((value) => Object.keys(value)))]
+    .filter((name) => name !== "__typename")
+    .sort();
+  const fields = named.getFields();
+  const selected = fieldNames.map((name) => {
+    if (fields[name] === undefined) {
+      throw new Error(`output value field ${name} is not declared by ${named.name}`);
+    }
+    return `${name} ${selection(fields[name].type, objects.map((value) => value[name]))}`;
+  });
+  const typename = objects.some((value) => "__typename" in value) ? "__typename " : "";
+  return `{ ${typename}${selected.join(" ")} }`;
+}
+
+let activeSchema;
+function schemaType(union, member) {
+  const type = activeSchema.getType(member);
+  if (!union.getTypes().includes(type)) {
+    throw new Error(`${member} is not a member of union ${union.name}`);
+  }
+  return type;
+}
+
 function buildFixtureSchema(fixture) {
   const queryFields = fixture.probes
-    .map((probe, index) => `  probe${index}(value: ${probe.graphqlType}): Boolean!`)
+    .flatMap((probe, index) => [
+      `  probe${index}(value: ${probe.graphqlType}): Boolean!`,
+      ...(probe.output === undefined ? [] : [`  output${index}: ${probe.output.graphqlType}`]),
+    ])
     .join("\n");
   const schema = buildSchema(`${fixture.sdl}\ntype Query {\n${queryFields}\n}\n`);
   const scalar = schema.getType(fixture.fallbackScalar);
@@ -194,8 +255,37 @@ async function executeFixture(name, fixture) {
       throw error;
     }
     results.push({ probe, valid });
+    if (probe.output !== undefined) {
+      await assertOutput(name, schema, index, probe);
+    }
   }
   return results;
+}
+
+/**
+ * A resolver returning the codec's output value for a valid source value is
+ * serialized by GraphQL.js unchanged, union members resolved by __typename.
+ */
+async function assertOutput(name, schema, index, probe) {
+  activeSchema = schema;
+  const field = `output${index}`;
+  const type = schema.getQueryType().getFields()[field].type;
+  const result = await graphql({
+    schema,
+    source: `query Output { ${field} ${selection(type, [probe.output.graphqlValue])} }`,
+    rootValue: { [field]: () => probe.output.graphqlValue },
+  });
+  if (result.errors !== undefined) {
+    throw new Error(
+      `${name}/${probe.label} output was not serialized:\n` +
+        result.errors.map((entry) => entry.message).join("\n"),
+    );
+  }
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.data[field])),
+    probe.output.graphqlValue,
+    `${name}/${probe.label} output changed through GraphQL.js serialization`,
+  );
 }
 
 if (graphqlVersion !== GRAPHQL_VERSION) {
@@ -246,16 +336,25 @@ if (divergenceCount !== manifest.lossy.probes.length) {
     `lossy fixture exposed ${divergenceCount}/${manifest.lossy.probes.length} divergences`,
   );
 }
-// The SHACL list components over projected instances: each list property is
-// the delegated custom scalar, so every non-conforming probe diverges at its
-// located delegation and every conforming one agrees.
+// The SHACL list components over projected instances: a list value is a
+// @oneOf input of a node reference and a @list object whose members are a
+// @oneOf input of their alternatives, so member typing and list-ness agree
+// with SHACL validation; a probe diverges only at a located length,
+// uniqueness or numeric-bound loss GraphQL has no expression for.
 const listResults = await executeFixture("lists", manifest.lists);
 const listDivergences = listResults.filter(({ probe, valid }) => valid !== probe.sourceValid);
-assert.equal(
-  listDivergences.length,
-  manifest.lists.probes.filter((probe) => !probe.sourceValid).length,
+assert.deepEqual(
+  listDivergences.map(({ probe }) => probe.label),
+  manifest.lists.probes.filter((probe) => probe.expectedLoss !== undefined).map((probe) => probe.label),
   "lists fixture divergences drifted",
 );
+for (const label of ["member-not-integer", "bounded-not-a-list"]) {
+  const agreed = listResults.find(({ probe }) => probe.label === label);
+  assert.ok(agreed !== undefined && !agreed.valid, `${label} must be rejected by GraphQL.js`);
+}
+const outputCount = [manifest.exact, manifest.lossy, manifest.lists]
+  .flatMap((fixture) => fixture.probes)
+  .filter((probe) => probe.output !== undefined).length;
 const codecCount = [...manifest.exact.probes, ...manifest.lossy.probes].filter(
   (probe) => probe.usedCodec,
 ).length;
@@ -264,6 +363,8 @@ console.log(
     `${exactResults.length} exact boon/variable-coercion probes agree; ` +
     `${divergenceCount} located divergences cover the complete ${profile.size}-code profile; ` +
     `${codecCount} probes exercise the production value codec; ` +
-    `${listResults.length} SHACL list-component probes agree or diverge at their located delegation; ` +
+    `${listResults.length} SHACL list-component probes agree or diverge at a located loss ` +
+    `(${listDivergences.length} divergences); ` +
+    `${outputCount} valid values serialize unchanged through output types and unions; ` +
     "verified reverse SHACL import passes",
 );

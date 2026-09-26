@@ -434,10 +434,12 @@ What remains is recorded on the forward ledger, each case with its reason:
 The Pydantic package enforces the list components, uniqueness included, with a
 validator over the raw JSON items. TypeScript states the length bounds as
 tuple types; it has no type for distinct elements. LinkML states all four on
-the `@list` slot. GraphQL delegates a list value to its custom scalar, because
-a list value is a node reference or a list object, and GraphQL has no input
-union. Each emitter oracle runs these components over projected instances of
-real data.
+the `@list` slot. GraphQL carries a list value as a `@oneOf` input object of a
+node reference and a list object, and each member as a `@oneOf` input object of
+the member shape's alternatives, so member types are checked. GraphQL list types
+have no length or uniqueness constraint and its numeric types have no bound, so
+those are recorded where they stand. Each emitter oracle runs these components
+over projected instances of real data.
 
 ## Ontology-complete developer schemas
 
@@ -650,16 +652,25 @@ executable schema.
 The exact grammar includes GraphQL booleans, strings, numbers, the signed
 32-bit `Int` domain, explicit nullability, finite JSON `const`/`enum` sets,
 closed object fields, requiredness, homogeneous lists, direct local `$defs`
-references and aliases, descriptions, and inline object helpers. One global
+references and aliases, descriptions, and inline object helpers. An `anyOf` is
+exact when every value selects one alternative: by its JSON kind, or, among
+object alternatives, by a required key no other alternative declares. It
+becomes a `@oneOf` input object with one field per alternative, and an output
+union. An alternative that is not an object type is a union member through a
+wrapper type whose `value` field carries it. One global
 collision-checked namespace covers types, helpers, and the fallback scalar;
 fields and enum symbols are checked in their GraphQL-local namespaces. The
 typed/canonical name maps retain the source definition keys, property keys, and
 finite JSON values.
 
 `GraphqlPackage::encode_input` maps source JSON keys and finite values to input
-field names and enum symbols. `decode_output` performs the inverse for fields
-present in a GraphQL response, without inventing omitted selections. Unknown or
-incompatible values fail. This package codec is the precise value boundary;
+field names and enum symbols, and wraps a union value in its alternative's
+`@oneOf` field. A non-object value of a kind no alternative admits passes
+unchanged, and GraphQL coercion rejects it. `decode_input` is the inverse for
+a coerced argument. `encode_output` writes the value a resolver returns, where a
+union value names its member in `__typename`. `decode_output` performs the
+inverse for fields present in a GraphQL response, without inventing omitted
+selections. Unknown or incompatible values fail. This package codec is the precise value boundary;
 `import_graphql_package` is the schema reverse boundary and verifies the SDL,
 typed/canonical maps, identity, retained source schema, and forward ledger.
 Arbitrary GraphQL SDL has no unique JSON Schema acceptance relation and is not
@@ -674,7 +685,7 @@ boundaries:
 | requiredness and recursion | nullable-presence widening, one deterministic recursive-input nullability relaxation |
 | lists | singleton coercion, cardinality, contains, uniqueness, tuples, unevaluated items |
 | scalar assertions | integer domain delegation, numeric predicates, string predicates |
-| applicators | conditionals, dependencies, intersections, unions, `oneOf`, negation |
+| applicators | conditionals, dependencies, intersections, overlapping and type-array unions, `oneOf`, negation |
 | runtime boundary | custom-scalar and unknown-keyword validation delegation |
 
 The caller-named fallback scalar is declared but PurRDF does not invent its
@@ -692,7 +703,9 @@ per object, or finite values; depth 128; and 255 bytes per GraphQL name.
 The independent dev oracle classifies source values with `boon`, builds the
 SDL with locked official GraphQL.js 16.14.0, and executes real variable
 coercion. It verifies exact agreement, every closed loss family and location,
-the name map and production codec, and deliberate corruption failures:
+the name map and production codec, and deliberate corruption failures. Each
+valid value is also returned through its output type, and GraphQL.js must
+serialize it unchanged:
 
 ```bash
 make graphql-oracle

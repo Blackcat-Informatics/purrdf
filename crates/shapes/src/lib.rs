@@ -76,7 +76,7 @@ pub use error::ShapesError;
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
     GraphqlDefinitionMap, GraphqlEnumValueMap, GraphqlError, GraphqlNameMap, GraphqlPackage,
-    emit_graphql, import_graphql_package,
+    GraphqlUnionMemberMap, emit_graphql, import_graphql_package,
 };
 pub use imports::{ResolvedShapesGraph, ShapesImportError, ShapesImports, resolve_shapes_imports};
 pub use json_schema::{
