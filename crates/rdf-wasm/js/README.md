@@ -455,7 +455,12 @@ that reaches the clause, by one of:
   own, as SPARQL evaluates it; the left side supplies only the list of endpoints to ask,
   and a row from any other endpoint could match no left row anyway. A left row whose
   endpoint answers nothing keeps its own bindings under `OPTIONAL` and is not removed
-  under `MINUS`.
+  under `MINUS`;
+- the other side of the group join that holds the clause: `{ SERVICE ?e { … } ?g
+  ex:endpoint ?e }`, `{ SERVICE ?e { … } VALUES ?e { … } }`. A join is commutative, so
+  these answer the rows, and ask the endpoints, of `{ ?g ex:endpoint ?e } { SERVICE ?e
+  { … } }`. `OPTIONAL` and `MINUS` are not: `{ SERVICE ?e { … } OPTIONAL { ?g ex:endpoint
+  ?e } }` is refused, since the optional side need not bind `?e`.
 
 Under `SERVICE SILENT` an endpoint that fails contributes one row binding only `?e`, so
 its own left rows survive unextended and no other endpoint's rows change. Under `MINUS`

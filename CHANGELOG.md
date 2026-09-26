@@ -766,6 +766,19 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   aggregate not grouped by `?e`, or a sub-`SELECT` not projecting `?e` sits between
   the binding and the clause.
 
+- **sparql-eval:** `{ SERVICE ?e { … } ?s ex:endpoint ?e }` and `{ SERVICE ?e { … }
+  VALUES ?e { … } }` were refused, although a join is commutative and the mirrored
+  `{ ?s ex:endpoint ?e } { SERVICE ?e { … } }` answered. A group join whose left
+  operand holds a variable-endpoint `SERVICE` and whose right operand may bind its
+  variable now evaluates the right operand first and answers the clause over the
+  endpoints it binds, then joins left against right as written: the same rows and
+  the same requests, one per distinct endpoint, as the left-bound form, with `SILENT`
+  per endpoint as there. The exactness argument is the left-bound one with the sides
+  exchanged. `OPTIONAL` and `MINUS` do not commute and keep their endpoints on the
+  left, so `{ SERVICE ?e { … } OPTIONAL { ?s ex:endpoint ?e } }` stays refused, as
+  does a right operand that leaves `?e` unbound in some solution; a clause an
+  enclosing operator already lists endpoints for keeps that list.
+
 - **rdf, shapes, shex:** a JSON number read through `serde_json` could become the
   neighbour of the binary64 its decimal spells. Without its `float_roundtrip` feature
   `serde_json` scales a `u64` significand by a binary64 power of ten, rounding at each

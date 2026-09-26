@@ -219,7 +219,10 @@ earlier in the same group (a triple pattern, `VALUES`, `BIND`, or
 `LATERAL { SERVICE ?e { … } }`), or by the left side of the `OPTIONAL`, `MINUS`
 or group join whose right side holds the clause —
 `?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`, and likewise with `MINUS` or
-`{ ?g ex:endpoint ?e } { SERVICE ?e { … } }`. There the right side is still
+`{ ?g ex:endpoint ?e } { SERVICE ?e { … } }` — or, since a join is commutative,
+by the other side of the group join holding it, as in
+`{ SERVICE ?e { … } ?g ex:endpoint ?e }` (not an `OPTIONAL` or `MINUS` right
+side, which need not bind it). There the right side is still
 evaluated on its own, and the left side supplies only the list of endpoints to
 ask. A left row whose endpoint answers nothing keeps its bindings under
 `OPTIONAL` and is not removed under `MINUS`. Under `SERVICE SILENT`, an endpoint

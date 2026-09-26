@@ -32,6 +32,11 @@
 //!   operand's solutions, in first-occurrence order. The clause becomes the union, over
 //!   that list, of `{?e ↦ iri} ⋈ Invocation(iri, P)` — one request per distinct
 //!   endpoint — and the enclosing operator then runs its own, unmodified algebra over it.
+//! * **The other side of a group join** — `{ SERVICE ?e { … } ?s ex:endpoint ?e }`,
+//!   `{ SERVICE ?e { … } VALUES ?e { … } }`. A join is commutative, so the side that
+//!   binds `?e` is evaluated first and supplies the list, and the join then runs as
+//!   written ([`binds_left_endpoints`]). `OPTIONAL` and `MINUS` do not commute: their
+//!   list comes from the left alone.
 //!
 //! Restricting the union to that list is not an approximation, and that is what licenses
 //! it. Every left solution binds `?e` (a left operand that leaves `?e` unbound in some
@@ -436,6 +441,52 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
     evaluated
 }
 
+/// Whether a group join `left ⋈ right` should take the endpoints of the variable-endpoint
+/// `SERVICE` clauses in a direct position of `left` from `right`: when `left` holds one
+/// and `right` holds none (a right operand that needs the left's endpoints keeps the
+/// left-bound order), and some such clause's variable is one `right` may bind.
+///
+/// A join is commutative, and the exactness argument of the left-bound case holds with
+/// the sides exchanged: every row the clause produces carries `?e`, every right row
+/// binds `?e` (a right operand that leaves it unbound in some solution is refused, as a
+/// left one is), so a row from an endpoint the right rows do not name joins none of them.
+/// Only the inner join commutes: an `OPTIONAL` or `MINUS` keeps its endpoints on the
+/// left. A clause an enclosing operator already lists endpoints for keeps that list, and
+/// the order it had, so no endpoint outside it is asked. When no enclosing operator and nothing on the right binds the variable, the
+/// clause is refused where it is evaluated, as before — the order changes nothing then —
+/// so this is decided on the patterns alone.
+///
+/// # Errors
+///
+/// [`EvalError::StackExhausted`] from the analysis walk.
+pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
+    left: &GraphPattern,
+    right: &GraphPattern,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    if ctx.endpoint_scan == EndpointScan::Absent {
+        return Ok(false);
+    }
+    let placeholders = ctx.deferred_exists.clone();
+    crate::stack::walk(|| {
+        let served = served_endpoint_variables(left, placeholders.as_deref());
+        if served.is_empty()
+            || !served_endpoint_variables(right, placeholders.as_deref()).is_empty()
+        {
+            return false;
+        }
+        let mut mentioned = crate::DetHashSet::default();
+        crate::expr::pattern_all_vars(right, &mut mentioned);
+        served.iter().any(|variable| mentioned.contains(variable))
+            && !served.iter().any(|variable| {
+                matches!(
+                    binding_for(&ctx.endpoint_frames, variable),
+                    Some(EndpointBinding::Endpoints(_))
+                )
+            })
+    })
+}
+
 /// Refuse a `LATERAL` whose right operand holds a variable-endpoint `SERVICE ?v` that
 /// some left solution cannot name an endpoint for — before the right operand is
 /// evaluated for any left solution, so no request of the clause goes out first.
@@ -617,8 +668,9 @@ pub(crate) fn unbound_endpoint(variable: &Variable, cause: &str) -> EvalError {
          no endpoint to send the request to. A variable endpoint is evaluated once per \
          distinct IRI ?{v} is bound to, wherever ?{v} is bound in every solution that \
          reaches the SERVICE: by a pattern earlier in the same group (a triple pattern, \
-         VALUES, BIND or LATERAL), or by the left side of the OPTIONAL, MINUS or group join \
-         whose right side holds the SERVICE — but not through a further OPTIONAL or MINUS \
+         VALUES, BIND or LATERAL), by the left side of the OPTIONAL, MINUS or group join \
+         whose right side holds the SERVICE, or by the other side of the group join that \
+         holds it — but not through a further OPTIONAL or MINUS \
          right side, an EXISTS, a LIMIT/OFFSET, an aggregate that does not group by ?{v}, \
          or a sub-SELECT that does not project ?{v}. Bind ?{v} before the SERVICE, e.g. \
          `?s <p> ?{v} . SERVICE ?{v} {{ … }}` or `?s <p> ?{v} LATERAL {{ SERVICE ?{v} {{ … }} \
@@ -1250,5 +1302,96 @@ mod tests {
             ["e=e1&g=g1&x=answer-from-e1"]
         );
         assert_eq!(requested(&source), ["e1"]);
+    }
+    /// A join is commutative: the endpoint bound on the RIGHT of a group join —
+    /// `{ SERVICE ?e { … } ?g ex:endpoint ?e }`, `{ SERVICE ?e { … } VALUES ?e { … } }` —
+    /// answers the rows the left-bound form answers, asking the same endpoints once each.
+    #[test]
+    fn an_endpoint_bound_on_the_right_of_a_group_join_answers_as_the_left_bound_form() {
+        let left_bound = Endpoints::default();
+        let expected = run(
+            &left_bound,
+            &q(&format!("{{ {BOUND} }} {{ SERVICE ?e {{ ?s ?p ?x }} }}")),
+        )
+        .expect("left-bound");
+        for shape in [
+            format!("{{ SERVICE ?e {{ ?s ?p ?x }} }} {{ {BOUND} }}"),
+            format!("SERVICE ?e {{ ?s ?p ?x }} {{ {BOUND} }}"),
+        ] {
+            let source = Endpoints::default();
+            assert_eq!(run(&source, &q(&shape)).expect(&shape), expected, "{shape}");
+            assert_eq!(requested(&source), requested(&left_bound), "{shape}");
+            assert_eq!(
+                source.requests().len(),
+                3,
+                "{shape}: one request per endpoint"
+            );
+        }
+        let source = Endpoints::default();
+        assert_eq!(
+            run(
+                &source,
+                &q("SERVICE ?e { ?s ?p ?x } VALUES ?e { ex:e2 ex:e1 ex:e2 }")
+            )
+            .expect("VALUES on the right"),
+            [
+                "e=e1&x=answer-from-e1",
+                "e=e2&x=answer-from-e2",
+                "e=e2&x=answer-from-e2",
+            ]
+        );
+        assert_eq!(requested(&source), ["e1", "e2"]);
+        // A bare triple pattern on the right, every endpoint including the failing one,
+        // under SILENT: the rows and requests of the left-bound group join.
+        let left_bound = Endpoints::default();
+        let expected = run(
+            &left_bound,
+            &q("{ ?g ex:endpoint ?e } { SERVICE SILENT ?e { ?s ?p ?x } }"),
+        )
+        .expect("left-bound");
+        let source = Endpoints::default();
+        assert_eq!(
+            run(
+                &source,
+                &q("SERVICE SILENT ?e { ?s ?p ?x } ?g ex:endpoint ?e")
+            )
+            .expect("a triple pattern on the right"),
+            expected
+        );
+        assert_eq!(requested(&source), requested(&left_bound));
+        assert_eq!(requested(&source), ["down", "e1", "e2", "e3"]);
+        // SILENT per endpoint, as on the left: the failing endpoint's right row survives
+        // with the identity.
+        let source = Endpoints::default();
+        assert_eq!(
+            run(
+                &source,
+                &q("SERVICE SILENT ?e { ?s ?p ?x } VALUES ?e { ex:e1 ex:down }")
+            )
+            .expect("SILENT on the right"),
+            ["e=down", "e=e1&x=answer-from-e1"]
+        );
+        assert_eq!(requested(&source), ["down", "e1"]);
+    }
+
+    /// What does not commute, or is not certainly bound, stays refused with no request:
+    /// an endpoint bound on neither side, one an `OPTIONAL` on the right may leave
+    /// unbound, and an `OPTIONAL` or `MINUS` whose left side is the `SERVICE`.
+    #[test]
+    fn an_endpoint_not_certainly_bound_on_the_right_stays_refused() {
+        for shape in [
+            "SERVICE ?e { ?s ?p ?x } ?g ex:other ?o",
+            "SERVICE ?e { ?s ?p ?x } OPTIONAL { ?g ex:endpoint ?e }",
+            "{ SERVICE ?e { ?s ?p ?x } } { VALUES ?g { ex:g1 ex:nobody } OPTIONAL { ?g ex:endpoint ?e } }",
+            "SERVICE ?e { ?s ?p ?x } MINUS { ?g ex:endpoint ?e }",
+        ] {
+            let source = Endpoints::default();
+            let error = run(&source, &q(shape)).expect_err(shape);
+            assert!(
+                error.to_string().contains("SERVICE ?e with no endpoint"),
+                "{shape}: {error}"
+            );
+            assert_eq!(source.requests(), Vec::<String>::new(), "{shape}");
+        }
     }
 }

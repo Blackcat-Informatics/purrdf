@@ -63,6 +63,25 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
+    // A join is commutative, so a variable-endpoint `SERVICE` in the LEFT operand whose
+    // endpoint the right operand binds (`{ SERVICE ?e { … } ?s ex:endpoint ?e }`) is
+    // answered over the endpoints the right rows bind, exactly as the mirrored shape is:
+    // the right operand is evaluated first, the left over its endpoint list, and the
+    // join then runs left against right as always, so the output is the one the
+    // left-bound order gives. See `crate::service_endpoints::binds_left_endpoints`.
+    if crate::service_endpoints::binds_left_endpoints(left, right, ctx)? {
+        let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+            return Ok(lift.withheld());
+        };
+        if lift.is_truncated() {
+            return Ok(lift.finish(SolutionSeq::empty(r.schema)));
+        }
+        let evaluated = crate::service_endpoints::eval_right_operand(&r, left, ctx)?;
+        let Some(l) = lift.absorb(0, evaluated) else {
+            return Ok(lift.withheld());
+        };
+        return Ok(lift.finish(hash_join(&l, &r, ctx)));
+    }
     let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
         return Ok(lift.withheld());
     };

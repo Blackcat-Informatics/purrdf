@@ -465,6 +465,40 @@ const ENDPOINTS_NT = [
   .join("\n");
 const endpointsLocal = () => Dataset.parse(ENDPOINTS_NT, "nquads");
 
+// A join is commutative: the endpoint bound on the right of a group join answers the rows,
+// and asks the endpoints, of the left-bound form; an OPTIONAL on the right, which need not
+// bind it, is refused with nobody asked.
+test("a group join binding the endpoint on its right answers as the left-bound form", async () => {
+  const engine = new QueryEngine();
+  const run = async (shape) => {
+    const mock = recordingResolver(answerWithEndpointName);
+    const result = await engine.queryAsync(endpointsLocal(), shape, { resolveService: mock.resolveService });
+    return { rows: rowsOf(result), asked: mock.calls.map((call) => call.request.endpoint).sort() };
+  };
+  const bound = `VALUES ?e { <${EX}e1> <${EX}e2> } ?g <${EX}endpoint> ?e`;
+  const leftBound = await run(`SELECT ?g ?e ?x WHERE { { ${bound} } { SERVICE ?e { ?s ?p ?x } } }`);
+  assert.equal(leftBound.rows.length, 3);
+  assert.deepEqual(leftBound.asked, [`${EX}e1`, `${EX}e2`]);
+  for (const shape of [
+    `SELECT ?g ?e ?x WHERE { { SERVICE ?e { ?s ?p ?x } } { ${bound} } }`,
+    `SELECT ?g ?e ?x WHERE { SERVICE ?e { ?s ?p ?x } { ${bound} } }`,
+  ]) {
+    assert.deepEqual(await run(shape), leftBound, shape);
+    const text = syncThrow(() => engine.query(endpointsLocal(), shape)).message;
+    assert.match(text, /no remote query source configured/, "the synchronous lane reaches the endpoint, not a refusal");
+  }
+  const mock = recordingResolver(answerWithEndpointName);
+  const refused = await rejection(
+    engine.queryAsync(
+      endpointsLocal(),
+      `SELECT * WHERE { SERVICE ?e { ?s ?p ?x } OPTIONAL { ?g <${EX}endpoint> ?e } }`,
+      { resolveService: mock.resolveService },
+    ),
+  );
+  assert.match(refused.message, /SERVICE \?e with no endpoint/);
+  assert.equal(mock.calls.length, 0);
+});
+
 // A left solution that names no endpoint — `?e` left unbound by an OPTIONAL, or bound to a
 // literal — refuses the clause before any endpoint is asked, in either row order. Before,
 // the solutions ahead of it had already sent their requests (with any credentials the

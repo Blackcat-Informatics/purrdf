@@ -493,7 +493,10 @@ per-row substitution described under "Points of disagreement with Jena" above)
 and the query dispatches normally, the same as a `SERVICE` with a fixed IRI.
 When the left side of the `OPTIONAL`, `MINUS` or group join holding the clause
 binds `?g` in every solution, the right side is still evaluated on its own and
-the clause is sent once to each distinct IRI that left side binds `?g` to.
+the clause is sent once to each distinct IRI that left side binds `?g` to. A
+join is commutative, so the same holds when the other side of a group join
+binds `?g` — `{ SERVICE ?g { … } ?s ex:endpoint ?g }` — while an `OPTIONAL` or
+`MINUS` takes its endpoints from its left side alone.
 
 ### Per-service context: the `ServiceResolver` seam
 
