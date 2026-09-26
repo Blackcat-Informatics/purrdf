@@ -2273,4 +2273,272 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         let (status, ..) = lint("@@@ not turtle");
         assert_eq!(status, PurrdfStatus::ParseError as i32);
     }
+
+    // ── One shapes graph, one owl:imports verdict, on every entry point ─────────
+
+    /// The importing shapes graph: an ontology header and its import, no shape of its own.
+    const IMPORTER: &str = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+        <http://example.org/shapes> a owl:Ontology ;\n\
+          owl:imports <http://example.org/lib> .\n";
+
+    /// The imported document: a shape needing `ex:name`, a rule tagging every `ex:Person`
+    /// `ex:checked ex:yes`, and a node expression `ex:Who` reading the scope variable `who`.
+    const IMPORTED: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        ex:NameShape a sh:NodeShape ;\n\
+          sh:targetClass ex:Person ;\n\
+          sh:property [ sh:path ex:name ; sh:minCount 1 ] ;\n\
+          sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:checked ; \
+                    sh:object ex:yes ] .\n\
+        ex:Who shnex:var \"who\" .\n";
+
+    /// One `ex:Person` with no `ex:name`.
+    const PERSON: &str = "<http://example.org/alice> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+
+    /// The typed half of a failed call — status, kind, IRIs — freeing the error.
+    ///
+    /// # Safety
+    /// `error` must be a live error written by a failed call.
+    unsafe fn take_import_error(
+        status: i32,
+        error: *mut PurrdfError,
+    ) -> (i32, String, Vec<String>) {
+        unsafe {
+            let text = |pointer: *const c_char| {
+                (!pointer.is_null()).then(|| {
+                    std::ffi::CStr::from_ptr(pointer)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+            };
+            let kind = text(purrdf_shapes_import_error_kind(error)).unwrap_or_default();
+            let iris = (0..purrdf_shapes_import_error_iri_count(error))
+                .filter_map(|index| text(purrdf_shapes_import_error_iri(error, index)))
+                .collect();
+            assert!(
+                purrdf_shapes_import_error_iri(error, usize::MAX).is_null(),
+                "an out-of-range index reads NULL"
+            );
+            purrdf_error_free(error);
+            (status, kind, iris)
+        }
+    }
+
+    /// Every shapes-graph entry point of the C ABI refuses the importing shapes graph with
+    /// `PURRDF_STATUS_SHAPES_IMPORT_ERROR`, kind `unresolved-import` and the one IRI, when the
+    /// import table is empty — and, with the imported document in the table, applies it:
+    /// the imported shape reports, the rule infers, the expression reads its scope, the lint
+    /// is clean, and the product carries the shape.
+    #[test]
+    fn every_shapes_entry_point_gives_the_same_owl_imports_verdict() {
+        use std::ffi::CString;
+
+        let shapes = CString::new(IMPORTER).expect("no NUL");
+        let data = CString::new(PERSON).expect("no NUL");
+        let lib_iri = CString::new("http://example.org/lib").expect("no NUL");
+        let lib_document = CString::new(IMPORTED).expect("no NUL");
+        let iris = [lib_iri.as_ptr()];
+        let documents = [lib_document.as_ptr()];
+        // (import_iris, import_documents, import_count) for the empty and the full table.
+        let tables: [(*const *const c_char, *const *const c_char, usize); 2] = [
+            (std::ptr::null(), std::ptr::null(), 0),
+            (iris.as_ptr(), documents.as_ptr(), 1),
+        ];
+        let refusal = (
+            PurrdfStatus::ShapesImportError as i32,
+            "unresolved-import".to_owned(),
+            vec!["http://example.org/lib".to_owned()],
+        );
+        let who = CString::new("http://example.org/Who").expect("no NUL");
+        let alice = CString::new("http://example.org/alice").expect("no NUL");
+        let scope_binding = CString::new("who=http://example.org/bob").expect("no NUL");
+        let scope = [scope_binding.as_ptr()];
+
+        for (index, (import_iris, import_documents, import_count)) in tables.into_iter().enumerate()
+        {
+            let supplied = index == 1;
+            // SAFETY: every pointer is a live CString, an array of live CStrings of the
+            // stated length (or NULL with a zero count), or a writable local.
+            unsafe {
+                let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+                let mut error: *mut PurrdfError = std::ptr::null_mut();
+                let status = purrdf_shacl_validate_to_sarif(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    &raw mut buffer,
+                    &raw mut error,
+                );
+                if supplied {
+                    assert_eq!(status, PurrdfStatus::Ok as i32);
+                    assert!(take_text(buffer).contains("MinCountConstraintComponent"));
+                } else {
+                    assert_eq!(take_import_error(status, error), refusal, "validate");
+                }
+
+                let mut scope_kind = -1i32;
+                let mut focus_nodes = 0usize;
+                let mut reason: *mut PurrdfBuffer = std::ptr::null_mut();
+                let status = purrdf_shacl_validate_changes_to_sarif(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    c"".as_ptr(),
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    &raw mut buffer,
+                    &raw mut scope_kind,
+                    &raw mut focus_nodes,
+                    &raw mut reason,
+                    &raw mut error,
+                );
+                if supplied {
+                    assert_eq!(status, PurrdfStatus::Ok as i32);
+                    assert!(take_text(buffer).contains("MinCountConstraintComponent"));
+                    if !reason.is_null() {
+                        crate::buffer::purrdf_buffer_free(reason);
+                    }
+                } else {
+                    assert_eq!(take_import_error(status, error), refusal, "change path");
+                }
+
+                let status = purrdf_shacl_entail_to_ntriples(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    &raw mut buffer,
+                    &raw mut error,
+                );
+                if supplied {
+                    assert_eq!(status, PurrdfStatus::Ok as i32);
+                    assert!(take_text(buffer).contains("<http://example.org/checked>"));
+                } else {
+                    assert_eq!(take_import_error(status, error), refusal, "entail");
+                }
+
+                let status = purrdf_shacl_apply_rules(
+                    data.as_ptr(),
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    &raw mut buffer,
+                    std::ptr::null_mut(),
+                    &raw mut error,
+                );
+                if supplied {
+                    assert_eq!(status, PurrdfStatus::Ok as i32);
+                    assert_eq!(
+                        take_text(buffer),
+                        "<http://example.org/alice> <http://example.org/checked> \
+                         <http://example.org/yes> .\n"
+                    );
+                } else {
+                    assert_eq!(take_import_error(status, error), refusal, "rules");
+                }
+
+                let status = purrdf_shacl_eval_node_expr(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    who.as_ptr(),
+                    alice.as_ptr(),
+                    scope.as_ptr(),
+                    scope.len(),
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    &raw mut buffer,
+                    &raw mut error,
+                );
+                if supplied {
+                    assert_eq!(status, PurrdfStatus::Ok as i32);
+                    assert_eq!(take_text(buffer), "<http://example.org/bob>\n");
+                } else {
+                    assert_eq!(take_import_error(status, error), refusal, "node-expr");
+                }
+
+                let mut clean = -1i32;
+                let mut findings = usize::MAX;
+                let status = purrdf_shacl_lint_shapes(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    &raw mut buffer,
+                    &raw mut clean,
+                    &raw mut findings,
+                    &raw mut error,
+                );
+                if supplied {
+                    assert_eq!((status, clean, findings), (PurrdfStatus::Ok as i32, 1, 0));
+                    take_text(buffer);
+                } else {
+                    assert_eq!(take_import_error(status, error), refusal, "lint");
+                }
+
+                let status = purrdf_shapes_product_encode(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    &raw mut buffer,
+                    &raw mut error,
+                );
+                if supplied {
+                    assert_eq!(status, PurrdfStatus::Ok as i32);
+                    let mut product_ptr: *const u8 = std::ptr::null();
+                    let mut product_len = 0usize;
+                    crate::buffer::purrdf_buffer_data(
+                        buffer,
+                        &raw mut product_ptr,
+                        &raw mut product_len,
+                    );
+                    let product = std::slice::from_raw_parts(product_ptr, product_len).to_vec();
+                    crate::buffer::purrdf_buffer_free(buffer);
+                    let sarif = purrdf_validate::validate_with_shapes_product(
+                        &product,
+                        PERSON,
+                        &SarifOptions::default(),
+                    )
+                    .expect("restores");
+                    assert!(sarif.contains("MinCountConstraintComponent"), "{sarif}");
+                } else {
+                    assert_eq!(take_import_error(status, error), refusal, "product encode");
+                }
+            }
+        }
+    }
+
+    /// The accessors answer NULL / 0 for an error that is not an import refusal.
+    #[test]
+    fn the_import_accessors_are_silent_on_other_errors() {
+        let error = PurrdfError::new(PurrdfStatus::ParseError, "not an import refusal");
+        let pointer = std::ptr::from_ref(&error);
+        // SAFETY: `pointer` borrows a live local error.
+        unsafe {
+            assert!(purrdf_shapes_import_error_kind(pointer).is_null());
+            assert_eq!(purrdf_shapes_import_error_iri_count(pointer), 0);
+            assert!(purrdf_shapes_import_error_iri(pointer, 0).is_null());
+            assert!(purrdf_shapes_import_error_kind(std::ptr::null()).is_null());
+        }
+    }
 }

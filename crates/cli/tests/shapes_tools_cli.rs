@@ -470,3 +470,142 @@ fn cli_shapes_lint() {
     let ledger = run(&["--loss-ledger", "shapes", "lint", &clean]);
     assert_eq!(code(&ledger), 2, "a text report has no loss ledger");
 }
+
+// ── One shapes graph, one owl:imports verdict, on every lane ────────────────────
+
+/// The importing shapes graph: an ontology header and its import, and no shape of its own.
+const IMPORTER: &str = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+    <http://example.org/shapes> a owl:Ontology ;\n\
+      owl:imports <http://example.org/lib> .\n";
+
+/// The imported document: a shape needing `ex:name`, a rule tagging every `ex:Person`
+/// `ex:checked ex:yes`, and a node expression `ex:Who` reading the scope variable `who`.
+const IMPORTED: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .\n\
+    @prefix ex: <http://example.org/> .\n\
+    ex:NameShape a sh:NodeShape ;\n\
+      sh:targetClass ex:Person ;\n\
+      sh:property [ sh:path ex:name ; sh:minCount 1 ] ;\n\
+      sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:checked ; \
+                sh:object ex:yes ] .\n\
+    ex:Who shnex:var \"who\" .\n";
+
+/// One `ex:Person` with no `ex:name`.
+const PERSON: &str = "<http://example.org/alice> \
+    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+
+/// Every shapes-graph lane of the command line refuses the importing shapes graph with the
+/// same `unresolved-import` refusal when no `--import` names the imported document, and —
+/// with the pair — applies the imported document: the shape reports, the rule infers, the
+/// expression reads its scope, the lint certifies, and the product carries the shape.
+#[test]
+fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "importer.ttl", IMPORTER);
+    let lib = write_file(dir.path(), "lib.ttl", IMPORTED);
+    let data = write_file(dir.path(), "data.nt", PERSON);
+    let pair = format!("http://example.org/lib={lib}");
+    let product = dir.path().join("closure.purrshp");
+    let product = product.to_str().expect("utf-8 path").to_owned();
+
+    let validate = |import: Option<&str>| {
+        let mut args = vec!["validate", "--shapes", &shapes];
+        args.extend(import.map(|pair| ["--import", pair]).into_iter().flatten());
+        args.push(&data);
+        run(&args)
+    };
+    let rules = |import: Option<&str>| {
+        let mut args = vec!["rules", "--shapes", &shapes, "--to", "ntriples"];
+        args.extend(import.map(|pair| ["--import", pair]).into_iter().flatten());
+        args.push(&data);
+        run(&args)
+    };
+    let node_expr = |import: Option<&str>| {
+        let mut args = vec![
+            "node-expr",
+            "--shapes",
+            &shapes,
+            "--expr",
+            "http://example.org/Who",
+            "--focus",
+            "http://example.org/alice",
+            "--scope",
+            "who=http://example.org/bob",
+        ];
+        args.extend(import.map(|pair| ["--import", pair]).into_iter().flatten());
+        args.push(&data);
+        run(&args)
+    };
+    let lint = |import: Option<&str>| {
+        let mut args = vec!["shapes", "lint"];
+        args.extend(import.map(|pair| ["--import", pair]).into_iter().flatten());
+        args.push(&shapes);
+        run(&args)
+    };
+    let pack = |import: Option<&str>| {
+        let mut args = vec!["shacl", "pack", "--shapes", &shapes, "--out", &product];
+        args.extend(import.map(|pair| ["--import", pair]).into_iter().flatten());
+        run(&args)
+    };
+
+    for (lane, out) in [
+        ("validate", validate(None)),
+        ("rules", rules(None)),
+        ("node-expr", node_expr(None)),
+        ("shapes lint", lint(None)),
+        ("shacl pack", pack(None)),
+    ] {
+        let err = stderr(&out);
+        assert_eq!(code(&out), 1, "{lane}: a runtime refusal: {err}");
+        assert!(
+            err.contains("unresolved-import")
+                && err.contains("<http://example.org/lib>")
+                && err.contains("--import http://example.org/lib=FILE"),
+            "{lane}: the one refusal, naming the import and its pair: {err}"
+        );
+        assert!(stdout(&out).is_empty(), "{lane}: nothing is written");
+    }
+
+    let validated = validate(Some(&pair));
+    assert_eq!(code(&validated), 0, "{}", stderr(&validated));
+    assert!(
+        stderr(&validated).contains("shacl conforms false\n")
+            && stdout(&validated).contains("MinCountConstraintComponent"),
+        "the imported shape reports: {}",
+        stdout(&validated)
+    );
+
+    let inferred = rules(Some(&pair));
+    assert_eq!(code(&inferred), 0, "{}", stderr(&inferred));
+    assert_eq!(
+        stdout(&inferred),
+        "<http://example.org/alice> <http://example.org/checked> <http://example.org/yes> .\n",
+        "the imported rule infers"
+    );
+
+    let evaluated = node_expr(Some(&pair));
+    assert_eq!(code(&evaluated), 0, "{}", stderr(&evaluated));
+    assert_eq!(
+        stdout(&evaluated),
+        "<http://example.org/bob>\n",
+        "the imported expression reads its scope"
+    );
+
+    let linted = lint(Some(&pair));
+    assert_eq!(code(&linted), 0, "{}", stderr(&linted));
+    assert!(
+        stdout(&linted).ends_with("clean true\n"),
+        "{}",
+        stdout(&linted)
+    );
+
+    let packed = pack(Some(&pair));
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let restored = run(&["validate", "--shapes-product", &product, &data]);
+    assert_eq!(code(&restored), 0, "{}", stderr(&restored));
+    assert!(
+        stdout(&restored).contains("MinCountConstraintComponent"),
+        "the product carries the imported shape: {}",
+        stdout(&restored)
+    );
+}
