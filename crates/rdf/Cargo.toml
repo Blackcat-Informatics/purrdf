@@ -141,9 +141,6 @@ syn = { workspace = true }
 proc-macro2 = { workspace = true }
 # Trusted draft-2020-12 oracle for the public JSON-LD options schema.
 boon = { workspace = true }
-# Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing
-# `use pretty_assertions::assert_eq;` per test file; identical on pass.
-pretty_assertions = { workspace = true }
 ciborium = { workspace = true }
 purrdf-gts = { workspace = true }
 # The SEP-0009 grammar, used by the composite blank-node scoping tests as an

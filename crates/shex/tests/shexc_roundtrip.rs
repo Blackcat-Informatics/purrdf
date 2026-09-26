@@ -21,7 +21,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pretty_assertions::assert_eq;
 use purrdf_shex::{parse_shexc, to_shexc};
 
 /// The URL prefix the vendored tree mirrors.

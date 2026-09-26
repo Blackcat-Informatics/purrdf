@@ -99,13 +99,9 @@ js-sys = { workspace = true }
 [dev-dependencies]
 # The workspace's shared counting allocator, for the `prepared_reuse_counters`
 # example. Path-only and unpublished, so it is stripped from the packaged
-# manifest; std-only and dependency-free, so like `pretty_assertions` below it
-# compiles on every target this crate is tested on and needs no target gate.
+# manifest; std-only and dependency-free, so it compiles on every target this
+# crate is tested on and needs no target gate.
 purrdf-alloc-probe = { workspace = true }
-# Colored line-diffs on assert_eq! failure (repo convention). Pure Rust, and —
-# with the allocator probe above — one of the two dev-dependencies that compile
-# on every target this crate is tested on.
-pretty_assertions = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Property-based generation for the governor differential harness

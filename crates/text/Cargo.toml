@@ -48,8 +48,6 @@ unicode-normalization.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention).
-pretty_assertions.workspace = true
 # Solution-sequence shapes for the ranked-row tests.
 purrdf-sparql-results.workspace = true
 

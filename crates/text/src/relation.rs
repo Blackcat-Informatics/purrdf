@@ -2052,7 +2052,6 @@ pub fn verify_binding<D: DatasetView>(
 mod tests {
     use std::sync::Arc;
 
-    use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_eval::RankFidelity;
 

@@ -234,7 +234,6 @@ fn push_field_reference<W: TextOut + ?Sized>(value: &str, out: &mut W) {
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm};
 
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";

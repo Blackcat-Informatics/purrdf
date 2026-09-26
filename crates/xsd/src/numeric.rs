@@ -1545,7 +1545,6 @@ pub fn numeric_round(a: &XsdValue) -> Result<XsdValue, XsdError> {
 mod tests {
     use super::*;
     use crate::XsdDatatype as D;
-    use pretty_assertions::assert_eq;
 
     /// The pre-single-buffer `canonical_lexical` (split/pad/`format!` form), kept
     /// verbatim as the byte-for-byte oracle for the exact-fit rewrite.

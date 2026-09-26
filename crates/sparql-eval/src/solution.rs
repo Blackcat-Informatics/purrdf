@@ -384,7 +384,6 @@ pub fn compatible<I: ViewTermId>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermId;
 
     fn var(name: &str) -> Variable {

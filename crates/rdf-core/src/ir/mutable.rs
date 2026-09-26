@@ -1017,7 +1017,6 @@ const _: fn() = || {
 mod tests {
     use super::*;
     use crate::ir::RdfDatasetBuilder;
-    use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use std::collections::HashSet;
 

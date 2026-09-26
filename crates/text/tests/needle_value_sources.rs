@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use pretty_assertions::assert_eq;
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };

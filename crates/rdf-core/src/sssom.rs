@@ -1381,7 +1381,6 @@ mod white_space_law {
         SSSOM_WHITE, SssomCommentPlacement, SssomSetComment, is_blank, parse_tsv, trim_white,
         trim_white_end, trim_white_start, validate,
     };
-    use pretty_assertions::assert_eq;
 
     /// Every Unicode scalar value, in order.
     fn all_scalars() -> impl Iterator<Item = char> {

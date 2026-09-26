@@ -16,7 +16,6 @@
 //! exactly this kind of round-trip property), so the properties are checked over
 //! generated values rather than only over a hand-written corpus.
 
-use pretty_assertions::assert_eq;
 use proptest::prelude::*;
 use purrdf_cdt::{
     CdtDatatype, CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtValue, TextDirection, XSD_INTEGER,

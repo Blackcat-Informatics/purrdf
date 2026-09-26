@@ -1734,7 +1734,6 @@ fn project_out_blanks<I: ViewTermId>(
 mod tests {
     use super::*;
     use crate::scratch::ScratchInterner;
-    use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_algebra::{Literal, NamedNode};
 

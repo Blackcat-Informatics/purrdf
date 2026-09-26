@@ -10,7 +10,6 @@
 //! [`CdtOutcome::Error`](purrdf_cdt::CdtOutcome::Error), and a case that expects a
 //! value asserts the value rather than merely that something was produced.
 
-use pretty_assertions::assert_eq;
 use purrdf_cdt::{
     CDT_FUNCTIONS, CDT_LIST, CDT_MAP, CDT_NS, CdtArity, CdtEntry, CdtError, CdtFn, CdtKey,
     CdtLiteral, CdtOutcome, CdtTerm, CdtValue, MAX_ELEMENTS, MAX_LEXICAL_BYTES, MAX_NESTING_DEPTH,
@@ -523,10 +522,10 @@ fn concat_raises_for_a_map_argument() {
 #[test]
 fn list_contains_compares_by_value() {
     // list-functions/contains-01.rq and contains-02.rq.
-    assert_eq!(value(list_contains(&items("[]"), &int("1"))), false);
+    assert!(!value(list_contains(&items("[]"), &int("1"))));
     let one = items("[1]");
-    assert_eq!(value(list_contains(&one, &int("1"))), true);
-    assert_eq!(value(list_contains(&one, &int("2"))), false);
+    assert!(value(list_contains(&one, &int("1"))));
+    assert!(!value(list_contains(&one, &int("2"))));
 
     // contains-03.rq: one value, many spellings, all of them found.
     let mixed = items("[1,'a','b'@en,2.0]");
@@ -540,23 +539,22 @@ fn list_contains_compares_by_value() {
         dec("2.0"),
         dbl("2e0"),
     ] {
-        assert_eq!(
+        assert!(
             value(list_contains(&mixed, &sought)),
-            true,
             "{sought:?} should be found by value"
         );
     }
-    assert_eq!(value(list_contains(&mixed, &text("a"))), true);
-    assert_eq!(value(list_contains(&mixed, &lang("b", "en"))), true);
+    assert!(value(list_contains(&mixed, &text("a"))));
+    assert!(value(list_contains(&mixed, &lang("b", "en"))));
     // A language-tagged string is not the plain string.
-    assert_eq!(value(list_contains(&mixed, &text("b"))), false);
+    assert!(!value(list_contains(&mixed, &text("b"))));
 
     // contains-04.rq: IRIs.
     let with_iri = items("[<http://example.org/test>,1]");
-    assert_eq!(
-        value(list_contains(&with_iri, &iri("http://example.org/test"))),
-        true
-    );
+    assert!(value(list_contains(
+        &with_iri,
+        &iri("http://example.org/test")
+    )));
 }
 
 #[test]
@@ -566,11 +564,11 @@ fn list_contains_compares_blank_nodes_by_identity() {
     // from the list is found.
     let with_blank = items("[_:b,null,'_:b']");
     let other = CdtTerm::Blank("fresh".into());
-    assert_eq!(value(list_contains(&with_blank, &other)), false);
+    assert!(!value(list_contains(&with_blank, &other)));
 
     let two = items("[_:b,2]");
     let first = value(list_head(&two));
-    assert_eq!(value(list_contains(&two, &first)), true);
+    assert!(value(list_contains(&two, &first)));
 }
 
 #[test]
@@ -578,38 +576,38 @@ fn list_contains_finds_nested_composites_in_either_spelling() {
     // list-functions/contains-07.rq: a nested `[2]`.
     let nested = items("[1,[2]]");
     let sought = composite(list("[2]"));
-    assert_eq!(value(list_contains(&nested, &int("1"))), true);
-    assert_eq!(value(list_contains(&nested, &int("2"))), false);
-    assert_eq!(value(list_contains(&nested, &sought)), true);
+    assert!(value(list_contains(&nested, &int("1"))));
+    assert!(!value(list_contains(&nested, &int("2"))));
+    assert!(value(list_contains(&nested, &sought)));
 
     // contains-08.rq: the SAME element written as a `cdt:List`-typed literal must be
     // found by the same query. Two spellings, one value.
     let as_literal = items("[1,'[2]'^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/List>]");
-    assert_eq!(value(list_contains(&as_literal, &int("1"))), true);
-    assert_eq!(value(list_contains(&as_literal, &int("2"))), false);
-    assert_eq!(value(list_contains(&as_literal, &sought)), true);
+    assert!(value(list_contains(&as_literal, &int("1"))));
+    assert!(!value(list_contains(&as_literal, &int("2"))));
+    assert!(value(list_contains(&as_literal, &sought)));
 
     // contains-09.rq and contains-10.rq: the same pair of spellings for a map.
     let sought_map = composite(map("{2: 3}"));
     let nested_map = items("[1,{2: 3}]");
-    assert_eq!(value(list_contains(&nested_map, &int("2"))), false);
-    assert_eq!(value(list_contains(&nested_map, &int("3"))), false);
-    assert_eq!(value(list_contains(&nested_map, &sought_map)), true);
+    assert!(!value(list_contains(&nested_map, &int("2"))));
+    assert!(!value(list_contains(&nested_map, &int("3"))));
+    assert!(value(list_contains(&nested_map, &sought_map)));
     let map_literal = items("[1,'{2: 3}'^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map>]");
-    assert_eq!(value(list_contains(&map_literal, &int("2"))), false);
-    assert_eq!(value(list_contains(&map_literal, &int("3"))), false);
-    assert_eq!(value(list_contains(&map_literal, &sought_map)), true);
+    assert!(!value(list_contains(&map_literal, &int("2"))));
+    assert!(!value(list_contains(&map_literal, &int("3"))));
+    assert!(value(list_contains(&map_literal, &sought_map)));
 }
 
 #[test]
 fn a_null_element_neither_matches_nor_poisons_the_search() {
     // list-functions/contains-null-01.rq.
     let with_null = items("[1,null,2]");
-    assert_eq!(value(list_contains(&with_null, &dec("1.0"))), true);
-    assert_eq!(value(list_contains(&with_null, &dec("2.0"))), true);
+    assert!(value(list_contains(&with_null, &dec("1.0"))));
+    assert!(value(list_contains(&with_null, &dec("2.0"))));
     // A term that is not there is a definite `false`, not an error, even with the
     // null sitting between the elements that were compared.
-    assert_eq!(value(list_contains(&with_null, &dec("3.0"))), false);
+    assert!(!value(list_contains(&with_null, &dec("3.0"))));
 }
 
 #[test]
@@ -620,7 +618,7 @@ fn a_definite_hit_dominates_an_undecidable_comparison() {
     // silently reported as "absent".
     let opaque = CdtTerm::Literal(CdtLiteral::typed("zzz", "http://example.org/opaque"));
     let with_opaque = vec![opaque, int("1")];
-    assert_eq!(value(list_contains(&with_opaque, &int("1"))), true);
+    assert!(value(list_contains(&with_opaque, &int("1"))));
     assert!(list_contains(&with_opaque, &int("9")).is_error());
 }
 
@@ -629,7 +627,7 @@ fn contains_raises_for_a_map_and_defers_to_contains_key() {
     // The corpus places `cdt:contains` under list-functions only, and gives maps
     // `cdt:containsKey`. Applying it to a map is refused rather than guessed at.
     assert!(contains(&map("{1: 'one'}"), &int("1")).is_error());
-    assert_eq!(value(contains(&list("[1]"), &int("1"))), true);
+    assert!(value(contains(&list("[1]"), &int("1"))));
 }
 
 // ── cdt:get on a map ──────────────────────────────────────────────────────────
@@ -727,7 +725,7 @@ fn contains_key_is_not_the_same_question_as_get() {
 #[test]
 fn contains_key_raises_for_a_list() {
     assert!(contains_key(&list("[1]"), &int("1")).is_error());
-    assert_eq!(value(contains_key(&map("{1: 'one'}"), &int("1"))), true);
+    assert!(value(contains_key(&map("{1: 'one'}"), &int("1"))));
 }
 
 // ── cdt:keys ──────────────────────────────────────────────────────────────────
@@ -745,8 +743,8 @@ fn map_keys_is_a_list_of_the_keys() {
     let Some(key_items) = keys_list.as_list() else {
         panic!("cdt:keys yields a list")
     };
-    assert_eq!(value(list_contains(key_items, &int("1"))), true);
-    assert_eq!(value(list_contains(key_items, &int("2"))), true);
+    assert!(value(list_contains(key_items, &int("1"))));
+    assert!(value(list_contains(key_items, &int("2"))));
     // The order is the key order, and it does not depend on how the map was written.
     assert_eq!(keys_list, map_keys(&entries("{1: 'one', 2: 'two'}")));
     assert_eq!(

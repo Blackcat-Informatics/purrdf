@@ -39,8 +39,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention).
-pretty_assertions = { workspace = true }
 # Turtle parsing for the validation conformance harness only (the library
 # itself depends on the ring-fenced kernel, never the codec stack).
 purrdf-rdf = { workspace = true }

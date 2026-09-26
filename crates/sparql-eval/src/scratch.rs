@@ -566,7 +566,6 @@ pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermVa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 
     fn dataset_with_one_iri() -> std::sync::Arc<RdfDataset> {

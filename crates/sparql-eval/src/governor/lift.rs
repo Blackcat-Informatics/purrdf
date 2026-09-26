@@ -597,7 +597,6 @@ impl ExpressionBarrier {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
     use purrdf_core::{ResourceDimension, TermId};
     use purrdf_sparql_algebra::{
         NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,

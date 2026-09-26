@@ -1385,7 +1385,6 @@ mod tests {
             ctx,
         )
     }
-    use pretty_assertions::assert_eq;
     use purrdf_core::{
         RdfDataset, RdfDatasetBuilder, ResourceDimension as TestResourceDimension, TermValue,
         TrippedGovernor as TestTrippedGovernor,

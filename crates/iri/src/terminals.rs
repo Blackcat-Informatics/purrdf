@@ -1091,7 +1091,6 @@ mod tests {
         varname_continue_ranges, varname_start_ranges, ws_ranges, xml_char_ranges,
         xml_name_char_ranges, xml_name_start_char_ranges,
     };
-    use pretty_assertions::assert_eq;
 
     /// Every Unicode scalar value, in order.
     fn all_scalars() -> impl Iterator<Item = char> {

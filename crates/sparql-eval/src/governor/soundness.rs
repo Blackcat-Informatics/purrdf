@@ -2492,7 +2492,6 @@ fn expr_probe_admissible(
 mod tests {
     use std::collections::BTreeSet;
 
-    use pretty_assertions::assert_eq;
     use purrdf_sparql_algebra::{
         AggregateExpression, AggregateFunction, GroundTerm, Literal, NamedNode, NamedNodePattern,
         PropertyPathExpression, TermPattern, TriplePattern, Variable,

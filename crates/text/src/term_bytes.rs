@@ -198,7 +198,6 @@ pub(crate) fn push_str(text: &str, out: &mut Vec<u8>) {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 

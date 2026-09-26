@@ -20,7 +20,6 @@
 //! candidate's bound, and one rank shallower it is not — so the pin is checked
 //! against the arithmetic rather than merely recorded.
 
-use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     CrossingRank, DecayRule, Fixed, FusionError, crossing_rank_at, threshold_at,
 };

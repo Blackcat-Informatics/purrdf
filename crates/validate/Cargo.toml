@@ -53,8 +53,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention).
-pretty_assertions = { workspace = true }
 # Declaring a native SPARQL function takes `Arity` and `Volatility`, which is what
 # a host wiring its own implementations into a prepared-shapes-product restore does.
 # Test-only: the product boundary itself names the three registry types through

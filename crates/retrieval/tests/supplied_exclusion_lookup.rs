@@ -37,7 +37,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
-use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, DomainTag,
@@ -2421,7 +2420,6 @@ fn every_admitted_supplied_shape_answers_with_its_lookups_as_the_full_read_witho
 /// needle does not reach — and one configuration triple naming the needle.
 mod text_relation {
     use super::*;
-    use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
     use purrdf_text::{
         GraphSelector, SearchObservations, TextIndex, TextIndexConfig, TextSearchRelation,

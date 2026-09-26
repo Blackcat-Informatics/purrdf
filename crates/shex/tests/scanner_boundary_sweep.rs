@@ -104,7 +104,6 @@ mod golden;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_iri::terminals;
 use purrdf_shex::lexer::tokenize;

@@ -113,7 +113,6 @@ pub(crate) fn ntriples_token(value: &TermValue) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use purrdf_core::BlankScope;
 
     /// Test-only helper: unwrap the `Result` for the common well-formed case
