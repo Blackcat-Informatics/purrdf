@@ -265,3 +265,43 @@ def test_py_lint_shapes_lists_superseded_builtin_validators() -> None:
         "<http://www.w3.org/ns/shacl#validator> <http://example.org/ns#neverValid> "
         "sparql-ask superseded-by-native\n"
     ) in report["report"]
+
+
+_SRL_IMPORTING = (
+    "PREFIX ex: <http://example.org/ns#>\n"
+    "IMPORTS <http://example.org/more>\n"
+    "RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n"
+)
+_SRL_IMPORTED = "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n"
+_SRL_LONE = "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n"
+_SRL_UNRESOLVED = (
+    "SPARQL 1.2 RL import <http://example.org/more> failed: no import-table entry supplies "
+    "the rule set it names, and PurRDF fetches nothing it was not handed; supply that rule "
+    "set's text under this IRI"
+)
+_SRL_UNREACHED = (
+    "the SPARQL 1.2 RL rule set's import closure never reaches <http://example.org/more>, so "
+    "the import table's rule set would be read and never used; remove it"
+)
+_COUNTED = (
+    "<http://example.org/ns#a> <http://example.org/ns#counted> "
+    '"true"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n'
+)
+
+
+def test_py_apply_rules_resolves_srl_imports_from_the_table() -> None:
+    ran = purrdf.shapes.apply_rules(
+        _DATA, srl=_SRL_IMPORTING, imports=[("http://example.org/more", _SRL_IMPORTED)]
+    )
+    assert _COUNTED in ran["inferred"], ran["inferred"]
+
+    with pytest.raises(ValueError) as unresolved:
+        purrdf.shapes.apply_rules(_DATA, srl=_SRL_IMPORTING)
+    assert str(unresolved.value) == _SRL_UNRESOLVED
+
+    with pytest.raises(ValueError) as unreached:
+        purrdf.shapes.apply_rules(
+            _DATA, srl=_SRL_LONE, imports=[("http://example.org/more", _SRL_IMPORTED)]
+        )
+    assert str(unreached.value) == _SRL_UNREACHED
+    assert _COUNTED not in purrdf.shapes.apply_rules(_DATA, srl=_SRL_LONE)["inferred"]

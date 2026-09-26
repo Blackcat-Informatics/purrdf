@@ -224,6 +224,32 @@ and checked against `shacl-shacl.ttl` like the importing document's, and a
 shapes graph whose imports are not in hand is refused rather than reported
 clean.
 
+## `IMPORTS` in a SPARQL 1.2 RL rule set
+
+A SPARQL 1.2 RL rule set can `IMPORTS` other rule sets. PurRDF fetches none of
+them. The rules tool takes the imported rule sets from the same import table it
+takes for a shapes graph, with rule-set text in place of Turtle: `--import
+IRI=FILE` on `purrdf rules --srl`, `imports=[(iri, text), ...]` on Python's
+`apply_rules(srl=...)`, `importIris` / `importDocuments` on `shaclApplyRules`,
+and `import_iris` / `import_documents` / `import_count` on
+`purrdf_shacl_apply_rules`. Every host resolves the table through
+`RuleSetDocument::resolve_import_table`. The imports are followed
+transitively and each IRI is read once. An imported rule set is parsed with its
+IRI as its base, and its rules run after the importer's.
+
+Every host refuses an import that no table entry supplies, with the same
+message, which names the IRI. It also refuses a table entry that the import
+closure never names, because that rule set would be read and never used. The
+command line exits 1 for the first case and 2 for the second.
+
+```python
+import purrdf
+
+inferred = purrdf.shapes.apply_rules(
+    data_nt, srl=rules_srl, imports=[("https://example.org/more", more_srl)]
+)["inferred"]
+```
+
 ## Prefixes in SHACL-SPARQL queries
 
 A SPARQL query in a shapes graph (`sh:select`, `sh:ask`, `sh:construct`,

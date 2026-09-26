@@ -759,6 +759,16 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **validate, shapes, python, wasm, capi, cli:** a SPARQL 1.2 RL rule set's
+  `IMPORTS` now resolve from the rules tool's import table on every host. The
+  Python `apply_rules(srl=..., imports=...)`, WebAssembly `shaclApplyRules` and
+  C `purrdf_shacl_apply_rules` entry points used to refuse any import. One
+  route, `RuleSetDocument::resolve_import_table`, is shared by the command line
+  and the `purrdf-validate` boundary. An import that no entry supplies, and an
+  entry that nothing imports, are refused with the same message on every host
+  (the new `SrlError::UnreachedImports` covers the second case).
+  `RulesRequest::shapes_imports` is renamed `RulesRequest::imports`, because
+  the table now serves either rule source.
 - **shapes, validate:** a validation report no longer fuses a shapes-graph
   blank node with a data-graph blank node that has the same label in its own
   document. The report graph (every RDF syntax) and the SARIF projection write

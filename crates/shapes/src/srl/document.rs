@@ -80,6 +80,12 @@ pub enum SrlError {
         /// Why.
         message: String,
     },
+    /// An import table ([`RuleSetDocument::resolve_import_table`]) supplies rule sets the
+    /// import closure never names: each would be read and never used.
+    UnreachedImports {
+        /// The unreached table keys, in table order.
+        iris: Vec<String>,
+    },
     /// A rule is not well formed (§4.2).
     WellFormedness {
         /// The rule, as [`SrlRule::describe`] names it.
@@ -130,6 +136,17 @@ impl fmt::Display for SrlError {
             Self::Import { iri, message } => {
                 write!(f, "SPARQL 1.2 RL import <{iri}> failed: {message}")
             }
+            Self::UnreachedImports { iris } => write!(
+                f,
+                "the SPARQL 1.2 RL rule set's import closure never reaches {}, so the import \
+                 table's rule {} would be read and never used; remove {}",
+                iris.iter()
+                    .map(|iri| format!("<{iri}>"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if iris.len() == 1 { "set" } else { "sets" },
+                if iris.len() == 1 { "it" } else { "them" },
+            ),
             Self::WellFormedness { rule, message } => {
                 write!(f, "SPARQL 1.2 RL {rule} is not well formed: {message}")
             }
@@ -473,6 +490,69 @@ impl RuleSetDocument {
             &mut imported,
         )?;
         Ok(merged)
+    }
+}
+
+/// Why an import no table entry names is unresolved — the text of the
+/// [`SrlError::Import`] [`RuleSetDocument::resolve_import_table`] refuses it with.
+pub const UNRESOLVED_IMPORT_MESSAGE: &str = "no import-table entry supplies the rule set it \
+     names, and PurRDF fetches nothing it was not handed; supply that rule set's text under \
+     this IRI";
+
+impl RuleSetDocument {
+    /// Resolve the document's imports from a caller-supplied TABLE of `(import IRI, rule
+    /// set text)` pairs — the one route every PurRDF host resolves `IMPORTS` through.
+    ///
+    /// PurRDF fetches nothing (see the [module docs](self)), so the table is the whole of
+    /// what an import can resolve to, followed transitively by [`Self::resolve_imports`]:
+    /// an imported rule set's own `IMPORTS` are looked up in the same table, each IRI read
+    /// once. A table entry must also be USED — an entry the closure never names would be
+    /// read and never used, so it is refused rather than ignored.
+    ///
+    /// # Errors
+    ///
+    /// [`SrlError::Import`] for a table key that is not an absolute IRI or that the table
+    /// names twice, for an import no entry names ([`UNRESOLVED_IMPORT_MESSAGE`]), and for
+    /// an entry that is not a SPARQL-RL document; [`SrlError::UnreachedImports`] for
+    /// entries the closure never names.
+    pub fn resolve_import_table(&self, table: &[(&str, &str)]) -> Result<Self, SrlError> {
+        for (index, (iri, _)) in table.iter().enumerate() {
+            if !purrdf_iri::is_absolute(iri).unwrap_or(false) {
+                return Err(SrlError::Import {
+                    iri: (*iri).to_owned(),
+                    message: "an import-table key must be the absolute IRI an IMPORTS names; \
+                              this one could never match one"
+                        .to_owned(),
+                });
+            }
+            if table[..index].iter().any(|(earlier, _)| earlier == iri) {
+                return Err(SrlError::Import {
+                    iri: (*iri).to_owned(),
+                    message: "the import table names this IRI twice, and one IRI names one \
+                              rule set; keeping either would be a choice made for the caller"
+                        .to_owned(),
+                });
+            }
+        }
+        let mut used: Vec<&str> = Vec::new();
+        let mut resolver = |iri: &str| -> Result<String, String> {
+            let (key, text) = table
+                .iter()
+                .find(|(key, _)| *key == iri)
+                .ok_or_else(|| UNRESOLVED_IMPORT_MESSAGE.to_owned())?;
+            used.push(key);
+            Ok((*text).to_owned())
+        };
+        let resolved = self.resolve_imports(&mut resolver)?;
+        let unreached: Vec<String> = table
+            .iter()
+            .filter(|(key, _)| !used.contains(key))
+            .map(|(key, _)| (*key).to_owned())
+            .collect();
+        if !unreached.is_empty() {
+            return Err(SrlError::UnreachedImports { iris: unreached });
+        }
+        Ok(resolved)
     }
 }
 

@@ -1475,6 +1475,12 @@ export class ShaclRulesInference {
  * criterion derived from the input — at most max(256, 4 × N) such rounds for N distinct
  * input terms — past which the rule set is refused as divergent, naming its rules. A
  * rule set bounded by a constant past that horizon states its bound here.
+ *
+ * `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
+ * `owl:imports` table (Turtle documents, see `ShaclImportError`) beside `shapesTtl`, the
+ * rule set's `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
+ * imported document's rules run. An import no entry supplies, and an entry the import
+ * closure never names, throw.
  */
 export function shaclApplyRules(
   dataNt: string,

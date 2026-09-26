@@ -1817,6 +1817,11 @@ class shapes:
     # for N distinct input terms, past which the rule set is refused as divergent,
     # naming its rules. A rule set bounded by a constant past that horizon states its
     # bound.
+    #
+    # `imports` is the rule source's import table of (IRI, text) pairs: the shapes
+    # graph's owl:imports table (Turtle) for `shapes_ttl`, the rule set's IMPORTS table
+    # (SPARQL 1.2 RL texts) for `srl`, followed transitively. An import no entry
+    # supplies, and an entry the import closure never names, raise ValueError.
     @staticmethod
     def apply_rules(
         data_nt: str,

@@ -244,51 +244,63 @@ fn import_pairs(specs: &[String]) -> Result<Vec<ImportPair<'_>>, CliError> {
 }
 
 /// Fold a SPARQL 1.2 RL rule set's `IMPORTS` closure in from the `--import` pairs, through
-/// the rule language's own resolution (`RuleSetDocument::resolve_imports`). An import no
-/// pair names is refused (exit 1), and a pair the closure never reaches is refused as
-/// unused (exit 2): it would be read and never used.
+/// the one import-table route every PurRDF host takes
+/// (`RuleSetDocument::resolve_import_table`): every pair's file is read, and the table they
+/// make is resolved exactly as the Python, WebAssembly and C hosts resolve theirs. An import
+/// no pair names is refused (exit 1) with the pair that resolves it, and a pair the closure
+/// never reaches is refused as unused (exit 2): it would be read and never used.
 fn resolve_srl_imports(
     document: &srl::RuleSetDocument,
     pairs: &[ImportPair<'_>],
     path: &str,
 ) -> Result<srl::RuleSetDocument, CliError> {
-    if document.imports().is_empty() {
-        if let Some((spec, ..)) = pairs.first() {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: the rule set has no IMPORTS at all, so this document would \
-                 be read and never used. Remove the pair"
-            )));
-        }
-        return Ok(document.clone());
-    }
-    let mut used: Vec<&str> = Vec::new();
-    let mut failure: Option<CliError> = None;
-    let mut resolver = |iri: &str| -> Result<String, String> {
-        let Some((_, named, file)) = pairs.iter().find(|(_, named, _)| *named == iri) else {
-            return Err(format!(
-                "no --import pair resolves it, and PurRDF fetches nothing the operator did not \
-                 name; pass `--import {iri}=FILE`"
-            ));
-        };
-        used.push(*named);
-        utf8_text(file, &format!("--import {iri}")).map_err(|error| {
-            let message = error.to_string();
-            failure = Some(error);
-            message
+    let texts = pairs
+        .iter()
+        .map(|(_, iri, file)| utf8_text(file, &format!("--import {iri}")))
+        .collect::<Result<Vec<String>, CliError>>()?;
+    let table: Vec<(&str, &str)> = pairs
+        .iter()
+        .zip(&texts)
+        .map(|((_, iri, _), text)| (*iri, text.as_str()))
+        .collect();
+    document
+        .resolve_import_table(&table)
+        .map_err(|error| match error {
+            srl::SrlError::UnreachedImports { iris } => {
+                let specs: Vec<&str> = pairs
+                    .iter()
+                    .filter(|(_, iri, _)| iris.iter().any(|unreached| unreached == iri))
+                    .map(|(spec, ..)| *spec)
+                    .collect();
+                CliError::Usage(format!(
+                    "--import {}: the rule set's import closure never reaches {}, so {} \
+                     would be read and never used. Remove {}",
+                    specs.join(" --import "),
+                    iris.iter()
+                        .map(|iri| format!("<{iri}>"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if iris.len() == 1 {
+                        "this document"
+                    } else {
+                        "these documents"
+                    },
+                    if iris.len() == 1 {
+                        "the pair"
+                    } else {
+                        "the pairs"
+                    },
+                ))
+            }
+            srl::SrlError::Import { iri, message } if message == srl::UNRESOLVED_IMPORT_MESSAGE => {
+                CliError::Runtime(format!(
+                    "--srl {path}: SPARQL 1.2 RL import <{iri}> failed: no --import pair \
+                     resolves it, and PurRDF fetches nothing the operator did not name; pass \
+                     `--import {iri}=FILE`"
+                ))
+            }
+            other => CliError::Runtime(format!("--srl {path}: {other}")),
         })
-    };
-    let resolved = document.resolve_imports(&mut resolver);
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    let resolved = resolved.map_err(|error| CliError::Runtime(format!("--srl {path}: {error}")))?;
-    if let Some((spec, iri, _)) = pairs.iter().find(|(_, iri, _)| !used.contains(iri)) {
-        return Err(CliError::Usage(format!(
-            "--import {spec}: the rule set's import closure never reaches <{iri}>, so this \
-             document would be read and never used. Remove the pair"
-        )));
-    }
-    Ok(resolved)
 }
 
 /// The resolved `node-expr` flags.

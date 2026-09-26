@@ -127,6 +127,48 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
     (error) =>
       error.message === "no rule source: name a SHACL shapes graph or a SPARQL 1.2 RL rule set",
   );
+
+  // A SPARQL 1.2 RL rule set's IMPORTS resolve from the same import table.
+  const importing =
+    "PREFIX ex: <http://example.org/ns#>\nIMPORTS <http://example.org/more>\n" +
+    "RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+  const imported =
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n";
+  const lone = "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+  const counted =
+    "<http://example.org/ns#a> <http://example.org/ns#counted> " +
+    '"true"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n';
+  const resolved = shaclApplyRules(
+    DATA,
+    undefined,
+    importing,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    ["http://example.org/more"],
+    [imported],
+  );
+  assert.ok(resolved.inferred.includes(counted), resolved.inferred);
+  resolved.free();
+  assert.throws(
+    () => shaclApplyRules(DATA, undefined, importing),
+    (error) =>
+      error.message ===
+      "SPARQL 1.2 RL import <http://example.org/more> failed: no import-table entry " +
+        "supplies the rule set it names, and PurRDF fetches nothing it was not handed; " +
+        "supply that rule set's text under this IRI",
+  );
+  assert.throws(
+    () =>
+      shaclApplyRules(DATA, undefined, lone, undefined, undefined, false, undefined, [
+        "http://example.org/more",
+      ], [imported]),
+    (error) =>
+      error.message ===
+      "the SPARQL 1.2 RL rule set's import closure never reaches <http://example.org/more>, " +
+        "so the import table's rule set would be read and never used; remove it",
+  );
 });
 
 test("wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope", () => {

@@ -507,9 +507,11 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 /// `  premise S P O .` per matched fact, or `  data-block` for a SPARQL 1.2 RL data-block
 /// triple), freed with `purrdf_buffer_free`.
 ///
-/// `import_iris` / `import_documents` / `import_count` are the shapes graph's
-/// `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). An imported document's rules
-/// run. A SPARQL 1.2 RL rule set reads no table, so a non-empty one beside `srl` is a
+/// `import_iris` / `import_documents` / `import_count` are the rule source's import table:
+/// the shapes graph's `owl:imports` table (Turtle documents, see
+/// `purrdf_shacl_validate_to_sarif`) beside `shapes_ttl`, the rule set's `IMPORTS` table
+/// (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An imported document's rules
+/// run. An import no entry supplies, and an entry the import closure never names, are a
 /// `ParseError`.
 ///
 /// # Safety
@@ -551,7 +553,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
                 data_nt: cstr_to_str(data_nt)?,
                 shapes_ttl: opt_cstr_to_str(shapes_ttl)?,
                 shapes_base: opt_cstr_to_str(shapes_base_iri)?,
-                shapes_imports: &imports,
+                imports: &imports,
                 srl: opt_cstr_to_str(srl)?,
                 srl_base: opt_cstr_to_str(srl_base_iri)?,
                 explain: !out_proof.is_null(),
@@ -2188,6 +2190,78 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         assert!(proof.expect("asked for").contains("  data-block\n"));
         let both = run(shapes.as_ptr(), srl.as_ptr(), None, false).expect_err("two sources");
         assert!(both.contains("two rule sources"), "{both}");
+    }
+
+    /// A SPARQL 1.2 RL rule set's `IMPORTS` resolve from the import table across the C
+    /// boundary: the imported rule's inference appears, an unsupplied import and an unused
+    /// entry are refused with the shared boundary's text.
+    #[test]
+    fn capi_apply_rules_resolves_srl_imports() {
+        use std::ffi::CString;
+
+        let data = CString::new(TOOLS_DATA).expect("no NUL");
+        let importing = CString::new(
+            "PREFIX ex: <http://example.org/ns#>\nIMPORTS <http://example.org/more>\n\
+             RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n",
+        )
+        .expect("no NUL");
+        let lone = CString::new(
+            "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n",
+        )
+        .expect("no NUL");
+        let iri = CString::new("http://example.org/more").expect("no NUL");
+        let imported = CString::new(
+            "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n",
+        )
+        .expect("no NUL");
+        let iris = [iri.as_ptr()];
+        let documents = [imported.as_ptr()];
+        let run = |srl: &CString, count: usize| -> Result<String, String> {
+            let mut inferred: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, NULL, a live array of `count`
+            // CString pointers, or a writable local.
+            unsafe {
+                let status = purrdf_shacl_apply_rules(
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    srl.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    iris.as_ptr(),
+                    documents.as_ptr(),
+                    count,
+                    &raw mut inferred,
+                    std::ptr::null_mut(),
+                    &raw mut error,
+                );
+                if status != PurrdfStatus::Ok as i32 {
+                    return Err(take_error(error));
+                }
+                Ok(take_text(inferred))
+            }
+        };
+        let graph = run(&importing, 1).expect("resolves");
+        assert!(
+            graph.contains(
+                "<http://example.org/ns#a> <http://example.org/ns#counted> \
+                 \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n"
+            ),
+            "{graph}"
+        );
+        assert_eq!(
+            run(&importing, 0).expect_err("unsupplied"),
+            "SPARQL 1.2 RL import <http://example.org/more> failed: no import-table entry \
+             supplies the rule set it names, and PurRDF fetches nothing it was not handed; \
+             supply that rule set's text under this IRI"
+        );
+        assert_eq!(
+            run(&lone, 1).expect_err("unused"),
+            "the SPARQL 1.2 RL rule set's import closure never reaches \
+             <http://example.org/more>, so the import table's rule set would be read and never \
+             used; remove it"
+        );
     }
 
     /// `purrdf_shacl_eval_node_expr` across the boundary: a `sh:sparqlExpr` node

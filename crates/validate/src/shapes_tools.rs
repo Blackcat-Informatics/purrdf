@@ -21,6 +21,14 @@
 //! closure that is not in hand is refused with [`ShapesError::Imports`] — never a rules
 //! run over fewer rules, and never a `clean` lint of a shapes graph validation refuses.
 //!
+//! # A SPARQL 1.2 RL rule set's `IMPORTS`
+//!
+//! The rules tool's one import table serves whichever rule source it runs. For a SPARQL
+//! 1.2 RL rule set it is a table of `(import IRI, rule-set text)` pairs, resolved through
+//! [`srl::RuleSetDocument::resolve_import_table`] — the route the command line takes too:
+//! followed transitively, each IRI read once, an import no entry supplies refused by name,
+//! and an entry the closure never names refused as unused.
+//!
 //! # The term-generating round limit
 //!
 //! [`RulesRequest::max_term_generating_rounds`] is the host's knob over
@@ -53,9 +61,11 @@ pub struct RulesRequest<'a> {
     pub shapes_ttl: Option<&'a str>,
     /// The base IRI the shapes document's relative references resolve against.
     pub shapes_base: Option<&'a str>,
-    /// The shapes graph's `owl:imports` table. Empty is the ordinary case, and still
-    /// refuses a shapes graph that imports a document it does not hold.
-    pub shapes_imports: &'a ShapesImportList<'a>,
+    /// The rule source's import table, `(IRI, document text)` pairs: the shapes graph's
+    /// `owl:imports` table (Turtle documents), or the SPARQL 1.2 RL rule set's `IMPORTS`
+    /// table (rule-set texts). Empty is the ordinary case, and still refuses a rule source
+    /// that imports a document it does not hold.
+    pub imports: &'a ShapesImportList<'a>,
     /// A SPARQL 1.2 RL rule set, as text.
     pub srl: Option<&'a str>,
     /// The base IRI the rule set's relative references resolve against.
@@ -83,8 +93,9 @@ pub struct RulesOutcome {
 /// The SHACL route is [`purrdf_shapes::infer`] over the shapes graph's default rule set,
 /// with no `sh:ruleProcessor` registered — a rule or rule set naming one is a failure,
 /// as SHACL 1.2 Inference Rules requires of a processor the engine cannot handle. The
-/// SPARQL 1.2 RL route is [`srl::parse_and_check`] then [`srl::infer`]; an `IMPORTS` is a
-/// failure, because this boundary reads nothing but the text it was handed.
+/// SPARQL 1.2 RL route is [`srl::parse_and_check`], then
+/// [`srl::RuleSetDocument::resolve_import_table`] over [`RulesRequest::imports`], then
+/// [`srl::infer`].
 ///
 /// # Errors
 ///
@@ -92,8 +103,8 @@ pub struct RulesOutcome {
 /// or its import table cannot be used. Otherwise [`ShapesError::Invalid`]: neither or
 /// both rule sources named; a document that does not parse; a rule set that is
 /// ill-formed, unstratifiable or fails during execution; the term-generating round
-/// limit passed; or an import table handed to a SPARQL 1.2 RL rule set, which reads
-/// none.
+/// limit passed; a SPARQL 1.2 RL `IMPORTS` the import table does not supply, or a table
+/// entry its import closure never names.
 pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
     let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
     let inference: Inference = match (request.shapes_ttl, request.srl) {
@@ -102,7 +113,7 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
                 shapes_ttl,
                 request.shapes_base,
                 None,
-                &ShapesImports::from_turtle(request.shapes_imports)?,
+                &ShapesImports::from_turtle(request.imports)?,
             )?;
             let projected = engine::project_dataset(data.as_ref())?;
             let holder = ShaclData::new(std::sync::Arc::clone(&projected), projected, None);
@@ -113,22 +124,9 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
             purrdf_shapes::infer(&holder, &shapes, &options)?
         }
         (None, Some(text)) => {
-            if !request.shapes_imports.is_empty() {
-                return Err(ShapesError::Invalid(
-                    "a shapes-graph import table was given with a SPARQL 1.2 RL rule set, which \
-                     has no owl:imports to resolve it against; the table would be read and \
-                     never used"
-                        .to_owned(),
-                ));
-            }
-            let document =
-                srl::parse_and_check(text, request.srl_base).map_err(|e| e.to_string())?;
-            if let Some(import) = document.imports().first() {
-                return Err(ShapesError::Invalid(format!(
-                    "the rule set imports {import}, and this boundary reads only the rule-set \
-                     text it was handed; merge the imported rules into the text"
-                )));
-            }
+            let document = srl::parse_and_check(text, request.srl_base)
+                .and_then(|document| document.resolve_import_table(request.imports))
+                .map_err(|e| e.to_string())?;
             let mut options = InferOptions::default();
             if let Some(rounds) = request.max_term_generating_rounds {
                 options = options.with_max_term_generating_rounds(rounds);

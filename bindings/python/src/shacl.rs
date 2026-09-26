@@ -258,9 +258,11 @@ fn entail(
 /// rounds for N distinct input terms, past which the rule set is refused as divergent,
 /// naming its rules. A rule set bounded by a constant past that horizon states its bound.
 ///
-/// `imports` is the SHACL shapes graph's `owl:imports` table — see the [module documentation](self); an
-/// imported document's rules run. A SPARQL 1.2 RL rule set reads no table, so passing one
-/// beside `srl` raises `ValueError`.
+/// `imports` is the rule source's import table of `(IRI, text)` pairs: for `shapes_ttl`
+/// the shapes graph's `owl:imports` table (Turtle documents — see the
+/// [module documentation](self)), for `srl` the rule set's `IMPORTS` table (SPARQL 1.2 RL
+/// texts), followed transitively. An imported document's rules run. An import no entry
+/// supplies, and an entry the import closure never names, raise `ValueError`.
 ///
 /// The work is [`purrdf_validate::apply_rules_to_ntriples`], the function the WASM and
 /// C-ABI bindings call.
@@ -296,7 +298,7 @@ fn apply_rules(
                 data_nt,
                 shapes_ttl,
                 shapes_base,
-                shapes_imports: &pairs,
+                imports: &pairs,
                 srl,
                 srl_base,
                 explain,

@@ -492,9 +492,11 @@ pub(crate) fn apply_rules_impl(
 /// N distinct input terms — past which the rule set is refused as divergent, naming its
 /// rules. A rule set bounded by a constant past that horizon states its bound here.
 ///
-/// `importIris` / `importDocuments` are the SHACL shapes graph's `owl:imports` table (see
-/// [`ShaclImportError`]); an imported document's rules run. A SPARQL 1.2 RL rule set reads
-/// no table, so passing one beside `srl` throws.
+/// `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
+/// `owl:imports` table (Turtle documents, see [`ShaclImportError`]) beside `shapesTtl`, the
+/// rule set's `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
+/// imported document's rules run. An import no entry supplies, and an entry the import
+/// closure never names, throw.
 ///
 /// Throws on a document that does not parse, an ill-formed or unstratifiable rule set, a
 /// rule failing during execution, and a passed round limit; rejects with a
@@ -526,7 +528,7 @@ pub fn shacl_apply_rules(
         data_nt,
         shapes_ttl: shapes_ttl.as_deref(),
         shapes_base: shapes_base.as_deref(),
-        shapes_imports: &imports,
+        imports: &imports,
         srl: srl.as_deref(),
         srl_base: srl_base.as_deref(),
         explain: explain.unwrap_or(false),
@@ -1619,6 +1621,45 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             })
             .is_err(),
             "no rule source"
+        );
+    }
+
+    /// A SPARQL 1.2 RL rule set's `IMPORTS` resolve from the import table: the imported
+    /// rule's inference appears, an unsupplied import and an unused entry are refused with
+    /// the shared boundary's text.
+    #[test]
+    fn wasm_apply_rules_resolves_srl_imports() {
+        const IMPORTING: &str = "PREFIX ex: <http://example.org/ns#>\n\
+            IMPORTS <http://example.org/more>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+        const IMPORTED: &str = "PREFIX ex: <http://example.org/ns#>\n\
+            RULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n";
+        const LONE: &str =
+            "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+        const COUNTED: &str = "<http://example.org/ns#a> <http://example.org/ns#counted> \
+            \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n";
+        let table = [("http://example.org/more", IMPORTED)];
+        let run = |srl: &'static str, imports: &[(&str, &str)]| {
+            apply_rules_impl(&purrdf_validate::RulesRequest {
+                data_nt: TOOLS_DATA,
+                srl: Some(srl),
+                imports,
+                ..purrdf_validate::RulesRequest::default()
+            })
+            .map(|outcome| outcome.inferred_ntriples)
+            .map_err(|error| error.to_string())
+        };
+        assert!(run(IMPORTING, &table).expect("resolves").contains(COUNTED));
+        assert_eq!(
+            run(IMPORTING, &[]).expect_err("unsupplied"),
+            "SPARQL 1.2 RL import <http://example.org/more> failed: no import-table entry \
+             supplies the rule set it names, and PurRDF fetches nothing it was not handed; \
+             supply that rule set's text under this IRI"
+        );
+        assert_eq!(
+            run(LONE, &table).expect_err("unused"),
+            "the SPARQL 1.2 RL rule set's import closure never reaches \
+             <http://example.org/more>, so the import table's rule set would be read and never \
+             used; remove it"
         );
     }
 

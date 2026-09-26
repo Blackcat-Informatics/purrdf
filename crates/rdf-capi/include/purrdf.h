@@ -2790,9 +2790,11 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * `  premise S P O .` per matched fact, or `  data-block` for a SPARQL 1.2 RL data-block
  * triple), freed with `purrdf_buffer_free`.
  *
- * `import_iris` / `import_documents` / `import_count` are the shapes graph's
- * `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). An imported document's rules
- * run. A SPARQL 1.2 RL rule set reads no table, so a non-empty one beside `srl` is a
+ * `import_iris` / `import_documents` / `import_count` are the rule source's import table:
+ * the shapes graph's `owl:imports` table (Turtle documents, see
+ * `purrdf_shacl_validate_to_sarif`) beside `shapes_ttl`, the rule set's `IMPORTS` table
+ * (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An imported document's rules
+ * run. An import no entry supplies, and an entry the import closure never names, are a
  * `ParseError`.
  *
  * # Safety
