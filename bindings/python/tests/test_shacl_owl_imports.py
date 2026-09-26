@@ -134,3 +134,54 @@ def test_a_relative_key_is_an_invalid_entry_and_an_absolute_one_is_not() -> None
         purrdf.shapes.validate(IMPORTER, PERSON, imports=[("lib", IMPORTED)])
     assert raised.value.kind == "invalid-import"
     purrdf.shapes.validate(IMPORTER, PERSON, imports=TABLE)
+
+
+def _prefix_idiom(description: str) -> str:
+    """SHACL's prefix idiom (the W3C ``sparql/node/prefixes-001`` shape on example.org).
+
+    The query's prefixes are collected along ``sh:prefixes/owl:imports*/sh:declare``, and
+    the ``owl:imports`` target is a node this shapes graph describes -- with
+    ``description``. ``imp:`` is declared only on that target and ``test:`` only on the
+    importing node, neither is a Turtle ``@prefix``, so a result proves the import was
+    followed to the described node and both declarations reached the query.
+    """
+    return (
+        "@prefix ex: <http://example.org/ns#> .\n"
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+        f"<http://example.org/ns#> {description} .\n"
+        "ex:TestPrefixes owl:imports <http://example.org/ns#> ;\n"
+        '  sh:declare [ sh:prefix "test" ; '
+        'sh:namespace "http://example.org/test#"^^xsd:anyURI ] .\n'
+        "ex:TestSPARQL sh:prefixes ex:TestPrefixes ;\n"
+        '  sh:select "SELECT $this ?value WHERE { $this imp:property ?value . '
+        'FILTER (?value = test:Value) }" .\n'
+        "ex:TestShape a sh:NodeShape ; sh:sparql ex:TestSPARQL ;\n"
+        "  sh:targetNode ex:Invalid , ex:Valid .\n"
+    )
+
+
+PREFIX_IDIOM_DATA = (
+    "<http://example.org/ns#Invalid> <http://example.org/ns#property> "
+    "<http://example.org/test#Value> .\n"
+    "<http://example.org/ns#Valid> <http://example.org/ns#property> "
+    "<http://example.org/test#Other> .\n"
+)
+
+
+def test_the_shacl_prefix_idiom_resolves_with_no_table_and_a_labelled_target_does_not() -> None:
+    declared = _prefix_idiom(
+        'sh:declare [ sh:prefix "imp" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ]'
+    )
+    report = purrdf.shapes.validate(declared, PREFIX_IDIOM_DATA)
+    assert report["conforms"] is False
+    assert [(r["focus"], r["value"]) for r in report["results"]] == [
+        ("<http://example.org/ns#Invalid>", "<http://example.org/test#Value>")
+    ]
+
+    with pytest.raises(purrdf.shapes.ShapesImportError) as raised:
+        purrdf.shapes.validate(_prefix_idiom('rdfs:label "a namespace"'), PREFIX_IDIOM_DATA)
+    assert raised.value.kind == "unresolved-import"
+    assert raised.value.iris == ["http://example.org/ns#"]

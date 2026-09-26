@@ -675,10 +675,14 @@ it is refused against `--shapes-product` and against a container.
 <IRI>=<FILE>` (repeatable, followed transitively) resolves one imported
 ontology to one local document. An import needs no pair when it names a
 document already read — the shapes document's own `file://` retrieval IRI,
-`--shapes-base` or `@base` (SHACL's `sh:prefixes/owl:imports*` idiom), or an
-`--import` document — or an ontology already in the shapes graph: `<X> a
-owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`, as when the W3C
-SHACL 1.2 vocabularies are merged into one document. Any other unresolved
+`--shapes-base` or `@base`, or an `--import` document — or an ontology already
+in the shapes graph: `<X> a owl:Ontology`, or an ontology whose
+`owl:versionIRI` is `<X>`, as when the W3C SHACL 1.2 vocabularies are merged
+into one document — or a node the shapes graph describes with `sh:declare`.
+That last is SHACL's prefix idiom: prefixes are collected along
+`sh:prefixes/owl:imports*/sh:declare` within the shapes graph, so an import
+target that declares prefixes there is present, and the W3C `prefixes-001`
+vector validates as written. Any other unresolved
 import is refused (exit `1`), naming each IRI, the `--import` pair that
 resolves it, and — for a document that imports its own published IRI — the
 `--shapes-base` that reads it under that IRI; a pair the closure never reaches

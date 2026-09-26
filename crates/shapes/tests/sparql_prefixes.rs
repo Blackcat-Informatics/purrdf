@@ -199,24 +199,21 @@ fn the_prefixes_path_follows_version_iris_and_imports() {
             declare_t(TARGET)
         )
     };
-    // `ex:Q` and `ex:R` are ontologies this document holds, so the imports along the
-    // path are resolved in place.
+    // `ex:R` is a node this document describes with `sh:declare`, so the import of it is
+    // in hand; `ex:Q` declares no prefix, and is in hand by its ontology header.
     assert_eq!(
-        violations(&graph("ex:Q a owl:Ontology .\nex:R a owl:Ontology .\n")),
+        violations(&graph("ex:Q a owl:Ontology .\n")),
         target_violation()
     );
-    // The neighbour: without their headers the imports name ontologies nothing in hand
-    // declares, and the shapes graph is refused rather than read without them.
+    // The neighbour: without `ex:Q`'s header the import of it names an ontology nothing in
+    // hand declares, and the shapes graph is refused rather than read without it. `ex:R` is
+    // not named: its `sh:declare` is what resolves it.
     let Err(ShapesError::Imports(ShapesImportError::Unresolved { iris })) =
         parse_shapes(&graph(""), None)
     else {
         panic!("an import of an ontology the shapes graph does not hold is refused");
     };
-    assert_eq!(
-        iris,
-        ["http://example.org/ns#Q", "http://example.org/ns#R"],
-        "every unresolved import is named, in walk order"
-    );
+    assert_eq!(iris, ["http://example.org/ns#Q"]);
 }
 
 // ── Conflicts ────────────────────────────────────────────────────────────────────
@@ -228,8 +225,7 @@ fn the_prefixes_path_follows_version_iris_and_imports() {
 fn a_conflicting_prefix_is_refused_and_an_agreeing_one_loads() {
     let explicit = |second: &str| {
         format!(
-            "{PREFIXES}{}\nex:P sh:declare {} ; owl:imports ex:Q .\n\
-             ex:Q a owl:Ontology ; sh:declare {} .\n",
+            "{PREFIXES}{}\nex:P sh:declare {} ; owl:imports ex:Q .\nex:Q sh:declare {} .\n",
             shape("sh:prefixes ex:P ;"),
             declare_t(TARGET),
             declare_t(second)

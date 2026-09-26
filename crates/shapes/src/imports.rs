@@ -19,9 +19,29 @@
 //!
 //! When an import counts as in hand is [`purrdf_core::imports`] — the same rule entailment
 //! applies, stated once in the kernel both engines sit on. This module adds only what a
-//! SHACL shapes graph needs beyond it: each supplied document's own `@prefix` map (a
-//! SHACL-SPARQL query in an imported document resolves prefixed names against ITS
-//! declarations), and the refusal of a supplied document nothing imports.
+//! SHACL shapes graph needs beyond it: SHACL's own reading of an import target, each
+//! supplied document's own `@prefix` map (a SHACL-SPARQL query in an imported document
+//! resolves prefixed names against ITS declarations), and the refusal of a supplied document
+//! nothing imports.
+//!
+//! # A prefix-declaring node is in hand
+//!
+//! SHACL-SPARQL collects a query's prefix declarations along
+//! `sh:prefixes/owl:imports*/sh:declare` within the shapes graph. The target of such an
+//! `owl:imports` is a node the shapes graph itself describes with `sh:declare` — the W3C
+//! SHACL test suite writes
+//!
+//! ```turtle
+//! <http://example.com/ns#> sh:declare [ sh:prefix "ex" ; sh:namespace "…"^^xsd:anyURI ] .
+//! ex:TestPrefixes owl:imports <http://example.com/ns#> ; sh:declare [ … ] .
+//! ```
+//!
+//! — so that target is present, not missing. Every [`ShapesImports`] therefore registers
+//! `sh:declare` with the kernel rule's extension point
+//! ([`ImportMap::resolve_subjects_of`]): an `owl:imports <X>` is also resolved when the
+//! closure holds a triple `X sh:declare ?d`, in the shapes graph or in any document the
+//! closure imported. Nothing else about `X` counts: a target the shapes graph mentions only
+//! by an `rdfs:label`, say, is still an unresolved import.
 //!
 //! [`resolve_shapes_imports`] is the one place the two meet. Every constructor of a
 //! [`Shapes`](crate::shapes::Shapes) — and so every validation, rules run, node-expression
@@ -82,7 +102,7 @@ use purrdf_core::imports::ImportMap;
 ///     .expect("every import resolves");
 /// assert_eq!(parsed.node_shapes.len(), 1);
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ShapesImports {
     /// The kernel's table: ontology IRI → document, plus the loaded IRIs.
     map: ImportMap,
@@ -91,8 +111,21 @@ pub struct ShapesImports {
     prefixes: BTreeMap<String, Vec<(String, String)>>,
 }
 
+impl Default for ShapesImports {
+    fn default() -> Self {
+        let mut map = ImportMap::new();
+        map.resolve_subjects_of(crate::model::sh::DECLARE);
+        Self {
+            map,
+            prefixes: BTreeMap::new(),
+        }
+    }
+}
+
 impl ShapesImports {
-    /// A table that supplies no document and declares no loaded IRI.
+    /// A table that supplies no document and declares no loaded IRI. It applies the
+    /// kernel rule with SHACL's prefix-declaring nodes in hand (see the
+    /// [module documentation](self)).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -222,7 +255,8 @@ fn check_import_iri(iri: &str) -> Result<(), ShapesImportError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesImportError {
     /// The closure imports ontologies that nothing in hand resolves — no table entry, no
-    /// loaded document, no `owl:Ontology` or `owl:versionIRI` declaration in the closure.
+    /// loaded document, no `owl:Ontology`, `owl:versionIRI` or `sh:declare` description of
+    /// the IRI in the closure.
     /// Every such IRI, in the order the closure walk first met it.
     Unresolved {
         /// The unresolved ontology IRIs.
@@ -482,6 +516,42 @@ mod tests {
             panic!("shnex.ttl alone imports an absent ontology");
         };
         assert_eq!(iris, ["http://www.w3.org/ns/shacl#"]);
+    }
+
+    /// SHACL's prefix idiom: the `owl:imports` target is a node the shapes graph describes
+    /// with `sh:declare`, so it is in hand with no table. The neighbour describes the same
+    /// node only with `rdfs:label` and is refused by name.
+    #[test]
+    fn a_prefix_declaring_import_target_resolves_and_a_labelled_one_does_not() {
+        let idiom = |description: &str| {
+            graph(&format!(
+                "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+                 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+                 @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+                 <http://example.org/ns#> {description} .\n\
+                 <http://example.org/ns#P> owl:imports <http://example.org/ns#> .\n"
+            ))
+        };
+        let declared = idiom(
+            "sh:declare [ sh:prefix \"ex\" ; \
+             sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ]",
+        );
+        let resolved = resolve_shapes_imports(&declared, &[], &[], &ShapesImports::new())
+            .expect("a prefix-declaring node is in hand");
+        assert!(
+            std::sync::Arc::ptr_eq(&resolved.dataset, &declared),
+            "nothing was merged"
+        );
+        let Err(ShapesImportError::Unresolved { iris }) = resolve_shapes_imports(
+            &idiom("rdfs:label \"a namespace\""),
+            &[],
+            &[],
+            &ShapesImports::new(),
+        ) else {
+            panic!("a node described only by a label is not an import in hand");
+        };
+        assert_eq!(iris, ["http://example.org/ns#"]);
     }
 
     #[test]

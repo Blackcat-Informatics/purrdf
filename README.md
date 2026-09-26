@@ -450,8 +450,10 @@ triple pattern.
   `owl:imports` are never fetched — the caller supplies `--import IRI=FILE`,
   the same shape `entails` and `shex` take, and the closure is followed
   transitively from that table. An import of the shapes document's own IRI,
-  or of an ontology already in the shapes graph (`<X> a owl:Ontology`, or an
-  `owl:versionIRI` naming it), needs no pair; any other unresolved import is
+  of an ontology already in the shapes graph (`<X> a owl:Ontology`, or an
+  `owl:versionIRI` naming it), or of a node the shapes graph describes with
+  `sh:declare` (SHACL's `sh:prefixes/owl:imports*/sh:declare` prefix idiom),
+  needs no pair; any other unresolved import is
   refused by name rather than validated against a smaller shapes graph.
 - **Schema lanes: SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML /
   TypeScript / GraphQL** (`purrdf-shapes`, **Rust only**) — `compile_schema`

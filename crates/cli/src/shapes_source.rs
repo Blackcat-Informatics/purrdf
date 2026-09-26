@@ -36,9 +36,11 @@
 //! an import is resolved when it names a document already LOADED — the shapes document's own
 //! retrieval IRI or base (including an in-document `@base`), or an `--import` document's — or
 //! when the closure already HOLDS the ontology it names (`<X> a owl:Ontology`, or an ontology
-//! whose `owl:versionIRI` is `<X>`). The first case is SHACL's own idiom: `sh:prefixes`
-//! collects `sh:declare`s along `owl:imports*`, and a document routinely points that path at
-//! its own IRI from a node that is no `owl:Ontology`. A shapes document that merges the W3C
+//! whose `owl:versionIRI` is `<X>`) — or, for a shapes graph, describes `<X>` with
+//! `sh:declare`. That last case is SHACL's own idiom: `sh:prefixes` collects `sh:declare`s
+//! along `sh:prefixes/owl:imports*/sh:declare` within the shapes graph, so the import names a
+//! node the shapes graph declares prefixes on, not a document to fetch — the W3C
+//! `prefixes-001` vector validates as written. A shapes document that merges the W3C
 //! SHACL 1.2 vocabularies — `shnex.ttl` importing `sh:`, beside the `shacl.ttl` that declares
 //! it — is therefore complete as written and needs no `--import`.
 //!

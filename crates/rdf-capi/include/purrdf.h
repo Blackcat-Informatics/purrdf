@@ -2639,9 +2639,10 @@ int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
  * `import_documents[i]`, parsed with that IRI as its base. `import_count == 0` (the
  * arrays may then be NULL) is the empty table. An `owl:imports` is resolved by a table
  * entry, by `shapes_base_iri` (or the document's own `@base`) naming the imported
- * document, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
- * ontology whose `owl:versionIRI` is `<X>`); anything else — or a table entry nothing
- * imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
+ * document, by the closure declaring the ontology (`<X> a owl:Ontology`, or an
+ * ontology whose `owl:versionIRI` is `<X>`), or by the closure describing `<X>` with
+ * `sh:declare` — SHACL's prefix-declaration idiom; anything else — or a table entry
+ * nothing imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
  * smaller shapes graph than the one named. Read its kind and IRIs with
  * `purrdf_shapes_import_error_kind` / `_iri_count` / `_iri`.
  *

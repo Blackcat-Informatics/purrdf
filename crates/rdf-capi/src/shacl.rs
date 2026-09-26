@@ -188,9 +188,10 @@ unsafe fn cstr_array<'a>(
 /// `import_documents[i]`, parsed with that IRI as its base. `import_count == 0` (the
 /// arrays may then be NULL) is the empty table. An `owl:imports` is resolved by a table
 /// entry, by `shapes_base_iri` (or the document's own `@base`) naming the imported
-/// document, or by the closure declaring the ontology (`<X> a owl:Ontology`, or an
-/// ontology whose `owl:versionIRI` is `<X>`); anything else — or a table entry nothing
-/// imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
+/// document, by the closure declaring the ontology (`<X> a owl:Ontology`, or an
+/// ontology whose `owl:versionIRI` is `<X>`), or by the closure describing `<X>` with
+/// `sh:declare` — SHACL's prefix-declaration idiom; anything else — or a table entry
+/// nothing imports — returns `PURRDF_STATUS_SHAPES_IMPORT_ERROR` rather than a report about a
 /// smaller shapes graph than the one named. Read its kind and IRIs with
 /// `purrdf_shapes_import_error_kind` / `_iri_count` / `_iri`.
 ///
@@ -2526,6 +2527,92 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 }
             }
         }
+    }
+
+    /// SHACL's prefix idiom (the W3C `sparql/node/prefixes-001` shape on `example.org`): the
+    /// `owl:imports` target is a node the shapes graph describes with `sh:declare`, so the call
+    /// succeeds with an EMPTY import table, and the prefixes `imp:` (declared only on the
+    /// target) and `test:` (only on the importing node) reach the query, which reports
+    /// `ex:Invalid` with `test:Value`. The neighbour describes the target only with
+    /// `rdfs:label` and is refused with the typed import error naming it.
+    #[test]
+    fn the_shacl_prefix_idiom_resolves_with_no_table_and_a_labelled_target_does_not() {
+        use std::ffi::CString;
+
+        let idiom = |description: &str| {
+            CString::new(format!(
+                "@prefix ex: <http://example.org/ns#> .\n\
+                 @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+                 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+                 @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+                 <http://example.org/ns#> {description} .\n\
+                 ex:TestPrefixes owl:imports <http://example.org/ns#> ;\n\
+                   sh:declare [ sh:prefix \"test\" ; \
+                                sh:namespace \"http://example.org/test#\"^^xsd:anyURI ] .\n\
+                 ex:TestSPARQL sh:prefixes ex:TestPrefixes ;\n\
+                   sh:select \"SELECT $this ?value WHERE {{ $this imp:property ?value . \
+                                FILTER (?value = test:Value) }}\" .\n\
+                 ex:TestShape a sh:NodeShape ; sh:sparql ex:TestSPARQL ;\n\
+                   sh:targetNode ex:Invalid , ex:Valid .\n"
+            ))
+            .expect("no NUL")
+        };
+        let data = CString::new(
+            "<http://example.org/ns#Invalid> <http://example.org/ns#property> \
+             <http://example.org/test#Value> .\n\
+             <http://example.org/ns#Valid> <http://example.org/ns#property> \
+             <http://example.org/test#Other> .\n",
+        )
+        .expect("no NUL");
+        let validate = |shapes: &CString| {
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString or a writable local; the import table
+            // is empty (NULL arrays, zero count).
+            let status = unsafe {
+                purrdf_shacl_validate_to_sarif(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut buffer,
+                    &raw mut error,
+                )
+            };
+            (status, buffer, error)
+        };
+
+        let (status, buffer, _) = validate(&idiom(
+            "sh:declare [ sh:prefix \"imp\" ; \
+             sh:namespace \"http://example.org/ns#\"^^xsd:anyURI ]",
+        ));
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        // SAFETY: a successful call wrote a live buffer.
+        let sarif = unsafe { take_text(buffer) };
+        assert!(
+            sarif.contains("SPARQLConstraintComponent")
+                && sarif.contains("http://example.org/ns#Invalid")
+                && sarif.contains("http://example.org/test#Value")
+                && !sarif.contains("http://example.org/test#Other"),
+            "both declared prefixes reached the query: {sarif}"
+        );
+
+        let (status, _, error) = validate(&idiom("rdfs:label \"a namespace\""));
+        // SAFETY: a failed call wrote a live error.
+        let refused = unsafe { take_import_error(status, error) };
+        assert_eq!(
+            refused,
+            (
+                PurrdfStatus::ShapesImportError as i32,
+                "unresolved-import".to_owned(),
+                vec!["http://example.org/ns#".to_owned()],
+            )
+        );
     }
 
     /// The accessors answer NULL / 0 for an error that is not an import refusal.

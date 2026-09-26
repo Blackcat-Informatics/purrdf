@@ -1407,8 +1407,9 @@ export function entailVerifyEntailment(
  * as two trailing parallel arrays, `importIris` and `importDocuments`: entry `i` declares
  * that `importIris[i]` names the Turtle document `importDocuments[i]`, parsed with that
  * IRI as its base. An `owl:imports` is resolved by a table entry, by `shapesBase` (or the
- * document's own `@base`) naming the imported document, or by the closure declaring the
- * ontology (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`).
+ * document's own `@base`) naming the imported document, by the closure declaring the
+ * ontology (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`), or by
+ * the closure describing `<X>` with `sh:declare` — SHACL's prefix-declaration idiom.
  * Anything else throws this class rather than validating a smaller shapes graph than the
  * one named. PurRDF fetches nothing; omitted arrays are an empty table, which still
  * enforces the rule.
