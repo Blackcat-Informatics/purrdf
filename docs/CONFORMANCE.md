@@ -890,8 +890,11 @@ The node-expression kinds split into two tiers:
 - The SHACL harness compares the result **multiset** on
   `(focusNode, resultPath, value, sourceConstraintComponent, severity,
   sourceShape)`, blank nodes compared as "a blank node"; every
-  `sh:resultMessage` an expected result states is compared exactly; nested
-  `sh:detail` is not compared.
+  `sh:resultMessage` an expected result states is compared exactly; every
+  nested `sh:detail` an expected result states is compared exactly, as a
+  recursive multiset. A result that states no `sh:detail` is not graded on
+  details: SHACL 1.2 Core §6.7.2.6 makes them optional ("Depending on the
+  capabilities of the SHACL processor").
 - ShEx logic-conformance (pass/fail parity) is the reported level, per suite
   convention; result-structure conformance is upstream-experimental.
 - One shexTest schemas entry (`start2RefS2`) has a frozen ShExJ that

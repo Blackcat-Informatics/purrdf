@@ -19,7 +19,7 @@
 //! compared. `sht:Failure` means the input must be REJECTED: any `Err` from
 //! loading or validation passes, a successful validation fails.
 //!
-//! Two parts of the expected report are more than a comparison:
+//! Four parts of the expected report are more than a comparison:
 //!
 //! * its `sh:conformanceDisallows` values are the VALIDATION PARAMETER the case
 //!   runs under ("the test framework needs to use the values of
@@ -37,7 +37,36 @@
 //!   expected result outside `rdf:type` and the SHACL namespaces — must be
 //!   carried the same way: the produced result with the same tuple has EXACTLY
 //!   the expected `(property, value)` set (SHACL 1.2 SPARQL Extensions,
-//!   "Annotation Properties").
+//!   "Annotation Properties"); and
+//! * every `sh:detail` it states is graded as a recursive multiset — see below.
+//!
+//! ## `sh:detail`
+//!
+//! SHACL 1.2 Core §6.7.2.6 makes nested results optional and
+//! processor-dependent: "The property sh:detail may link a (parent) result with
+//! one or more SHACL instances of sh:AbstractResult that can provide further
+//! details about the cause of the (parent) result. Depending on the capabilities
+//! of the SHACL processor, this may for example include violations of
+//! constraints that have been evaluated as part of conformance checking via
+//! sh:node." §6.6 says the same of conformance checking's own results, which
+//! "typically do not end up in the same validation report (except perhaps as
+//! values of sh:detail)".
+//!
+//! So the rule is exactly this:
+//!
+//! * an expected result that STATES `sh:detail` claims a distinct produced
+//!   result with the same tuple whose details are EXACTLY the stated ones, as a
+//!   multiset of the same tuple, recursively (each stated detail that itself
+//!   states details is graded the same way). A missing, extra or different
+//!   detail fails;
+//! * an expected result that states NO `sh:detail` does not grade the produced
+//!   result's details: "may", "depending on the capabilities of the SHACL
+//!   processor" — a processor that carries details the approved report does not
+//!   spell is conforming, and one that carries none is too.
+//!
+//! The claim is a maximum bipartite matching rather than a first-fit, so two
+//! expected results with the same tuple cannot fail by claiming each other's
+//! produced result.
 //!
 //! Every function here returns a verdict; none asserts one. The harness decides
 //! what a verdict means against its ledger.
@@ -45,16 +74,16 @@
 use std::fs;
 
 use purrdf_shapes::engine::ValidationOptions;
-use purrdf_shapes::report::{ConformanceDisallows, ValidationReport};
+use purrdf_shapes::report::{ConformanceDisallows, ValidationReport, ValidationResult};
 
 use std::collections::BTreeSet;
 
 use purrdf_shapes::term::Term;
 
-use super::{Expected, Multiset, Tuple, W3cCase, file_iri, norm};
+use super::{Expected, ExpectedResult, Multiset, Tuple, W3cCase, file_iri, norm};
 
 /// Load graphs, run the engine. `Err` carries the parse/validation error.
-fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
+pub(crate) fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
     let purrdf_shapes::text_ingest::TurtleDocument {
@@ -178,11 +207,136 @@ fn grade_report_details(tc: &W3cCase, report: &ValidationReport) -> Result<(), S
         };
         unclaimed.swap_remove(position);
     }
-    Ok(())
+    grade_details(&tc.expected_details, &report.results)
+}
+
+/// Whether the produced result `p` carries the expected result `e`: the same
+/// tuple and, when `e` states details, exactly those details (see the module
+/// docs).
+fn result_matches(e: &ExpectedResult, p: &ValidationResult) -> bool {
+    e.tuple == result_tuple(p)
+        && e.details
+            .as_ref()
+            .is_none_or(|details| details_match(details, &p.details))
+}
+
+/// Whether `produced` is EXACTLY the multiset `expected`: as many results, each
+/// expected one carried by a distinct produced one.
+fn details_match(expected: &[ExpectedResult], produced: &[ValidationResult]) -> bool {
+    expected.len() == produced.len() && max_matching(expected, produced).0 == expected.len()
+}
+
+/// Maximum bipartite matching of `expected` into `produced` under
+/// [`result_matches`] (augmenting paths): the matching size and, per expected
+/// result, the produced result it claims.
+fn max_matching(
+    expected: &[ExpectedResult],
+    produced: &[ValidationResult],
+) -> (usize, Vec<Option<usize>>) {
+    let edges: Vec<Vec<usize>> = expected
+        .iter()
+        .map(|e| {
+            produced
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| result_matches(e, p))
+                .map(|(j, _)| j)
+                .collect()
+        })
+        .collect();
+    let mut owner: Vec<Option<usize>> = vec![None; produced.len()];
+    fn augment(
+        i: usize,
+        edges: &[Vec<usize>],
+        owner: &mut [Option<usize>],
+        seen: &mut [bool],
+    ) -> bool {
+        for &j in &edges[i] {
+            if seen[j] {
+                continue;
+            }
+            seen[j] = true;
+            if owner[j].is_none_or(|k| augment(k, edges, owner, seen)) {
+                owner[j] = Some(i);
+                return true;
+            }
+        }
+        false
+    }
+    let mut size = 0;
+    for i in 0..expected.len() {
+        let mut seen = vec![false; produced.len()];
+        if augment(i, &edges, &mut owner, &mut seen) {
+            size += 1;
+        }
+    }
+    let mut claims = vec![None; expected.len()];
+    for (j, i) in owner.iter().enumerate() {
+        if let Some(i) = i {
+            claims[*i] = Some(j);
+        }
+    }
+    (size, claims)
+}
+
+/// Every expected result that states `sh:detail` claims a distinct produced
+/// top-level result carrying exactly those details.
+fn grade_details(expected: &[ExpectedResult], produced: &[ValidationResult]) -> Result<(), String> {
+    let (size, claims) = max_matching(expected, produced);
+    if size == expected.len() {
+        return Ok(());
+    }
+    let mut lines = vec!["sh:detail mismatch:".to_owned()];
+    for (e, claim) in expected.iter().zip(&claims) {
+        if claim.is_some() {
+            continue;
+        }
+        lines.push(format!(
+            "  expected {:?} with details {}",
+            e.tuple,
+            render_expected_details(e.details.as_deref().unwrap_or_default())
+        ));
+        for p in produced.iter().filter(|p| result_tuple(p) == e.tuple) {
+            lines.push(format!(
+                "    a produced result with that tuple carries {}",
+                render_produced_details(&p.details)
+            ));
+        }
+    }
+    Err(lines.join("\n"))
+}
+
+fn render_expected_details(details: &[ExpectedResult]) -> String {
+    let items: Vec<String> = details
+        .iter()
+        .map(|d| match &d.details {
+            None => format!("{:?}", d.tuple),
+            Some(nested) => format!("{:?} {}", d.tuple, render_expected_details(nested)),
+        })
+        .collect();
+    format!("[{}]", items.join(", "))
+}
+
+fn render_produced_details(details: &[ValidationResult]) -> String {
+    let items: Vec<String> = details
+        .iter()
+        .map(|d| {
+            if d.details.is_empty() {
+                format!("{:?}", result_tuple(d))
+            } else {
+                format!(
+                    "{:?} {}",
+                    result_tuple(d),
+                    render_produced_details(&d.details)
+                )
+            }
+        })
+        .collect();
+    format!("[{}]", items.join(", "))
 }
 
 /// The comparison tuple of one produced result.
-fn result_tuple(r: &purrdf_shapes::report::ValidationResult) -> Tuple {
+fn result_tuple(r: &ValidationResult) -> Tuple {
     (
         norm(&r.focus_node),
         r.result_path.as_ref().map(norm),

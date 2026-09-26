@@ -35,7 +35,11 @@
 //!   with the same tuple must carry EXACTLY that message set (language tags,
 //!   directions and datatypes included); an engine-generated message on a result
 //!   the suite states none for is the engine's own;
-//! - **nested `sh:detail` is NOT compared**;
+//! - **nested `sh:detail` is compared where the expected report states it** —
+//!   such a result's produced details must be exactly the stated ones, as a
+//!   multiset of the same tuple, recursively; a result the expected report
+//!   states no details for is not graded on details, since SHACL 1.2 Core makes
+//!   them optional and processor-dependent (quoted in `report_grading`);
 //! - the expected report's `sh:conformanceDisallows` values are the validation
 //!   parameter the case runs under, and the report must echo them;
 //! - `mf:result sht:Failure` means the validator must REJECT the test input

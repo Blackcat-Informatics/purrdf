@@ -13,7 +13,7 @@
 //!   "the report agrees": `sh:conforms` plus the multiset of
 //!   `(focusNode, resultPath, value, sourceConstraintComponent, severity,
 //!   sourceShape)` tuples, blank nodes normalized, every `sh:resultMessage` the expected report
-//!   mentions, and — where the expected report states `sh:conformanceDisallows`
+//!   mentions, every `sh:detail` it states (recursively), and — where the expected report states `sh:conformanceDisallows`
 //!   — validation under exactly that set, echoed back in the report. `sht:Failure` expects an error at load or
 //!   validation. The only departure from the approved expectation is
 //!   [`EXPECTATION_DEFECTS`].
@@ -1585,4 +1585,89 @@ fn the_grader_grades_the_source_shape_both_ways() {
         shacl_corpora::report_grading::run_validate_case(case).is_err(),
         "a different expected source shape must fail the case"
     );
+}
+
+/// The shared grader grades `sh:detail` exactly where the approved report states
+/// it, and not where it states none.
+///
+/// Over the approved `core/node/memberShape-001` — whose `ex:list2` result states
+/// the one detail `"Bob"` and whose `ex:list5` result states exactly `"Charlie"`
+/// and `"Donna"` — the case passes as written, and fails when the stated details
+/// lose one, gain one, or change one field of one. Then the control: with
+/// `ex:list5`'s stated details removed from the expectation, the case still
+/// passes while the engine's own `ex:list5` result carries two details — a
+/// produced detail the expectation does not spell is not graded (SHACL 1.2 Core
+/// §6.7.2.6, quoted in the grader's docs).
+#[test]
+fn the_grader_grades_sh_detail_where_it_is_stated() {
+    use shacl_corpora::ExpectedResult;
+
+    let mut cases = shacl12_cases();
+    let case = cases
+        .iter_mut()
+        .find(|c| c.id == "core/node/memberShape-001")
+        .expect("memberShape-001 is discovered");
+    let Body::Validate(tc) = &mut case.body else {
+        panic!("memberShape-001 is an sht:Validate test");
+    };
+    let list5 = "<http://example.com/ns#list5>";
+    let stated: Vec<(String, usize)> = tc
+        .expected_details
+        .iter()
+        .map(|e| (e.tuple.0.clone(), e.details.as_ref().map_or(0, Vec::len)))
+        .collect();
+    assert_eq!(
+        stated,
+        [
+            ("<http://example.com/ns#list2>".to_owned(), 1),
+            (list5.to_owned(), 2)
+        ],
+        "the approved report states details on ex:list2 and ex:list5"
+    );
+    shacl_corpora::report_grading::run_validate_case(tc)
+        .expect("the engine carries exactly the stated details");
+
+    let original = tc.expected_details.clone();
+    let list5_at = original
+        .iter()
+        .position(|e| e.tuple.0 == list5)
+        .expect("ex:list5 states details");
+    let with_list5 = |details: Option<Vec<ExpectedResult>>| {
+        let mut amended = original.clone();
+        amended[list5_at].details = details;
+        amended
+    };
+    let stated5 = original[list5_at]
+        .details
+        .clone()
+        .expect("ex:list5 states details");
+
+    let mut lost = stated5.clone();
+    lost.pop();
+    let mut gained = stated5.clone();
+    gained.push(stated5[0].clone());
+    let mut changed = stated5.clone();
+    changed[1].tuple.5 = ELSEWHERE.to_owned();
+    for (what, details) in [("loses", lost), ("gains", gained), ("changes", changed)] {
+        tc.expected_details = with_list5(Some(details));
+        assert!(
+            shacl_corpora::report_grading::run_validate_case(tc).is_err(),
+            "an expectation that {what} one of ex:list5's details must fail"
+        );
+    }
+
+    tc.expected_details = with_list5(None);
+    let report = shacl_corpora::report_grading::validate_case(tc).expect("the engine validates");
+    let produced5 = report
+        .results
+        .iter()
+        .find(|r| shacl_corpora::norm(&r.focus_node) == list5)
+        .expect("the engine reports ex:list5");
+    assert_eq!(
+        produced5.details.len(),
+        2,
+        "the engine's ex:list5 result carries its two details"
+    );
+    shacl_corpora::report_grading::run_validate_case(tc)
+        .expect("a produced detail the expectation does not state is not graded");
 }
