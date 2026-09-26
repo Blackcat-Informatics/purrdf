@@ -67,7 +67,7 @@ mod shacl_corpora;
 use std::collections::BTreeMap;
 
 use shacl_corpora::report_grading::{grade_refused_import, run_validate_case};
-use shacl_corpora::{W3C_TOTAL_CASES, w3c_cases};
+use shacl_corpora::{W3C_PROPOSED_UNINCLUDED, W3C_TOTAL_CASES, w3c_cases, w3c_proposed_cases};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
@@ -196,4 +196,28 @@ fn w3c_shacl_conformance() {
         W3C_TOTAL_CASES,
         "every discovered test must be a pass, an expected import refusal or a ledgered xfail"
     );
+}
+
+/// The vendored `sht:proposed` entries no manifest includes
+/// ([`W3C_PROPOSED_UNINCLUDED`]), graded by the approved suite's grader and reported
+/// under their own category, "proposed, graded" — never among the approved passes
+/// [`w3c_shacl_conformance`] counts. Every one must pass: a proposed test this engine
+/// fails is a defect to fix, or an expectation to dispute against the specification.
+#[test]
+fn w3c_shacl_proposed_unincluded_files() {
+    let cases = w3c_proposed_cases();
+    assert_eq!(cases.len(), W3C_PROPOSED_UNINCLUDED.len());
+    let mut errors: Vec<String> = Vec::new();
+    let mut passed = 0usize;
+    for tc in &cases {
+        match run_validate_case(tc) {
+            Ok(()) => passed += 1,
+            Err(e) => errors.push(format!("FAIL [{id}] (proposed): {e}", id = tc.id)),
+        }
+    }
+    println!(
+        "W3C SHACL proposed, graded (not counted among approved tests): passed {passed} of {}",
+        cases.len()
+    );
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }

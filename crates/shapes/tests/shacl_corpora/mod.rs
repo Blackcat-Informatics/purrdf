@@ -82,11 +82,66 @@ pub(crate) const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus
 ///
 /// Note: the corpus ships 121 files with a `sht:Validate` entry in `core/` +
 /// `sparql/`, but upstream's `sparql/component/manifest.ttl` never
-/// `mf:include`s `nodeValidator-001.ttl`, so that subtree yields 120.
+/// `mf:include`s `nodeValidator-001.ttl`, so that subtree yields 120. That file's
+/// entry is `sht:proposed`, not approved; it is graded apart, under its own
+/// category (see [`W3C_PROPOSED_UNINCLUDED`]).
 /// The SHACL-AF seam at `af/` adds 9 more `sht:Validate` entries — 6 vendored
 /// from pySHACL's DASH tests and 3 first-party (no W3C SHACL-AF conformance
 /// suite exists; see `vectors/shacl/af/README.md`).
 pub(crate) const W3C_TOTAL_CASES: usize = 129;
+
+/// Vendored SHACL 1.0 files that carry a `sht:Validate` entry no upstream manifest
+/// includes, and whose entry is `mf:status sht:proposed` rather than approved:
+/// `(path relative to the suite root, why it is walked)`.
+///
+/// A test that exists but runs nowhere is silent coverage loss, so each file is
+/// walked as a manifest root of its own and its entry graded by the same grader as
+/// the approved suite ([`w3c_proposed_cases`]). Grading it is not counting it: it is
+/// reported as "proposed, graded", never among the approved suite's passes.
+pub(crate) const W3C_PROPOSED_UNINCLUDED: &[(&str, &str)] = &[(
+    "sparql/component/nodeValidator-001.ttl",
+    "sht:proposed sh:nodeValidator test (a SELECT validator pre-binding a required \
+     parameter); sparql/component/manifest.ttl does not include it",
+)];
+
+const MF_STATUS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#status";
+const SHT_PROPOSED: &str = "http://www.w3.org/ns/shacl-test#proposed";
+
+/// The `sht:Validate` entries of [`W3C_PROPOSED_UNINCLUDED`], in table order.
+///
+/// Asserts that every file yields exactly one entry and that the entry IS
+/// `sht:proposed`: an entry upstream approves belongs in the approved walk, and a
+/// file that stopped yielding its entry would otherwise vanish.
+pub(crate) fn w3c_proposed_cases() -> Vec<W3cCase> {
+    let root = w3c_root();
+    let mut cases: Vec<W3cCase> = Vec::new();
+    for (relative, _) in W3C_PROPOSED_UNINCLUDED {
+        let path = root.join(relative);
+        let before = cases.len();
+        walk_manifest(&path, &mut |g, entry, manifest| {
+            if let Some(tc) = parse_entry(g, entry, manifest, &root) {
+                let proposed = objects(g, entry, MF_STATUS)
+                    .iter()
+                    .any(|t| matches!(t, Term::NamedNode(n) if n.as_str() == SHT_PROPOSED));
+                assert!(
+                    proposed,
+                    "{}: entry {} is not sht:proposed; an approved entry belongs in the \
+                     approved walk",
+                    path.display(),
+                    tc.id
+                );
+                cases.push(tc);
+            }
+        });
+        assert_eq!(
+            cases.len() - before,
+            1,
+            "{} must yield exactly one sht:Validate entry",
+            path.display()
+        );
+    }
+    cases
+}
 
 /// Exact number of case directories under [`CORPUS_DIR`].
 ///

@@ -89,10 +89,10 @@ pub(crate) const W3C12_UNLISTED_TYPED_NODES: &[(&str, &str)] = &[(
 /// `mf:include`s, walked as extra roots so their entries are graded rather than
 /// silently absent: `(path relative to the suite root, why it is walked)`.
 ///
-/// The SHACL 1.0 harness documents its one such file (`nodeValidator-001.ttl`)
-/// and leaves it out; here the files are run, because a test that exists and is
-/// approved but runs nowhere is exactly the silent coverage loss the reachability
-/// guard exists to stop. Running them is not counting them: their entries are
+/// The files are run because a test that exists and is approved but runs nowhere
+/// is exactly the silent coverage loss the reachability guard exists to stop; the
+/// SHACL 1.0 harness grades its one such file, the `sht:proposed`
+/// `nodeValidator-001.ttl`, the same way (`shacl_corpora::W3C_PROPOSED_UNINCLUDED`). Running them is not counting them: their entries are
 /// discovered with `listed == false`, and the harness grades and reports them in
 /// a category of their own, never among the approved suite's passes.
 pub(crate) const W3C12_UNINCLUDED_MANIFESTS: &[(&str, &str)] = &[

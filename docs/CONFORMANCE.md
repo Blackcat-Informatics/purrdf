@@ -597,7 +597,11 @@ way the matrix stays honest:
   graded as an exact expected refusal — `ShapesImportError::Unresolved` naming
   exactly that IRI, a load success being a failure — and reported as
   **refused: unresolvable import**, never as a pass; the SHACL 1.2 suite's copy
-  is graded the same way. `sh:expression`, custom SPARQL constraint components,
+  is graded the same way. `sparql/component/nodeValidator-001.ttl`, a vendored
+  file no upstream manifest includes, carries an `sht:proposed` (not approved)
+  entry; `w3c_shacl_proposed_unincluded_files` grades it with the same grader
+  and reports it as **proposed, graded** (1 / 1), never among the approved
+  passes. `sh:expression`, custom SPARQL constraint components,
   pre-binding semantics, and user-defined `sh:SPARQLFunction` calls are
   implemented and exercised; `sh:SPARQLTargetType` is implemented.
   **SHACL Rules** (`sh:rule` — both `sh:TripleRule` and

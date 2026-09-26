@@ -746,6 +746,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **shapes:** a SELECT-based validator of a SPARQL-based constraint component
+  on a node shape reports the focus node as `sh:value` when its solution does
+  not bind `?value`, as for a SPARQL-based constraint ("The value node"); the
+  result had no value. The W3C SHACL suite's `sht:proposed`
+  `sparql/component/nodeValidator-001`, which no manifest includes, is graded
+  under its own category and passes.
 - **xsd:** the `xsd:dateTime`, `xsd:date` and `xsd:time` parsers reject a
   signed field (`+2020-01-01`, `+1:00:00`, a `+-1:00` timezone) and a seconds
   field that is not two digits (`00:00:5`). `from_str` had read the sign.
