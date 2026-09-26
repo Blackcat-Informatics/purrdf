@@ -1432,7 +1432,6 @@ dependencies = [
  "purrdf-core",
  "purrdf-datalog",
  "purrdf-iri",
- "purrdf-rdf",
  "purrdf-xsd",
  "roxmltree",
 ]

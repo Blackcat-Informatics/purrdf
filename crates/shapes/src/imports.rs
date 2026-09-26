@@ -460,6 +460,30 @@ mod tests {
         resolve_shapes_imports(&graph(IMPORTER), &[], &[], &imports).expect("reached");
     }
 
+    /// The vendored W3C SHACL 1.2 vocabularies, merged: `shnex.ttl` imports `sh:` and
+    /// `shacl.ttl` beside it declares `sh:`, so the closure is in hand with no table. The
+    /// neighbour: `shnex.ttl` alone names exactly `sh:` as unresolved.
+    #[test]
+    fn the_merged_w3c_vocabularies_resolve_and_shnex_alone_does_not() {
+        const SHACL_TTL: &str = include_str!("../spec/shacl.ttl");
+        const SHNEX_TTL: &str = include_str!("../spec/shnex.ttl");
+        let merged = graph(&format!("{SHNEX_TTL}\n{SHACL_TTL}"));
+        assert!(
+            purrdf_core::imports::imported_iris(&merged)
+                .iter()
+                .any(|iri| iri == "http://www.w3.org/ns/shacl#"),
+            "the merged graph does import `sh:`"
+        );
+        resolve_shapes_imports(&merged, &[], &[], &ShapesImports::new())
+            .expect("the merged vocabularies are a complete closure");
+        let Err(ShapesImportError::Unresolved { iris }) =
+            resolve_shapes_imports(&graph(SHNEX_TTL), &[], &[], &ShapesImports::new())
+        else {
+            panic!("shnex.ttl alone imports an absent ontology");
+        };
+        assert_eq!(iris, ["http://www.w3.org/ns/shacl#"]);
+    }
+
     #[test]
     fn a_relative_or_repeated_key_is_an_invalid_entry_and_an_absolute_one_is_not() {
         let mut imports = ShapesImports::new();

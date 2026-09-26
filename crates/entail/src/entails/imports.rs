@@ -500,18 +500,15 @@ mod tests {
     }
 
     // ── The in-graph resolution rule ────────────────────────────────────────────────
+    //
+    // The same rule over the vendored W3C SHACL 1.2 vocabulary files themselves is held
+    // by `purrdf-shapes` (`imports::tests`), which reads Turtle; these are the headers
+    // those files carry, so this crate needs no parser to test the rule.
 
-    /// The W3C SHACL 1.2 core vocabulary document, vendored beside the shapes engine.
-    const SHACL_TTL: &str = include_str!("../../../shapes/spec/shacl.ttl");
-    /// The W3C SHACL 1.2 node-expression vocabulary, which `owl:imports <sh:>`.
-    const SHNEX_TTL: &str = include_str!("../../../shapes/spec/shnex.ttl");
     /// The ontology IRI `shnex.ttl` imports and `shacl.ttl` declares.
     const SH: &str = "http://www.w3.org/ns/shacl#";
-
-    /// Parse one Turtle document with the native codec.
-    fn turtle(text: &str) -> Arc<RdfDataset> {
-        purrdf_rdf::parse_dataset(text.as_bytes(), "text/turtle", None).expect("turtle parses")
-    }
+    /// The ontology IRI `shnex.ttl` declares.
+    const SHNEX: &str = "http://www.w3.org/ns/shacl-node-expr#";
 
     /// A dataset of the given IRI triples.
     fn triples(rows: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
@@ -525,11 +522,18 @@ mod tests {
         b.freeze().expect("freeze")
     }
 
+    /// `shnex.ttl`'s header: it declares its own ontology and imports `sh:`.
+    fn shnex_header() -> Vec<(&'static str, &'static str, &'static str)> {
+        vec![(SHNEX, RDF_TYPE, OWL_ONTOLOGY), (SHNEX, OWL_IMPORTS, SH)]
+    }
+
     /// The merged SHACL 1.2 vocabularies: `shnex.ttl` imports `sh:`, and `shacl.ttl` is in
     /// the same graph declaring `sh: a owl:Ontology`, so nothing is missing.
     #[test]
     fn import_present_in_graph_is_resolved() {
-        let merged = RdfDataset::union(&[&turtle(SHNEX_TTL), &turtle(SHACL_TTL)]);
+        let mut rows = shnex_header();
+        rows.push((SH, RDF_TYPE, OWL_ONTOLOGY));
+        let merged = triples(&rows);
         // The oracle observes the import: the graph DOES import `sh:`, so an empty answer
         // is the rule resolving it, not a graph with nothing to resolve.
         assert!(imported_iris(&merged).iter().any(|iri| iri == SH));
@@ -542,7 +546,7 @@ mod tests {
     /// the graph does not contain, and that import alone is named.
     #[test]
     fn absent_import_is_unresolved() {
-        let shnex = turtle(SHNEX_TTL);
+        let shnex = triples(&shnex_header());
         assert_eq!(unresolved_imports(&shnex, &[]), vec![SH.to_owned()]);
         let Err(EntailError::UnresolvedImport(iri)) = resolve(&shnex, &ImportMap::new()) else {
             panic!("an import of an absent ontology must refuse");
@@ -557,15 +561,18 @@ mod tests {
     #[test]
     fn self_import_is_resolved() {
         const DOC: &str = "http://example.org/shapes/doc.ttl";
-        let graph = purrdf_rdf::parse_dataset(
-            b"@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-              @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
-              <> sh:declare [ sh:prefix \"ex\" ; sh:namespace \"http://example.org/ns#\" ] .\n\
-              <http://example.org/shapes/doc.ttl#Prefixes> owl:imports <> .\n",
-            "text/turtle",
-            Some(DOC),
-        )
-        .expect("turtle parses");
+        let graph = triples(&[
+            (
+                DOC,
+                "http://www.w3.org/ns/shacl#declare",
+                "http://example.org/shapes/doc.ttl#ex",
+            ),
+            (
+                "http://example.org/shapes/doc.ttl#Prefixes",
+                OWL_IMPORTS,
+                DOC,
+            ),
+        ]);
         assert_eq!(imported_iris(&graph), vec![DOC.to_owned()]);
         assert_eq!(unresolved_imports(&graph, &[DOC]), Vec::<String>::new());
         assert_eq!(unresolved_imports(&graph, &[]), vec![DOC.to_owned()]);
