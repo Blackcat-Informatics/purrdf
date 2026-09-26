@@ -12,9 +12,9 @@
 //!
 //! ## Comparison contract
 //!
-//! The expected report is compared on the tuple subset
-//! `(focusNode, resultPath, value, sourceConstraintComponent, severity)` as a
-//! MULTISET, plus `sh:conforms`; see [`super::norm`] for the blank-node
+//! The expected report is compared on the tuple
+//! `(focusNode, resultPath, value, sourceConstraintComponent, severity,
+//! sourceShape)` as a MULTISET, plus `sh:conforms`; see [`super::norm`] for the blank-node
 //! normalization and the harness module docs for what is deliberately not
 //! compared. `sht:Failure` means the input must be REJECTED: any `Err` from
 //! loading or validation passes, a successful validation fails.
@@ -189,6 +189,7 @@ fn result_tuple(r: &purrdf_shapes::report::ValidationResult) -> Tuple {
         r.value.as_ref().map(norm),
         format!("<{}>", r.source_constraint_component.as_str()),
         format!("<{}>", r.severity.iri()),
+        norm(&r.source_shape),
     )
 }
 

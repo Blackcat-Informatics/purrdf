@@ -118,9 +118,17 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 
 // ── The discovered case models ────────────────────────────────────────────────
 
-/// Comparison tuple: `(focus, path, value, component, severity)` — see [`norm`]
-/// for the normalization rules.
-pub(crate) type Tuple = (String, Option<String>, Option<String>, String, String);
+/// Comparison tuple: `(focus, path, value, component, severity, source shape)` —
+/// see [`norm`] for the normalization rules. A blank-node source shape compares as
+/// `_:`, like every other blank node.
+pub(crate) type Tuple = (
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    String,
+);
 
 /// Result multiset: tuple → occurrence count.
 pub(crate) type Multiset = BTreeMap<Tuple, usize>;
@@ -542,7 +550,11 @@ fn expected_tuple(g: &RdfDataset, result: &Term) -> Tuple {
         object(g, result, sh::SOURCE_CONSTRAINT_COMPONENT).map_or_else(String::new, |t| norm(&t));
     let severity = object(g, result, sh::RESULT_SEVERITY)
         .map_or_else(|| format!("<{}>", sh::VIOLATION), |t| norm(&t));
-    (focus, path, value, component, severity)
+    // An expected result that states no source shape compares as the empty string,
+    // which no produced result carries: every result the engine produces names its
+    // shape, so such an expectation fails loudly instead of matching anything.
+    let source_shape = object(g, result, sh::SOURCE_SHAPE).map_or_else(String::new, |t| norm(&t));
+    (focus, path, value, component, severity, source_shape)
 }
 
 /// One message as the grader compares it: the literal's N-Triples rendering, so
