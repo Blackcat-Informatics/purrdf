@@ -123,6 +123,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/check-simd-asm.py --self-test
 	python3 scripts/check-wasm-jspi-frame.py --self-test
+	python3 scripts/bind-wasm-glue.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
 	python3 scripts/benchmark-acquire.py --self-test
