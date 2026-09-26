@@ -208,6 +208,45 @@ function defaultInternalErrorReporter(error, { correlationId }) {
   console.error(error, correlationId);
 }
 
+/**
+ * Call a host-supplied reporter (`onCacheError`, `onInternalError`) so that the reporter
+ * itself can never change what this module answers. A reporter is observability, not
+ * control flow: a cache failure must still fall through to the remote, a `put` failure
+ * must still return the answer, and an internal error must still become a sanitized `500`
+ * — so a reporter that throws synchronously, or returns a promise that rejects, is caught
+ * here rather than rejecting the resolver or escaping as an unhandled rejection.
+ *
+ * Catching it is not swallowing it: the reporter's failure means the original error was
+ * never reported, so both go to the default console path in one `console.error` line —
+ * the error the reporter was handed and the reporter's own failure. Both are written only
+ * to the Worker log, never to a response.
+ *
+ * Returns a promise that always fulfils once the reporter has settled (immediately for a
+ * synchronous one), so a caller that wants an asynchronous reporter's work kept alive —
+ * the `put` path under `waitUntil` — can hand it on without ever seeing it reject.
+ */
+function report(hook, reporter, error, context) {
+  const reporterFailed = (reporterError) => {
+    console.error(
+      `@blackcatinformatics/purrdf/cloudflare: the ${hook} reporter failed, so this ` +
+        `error went unreported by it:`,
+      error,
+      `— the reporter's own failure:`,
+      reporterError,
+    );
+  };
+  let outcome;
+  try {
+    outcome = reporter(error, context);
+  } catch (reporterError) {
+    reporterFailed(reporterError);
+    return Promise.resolve();
+  }
+  // `Promise.resolve` adopts a thenable (including one whose `then` getter throws, which
+  // becomes a rejection) and passes any other return value through unchanged.
+  return Promise.resolve(outcome).then(() => undefined, reporterFailed);
+}
+
 function cacheOptions(source, caller) {
   const { cache, cacheTtlSeconds, waitUntil, onCacheError } = source;
   if (!isPresent(cache)) {
@@ -432,6 +471,11 @@ async function cacheKey(request) {
  * way the answer is returned regardless. Every cache failure is reported through
  * `onCacheError(error, { operation: "match" | "put", endpoint })`, which defaults to one
  * `console.warn` line (Workers routes it to logs) so a failure is visible, never silent.
+ * The reporter cannot change the answer either: one that throws or returns a rejecting
+ * promise still falls through to the remote on a `match` failure and still returns the
+ * answer on a `put` failure (with or without `waitUntil`), and its own failure goes to
+ * `console.error` together with the cache error it was handed. A `waitUntil` that throws
+ * is reported the same way, and the put is then awaited instead of deferred.
  */
 export function createFetchServiceResolver(options) {
   const caller = "createFetchServiceResolver";
@@ -466,7 +510,12 @@ export function createFetchServiceResolver(options) {
       try {
         hit = await caching.cache.match(key);
       } catch (error) {
-        caching.onCacheError(error, { operation: "match", endpoint: request.endpoint });
+        // Not awaited: the fetch below never waits on the reporter, and `report` never
+        // rejects, so a throwing or rejecting reporter cannot turn this miss into a failure.
+        void report("onCacheError", caching.onCacheError, error, {
+          operation: "match",
+          endpoint: request.endpoint,
+        });
         hit = undefined;
       }
       if (hit) return new Uint8Array(await hit.arrayBuffer());
@@ -503,11 +552,30 @@ export function createFetchServiceResolver(options) {
       } catch (error) {
         put = Promise.reject(error);
       }
-      const reportedPut = put.catch((error) => {
-        caching.onCacheError(error, { operation: "put", endpoint: request.endpoint });
-      });
-      if (caching.waitUntil !== undefined) caching.waitUntil(reportedPut);
-      else await reportedPut;
+      // `reportedPut` never rejects — `report` isolates the reporter too — and it settles
+      // only once an asynchronous reporter has, so `waitUntil` keeps that work alive.
+      const reportedPut = put.catch((error) =>
+        report("onCacheError", caching.onCacheError, error, {
+          operation: "put",
+          endpoint: request.endpoint,
+        }),
+      );
+      let deferred = false;
+      if (caching.waitUntil !== undefined) {
+        try {
+          caching.waitUntil(reportedPut);
+          deferred = true;
+        } catch (error) {
+          // A `waitUntil` that throws never held the put: await it here instead, so the
+          // write still completes, and say so — the host's deferral is broken.
+          console.error(
+            `${caller}: waitUntil threw, so the cache put for <${request.endpoint}> is ` +
+              `awaited instead:`,
+            error,
+          );
+        }
+      }
+      if (!deferred) await reportedPut;
     }
     return answer.bytes;
   };
@@ -832,7 +900,9 @@ function failure(error, signal, headers) {
  */
 function reportInternalError(error, onInternalError, request) {
   const correlationId = crypto.randomUUID();
-  onInternalError(error, { correlationId, request });
+  // Not awaited, and never rejecting: a throwing or rejecting `onInternalError` still
+  // yields the sanitized `500` (see `report`), never an unhandled rejection.
+  void report("onInternalError", onInternalError, error, { correlationId, request });
   return correlationId;
 }
 
@@ -961,7 +1031,10 @@ async function boundedRequestBody(request, maxRequestBytes, headers) {
  * in a host-supplied `resolveService`/`resolveLoad`, or an unexpected exception anywhere
  * in this adapter), a fixed generic `detail` and a `correlationId` instead: the real error
  * goes to `onInternalError(error, { correlationId, request })` (one `console.error` line
- * by default) and never into the response. Never a `200` with a partial body. Every error
+ * by default) and never into the response. An `onInternalError` that itself throws or
+ * rejects changes none of that: the response is still the sanitized `500`, and the
+ * reporter's failure goes to `console.error` together with the error it was handed.
+ * Never a `200` with a partial body. Every error
  * is an RFC 9457 `application/problem+json` document (`type: "about:blank"`, `title`,
  * `status`, `detail`, and `code` — the refusal's stable name — plus `parameter`,
  * `dimension`, `limit`, `consumed`, `estimate`, `correlationId` where they apply). Every

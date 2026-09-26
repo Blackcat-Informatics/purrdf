@@ -44,9 +44,14 @@ export interface CacheErrorContext {
  * treated as a miss (the request still goes to the remote) and a `put` failure never
  * discards an answer the remote already returned — this is called either way, so a
  * failure is never silent. Defaults to one `console.warn` line (Workers routes it to
- * logs).
+ * logs). The reporter cannot change the answer either: if it throws, or returns a promise
+ * that rejects, the request still proceeds exactly as above, and the reporter's failure
+ * goes to `console.error` together with the cache error it was handed.
  */
-export type CacheErrorReporter = (error: unknown, context: CacheErrorContext) => void;
+export type CacheErrorReporter = (
+  error: unknown,
+  context: CacheErrorContext,
+) => void | PromiseLike<unknown>;
 
 /** The correlation id a `500` response carries, and the request it was answering. */
 export interface InternalErrorContext {
@@ -60,9 +65,14 @@ export interface InternalErrorContext {
  * client's own concern), or any other exception this adapter did not otherwise classify.
  * The response gets a fixed generic `detail` and `correlationId` instead of `error`'s own
  * words; this is the only place `error` (and, for an `Error`, its `stack`) is ever
- * written. Defaults to one `console.error(error, correlationId)` line.
+ * written. Defaults to one `console.error(error, correlationId)` line. A reporter that
+ * throws, or returns a promise that rejects, never changes the response — it is still the
+ * sanitized `500` — and its failure goes to `console.error` together with `error`.
  */
-export type InternalErrorReporter = (error: unknown, context: InternalErrorContext) => void;
+export type InternalErrorReporter = (
+  error: unknown,
+  context: InternalErrorContext,
+) => void | PromiseLike<unknown>;
 
 /** Service bindings by origin (`"https://example.org"`, no path, no trailing slash). */
 export type ServiceBindings = Readonly<Record<string, ServiceBindingLike>>;

@@ -110,7 +110,12 @@ test("QueryEngine raw serialization supports result and graph formats", () => {
     "PREFIX ex: <https://example.org/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
     { format: "nquads" },
   );
-  assert.match(nquads, /https:\/\/example\.org\/label/);
+  // Exact: the whole N-Quads document, not a substring that a wrong IRI could contain.
+  assert.equal(
+    nquads,
+    '<https://example.org/a> <https://example.org/label> "Ann" .\n' +
+      '<https://example.org/b> <https://example.org/label> "Bob" .\n',
+  );
 
   assert.throws(() =>
     engine.queryRaw(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }", {
@@ -231,8 +236,13 @@ test("serialize supports JSON-LD (the docs 'copy as' transcode surface)", () => 
   const ds = Dataset.parse('@prefix ex: <https://example.org/> . ex:a ex:p ex:o .', "turtle");
   const jsonld = ds.serialize("jsonld");
   const doc = JSON.parse(jsonld); // must be valid JSON
-  assert.ok(
-    JSON.stringify(doc).includes("https://example.org/"),
+  // Exact: the document carries each term IRI in its own position, compared whole.
+  assert.deepEqual(
+    doc,
+    {
+      "@context": {},
+      "@graph": [{ "@id": "https://example.org/a", "https://example.org/p": { "@id": "https://example.org/o" } }],
+    },
     "the JSON-LD document must carry the term IRIs",
   );
 });
@@ -259,12 +269,15 @@ test("the default query() format never returns an empty string for a named-graph
   const ds = Dataset.parse(TRIG, "trig");
   const out = ds.query(GRAPH_CONSTRUCT);
   assert.notEqual(out.trim(), "", "the documented default must never be a silent empty result");
-  assert.ok(out.includes("https://example.org/out"), `the graph the query named must survive: ${out}`);
-  assert.ok(out.includes("https://example.org/a"), `the constructed statement must survive: ${out}`);
-  // TriG round-trips back into a dataset that still carries the graph.
+  // TriG round-trips back into a dataset that still carries the graph and the statement;
+  // every term is compared whole, never as a substring of the serialized text.
   const reparsed = Dataset.parse(out, "trig");
-  assert.equal(reparsed.size, 1);
-  assert.equal(reparsed.quads()[0].graph.value, "https://example.org/out");
+  assert.equal(reparsed.size, 1, `the constructed statement must survive: ${out}`);
+  const [quad] = reparsed.quads();
+  assert.equal(quad.graph.value, "https://example.org/out", `the graph the query named must survive: ${out}`);
+  assert.equal(quad.subject.value, "https://example.org/a");
+  assert.equal(quad.predicate.value, "https://example.org/knows");
+  assert.equal(quad.object.value, "https://example.org/b");
 });
 
 test("the default query() format is still Turtle for a default-graph CONSTRUCT", () => {
@@ -335,16 +348,24 @@ test("the default query() format carries a named-graph DESCRIBE instead of empty
   const ds = Dataset.parse(GRAPH_STAR_TRIG, "trig");
   const out = ds.query(GRAPH_DESCRIBE);
   assert.notEqual(out.trim(), "", "a description must never come back as a silent empty result");
-  assert.ok(out.includes("https://example.org/g"), `the graph the source asserted must survive: ${out}`);
+  // Every described statement stays in the graph the source asserted it in, compared whole.
+  assert.deepEqual(
+    Dataset.parse(out, "trig").quads().map((quad) => quad.graph.value),
+    ["https://example.org/g", "https://example.org/g", "https://example.org/g"],
+    `the graph the source asserted must survive: ${out}`,
+  );
   const engine = new QueryEngine();
   const nquads = engine.queryRaw(ds, GRAPH_DESCRIBE, { format: "nquads" });
-  for (const row of [
-    "<https://example.org/s> <https://example.org/p> <https://example.org/o> <https://example.org/g> .",
-    "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> <https://example.org/g> .",
-    '<https://example.org/r> <https://example.org/note> "n" <https://example.org/g> .',
-  ]) {
-    assert.ok(nquads.includes(row), `the description must carry \`${row}\`: ${nquads}`);
-  }
+  // Exactly these rows, each compared whole as a line — no more, no fewer.
+  assert.deepEqual(
+    nquads.split("\n").filter((line) => line !== "").sort(),
+    [
+      "<https://example.org/s> <https://example.org/p> <https://example.org/o> <https://example.org/g> .",
+      "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> <https://example.org/g> .",
+      '<https://example.org/r> <https://example.org/note> "n" <https://example.org/g> .',
+    ].sort(),
+    `the description must carry exactly its rows: ${nquads}`,
+  );
 });
 
 test("an explicit single-graph format throws for a named-graph DESCRIBE", () => {
@@ -385,7 +406,13 @@ test("serializeWithLoss reports the named-graph rows a single-graph syntax drops
   assert.equal(lossy.directionalLiteralsDropped, 0);
   // …and the named-graph count is the one that reports the vanished row.
   assert.equal(lossy.namedGraphRowsDropped, 1);
-  assert.ok(!lossy.text.includes("https://example.org/g"), lossy.text);
+  // Exactly the three default-graph rows: the named-graph row is gone, nothing else is.
+  assert.equal(
+    lossy.text,
+    "<https://example.org/a> <https://example.org/knows> <https://example.org/b> .\n" +
+      '<https://example.org/a> <https://example.org/name> "Ann" .\n' +
+      '<https://example.org/b> <https://example.org/name> "Bob" .\n',
+  );
   // The bytes are exactly what the plain entry point produces.
   assert.equal(lossy.text, ds.serialize("ntriples"));
   lossy.free();
@@ -394,7 +421,14 @@ test("serializeWithLoss reports the named-graph rows a single-graph syntax drops
   assert.equal(lossless.statementRowsDropped, 0);
   assert.equal(lossless.directionalLiteralsDropped, 0);
   assert.equal(lossless.namedGraphRowsDropped, 0);
-  assert.ok(lossless.text.includes("https://example.org/g"), lossless.text);
+  // Exactly the same rows plus the named-graph row, carried in its graph.
+  assert.equal(
+    lossless.text,
+    "<https://example.org/a> <https://example.org/knows> <https://example.org/b> .\n" +
+      '<https://example.org/a> <https://example.org/name> "Ann" .\n' +
+      '<https://example.org/b> <https://example.org/name> "Bob" .\n' +
+      "<https://example.org/c> <https://example.org/knows> <https://example.org/a> <https://example.org/g> .\n",
+  );
   lossless.free();
 });
 

@@ -264,7 +264,8 @@ test("SparqlProtocolRequest reads an operation and its dataset parameters", () =
     assert.deepEqual(request.defaultGraphUris, [`${EX}g1`]);
     assert.deepEqual(request.namedGraphUris, []);
     assert.deepEqual(request.extraParameters, ["x", "1"]);
-    assert.match(request.effectiveText(), new RegExp(`FROM <${EX}g1>`));
+    // Exact: the dataset parameter becomes exactly one FROM clause, for exactly that IRI.
+    assert.equal(request.effectiveText(), `SELECT *  FROM <${EX}g1> WHERE { ?s ?p ?o }`);
     assert.equal(request.negotiate(undefined), "json");
     assert.equal(request.negotiate("text/csv"), "csv");
     assert.equal(request.negotiate("text/html"), undefined);
@@ -717,7 +718,11 @@ test("SERVICE redirect: a 302 to an unlisted origin is a transport failure, neve
   const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
   const answer = await resolveService(serviceRequest(), liveCtx());
   assert.equal(answer.kind, "transport");
-  assert.match(answer.message, /^SERVICE <https:\/\/remote\.example\.org\/sparql>: redirected \(HTTP 302 to https:\/\/evil\.example\.org\/steal\)/);
+  assert.equal(
+    answer.message,
+    `SERVICE <${REMOTE}>: redirected (HTTP 302 to ${evilOrigin}/steal); ` +
+      `a catalogued endpoint's redirect is never followed`,
+  );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, REMOTE);
 
@@ -752,7 +757,11 @@ test("SERVICE redirect: a 307 is never followed — no body or header ever reach
   const resolveService = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch });
   const answer = await resolveService(serviceRequest(), liveCtx());
   assert.equal(answer.kind, "transport");
-  assert.match(answer.message, /redirected \(HTTP 307 to https:\/\/remote\.example\.org\/elsewhere\)/);
+  assert.equal(
+    answer.message,
+    `SERVICE <${REMOTE}>: redirected (HTTP 307 to ${REMOTE_ORIGIN}/elsewhere); ` +
+      `a catalogued endpoint's redirect is never followed`,
+  );
   assert.equal(calls.length, 1, "the 307's Location is never fetched — a re-sent 307 body would be a second call");
   assert.equal(calls[0].url, REMOTE);
   assert.equal(calls[0].init.body, serviceRequest().queryText, "only the catalogued endpoint ever saw the body");
@@ -973,9 +982,239 @@ test("the default onCacheError writes one console.warn line naming the operation
   } finally {
     console.warn = original;
   }
-  assert.equal(calls.length, 1);
-  assert.match(calls[0], /match/);
-  assert.match(calls[0], new RegExp(REMOTE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  // Exact equality, not a substring or unanchored match: the whole line is the contract —
+  // operation, endpoint and the cache error's own words, and nothing else.
+  assert.deepEqual(calls, [
+    `createFetchServiceResolver: cache match failed for <${REMOTE}>: Error: No Cache was configured`,
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// A cache failure never changes the answer — including through its own reporter
+// ---------------------------------------------------------------------------
+//
+// `onCacheError`/`onInternalError`/`waitUntil` are host code. One that throws or rejects
+// must neither change what the adapter answers nor vanish: its failure is written to
+// `console.error` together with the error it was handed. Every treatment row below is
+// paired with a control row whose console.error count (0) differs from the treatment's (1).
+
+/** Run `fn` with console.error (and console.warn) recorded; settles pending reporter work. */
+async function withConsoleRecorded(fn) {
+  const errorCalls = [];
+  const warnCalls = [];
+  const unhandled = [];
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const onUnhandled = (reason) => unhandled.push(reason);
+  console.error = (...args) => errorCalls.push(args);
+  console.warn = (...args) => warnCalls.push(args);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const result = await fn();
+    // A rejecting reporter is observed on a later microtask; let every one settle.
+    await new Promise((resolve) => setImmediate(resolve));
+    return { result, errorCalls, warnCalls, unhandled };
+  } finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+    process.off("unhandledRejection", onUnhandled);
+  }
+}
+
+/** The one console.error line `report` writes when a host reporter fails. */
+function assertReporterFailureLogged(errorCalls, hook, handed, reporterError) {
+  assert.equal(errorCalls.length, 1, "the reporter's failure is written exactly once");
+  const [message, loggedError, separator, loggedReporterError] = errorCalls[0];
+  assert.equal(
+    message,
+    `@blackcatinformatics/purrdf/cloudflare: the ${hook} reporter failed, so this error went unreported by it:`,
+  );
+  assert.equal(loggedError, handed, "the original error is still logged");
+  assert.equal(separator, "— the reporter's own failure:");
+  assert.equal(loggedReporterError, reporterError, "the reporter's own failure is logged");
+  assert.equal(errorCalls[0].length, 4);
+}
+
+const noCacheAnswer = async (catalog) => {
+  const noCache = createFetchServiceResolver({ catalog, timeoutMs: 1000, fetch: async () => srjResponse() });
+  return noCache(serviceRequest(), liveCtx());
+};
+
+for (const [shape, makeReporter] of [
+  [
+    "throws synchronously",
+    (seen, reporterError) => (error, context) => {
+      seen.push({ error, ...context });
+      throw reporterError;
+    },
+  ],
+  [
+    "returns a rejecting promise",
+    (seen, reporterError) => async (error, context) => {
+      seen.push({ error, ...context });
+      throw reporterError;
+    },
+  ],
+]) {
+  test(`an onCacheError that ${shape} on a match failure still falls through to the remote: the answer equals the no-cache answer`, async () => {
+    const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+    const cacheError = new Error("No Cache was configured");
+    const cache = rejectingMatchCache(cacheError);
+    const reporterError = new Error("the host reporter is broken");
+    const seen = [];
+    const { calls, fetch } = recordingFetch(() => srjResponse());
+    const resolve = createFetchServiceResolver({
+      catalog,
+      timeoutMs: 1000,
+      fetch,
+      cache,
+      cacheTtlSeconds: 60,
+      onCacheError: makeReporter(seen, reporterError),
+    });
+    const { result: answer, errorCalls, warnCalls, unhandled } = await withConsoleRecorded(() =>
+      resolve(serviceRequest(), liveCtx()),
+    );
+    assert.equal(calls.length, 1, "the match failure fell through to the remote");
+    assert.deepEqual(answer, await noCacheAnswer(catalog), "byte-for-byte the no-cache answer");
+    assert.equal(seen.length, 1, "the reporter was still called, once");
+    assert.equal(seen[0].operation, "match");
+    assertReporterFailureLogged(errorCalls, "onCacheError", cacheError, reporterError);
+    assert.equal(warnCalls.length, 0);
+    assert.deepEqual(unhandled, []);
+  });
+
+  test(`an onCacheError that ${shape} on a put failure, without waitUntil, still returns the answer`, async () => {
+    const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+    const cacheError = new Error("No Cache was configured");
+    const cache = rejectingPutCache(cacheError);
+    const reporterError = new Error("the host reporter is broken");
+    const seen = [];
+    const resolve = createFetchServiceResolver({
+      catalog,
+      timeoutMs: 1000,
+      fetch: async () => srjResponse(),
+      cache,
+      cacheTtlSeconds: 60,
+      onCacheError: makeReporter(seen, reporterError),
+    });
+    const { result: answer, errorCalls, unhandled } = await withConsoleRecorded(() =>
+      resolve(serviceRequest(), liveCtx()),
+    );
+    assert.deepEqual(answer, await noCacheAnswer(catalog), "the remote answer is returned, not discarded");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].operation, "put");
+    assertReporterFailureLogged(errorCalls, "onCacheError", cacheError, reporterError);
+    assert.deepEqual(unhandled, []);
+  });
+
+  test(`an onCacheError that ${shape} on a put failure, with waitUntil, still returns the answer and hands waitUntil a promise that never rejects`, async () => {
+    const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+    const cacheError = new Error("No Cache was configured");
+    const cache = rejectingPutCache(cacheError);
+    const reporterError = new Error("the host reporter is broken");
+    const seen = [];
+    const deferred = [];
+    const resolve = createFetchServiceResolver({
+      catalog,
+      timeoutMs: 1000,
+      fetch: async () => srjResponse(),
+      cache,
+      cacheTtlSeconds: 60,
+      waitUntil: (promise) => deferred.push(promise),
+      onCacheError: makeReporter(seen, reporterError),
+    });
+    const { result: answer, errorCalls, unhandled } = await withConsoleRecorded(async () => {
+      const bytes = await resolve(serviceRequest(), liveCtx());
+      assert.equal(deferred.length, 1);
+      assert.equal(await deferred[0], undefined, "the deferred put fulfils; it never rejects");
+      return bytes;
+    });
+    assert.deepEqual(answer, await noCacheAnswer(catalog));
+    assert.equal(seen.length, 1);
+    assertReporterFailureLogged(errorCalls, "onCacheError", cacheError, reporterError);
+    assert.deepEqual(unhandled, []);
+  });
+}
+
+test("valid neighbour: a non-throwing onCacheError (sync, and async-resolving) is called exactly once per failure and console.error is never called", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  for (const reporterOf of [
+    (seen) => (error, context) => {
+      seen.push({ error, ...context });
+    },
+    (seen) => async (error, context) => {
+      seen.push({ error, ...context });
+    },
+  ]) {
+    for (const [operation, cache] of [
+      ["match", rejectingMatchCache()],
+      ["put", rejectingPutCache()],
+    ]) {
+      const seen = [];
+      const resolve = createFetchServiceResolver({
+        catalog,
+        timeoutMs: 1000,
+        fetch: async () => srjResponse(),
+        cache,
+        cacheTtlSeconds: 60,
+        onCacheError: reporterOf(seen),
+      });
+      const { result: answer, errorCalls, warnCalls, unhandled } = await withConsoleRecorded(() =>
+        resolve(serviceRequest(), liveCtx()),
+      );
+      assert.deepEqual(answer, await noCacheAnswer(catalog));
+      assert.equal(seen.length, 1, `the ${operation} reporter is called exactly once`);
+      assert.equal(seen[0].operation, operation);
+      assert.equal(seen[0].endpoint, REMOTE);
+      assert.equal(errorCalls.length, 0, "a working reporter never reaches console.error");
+      assert.equal(warnCalls.length, 0, "a host reporter replaces the default console.warn");
+      assert.deepEqual(unhandled, []);
+    }
+  }
+});
+
+test("a waitUntil that throws never discards the answer: the put is awaited instead and the throw is logged; a working waitUntil is the neighbour", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const waitUntilError = new Error("waitUntil called outside a request");
+  const broken = fakeCache();
+  const resolveBroken = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch: async () => srjResponse(),
+    cache: broken,
+    cacheTtlSeconds: 60,
+    waitUntil: () => {
+      throw waitUntilError;
+    },
+  });
+  const treated = await withConsoleRecorded(() => resolveBroken(serviceRequest(), liveCtx()));
+  assert.deepEqual(treated.result, await noCacheAnswer(catalog));
+  assert.equal(broken.store.size, 1, "the put was awaited to completion instead of deferred");
+  assert.equal(treated.errorCalls.length, 1);
+  assert.deepEqual(treated.errorCalls[0], [
+    `createFetchServiceResolver: waitUntil threw, so the cache put for <${REMOTE}> is awaited instead:`,
+    waitUntilError,
+  ]);
+
+  const healthy = fakeCache();
+  const deferred = [];
+  const resolveHealthy = createFetchServiceResolver({
+    catalog,
+    timeoutMs: 1000,
+    fetch: async () => srjResponse(),
+    cache: healthy,
+    cacheTtlSeconds: 60,
+    waitUntil: (promise) => deferred.push(promise),
+  });
+  const control = await withConsoleRecorded(async () => {
+    const bytes = await resolveHealthy(serviceRequest(), liveCtx());
+    await Promise.all(deferred);
+    return bytes;
+  });
+  assert.deepEqual(control.result, treated.result);
+  assert.equal(deferred.length, 1, "a working waitUntil holds the put");
+  assert.equal(healthy.store.size, 1);
+  assert.equal(control.errorCalls.length, 0, "a working waitUntil never reaches console.error");
 });
 
 test("SERVICE SILENT with the remote down and a rejecting cache yields the join identity, not a fault", async () => {
@@ -1037,7 +1276,11 @@ test("refusal pair: a LOAD the catalog does not authorize is denied before any f
   const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
   const denied = await resolveLoad({ kind: "load", iri: `${REMOTE_ORIGIN}/secret.ttl` }, liveCtx());
   assert.equal(denied.kind, "denied");
-  assert.match(denied.message, /LOAD <https:\/\/remote\.example\.org\/secret\.ttl>/);
+  assert.equal(
+    denied.message,
+    `LOAD <${REMOTE_ORIGIN}/secret.ttl>: <${REMOTE_ORIGIN}/secret.ttl> withholds the query ` +
+      `capability: no profile is configured for this service, and the catalog has no fallback`,
+  );
   assert.equal(calls.length, 0);
 
   const loaded = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
@@ -1098,7 +1341,12 @@ test("LOAD redirect: a redirect to an unlisted origin is denied, and the unliste
   const resolveLoad = createFetchLoadResolver({ catalog, timeoutMs: 1000, fetch });
   const denied = await resolveLoad({ kind: "load", iri: DOC }, liveCtx());
   assert.equal(denied.kind, "denied");
-  assert.match(denied.message, new RegExp(`LOAD <${evilOrigin}/steal\\.ttl>`));
+  // Exact: the refusal names the redirect's own target (never the authorized DOC).
+  assert.equal(
+    denied.message,
+    `LOAD <${evilOrigin}/steal.ttl>: <${evilOrigin}/steal.ttl> withholds the query capability: ` +
+      `no profile is configured for this service, and the catalog has no fallback`,
+  );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, DOC);
 });
@@ -1714,7 +1962,10 @@ test("refusal pair: a resolveService that throws is a 500 with a correlation id,
   const body = await problemOf(response);
   assert.equal(body.code, "InternalError");
   assert.equal(typeof body.correlationId, "string");
-  assert.match(body.detail, new RegExp(body.correlationId));
+  assert.equal(
+    body.detail,
+    `internal error; see the Worker log for correlation id ${body.correlationId}`,
+  );
   assert.equal(errors.length, 1, "the hook observed exactly one internal error");
   assert.equal(errors[0].error.message, "secret-token-abc at /internal/path", "the hook got the real error");
   assert.equal(errors[0].correlationId, body.correlationId, "the client and the log share one id");
@@ -1800,6 +2051,89 @@ test("the default onInternalError hook writes one console.error line carrying th
   }
 });
 
+for (const [shape, makeReporter] of [
+  [
+    "throws synchronously",
+    (seen, reporterError) => (error, context) => {
+      seen.push({ error, ...context });
+      throw reporterError;
+    },
+  ],
+  [
+    "returns a rejecting promise",
+    (seen, reporterError) => async (error, context) => {
+      seen.push({ error, ...context });
+      throw reporterError;
+    },
+  ],
+]) {
+  test(`an onInternalError that ${shape} still yields the sanitized 500 with a correlation id and no secret, and its failure reaches console.error`, async () => {
+    const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+    const hostError = new Error("secret-token-abc at /internal/path");
+    const reporterError = new Error("the host reporter is broken");
+    const seen = [];
+    const { result: response, errorCalls, unhandled } = await withConsoleRecorded(() =>
+      handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+        engine: new QueryEngine(),
+        dataset: dataset(),
+        governors: GOVERNORS,
+        resolveService: async () => {
+          throw hostError;
+        },
+        catalog,
+        onInternalError: makeReporter(seen, reporterError),
+      }),
+    );
+    assert.equal(response.status, 500);
+    const raw = await response.clone().text();
+    assert.doesNotMatch(raw, /secret-token-abc/);
+    assert.doesNotMatch(raw, /the host reporter is broken/, "the reporter's failure never reaches the client");
+    const body = await problemOf(response);
+    assert.equal(body.code, "InternalError");
+    assert.equal(typeof body.correlationId, "string");
+    assert.equal(
+      body.detail,
+      `internal error; see the Worker log for correlation id ${body.correlationId}`,
+    );
+    assert.equal(seen.length, 1, "the reporter was called once");
+    assert.equal(seen[0].correlationId, body.correlationId);
+    assertReporterFailureLogged(errorCalls, "onInternalError", hostError, reporterError);
+    assert.deepEqual(unhandled, [], "a failing reporter is never an unhandled rejection");
+  });
+}
+
+test("valid neighbour: a non-throwing onInternalError (sync, and async-resolving) is called exactly once and console.error is never called", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  for (const reporterOf of [
+    (seen) => (error, context) => {
+      seen.push({ error, ...context });
+    },
+    (seen) => async (error, context) => {
+      seen.push({ error, ...context });
+    },
+  ]) {
+    const seen = [];
+    const { result: response, errorCalls, unhandled } = await withConsoleRecorded(() =>
+      handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+        engine: new QueryEngine(),
+        dataset: dataset(),
+        governors: GOVERNORS,
+        resolveService: async () => {
+          throw new Error("secret-token-abc");
+        },
+        catalog,
+        onInternalError: reporterOf(seen),
+      }),
+    );
+    assert.equal(response.status, 500);
+    const body = await problemOf(response);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].correlationId, body.correlationId);
+    assert.equal(errorCalls.length, 0, "a working reporter never reaches console.error");
+    assert.deepEqual(unhandled, []);
+  }
+});
+
 test("an unexpected exception anywhere else in the adapter is also a 500 with a correlation id, never a bare rejection", async () => {
   const original = SparqlProtocolRequest.prototype.negotiate;
   SparqlProtocolRequest.prototype.negotiate = function negotiate() {
@@ -1855,7 +2189,7 @@ test("the catalog denies an unlisted endpoint before any fetch; a listed one is 
 test("a federated query runs end to end through a service binding", async () => {
   const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
   const binding = recordingFetch(async (_url, init) => {
-    assert.match(init.body, /\?o <http:\/\/example\.org\/q> \?x/);
+    assert.equal(init.body, `SELECT * WHERE { ?o <${EX}q> ?x . }`, "exactly the SERVICE pattern");
     return srjResponse();
   });
   const response = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
