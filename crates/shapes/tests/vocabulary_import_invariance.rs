@@ -72,9 +72,9 @@ const TOTAL_CASES: usize = 376;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
-/// the three corpora except the 12 declared `sht:Failure` inputs. No SHACL 1.2
-/// entry is refused at load any more: the harness asserts that every case not
-/// compared on a report is a declared `sht:Failure` input.
+/// the three corpora except the [`DECLARED_REFUSAL_CASES`]. No other entry is
+/// refused at load: the harness asserts that every case not compared on a report
+/// is a declared refusal.
 ///
 /// Moved from 335 to 338 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
 /// became evaluated: `singleLine-001`, `rootClass-001` and `someValue-001` now
@@ -130,12 +130,19 @@ const TOTAL_CASES: usize = 376;
 /// declares it and now loads, so its report is compared too. The merged vocabulary
 /// declares `sh:RulesEntailment` and `sh:entailment`, never as a statement about the
 /// case's shapes graph, so the merge changes no rule and no validation result.
-const COMPARED_ON_REPORT: usize = 364;
+///
+/// Moved from 364 to 362 when `sparql/component/validator-001`, once in each
+/// vendored suite, stopped loading against a fabricated stand-in for the DASH
+/// document it imports: it is an expected refusal of an unresolvable import
+/// (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`), compared on an identical load
+/// error (see [`DECLARED_REFUSAL_CASES`]).
+const COMPARED_ON_REPORT: usize = 362;
 
-/// The declared `sht:Failure` inputs among [`TOTAL_CASES`]; with
-/// [`COMPARED_ON_REPORT`] they account for every case, so the refused-at-load
-/// gap is 0.
-const DECLARED_FAILURE_CASES: usize = 12;
+/// The inputs among [`TOTAL_CASES`] that must be refused at load: the 12 declared
+/// `sht:Failure` inputs, and the 2 expected refusals of an unresolvable import.
+/// With [`COMPARED_ON_REPORT`] they account for every case, so the
+/// refused-at-load gap is 0.
+const DECLARED_REFUSAL_CASES: usize = 14;
 
 /// One case, reduced to what both parses need.
 struct Input {
@@ -144,8 +151,9 @@ struct Input {
     base: Option<String>,
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
-    /// The manifest expects `sht:Failure`: the one reason a case may be compared
-    /// on an identical load error rather than on a report.
+    /// The manifest expects `sht:Failure`, or the conformance harnesses grade the
+    /// case as an expected refusal of an unresolvable import: the two reasons a
+    /// case may be compared on an identical load error rather than on a report.
     declared_failure: bool,
     /// The data graph, parsed once and shared by both runs.
     data: Result<Arc<RdfDataset>, String>,
@@ -216,7 +224,8 @@ fn inputs() -> Vec<Input> {
             base: Some(file_iri(&case.shapes_path)),
             box_role_vocab: None,
             shapes_graph: case.shapes_graph_iri.clone(),
-            declared_failure: matches!(case.expected, Expected::Failure),
+            declared_failure: matches!(case.expected, Expected::Failure)
+                || shacl_corpora::refused_import(&case.id).is_some(),
             data,
         });
     }
@@ -386,7 +395,8 @@ fn merging_the_vocabulary_changes_no_answer() {
         inputs.len()
     );
     // The ratchet gap: a case compared only on an identical load error is a
-    // declared `sht:Failure` input, never an entry the engine refuses at load.
+    // declared `sht:Failure` input or an expected import refusal, never an entry
+    // the engine refuses at load otherwise.
     let refused_at_load: Vec<&str> = not_on_report
         .iter()
         .filter(|input| !input.declared_failure)
@@ -398,8 +408,8 @@ fn merging_the_vocabulary_changes_no_answer() {
     );
     assert_eq!(
         not_on_report.len(),
-        DECLARED_FAILURE_CASES,
-        "the declared sht:Failure inputs compared on an identical error"
+        DECLARED_REFUSAL_CASES,
+        "the declared refusals compared on an identical error"
     );
     assert_eq!(
         compared_on_report, COMPARED_ON_REPORT,

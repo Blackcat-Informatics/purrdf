@@ -71,7 +71,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        236,
+        234,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -110,6 +110,15 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
         "the pre-binding restrictions of SHACL 1.2 SPARQL Extensions, Appendix A (no MINUS, \
          VALUES or SERVICE, no assignment to a pre-bound variable, subqueries project it) are \
          rules about SPARQL text, which shacl-shacl.ttl does not parse",
+    ),
+    (
+        "unresolved-import",
+        "unresolved-import: the shapes graph's owl:imports closure names <http://datashapes.org/dash>",
+        2,
+        "sparql/component/validator-001, in the SHACL 1.0 and the SHACL 1.2 suite, imports \
+         DASH, which no document is supplied for: PurRDF fetches nothing and refuses a shapes \
+         graph whose owl:imports closure is not in hand, where shacl-shacl.ttl reads only the \
+         graph it is given. Both conformance harnesses grade exactly this refusal",
     ),
     (
         "sparql-constraint-severity",
@@ -553,7 +562,15 @@ const BASE_INPUTS: usize = 376;
 /// non-integer-count and list-for-single-value kinds its property shape's
 /// `sh:minCount` (+2), and the property shape gains a misspelled predicate (+1,
 /// refused under `unknown-term`).
-const MUTANT_INPUTS: usize = 724;
+///
+/// Moved from 724 to 720 when `sparql/component/validator-001`, once in each
+/// vendored suite, stopped loading against a fabricated stand-in for the DASH
+/// document it imports: PurRDF refuses the unresolved import (see
+/// `unresolved-import`), so neither copy is a base both sides accept any more.
+/// Each had gained a list-for-single-value (its first `sh:datatype`) and a
+/// misspelled predicate on the node carrying its first `sh:path`, refused under
+/// `unknown-term` (−4, and `unknown-term` went from 236 inputs to 234).
+const MUTANT_INPUTS: usize = 720;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -672,9 +689,9 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     let expected_by_kind: BTreeMap<&str, usize> = [
         ("literal-where-an-IRI-is-required", 193),
         ("non-integer-count", 102),
-        ("list-where-a-single-value-is-required", 158),
+        ("list-where-a-single-value-is-required", 156),
         ("non-boolean-flag", 35),
-        (UNKNOWN_TERM, 236),
+        (UNKNOWN_TERM, 234),
     ]
     .into_iter()
     .collect();

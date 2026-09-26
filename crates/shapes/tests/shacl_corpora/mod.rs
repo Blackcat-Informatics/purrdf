@@ -287,14 +287,38 @@ pub(crate) fn norm(t: &Term) -> String {
 
 // ── The vendored suites' owl:imports ─────────────────────────────────────────
 
-/// DASH, the TopBraid test vocabulary two vendored W3C cases import. It is not vendored,
-/// and nothing the cases assert reads it: its stand-in declares the ontology and nothing
-/// else — the same stand-in the command line's `--import` test names for it.
+/// DASH, the TopBraid vocabulary the vendored W3C `sparql/component/validator-001`
+/// cases (SHACL 1.0 and SHACL 1.2) import.
 pub(crate) const DASH: &str = "http://datashapes.org/dash";
 
-/// The stand-in document supplied for [`DASH`].
-const DASH_STAND_IN: &str = "<http://datashapes.org/dash> \
-    <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .\n";
+/// The imports no document can be supplied for, so a case that imports one is an
+/// EXPECTED REFUSAL rather than a validation.
+///
+/// DASH cannot be supplied as it is published, because it is not well-formed
+/// SHACL: it gives `sh:validator` values that are `sh:JSValidator`s, where SHACL 1.2
+/// SPARQL Extensions §4.2.3 says "The values of sh:validator must be ASK-based
+/// validators", and `dash:uriTemplate` declares a parameter named `value`, which
+/// §4.2.1 forbids. Its shapes would also change the case's verdict. A stand-in
+/// document would be a fabricated ontology. PurRDF fetches nothing and refuses a
+/// shapes graph whose imports closure is not in hand, so the honest grade of such a
+/// case is that refusal, exactly.
+pub(crate) const UNRESOLVABLE_IMPORTS: &[&str] = &[DASH];
+
+/// The vendored W3C cases whose shapes graph imports an [`UNRESOLVABLE_IMPORTS`]
+/// ontology: `(case id, the imports it must be refused for)`. The same id names the
+/// case in the SHACL 1.0 and the SHACL 1.2 suite. Each is graded by
+/// [`report_grading::grade_refused_import`] as an exact expected refusal and
+/// reported as "refused: unresolvable import" — never as a pass.
+pub(crate) const REFUSED_UNRESOLVABLE_IMPORT: &[(&str, &[&str])] =
+    &[("sparql/component/validator-001", &[DASH])];
+
+/// The expected refusal of `id`, if it is one.
+pub(crate) fn refused_import(id: &str) -> Option<&'static [&'static str]> {
+    REFUSED_UNRESOLVABLE_IMPORT
+        .iter()
+        .find(|(case, _)| *case == id)
+        .map(|(_, iris)| *iris)
+}
 
 /// The import table a vendored W3C case's shapes graph loads with: for every
 /// `owl:imports` the graph does not already resolve itself, the document the harness
@@ -304,21 +328,18 @@ const DASH_STAND_IN: &str = "<http://datashapes.org/dash> \
 /// caller like any other, so it resolves imports the way a caller does: by supplying a
 /// document. The prefix idiom the suites use (`owl:imports` of a node the case describes
 /// with `sh:declare`) is resolved by the engine's own rule and needs nothing here. An
-/// import this function does not supply panics: a newly vendored case with an import has
-/// to be resolved here on purpose, not skipped.
+/// [`UNRESOLVABLE_IMPORTS`] ontology is left unresolved on purpose, so the load refuses
+/// it. Any other import panics: a newly vendored case with an import has to be resolved
+/// here on purpose, not skipped.
 pub(crate) fn w3c_case_imports(dataset: &RdfDataset) -> ShapesImports {
-    let mut imports = ShapesImports::new();
+    let imports = ShapesImports::new();
     for iri in imports.import_map().unresolved_imports(dataset) {
-        if iri == DASH {
-            imports
-                .insert_turtle(DASH, DASH_STAND_IN)
-                .expect("the DASH stand-in parses");
-        } else {
-            panic!(
-                "a vendored case owl:imports <{iri}>, which the harness does not supply a \
-                 document for; add it to `w3c_case_imports`"
-            );
-        }
+        assert!(
+            UNRESOLVABLE_IMPORTS.contains(&iri.as_str()),
+            "a vendored case owl:imports <{iri}>, which the harness does not supply a \
+             document for; resolve it in `w3c_case_imports` or, if no document can be \
+             supplied, list it in UNRESOLVABLE_IMPORTS"
+        );
     }
     imports
 }
