@@ -94,11 +94,19 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// `XPASS` and the entry must be removed.
 const XFAIL: &[(&str, &str)] = &[];
 
-// ── Canonical-form expectations ───────────────────────────────────────────────
+// ── Upstream errata: non-canonical expectations ──────────────────────────────
 
-/// Node-expression entries whose W3C expected literal is NOT in the canonical
-/// lexical form XSD 1.1 Part 2 assigns its value: `(test id, expected lexical,
-/// XSD 1.1 canonical lexical, canonical-mapping clause)`.
+/// UPSTREAM ERRATA: node-expression entries whose W3C expected literal is NOT in
+/// the canonical lexical form XSD 1.1 Part 2 assigns its value: `(test id,
+/// expected lexical, XSD 1.1 canonical lexical, canonical-mapping clause)`.
+///
+/// Each expects an integer-valued `xsd:decimal` spelled the XSD 1.0 way (`"4.0"`,
+/// `"00"`); PurRDF emits the XSD 1.1 canonical form (`"4"`, `"0"`), as the
+/// approved W3C SPARQL suite itself expects of CEIL, FLOOR, ROUND and SECONDS
+/// (`functions#ceil01`, `floor01`, `round01`, `seconds` expect `"3"`, `"2"`,
+/// `"1"`, `"0"`). These entries are therefore NOT passes of the approved suite:
+/// the harness reports them under their own `upstream-errata` label, pinned by
+/// [`NON_CANONICAL_EXPECTATIONS_COUNT`], and grades each one exactly as follows.
 ///
 /// RDF 1.2 literal equality compares lexical forms, and PurRDF emits canonical
 /// forms, so an expectation spelled non-canonically can never be met by a
@@ -704,6 +712,48 @@ fn run(case: &Case12) -> Result<(), String> {
     }
 }
 
+/// The label an approved entry that agrees with the harness is reported under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Category {
+    /// Graded against its approved expectation, exactly, and agrees.
+    Pass,
+    /// An upstream erratum: [`NON_CANONICAL_EXPECTATIONS`]. Graded exactly
+    /// against the canonical form of its one non-canonical expected literal, and
+    /// agrees with THAT — never counted as a pass of the approved expectation.
+    UpstreamErratum,
+}
+
+impl Category {
+    /// The category an approved entry is reported under when it agrees.
+    fn of(case: &Case12) -> Self {
+        if NON_CANONICAL_EXPECTATIONS
+            .iter()
+            .any(|(id, ..)| *id == case.id)
+        {
+            Self::UpstreamErratum
+        } else {
+            Self::Pass
+        }
+    }
+}
+
+/// Per-section and per-type counts.
+#[derive(Clone, Copy, Debug, Default)]
+struct Tally {
+    passed: usize,
+    errata: usize,
+    xfailed: usize,
+}
+
+impl Tally {
+    fn line(self) -> String {
+        format!(
+            "passed {:>3}  upstream-errata {:>2}  xfailed {:>3}",
+            self.passed, self.errata, self.xfailed
+        )
+    }
+}
+
 #[test]
 fn w3c_shacl12_conformance() {
     let cases = shacl12_cases();
@@ -727,11 +777,9 @@ fn w3c_shacl12_conformance() {
     }
 
     let mut errors: Vec<String> = Vec::new();
-    // (passed, xfailed), keyed by section and by test type.
-    let mut sections: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
-    let mut types: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    let mut total_passed = 0usize;
-    let mut total_xfailed = 0usize;
+    let mut sections: BTreeMap<&str, Tally> = BTreeMap::new();
+    let mut types: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut total = Tally::default();
 
     // Engine panics are caught by `no_panic` and graded as failures; the default
     // hook's backtraces would only drown the scoreboard.
@@ -745,24 +793,31 @@ fn w3c_shacl12_conformance() {
             unlisted += 1;
             continue;
         }
-        let section = sections.entry(case.section.as_str()).or_insert((0, 0));
-        let ty = types.entry(case.type_label()).or_insert((0, 0));
-        match (run(case), xfail.get(case.id.as_str())) {
-            (Ok(()), None) => {
-                section.0 += 1;
-                ty.0 += 1;
-                total_passed += 1;
-            }
-            (Err(_), Some(_)) => {
-                section.1 += 1;
-                ty.1 += 1;
-                total_xfailed += 1;
-            }
-            (Ok(()), Some(reason)) => errors.push(format!(
-                "XPASS [{id}]: now passes — remove it from the XFAIL ledger (reason was: {reason})",
-                id = case.id
-            )),
-            (Err(e), None) => errors.push(format!("FAIL [{id}]: {e}", id = case.id)),
+        let bump = |tally: &mut Tally, f: fn(&mut Tally) -> &mut usize| *f(tally) += 1;
+        let slot: Option<fn(&mut Tally) -> &mut usize> =
+            match (run(case), xfail.get(case.id.as_str())) {
+                (Ok(()), None) => Some(match Category::of(case) {
+                    Category::Pass => |t| &mut t.passed,
+                    Category::UpstreamErratum => |t| &mut t.errata,
+                }),
+                (Err(_), Some(_)) => Some(|t| &mut t.xfailed),
+                (Ok(()), Some(reason)) => {
+                    errors.push(format!(
+                        "XPASS [{id}]: now passes — remove it from the XFAIL ledger (reason \
+                         was: {reason})",
+                        id = case.id
+                    ));
+                    None
+                }
+                (Err(e), None) => {
+                    errors.push(format!("FAIL [{id}]: {e}", id = case.id));
+                    None
+                }
+            };
+        if let Some(slot) = slot {
+            bump(sections.entry(case.section.as_str()).or_default(), slot);
+            bump(types.entry(case.type_label()).or_default(), slot);
+            bump(&mut total, slot);
         }
     }
 
@@ -773,15 +828,18 @@ fn w3c_shacl12_conformance() {
          unlisted vendored files reported apart):",
         cases.len() - unlisted
     );
-    for (section, (passed, xfailed)) in &sections {
-        println!("  {section:<36} passed {passed:>3}  xfailed {xfailed:>3}");
+    for (section, tally) in &sections {
+        println!("  {section:<36} {}", tally.line());
     }
     println!("  by test type:");
-    for (ty, (passed, xfailed)) in &types {
-        println!("  {ty:<36} passed {passed:>3}  xfailed {xfailed:>3}");
+    for (ty, tally) in &types {
+        println!("  {ty:<36} {}", tally.line());
     }
     println!(
-        "  W3C12 TOTAL: passed {total_passed}, xfailed {total_xfailed}, ledger {}",
+        "  W3C12 TOTAL: passed {}, upstream-errata {}, xfailed {}, ledger {}",
+        total.passed,
+        total.errata,
+        total.xfailed,
         XFAIL.len()
     );
 
@@ -792,18 +850,22 @@ fn w3c_shacl12_conformance() {
         errors.join("\n\n")
     );
     assert_eq!(
-        total_xfailed,
+        total.xfailed,
         XFAIL.len(),
         "xfail count must match the ledger exactly"
+    );
+    assert_eq!(
+        total.errata, NON_CANONICAL_EXPECTATIONS_COUNT,
+        "every upstream erratum is reported as one, and nothing else is"
     );
     assert_eq!(
         unlisted, W3C12_UNLISTED_ENTRIES,
         "entries of unlisted vendored files"
     );
     assert_eq!(
-        total_passed + total_xfailed,
+        total.passed + total.errata + total.xfailed,
         W3C12_TOTAL_CASES - W3C12_UNLISTED_ENTRIES,
-        "every approved test must be a pass or a ledgered xfail"
+        "every approved test must be a pass, an upstream erratum or a ledgered xfail"
     );
 }
 
@@ -1124,6 +1186,10 @@ fn non_canonical_expectations_are_really_non_canonical() {
             .iter()
             .find(|c| c.id == *id)
             .unwrap_or_else(|| panic!("{id}: no such test"));
+        assert!(
+            case.listed,
+            "{id}: an upstream erratum is an entry of the approved suite"
+        );
         let Body::NodeExpr(tc) = &case.body else {
             panic!("{id}: not an sht:EvalNodeExpr test");
         };

@@ -344,8 +344,11 @@ carries no details.
 Six node-expression tests expect an integer-valued `xsd:decimal` in a lexical
 form that is not canonical, such as `"4.0"` or `"00"`. XSD 1.1 Part 2 (section
 3.3.3.1 and the `decimalCanonicalMap` of E.1) makes the canonical form `"4"`
-and `"0"`. PurRDF emits canonical forms, and each of those tests is graded
-exactly against the canonical form, not by comparing values.
+and `"0"`, which is also what the approved W3C SPARQL tests `ceil01`,
+`floor01`, `round01` and `seconds` expect. PurRDF emits canonical forms. These
+six are upstream errata, not passes: the harness reports them under their own
+label, and grades each one exactly against the canonical form, not by
+comparing values.
 
 SPARQL 1.2 RL grammar rule [2],
 `RuleOrDataBlock ::= Prologue ( RuleOrData+ ( Prologue1 RuleOrData? )* )?`, is
