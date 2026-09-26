@@ -1255,7 +1255,14 @@ impl Parser<'_> {
             accepted.push(sh::DESC);
         }
         match kind {
-            ExprKind::Path => accepted.push(shnex::FOCUS_NODE),
+            // SHACL Advanced Features 1.1, "Path Expressions": the `sh:path`
+            // spelling takes its input nodes from `sh:nodes`.
+            ExprKind::Path => {
+                accepted.push(shnex::FOCUS_NODE);
+                if iri == sh::PATH {
+                    accepted.push(sh::NODES);
+                }
+            }
             ExprKind::FilterShape => accepted.push(if iri == sh::FILTER_SHAPE {
                 sh::NODES
             } else {
@@ -1420,15 +1427,38 @@ impl Parser<'_> {
             // the evaluation context's focus node — literally the same arm. With
             // `shnex:focusNode` the spec adds a single-node requirement on the
             // computed focus, which needs its own arm to keep that failure mode.
+            //
+            // SHACL Advanced Features 1.1, "Path Expressions": "For the path
+            // expression $expr that has the property path P as its value for sh:path
+            // and the node expression N as its value for sh:nodes (defaulting to the
+            // focus node expression if absent)", the output is "the list of values of
+            // all nodes produced by Eval(N, $this) for the property path P" — the
+            // path walked from EACH input node and the results concatenated, which is
+            // SHACL 1.2's flatMap of the path over N (§4.3.1), not `shnex:focusNode`'s
+            // single-node form.
             ExprKind::Path => {
                 let path_node = object;
                 let path = self.parse_path(&path_node, node, &mut FastSet::default())?;
-                match self.first_object_of(node, shnex::FOCUS_NODE) {
-                    None => Ok(NodeExpr::Path(path)),
-                    Some(focus_node) => Ok(NodeExpr::PathValues {
+                let focus_node = self.first_object_of(node, shnex::FOCUS_NODE);
+                let input_nodes = if iri == sh::PATH {
+                    self.first_object_of(node, sh::NODES)
+                } else {
+                    None
+                };
+                match (focus_node, input_nodes) {
+                    (None, None) => Ok(NodeExpr::Path(path)),
+                    (Some(focus_node), None) => Ok(NodeExpr::PathValues {
                         path,
                         focus: Box::new(self.parse_node_expr(&focus_node)?),
                     }),
+                    (None, Some(input_nodes)) => Ok(NodeExpr::FlatMap {
+                        nodes: Box::new(self.parse_node_expr(&input_nodes)?),
+                        map: Box::new(NodeExpr::Path(path)),
+                    }),
+                    (Some(_), Some(_)) => Err(format!(
+                        "sh:path node expression on {node} has both shnex:focusNode and \
+                         sh:nodes, two different sources for the nodes its path starts from"
+                    )),
                 }
             }
             // `sh:filterShape` (SHACL-AF) / `shnex:filterShape` (§4.2.5). The

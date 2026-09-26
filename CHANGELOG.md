@@ -1534,6 +1534,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **shapes:** a SHACL Advanced Features 1.1 path expression with an input,
+  `[ sh:path P ; sh:nodes N ]`, was refused for carrying `sh:nodes`. It now evaluates
+  as the specification defines it, the values of P from every node N produces, which
+  is SHACL 1.2's `shnex:flatMap` of the path over N. One that also carries
+  `shnex:focusNode` is refused.
+
 - **sparql-eval:** The forked row loop's per-chunk harvest no longer allocates below
   the parallel threshold. Harvesting a worker's relation witness came back as a `Vec`
   of one element on the sequential path — a heap allocation per `FILTER` or `BIND`
