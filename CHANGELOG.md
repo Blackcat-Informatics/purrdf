@@ -2381,6 +2381,22 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   says to use a thread with a larger stack any more, which a JavaScript caller
   cannot do.
 
+- **BREAKING** **sparql-eval, sparql-algebra, wasm:** an unsupported request no longer
+  reads as a development stage or as a server fault. `EvalError::Unsupported` renders
+  as `unsupported: …` (it was `unsupported in sparql-eval (S6 scope): …`) and
+  `ParseError::Unsupported` as `unsupported SPARQL construct: …` (it was `… (purrdf S5
+  scope): …`). An unclassified `EvalError::Unsupported` carries its own code at the
+  engine boundary, `native-sparql-unsupported` (`EvalError::UNSUPPORTED_CODE`), where it
+  used to carry `native-sparql-query-eval` or `native-sparql-update-eval` like an
+  evaluation that failed; a `SERVICE ?e` bound to a literal or a blank node is now that
+  refusal too, not a federation error. The Cloudflare adapter's `handleSparqlRequest`
+  answers a request the engine refuses to evaluate as written
+  (`native-sparql-unsupported`, `native-sparql-custom-function`,
+  `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted`)
+  with a `400` whose `code` is that diagnostic code and whose `detail` is the refusal,
+  where it answered `500 Internal Server Error`; a host fault is still the sanitized
+  `500`.
+
 - **BREAKING** **sparql-eval:** `UnsupportedKind::GraphPatternDepthExceeded` and its
   code `native-sparql-graph-pattern-depth-exceeded` are removed (`UnsupportedKind::ALL`
   has three entries). The `wasm32` graph-pattern depth limit it reported is the

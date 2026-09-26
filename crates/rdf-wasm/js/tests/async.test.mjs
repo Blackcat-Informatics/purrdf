@@ -364,7 +364,7 @@ test("a variable endpoint bound by VALUES resolves per row", async () => {
 
 test("an endpoint variable nothing binds is refused, under SILENT too", async () => {
   const engine = new QueryEngine();
-  const MESSAGE = /unsupported in sparql-eval \(S6 scope\): SERVICE \?g with no endpoint: .*LATERAL/;
+  const MESSAGE = /^error native-sparql-unsupported: unsupported: SERVICE \?g with no endpoint: .*LATERAL/;
   for (const shape of [
     `SELECT ?g ?x WHERE { SERVICE ?g { ?s ?p ?x } }`,
     // A LATERAL whose left side never binds the endpoint variable.

@@ -397,15 +397,24 @@ impl EvalError {
     }
 
     /// The machine-readable code this error carries to the `SparqlEngine` boundary:
-    /// [`Self::diagnostic_code`], or — for [`Self::Dataset`] — the dataset's own
-    /// diagnostic code.
+    /// [`Self::diagnostic_code`]; for [`Self::Dataset`], the dataset's own diagnostic
+    /// code; and for an unclassified [`Self::Unsupported`],
+    /// [`Self::UNSUPPORTED_CODE`], so a host can tell a request this engine refuses to
+    /// evaluate (the request's to change) from an evaluation that failed.
     #[must_use]
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Dataset(diagnostic) => Some(&diagnostic.code),
+            Self::Unsupported { kind: None, .. } => Some(Self::UNSUPPORTED_CODE),
             other => other.diagnostic_code(),
         }
     }
+
+    /// The stable, machine-readable code an unclassified [`Self::Unsupported`] carries to
+    /// the `SparqlEngine` boundary ([`Self::code`]): a well-formed request this engine
+    /// refuses to evaluate as written — for example a `SERVICE ?e` no solution names an
+    /// endpoint for. The classified residue keeps its own [`UnsupportedKind::code`].
+    pub const UNSUPPORTED_CODE: &'static str = "native-sparql-unsupported";
 
     /// The stable, machine-readable diagnostic code
     /// [`Self::RelationIncomplete`] maps to at the `SparqlEngine` boundary.
@@ -489,7 +498,7 @@ impl core::fmt::Display for EvalError {
         match self {
             Self::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
             Self::Unsupported { what, .. } => {
-                write!(f, "unsupported in sparql-eval (S6 scope): {what}")
+                write!(f, "unsupported: {what}")
             }
             Self::Dataset(diagnostic) => write!(
                 f,
@@ -592,8 +601,9 @@ mod tests {
     #[test]
     fn unsupported_names_the_construct() {
         let e = EvalError::unsupported("SERVICE");
-        assert!(e.to_string().contains("SERVICE"));
-        assert!(e.to_string().contains("scope"));
+        // A plain user-facing prefix, and no development label.
+        assert_eq!(e.to_string(), "unsupported: SERVICE");
+        assert_eq!(e.code(), Some(EvalError::UNSUPPORTED_CODE));
     }
 
     /// An unclassified `Unsupported` (a genuine gap) carries no diagnostic

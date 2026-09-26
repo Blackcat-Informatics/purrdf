@@ -170,6 +170,7 @@ mod tests {
             "native-sparql-query-eval",
             "native-sparql-query-parse",
             "native-sparql-update-eval",
+            "native-sparql-unsupported",
             "native-sparql-property-function",
             "native-sparql-aggregate-function",
             "native-sparql-heldin-something-unrelated",

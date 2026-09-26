@@ -11,8 +11,8 @@
 //! * [`ParseError::Lex`] — the byte stream could not be tokenized.
 //! * [`ParseError::Syntax`] — the token stream violates the SPARQL grammar.
 //! * [`ParseError::Unsupported`] — the query is well-formed SPARQL but uses a
-//!   construct outside this crate's in-scope subset (purrdf S5 scope). It is a
-//!   hard error, NOT a parse-it-anyway: the downstream evaluator (S6) must
+//!   construct outside this crate's in-scope subset. It is a
+//!   hard error, NOT a parse-it-anyway: the downstream evaluator must
 //!   never be handed a partially-understood algebra.
 //! * [`ParseError::Iri`] — an IRI/CURIE in term position failed RFC-3987
 //!   validation (delegated to `purrdf-iri`).
@@ -187,10 +187,7 @@ impl fmt::Display for ParseError {
                 write!(f, "SPARQL syntax error at byte {at}: {reason}")
             }
             Self::Unsupported(feature) => {
-                write!(
-                    f,
-                    "unsupported SPARQL construct (purrdf S5 scope): {feature}"
-                )
+                write!(f, "unsupported SPARQL construct: {feature}")
             }
             Self::Iri { lexical, reason } => {
                 write!(f, "invalid IRI {lexical:?} in term position: {reason}")

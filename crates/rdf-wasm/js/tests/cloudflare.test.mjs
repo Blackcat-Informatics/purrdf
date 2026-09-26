@@ -1933,6 +1933,50 @@ test("an evaluation failure is a 500 problem", async () => {
   assert.match(body.detail, /no remote query source configured/);
 });
 
+// A request the engine refuses to evaluate as written is the client's to change: a 400
+// whose `code` is the engine's diagnostic code and whose `detail` is its refusal, never
+// the 500 of an evaluation that failed. The neighbours keep their 500s: a host bug is
+// still sanitized, and a missing resolver (this endpoint's configuration) is still a 500.
+test("refusal pair: an unbound SERVICE ?e is a 400 with the engine's refusal; a host fault stays a sanitized 500", async () => {
+  const catalog = catalogFor([REMOTE, QUERY_NETWORK]);
+  const calls = [];
+  const resolveService = async (request) => {
+    calls.push(request.endpoint);
+    return { kind: "transport", message: "not expected" };
+  };
+  const unbound = `SELECT ?s ?x WHERE { ?s <${EX}p> ?o . SERVICE ?e { ?o <${EX}q> ?x } }`;
+  const response = await handleSparqlRequest(httpRequest({ query: q(unbound) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    resolveService,
+    catalog,
+  });
+  assert.equal(response.status, 400);
+  const body = await problemOf(response);
+  assert.equal(body.title, "Bad Request");
+  assert.equal(body.code, "native-sparql-unsupported");
+  assert.match(body.detail, /^error native-sparql-unsupported: unsupported: SERVICE \?e with no endpoint: /);
+  assert.deepEqual(calls, [], "no endpoint was asked");
+
+  const { errors, onInternalError } = recordingInternalErrors();
+  const faulted = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
+    engine: new QueryEngine(),
+    dataset: dataset(),
+    governors: GOVERNORS,
+    resolveService: async () => {
+      throw new Error("secret-token-abc");
+    },
+    catalog,
+    onInternalError,
+  });
+  assert.equal(faulted.status, 500);
+  const faultBody = await problemOf(faulted);
+  assert.equal(faultBody.code, "InternalError");
+  assert.doesNotMatch(JSON.stringify(faultBody), /secret-token-abc/);
+  assert.equal(errors.length, 1);
+});
+
 // ---------------------------------------------------------------------------
 // A host bug — a resolveService/resolveLoad exception, or any other unclassified
 // exception — never reaches the client as its own words (gap G4, information exposure

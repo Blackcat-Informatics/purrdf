@@ -183,7 +183,10 @@ export interface SparqlEndpointOptions {
  * governor's label (`"fuel-exhausted"`, `"deadline-exceeded"`, …), `"NotAcceptable"`,
  * `"ContentTooLarge"` (the body exceeded `maxRequestBytes`), `"InternalError"` (a host bug
  * or an unexpected exception; `detail` is generic and `correlationId` is the only lead,
- * shared with the matching `onInternalError` call), or the evaluation error's own name.
+ * shared with the matching `onInternalError` call), the engine's diagnostic code for a
+ * request it refuses to evaluate as written (a `400`: `"native-sparql-unsupported"`,
+ * `"native-sparql-custom-function"`, `"native-sparql-quoted-triple-term-variable"`,
+ * `"native-sparql-host-stack-exhausted"`), or the evaluation error's own name.
  */
 export interface SparqlProblem {
   readonly type: "about:blank";

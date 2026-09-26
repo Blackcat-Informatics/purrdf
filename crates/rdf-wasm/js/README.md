@@ -643,7 +643,10 @@ pieces:
 - `handleSparqlRequest(request, options)` answers one protocol request (`GET ?query=`,
   or a `POST` of `application/sparql-query`, `application/sparql-update` or a form) with
   a `Response`. The statuses are `200` with the negotiated document, `204` for an
-  applied update, `400`/`405`/`415` for a malformed request, `406` when no acceptable
+  applied update, `400`/`405`/`415` for a malformed request, `400` for one the engine
+  refuses to evaluate as written (an unsupported construct such as a `SERVICE ?e` no
+  solution names an endpoint for, an unregistered function, nesting past the host-stack
+  budget), with the engine's diagnostic code as its `code`, `406` when no acceptable
   format can carry the result, `413` when the body exceeds `maxRequestBytes`, `422` when
   a deterministic ceiling stopped the request, `503` when the deadline or a cancellation
   did, and `500` when evaluation failed. A partial answer is never sent with a `200`.
@@ -656,7 +659,7 @@ pieces:
   above it is refused before anything is read, and a missing or understated one is still
   caught by counting bytes as the body streams in, so a lying header never buys a larger
   body than an honest one would. A `500`'s `detail` is the engine's own words only when
-  the failure is the query's — a parse, an evaluation, a tripped governor: a SPARQL
+  the failure is the query's — an evaluation, a tripped governor: a SPARQL
   client is owed the reason its request failed. A bug this endpoint cannot attribute to
   the query itself — `resolveService`/`resolveLoad` throwing or rejecting, or any other
   exception this adapter did not otherwise classify — never puts its own message or stack

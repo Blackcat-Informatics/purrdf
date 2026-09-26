@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-26T14:45:17-06:00\n"
+"POT-Creation-Date: 2026-09-26T16:16:11-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1454,22 +1454,25 @@ msgid ""
 "`maxRequestBytes` (1 MiB by default — a query or update's text is a program, "
 "not a payload), `422` or `503` when a governor stopped it (never a `200` "
 "with a partial body), `application/problem+json` errors, `Server-Timing` "
-"from the job's evidence, and CORS when asked for. A `500`'s `detail` is the "
-"engine's own words for the query's own failures (a parse, an evaluation, a "
-"tripped governor); a bug this endpoint cannot attribute to the query — a "
-"`resolveService`/`resolveLoad` that throws, or any other exception the "
-"adapter did not otherwise classify — never reaches the response as its own "
-"message or stack: the client gets a fixed generic `detail` and a "
-"`correlationId`, and the real error goes to `onInternalError` (one "
-"`console.error` line by default) alone. A `Content-Length` over the bound is "
-"refused before anything is read; a missing or understated one is still "
-"caught by counting bytes as the body streams in, so a lying header never "
-"buys a larger body than an honest one would. Both resolvers fetch with "
-"`redirect: \"manual\"`: a `SERVICE` request never follows a redirect (a 3xx "
-"is a typed transport failure, so a catalogued endpoint's headers and "
-"credential can never reach a different origin), and a `LOAD` follows one "
-"only by re-authorizing the redirected IRI against the catalog before every "
-"hop, up to `maxRedirects` (5 by default). A complete Worker:"
+"from the job's evidence, and CORS when asked for. A request the engine "
+"refuses to evaluate as written — an unsupported construct, an unregistered "
+"function, nesting past the host-stack budget — is a `400` whose `code` is "
+"the engine's diagnostic code. A `500`'s `detail` is the engine's own words "
+"for the query's own failures (a parse, an evaluation, a tripped governor); a "
+"bug this endpoint cannot attribute to the query — a `resolveService`/"
+"`resolveLoad` that throws, or any other exception the adapter did not "
+"otherwise classify — never reaches the response as its own message or stack: "
+"the client gets a fixed generic `detail` and a `correlationId`, and the real "
+"error goes to `onInternalError` (one `console.error` line by default) alone. "
+"A `Content-Length` over the bound is refused before anything is read; a "
+"missing or understated one is still caught by counting bytes as the body "
+"streams in, so a lying header never buys a larger body than an honest one "
+"would. Both resolvers fetch with `redirect: \"manual\"`: a `SERVICE` request "
+"never follows a redirect (a 3xx is a typed transport failure, so a "
+"catalogued endpoint's headers and credential can never reach a different "
+"origin), and a `LOAD` follows one only by re-authorizing the redirected IRI "
+"against the catalog before every hop, up to `maxRedirects` (5 by default). A "
+"complete Worker:"
 msgstr ""
 "`@blackcatinformatics/purrdf/cloudflare` 提供 `createFetchServiceResolver`、"
 "`createFetchLoadResolver` 与 `handleSparqlRequest`；后者以一个 `Response` 应"
@@ -1477,7 +1480,9 @@ msgstr ""
 "`maxRequestBytes`（默认 1 MiB——一个查询或更新的文本是一段程序，不是一份负载）"
 "时返回 `413`，governor 叫停请求时返回 `422` 或 `503`（绝不会以 `200` 返回部分"
 "结果），错误以 `application/problem+json` 给出，`Server-Timing` 取自作业的证"
-"据，并在配置后发送 CORS 头。`500` 的 `detail` 只在失败确实是查询自身的失败时"
+"据，并在配置后发送 CORS 头。引擎拒绝按原样求值的请求——不受支持的构造、未注"
+"册的函数、超出宿主栈预算的嵌套——返回 `400`，其 `code` 为引擎的诊断代码。"
+"`500` 的 `detail` 只在失败确实是查询自身的失败时"
 "才是引擎的原话（解析失败、求值失败、被叫停的 governor）；这个端点无法归因于查"
 "询本身的缺陷——`resolveService`/`resolveLoad` 抛出异常，或适配器未能分类的任何"
 "其他异常——绝不会以自身的消息或调用栈进入响应：客户端得到的是固定的通用 "
@@ -1490,7 +1495,7 @@ msgstr ""
 "在对被重定向的 IRI 重新按目录鉴权之后才会跟随每一跳，跳数上限为 "
 "`maxRedirects`（默认 5）。一个完整的 Worker："
 
-#: src/getting-started/javascript.md:295
+#: src/getting-started/javascript.md:298
 msgid ""
 "```js worker-recipe\n"
 "import wasm from \"@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm\";\n"
@@ -1535,7 +1540,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/getting-started/javascript.md:334
+#: src/getting-started/javascript.md:337
 msgid ""
 "Workers limits how many subrequests one invocation may make, and "
 "`maxRemoteRequests` is the exact control for it: every `SERVICE` request and "
@@ -1567,7 +1572,7 @@ msgstr ""
 "同步的 `deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出"
 "和每一次宿主请求时检查截止时间。"
 
-#: src/getting-started/javascript.md:351
+#: src/getting-started/javascript.md:354
 msgid ""
 "The package [README](https://github.com/Blackcat-Informatics/purrdf/tree/"
 "main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
@@ -1577,11 +1582,11 @@ msgstr ""
 "crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
 "adapter) 是这些约定的完整参考。"
 
-#: src/getting-started/javascript.md:355
+#: src/getting-started/javascript.md:358
 msgid "Scope and current limitations"
 msgstr ""
 
-#: src/getting-started/javascript.md:357
+#: src/getting-started/javascript.md:360
 msgid ""
 "**In-memory only.** SPARQL queries run over the in-memory dataset. The "
 "synchronous methods install no `SERVICE` or `LOAD` source, so there a remote "
@@ -1592,7 +1597,7 @@ msgstr ""
 "或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 会显式失败，无论是否写"
 "了 `SILENT`；异步孪生方法只能经由宿主传入的处理函数到达远程端点。"
 
-#: src/getting-started/javascript.md:362
+#: src/getting-started/javascript.md:365
 msgid ""
 "**Triple terms per format.** `serialize` is the writer-native lane: an "
 "object-position quoted-triple term and the RDF 1.2 statement layer survive "
@@ -1604,26 +1609,26 @@ msgid ""
 "alone."
 msgstr ""
 
-#: src/getting-started/javascript.md:371
+#: src/getting-started/javascript.md:374
 msgid "Building from source"
 msgstr ""
 
-#: src/getting-started/javascript.md:373
+#: src/getting-started/javascript.md:376
 msgid ""
 "The Rust cdylib lives in [`crates/rdf-wasm`](https://github.com/Blackcat-"
 "Informatics/purrdf/tree/main/crates/rdf-wasm); the published ESM package is "
 "generated from it:"
 msgstr ""
 
-#: src/getting-started/javascript.md:378
+#: src/getting-started/javascript.md:381
 msgid "# release wasm + wasm-bindgen ESM bindings → js/pkg/\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:379
+#: src/getting-started/javascript.md:382
 msgid "# the above + TypeScript, Node, and packed-tarball gates\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:382
+#: src/getting-started/javascript.md:385
 msgid ""
 "This requires the `wasm32-unknown-unknown` Rust target and a `wasm-bindgen-"
 "cli` pinned to the crate's `wasm-bindgen` version."
@@ -4326,8 +4331,8 @@ msgstr ""
 #: src/project/diagnostic-codes.md:42 src/project/diagnostic-codes.md:68
 #: src/project/diagnostic-codes.md:85 src/project/diagnostic-codes.md:96
 #: src/project/diagnostic-codes.md:116 src/project/diagnostic-codes.md:138
-#: src/project/diagnostic-codes.md:162 src/project/diagnostic-codes.md:172
-#: src/project/diagnostic-codes.md:182
+#: src/project/diagnostic-codes.md:163 src/project/diagnostic-codes.md:173
+#: src/project/diagnostic-codes.md:183
 msgid "Code"
 msgstr ""
 
@@ -14670,16 +14675,16 @@ msgstr ""
 #: src/project/diagnostic-codes.md:28 src/project/diagnostic-codes.md:42
 #: src/project/diagnostic-codes.md:68 src/project/diagnostic-codes.md:85
 #: src/project/diagnostic-codes.md:96 src/project/diagnostic-codes.md:116
-#: src/project/diagnostic-codes.md:138 src/project/diagnostic-codes.md:162
-#: src/project/diagnostic-codes.md:172 src/project/diagnostic-codes.md:182
+#: src/project/diagnostic-codes.md:138 src/project/diagnostic-codes.md:163
+#: src/project/diagnostic-codes.md:173 src/project/diagnostic-codes.md:183
 msgid "Meaning"
 msgstr ""
 
 #: src/project/diagnostic-codes.md:28 src/project/diagnostic-codes.md:42
 #: src/project/diagnostic-codes.md:68 src/project/diagnostic-codes.md:85
 #: src/project/diagnostic-codes.md:96 src/project/diagnostic-codes.md:116
-#: src/project/diagnostic-codes.md:138 src/project/diagnostic-codes.md:162
-#: src/project/diagnostic-codes.md:172 src/project/diagnostic-codes.md:182
+#: src/project/diagnostic-codes.md:138 src/project/diagnostic-codes.md:163
+#: src/project/diagnostic-codes.md:173 src/project/diagnostic-codes.md:183
 msgid "Remedy"
 msgstr ""
 
@@ -14974,7 +14979,7 @@ msgid "A term in an IRI-only position (the predicate) is not an IRI."
 msgstr ""
 
 #: src/project/diagnostic-codes.md:57 src/project/diagnostic-codes.md:99
-#: src/project/diagnostic-codes.md:120 src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:120 src/project/diagnostic-codes.md:159
 msgid "Use an IRI predicate."
 msgstr ""
 
@@ -15653,10 +15658,30 @@ msgstr ""
 "的 `stackBytes`），或减少请求的嵌套深度。"
 
 #: src/project/diagnostic-codes.md:149
-msgid "`native-sparql-host-stack-exhausted`"
+msgid "`native-sparql-unsupported`"
 msgstr ""
 
 #: src/project/diagnostic-codes.md:149
+msgid ""
+"The request is well-formed but uses something this engine refuses to "
+"evaluate as written — for example a `SERVICE ?e` for which no solution names "
+"an endpoint, or `?e` bound to a literal, or an unrecognized `VERSION`. The "
+"message names what and, where there is one, the rewrite. The Cloudflare "
+"adapter answers it with a `400`."
+msgstr ""
+"请求本身格式正确，但使用了本引擎拒绝按原样求值的内容——例如没有任何解为其指明"
+"端点的 `SERVICE ?e`、绑定到字面量的 `?e`，或无法识别的 `VERSION`。消息会指出"
+"具体是什么，并在可行时给出改写方式。Cloudflare 适配器以 `400` 应答。"
+
+#: src/project/diagnostic-codes.md:149
+msgid "Rewrite the request as the message says."
+msgstr "按消息所述改写请求。"
+
+#: src/project/diagnostic-codes.md:150
+msgid "`native-sparql-host-stack-exhausted`"
+msgstr ""
+
+#: src/project/diagnostic-codes.md:150
 msgid ""
 "wasm only: the request nests deeper than the JavaScript engine's own call "
 "stack holds. PurRDF keeps a fixed budget of that stack for a request (637 "
@@ -15669,40 +15694,40 @@ msgstr ""
 "图模式），而 V8 为同步通道和异步作业分配的栈大小相同，因此两个通道上的上限相"
 "同，调大 `stackBytes` 也无法提高它。"
 
-#: src/project/diagnostic-codes.md:149
+#: src/project/diagnostic-codes.md:150
 msgid "Nest the request less deeply."
 msgstr "减少请求的嵌套深度。"
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:151
 msgid "`native-sparql-bnode-mint-prefix`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:151
 msgid "The blank-node mint prefix supplied in the options is invalid."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:151
 msgid "Supply a valid prefix."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:152
 msgid "`native-sparql-load-no-resolver`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:152
 msgid ""
 "`LOAD <iri>` was requested but no `GraphResolver` host seam was provided."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:152
 msgid "Inject a resolver, or remove the `LOAD`."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:153
 msgid "`native-sparql-load-denied`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:153
 msgid ""
 "A `GraphResolver` refused the `LOAD` source by the host's policy — for "
 "example a JavaScript `resolveLoad` that answered `{ kind: \"denied\" }`, as "
@@ -15715,15 +15740,15 @@ msgstr ""
 "`ServiceCatalog` 没有授予该来源 `network` 能力时，适配器的处理函数就会这样应"
 "答。即使在 `LOAD SILENT` 下它也会让请求失败，与被拒绝的 `SERVICE` 一致。"
 
-#: src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:153
 msgid "Grant the source in the host's policy, or remove the `LOAD`."
 msgstr "在宿主策略中授予该来源，或去掉 `LOAD`。"
 
-#: src/project/diagnostic-codes.md:153
+#: src/project/diagnostic-codes.md:154
 msgid "`native-sparql-load-failed`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:153
+#: src/project/diagnostic-codes.md:154
 msgid ""
 "The wasm package's asynchronous `resolveLoad` answered `{ kind: "
 "\"transport\" }`: the document could not be fetched or read. `LOAD SILENT` "
@@ -15732,15 +15757,15 @@ msgstr ""
 "wasm 包的异步 `resolveLoad` 应答了 `{ kind: \"transport\" }`：文档无法获取或"
 "读取。`LOAD SILENT` 会吞掉它。"
 
-#: src/project/diagnostic-codes.md:153
+#: src/project/diagnostic-codes.md:154
 msgid "Make the source reachable, or write `LOAD SILENT`."
 msgstr "让该来源可达，或写作 `LOAD SILENT`。"
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:155
 msgid "`native-sparql-load-stopped`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:155
 msgid ""
 "The asynchronous job's stop signal (a cancellation or the deadline) fired "
 "while a `LOAD` was awaited. The request reports the governor trip, not this "
@@ -15749,15 +15774,15 @@ msgstr ""
 "在等待 `LOAD` 期间，异步作业的停止信号（取消或截止时间）被触发。请求报告的是 "
 "governor 触发，而不是这个代码。"
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:155
 msgid "Raise the deadline, or do not cancel the job."
 msgstr "放宽截止时间，或不要取消该作业。"
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:156
 msgid "`native-sparql-load-fault`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:156
 msgid ""
 "The asynchronous `resolveLoad` answered with nothing, or with something that "
 "is not a `LOAD` answer. The fault fails the job even under `LOAD SILENT`."
@@ -15765,7 +15790,7 @@ msgstr ""
 "异步 `resolveLoad` 什么也没有应答，或应答了不属于 `LOAD` 应答的内容。该故障即"
 "使在 `LOAD SILENT` 下也会让作业失败。"
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:156
 msgid ""
 "Return a document with its media type, a `Response`, a `Dataset` or a typed "
 "failure — never throw."
@@ -15773,49 +15798,49 @@ msgstr ""
 "返回一份带媒体类型的文档、一个 `Response`、一个 `Dataset` 或一个带类型的失败"
 "——绝不要抛出异常。"
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:157
 msgid "`native-sparql-update-bad-destination`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:157
 msgid ""
 "An `ADD`/`MOVE`/`COPY`/`LOAD` destination is `NAMED` or `ALL`; it must be "
 "`DEFAULT` or a single named `GRAPH`."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:157
 msgid "Name a single destination graph."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:158
 msgid "`native-sparql-subst-iri`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:158
 msgid "A substitution value is not a valid IRI."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:158
 msgid "Supply a valid IRI."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:159
 msgid "`native-sparql-subst-triple-predicate`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:159
 msgid "A substituted quoted triple has a predicate that is not an IRI."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:160
+#: src/project/diagnostic-codes.md:161
 msgid "`reasoning-*` — SPARQL under an entailment regime (`purrdf`)"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:165
 msgid "`reasoning-closure-relation-witness`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:165
 msgid ""
 "Property-function relations derived from the closure cannot be combined with "
 "an OWL Direct-Semantics run whose restricted chase minted existential "
@@ -15823,157 +15848,157 @@ msgid ""
 "the regime's scoping graph does not contain."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:165
 msgid ""
 "Query under a regime that mints no witnesses (`rdf`, `rdfs`, `owl-rl`, `d`, "
 "`rif`, `simple`), or drop the dataset-derived relations from the call."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:166
 msgid "`reasoning-closure-relation-rebuild`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:166
 msgid "Rebuilding the property-function relations over the closure failed."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:166
 msgid "The relation builder's own error is in the message."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:167
+#: src/project/diagnostic-codes.md:168
 msgid "`statements-*` — statement-metadata ingestion (`purrdf-rdf`)"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:169
+#: src/project/diagnostic-codes.md:170
 msgid ""
 "These arise when a document's `rdf:reifies` and `owl:Axiom` statements are "
 "read into the statement layer."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:175
 msgid "`statements-turtle-parse`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:175
 msgid "The statement-metadata Turtle failed to parse."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:175
 msgid "Fix the Turtle."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:176
 msgid "`statements-non-iri`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:176
 msgid "A term that must be an IRI in this context is not one."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:176
 msgid "Use an IRI."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:177
 msgid "`statements-reifies-non-triple`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:177
 msgid "The object of `rdf:reifies` is not a triple term."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:177
 msgid "Reify a triple term."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:178
 msgid "`statements-malformed-axiom`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:178
 msgid "An `owl:Axiom` lacks its source, property or target."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:178
 msgid "Complete the axiom."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:179
 msgid "`statements-conflicting-structural`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:179
 msgid "One subject carries two different values for a structural field."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:179
 msgid "Keep one value."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:180
+#: src/project/diagnostic-codes.md:181
 msgid "Other single-code families"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:184
+#: src/project/diagnostic-codes.md:185
 msgid "`sssom-tsv-parse`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:184
+#: src/project/diagnostic-codes.md:185
 msgid ""
 "An SSSOM TSV document is malformed: a missing or unreadable header row, a "
 "malformed `curie_map` entry or set comment, a malformed row, or a non-"
 "numeric confidence; the location names the line."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:184
+#: src/project/diagnostic-codes.md:185
 msgid "Fix the TSV at the reported line."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:185
+#: src/project/diagnostic-codes.md:186
 msgid "`content-id-scheme`"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:185
+#: src/project/diagnostic-codes.md:186
 msgid ""
 "A content-id scheme prefix is invalid: empty, non-ASCII, or ending in a "
 "hexadecimal digit (which would make it ambiguous with the 64-hex-character "
 "tail)."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:185
+#: src/project/diagnostic-codes.md:186
 msgid ""
 "Choose a prefix that is non-empty ASCII and does not end in `0-9`, `a-f` or "
 "`A-F`."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:187
+#: src/project/diagnostic-codes.md:188
 msgid "Where the code reaches you"
 msgstr ""
 
-#: src/project/diagnostic-codes.md:189
+#: src/project/diagnostic-codes.md:190
 msgid ""
 "**Rust** — `RdfDiagnostic::code` on the returned error; its `Display` form "
 "is `<severity> <code>: <message>`."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:191
+#: src/project/diagnostic-codes.md:192
 msgid ""
 "**Python** — the `ValueError` message is that `Display` form (for example "
 "`error native-codec-parse: …`); an IRI failure is rendered as `<code>: "
 "<message>` (for example `iri-relative-no-base: …`)."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:194
+#: src/project/diagnostic-codes.md:195
 msgid "**JavaScript** — the thrown `Error` message carries the same text."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:195
+#: src/project/diagnostic-codes.md:196
 msgid ""
 "**C** — the error string returned through the C ABI carries the same text."
 msgstr ""
 
-#: src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:197
 msgid ""
 "**SARIF** — the `ruleId` of each result is the code, with a "
 "`reportingDescriptor` in the run's rule table ([`purrdf-validate`](https://"

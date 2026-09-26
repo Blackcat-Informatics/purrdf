@@ -456,9 +456,8 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
 ///
 /// # Errors
 ///
-/// [`EvalError::Remote`] naming the value when a left solution binds `?v` to a term that
-/// is not an IRI ([`non_iri_endpoint`]), [`EvalError::Unsupported`] when one leaves it
-/// unbound and no enclosing operator lists its endpoints ([`unbound_endpoint`]), under
+/// [`EvalError::Unsupported`] naming the value when a left solution binds `?v` to a term
+/// that is not an IRI ([`non_iri_endpoint`]), and when one leaves it unbound and no enclosing operator lists its endpoints ([`unbound_endpoint`]), under
 /// `SILENT` too; [`EvalError::StackExhausted`] from the analysis walk.
 pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
@@ -586,8 +585,8 @@ pub(crate) fn eval_projected<D: DatasetView + Sync>(
 /// # Errors
 ///
 /// [`EvalError::Unsupported`] when no enclosing solution names an endpoint (under `SILENT`
-/// too); [`EvalError::Remote`] when a non-`SILENT` clause's variable is bound to a term
-/// that is not an IRI; and whatever each endpoint's evaluation raises.
+/// too) and when the clause's variable is bound to a term that is not an IRI (`SILENT`
+/// or not); and whatever each endpoint's evaluation raises.
 pub(crate) fn eval_variable_endpoint<D: DatasetView + Sync>(
     node: &GraphPattern,
     variable: &Variable,
@@ -629,8 +628,9 @@ pub(crate) fn unbound_endpoint(variable: &Variable, cause: &str) -> EvalError {
 }
 
 /// The refusal for a `SERVICE ?variable` whose variable is bound to a term that is not an
-/// IRI: it names no endpoint, so there is nothing to send the request to. Under `SILENT`
-/// the message says why `SILENT` does not apply.
+/// IRI: it names no endpoint, so there is nothing to send the request to — a request this
+/// engine refuses as written ([`EvalError::Unsupported`]), not a federation failure. Under
+/// `SILENT` the message says why `SILENT` does not apply.
 pub(crate) fn non_iri_endpoint(variable: &Variable, value: &TermValue, silent: bool) -> EvalError {
     let v = variable.as_str();
     let mut message = format!(
@@ -644,7 +644,7 @@ pub(crate) fn non_iri_endpoint(variable: &Variable, value: &TermValue, silent: b
              names none",
         );
     }
-    EvalError::remote(message)
+    EvalError::unsupported(message)
 }
 
 /// A short description of a non-IRI term, for the error naming it.

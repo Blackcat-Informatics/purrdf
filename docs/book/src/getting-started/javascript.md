@@ -275,7 +275,10 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
 `maxRequestBytes` (1 MiB by default — a query or update's text is a program,
 not a payload), `422` or `503` when a governor stopped it (never a `200` with
 a partial body), `application/problem+json` errors, `Server-Timing` from the
-job's evidence, and CORS when asked for. A `500`'s `detail` is the engine's
+job's evidence, and CORS when asked for. A request the engine refuses to
+evaluate as written — an unsupported construct, an unregistered function,
+nesting past the host-stack budget — is a `400` whose `code` is the engine's
+diagnostic code. A `500`'s `detail` is the engine's
 own words for the query's own failures (a parse, an evaluation, a tripped
 governor); a bug this endpoint cannot attribute to the query — a
 `resolveService`/`resolveLoad` that throws, or any other exception the

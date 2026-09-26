@@ -144,6 +144,7 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 | `native-sparql-quoted-triple-term-variable` | 在基本图模式或属性路径中，变量占据了引用三元组项的某个组成部分；结构性的三元组项匹配不在范围内。 | 把三元组项作为整体绑定，或经由具体化节点匹配其组成部分。 |
 | `native-sparql-heldin-unconfigured` | 调用 `heldIn` 时没有调用方提供的立场谓词（standpoint predicate）配置。 | 使用 `heldIn` 之前先配置立场谓词。 |
 | `native-sparql-evaluation-stack-exhausted` | 请求的嵌套深度超出了求值它的线程栈所能容纳的范围：求值器在每一个递归步骤都测量剩余的栈空间，并在耗尽之前拒绝，而不是让进程中止或让 wasm 实例陷入 trap。解析器已接受该请求，在更大的栈上同一请求可以得到应答。 | 在栈更大的线程上求值（原生平台上以更大的栈创建线程；异步 wasm 作业则使用更大的 `stackBytes`），或减少请求的嵌套深度。 |
+| `native-sparql-unsupported` | 请求本身格式正确，但使用了本引擎拒绝按原样求值的内容——例如没有任何解为其指明端点的 `SERVICE ?e`、绑定到字面量的 `?e`，或无法识别的 `VERSION`。消息会指出具体是什么，并在可行时给出改写方式。Cloudflare 适配器以 `400` 应答。 | 按消息所述改写请求。 |
 | `native-sparql-host-stack-exhausted` | 仅限 wasm：请求的嵌套深度超出了 JavaScript 引擎自身调用栈所能容纳的范围。PurRDF 为每个请求保留该栈中固定的一份预算（例如 637 层嵌套圆括号或 283 层嵌套图模式），而 V8 为同步通道和异步作业分配的栈大小相同，因此两个通道上的上限相同，调大 `stackBytes` 也无法提高它。 | 减少请求的嵌套深度。 |
 | `native-sparql-bnode-mint-prefix` | 选项中提供的空节点生成前缀无效。 | 提供合法的前缀。 |
 | `native-sparql-load-no-resolver` | 请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主扩展点。 | 注入一个解析器，或去掉 `LOAD`。 |

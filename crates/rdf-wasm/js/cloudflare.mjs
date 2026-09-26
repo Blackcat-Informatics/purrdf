@@ -871,6 +871,27 @@ function reclassifiedFailure(operation, error, signal, headers, cors) {
   return failure(error, signal, headers);
 }
 
+/**
+ * The engine's diagnostic codes for a request it refuses to evaluate as written — the
+ * client's to change, so a `400`, never the `500` of an evaluation that failed: a
+ * construct it does not evaluate (a `SERVICE ?e` no solution names an endpoint for, an
+ * unrecognized `VERSION`), a function IRI nothing is registered under, a variable in a
+ * quoted triple term's component, and nesting past the budget kept under the JavaScript
+ * engine's call stack, which no configuration of this endpoint raises.
+ */
+const CLIENT_REFUSAL_CODES = new Set([
+  "native-sparql-unsupported",
+  "native-sparql-custom-function",
+  "native-sparql-quoted-triple-term-variable",
+  "native-sparql-host-stack-exhausted",
+]);
+
+/** The diagnostic code an engine error's message leads with (`error <code>: …`), if any. */
+function engineCode(error) {
+  if (!(error instanceof Error)) return undefined;
+  return /^error ([a-z0-9-]+): /.exec(error.message)?.[1];
+}
+
 /** The response for a twin that rejected. */
 function failure(error, signal, headers) {
   const timing = serverTiming(error?.evidence?.async);
@@ -884,6 +905,10 @@ function failure(error, signal, headers) {
   }
   if (signal.aborted || error?.name === "AbortError" || error?.name === "TimeoutError") {
     return problem(503, errorText(error), { code: "cancelled" }, [...timing, ...headers]);
+  }
+  const code = engineCode(error);
+  if (code !== undefined && CLIENT_REFUSAL_CODES.has(code)) {
+    return problem(400, error.message, { code }, [...timing, ...headers]);
   }
   return problem(
     500,
@@ -1020,7 +1045,10 @@ async function boundedRequestBody(request, maxRequestBytes, headers) {
  * to buffer past the bound by lying about its size.
  *
  * Statuses: `200` with the negotiated document; `204` for an applied update; `400` for a
- * malformed request or operation (`405` for a method the protocol does not bind, `415`
+ * malformed request or operation, or one the engine refuses to evaluate as written (its
+ * diagnostic code — `native-sparql-unsupported`, `native-sparql-custom-function`,
+ * `native-sparql-quoted-triple-term-variable`, `native-sparql-host-stack-exhausted` — is
+ * the problem's `code`, and its message the `detail`) (`405` for a method the protocol does not bind, `415`
  * for a `Content-Type` it does not define); `406` when the `Accept` header allows no
  * format that can carry the result; `413` when the body exceeds `maxRequestBytes`; `422`
  * when a deterministic ceiling (fuel, answers, intermediate cells, scratch bytes, remote

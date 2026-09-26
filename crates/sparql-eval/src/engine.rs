@@ -2988,8 +2988,9 @@ where
 /// site's existing,
 /// unclassified generic code (`"native-sparql-query-eval"` for a query,
 /// `"native-sparql-update-eval"` for [`crate::update`]'s identical `WHERE`-clause
-/// evaluation seam), preserved for every genuine gap: an unclassified
-/// `Unsupported`, `Internal`, `Remote`, `Data`, `Function`, or `Config`. The
+/// evaluation seam), preserved for every genuine gap: an `Internal`, `Remote`, `Data`,
+/// `Function`, or `Config`. An unclassified `Unsupported` carries
+/// [`crate::EvalError::UNSUPPORTED_CODE`]. The
 /// single chokepoint every `EvalError -> RdfDiagnostic` reduction in this crate
 /// reads, so a caller further downstream (e.g. the golden-capture harness) can
 /// always recover the typed classification from `RdfDiagnostic::code` without
@@ -6427,7 +6428,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert_eq!(err.code, "native-sparql-update-eval");
+        assert_eq!(err.code, "native-sparql-unsupported");
         assert!(err.message.contains("VERSION \"9.9\""));
         assert!(
             Arc::ptr_eq(&before, &ds),
@@ -6458,7 +6459,7 @@ mod tests {
                 &QueryGovernors::UNBOUNDED,
             )
             .unwrap_err();
-        assert_eq!(err.code, "native-sparql-update-eval");
+        assert_eq!(err.code, "native-sparql-unsupported");
         assert!(err.message.contains("VERSION \"9.9\""));
         assert!(
             Arc::ptr_eq(&before, &ds),

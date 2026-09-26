@@ -1662,7 +1662,7 @@ mod tests {
             )
             .unwrap_err(),
         );
-        assert_eq!(code, "native-sparql-update-eval");
+        assert_eq!(code, "native-sparql-unsupported");
         // The chokepoint runs before the blank-mint counter is even initialized, let
         // alone before any operation applies — the store must be exactly what it was.
         assert_eq!(quad_set(&m), before, "no mutation applied");
@@ -1704,7 +1704,7 @@ mod tests {
             )
             .unwrap_err(),
         );
-        assert_eq!(code, "native-sparql-update-eval");
+        assert_eq!(code, "native-sparql-unsupported");
         // Same admission chokepoint as the unrecognized-VERSION case: it runs before any
         // operation applies, so the store is exactly what it was.
         assert_eq!(quad_set(&m), before, "no mutation applied");
