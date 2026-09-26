@@ -6,7 +6,7 @@
 //! * `SELECT` → the solution sequence compared with a **single global
 //!   blank-node bijection** over the whole result set (W3C solution-set
 //!   equality), as a multiset when there is no top-level `ORDER BY` and as an
-//!   ordered sequence when there is (see [`compare_solutions`]).
+//!   ordered sequence when there is (see the private `compare_solutions`).
 //! * `ASK` → boolean equality.
 //! * `CONSTRUCT`/`DESCRIBE` → canonical (RDFC-1.0) N-Quads equality.
 //! * syntax tests → parse success/failure matches the kind.
@@ -19,7 +19,7 @@
 //! blank node across every row at once (never a looser per-row bijection) while
 //! non-blank terms — IRIs, literals including datatype/language/base-direction,
 //! and their variable positions — still compare exactly. See
-//! [`encode_solution_set`].
+//! the private `encode_solution_set`.
 
 use std::path::Path;
 use std::sync::Arc;
