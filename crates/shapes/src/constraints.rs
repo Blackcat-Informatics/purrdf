@@ -4001,8 +4001,10 @@ fn temporal_parts_cmp(
     if !TEMPORAL.contains(&a_datatype) || !TEMPORAL.contains(&b_datatype) {
         return None;
     }
-    let va = purrdf_xsd::parse_by_iri(a_lexical, a_datatype).ok()??;
-    let vb = purrdf_xsd::parse_by_iri(b_lexical, b_datatype).ok()??;
+    // The three datatypes fix `whiteSpace` = `collapse`; a lexical form with an
+    // interior space is not one, so the collapse is the trim.
+    let va = purrdf_xsd::parse_by_iri(collapse_trim(a_lexical), a_datatype).ok()??;
+    let vb = purrdf_xsd::parse_by_iri(collapse_trim(b_lexical), b_datatype).ok()??;
     purrdf_xsd::value_cmp(&va, &vb)
 }
 

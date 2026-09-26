@@ -746,7 +746,7 @@
     "from": "json-schema",
     "to": "pydantic-v2",
     "intentional": true,
-    "note": "JSON Schema not has no direct Pydantic v2 type-annotation equivalent; the generated runtime annotation validates the positive carrier type while model_json_schema() retains the negation."
+    "note": "JSON Schema not has no Pydantic v2 type-annotation equivalent, so the generated package evaluates the negated schema over the raw JSON input in a before-validator with a closed keyword table. A negated schema using a keyword outside that table (a regex-selected key, key names, dependencies, evaluation state, a format, content, a non-integer multipleOf, or a pattern outside the common regex grammar) is not evaluated: the positive carrier is validated while model_json_schema() retains the negation."
   },
   {
     "code": "one-of-validation-widened",
@@ -2636,14 +2636,14 @@
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A sh:maxExclusive constraint. A numeric bound compares a bare integer by minimum/maximum and a typed literal of an integer-family or decimal datatype by an order pattern on its lexical form (the forms on one side of a rational threshold are a regular language), exactly; it does not judge an xsd:double or xsd:float literal, whose lexical forms on one side of a bound are no regular language (among 0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in makes those values finite; a temporal bound (a date) is not projected."
+    "note": "A sh:maxExclusive constraint. A numeric bound compares a bare integer by minimum/maximum and a typed literal of an integer-family or decimal datatype by an order pattern on its lexical form (the forms on one side of a rational threshold are a regular language), exactly; it does not judge an xsd:double or xsd:float literal, whose lexical forms on one side of a bound are no regular language (among 0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is judged exactly, by order patterns on the lexical form over the XSD timeline, the +-14:00 partial order between zoned and local values included."
   },
   {
     "code": "sh:maxInclusive",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A sh:maxInclusive constraint. A numeric bound compares a bare integer by minimum/maximum and a typed literal of an integer-family or decimal datatype by an order pattern on its lexical form (the forms on one side of a rational threshold are a regular language), exactly; it does not judge an xsd:double or xsd:float literal, whose lexical forms on one side of a bound are no regular language (among 0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in makes those values finite; a temporal bound (a date) is not projected."
+    "note": "A sh:maxInclusive constraint. A numeric bound compares a bare integer by minimum/maximum and a typed literal of an integer-family or decimal datatype by an order pattern on its lexical form (the forms on one side of a rational threshold are a regular language), exactly; it does not judge an xsd:double or xsd:float literal, whose lexical forms on one side of a bound are no regular language (among 0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is judged exactly, by order patterns on the lexical form over the XSD timeline, the +-14:00 partial order between zoned and local values included."
   },
   {
     "code": "sh:maxListLength",
@@ -2671,14 +2671,14 @@
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A sh:minExclusive constraint. A numeric bound compares a bare integer by minimum/maximum and a typed literal of an integer-family or decimal datatype by an order pattern on its lexical form (the forms on one side of a rational threshold are a regular language), exactly; it does not judge an xsd:double or xsd:float literal, whose lexical forms on one side of a bound are no regular language (among 0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in makes those values finite; a temporal bound (a date) is not projected."
+    "note": "A sh:minExclusive constraint. A numeric bound compares a bare integer by minimum/maximum and a typed literal of an integer-family or decimal datatype by an order pattern on its lexical form (the forms on one side of a rational threshold are a regular language), exactly; it does not judge an xsd:double or xsd:float literal, whose lexical forms on one side of a bound are no regular language (among 0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is judged exactly, by order patterns on the lexical form over the XSD timeline, the +-14:00 partial order between zoned and local values included."
   },
   {
     "code": "sh:minInclusive",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
-    "note": "A sh:minInclusive constraint. A numeric bound compares a bare integer by minimum/maximum and a typed literal of an integer-family or decimal datatype by an order pattern on its lexical form (the forms on one side of a rational threshold are a regular language), exactly; it does not judge an xsd:double or xsd:float literal, whose lexical forms on one side of a bound are no regular language (among 0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in makes those values finite; a temporal bound (a date) is not projected."
+    "note": "A sh:minInclusive constraint. A numeric bound compares a bare integer by minimum/maximum and a typed literal of an integer-family or decimal datatype by an order pattern on its lexical form (the forms on one side of a rational threshold are a regular language), exactly; it does not judge an xsd:double or xsd:float literal, whose lexical forms on one side of a bound are no regular language (among 0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is judged exactly, by order patterns on the lexical form over the XSD timeline, the +-14:00 partial order between zoned and local values included."
   },
   {
     "code": "sh:minListLength",

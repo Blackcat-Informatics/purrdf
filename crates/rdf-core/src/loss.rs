@@ -1007,7 +1007,7 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// exactly); `sh:rootClass`; the part of `sh:pattern` a canonical
 /// `xsd:integer` (a bare JSON number) would need, and a pattern past the
 /// translation size bound; a range bound's comparison with an `xsd:double` or
-/// `xsd:float` literal, and a temporal bound; a node shape's `sh:class`
+/// `xsd:float` literal; a node shape's `sh:class`
 /// (membership runs through `rdfs:subClassOf*` triples on other nodes) and the
 /// constraints not well-formed on a node shape (`sh:minCount`, `sh:maxCount`,
 /// `sh:uniqueLang`, `sh:qualifiedValueShape`); every property pair
@@ -1316,7 +1316,9 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          whose lexical forms on one side of a bound are no regular language (among \
          0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a \
          comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in \
-         makes those values finite; a temporal bound (a date) is not projected.",
+         makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is \
+         judged exactly, by order patterns on the lexical form over the XSD timeline, the \
+         +-14:00 partial order between zoned and local values included.",
     ),
     (
         "sh:maxInclusive",
@@ -1327,7 +1329,9 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          whose lexical forms on one side of a bound are no regular language (among \
          0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a \
          comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in \
-         makes those values finite; a temporal bound (a date) is not projected.",
+         makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is \
+         judged exactly, by order patterns on the lexical form over the XSD timeline, the \
+         +-14:00 partial order between zoned and local values included.",
     ),
     (
         "sh:minExclusive",
@@ -1338,7 +1342,9 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          whose lexical forms on one side of a bound are no regular language (among \
          0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a \
          comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in \
-         makes those values finite; a temporal bound (a date) is not projected.",
+         makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is \
+         judged exactly, by order patterns on the lexical form over the XSD timeline, the \
+         +-14:00 partial order between zoned and local values included.",
     ),
     (
         "sh:maxExclusive",
@@ -1349,7 +1355,9 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          whose lexical forms on one side of a bound are no regular language (among \
          0.0...01E<n> the value is at least 1 exactly when n exceeds the count of zeros, a \
          comparison no finite automaton, and no ECMA-262 backreference, makes), unless sh:in \
-         makes those values finite; a temporal bound (a date) is not projected.",
+         makes those values finite. A temporal bound (xsd:dateTime, xsd:date, xsd:time) is \
+         judged exactly, by order patterns on the lexical form over the XSD timeline, the \
+         +-14:00 partial order between zoned and local values included.",
     ),
     (
         "sh:path",
@@ -1441,9 +1449,13 @@ const JSON_SCHEMA_PYDANTIC_PROFILE: &[(&str, &str)] = &[
     ),
     (
         "negation-validation-dropped",
-        "JSON Schema not has no direct Pydantic v2 type-annotation equivalent; the generated \
-         runtime annotation validates the positive carrier type while model_json_schema() \
-         retains the negation.",
+        "JSON Schema not has no Pydantic v2 type-annotation equivalent, so the generated \
+         package evaluates the negated schema over the raw JSON input in a before-validator \
+         with a closed keyword table. A negated schema using a keyword outside that table (a \
+         regex-selected key, key names, dependencies, evaluation state, a format, content, a \
+         non-integer multipleOf, or a pattern outside the common regex grammar) is not \
+         evaluated: the positive carrier is validated while model_json_schema() retains the \
+         negation.",
     ),
     (
         "one-of-validation-widened",

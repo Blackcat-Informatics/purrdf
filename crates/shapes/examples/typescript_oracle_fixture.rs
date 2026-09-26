@@ -8,6 +8,8 @@ use std::error::Error;
 
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
+#[path = "support/shacl_temporal.rs"]
+mod shacl_temporal;
 
 use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
@@ -1451,6 +1453,60 @@ fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
     })
 }
 
+/// The temporal range-bound fixture (see `support/shacl_temporal.rs`): a bound
+/// is the negation of the values it rejects, and TypeScript has no complement
+/// of a type (the lossy fixture's complement proofs); nor can the admitted
+/// lexical forms be written positively, as template literal types over digit
+/// unions: the dates of four-digit years alone are 8,000,000 members, past the
+/// compiler's union limit (this fixture's proof). So every non-conforming probe
+/// diverges at its property's dropped negation.
+fn temporal_fixture() -> Result<Fixture, Box<dyn Error>> {
+    let compiled = shacl_temporal::compiled()?;
+    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let package = emit_typescript(&compiled, &config()?)?;
+    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
+    let mut probes = Vec::new();
+    for case in shacl_temporal::cases()? {
+        let property = shacl_temporal::VARIANTS
+            .iter()
+            .find(|(label, _, _)| *label == case.label)
+            .map(|(_, property, _)| *property)
+            .ok_or("every case is a variant")?;
+        let location = format!("#/$defs/Holder/properties/{property}/not");
+        let expected_loss =
+            (!case.conforms).then_some(("negation-validation-dropped", location.as_str()));
+        probes.push(probe(
+            &schema,
+            &package,
+            case.label,
+            "Holder",
+            case.value,
+            "variable",
+            case.conforms,
+            expected_loss,
+        )?);
+    }
+    Ok(Fixture {
+        declaration: declaration(&package)?,
+        type_names: package.type_names.clone(),
+        losses: ledger_json(&package)?,
+        probes,
+        compiler_probes: Vec::new(),
+        proofs: vec![Proof {
+            label: "four-digit-year-dates-exceed-the-union-limit".to_owned(),
+            source: "type Digit = \"0\" | \"1\" | \"2\" | \"3\" | \"4\" | \"5\" | \"6\" | \"7\" | \"8\" | \"9\";\n\
+                     type Year = `${Digit}${Digit}${Digit}${Digit}`;\n\
+                     type MonthDay = `${\"0\" | \"1\"}${Digit}-${\"0\" | \"1\" | \"2\" | \"3\"}${Digit}`;\n\
+                     const value: `${Year}-${MonthDay}` = \"2020-03-01\";\n\
+                     void value;\n\
+                     export {};\n"
+                .to_owned(),
+            expected_typescript_valid: false,
+            expected_code: Some(2590),
+        }],
+    })
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
     let exact_schema = exact_schema();
@@ -1472,6 +1528,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "exact": exact_fixture(&exact_schema, exact_package)?,
         "lossy": lossy_fixture(&lossy_schema, lossy_package)?,
         "lists": lists_fixture()?,
+        "temporal": temporal_fixture()?,
         "reverse": reverse,
     });
     println!("{}", serde_json::to_string(&output)?);

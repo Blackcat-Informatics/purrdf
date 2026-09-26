@@ -9,6 +9,8 @@ use std::error::Error;
 
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
+#[path = "support/shacl_temporal.rs"]
+mod shacl_temporal;
 
 use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
@@ -857,6 +859,39 @@ fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
     fixture(&package, probes)
 }
 
+/// The temporal range-bound fixture (see `support/shacl_temporal.rs`): a bound
+/// is the negation of the values it rejects, and GraphQL has no input
+/// complement, so each bounded property is the custom scalar and every
+/// non-conforming probe diverges at its property's delegated negation.
+fn temporal_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
+    let compiled = shacl_temporal::compiled()?;
+    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let package = emit_graphql(&compiled, config)?;
+    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
+    let mut probes = Vec::new();
+    for case in shacl_temporal::cases()? {
+        let property = shacl_temporal::VARIANTS
+            .iter()
+            .find(|(label, _, _)| *label == case.label)
+            .map(|(_, property, _)| *property)
+            .ok_or("every case is a variant")?;
+        let location = format!("#/$defs/Holder/properties/{property}/not");
+        let expected_loss =
+            (!case.conforms).then_some(("negation-validation-delegated", location.as_str()));
+        probes.push(probe(
+            &schema,
+            &package,
+            case.label,
+            "Holder",
+            case.value,
+            case.conforms,
+            None,
+            expected_loss,
+        )?);
+    }
+    fixture(&package, probes)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
     let exact_schema = exact_schema();
@@ -879,6 +914,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "exact": exact_fixture(&exact_schema, &exact_package)?,
         "lossy": lossy_fixture(&lossy_schema, &lossy_package)?,
         "lists": lists_fixture(&config)?,
+        "temporal": temporal_fixture(&config)?,
         "reverse": reverse_evidence(&exact_package, &import_config()?)?,
     });
     println!("{}", serde_json::to_string(&output)?);

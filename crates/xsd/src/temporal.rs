@@ -468,6 +468,11 @@ fn split_tz(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(String, Option<i
         let tail = &s[s.len() - 6..];
         let sign = tail.as_bytes()[0];
         if (sign == b'+' || sign == b'-') && tail.as_bytes()[3] == b':' {
+            // `i32::from_str` also takes a sign, so "+-1:00" would read an hour
+            // of -1: both fields are exactly two ASCII digits.
+            if !all_ascii_digits(&tail[1..3]) || !all_ascii_digits(&tail[4..6]) {
+                return Err(invalid(dt, lexical, "timezone fields must be two digits"));
+            }
             let hh: i32 = tail[1..3]
                 .parse()
                 .map_err(|_| invalid(dt, lexical, "bad timezone hour"))?;
@@ -488,6 +493,11 @@ fn split_tz(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(String, Option<i
         }
     }
     Ok((s.to_string(), None))
+}
+
+/// Whether `text` is non-empty and all ASCII digits.
+fn all_ascii_digits(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Number of days in a given month for a proleptic-Gregorian year.
@@ -521,6 +531,11 @@ fn parse_ymd(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(i64, u8, u8), X
     }
     if year_text.len() < 4 || month_text.len() != 2 || day_text.len() != 2 {
         return Err(invalid(dt, lexical, "bad date field widths"));
+    }
+    // `from_str` also takes a leading `+`, which no date field carries.
+    if !all_ascii_digits(year_text) || !all_ascii_digits(month_text) || !all_ascii_digits(day_text)
+    {
+        return Err(invalid(dt, lexical, "date fields must be ASCII digits"));
     }
     // XSD 1.1 §3.3.7: a year wider than 4 digits must not have a leading zero.
     // Exactly 4 digits with a leading zero (e.g. "0044", "0000") are valid.
@@ -563,6 +578,12 @@ fn parse_hms(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(u8, u8, Decimal
     }
     if hour_text.len() != 2 || minute_text.len() != 2 {
         return Err(invalid(dt, lexical, "bad time field widths"));
+    }
+    // `from_str` also takes a leading `+`; the seconds field is two digits and
+    // an optional fraction (`ss(.s+)?`), never `5` or `005`.
+    let (whole_seconds, _) = second_text.split_once('.').unwrap_or((second_text, ""));
+    if !all_ascii_digits(hour_text) || !all_ascii_digits(minute_text) || whole_seconds.len() != 2 {
+        return Err(invalid(dt, lexical, "time fields must be two ASCII digits"));
     }
     let hour: u8 = hour_text
         .parse()
@@ -3332,6 +3353,38 @@ impl Gregorian {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn signed_or_short_temporal_fields_are_rejected() {
+        for lexical in ["+2020-01-01", "2020-+1-01", "2020-01-+1", "-+202-01-01"] {
+            assert!(parse_date(lexical).is_err(), "{lexical}");
+        }
+        for lexical in [
+            "+1:00:00",
+            "01:+1:00",
+            "01:00:5",
+            "01:00:005",
+            "01:00:5.5",
+            "01:00:00++1:00",
+            "01:00:00+-1:00",
+            "01:00:00+01:+5",
+        ] {
+            assert!(parse_time(lexical).is_err(), "{lexical}");
+        }
+        // The neighbouring valid forms still parse.
+        for lexical in ["2020-01-01", "-0044-03-01", "0000-02-29-14:00"] {
+            assert!(parse_date(lexical).is_ok(), "{lexical}");
+        }
+        for lexical in [
+            "01:00:05",
+            "01:00:05.5",
+            "24:00:00",
+            "01:00:00+01:30",
+            "00:00:00Z",
+        ] {
+            assert!(parse_time(lexical).is_ok(), "{lexical}");
+        }
+    }
+
     use super::*;
     use pretty_assertions::assert_eq;
 

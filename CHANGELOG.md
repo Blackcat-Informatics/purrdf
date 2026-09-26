@@ -24,8 +24,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   shape's node kind, `sh:in`, `sh:hasValue` and lexical constraints judge the
   focus node's `@id`. What remains recorded is what no JSON Schema keyword
   states, each case with its reason: a list kept as linked nodes, a pattern
-  over a bare integer, a bound over double or float lexical forms, a temporal
-  bound, and a node shape's class membership. The Pydantic emitter enforces
+  over a bare integer, a bound over double or float lexical forms, and a node
+  shape's class membership. The Pydantic emitter enforces
   `uniqueItems`. LinkML carries `@list` and `@direction`, and its `any_of`
   branches keep to the anonymous-slot-expression fields.
 - **shapes:** the GraphQL emitter carries a JSON Schema `anyOf` whose
@@ -51,6 +51,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   codes leave the `json-schema` → `typescript-7.0` profile. The TypeScript
   oracle compiles the facts the remaining numeric and uniqueness losses rest
   on, and its scratch directory moves beside the build output.
+- **shapes:** the JSON Schema compiler projects a temporal range bound
+  (`sh:minInclusive` and the rest over `xsd:dateTime`, `xsd:date` or
+  `xsd:time`) exactly, as order and lexical patterns on the literal's lexical
+  form over the XSD timeline. A timezone makes the value an instant, and
+  `24:00:00` is the next day's midnight. A zoned value and a local bound, or
+  the reverse, compare only beyond ±14:00, and are an incomparable violation
+  within it. The leap-year rule, the signed 64-bit year range and 18 fractional
+  second digits are held as the validator parses them, and values of any other
+  datatype are rejected. The validator trims a temporal lexical form by
+  `whiteSpace` `collapse`, as it trims a numeric one. The generated Pydantic
+  package evaluates a JSON Schema `not` at run time over the raw input for a
+  closed keyword table, `$ref` included. So temporal bounds, typed numeric
+  bounds and the other negations the compiler writes are enforced, not only
+  recorded. A pattern conjunct restates `"type": "string"`, so LinkML reads it
+  with its string carrier. Every emitter oracle runs a temporal fixture over
+  projected instances.
 - **core:** `purrdf_core::xsd_regex::to_ecma_262` writes the `i` flag into the
   pattern as XPath case variants (F&O 3.1 section 5.6.2), instead of refusing
   it: each normal character and character range gains its variants, and every
@@ -690,6 +706,9 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **xsd:** the `xsd:dateTime`, `xsd:date` and `xsd:time` parsers reject a
+  signed field (`+2020-01-01`, `+1:00:00`, a `+-1:00` timezone) and a seconds
+  field that is not two digits (`00:00:5`). `from_str` had read the sign.
 - **rdf, shapes, shex:** a JSON number read through `serde_json` could become the
   neighbour of the binary64 its decimal spells. Without its `float_roundtrip` feature
   `serde_json` scales a `u64` significand by a binary64 power of ten, rounding at each
