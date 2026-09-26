@@ -27,7 +27,7 @@ use crate::shapes::{
     AnnotatedConstraint, ComponentValidator, ConstraintAnnotation, NodeKindValue, Path,
     PropertyShape, Shape, annotation_for,
 };
-use crate::term::{Literal, NamedNode, Term, Triple, canonical_cmp_ids, term_id_to_native};
+use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
 
 /// Internal value-node currency for the constraint layer.
 ///
@@ -1668,14 +1668,16 @@ fn eval_reifier_shapes<S: ResultSink>(
         if !reified && ps.reification_required {
             // "If $reificationRequired is set to true and there is no reified
             // statement for the triple term t in the data graph, there is a
-            // validation result with t as sh:value" — `t` here is the triple term
-            // (focus node, $path, value node), since there is no reifier to name.
+            // validation result with t as sh:value." The result's `sh:value` is
+            // the VALUE NODE, as the approved W3C tests state (see
+            // [`reifier_result`] for the reading): with the focus node and
+            // `sh:resultPath` beside it, it names the unreified statement exactly.
             let flow = sink.violation(source.severity, || {
                 let mut result = ValidationResult {
                     focus_node: focus.to_term(ds),
                     result_path: Some(ctx.path_term().clone()),
                     path_structure: None,
-                    value: Some(reified_triple_term(ds, focus, predicate, value)),
+                    value: Some(value.to_term(ds)),
                     source_constraint_component: NamedNode::from(
                         sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                     ),
@@ -1724,7 +1726,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                         } else {
                             first_messages(&[&reifier_shape.messages, &ps.messages])
                         };
-                        reifier_result(&ctx, reifier, &source_roles, &source, messages, &[])
+                        reifier_result(&ctx, value, &source_roles, &source, messages, &[], vec![])
                     });
                     if flow.stopped() {
                         return Ok(Flow::Stop);
@@ -1755,13 +1757,17 @@ fn eval_reifier_shapes<S: ResultSink>(
                     let inner_roles = inner.iter().fold(Vec::new(), |roles, inner| {
                         merge_box_roles(&roles, &inner.source_box_roles)
                     });
+                    // The reifier's own results — each with the reifier as its
+                    // focus node — are the result's `sh:detail`, so the reifier
+                    // and why it fails are carried beside the value node.
                     reifier_result(
                         &ctx,
-                        reifier,
+                        value,
                         &source_roles,
                         &source,
                         messages,
                         &inner_roles,
+                        inner,
                     )
                 });
                 if flow.stopped() {
@@ -1783,47 +1789,42 @@ fn first_messages(candidates: &[&Vec<Literal>]) -> Vec<Literal> {
 }
 
 /// One `sh:reifierShape` result: the enclosing property shape's focus node and
-/// path, the non-conforming REIFIER as `sh:value`, carrying `messages` and the
-/// roles the inner results contributed.
+/// path, the VALUE NODE as `sh:value`, the non-conforming reifier's own results
+/// (each with the reifier as focus node) as `sh:detail`, carrying `messages` and
+/// the roles the inner results contributed.
 ///
-/// SHACL 1.2 Core §7.8.5 defines the component over two variables that share a
-/// name. It opens "Let t be the triple term (focus node, $path, value node)",
-/// and the reporting sentence then binds a new one: "For each reifier t that does
-/// not conform to $reifierShape, there is a validation result with t as
-/// sh:value." "For each reifier t" is the binding form every Core textual
-/// definition uses ("for each value node v … with v as sh:value"), so the
-/// sentence's own `t` — the reifier — is the value; reading it as "each reifier
-/// OF t" would need a word the text does not have. The Working Group's review of
-/// the definition asked for exactly this per-reifier form, replacing "if the
-/// reifiers of t do not conform … with t as sh:value", whose `t` was the triple
-/// term. §6.7.2.3 leaves the choice to the definition: "The textual definitions of
-/// the validators of the SHACL Core components specify how this value is
-/// constructed". So one result per non-conforming reifier per reifier shape, with
-/// that reifier as `sh:value`.
+/// SHACL 1.2 Core §7.8.5's textual definition uses one name, `t`, for two
+/// things. It opens "Let t be the triple term (focus node, $path, value node)",
+/// and the reporting sentences read "For each reifier t that does not conform to
+/// $reifierShape, there is a validation result with t as sh:value" and "there is
+/// no reified statement for the triple term t in the data graph, there is a
+/// validation result with t as sh:value". The approved W3C SHACL 1.2 tests
+/// resolve the name: `core/property/reifierShape-001` (a non-conforming reifier)
+/// and `core/property/reifierShape-002` (`sh:reificationRequired` with no
+/// reifier) both expect `sh:value "invalid"` — the value node. PurRDF follows
+/// the approved suite's reading for both results.
 ///
-/// `sh:reificationRequired` is the other variable: "there is no reified statement
-/// for the triple term t in the data graph, there is a validation result with t
-/// as sh:value" — there is no reifier to name, and its `t` is the triple term, so
-/// its result carries [`reified_triple_term`] instead (see
-/// [`eval_reifier_shapes`]).
-///
-/// The approved suite entries for both expect the VALUE NODE (`sh:value
-/// "invalid"`), which neither sentence produces; the conformance harness grades
-/// them against the normative text and records the delta.
+/// No information is lost by it. One result is produced per non-conforming
+/// reifier per reifier shape, and the reifier is named by every one of its
+/// `sh:detail` results, whose focus node it is. SHACL 1.2 Core §6.7.2.6 is the
+/// licence: "The property sh:detail may link a (parent) result with one or more
+/// SHACL instances of sh:AbstractResult that can provide further details about
+/// the cause of the (parent) result."
 fn reifier_result(
     ctx: &ReifierEvalContext<'_, '_, '_>,
-    reifier: TermId,
+    value: &ValueNode,
     source_roles: &[NamedNode],
     source: &ConstraintSource<'_>,
     messages: Vec<Literal>,
     inner_source_roles: &[NamedNode],
+    details: Vec<ValidationResult>,
 ) -> ValidationResult {
     let ds = ctx.context.store.core_view();
     let mut result = ValidationResult {
         focus_node: ctx.focus.to_term(ds),
         result_path: Some(ctx.path_term().clone()),
         path_structure: None,
-        value: Some(ValueNode::Interned(reifier).to_term(ds)),
+        value: Some(value.to_term(ds)),
         source_constraint_component: NamedNode::from(sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT),
         source_shape: ctx.ps.id.clone(),
         severity: source.severity.clone(),
@@ -1832,38 +1833,12 @@ fn reifier_result(
         path_box_roles: vec![],
         result_box_roles: vec![],
         attributions: vec![],
-        details: vec![],
+        details,
         annotations: vec![],
     };
     let merged = merge_box_roles(source_roles, inner_source_roles);
     result.apply_box_roles(&merged, ctx.path_roles);
     result
-}
-
-/// The quoted triple term `<< focus predicate value >>` as a report value — the
-/// `sh:value` of a `sh:reificationRequired` result (SHACL 1.2 Core §7.8.5: "there
-/// is a validation result with t as sh:value", `t` being the triple term).
-///
-/// **A materialization boundary.** It is called from inside a result builder and
-/// nowhere else, so a statement that is reified as its shape requires never builds
-/// one — which is the whole difference between this and the owned triple the arm
-/// used to construct for every value node before anything was known about it.
-///
-/// It is built rather than looked up because it must exist even when the data
-/// graph interns no such term: a `sh:reificationRequired` violation REPORTS the
-/// statement that is missing its reifier, and a statement the graph never quoted
-/// is precisely the one most likely to be missing one.
-fn reified_triple_term(
-    ds: &impl ShaclRead,
-    focus: &FocusNode,
-    predicate: &NamedNode,
-    value: &ValueNode,
-) -> Term {
-    Term::Triple(Box::new(Triple::new(
-        focus.to_term(ds),
-        predicate.clone(),
-        value.to_term(ds),
-    )))
 }
 
 /// The reifier resources declared for one quoted triple term, id-native.
@@ -4448,7 +4423,7 @@ mod tests {
     use super::*;
     use crate::report::Severity;
     use crate::shapes::Constraint;
-    use crate::term::{Literal, NamedNode};
+    use crate::term::{Literal, NamedNode, Triple};
 
     /// Build a [`ShaclData`] holder over a projected test dataset: Core lookups and
     /// the SPARQL dataset are the same frozen graph (no shapes-graph overlay).
@@ -4788,11 +4763,17 @@ mod tests {
             "ex:alpha sorts before ex:zeta canonically and interns after it, so this order is \
              the canonical one and its reverse is the insertion one"
         );
-        // Each result names the reifier it judged, so the order is observable in
-        // `sh:value` as well as in the message.
+        // Each result names the reifier it judged as the focus node of its
+        // `sh:detail` results, so the order is observable there as well as in the
+        // message; `sh:value` is the value node for both.
         let values: Vec<Option<&Term>> =
             results.iter().map(|result| result.value.as_ref()).collect();
-        assert_eq!(values, vec![Some(&ex("alpha")), Some(&ex("zeta"))]);
+        assert_eq!(values, vec![Some(&ex("bob")), Some(&ex("bob"))]);
+        let judged: Vec<Vec<&Term>> = results
+            .iter()
+            .map(|result| result.details.iter().map(|d| &d.focus_node).collect())
+            .collect();
+        assert_eq!(judged, vec![vec![&ex("alpha")], vec![&ex("zeta")]]);
     }
 
     /// The reifier-shape fixture: `ex:Shape` requires every `ex:knows` reifier to
@@ -4821,15 +4802,18 @@ mod tests {
     }
 
     /// **SHACL 1.2 Core §7.8.5: "For each reifier t that does not conform to
-    /// $reifierShape, there is a validation result with t as sh:value."**
+    /// $reifierShape, there is a validation result with t as sh:value"**, read
+    /// as the approved W3C test `core/property/reifierShape-001` reads it: the
+    /// value is the VALUE NODE.
     ///
     /// `ex:bad` breaks BOTH halves of the reifier shape, and still yields exactly
     /// one result — one per non-conforming reifier, not one per inner result —
-    /// whose `sh:value` is the reifier itself, not the triple term and not the
-    /// value node. The conforming reifier `ex:good` of the same statement yields
-    /// nothing, and neither does a statement whose only reifier conforms.
+    /// whose `sh:value` is the value node `ex:bob`, and whose `sh:detail` holds
+    /// the reifier's own two results, each with `ex:bad` as its focus node. The
+    /// conforming reifier `ex:good` of the same statement yields nothing, and
+    /// neither does a statement whose only reifier conforms.
     #[test]
-    fn reifier_shape_result_names_the_non_conforming_reifier() {
+    fn reifier_shape_result_names_the_value_node_and_details_the_reifier() {
         let store = load_store(
             "@prefix ex: <http://example.org/ns#> .\n\
              @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
@@ -4854,11 +4838,23 @@ mod tests {
             1,
             "one non-conforming reifier, one result: {results:?}"
         );
-        assert_eq!(results[0].value.as_ref(), Some(&ex("bad")));
+        assert_eq!(results[0].value.as_ref(), Some(&ex("bob")));
         assert_ne!(
             results[0].value.as_ref(),
             Some(&triple_term("alice", "knows", "bob")),
-            "the reifier, not the triple term it reifies"
+            "the value node, not the triple term"
+        );
+        let details: Vec<(&Term, Option<&Term>)> = results[0]
+            .details
+            .iter()
+            .map(|d| (&d.focus_node, d.result_path.as_ref()))
+            .collect();
+        let source = Term::NamedNode(NamedNode::new_unchecked(format!("{EX}source")));
+        let date = Term::NamedNode(NamedNode::new_unchecked(format!("{EX}date")));
+        assert_eq!(
+            details,
+            vec![(&ex("bad"), Some(&source)), (&ex("bad"), Some(&date))],
+            "the non-conforming reifier's own results, the reifier as focus node"
         );
         assert!(component_iri(&results)[0].ends_with("#ReifierShapeConstraintComponent"));
 
@@ -4868,11 +4864,12 @@ mod tests {
 
     /// **SHACL 1.2 Core §7.8.5: "If $reificationRequired is set to true and there
     /// is no reified statement for the triple term t in the data graph, there is
-    /// a validation result with t as sh:value."** There is no reifier to name,
-    /// so `sh:value` is the triple term; the valid neighbour, a statement with a
-    /// conforming reifier, yields nothing.
+    /// a validation result with t as sh:value"**, read as the approved W3C test
+    /// `core/property/reifierShape-002` reads it: `sh:value` is the value node,
+    /// not the triple term. The valid neighbour, a statement with a conforming
+    /// reifier, yields nothing.
     #[test]
-    fn reification_required_result_names_the_triple_term() {
+    fn reification_required_result_names_the_value_node() {
         let store = load_store(
             "@prefix ex: <http://example.org/ns#> .\n\
              @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
@@ -4890,9 +4887,14 @@ mod tests {
 
         let results = validate_shape(&store, &ex("alice"), shape);
         assert_eq!(results.len(), 1, "{results:?}");
-        assert_eq!(
+        assert_eq!(results[0].value.as_ref(), Some(&ex("bob")));
+        assert_ne!(
             results[0].value.as_ref(),
             Some(&triple_term("alice", "knows", "bob"))
+        );
+        assert!(
+            results[0].details.is_empty(),
+            "no reifier, nothing to detail"
         );
         assert!(component_iri(&results)[0].ends_with("#ReifierShapeConstraintComponent"));
 

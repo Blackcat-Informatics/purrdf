@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Integration test: run every corpus case through the real validator and compare
-//! against the frozen expected report by normalised tuple set.
+//! against the frozen expected report twice: by normalised tuple set, and as a
+//! whole report GRAPH under RDF isomorphism (RDFC-1.0), so everything the report
+//! carries beyond the tuple — nested `sh:detail` results, complex-path
+//! structure, types — is graded too. The one predicate the graph comparison
+//! leaves out is `sh:resultMessage`: the frozen reports record the messages a
+//! case is about and not every engine-generated one.
 //!
 //! Case discovery and the exact case count live in [`shacl_corpora`], the one
 //! reader for this crate's two SHACL corpora, so this file is only the grading
@@ -89,6 +94,18 @@ fn conformance_corpus() {
             ));
         }
 
+        // Compare the report graphs, sh:resultMessage aside.
+        let produced_graph = canonical_without_messages(&report.to_ntriples());
+        let expected_graph = canonical_without_messages(&expected_nt);
+        if produced_graph != expected_graph {
+            failures.push(format!(
+                "[{case_name}] report graph differs from the frozen report (RDFC-1.0, \
+                 sh:resultMessage aside):\n  PRODUCED:\n{}\n  EXPECTED:\n{}",
+                report.to_ntriples(),
+                expected_nt
+            ));
+        }
+
         if failures.len() == case_failures_before {
             passed += 1;
         }
@@ -115,4 +132,22 @@ fn conformance_corpus() {
         "no corpus case reached the corpus relation, so the relation case is grading \
          an empty environment rather than a resolved call",
     );
+}
+
+/// `sh:resultMessage`, the one predicate the graph comparison leaves out.
+const RESULT_MESSAGE: &str = "<http://www.w3.org/ns/shacl#resultMessage>";
+
+/// The RDFC-1.0 canonical N-Quads of a report's N-Triples without its
+/// `sh:resultMessage` triples. N-Triples holds one triple per line, and every
+/// report subject is a blank node or an IRI, so a line's predicate is its second
+/// whitespace-separated token.
+fn canonical_without_messages(nt: &str) -> String {
+    let kept: String = nt
+        .lines()
+        .filter(|line| line.split_whitespace().nth(1) != Some(RESULT_MESSAGE))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let dataset = purrdf::parse_dataset(kept.as_bytes(), "application/n-triples", None)
+        .unwrap_or_else(|e| panic!("a report's N-Triples parse: {e}"));
+    purrdf::canonicalize(dataset.as_ref()).nquads
 }

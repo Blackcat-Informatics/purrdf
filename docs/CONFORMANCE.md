@@ -622,13 +622,14 @@ way the matrix stays honest:
   isomorphism) and 203 SPARQL 1.2 RL tests across seven test types, each
   negative test required to fail at the stage its type names. Discovery
   refuses to lose a test: an unknown test type, an unreached manifest, an
-  unlisted test node or a duplicate id stops the run. Three approved
-  expectations contradict normative SHACL 1.2 Core text and are graded against
-  the spec-corrected report, each amendment quoting its clause and proven exact
+  unlisted test node or a duplicate id stops the run. One approved
+  expectation contradicts normative SHACL 1.2 Core text and is graded against
+  the spec-corrected report, the amendment quoting its clause and proven exact
   against controls: `core/node/xone-003` (§6.7.2.2, the result path of a
-  property shape's result) and `core/property/reifierShape-001` and `-002`
-  (§7.8.5, `sh:value` is the reifier, or the triple term for a missing
-  reification). Six node-expression expectations spell an integer-valued
+  property shape's result). `core/property/reifierShape-001` and `-002` are
+  graded as approved: §7.8.5's textual definition names both the triple term
+  and the reifier `t`, and PurRDF follows the approved tests' reading, the value
+  node as `sh:value`. Six node-expression expectations spell an integer-valued
   `xsd:decimal` non-canonically and are graded against the XSD 1.1 canonical
   form (Part 2 §3.3.3.1 and §E.1), which PurRDF emits. SPARQL 1.2 RL grammar
   rule [2] is implemented as written. Beside the suite,

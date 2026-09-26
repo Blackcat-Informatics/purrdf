@@ -1096,11 +1096,24 @@ fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
 
 /// Walk a SHACL report dataset and extract result tuples.
 ///
-/// Finds all `?r rdf:type sh:ValidationResult` nodes and reads their mandatory and
-/// optional predicates, building the same tuple shape as
-/// [`ValidationReport::result_tuples`].
+/// Reads the report's TOP-LEVEL results — the objects of `sh:result` — and their
+/// mandatory and optional predicates, building the same tuple set as
+/// [`ValidationReport::result_tuples`], which is top-level too. A nested
+/// `sh:detail` result is typed `sh:ValidationResult` as well, but it is not a
+/// result of the report: reading every typed node would count each detail as a
+/// report result of its own, so a round trip of a report with details would not
+/// give back its own tuples.
 pub fn tuples_from_dataset(data: &RdfDataset) -> BTreeSet<ResultTuple> {
-    let result_nodes = subjects_typed(data, sh::VALIDATION_RESULT);
+    let result_nodes: Vec<Term> = native_quads(
+        data,
+        None,
+        Some(&Term::NamedNode(NamedNode::from(sh::RESULT))),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .into_iter()
+    .map(|(_, _, result)| result)
+    .collect();
 
     let mut tuples = BTreeSet::new();
 
@@ -1262,6 +1275,45 @@ mod tests {
         assert_eq!(
             parsed, expected,
             "round-trip tuples must match original tuples"
+        );
+    }
+
+    /// A report whose result carries a `sh:detail` round-trips to its own
+    /// top-level tuples: the detail is emitted (typed `sh:ValidationResult`) but
+    /// is not read back as a result of the report. The control is the detail's
+    /// own tuple, which differs from the parent's in every compared field but the
+    /// component, so reading it as a report result would be visible.
+    #[test]
+    fn a_detail_result_is_not_read_back_as_a_report_result() {
+        let mut detail = make_result();
+        detail.focus_node = Term::NamedNode(NamedNode::new_unchecked("http://example.org/inner"));
+        detail.result_path = None;
+        detail.value = Some(Term::Literal(Literal::new_simple_literal("inner value")));
+        detail.source_shape =
+            Term::NamedNode(NamedNode::new_unchecked("http://example.org/InnerShape"));
+        let mut parent = make_result();
+        parent.details = vec![detail.clone()];
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![parent],
+            conformance_disallows: ConformanceDisallows::default(),
+        };
+
+        let nt = report.to_ntriples();
+        assert!(
+            nt.contains("<http://www.w3.org/ns/shacl#detail>"),
+            "the detail is emitted: {nt}"
+        );
+        let parsed = tuples_from_ntriples(&nt).expect("the report parses");
+        assert_eq!(parsed, report.result_tuples(), "only the top-level result");
+        let as_report = ValidationReport {
+            conforms: false,
+            results: vec![detail],
+            conformance_disallows: ConformanceDisallows::default(),
+        };
+        assert!(
+            parsed.is_disjoint(&as_report.result_tuples()),
+            "the detail's own tuple is not a report result"
         );
     }
 
