@@ -139,14 +139,23 @@ const TOTAL_CASES: usize = W3C_TOTAL_CASES + FIRST_PARTY_TOTAL_CASES + W3C12_VAL
 ///   seven, all under `sparql/pre-binding/`, each carrying a `sh:sparql` body that
 ///   SHACL's pre-binding rules forbid; the SHACL 1.2 suite has
 ///   [`W3C12_DECLARED_FAILURES`];
-/// * a SHACL 1.2 case named in [`W3C12_REFUSED_AT_LOAD`], with its reason.
+/// * a SHACL 1.2 case named in [`W3C12_REFUSED_AT_LOAD`], with its reason; and
+/// * a case both conformance harnesses grade as an EXACT expected refusal of an
+///   unresolvable import (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`):
+///   `sparql/component/validator-001` in the SHACL 1.0 and the SHACL 1.2 suite,
+///   which imports DASH, a document no one supplies.
 ///
 /// So this bucket is not an excuse list, and `Case::refusal_is_declared` enforces
 /// that correspondence case by case rather than trusting the number.
 ///
 /// The count is asserted in addition to the rule, because the rule alone would
 /// be satisfied by a parser that had started refusing NOTHING at all.
-const UNLOADABLE_CASES: usize = 7 + W3C12_DECLARED_FAILURES + W3C12_REFUSED_AT_LOAD.len();
+const UNLOADABLE_CASES: usize =
+    7 + W3C12_DECLARED_FAILURES + W3C12_REFUSED_AT_LOAD.len() + REFUSED_IMPORT_CASES;
+
+/// The cases, across both vendored suites, graded as an expected refusal of an
+/// unresolvable import: `validator-001` once in each.
+const REFUSED_IMPORT_CASES: usize = 2;
 
 /// The W3C SHACL 1.2 `sht:Validate` entries whose manifest declares
 /// `mf:result sht:Failure` — inputs a validator must reject, admitted to the
@@ -265,7 +274,13 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// Moved from 363 to 364 when the `sh:RulesEntailment` regime became supported:
 /// `inference-rules/rules-entailment-validation` now loads, packs, and its three
 /// lanes agree on a report — validation after the regime ran the rules.
-const AGREED_ON_REPORT_CASES: usize = 364;
+///
+/// Moved from 364 to 362 when `sparql/component/validator-001` (in each of the
+/// two vendored suites) stopped loading against a fabricated stand-in for the
+/// DASH document it imports: no document is supplied for DASH, the load refuses
+/// the unresolved import, and both conformance harnesses grade exactly that
+/// refusal (−2; see [`REFUSED_IMPORT_CASES`]).
+const AGREED_ON_REPORT_CASES: usize = 362;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -378,7 +393,13 @@ const AGREED_ON_REPORT_CASES: usize = 364;
 /// The first-party corpus gained `73-expr-if-list-true`, whose `xsd:integer`
 /// condition `1` is not the list `( true )` and so takes `shnex:else`: the lanes
 /// agree on that one violation, and on none for the `true` control (+1).
-const AGREED_WITH_RESULTS_CASES: usize = 343;
+///
+/// # Why it moved from 343 to 341
+///
+/// `sparql/component/validator-001`, once in each vendored suite, no longer loads:
+/// the DASH document it imports is not supplied, and each had agreed on its one
+/// expected violation (−2; see [`REFUSED_IMPORT_CASES`]).
+const AGREED_WITH_RESULTS_CASES: usize = 341;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 
@@ -662,7 +683,8 @@ fn product_corpus_equivalence() {
     for case in w3c_cases() {
         cases.push(Case {
             id: format!("w3c/{}", case.id),
-            refusal_is_declared: matches!(case.expected, Expected::Failure),
+            refusal_is_declared: matches!(case.expected, Expected::Failure)
+                || shacl_corpora::refused_import(&case.id).is_some(),
             loaded: load_w3c(&case),
         });
     }
@@ -680,6 +702,7 @@ fn product_corpus_equivalence() {
         let id = format!("w3c12/{}", case.id);
         cases.push(Case {
             refusal_is_declared: matches!(case.expected, Expected::Failure)
+                || shacl_corpora::refused_import(&case.id).is_some()
                 || W3C12_REFUSED_AT_LOAD
                     .iter()
                     .any(|(ledgered, _)| *ledgered == id),

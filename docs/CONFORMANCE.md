@@ -584,7 +584,17 @@ way the matrix stays honest:
   and none is claimed to. Both kinds are written in the same `sht:Validate`
   manifest format and are discovered and gated by
   `crates/shapes/tests/w3c_conformance.rs`; `vectors/shacl/af/README.md` says
-  which files are which. `sh:expression`, custom SPARQL constraint components,
+  which files are which. `sparql/component/validator-001` imports DASH
+  (`<http://datashapes.org/dash>`), which cannot be supplied: DASH is not
+  well-formed SHACL (its `sh:validator` values include `sh:JSValidator`s, where
+  SHACL 1.2 SPARQL Extensions §4.2.3 says "The values of sh:validator must be
+  ASK-based validators", and `dash:uriTemplate` declares a parameter named
+  `value`, which §4.2.1 forbids), and its shapes would change the verdict.
+  PurRDF fetches nothing and refuses an unresolved import, so this case is
+  graded as an exact expected refusal — `ShapesImportError::Unresolved` naming
+  exactly that IRI, a load success being a failure — and reported as
+  **refused: unresolvable import**, never as a pass; the SHACL 1.2 suite's copy
+  is graded the same way. `sh:expression`, custom SPARQL constraint components,
   pre-binding semantics, and user-defined `sh:SPARQLFunction` calls are
   implemented and exercised; `sh:SPARQLTargetType` is implemented.
   **SHACL Rules** (`sh:rule` — both `sh:TripleRule` and

@@ -43,7 +43,13 @@
 //! - the expected report's `sh:conformanceDisallows` values are the validation
 //!   parameter the case runs under, and the report must echo them;
 //! - `mf:result sht:Failure` means the validator must REJECT the test input
-//!   (any engine `Err` passes; a successful validation fails).
+//!   (any engine `Err` passes; a successful validation fails);
+//! - a case whose shapes graph imports an ontology no document can be supplied
+//!   for (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT` — `validator-001`, which
+//!   imports DASH) is graded as an EXACT expected refusal: the load must fail with
+//!   `ShapesImportError::Unresolved` naming exactly that import, and a load that
+//!   succeeds is a failure. It is reported as "refused: unresolvable import",
+//!   never as a pass.
 //!
 //! ## Xfail ledger
 //!
@@ -60,7 +66,7 @@ mod shacl_corpora;
 
 use std::collections::BTreeMap;
 
-use shacl_corpora::report_grading::run_validate_case;
+use shacl_corpora::report_grading::{grade_refused_import, run_validate_case};
 use shacl_corpora::{W3C_TOTAL_CASES, w3c_cases};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
@@ -75,6 +81,11 @@ const XFAIL: &[(&str, &str)] = &[
     // All ledgered AF tests now pass; keep this ledger empty unless new
     // validation-only gaps are discovered.
 ];
+
+/// The SHACL 1.0 cases graded as an expected refusal of an unresolvable import
+/// (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`): `sparql/component/validator-001`,
+/// which imports DASH.
+const W3C_REFUSED_IMPORTS: usize = 1;
 
 // ── Running one case ──────────────────────────────────────────────────────────
 //
@@ -101,10 +112,11 @@ fn w3c_shacl_conformance() {
     }
 
     let mut errors: Vec<String> = Vec::new();
-    // (section, passed, xfailed) in discovery order.
-    let mut sections: Vec<(String, usize, usize)> = Vec::new();
+    // (section, passed, xfailed, refused) in discovery order.
+    let mut sections: Vec<(String, usize, usize, usize)> = Vec::new();
     let mut total_passed = 0usize;
     let mut total_xfailed = 0usize;
+    let mut total_refused = 0usize;
 
     // Silence the default panic hook while running cases: engine panics are
     // caught by `report_grading::no_panic` and reported as ledgered failures, so
@@ -113,11 +125,21 @@ fn w3c_shacl_conformance() {
     std::panic::set_hook(Box::new(|_| {}));
 
     for tc in &tests {
-        if sections.last().is_none_or(|(s, _, _)| s != &tc.section) {
-            sections.push((tc.section.clone(), 0, 0));
+        if sections.last().is_none_or(|(s, ..)| s != &tc.section) {
+            sections.push((tc.section.clone(), 0, 0, 0));
         }
         let slot = sections.last_mut().expect("section pushed above");
 
+        if let Some(iris) = shacl_corpora::refused_import(&tc.id) {
+            match grade_refused_import(tc, iris) {
+                Ok(()) => {
+                    slot.3 += 1;
+                    total_refused += 1;
+                }
+                Err(e) => errors.push(format!("FAIL [{id}]: {e}", id = tc.id)),
+            }
+            continue;
+        }
         let verdict = run_validate_case(tc);
         match (verdict, xfail.get(tc.id.as_str())) {
             (Ok(()), None) => {
@@ -140,11 +162,15 @@ fn w3c_shacl_conformance() {
 
     // Scoreboard: one line per manifest section.
     println!("W3C SHACL conformance scoreboard ({} tests):", tests.len());
-    for (section, passed, xfailed) in &sections {
-        println!("  {section:<28} passed {passed:>3}  xfailed {xfailed:>3}");
+    for (section, passed, xfailed, refused) in &sections {
+        println!(
+            "  {section:<28} passed {passed:>3}  refused-unresolvable-import {refused:>2}  \
+             xfailed {xfailed:>3}"
+        );
     }
     println!(
-        "  TOTAL: passed {total_passed}, xfailed {total_xfailed}, ledger {}",
+        "  TOTAL: passed {total_passed}, refused-unresolvable-import {total_refused}, xfailed \
+         {total_xfailed}, ledger {}",
         XFAIL.len()
     );
 
@@ -162,8 +188,12 @@ fn w3c_shacl_conformance() {
         "xfail count must match the ledger exactly"
     );
     assert_eq!(
-        total_passed + total_xfailed,
+        total_refused, W3C_REFUSED_IMPORTS,
+        "every expected import refusal is reported as one, and nothing else is"
+    );
+    assert_eq!(
+        total_passed + total_refused + total_xfailed,
         W3C_TOTAL_CASES,
-        "every discovered test must be a pass or a ledgered xfail"
+        "every discovered test must be a pass, an expected import refusal or a ledgered xfail"
     );
 }

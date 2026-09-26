@@ -73,7 +73,9 @@ use purrdf_shapes::srl::{self, SrlError};
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::{apply_rules, engine, shapes, sparql, text_ingest};
 
-use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
+use shacl_corpora::report_grading::{
+    grade, grade_against, grade_refused_import, no_panic, produce,
+};
 use shacl_corpora::shacl12::{
     Body, Case12, InferCase, InferExpected, NodeExprCase, SrlCase, SrlKind, W3C12_TOTAL_CASES,
     shacl12_cases,
@@ -705,7 +707,10 @@ fn srl_stage(error: &SrlError) -> &'static str {
 /// Grade one entry.
 fn run(case: &Case12) -> Result<(), String> {
     match &case.body {
-        Body::Validate(tc) => run_validate(&case.id, case.listed, tc),
+        Body::Validate(tc) => match shacl_corpora::refused_import(&case.id) {
+            Some(iris) => grade_refused_import(tc, iris),
+            None => run_validate(&case.id, case.listed, tc),
+        },
         Body::NodeExpr(tc) => run_node_expr(&case.id, tc),
         Body::Infer(tc) => run_infer(tc),
         Body::Srl(tc) => run_srl(tc),
@@ -721,12 +726,18 @@ enum Category {
     /// against the canonical form of its one non-canonical expected literal, and
     /// agrees with THAT — never counted as a pass of the approved expectation.
     UpstreamErratum,
+    /// Refused: its shapes graph imports an ontology no document can be supplied
+    /// for (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`), and the load refused it
+    /// with exactly `ShapesImportError::Unresolved` naming exactly that import.
+    RefusedImport,
 }
 
 impl Category {
     /// The category an approved entry is reported under when it agrees.
     fn of(case: &Case12) -> Self {
-        if NON_CANONICAL_EXPECTATIONS
+        if shacl_corpora::refused_import(&case.id).is_some() {
+            Self::RefusedImport
+        } else if NON_CANONICAL_EXPECTATIONS
             .iter()
             .any(|(id, ..)| *id == case.id)
         {
@@ -742,17 +753,22 @@ impl Category {
 struct Tally {
     passed: usize,
     errata: usize,
+    refused: usize,
     xfailed: usize,
 }
 
 impl Tally {
     fn line(self) -> String {
         format!(
-            "passed {:>3}  upstream-errata {:>2}  xfailed {:>3}",
-            self.passed, self.errata, self.xfailed
+            "passed {:>3}  upstream-errata {:>2}  refused-unresolvable-import {:>2}  \
+             xfailed {:>3}",
+            self.passed, self.errata, self.refused, self.xfailed
         )
     }
 }
+
+/// The SHACL 1.2 entries graded as an expected refusal of an unresolvable import.
+const W3C12_REFUSED_IMPORTS: usize = 1;
 
 #[test]
 fn w3c_shacl12_conformance() {
@@ -799,6 +815,7 @@ fn w3c_shacl12_conformance() {
                 (Ok(()), None) => Some(match Category::of(case) {
                     Category::Pass => |t| &mut t.passed,
                     Category::UpstreamErratum => |t| &mut t.errata,
+                    Category::RefusedImport => |t| &mut t.refused,
                 }),
                 (Err(_), Some(_)) => Some(|t| &mut t.xfailed),
                 (Ok(()), Some(reason)) => {
@@ -836,9 +853,11 @@ fn w3c_shacl12_conformance() {
         println!("  {ty:<36} {}", tally.line());
     }
     println!(
-        "  W3C12 TOTAL: passed {}, upstream-errata {}, xfailed {}, ledger {}",
+        "  W3C12 TOTAL: passed {}, upstream-errata {}, refused-unresolvable-import {}, \
+         xfailed {}, ledger {}",
         total.passed,
         total.errata,
+        total.refused,
         total.xfailed,
         XFAIL.len()
     );
@@ -859,13 +878,18 @@ fn w3c_shacl12_conformance() {
         "every upstream erratum is reported as one, and nothing else is"
     );
     assert_eq!(
+        total.refused, W3C12_REFUSED_IMPORTS,
+        "every expected import refusal is reported as one, and nothing else is"
+    );
+    assert_eq!(
         unlisted, W3C12_UNLISTED_ENTRIES,
         "entries of unlisted vendored files"
     );
     assert_eq!(
-        total.passed + total.errata + total.xfailed,
+        total.passed + total.errata + total.refused + total.xfailed,
         W3C12_TOTAL_CASES - W3C12_UNLISTED_ENTRIES,
-        "every approved test must be a pass, an upstream erratum or a ledgered xfail"
+        "every approved test must be a pass, an upstream erratum, an expected import \
+         refusal or a ledgered xfail"
     );
 }
 
@@ -1789,4 +1813,38 @@ fn the_grader_grades_sh_detail_where_it_is_stated() {
     );
     shacl_corpora::report_grading::run_validate_case(tc)
         .expect("a produced detail the expectation does not state is not graded");
+}
+
+/// The expected import refusal is EXACT in both directions. `validator-001`
+/// refused for exactly DASH passes; the same case expected to be refused for a
+/// different import fails; and a case whose shapes graph LOADS — here the
+/// neighbouring `sparql/component/optional-001`, which imports nothing
+/// unresolvable — fails when graded as a refusal, so a surprise load success can
+/// never read as the refusal the category reports.
+#[test]
+fn the_expected_import_refusal_is_exact() {
+    let cases = shacl12_cases();
+    let validate = |id: &str| -> &W3cCase {
+        match &cases
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("{id} is discovered"))
+            .body
+        {
+            Body::Validate(tc) => tc,
+            _ => panic!("{id} is an sht:Validate test"),
+        }
+    };
+    let refused = validate("sparql/component/validator-001");
+    grade_refused_import(refused, &[shacl_corpora::DASH]).expect("refused for exactly DASH");
+    assert!(
+        grade_refused_import(refused, &["http://example.org/ns#other"]).is_err(),
+        "a refusal naming another import is not this refusal"
+    );
+    let loads = validate("sparql/component/optional-001");
+    shacl_corpora::report_grading::run_validate_case(loads)
+        .expect("the neighbouring case loads and agrees with its report");
+    let error = grade_refused_import(loads, &[shacl_corpora::DASH])
+        .expect_err("a case that loads is not an import refusal");
+    assert!(error.contains("LOADED"), "{error}");
 }

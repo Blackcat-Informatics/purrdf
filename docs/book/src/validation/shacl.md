@@ -350,6 +350,18 @@ six are upstream errata, not passes: the harness reports them under their own
 label, and grades each one exactly against the canonical form, not by
 comparing values.
 
+`sparql/component/validator-001`, in this suite and in the SHACL 1.0 suite,
+imports DASH (`<http://datashapes.org/dash>`). No document can be supplied for
+it. DASH is not well-formed SHACL: some of its `sh:validator` values are
+`sh:JSValidator`s, but SHACL 1.2 SPARQL Extensions section 4.2.3 says "The
+values of sh:validator must be ASK-based validators". Its `dash:uriTemplate`
+also declares a parameter named `value`, which section 4.2.1 forbids. Its
+shapes would also change the verdict. PurRDF fetches nothing and refuses an
+unresolved import. So the case is graded as an exact expected refusal: loading
+must fail with `ShapesImportError::Unresolved` naming exactly that IRI, and a
+load that succeeds is a failure. The case is reported as "refused: unresolvable
+import", never as a pass.
+
 SPARQL 1.2 RL grammar rule [2],
 `RuleOrDataBlock ::= Prologue ( RuleOrData+ ( Prologue1 RuleOrData? )* )?`, is
 implemented as written: once a declaration follows a rule or data block, at

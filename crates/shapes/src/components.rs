@@ -1151,38 +1151,27 @@ mod tests {
         Term::Literal(Literal::new_simple_literal(s))
     }
 
-    /// DASH, the TopBraid test vocabulary the W3C `validator-001` case imports.
-    const DASH: &str = "http://datashapes.org/dash";
-
     fn validate_fixture(ttl: &str, base_iri: &str) -> crate::report::ValidationReport {
+        validate_fixture_with_imports(ttl, base_iri, &crate::imports::ShapesImports::new())
+            .expect("shapes parse")
+    }
+
+    fn validate_fixture_with_imports(
+        ttl: &str,
+        base_iri: &str,
+        imports: &crate::imports::ShapesImports,
+    ) -> Result<crate::report::ValidationReport, crate::error::ShapesError> {
         let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
         let dataset = document.dataset;
-        // `validator-001` imports DASH, which is not vendored and which nothing it asserts
-        // reads: a stand-in declaring the ontology resolves the import, as a caller would.
-        let mut imports = crate::imports::ShapesImports::new();
-        if purrdf_core::imports::imported_iris(&dataset)
-            .iter()
-            .any(|iri| iri == DASH)
-        {
-            imports
-                .insert_turtle(
-                    DASH,
-                    "<http://datashapes.org/dash> \
-                     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
-                     <http://www.w3.org/2002/07/owl#Ontology> .\n",
-                )
-                .expect("the DASH stand-in parses");
-        }
         let shapes = crate::shapes::from_dataset_with_base(
             &dataset,
             Some(base_iri),
             &document.prefixes,
             None,
             None,
-            &imports,
-        )
-        .expect("shapes parse");
-        crate::engine::validate_dataset(&dataset, &shapes).expect("validation evaluates")
+            imports,
+        )?;
+        Ok(crate::engine::validate_dataset(&dataset, &shapes).expect("validation evaluates"))
     }
 
     #[test]
@@ -1244,24 +1233,76 @@ mod tests {
         assert!(error.contains("only one is allowed"), "{error}");
     }
 
+    /// The W3C `validator-001` mechanism — a custom component with two parameters
+    /// whose ASK validator flags every value that is not their concatenation, typed
+    /// through SUBCLASSES of `sh:ConstraintComponent` and `sh:SPARQLAskValidator` —
+    /// on an `example.org` fixture whose subclass axioms live in an IMPORTED
+    /// document, written for this test. With the document supplied, exactly the
+    /// non-conforming target `"Hallo Welt"` is reported; without it, the load
+    /// refuses the unresolved import by name.
     #[test]
     fn eval_ask_validator_001() {
-        let ttl = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../vectors/shacl/sparql/component/validator-001.ttl"
-        ))
-        .expect("fixture exists");
-        let report = validate_fixture(
-            &ttl,
-            "http://datashapes.org/sh/tests/sparql/component/validator-001.test",
+        const VOCABULARY: &str = "http://example.org/validator-vocabulary";
+        let shapes = format!(
+            r#"
+            @prefix ex: <http://example.org/ns#> .
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+            <http://example.org/shapes> owl:imports <{VOCABULARY}> .
+            ex:TestConstraintComponent a ex:ConstraintComponent ;
+                sh:parameter ex:TestParameter1, ex:TestParameter2 ;
+                sh:validator [
+                    a ex:SPARQLAskValidator ;
+                    sh:ask "ASK {{ FILTER (?value = CONCAT($test1, $test2)) }}" ;
+                ] .
+            ex:TestParameter1 a sh:Parameter ; sh:path ex:test1 ; sh:datatype xsd:string .
+            ex:TestParameter2 a sh:Parameter ; sh:path ex:test2 ; sh:datatype xsd:string .
+            ex:TestShape a sh:NodeShape ;
+                ex:test1 "Hello " ;
+                ex:test2 "World" ;
+                sh:targetNode "Hallo Welt", "Hello World" .
+            "#
         );
+        let vocabulary = format!(
+            r#"
+            @prefix ex: <http://example.org/ns#> .
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            <{VOCABULARY}> a owl:Ontology .
+            ex:ConstraintComponent rdfs:subClassOf sh:ConstraintComponent .
+            ex:SPARQLAskValidator rdfs:subClassOf sh:SPARQLAskValidator .
+            "#
+        );
+        let mut imports = crate::imports::ShapesImports::new();
+        imports
+            .insert_turtle(VOCABULARY, &vocabulary)
+            .expect("the imported document parses");
+        let report = validate_fixture_with_imports(&shapes, "http://example.org/shapes", &imports)
+            .expect("the imported document resolves the import");
         assert!(!report.conforms);
         assert_eq!(report.results.len(), 1, "exactly one non-conforming target");
         assert_eq!(report.results[0].focus_node, lit("Hallo Welt"));
         assert_eq!(report.results[0].value, Some(lit("Hallo Welt")));
         assert_eq!(
             report.results[0].source_constraint_component.as_str(),
-            "http://datashapes.org/sh/tests/sparql/component/validator-001.test#TestConstraintComponent"
+            "http://example.org/ns#TestConstraintComponent"
+        );
+
+        let refused = validate_fixture_with_imports(
+            &shapes,
+            "http://example.org/shapes",
+            &crate::imports::ShapesImports::new(),
+        )
+        .expect_err("an import no document resolves is refused");
+        assert!(
+            matches!(
+                refused.as_imports(),
+                Some(crate::imports::ShapesImportError::Unresolved { iris })
+                    if iris == &[VOCABULARY.to_owned()]
+            ),
+            "refused for exactly the unresolved import: {refused}"
         );
     }
 

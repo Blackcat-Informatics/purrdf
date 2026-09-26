@@ -1766,47 +1766,72 @@ fn shapes_base_is_the_shapes_documents_parse_base() {
     );
 }
 
-/// The vendored W3C `sparql/component/validator-001` test imports DASH, a genuinely external
-/// ontology no document here holds, so it is refused without `--import` — and validates to
-/// the W3C verdict once a document is named for it. No DASH document is vendored, so a
-/// minimal stand-in declaring the imported ontology proves the `--import` path.
+/// The imported vocabulary of [`EXTERNAL_IMPORT_SHAPES`]: the subclass axioms that make
+/// `ex:ConstraintComponent` a constraint-component class and `ex:SPARQLAskValidator` an
+/// ASK-validator class.
+const EXTERNAL_IMPORT_VOCABULARY: &str = concat!(
+    "@prefix ex: <http://example.org/ns#> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "<http://example.org/validator-vocabulary> a owl:Ontology .\n",
+    "ex:ConstraintComponent rdfs:subClassOf sh:ConstraintComponent .\n",
+    "ex:SPARQLAskValidator rdfs:subClassOf sh:SPARQLAskValidator .\n",
+);
+
+/// A custom component with two parameters whose ASK validator flags every value that is
+/// not their concatenation — the W3C `validator-001` mechanism, on `example.org` terms —
+/// in a shapes graph that imports [`EXTERNAL_IMPORT_VOCABULARY`] by IRI. Its targets are
+/// literals, so the file is its own data graph.
+const EXTERNAL_IMPORT_SHAPES: &str = concat!(
+    "@prefix ex: <http://example.org/ns#> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    "<http://example.org/validator-shapes> owl:imports <http://example.org/validator-vocabulary> .\n",
+    "ex:TestConstraintComponent a ex:ConstraintComponent ;\n",
+    "    sh:parameter ex:TestParameter1, ex:TestParameter2 ;\n",
+    "    sh:validator [ a ex:SPARQLAskValidator ;\n",
+    "        sh:ask \"ASK { FILTER (?value = CONCAT($test1, $test2)) }\" ] .\n",
+    "ex:TestParameter1 a sh:Parameter ; sh:path ex:test1 ; sh:datatype xsd:string .\n",
+    "ex:TestParameter2 a sh:Parameter ; sh:path ex:test2 ; sh:datatype xsd:string .\n",
+    "ex:TestShape a sh:NodeShape ; ex:test1 \"Hello \" ; ex:test2 \"World\" ;\n",
+    "    sh:targetNode \"Hallo Welt\", \"Hello World\" .\n",
+);
+
+/// A shapes graph that imports an ontology no document here holds is refused without
+/// `--import`, naming the import and the flag that supplies it — and validates once a
+/// document is named for it: one violation, on the focus node `"Hallo Welt"`.
 #[test]
 fn an_external_import_is_refused_until_a_document_is_named_for_it() {
-    const VALIDATOR_001: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../vectors/shacl/sparql/component/validator-001.ttl"
-    );
-    const DASH: &str = "http://datashapes.org/dash";
+    const VOCABULARY: &str = "http://example.org/validator-vocabulary";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", EXTERNAL_IMPORT_SHAPES);
 
-    let refused = run(&["validate", "--shapes", VALIDATOR_001, VALIDATOR_001]);
+    let refused = run(&["validate", "--shapes", &shapes, &shapes]);
     let err = stderr(&refused);
     assert_eq!(code(&refused), 1, "{err}");
     assert!(
-        err.contains(&format!("<{DASH}>")) && err.contains(&format!("--import {DASH}=FILE")),
+        err.contains(&format!("<{VOCABULARY}>"))
+            && err.contains(&format!("--import {VOCABULARY}=FILE")),
         "the refusal names the external import and its pair: {err}"
     );
     assert!(stdout(&refused).is_empty(), "no report is written");
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    let stand_in = write_file(
-        dir.path(),
-        "dash-stand-in.ttl",
-        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
-         <http://datashapes.org/dash> a owl:Ontology .\n",
-    );
+    let vocabulary = write_file(dir.path(), "vocabulary.ttl", EXTERNAL_IMPORT_VOCABULARY);
     let out = run(&[
         "validate",
         "--shapes",
-        VALIDATOR_001,
+        &shapes,
         "--import",
-        &format!("{DASH}={stand_in}"),
-        VALIDATOR_001,
+        &format!("{VOCABULARY}={vocabulary}"),
+        &shapes,
     ]);
     let err = stderr(&out);
     assert_eq!(code(&out), 0, "a named document resolves the import: {err}");
     assert!(
         err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
-        "the W3C verdict: one violation: {err}"
+        "one violation: {err}"
     );
     assert!(
         stdout(&out).contains("<http://www.w3.org/ns/shacl#focusNode> \"Hallo Welt\""),

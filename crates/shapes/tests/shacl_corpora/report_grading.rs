@@ -82,8 +82,16 @@ use purrdf_shapes::term::Term;
 
 use super::{Expected, ExpectedResult, Multiset, Tuple, W3cCase, file_iri, norm};
 
-/// Load graphs, run the engine. `Err` carries the parse/validation error.
-pub(crate) fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
+/// The shapes graph a case loads: its dataset, and the shapes the loader built from
+/// it — or the loader's TYPED error. The outer `Err` is a file that cannot be read or
+/// Turtle that does not parse.
+type LoadedShapes = (
+    std::sync::Arc<purrdf::RdfDataset>,
+    Result<purrdf_shapes::shapes::Shapes, purrdf_shapes::ShapesError>,
+);
+
+/// Read and parse a case's shapes graph and load it, with the harness's import table.
+fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
     let purrdf_shapes::text_ingest::TurtleDocument {
@@ -95,16 +103,43 @@ pub(crate) fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
         Some(&file_iri(&tc.shapes_path)),
     )
     .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    let shapes_graph_iri = tc.shapes_graph_iri.as_deref();
     let shapes = purrdf_shapes::shapes::from_dataset_with_base(
         &shapes_dataset,
         None,
         &doc_prefixes,
         None,
-        shapes_graph_iri.map(ToOwned::to_owned),
+        tc.shapes_graph_iri.clone(),
         &super::w3c_case_imports(&shapes_dataset),
-    )
-    .map_err(|e| format!("shapes parse error: {e}"))?;
+    );
+    Ok((shapes_dataset, shapes))
+}
+
+/// Grade a case listed in [`super::REFUSED_UNRESOLVABLE_IMPORT`]: loading its shapes
+/// graph must fail with EXACTLY `ShapesImportError::Unresolved` naming exactly
+/// `iris`, in that order. A load that SUCCEEDS is a hard failure — the import was
+/// resolved by something nobody supplied — and so is any other error, which would
+/// be refusing the case for a reason that is not the one it is reported under.
+pub(crate) fn grade_refused_import(tc: &W3cCase, iris: &[&str]) -> Result<(), String> {
+    let (_, loaded) = no_panic(|| load_shapes(tc))?;
+    match loaded {
+        Err(purrdf_shapes::ShapesError::Imports(
+            purrdf_shapes::ShapesImportError::Unresolved { iris: refused },
+        )) if refused.iter().map(String::as_str).eq(iris.iter().copied()) => Ok(()),
+        Err(other) => Err(format!(
+            "expected a refusal of exactly the unresolved imports {iris:?}, got: {other}"
+        )),
+        Ok(_) => Err(format!(
+            "expected a refusal of the unresolved imports {iris:?}, but the shapes graph \
+             LOADED — an import nobody supplied was resolved"
+        )),
+    }
+}
+
+/// Load graphs, run the engine. `Err` carries the parse/validation error.
+pub(crate) fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
+    let (shapes_dataset, shapes) = load_shapes(tc)?;
+    let shapes = shapes.map_err(|e| format!("shapes parse error: {e}"))?;
+    let shapes_graph_iri = tc.shapes_graph_iri.as_deref();
 
     let data_dataset = if tc.data_path == tc.shapes_path {
         shapes_dataset
