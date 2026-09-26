@@ -8,6 +8,13 @@ on:
     branches:
       - main
 
+# A newer push to a pull request supersedes the run the previous one started, so that
+# run is cancelled rather than left to hold runners for a result nobody reads. Runs on
+# main (and on tags) are never cancelled: every commit there keeps its whole record.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
 permissions:
   contents: read
 
