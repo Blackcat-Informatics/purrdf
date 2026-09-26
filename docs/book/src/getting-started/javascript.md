@@ -122,6 +122,19 @@ over the host's answer. Its measuring run yields and stops on its `signal` like
 any other job, and it takes no ceiling, because the run is metered, never
 bounded.
 
+SHACL validation evaluates SPARQL as well: `sh:SPARQLTarget` queries,
+SHACL-SPARQL constraints, and SHACL-AF node expressions and rules. The SHACL
+functions therefore have twins too: `shaclValidateToSarifAsync`,
+`shaclValidateChangesToSarifAsync`, `shaclEntailAsync`, and
+`shaclProductValidateToSarifAsync` with its `Rebuild`, `Expecting` and
+`RebuildExpecting` forms. Each takes its synchronous twin's arguments followed
+by the host options and returns exactly what the synchronous twin returns; a
+refused product rejects with the same `ShaclProductRefusal`. The `signal` is
+polled between focus nodes as well as inside queries, so a validation with no
+SPARQL in it still yields and stops. SHACL admits `SERVICE` only in a query that
+pre-binds nothing, such as a `sh:SPARQLTarget`; a constraint query that uses
+`SERVICE` is refused when the shapes graph loads, on either lane.
+
 The twins run over WebAssembly JavaScript Promise Integration (JSPI), on by
 default in Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and
 Cloudflare Workers (workerd). `hasAsyncQueries()` reports whether the current

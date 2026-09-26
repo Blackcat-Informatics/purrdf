@@ -140,6 +140,18 @@ the parsing, the evaluation, the joins, the `SILENT` semantics and the result en
   `Dataset.queryAsync`. Each
   reads a snapshot of the dataset taken when it starts and resolves to its synchronous
   twin's shape.
+- **SHACL twins** — `shaclValidateToSarifAsync`, `shaclValidateChangesToSarifAsync`,
+  `shaclEntailAsync`, `shaclProductValidateToSarifAsync`,
+  `shaclProductValidateToSarifRebuildAsync`, `shaclProductValidateToSarifExpectingAsync`
+  and `shaclProductValidateToSarifRebuildExpectingAsync`. SHACL evaluates SPARQL, so each
+  runs its synchronous twin's own body as a job whose signal and sources are installed as
+  the SHACL engine's execution scope (`purrdf_shapes::sparql::enter_execution_scope`):
+  every query the validation runs reaches the host's `SERVICE` answer, and the signal is
+  polled between focus nodes as well as inside queries. The engine's per-thread scopes
+  are swapped with the stack context at every suspension, so a synchronous validation
+  run while a job waits sees none of the job's governors, sources or registries. Each
+  resolves to exactly what its synchronous twin returns; a refused product rejects with
+  the same `ShaclProductRefusal`.
 - **Host handlers** — `resolveService(request, ctx)` answers a `SERVICE` request with
   SPARQL Results JSON, a `Response`, or a typed failure: `{ kind: "transport" }`, which
   `SERVICE SILENT` swallows to the join identity, or `{ kind: "denied" }`, which fails

@@ -2187,4 +2187,95 @@ export function shaclProductValidateToSarifExpecting(
   expectIdentity: string,
 ): string;
 
+/**
+ * The host options a SHACL asynchronous twin accepts, and nothing else. A synchronous
+ * SHACL entry takes no ceiling, so neither does its twin: a deadline is a `signal`
+ * (`AbortSignal.timeout(ms)`). `shapesBase` stays positional, where the synchronous twin
+ * takes it.
+ */
+export interface AsyncShaclOptions extends AsyncHostOptions {}
+
+/**
+ * The asynchronous twin of `shaclValidateToSarif`: resolves to the same SARIF 2.1.0 JSON
+ * string, byte for byte.
+ *
+ * SHACL evaluates SPARQL — `sh:SPARQLTarget` queries, SHACL-SPARQL constraints and
+ * validators, SHACL-AF node expressions and rules — so the validation runs as a job like
+ * every other evaluating twin: every query it runs suspends on `resolveService` (and
+ * `localServices`), and the job yields to the event loop every `yieldEveryPolls` polls
+ * and stops on `signal`. The signal is polled between focus nodes as well as inside
+ * queries, so a validation with no SPARQL in it still yields and stops. A `SERVICE` the
+ * synchronous twin refuses for want of a source is answered by the host. (SHACL itself
+ * admits `SERVICE` only in a query that pre-binds nothing, such as a `sh:SPARQLTarget`:
+ * a constraint's query with `SERVICE` in it is refused while the shapes graph loads, on
+ * either lane.) A stop rejects — with the signal's reason, or its `TimeoutError` — and
+ * never resolves to the report of a validation that did not finish.
+ */
+export function shaclValidateToSarifAsync(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string | null,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/**
+ * The asynchronous twin of `shaclValidateChangesToSarif`: resolves to the same
+ * `ShaclChangeValidation` (call `free()` on it), under the job semantics
+ * `shaclValidateToSarifAsync` describes.
+ */
+export function shaclValidateChangesToSarifAsync(
+  shapesTtl: string,
+  dataNt: string,
+  addedNt?: string | null,
+  removedNt?: string | null,
+  shapesBase?: string | null,
+  options?: AsyncShaclOptions | null,
+): Promise<ShaclChangeValidation>;
+
+/**
+ * The asynchronous twin of `shaclEntail`: resolves to the same materialized N-Triples.
+ * A `sh:SPARQLRule`'s CONSTRUCT and every node expression run as the job's queries, and
+ * the signal is polled between the focus nodes of every rule.
+ */
+export function shaclEntailAsync(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string | null,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/**
+ * The asynchronous twin of `shaclProductValidateToSarif`: resolves to the same SARIF
+ * string, or rejects with the same `ShaclProductRefusal` the synchronous twin throws
+ * (its `evidence.async` added, as on every asynchronous rejection).
+ */
+export function shaclProductValidateToSarifAsync(
+  product: Uint8Array,
+  dataNt: string,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifRebuild`. */
+export function shaclProductValidateToSarifRebuildAsync(
+  product: Uint8Array,
+  dataNt: string,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifExpecting`. */
+export function shaclProductValidateToSarifExpectingAsync(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifRebuildExpecting`. */
+export function shaclProductValidateToSarifRebuildExpectingAsync(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+  options?: AsyncShaclOptions | null,
+): Promise<string>;
+
 export function version(): string;

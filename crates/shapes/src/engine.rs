@@ -1027,9 +1027,15 @@ fn evaluate_shape_focus_nodes(
     if let Some(governors) = crate::sparql::current_governors() {
         let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&bound_functions));
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
-        let _governor_scope = crate::sparql::enter_governor_scope(governors);
+        let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&governors));
         let mut out = Vec::new();
         for focus in focus_nodes {
+            // The stop signal is polled between focus nodes as well as inside every
+            // query, so a validation with no SPARQL in it — Core constraints read the IR
+            // directly and charge nothing — still stops, and a host that slices its
+            // signal into yields still gets the event loop back while it runs. Only
+            // this governed branch pays for it: the ungoverned one has no signal.
+            crate::sparql::poll_between_evaluations(Some(&governors))?;
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,

@@ -417,7 +417,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `explainQueryAsync`, with `Dataset.queryAsync` beside them. EXPLAIN evaluates the
   query it measures, so `explainQueryAsync` explains a `SERVICE` query over the host's
   answer where `explainQuery` refuses it for want of a source, and it yields and stops
-  on its signal while it measures. `queryGovernedNegotiatedAsync` answers a governed
+  on its signal while it measures. SHACL evaluates SPARQL too, so the SHACL
+  functions have twins: `shaclValidateToSarifAsync`, `shaclValidateChangesToSarifAsync`,
+  `shaclEntailAsync`, `shaclProductValidateToSarifAsync`,
+  `shaclProductValidateToSarifRebuildAsync`, `shaclProductValidateToSarifExpectingAsync`
+  and `shaclProductValidateToSarifRebuildExpectingAsync`. Each takes its synchronous
+  twin's arguments and then the host options, and returns exactly what the synchronous
+  twin returns; a refused product rejects with the same `ShaclProductRefusal`. A
+  `sh:SPARQLTarget` that uses `SERVICE` is answered by the host where the synchronous
+  entry refuses it for want of a source, and the signal is polled between focus nodes
+  as well as inside queries, so a validation with no SPARQL in it still yields and
+  stops. `queryGovernedNegotiatedAsync` answers a governed
   query as a document in the format an HTTP `Accept` header negotiates. Each twin
   runs the same evaluator over a snapshot of the dataset, as a job on its own stack
   region that suspends through WebAssembly JavaScript Promise Integration (JSPI)
@@ -491,6 +501,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   explains a query with a host stop signal polled by the measuring run, which is
   still metered and never bounded; a signal that fires is reported on the
   explanation's evidence as the stop it was.
+
+- **shapes:** `sparql::enter_execution_scope` installs a governor state together with
+  the `SERVICE` and `LOAD` sources (`sparql::QuerySources`) a validation's SPARQL
+  reaches, for the length of a validation, change validation or rule application. A
+  governed run polls its stop signal between focus nodes as well as inside every
+  query, so a validation with no SPARQL in it stops too. An ungoverned run reads no
+  sources and is unchanged. `sparql::AmbientContext` and
+  `sparql::replace_ambient_context` take every scope the engine keeps on the thread
+  (governors, sources, registries, parser options, call depth and the extension
+  environment built from them) off it as one value and put it back, for a host that
+  suspends a validation and runs other work on the same thread before resuming it.
 
 - **sparql-algebra:** `SparqlParser::parse_query_dataset_slot` returns a
   `QueryDatasetSlot`: where a query's dataset clause is, or where one would go.

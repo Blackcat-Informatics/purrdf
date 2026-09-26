@@ -104,6 +104,8 @@ RDF/JS 映射的更多内容见 [JavaScript 中的 RDF/JS](../interop/rdfjs.md)�
 
 EXPLAIN 也是这类求值方法之一：它的计费台账是实际运行查询测得的，而不是根据查询文本预测的。因此，`explainQuery` 会因缺少来源而拒绝 `SERVICE` 查询，而 `explainQueryAsync` 则基于宿主的应答来解释它。它的测量运行与其他作业一样会让出事件循环，并在其 `signal` 触发时停止；它不接受任何上限，因为这次运行只计量、从不设限。
 
+SHACL 验证同样会对 SPARQL 求值：`sh:SPARQLTarget` 查询、SHACL-SPARQL 约束，以及 SHACL-AF 的节点表达式与规则。因此，SHACL 函数也有孪生方法：`shaclValidateToSarifAsync`、`shaclValidateChangesToSarifAsync`、`shaclEntailAsync`，以及 `shaclProductValidateToSarifAsync` 与它的 `Rebuild`、`Expecting` 和 `RebuildExpecting` 形式。每个孪生方法依次接受其同步孪生方法的参数和宿主选项，并返回与同步孪生方法完全相同的结果；被拒绝的预编译形状产物（prepared shapes product）会以同一个 `ShaclProductRefusal` 拒绝。`signal` 既在查询内部轮询，也在焦点节点之间轮询，因此即使一次验证中没有任何 SPARQL，它也会让出事件循环，并在信号触发时停止。SHACL 只允许在不预绑定任何变量的查询（例如 `sh:SPARQLTarget`）中使用 `SERVICE`；使用 `SERVICE` 的约束查询会在加载形状图时被拒绝，两条通道都是如此。
+
 孪生方法运行在 WebAssembly JavaScript Promise Integration（JSPI）之上，它在 Chrome 与 Edge 137+、Firefox 139+、Safari 27、Node 24.20+ 以及 Cloudflare Workers（workerd）中默认启用。`hasAsyncQueries()` 报告当前引擎是否支持 JSPI；在不支持的引擎上，每个孪生方法都会在触及 wasm 之前以同一个错误拒绝，而同步 API 照常工作。
 
 ### 应答 `SERVICE`

@@ -73,8 +73,8 @@ use wasm_bindgen::prelude::*;
 //                 (`shaclValidateToSarif`/`shaclEntail`)
 //   * `stream`  — the RDF/JS Sink over the `purrdf-events` ingestion protocol
 //   * `async_query` — the asynchronous operation runtime: every evaluating `query`
-//                 surface as a job that suspends on host-resolved SERVICE / LOAD
-//                 effects and yields to the event loop, through JSPI
+//                 and SHACL surface as a job that suspends on host-resolved SERVICE /
+//                 LOAD effects and yields to the event loop, through JSPI
 //   * `protocol` — the SPARQL 1.1 Protocol request surface (`SparqlProtocolRequest`):
 //                 an HTTP request read into an operation, its dataset parameters
 //                 applied, its response format negotiated
@@ -96,7 +96,7 @@ mod term;
 pub use async_query::purrdf_jspi_run;
 pub use async_query::{
     AsyncEffect, AsyncEffectKind, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind,
-    LoadAuthorization, ServiceCatalog,
+    LoadAuthorization, ServiceCatalog, ShaclAsyncOperation,
 };
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;

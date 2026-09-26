@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-25T18:45:22-06:00\n"
+"POT-Creation-Date: 2026-09-25T20:00:40-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1139,12 +1139,13 @@ msgstr ""
 "`constructAsync`、`describeAsync`、`queryRawAsync`、`queryRawBytesAsync`、"
 "`queryRawWithContextAsync`、`queryGovernedAsync`、"
 "`queryEntailmentGovernedAsync`、`updateAsync`、`updateGovernedAsync` 与 "
-"`explainQueryAsync`，以及 `Dataset.queryAsync`——此外还有 `queryGovernedNegotiatedAsync`，它把受 "
-"governor 管控的查询按 HTTP `Accept` 请求头协商出的格式作为文档返回。孪生方法"
-"在调用开始时为数据集拍下快照，并在快照上运行同一个求值器；它以作业的形式执"
-"行：宿主应答 `SERVICE` 或 `LOAD` 时作业挂起，求值期间作业把事件循环让出，最终"
-"兑现为与其同步孪生方法完全相同的返回值。I/O 由宿主完成，相应的策略也归宿主所"
-"有；解析、求值、连接、`SILENT` 语义与结果编码仍由 PurRDF 负责。"
+"`explainQueryAsync`，以及 `Dataset.queryAsync`——此外还有 "
+"`queryGovernedNegotiatedAsync`，它把受 governor 管控的查询按 HTTP `Accept` 请"
+"求头协商出的格式作为文档返回。孪生方法在调用开始时为数据集拍下快照，并在快照"
+"上运行同一个求值器；它以作业的形式执行：宿主应答 `SERVICE` 或 `LOAD` 时作业挂"
+"起，求值期间作业把事件循环让出，最终兑现为与其同步孪生方法完全相同的返回值。"
+"I/O 由宿主完成，相应的策略也归宿主所有；解析、求值、连接、`SILENT` 语义与结果"
+"编码仍由 PurRDF 负责。"
 
 #: src/getting-started/javascript.md:118
 msgid ""
@@ -1155,13 +1156,42 @@ msgid ""
 "its `signal` like any other job, and it takes no ceiling, because the run is "
 "metered, never bounded."
 msgstr ""
-"EXPLAIN 也是这类求值方法之一：它的计费台账是实际运行查询测得的，而不是根据查询文本预测的。"
-"因此，`explainQuery` 会因缺少来源而拒绝 `SERVICE` 查询，"
-"而 `explainQueryAsync` 则基于宿主的应答来解释它。它的测量运行与其他作业一样会让出事件循环，"
-"并在其 `signal` 触发时停止；它不接受任何上限，因为这次运行只计量、"
-"从不设限。"
+"EXPLAIN 也是这类求值方法之一：它的计费台账是实际运行查询测得的，而不是根据查"
+"询文本预测的。因此，`explainQuery` 会因缺少来源而拒绝 `SERVICE` 查询，而 "
+"`explainQueryAsync` 则基于宿主的应答来解释它。它的测量运行与其他作业一样会让"
+"出事件循环，并在其 `signal` 触发时停止；它不接受任何上限，因为这次运行只计"
+"量、从不设限。"
 
 #: src/getting-started/javascript.md:125
+msgid ""
+"SHACL validation evaluates SPARQL as well: `sh:SPARQLTarget` queries, SHACL-"
+"SPARQL constraints, and SHACL-AF node expressions and rules. The SHACL "
+"functions therefore have twins too: `shaclValidateToSarifAsync`, "
+"`shaclValidateChangesToSarifAsync`, `shaclEntailAsync`, and "
+"`shaclProductValidateToSarifAsync` with its `Rebuild`, `Expecting` and "
+"`RebuildExpecting` forms. Each takes its synchronous twin's arguments "
+"followed by the host options and returns exactly what the synchronous twin "
+"returns; a refused product rejects with the same `ShaclProductRefusal`. The "
+"`signal` is polled between focus nodes as well as inside queries, so a "
+"validation with no SPARQL in it still yields and stops. SHACL admits "
+"`SERVICE` only in a query that pre-binds nothing, such as a "
+"`sh:SPARQLTarget`; a constraint query that uses `SERVICE` is refused when "
+"the shapes graph loads, on either lane."
+msgstr ""
+"SHACL 验证同样会对 SPARQL 求值：`sh:SPARQLTarget` 查询、"
+"SHACL-SPARQL 约束，以及 SHACL-AF 的节点表达式与规则。"
+"因此，SHACL 函数也有孪生方法：`shaclValidateToSarifAsync`、"
+"`shaclValidateChangesToSarifAsync`、`shaclEntailAsync`，"
+"以及 `shaclProductValidateToSarifAsync` 与它的 `Rebuild`、"
+"`Expecting` 和 `RebuildExpecting` 形式。每个孪生方法依次接受其同步孪生方法的参数和宿主选项，"
+"并返回与同步孪生方法完全相同的结果；被拒绝的预编译形状产物（prepared shapes product）"
+"会以同一个 `ShaclProductRefusal` 拒绝。`signal` 既在查询内部轮询，"
+"也在焦点节点之间轮询，因此即使一次验证中没有任何 SPARQL，它也会让出事件循环，"
+"并在信号触发时停止。SHACL 只允许在不预绑定任何变量的查询（例如 `sh:SPARQLTarget`）"
+"中使用 `SERVICE`；使用 `SERVICE` 的约束查询会在加载形状图时被拒绝，"
+"两条通道都是如此。"
+
+#: src/getting-started/javascript.md:138
 msgid ""
 "The twins run over WebAssembly JavaScript Promise Integration (JSPI), on by "
 "default in Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and "
@@ -1175,11 +1205,11 @@ msgstr ""
 "在不支持的引擎上，每个孪生方法都会在触及 wasm 之前以同一个错误拒绝，而同步 "
 "API 照常工作。"
 
-#: src/getting-started/javascript.md:131
+#: src/getting-started/javascript.md:144
 msgid "Answering `SERVICE`"
 msgstr "应答 `SERVICE`"
 
-#: src/getting-started/javascript.md:133
+#: src/getting-started/javascript.md:146
 msgid ""
 "`resolveService(request, ctx)` receives the SPARQL 1.1 Protocol POST to "
 "send: `endpoint`, `queryText`, `contentType` (`application/sparql-query`), "
@@ -1209,7 +1239,7 @@ msgstr ""
 "为发生故障；故障即使在 `SERVICE SILENT` 下也会让作业失败，因为它不是应答。"
 "`ctx.silent` 仅供参考：处理函数无权自行编造一个空应答。"
 
-#: src/getting-started/javascript.md:147
+#: src/getting-started/javascript.md:160
 msgid ""
 "```js resolve-service-recipe\n"
 "import { ready, Dataset, QueryEngine } from \"@blackcatinformatics/"
@@ -1262,7 +1292,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/getting-started/javascript.md:189
+#: src/getting-started/javascript.md:202
 msgid ""
 "A `ServiceCatalog` passed as `catalog` authorizes every request before the "
 "handler is called (deny by default, one profile per endpoint, an optional "
@@ -1279,7 +1309,7 @@ msgstr ""
 "型、一个 `Response`、一个 `Dataset`，或一个带类型的失败；`LOAD SILENT` 会吞掉"
 "传输失败，但绝不吞掉拒绝。"
 
-#: src/getting-started/javascript.md:197
+#: src/getting-started/javascript.md:210
 msgid ""
 "In a browser, the remote endpoint's CORS policy governs whether `fetch` can "
 "read its answer: an endpoint that does not allow the page's origin surfaces "
@@ -1291,11 +1321,11 @@ msgstr ""
 "源的端点会表现为网络错误，上面的处理函数把它报告为传输失败。若某个端点可能不"
 "可达、且其结果行可有可无，请写 `SERVICE SILENT`。"
 
-#: src/getting-started/javascript.md:202
+#: src/getting-started/javascript.md:215
 msgid "Yielding, cancellation and concurrency"
 msgstr "让出、取消与并发"
 
-#: src/getting-started/javascript.md:204
+#: src/getting-started/javascript.md:217
 msgid ""
 "A job gives the event loop one turn every `yieldEveryPolls` governor polls "
 "(65 536 by default; `0` yields at every poll), through the macrotask "
@@ -1308,7 +1338,7 @@ msgstr ""
 "告。只有求值阶段会让出：冻结数据集与序列化结果都会一次运行到底，"
 "`evidence.async` 报告每个阶段的耗时。"
 
-#: src/getting-started/javascript.md:209
+#: src/getting-started/javascript.md:222
 msgid ""
 "`signal: AbortSignal` cancels a job at its next yield or host effect. On the "
 "governed twins, `deadlineMs` includes the time spent waiting for the "
@@ -1319,7 +1349,7 @@ msgstr ""
 "governor 管控的孪生方法上，`deadlineMs` 包含等待处理函数的时间；一次 "
 "governor 触发——包括截止时间与取消——是一个结果，而不是一次 Promise 拒绝。"
 
-#: src/getting-started/javascript.md:213
+#: src/getting-started/javascript.md:226
 msgid ""
 "A query reads its own snapshot; asynchronous updates on one dataset run one "
 "at a time, in call order, and an update is applied only if the dataset was "
@@ -1330,7 +1360,7 @@ msgstr ""
 "期间数据集未被修改时才会应用。`configureAsync({ maxConcurrentJobs })` 限定同"
 "时在途的作业数（默认 16）。"
 
-#: src/getting-started/javascript.md:217
+#: src/getting-started/javascript.md:230
 msgid ""
 "Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by "
 "default); `evidence.async.stackHighWaterBytes` reports how deep it went, and "
@@ -1347,11 +1377,11 @@ msgstr ""
 "建的对象的调用——都会抛出错误，只有全新的 JavaScript realm（新的页面、Worker "
 "isolate 或进程）才能再次加载本包。"
 
-#: src/getting-started/javascript.md:225
+#: src/getting-started/javascript.md:238
 msgid "Cloudflare Workers"
 msgstr ""
 
-#: src/getting-started/javascript.md:227
+#: src/getting-started/javascript.md:240
 msgid ""
 "`@blackcatinformatics/purrdf/cloudflare` provides "
 "`createFetchServiceResolver`, `createFetchLoadResolver` and "
@@ -1396,7 +1426,7 @@ msgstr ""
 "在对被重定向的 IRI 重新按目录鉴权之后才会跟随每一跳，跳数上限为 "
 "`maxRedirects`（默认 5）。一个完整的 Worker："
 
-#: src/getting-started/javascript.md:251
+#: src/getting-started/javascript.md:264
 msgid ""
 "```js worker-recipe\n"
 "import wasm from \"@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm\";\n"
@@ -1441,7 +1471,7 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/getting-started/javascript.md:290
+#: src/getting-started/javascript.md:303
 msgid ""
 "Workers limits how many subrequests one invocation may make, and "
 "`maxRemoteRequests` is the exact control for it: every `SERVICE` request and "
@@ -1470,7 +1500,7 @@ msgstr ""
 "`deadlineMs` 在那里无法在 CPU 密集的工作中触发；异步通道则在每一次让出和每一"
 "次宿主请求时检查截止时间。"
 
-#: src/getting-started/javascript.md:305
+#: src/getting-started/javascript.md:318
 msgid ""
 "The package [README](https://github.com/Blackcat-Informatics/purrdf/tree/"
 "main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
@@ -1480,11 +1510,11 @@ msgstr ""
 "crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
 "adapter) 是这些约定的完整参考。"
 
-#: src/getting-started/javascript.md:309
+#: src/getting-started/javascript.md:322
 msgid "Scope and current limitations"
 msgstr ""
 
-#: src/getting-started/javascript.md:311
+#: src/getting-started/javascript.md:324
 msgid ""
 "**In-memory only.** SPARQL queries run over the in-memory dataset. The "
 "synchronous methods install no `SERVICE` or `LOAD` source, so there a remote "
@@ -1496,7 +1526,7 @@ msgstr ""
 "或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 除非写作 `SILENT`，否则"
 "会显式失败；异步孪生方法只能经由宿主传入的处理函数到达远程端点。"
 
-#: src/getting-started/javascript.md:316
+#: src/getting-started/javascript.md:329
 msgid ""
 "**Triple terms per format.** `serialize` is the writer-native lane: an "
 "object-position quoted-triple term and the RDF 1.2 statement layer survive "
@@ -1508,26 +1538,26 @@ msgid ""
 "alone."
 msgstr ""
 
-#: src/getting-started/javascript.md:325
+#: src/getting-started/javascript.md:338
 msgid "Building from source"
 msgstr ""
 
-#: src/getting-started/javascript.md:327
+#: src/getting-started/javascript.md:340
 msgid ""
 "The Rust cdylib lives in [`crates/rdf-wasm`](https://github.com/Blackcat-"
 "Informatics/purrdf/tree/main/crates/rdf-wasm); the published ESM package is "
 "generated from it:"
 msgstr ""
 
-#: src/getting-started/javascript.md:332
+#: src/getting-started/javascript.md:345
 msgid "# release wasm + wasm-bindgen ESM bindings → js/pkg/\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:333
+#: src/getting-started/javascript.md:346
 msgid "# the above + TypeScript, Node, and packed-tarball gates\n"
 msgstr ""
 
-#: src/getting-started/javascript.md:336
+#: src/getting-started/javascript.md:349
 msgid ""
 "This requires the `wasm32-unknown-unknown` Rust target and a `wasm-bindgen-"
 "cli` pinned to the crate's `wasm-bindgen` version."

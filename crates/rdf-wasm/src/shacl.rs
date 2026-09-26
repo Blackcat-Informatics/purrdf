@@ -121,6 +121,14 @@ pub struct ShaclChangeValidation {
     scope: purrdf_validate::ChangeScope,
 }
 
+impl ShaclChangeValidation {
+    /// The log and the scope it describes, as the synchronous entry and its
+    /// asynchronous twin both build it.
+    pub(crate) const fn new(sarif: String, scope: purrdf_validate::ChangeScope) -> Self {
+        Self { sarif, scope }
+    }
+}
+
 #[wasm_bindgen]
 impl ShaclChangeValidation {
     /// The SARIF 2.1.0 JSON log. See `bounded` for what it describes.
@@ -229,7 +237,7 @@ pub fn shacl_validate_changes_to_sarif(
         removed_nt.as_deref(),
     )
     .map_err(|e| JsError::new(&e))?;
-    Ok(ShaclChangeValidation { sarif, scope })
+    Ok(ShaclChangeValidation::new(sarif, scope))
 }
 
 /// Entail `data_nt` under `shapes_ttl` and render the MATERIALIZED dataset (base

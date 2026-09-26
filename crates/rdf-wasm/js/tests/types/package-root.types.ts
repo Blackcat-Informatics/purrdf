@@ -13,6 +13,7 @@ import {
   type AsyncLoadResolver,
   type AsyncQueryOutcome,
   type AsyncServiceResolver,
+  type AsyncShaclOptions,
   type AsyncUpdateOutcome,
   type ServiceProfileJson,
   CancellationToken,
@@ -46,6 +47,15 @@ import {
   type VisualExport,
   type VisualModel,
   type VisualSvgDocument,
+  shaclEntailAsync,
+  shaclPackProduct,
+  ShaclChangeValidation,
+  shaclProductValidateToSarifAsync,
+  shaclProductValidateToSarifExpectingAsync,
+  shaclProductValidateToSarifRebuildAsync,
+  shaclProductValidateToSarifRebuildExpectingAsync,
+  shaclValidateChangesToSarifAsync,
+  shaclValidateToSarifAsync,
 } from "@blackcatinformatics/purrdf";
 
 await ready();
@@ -315,6 +325,42 @@ const asyncExplained: Promise<string> = engine.explainQueryAsync(
   "SELECT ?s WHERE { ?s ?p ?o }",
   { base: "https://example.org/", resolveService, signal: controller.signal, yieldEveryPolls: 0 },
 );
+const shaclOptions: AsyncShaclOptions = {
+  resolveService,
+  signal: controller.signal,
+  yieldEveryPolls: 0,
+  localServices: { "https://example.org/local": matched },
+};
+const shaclShapes = "@prefix sh: <http://www.w3.org/ns/shacl#> .";
+const shaclData = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .";
+const asyncSarif: Promise<string> = shaclValidateToSarifAsync(shaclShapes, shaclData, null, shaclOptions);
+const asyncSarifBased: Promise<string> = shaclValidateToSarifAsync(shaclShapes, shaclData, "https://example.org/");
+const asyncChange: Promise<ShaclChangeValidation> = shaclValidateChangesToSarifAsync(
+  shaclShapes,
+  shaclData,
+  shaclData,
+  null,
+  undefined,
+  { signal: AbortSignal.timeout(1_000) },
+);
+const asyncShaclEntailed: Promise<string> = shaclEntailAsync(shaclShapes, shaclData, undefined, shaclOptions);
+const shaclProduct: Uint8Array = shaclPackProduct(shaclShapes);
+const asyncProductSarif: Promise<string> = shaclProductValidateToSarifAsync(shaclProduct, shaclData, shaclOptions);
+const asyncProductRebuilt: Promise<string> = shaclProductValidateToSarifRebuildAsync(shaclProduct, shaclData);
+const asyncProductExpected: Promise<string> = shaclProductValidateToSarifExpectingAsync(
+  shaclProduct,
+  shaclData,
+  "0".repeat(64),
+  null,
+);
+const asyncProductRebuiltExpected: Promise<string> = shaclProductValidateToSarifRebuildExpectingAsync(
+  shaclProduct,
+  shaclData,
+  "0".repeat(64),
+  { yieldEveryPolls: 1_024 },
+);
+// @ts-expect-error — no synchronous SHACL entry takes a ceiling, so neither does its twin.
+void shaclValidateToSarifAsync(shaclShapes, shaclData, null, { fuel: 10 });
 const asyncEvidence: AsyncEvidence = asyncGoverned.evidence.async;
 const stackHighWater: number = asyncEvidence.stackHighWaterBytes;
 const asyncEntailed: AsyncEntailmentQueryOutcome = await engine.queryEntailmentGovernedAsync(
@@ -401,6 +447,14 @@ void asyncRaw;
 void asyncRawConfigured;
 void asyncRawBytes;
 void asyncExplained;
+void asyncSarif;
+void asyncSarifBased;
+void asyncChange;
+void asyncShaclEntailed;
+void asyncProductSarif;
+void asyncProductRebuilt;
+void asyncProductExpected;
+void asyncProductRebuiltExpected;
 void asyncRawWithContext;
 void stackHighWater;
 void entailedEvidence;

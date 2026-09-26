@@ -36,8 +36,10 @@
 //     below drain them into ordinary JS objects and free the handles, exactly as
 //     `queryResultToObject` already does for an ungoverned result.
 //   * the asynchronous twins (`queryAsync`, `selectAsync`, …, `updateGovernedAsync`,
-//     `explainQueryAsync`, `queryGovernedNegotiatedAsync`, `Dataset#queryAsync`) — each
-//     begins a job in Rust (`QueryEngine.beginAsync`), hands it to the scheduler in
+//     `explainQueryAsync`, `queryGovernedNegotiatedAsync`, `Dataset#queryAsync`, and the
+//     SHACL twins `shaclValidateToSarifAsync`, …, `shaclEntailAsync`) — each
+//     begins a job in Rust (`QueryEngine.beginAsync`, `AsyncJob.beginShacl`), hands it
+//     to the scheduler in
 //     `./pkg/purrdf_jspi.mjs` with the host's `SERVICE` and `LOAD` handlers and its
 //     `AbortSignal`, and drains the finished job into the very shape its synchronous
 //     twin returns (the negotiated twin, which has no synchronous twin, into a governed
@@ -53,6 +55,7 @@
 // those `bigint` — a shape change, not a decision.
 
 import init, {
+  AsyncJob,
   AsyncJobOptions,
   AsyncOperationKind,
   CancellationToken,
@@ -99,6 +102,7 @@ import init, {
   shaclPackProduct,
   shaclProductCertify,
   shaclProductExplain,
+  ShaclAsyncOperation,
   ShaclProductRefusal,
   shaclProductValidateToSarif,
   shaclProductValidateToSarifExpecting,
@@ -675,6 +679,10 @@ const ASYNC_OPERATION_KEYS = {
   // EXPLAIN measures a run that is metered and never bounded, so it takes no ceiling:
   // exactly `explainQuery`'s options.
   explain: { keys: ["base"], governed: false },
+  // The SHACL twins take their synchronous twin's arguments positionally — `shapesBase`
+  // among them — and no ceiling, since no synchronous SHACL entry takes one: only the
+  // host options.
+  shacl: { keys: [], governed: false },
 };
 
 function isPresent(value) {
@@ -929,7 +937,7 @@ function jobFailure(job, signal) {
  * Begin a job with `begin(jobOptions)`, run it to completion and settle it with
  * `settle(job)`. The job is always finished and freed, whatever happens.
  */
-async function driveAsyncJob(normalized, begin, settle) {
+async function driveAsyncJob(normalized, begin, settle, fail = jobFailure) {
   const { signal } = normalized;
   if (signal !== undefined && signal.aborted) {
     throw abortRejection(signal, "the asynchronous operation was cancelled");
@@ -944,7 +952,7 @@ async function driveAsyncJob(normalized, begin, settle) {
   try {
     const status = await runJob(job, normalized.host);
     if (status === 0) return settle(job);
-    if (status === 1) throw jobFailure(job, signal);
+    if (status === 1) throw fail(job, signal);
     throw new Error(
       `asynchronous job ${job.id} could not run (scheduler status ${status})`,
     );
@@ -986,6 +994,169 @@ function takeGraph(job, expect) {
 }
 
 const utf8 = new TextDecoder();
+
+// ---------------------------------------------------------------------------
+// The asynchronous SHACL twins
+// ---------------------------------------------------------------------------
+//
+// Each runs its synchronous twin's own Rust body as a job (`AsyncJob.beginShacl`) under
+// the job's signal and SERVICE/LOAD sources, and settles into exactly what the
+// synchronous twin returns: the same SARIF text, the same `ShaclChangeValidation`, the
+// same N-Triples, and — for the product twins — a rejection with the same
+// `ShaclProductRefusal` the synchronous twin throws.
+
+/**
+ * Begin and drive a SHACL job for `operation`: `args` are the synchronous twin's
+ * arguments by name, `options` the host options (`resolveService`, `resolveLoad`,
+ * `signal`, `yieldEveryPolls`, `stackBytes`, `catalog`, `localServices`).
+ */
+async function driveShaclJob(operation, args, options, settle, fail) {
+  assertAsyncQueries();
+  const o = normalizeAsyncOptions(options, "shacl");
+  return driveAsyncJob(
+    o,
+    (jobOptions) =>
+      AsyncJob.beginShacl(
+        operation,
+        jobOptions,
+        args.dataNt,
+        args.shapesTtl,
+        args.shapesBase ?? undefined,
+        args.addedNt ?? undefined,
+        args.removedNt ?? undefined,
+        args.product,
+        args.expectIdentity,
+      ),
+    settle,
+    fail,
+  );
+}
+
+const takeText = (job) => utf8.decode(job.takeRawBytes());
+
+/**
+ * A product job's rejection: the `ShaclProductRefusal` its synchronous twin throws when
+ * the job was refused (carrying the job's evidence, as every asynchronous rejection
+ * does), and the ordinary asynchronous rejection otherwise — a cancellation, a deadline,
+ * a fault.
+ */
+function shaclRefusalFailure(job, signal) {
+  if (job.errorKind === "error") {
+    const refusal = job.takeShaclRefusal();
+    if (refusal !== undefined) {
+      job.takeError();
+      refusal.evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
+      return refusal;
+    }
+  }
+  return jobFailure(job, signal);
+}
+
+/**
+ * The twin of `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)`: resolves to the
+ * same SARIF 2.1.0 JSON string.
+ */
+export async function shaclValidateToSarifAsync(shapesTtl, dataNt, shapesBase, options) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ValidateToSarif,
+    { shapesTtl, dataNt, shapesBase },
+    options,
+    takeText,
+  );
+}
+
+/**
+ * The twin of `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?,
+ * shapesBase?)`: resolves to the same `ShaclChangeValidation` (call `.free()` on it).
+ */
+export async function shaclValidateChangesToSarifAsync(
+  shapesTtl,
+  dataNt,
+  addedNt,
+  removedNt,
+  shapesBase,
+  options,
+) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ValidateChangesToSarif,
+    { shapesTtl, dataNt, addedNt, removedNt, shapesBase },
+    options,
+    (job) => job.takeShaclChangeValidation(),
+  );
+}
+
+/**
+ * The twin of `shaclEntail(shapesTtl, dataNt, shapesBase?)`: resolves to the same
+ * N-Triples.
+ */
+export async function shaclEntailAsync(shapesTtl, dataNt, shapesBase, options) {
+  return driveShaclJob(
+    ShaclAsyncOperation.Entail,
+    { shapesTtl, dataNt, shapesBase },
+    options,
+    takeText,
+  );
+}
+
+/**
+ * The twin of `shaclProductValidateToSarif(product, dataNt)`: resolves to the same SARIF
+ * string, or rejects with the same `ShaclProductRefusal`.
+ */
+export async function shaclProductValidateToSarifAsync(product, dataNt, options) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ProductValidateToSarif,
+    { product, dataNt },
+    options,
+    takeText,
+    shaclRefusalFailure,
+  );
+}
+
+/** The twin of `shaclProductValidateToSarifRebuild(product, dataNt)`. */
+export async function shaclProductValidateToSarifRebuildAsync(product, dataNt, options) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ProductValidateToSarifRebuild,
+    { product, dataNt },
+    options,
+    takeText,
+    shaclRefusalFailure,
+  );
+}
+
+/** The twin of `shaclProductValidateToSarifExpecting(product, dataNt, expectIdentity)`. */
+export async function shaclProductValidateToSarifExpectingAsync(
+  product,
+  dataNt,
+  expectIdentity,
+  options,
+) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ProductValidateToSarifExpecting,
+    { product, dataNt, expectIdentity },
+    options,
+    takeText,
+    shaclRefusalFailure,
+  );
+}
+
+/**
+ * The twin of `shaclProductValidateToSarifRebuildExpecting(product, dataNt,
+ * expectIdentity)`.
+ */
+export async function shaclProductValidateToSarifRebuildExpectingAsync(
+  product,
+  dataNt,
+  expectIdentity,
+  options,
+) {
+  return driveShaclJob(
+    ShaclAsyncOperation.ProductValidateToSarifRebuildExpecting,
+    { product, dataNt, expectIdentity },
+    options,
+    takeText,
+    shaclRefusalFailure,
+  );
+}
 
 /**
  * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI

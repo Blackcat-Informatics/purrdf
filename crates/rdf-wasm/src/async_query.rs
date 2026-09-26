@@ -21,9 +21,10 @@
 //!
 //! Kind 4 is reserved for page faults of a paged dataset. The runner itself knows nothing
 //! about SPARQL: an [`Operation`] is a closure over a [`JobRun`], and the SPARQL query,
-//! update and EXPLAIN kinds are simply its first operations. SHACL validation,
-//! entailment closure and large parses can ride the same runner, the same effects and the
-//! same import.
+//! update and EXPLAIN kinds are simply its first operations. SHACL validation, change
+//! validation, SHACL-AF entailment and product validation ride the same runner, the same
+//! effects and the same import as the SHACL kind (see [`execute_shacl`]); entailment
+//! closure and large parses can too.
 //!
 //! Each effect call writes a *ticket* (a sequence number and a payload) into the job's
 //! slots and calls the one suspending import, `purrdf_jspi_suspend(job, ticket, out)`,
@@ -184,10 +185,12 @@
 //! | `GovernorState` (`poll_stop`, `trip`) | No. It polls the signal *before* touching its `OnceLock`, never inside the initializer. |
 //! | Lazily built dataset indexes (`OnceLock` permutations, predecessor and value indexes, path-relation adjacency) | No. Their initializers are pure sorts and scans that poll nothing, so no initialization can be suspended half-done. |
 //! | Reasoner state (`purrdf-entail`'s tableau `RefCell`s, the datalog engines) | No sharing: every closure run owns its own. |
-//! | SHACL's per-thread engine, prepared handles and extension environment (`purrdf-shapes`'s `SPARQL_ENGINE`, `PREPARED_EXECUTIONS`, `CACHED_ENV`, scope `RefCell`s) | Not on this lane: no operation here validates shapes, and those handles are already checked out rather than lent while they run. |
+//! | SHACL's ambient scopes (`purrdf-shapes`'s `CURRENT_GOVERNORS`, `CURRENT_SOURCES`, `CURRENT_FUNCTIONS`, `CURRENT_PROPERTY_FUNCTIONS`, `CURRENT_AGGREGATES`, `CURRENT_PARSER_OPTIONS`, `CURRENT_CALL_DEPTH`) and the extension environment memoized from them (`CACHED_ENV`) | Yes — a SHACL job installs its governors and sources with `enter_execution_scope`, and the engine its registries, through guards that stay open across every query and every poll between focus nodes, so a job yields inside them. Swapped: the lot is one [`purrdf_shapes::sparql::AmbientContext`], taken off the thread and put back beside the stack context at every suspension and resumption, and a job starts with none installed. A context that runs while the job waits sees its own scopes — a synchronous validation stays ungoverned, polls no suspended job's signal and has no `SERVICE` source — and each job's guards restore values it installed, in whatever order the jobs finish. Without the swap a synchronous validation run during a suspension polled the suspended job's signal and was stopped by it. |
+//! | SHACL's per-thread engine (`purrdf-shapes`'s `SPARQL_ENGINE`, a `NativeSparqlEngine` whose plan cache is a `RefCell`) | No, for the reason the evaluator's own plan cache is not: every borrow is a temporary inside one planning statement that polls nothing and calls no resolver. |
+//! | SHACL's prepared handles (`purrdf-shapes`'s `PREPARED_EXECUTIONS`, a `RefCell` map of cached `PreparedExecution`s) | No. The map is borrowed only to take a handle out or put one back, never across a run; a running validation holds its handle checked OUT, so a caller that runs while it waits finds no handle for that query and prepares its own, and nothing it does to the map reaches the suspended one. A handle put back by either is re-prepared at the next checkout if its environment is not the one then in force, so a handle prepared under another context's registries is never run. |
 //! | This module's own [`JobSlots`] mutexes and the job registry (thread-local `JOBS` and `LAST_JOB_ID`) | No. Each is locked or borrowed inside one helper that returns owned values, and none is held when [`suspend`] is called. |
 //! | `purrdf-sparql-eval`'s memo-verification switch (`MEMO_VERIFICATION_ENABLED`) | Absent from release builds (it exists only under `debug_assertions`), and never written during an evaluation: only a test harness sets it. |
-//! | Test instrumentation thread-locals — `purrdf-sparql-eval`'s counters and strategy overrides (`LEVEL_ADVANCES`, `POWER_EXPANSIONS`, `NUMERIC_FOLD_TRACE`, `FORCE_PARALLEL`, `FORCE_CHUNK_SIZE`, `MERGE_COUNT`, `INDEX_OF_CALLS`, `FORCE_EXISTS_STRATEGY`, `SUPPRESS_FIRST_WITNESS_WRAP`, `PREPARED_EXISTS_BUILD_COUNT`), `purrdf-core`'s distance-kernel hooks (`BYPASSED`, `HIDDEN`), `purrdf-hnsw`'s `LACKING` | Not compiled into this package: every one is `#[cfg(test)]`. |
+//! | Test instrumentation thread-locals — `purrdf-sparql-eval`'s counters and strategy overrides (`LEVEL_ADVANCES`, `POWER_EXPANSIONS`, `NUMERIC_FOLD_TRACE`, `FORCE_PARALLEL`, `FORCE_CHUNK_SIZE`, `MERGE_COUNT`, `INDEX_OF_CALLS`, `FORCE_EXISTS_STRATEGY`, `SUPPRESS_FIRST_WITNESS_WRAP`, `PREPARED_EXISTS_BUILD_COUNT`), `purrdf-core`'s distance-kernel hooks (`BYPASSED`, `HIDDEN`), `purrdf-hnsw`'s `LACKING`, `purrdf-shapes`'s scheduler overrides (`FORCE_PARALLEL`, `FORCE_CHUNK_SIZE`) and class-index counter (`THREAD_INDEX_BUILDS`) | Not compiled into this package: every one is `#[cfg(test)]`. |
 //!
 //! `FORCE_SEQUENTIAL_OPERATION` (`purrdf_sparql_eval::parallel`) is a last-in-first-out
 //! guard that interleaving would break, but it is set only by the fallible lazy-view
@@ -210,12 +213,12 @@ use purrdf::{
 use purrdf_core::SparqlResult;
 use purrdf_sparql_eval::protocol::negotiate;
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernedOutcome, GovernedUpdateOutcome, GraphResolveRequest, GraphResolver,
-    HttpRemoteQuerySource, HttpRequest, HttpTransport, InProcessServiceResolver,
+    CancellationFlag, GovernedOutcome, GovernedUpdateOutcome, GovernorState, GraphResolveRequest,
+    GraphResolver, HttpRemoteQuerySource, HttpRequest, HttpTransport, InProcessServiceResolver,
     NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError, ResolvedBindings,
     ServiceCapabilities, ServiceCapability, ServiceCatalog as NativeServiceCatalog,
-    ServiceCredential, ServiceProfile, ServiceRequest, ServiceResolver, ServiceRouter, StopCause,
-    StopSignal, TrippedGovernor, WallDeadline,
+    ServiceCredential, ServiceProfile, ServiceRequest, ServiceResolver, StopCause, StopSignal,
+    TrippedGovernor, WallDeadline,
 };
 use purrdf_sparql_results::ProvenanceNamespace;
 use serde::Deserialize;
@@ -232,6 +235,12 @@ use crate::query::{
     kind_mismatch, negotiable_result_kind, negotiated_outcome_from_value,
     query_outcome_from_governed, query_result_from_sparql, serialize_configured_graph,
     serialize_query_result, sparql_request, update_outcome_from_governed,
+};
+use crate::shacl::{
+    ShaclChangeValidation, ShaclProductRefusal, entail_to_ntriples_impl,
+    product_validate_expecting_impl, product_validate_impl,
+    product_validate_rebuild_expecting_impl, product_validate_rebuild_impl,
+    validate_changes_to_sarif_impl, validate_to_sarif_impl,
 };
 
 // ---------------------------------------------------------------------------
@@ -929,6 +938,12 @@ struct JobSlots {
     /// returns. Only ever written on `wasm32`, where the job runs on its region; locked
     /// only to read or write the value, never across [`suspend`].
     outer_context: Mutex<purrdf_stack::Context>,
+    /// The SHACL engine's ambient scopes ([`purrdf_shapes::sparql::AmbientContext`]:
+    /// its governors, `SERVICE`/`LOAD` sources, registries and call depth) of the context
+    /// the job was started or last resumed from, put back with [`Self::outer_context`]
+    /// and on the same occasions. Only ever written on `wasm32`; locked only to move the
+    /// value in or out, never across [`suspend`].
+    outer_ambient: Mutex<purrdf_shapes::sparql::AmbientContext>,
     counters: AsyncCounters,
 }
 
@@ -944,6 +959,7 @@ impl JobSlots {
             region_armed: AtomicBool::new(false),
             bounds,
             outer_context: Mutex::new(purrdf_stack::Context::on_floor(0)),
+            outer_ambient: Mutex::new(purrdf_shapes::sparql::AmbientContext::default()),
             counters: AsyncCounters::default(),
         }
     }
@@ -1053,6 +1069,13 @@ impl JobSlots {
 // The stop watch
 // ---------------------------------------------------------------------------
 
+/// A suspended job's per-thread state, held in its own frame while it waits: its stack
+/// context and the SHACL engine's ambient scopes. See [`JspiStopWatch::leave_region`].
+struct RegionContext {
+    stack: purrdf_stack::Context,
+    ambient: purrdf_shapes::sparql::AmbientContext,
+}
+
 /// The job's [`StopSignal`]: cancellation, the wall deadline, the host's deadline latch,
 /// the fault latch, the stack guard — and the poll counter that slices evaluation into
 /// yields.
@@ -1149,9 +1172,10 @@ impl JspiStopWatch {
         let started = now_ms();
         // Leaving the region: whatever runs while the job is suspended runs on the
         // context's own stack, so it gets that stack's context back — its floor, and its
-        // own walk scopes rather than the one the job may have open — and the job gets its
-        // region's back on resumption, from whichever context resumed it (that context's
-        // is the one to put back at the next suspension).
+        // own walk scopes rather than the one the job may have open — and its own SHACL
+        // scopes rather than the governors, sources and registries of a validation the
+        // job is inside; the job gets its own back on resumption, from whichever context
+        // resumed it (that context's are the ones to put back at the next suspension).
         let region = self.leave_region();
         let status = suspend(self.slots.job, seq);
         self.enter_region(region);
@@ -1171,26 +1195,34 @@ impl JspiStopWatch {
         }
     }
 
-    /// Put the outer context's stack context back before the job leaves its region, and
-    /// return the job's own — its region's floor and its open walk scopes — to reinstall
-    /// on the way back in. `None` off `wasm32`, where the job never runs on its region and
-    /// nothing runs while it is suspended.
-    fn leave_region(&self) -> Option<purrdf_stack::Context> {
+    /// Put the outer context's per-thread state back before the job leaves its region,
+    /// and return the job's own to reinstall on the way back in: its stack context (its
+    /// region's floor and its open walk scopes) and the SHACL engine's ambient scopes (a
+    /// validation's governors, sources, registries and call depth, installed by guards
+    /// the job is still inside). `None` off `wasm32`, where the job never runs on its
+    /// region and nothing runs while it is suspended.
+    fn leave_region(&self) -> Option<RegionContext> {
         if !cfg!(target_arch = "wasm32") {
             return None;
         }
-        let outer = *lock(&self.slots.outer_context);
-        Some(purrdf_stack::replace_context(outer))
+        let outer_stack = *lock(&self.slots.outer_context);
+        let outer_ambient = std::mem::take(&mut *lock(&self.slots.outer_ambient));
+        Some(RegionContext {
+            stack: purrdf_stack::replace_context(outer_stack),
+            ambient: purrdf_shapes::sparql::replace_ambient_context(outer_ambient),
+        })
     }
 
-    /// Reinstall the job's stack context on resumption, recording the context that
-    /// resumed the job as the one to put back next. A no-op off `wasm32`.
-    fn enter_region(&self, region: Option<purrdf_stack::Context>) {
+    /// Reinstall the job's per-thread state on resumption, recording the state of the
+    /// context that resumed the job as the one to put back next. A no-op off `wasm32`.
+    fn enter_region(&self, region: Option<RegionContext>) {
         let Some(region) = region else {
             return;
         };
-        let outer = purrdf_stack::replace_context(region);
-        *lock(&self.slots.outer_context) = outer;
+        let outer_stack = purrdf_stack::replace_context(region.stack);
+        *lock(&self.slots.outer_context) = outer_stack;
+        let outer_ambient = purrdf_shapes::sparql::replace_ambient_context(region.ambient);
+        *lock(&self.slots.outer_ambient) = outer_ambient;
     }
 
     /// Give the event loop back once.
@@ -1427,6 +1459,49 @@ impl ServiceResolver for UnhandledServiceSource {
     }
 }
 
+/// A job's `SERVICE` source: its local services, answered in process, and every other
+/// endpoint handed to the host's handler — or, with no handler, refused exactly as the
+/// offline lane's missing source is.
+///
+/// Owned, so an operation can install it where a validation reads its sources (see
+/// [`JobRun`]). A job with local services routes each request exactly as a
+/// [`purrdf_sparql_eval::ServiceRouter`] with one route per local endpoint and the host's source as its
+/// fallback does — a fired signal prevents the exchange, a local endpoint is answered in
+/// process, every other endpoint goes to the fallback — without building one per
+/// request: a router borrows its resolvers, and this owns them. A job without local
+/// services hands every request to the host's source directly, as it always has.
+#[derive(Debug)]
+struct JobServiceSource {
+    /// The in-process resolver and the endpoints it serves.
+    local: Option<(InProcessServiceResolver, Vec<String>)>,
+    host: Option<HostServiceSource>,
+}
+
+impl ServiceResolver for JobServiceSource {
+    fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+        let fallback: &(dyn ServiceResolver + Sync) = match &self.host {
+            Some(host) => host,
+            None => &UnhandledServiceSource,
+        };
+        let Some((local, endpoints)) = &self.local else {
+            return fallback.resolve(request);
+        };
+        // The router's own sequence. Its no-route denial cannot arise: there is always a
+        // fallback.
+        if let Some(trip) = request.stop_trip() {
+            return Err(trip);
+        }
+        if endpoints
+            .iter()
+            .any(|endpoint| endpoint == request.endpoint)
+        {
+            local.resolve(request)
+        } else {
+            fallback.resolve(request)
+        }
+    }
+}
+
 /// The `LOAD` source that suspends the job on a `Load` effect.
 #[derive(Debug)]
 struct JspiGraphResolver {
@@ -1480,6 +1555,13 @@ pub enum AsyncOperationKind {
     /// [`AsyncJob::take_raw_bytes`]. EXPLAIN evaluates the query to measure it, so its
     /// measuring run suspends on `SERVICE`, yields and stops exactly as a query does.
     Explain = 8,
+    /// A SHACL surface — validation to SARIF, change validation, SHACL-AF entailment, or
+    /// validation with a prepared product ([`ShaclAsyncOperation`] names which). Its
+    /// `sh:SPARQLTarget` queries, SHACL-SPARQL constraints, node expressions and rules
+    /// run under the job's signal and reach its `SERVICE` and `LOAD` sources, and the
+    /// signal is polled between focus nodes too, so a validation with no SPARQL in it
+    /// still yields and stops. Started through `AsyncJob.beginShacl`.
+    Shacl = 9,
 }
 
 impl AsyncOperationKind {
@@ -1494,6 +1576,7 @@ impl AsyncOperationKind {
             Self::UpdateGoverned => "updateGoverned",
             Self::Negotiated => "negotiated",
             Self::Explain => "explain",
+            Self::Shacl => "shacl",
         }
     }
 
@@ -1588,6 +1671,11 @@ enum JobOutcome {
         frozen: Option<Arc<RdfDataset>>,
     },
     Negotiated(Box<NegotiatedValue>),
+    /// A change validation's log beside the scope it describes.
+    ShaclChange(ShaclChangeValidation),
+    /// A prepared-product refusal: the job's error, carried as the class the synchronous
+    /// twin rejects with rather than flattened into a message.
+    Refused(ShaclProductRefusal),
     Failed(JobError),
 }
 
@@ -1601,35 +1689,52 @@ impl fmt::Debug for JobOutcome {
             Self::Updated(_) => "Updated",
             Self::UpdateGoverned { .. } => "UpdateGoverned",
             Self::Negotiated(_) => "Negotiated",
+            Self::ShaclChange(_) => "ShaclChange",
+            Self::Refused(_) => "Refused",
             Self::Failed(_) => "Failed",
         })
     }
 }
 
 /// What an operation runs with: the job's stop signal and effect sources.
+///
+/// The sources are owned (`Arc`) rather than borrowed so an operation can hand them to
+/// code that reads its sources off an ambient scope rather than off a request — SHACL
+/// validation installs them with [`purrdf_shapes::sparql::enter_execution_scope`].
 struct JobRun<'r> {
     stop: Arc<dyn StopSignal>,
-    remote: Option<&'r (dyn ServiceResolver + Sync)>,
-    load: Option<&'r (dyn GraphResolver + Sync)>,
+    remote: Option<Arc<dyn ServiceResolver + Send + Sync>>,
+    load: Option<Arc<dyn GraphResolver + Send + Sync>>,
     counters: &'r AsyncCounters,
 }
 
-impl<'r> JobRun<'r> {
+impl JobRun<'_> {
     /// `ceilings` with the job's stop signal attached.
     fn governors(&self, ceilings: QueryGovernors) -> QueryGovernors {
         ceilings.with_stop_signal(Arc::clone(&self.stop))
     }
 
     /// Request options carrying the job's sources and `env`.
-    fn options<'o>(&self, env: &'o purrdf_sparql_eval::ExtensionEnv) -> QueryOptions<'o>
-    where
-        'r: 'o,
-    {
+    fn options<'o>(&'o self, env: &'o purrdf_sparql_eval::ExtensionEnv) -> QueryOptions<'o> {
         QueryOptions {
             env,
-            remote: self.remote,
-            load: self.load,
+            remote: self
+                .remote
+                .as_deref()
+                .map(|remote| remote as &(dyn ServiceResolver + Sync)),
+            load: self
+                .load
+                .as_deref()
+                .map(|load| load as &(dyn GraphResolver + Sync)),
             ..QueryOptions::EMPTY
+        }
+    }
+
+    /// The job's sources, for an ambient execution scope.
+    fn sources(&self) -> purrdf_shapes::sparql::QuerySources {
+        purrdf_shapes::sparql::QuerySources {
+            remote: self.remote.clone(),
+            load: self.load.clone(),
         }
     }
 
@@ -1855,6 +1960,9 @@ impl OperationInput {
                     Some(tripped) => Err(JobError::stopped(tripped)),
                 }
             }
+            // `beginAsync` refuses the kind before an input is ever built; a SHACL job's
+            // operation is `execute_shacl`, over no dataset and no SPARQL text.
+            AsyncOperationKind::Shacl => Err(JobError::error(SHACL_STARTS_ELSEWHERE)),
             AsyncOperationKind::UpdateGoverned => {
                 let env = governed_env(aggregate_namespace)?;
                 let governors = run.governors(ceilings.ceilings());
@@ -1870,6 +1978,270 @@ impl OperationInput {
                 Ok(JobOutcome::UpdateGoverned { outcome, frozen })
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SHACL operations
+// ---------------------------------------------------------------------------
+
+/// Why `beginAsync` refuses the SHACL kind.
+const SHACL_STARTS_ELSEWHERE: &str =
+    "a shacl operation reads no dataset and no SPARQL text; it starts through AsyncJob.beginShacl";
+
+/// Which SHACL surface a [`AsyncOperationKind::Shacl`] job runs: one per synchronous
+/// entry point that evaluates SPARQL, each returning exactly what that entry returns.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShaclAsyncOperation {
+    /// `shaclValidateToSarif`: a SARIF log, taken through [`AsyncJob::take_raw_bytes`].
+    ValidateToSarif = 0,
+    /// `shaclValidateChangesToSarif`: a [`ShaclChangeValidation`], taken through
+    /// [`AsyncJob::take_shacl_change_validation`].
+    ValidateChangesToSarif = 1,
+    /// `shaclEntail`: canonical N-Triples, taken through [`AsyncJob::take_raw_bytes`].
+    Entail = 2,
+    /// `shaclProductValidateToSarif`.
+    ProductValidateToSarif = 3,
+    /// `shaclProductValidateToSarifRebuild`.
+    ProductValidateToSarifRebuild = 4,
+    /// `shaclProductValidateToSarifExpecting`.
+    ProductValidateToSarifExpecting = 5,
+    /// `shaclProductValidateToSarifRebuildExpecting`.
+    ProductValidateToSarifRebuildExpecting = 6,
+}
+
+impl ShaclAsyncOperation {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::ValidateToSarif => "shaclValidateToSarif",
+            Self::ValidateChangesToSarif => "shaclValidateChangesToSarif",
+            Self::Entail => "shaclEntail",
+            Self::ProductValidateToSarif => "shaclProductValidateToSarif",
+            Self::ProductValidateToSarifRebuild => "shaclProductValidateToSarifRebuild",
+            Self::ProductValidateToSarifExpecting => "shaclProductValidateToSarifExpecting",
+            Self::ProductValidateToSarifRebuildExpecting => {
+                "shaclProductValidateToSarifRebuildExpecting"
+            }
+        }
+    }
+}
+
+/// A SHACL job's arguments, exactly those of the synchronous entry it twins.
+#[derive(Debug)]
+enum ShaclRequest {
+    Validate {
+        shapes: String,
+        shapes_base: Option<String>,
+        data: String,
+    },
+    ValidateChanges {
+        shapes: String,
+        shapes_base: Option<String>,
+        data: String,
+        added: Option<String>,
+        removed: Option<String>,
+    },
+    Entail {
+        shapes: String,
+        shapes_base: Option<String>,
+        data: String,
+    },
+    Product {
+        product: Vec<u8>,
+        data: String,
+        rebuild: bool,
+        expect_identity: Option<String>,
+    },
+}
+
+/// The arguments `AsyncJob.beginShacl` was handed, before they are matched to an operation.
+#[derive(Debug, Default)]
+struct ShaclArguments {
+    shapes: Option<String>,
+    shapes_base: Option<String>,
+    data: String,
+    added: Option<String>,
+    removed: Option<String>,
+    product: Option<Vec<u8>>,
+    expect_identity: Option<String>,
+}
+
+impl ShaclRequest {
+    /// Match `arguments` to `operation`, refusing a missing argument and one the
+    /// operation would ignore, by name.
+    fn build(operation: ShaclAsyncOperation, arguments: ShaclArguments) -> Result<Self, String> {
+        let ShaclArguments {
+            shapes,
+            shapes_base,
+            data,
+            added,
+            removed,
+            product,
+            expect_identity,
+        } = arguments;
+        let op = operation.name();
+        let refuse = |name: &str| format!("{op} takes no {name}");
+        let is_product = matches!(
+            operation,
+            ShaclAsyncOperation::ProductValidateToSarif
+                | ShaclAsyncOperation::ProductValidateToSarifRebuild
+                | ShaclAsyncOperation::ProductValidateToSarifExpecting
+                | ShaclAsyncOperation::ProductValidateToSarifRebuildExpecting
+        );
+        let expecting = matches!(
+            operation,
+            ShaclAsyncOperation::ProductValidateToSarifExpecting
+                | ShaclAsyncOperation::ProductValidateToSarifRebuildExpecting
+        );
+        if operation != ShaclAsyncOperation::ValidateChangesToSarif
+            && (added.is_some() || removed.is_some())
+        {
+            return Err(refuse("change document"));
+        }
+        if !expecting && expect_identity.is_some() {
+            return Err(refuse("expected identity"));
+        }
+        if is_product {
+            if shapes.is_some() {
+                return Err(refuse("shapes graph: a product carries its own"));
+            }
+            if shapes_base.is_some() {
+                return Err(refuse("shapesBase: a product records its own"));
+            }
+            let product = product.ok_or_else(|| format!("{op} needs a product"))?;
+            if expecting && expect_identity.is_none() {
+                return Err(format!("{op} needs an expected identity"));
+            }
+            return Ok(Self::Product {
+                product,
+                data,
+                rebuild: matches!(
+                    operation,
+                    ShaclAsyncOperation::ProductValidateToSarifRebuild
+                        | ShaclAsyncOperation::ProductValidateToSarifRebuildExpecting
+                ),
+                expect_identity,
+            });
+        }
+        if product.is_some() {
+            return Err(refuse("product"));
+        }
+        let shapes = shapes.ok_or_else(|| format!("{op} needs a shapes graph"))?;
+        Ok(match operation {
+            ShaclAsyncOperation::ValidateToSarif => Self::Validate {
+                shapes,
+                shapes_base,
+                data,
+            },
+            ShaclAsyncOperation::ValidateChangesToSarif => Self::ValidateChanges {
+                shapes,
+                shapes_base,
+                data,
+                added,
+                removed,
+            },
+            _ => Self::Entail {
+                shapes,
+                shapes_base,
+                data,
+            },
+        })
+    }
+
+    /// Run the synchronous entry's own body. Every one reaches the engine through the
+    /// ambient scopes, so the execution scope [`execute_shacl`] installs around this is
+    /// what governs it: nothing here is a second implementation of any surface.
+    fn run(self) -> JobOutcome {
+        let text = |result: Result<String, String>| match result {
+            Ok(text) => JobOutcome::Raw(text.into_bytes()),
+            Err(message) => JobOutcome::Failed(JobError::error(message)),
+        };
+        let refusable = |result: Result<String, ShaclProductRefusal>| match result {
+            Ok(text) => JobOutcome::Raw(text.into_bytes()),
+            Err(refusal) => JobOutcome::Refused(refusal),
+        };
+        match self {
+            Self::Validate {
+                shapes,
+                shapes_base,
+                data,
+            } => text(validate_to_sarif_impl(
+                &shapes,
+                shapes_base.as_deref(),
+                &data,
+            )),
+            Self::ValidateChanges {
+                shapes,
+                shapes_base,
+                data,
+                added,
+                removed,
+            } => match validate_changes_to_sarif_impl(
+                &shapes,
+                shapes_base.as_deref(),
+                &data,
+                added.as_deref(),
+                removed.as_deref(),
+            ) {
+                Ok((sarif, scope)) => {
+                    JobOutcome::ShaclChange(ShaclChangeValidation::new(sarif, scope))
+                }
+                Err(message) => JobOutcome::Failed(JobError::error(message)),
+            },
+            Self::Entail {
+                shapes,
+                shapes_base,
+                data,
+            } => text(entail_to_ntriples_impl(
+                &shapes,
+                shapes_base.as_deref(),
+                &data,
+            )),
+            Self::Product {
+                product,
+                data,
+                rebuild,
+                expect_identity,
+            } => refusable(match (rebuild, expect_identity.as_deref()) {
+                (false, None) => {
+                    product_validate_impl(&product, &data).map_err(ShaclProductRefusal::from)
+                }
+                (true, None) => product_validate_rebuild_impl(&product, &data)
+                    .map_err(ShaclProductRefusal::from),
+                (false, Some(expected)) => {
+                    product_validate_expecting_impl(&product, &data, expected)
+                }
+                (true, Some(expected)) => {
+                    product_validate_rebuild_expecting_impl(&product, &data, expected)
+                }
+            }),
+        }
+    }
+}
+
+/// Run `request` under the job: its signal and its sources installed as the SHACL
+/// engine's execution scope, so every SPARQL query the surface runs — a
+/// `sh:SPARQLTarget`, a SHACL-SPARQL constraint, a node expression, a rule — reaches the
+/// job's `SERVICE` and `LOAD` sources and polls its signal, and the signal is polled
+/// between focus nodes as well.
+///
+/// The scope is metered and never bounded, as `queryAsync`'s is: the synchronous twins
+/// take no ceiling, so neither does this. A stop is the job's error — a validation cut
+/// short has no report, and its partial one is never offered — read back off the state
+/// that latched it rather than out of the error text the stop unwound with.
+fn execute_shacl(request: ShaclRequest, run: &JobRun<'_>) -> JobOutcome {
+    let state = Arc::new(GovernorState::new(&run.governors(QueryGovernors::METERED)));
+    let outcome = {
+        let _scope =
+            purrdf_shapes::sparql::enter_execution_scope(Arc::clone(&state), run.sources());
+        run.evaluate(|| request.run())
+    };
+    match state.tripped() {
+        Some(tripped @ TrippedGovernor::Stopped { .. }) => {
+            JobOutcome::Failed(JobError::stopped(tripped))
+        }
+        _ => outcome,
     }
 }
 
@@ -1975,6 +2347,9 @@ struct JobInner {
     error: RefCell<Option<JobError>>,
     /// The frozen result an applied update offers `commitUpdate`, until it is taken.
     pending_commit: RefCell<Option<Arc<RdfDataset>>>,
+    /// A SHACL product job's refusal, beside the error it also stored, until it is
+    /// taken ([`AsyncJob::take_shacl_refusal`]).
+    refusal: RefCell<Option<ShaclProductRefusal>>,
     outer_sp: Cell<u32>,
 }
 
@@ -2011,6 +2386,12 @@ impl JobInner {
                 self.region.bounds.base,
             ));
             *lock(&slots.outer_context) = outer;
+            // Likewise the job starts with no SHACL scope installed, whatever the context
+            // that started it has installed.
+            let outer_ambient = purrdf_shapes::sparql::replace_ambient_context(
+                purrdf_shapes::sparql::AmbientContext::default(),
+            );
+            *lock(&slots.outer_ambient) = outer_ambient;
         }
         let outcome = match (operation, self.watch.stack_check()) {
             (_, Err(fault)) => {
@@ -2026,6 +2407,12 @@ impl JobInner {
         slots.region_armed.store(false, Ordering::Relaxed);
         if cfg!(target_arch = "wasm32") {
             purrdf_stack::replace_context(*lock(&slots.outer_context));
+            // Every guard the operation installed has dropped by now, so the job's own
+            // context is idle and is discarded as the outer one goes back.
+            let outer_ambient = std::mem::take(&mut *lock(&slots.outer_ambient));
+            drop(purrdf_shapes::sparql::replace_ambient_context(
+                outer_ambient,
+            ));
         }
         match self.region.overrun() {
             Overrun::None => {}
@@ -2065,6 +2452,11 @@ impl JobInner {
                 *self.error.borrow_mut() = Some(error);
                 RUN_ERROR
             }
+            JobOutcome::Refused(refusal) => {
+                *self.error.borrow_mut() = Some(JobError::error(refusal.to_js_string()));
+                *self.refusal.borrow_mut() = Some(refusal);
+                RUN_ERROR
+            }
             JobOutcome::Updated(frozen) => {
                 *self.pending_commit.borrow_mut() = Some(frozen);
                 RUN_OUTCOME
@@ -2089,12 +2481,18 @@ impl JobInner {
     /// Build the job's effect sources and run `operation` over them.
     fn execute(&self, operation: Operation) -> JobOutcome {
         let local = (!self.local_services.is_empty()).then(|| {
-            self.local_services.iter().fold(
+            let resolver = self.local_services.iter().fold(
                 InProcessServiceResolver::new(),
                 |resolver, (endpoint, dataset)| {
                     resolver.with_endpoint(endpoint.clone(), Arc::clone(dataset))
                 },
-            )
+            );
+            let endpoints = self
+                .local_services
+                .iter()
+                .map(|(endpoint, _)| endpoint.clone())
+                .collect();
+            (resolver, endpoints)
         });
         let host = self.service_handler.then(|| {
             let transport = JspiTransport {
@@ -2111,32 +2509,20 @@ impl JobInner {
                 source,
             }
         });
-        let unhandled = UnhandledServiceSource;
-        let router = local.as_ref().map(|local| {
-            let fallback: &(dyn ServiceResolver + Sync) = match &host {
-                Some(host) => host,
-                None => &unhandled,
-            };
-            self.local_services.iter().fold(
-                ServiceRouter::new().with_fallback(fallback),
-                |router, (endpoint, _)| router.with_route(endpoint.clone(), local),
-            )
-        });
-        let remote: Option<&(dyn ServiceResolver + Sync)> = match (&router, &host) {
-            (Some(router), _) => Some(router),
-            (None, Some(host)) => Some(host),
-            (None, None) => None,
-        };
-        let graph = self.load_handler.then(|| JspiGraphResolver {
-            watch: Arc::clone(&self.watch),
+        let remote: Option<Arc<dyn ServiceResolver + Send + Sync>> =
+            (local.is_some() || host.is_some()).then(|| {
+                Arc::new(JobServiceSource { local, host }) as Arc<dyn ServiceResolver + Send + Sync>
+            });
+        let load = self.load_handler.then(|| {
+            Arc::new(JspiGraphResolver {
+                watch: Arc::clone(&self.watch),
+            }) as Arc<dyn GraphResolver + Send + Sync>
         });
         let stop: Arc<dyn StopSignal> = Arc::clone(&self.watch) as Arc<dyn StopSignal>;
         let run = JobRun {
             stop,
             remote,
-            load: graph
-                .as_ref()
-                .map(|graph| graph as &(dyn GraphResolver + Sync)),
+            load,
             counters: &self.watch.slots.counters,
         };
         operation(&run)
@@ -2502,7 +2888,8 @@ impl AsyncJob {
         query_result_from_sparql(result)
     }
 
-    /// A raw job's serialized bytes, or an explain job's rendered ledger (UTF-8 text).
+    /// A raw job's serialized bytes, an explain job's rendered ledger, or a SHACL job's
+    /// SARIF log or entailed N-Triples (UTF-8 text).
     #[wasm_bindgen(js_name = takeRawBytes)]
     pub fn take_raw_bytes(&self) -> Result<Vec<u8>, JsError> {
         match self
@@ -2513,6 +2900,7 @@ impl AsyncJob {
                     AsyncOperationKind::Raw,
                     AsyncOperationKind::RawWithContext,
                     AsyncOperationKind::Explain,
+                    AsyncOperationKind::Shacl,
                 ],
             )
             .map_err(|message| js_error(&message))?
@@ -2586,6 +2974,29 @@ impl AsyncJob {
                 "takeUpdateOutcome: the job holds no update outcome",
             )),
         }
+    }
+
+    /// A SHACL change-validation job's outcome: the SARIF log and the scope it
+    /// describes, exactly as `shaclValidateChangesToSarif` returns them.
+    #[wasm_bindgen(js_name = takeShaclChangeValidation)]
+    pub fn take_shacl_change_validation(&self) -> Result<ShaclChangeValidation, JsError> {
+        match self
+            .inner
+            .take_outcome("takeShaclChangeValidation", &[AsyncOperationKind::Shacl])
+            .map_err(|message| js_error(&message))?
+        {
+            JobOutcome::ShaclChange(validation) => Ok(validation),
+            _ => Err(js_error(
+                "takeShaclChangeValidation: the job holds no change validation",
+            )),
+        }
+    }
+
+    /// A SHACL product job's refusal, once — the `ShaclProductRefusal` the synchronous
+    /// twin throws — or `undefined` when the job was not refused.
+    #[wasm_bindgen(js_name = takeShaclRefusal)]
+    pub fn take_shacl_refusal(&self) -> Option<ShaclProductRefusal> {
+        self.inner.refusal.borrow_mut().take()
     }
 
     /// The job's error message, once; `undefined` when it has none.
@@ -2903,6 +3314,13 @@ impl AsyncJobOptions {
         }
         if kind == AsyncOperationKind::UpdateGoverned && self.max_answers.is_some() {
             return Err(UPDATE_REFUSES_MAX_ANSWERS.to_owned());
+        }
+        if kind == AsyncOperationKind::Shacl && self.base.is_some() {
+            return Err(
+                "base is a SPARQL operation's base IRI; a shacl operation resolves its shapes \
+                 graph against shapesBase and would ignore it"
+                    .to_owned(),
+            );
         }
         let ceilings = GovernorArgs::decode(
             self.fuel,
@@ -3352,6 +3770,27 @@ fn begin_job(
         program: options.program.clone(),
         accept: options.accept.clone(),
     };
+    Ok(register_operation(
+        kind,
+        input.into_operation(),
+        validated,
+        options,
+        freeze_ms,
+        (dataset.identity(), dataset.current_generation()),
+    ))
+}
+
+/// Register a job of `kind` that runs `operation` under `validated` and `options`.
+/// `dataset` is the identity and generation an update's commit is checked against
+/// (`(0, 0)` for an operation that reads no dataset).
+fn register_operation(
+    kind: AsyncOperationKind,
+    operation: Operation,
+    validated: ValidatedOptions,
+    options: &AsyncJobOptions,
+    freeze_ms: f64,
+    dataset: (u64, u64),
+) -> AsyncJob {
     let region = StackRegion::new(validated.stack_bytes as usize);
     let inner = register_job(|id| {
         let slots = Arc::new(JobSlots::new(id, region.bounds));
@@ -3365,22 +3804,90 @@ fn begin_job(
             id,
             kind,
             watch,
-            operation: RefCell::new(Some(input.into_operation())),
+            operation: RefCell::new(Some(operation)),
             service_handler: options.service_handler,
             load_handler: options.load_handler,
             catalog: options.catalog.clone(),
             local_services: options.local_services.clone(),
-            dataset_id: dataset.identity(),
-            dataset_generation: dataset.current_generation(),
+            dataset_id: dataset.0,
+            dataset_generation: dataset.1,
             region,
             state: Cell::new(JobState::Pending),
             outcome: RefCell::new(None),
             error: RefCell::new(None),
             pending_commit: RefCell::new(None),
+            refusal: RefCell::new(None),
             outer_sp: Cell::new(0),
         }
     });
-    Ok(AsyncJob { inner })
+    AsyncJob { inner }
+}
+
+/// Validate `options` for a SHACL job, match the arguments to `operation`, and register
+/// the job. Native-testable core of [`AsyncJob::begin_shacl`].
+fn begin_shacl_job(
+    operation: ShaclAsyncOperation,
+    arguments: ShaclArguments,
+    options: &AsyncJobOptions,
+) -> Result<AsyncJob, String> {
+    let validated = options.validate(AsyncOperationKind::Shacl)?;
+    let request = ShaclRequest::build(operation, arguments)?;
+    Ok(register_operation(
+        AsyncOperationKind::Shacl,
+        Box::new(move |run| execute_shacl(request, run)),
+        validated,
+        options,
+        0.0,
+        (0, 0),
+    ))
+}
+
+#[wasm_bindgen]
+impl AsyncJob {
+    /// Start an asynchronous SHACL operation: the twin of the synchronous entry
+    /// `operation` names, over the same arguments.
+    ///
+    /// `shapesTtl`, `shapesBase`, `addedNt` and `removedNt` are the text-shapes entries'
+    /// arguments and `product` and `expectIdentity` the product entries'; an argument the
+    /// operation does not take is refused by name, as is an option it would ignore. The
+    /// documents are parsed when the job runs, so a parse error — like a product refusal
+    /// — is the job's error, with the synchronous twin's words.
+    ///
+    /// A static constructor rather than a free function: it is the package root's
+    /// plumbing, reached through its `shacl…Async` twins, never a consumer entry point.
+    ///
+    /// # Errors
+    ///
+    /// An option the operation would ignore or cannot honor, or an argument it does not
+    /// take or is missing.
+    #[wasm_bindgen(js_name = beginShacl)]
+    #[allow(clippy::too_many_arguments)] // one argument per synchronous twin's argument
+    pub fn begin_shacl(
+        operation: ShaclAsyncOperation,
+        options: &AsyncJobOptions,
+        data_nt: String,
+        shapes_ttl: Option<String>,
+        shapes_base: Option<String>,
+        added_nt: Option<String>,
+        removed_nt: Option<String>,
+        product: Option<Vec<u8>>,
+        expect_identity: Option<String>,
+    ) -> Result<Self, JsError> {
+        begin_shacl_job(
+            operation,
+            ShaclArguments {
+                shapes: shapes_ttl,
+                shapes_base,
+                data: data_nt,
+                added: added_nt,
+                removed: removed_nt,
+                product,
+                expect_identity,
+            },
+            options,
+        )
+        .map_err(|message| js_error(&message))
+    }
 }
 
 #[wasm_bindgen]
@@ -3411,6 +3918,9 @@ impl QueryEngine {
             return Err(js_error(
                 "a rawWithContext operation starts through beginAsyncWithContext",
             ));
+        }
+        if kind == AsyncOperationKind::Shacl {
+            return Err(js_error(SHACL_STARTS_ELSEWHERE));
         }
         let validated = options
             .validate(kind)
@@ -5154,5 +5664,380 @@ mod tests {
                 .headers(),
             ["X-Key", "k"]
         );
+    }
+
+    // ── SHACL jobs ──────────────────────────────────────────────────────────────────
+
+    const SHACL_PREFIXES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n";
+
+    /// Core shapes: every person's age is an integer.
+    fn core_shapes() -> String {
+        format!(
+            "{SHACL_PREFIXES}ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;\n\
+             sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
+        )
+    }
+
+    /// A SPARQL target that asks `ENDPOINT` which people are banned, and a constraint
+    /// every one of them violates.
+    fn service_target_shapes() -> String {
+        format!(
+            "{SHACL_PREFIXES}ex:BannedShape a sh:NodeShape ;\n\
+             sh:target [ a sh:SPARQLTarget ; sh:select \"\"\"SELECT ?this WHERE {{ \
+             ?this a <http://example.org/Person> . SERVICE <{ENDPOINT}> \
+             {{ ?this <http://example.org/status> \"banned\" }} }}\"\"\" ] ;\n\
+             sh:property [ sh:path ex:clearance ; sh:minCount 1 ] .\n"
+        )
+    }
+
+    const PEOPLE_NT: &str = concat!(
+        "<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n",
+        "<http://example.org/alice> <http://example.org/age> \"old\" .\n",
+        "<http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n",
+        "<http://example.org/bob> <http://example.org/age> \"40\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+    );
+
+    fn shacl_arguments(shapes: Option<String>, data: &str) -> ShaclArguments {
+        ShaclArguments {
+            shapes,
+            data: data.to_owned(),
+            ..ShaclArguments::default()
+        }
+    }
+
+    /// Begin a SHACL job and run it to completion on the native build.
+    fn run_shacl(
+        operation: ShaclAsyncOperation,
+        arguments: ShaclArguments,
+        options: &AsyncJobOptions,
+    ) -> (AsyncJob, u32) {
+        let job = begin_shacl_job(operation, arguments, options).expect("the job begins");
+        let status = run_job(job.id());
+        (job, status)
+    }
+
+    #[test]
+    fn a_shacl_job_answers_what_each_synchronous_entry_answers() {
+        let shapes = core_shapes();
+        let (job, status) = run_shacl(
+            ShaclAsyncOperation::ValidateToSarif,
+            shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
+            &options(),
+        );
+        assert_eq!(status, RUN_OUTCOME);
+        let expected = validate_to_sarif_impl(&shapes, None, PEOPLE_NT).expect("sync entry");
+        assert!(
+            expected.contains("DatatypeConstraintComponent"),
+            "the fixture violates"
+        );
+        assert_eq!(raw_text(&job), expected);
+        assert!(
+            job.take_evidence().polls() > 0.0,
+            "the validation polled the job's watch between focus nodes"
+        );
+        job.finish();
+
+        let added = "<http://example.org/bob> <http://example.org/age> \"x\" .\n";
+        let (job, status) = run_shacl(
+            ShaclAsyncOperation::ValidateChangesToSarif,
+            ShaclArguments {
+                added: Some(added.to_owned()),
+                ..shacl_arguments(Some(shapes.clone()), PEOPLE_NT)
+            },
+            &options(),
+        );
+        assert_eq!(status, RUN_OUTCOME);
+        let (sarif, scope) =
+            validate_changes_to_sarif_impl(&shapes, None, PEOPLE_NT, Some(added), None)
+                .expect("sync entry");
+        let changed = job
+            .take_shacl_change_validation()
+            .expect("a change validation");
+        assert_eq!(changed.sarif(), sarif);
+        assert_eq!(changed.bounded(), scope.is_bounded());
+        assert_eq!(changed.focus_nodes(), Some(1));
+        job.finish();
+
+        let rules = format!(
+            "{SHACL_PREFIXES}ex:R a sh:NodeShape ; sh:targetClass ex:Person ;\n\
+             sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:adult ; \
+             sh:object ex:yes ] .\n"
+        );
+        let (job, status) = run_shacl(
+            ShaclAsyncOperation::Entail,
+            shacl_arguments(Some(rules.clone()), PEOPLE_NT),
+            &options(),
+        );
+        assert_eq!(status, RUN_OUTCOME);
+        let entailed = entail_to_ntriples_impl(&rules, None, PEOPLE_NT).expect("sync entry");
+        assert!(entailed.contains("<http://example.org/adult>"));
+        assert_eq!(raw_text(&job), entailed);
+        job.finish();
+
+        let product = crate::shacl::pack_product_impl(&shapes, None).expect("packs");
+        for operation in [
+            ShaclAsyncOperation::ProductValidateToSarif,
+            ShaclAsyncOperation::ProductValidateToSarifRebuild,
+        ] {
+            let (job, status) = run_shacl(
+                operation,
+                ShaclArguments {
+                    product: Some(product.clone()),
+                    ..shacl_arguments(None, PEOPLE_NT)
+                },
+                &options(),
+            );
+            assert_eq!(status, RUN_OUTCOME, "{operation:?}");
+            assert_eq!(raw_text(&job), expected, "{operation:?}");
+            job.finish();
+        }
+    }
+
+    #[test]
+    fn a_shacl_job_reaches_its_local_service_where_the_synchronous_entry_has_no_source() {
+        let shapes = service_target_shapes();
+        let refused = validate_to_sarif_impl(&shapes, None, PEOPLE_NT)
+            .expect_err("no SERVICE source offline");
+        assert!(
+            refused.contains("no remote query source configured"),
+            "{refused}"
+        );
+        let (job, status) = run_shacl(
+            ShaclAsyncOperation::ValidateToSarif,
+            shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
+            &options(),
+        );
+        assert_eq!(
+            status, RUN_ERROR,
+            "a job with no source refuses it the same way"
+        );
+        assert!(
+            job.take_error()
+                .expect("an error")
+                .contains("no remote query source configured")
+        );
+        job.finish();
+
+        // Two registries: the report's focus node is the one each bans.
+        for (banned, other) in [("alice", "bob"), ("bob", "alice")] {
+            let registry = Dataset::parse(
+                &format!(
+                    "<http://example.org/{banned}> <http://example.org/status> \"banned\" .\n"
+                ),
+                "ntriples",
+                None,
+            )
+            .expect("registry parses");
+            let mut local = options();
+            local
+                .add_local_frozen(
+                    ENDPOINT.to_owned(),
+                    registry.view().freeze().expect("freeze"),
+                )
+                .expect("declared");
+            let (job, status) = run_shacl(
+                ShaclAsyncOperation::ValidateToSarif,
+                shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
+                &local,
+            );
+            assert_eq!(status, RUN_OUTCOME);
+            let sarif = raw_text(&job);
+            assert!(
+                sarif.contains(&format!("http://example.org/{banned}")),
+                "{sarif}"
+            );
+            assert!(
+                !sarif.contains(&format!("http://example.org/{other}")),
+                "{sarif}"
+            );
+            job.finish();
+        }
+    }
+
+    #[test]
+    fn a_cancelled_shacl_job_errors_as_cancelled_and_an_uncancelled_one_answers() {
+        let (job, status) = {
+            let job = begin_shacl_job(
+                ShaclAsyncOperation::ValidateToSarif,
+                shacl_arguments(Some(core_shapes()), PEOPLE_NT),
+                &options(),
+            )
+            .expect("begins");
+            assert_eq!(job.cancel(), DELIVERY_ACCEPTED);
+            let status = run_job(job.id());
+            (job, status)
+        };
+        assert_eq!(status, RUN_ERROR);
+        assert_eq!(job.error_kind().as_deref(), Some("cancelled"));
+        job.finish();
+        let (job, status) = run_shacl(
+            ShaclAsyncOperation::ValidateToSarif,
+            shacl_arguments(Some(core_shapes()), PEOPLE_NT),
+            &options(),
+        );
+        assert_eq!(status, RUN_OUTCOME);
+        job.finish();
+    }
+
+    #[test]
+    fn a_refused_product_job_keeps_the_refusal_class_and_a_valid_product_answers() {
+        let product = crate::shacl::pack_product_impl(&core_shapes(), None).expect("packs");
+        let mut corrupted = product.clone();
+        let middle = corrupted.len() / 2;
+        corrupted[middle] ^= 0xff;
+        let (job, status) = run_shacl(
+            ShaclAsyncOperation::ProductValidateToSarif,
+            ShaclArguments {
+                product: Some(corrupted),
+                ..shacl_arguments(None, PEOPLE_NT)
+            },
+            &options(),
+        );
+        assert_eq!(status, RUN_ERROR);
+        assert_eq!(job.error_kind().as_deref(), Some("error"));
+        let refusal = job.take_shacl_refusal().expect("the refusal is kept");
+        assert_eq!(refusal.dimension().as_deref(), Some("section-digest"));
+        assert!(job.take_shacl_refusal().is_none(), "taken once");
+        job.finish();
+
+        let (job, status) = run_shacl(
+            ShaclAsyncOperation::ProductValidateToSarifExpecting,
+            ShaclArguments {
+                product: Some(product.clone()),
+                expect_identity: Some("not-hex".to_owned()),
+                ..shacl_arguments(None, PEOPLE_NT)
+            },
+            &options(),
+        );
+        assert_eq!(status, RUN_ERROR);
+        let refusal = job.take_shacl_refusal().expect("the refusal is kept");
+        assert_eq!(refusal.dimension(), None, "no product was inspected");
+        job.finish();
+
+        let (job, status) = run_shacl(
+            ShaclAsyncOperation::ProductValidateToSarif,
+            ShaclArguments {
+                product: Some(product),
+                ..shacl_arguments(None, PEOPLE_NT)
+            },
+            &options(),
+        );
+        assert_eq!(status, RUN_OUTCOME);
+        assert!(job.take_shacl_refusal().is_none());
+        job.finish();
+    }
+
+    #[test]
+    fn a_shacl_operation_refuses_what_it_would_ignore_and_takes_what_its_twin_takes() {
+        let mut ceiling = options();
+        ceiling.set_fuel(Some(10));
+        assert!(
+            ceiling
+                .validate(AsyncOperationKind::Shacl)
+                .expect_err("no SHACL entry takes a ceiling")
+                .contains("fuel is an execution governor")
+        );
+        let mut based = options();
+        based.set_base(Some("http://example.org/".to_owned()));
+        assert!(
+            based
+                .validate(AsyncOperationKind::Shacl)
+                .expect_err("a SPARQL base would be ignored")
+                .contains("shapesBase")
+        );
+        assert!(options().validate(AsyncOperationKind::Shacl).is_ok());
+
+        let shapes = || Some(core_shapes());
+        let product = || Some(vec![0_u8; 4]);
+        for (operation, arguments, refusal) in [
+            (
+                ShaclAsyncOperation::ValidateToSarif,
+                shacl_arguments(None, PEOPLE_NT),
+                "needs a shapes graph",
+            ),
+            (
+                ShaclAsyncOperation::ValidateToSarif,
+                ShaclArguments {
+                    product: product(),
+                    ..shacl_arguments(shapes(), PEOPLE_NT)
+                },
+                "takes no product",
+            ),
+            (
+                ShaclAsyncOperation::Entail,
+                ShaclArguments {
+                    added: Some(String::new()),
+                    ..shacl_arguments(shapes(), PEOPLE_NT)
+                },
+                "takes no change document",
+            ),
+            (
+                ShaclAsyncOperation::ProductValidateToSarif,
+                shacl_arguments(shapes(), PEOPLE_NT),
+                "takes no shapes graph",
+            ),
+            (
+                ShaclAsyncOperation::ProductValidateToSarif,
+                ShaclArguments {
+                    expect_identity: Some("00".to_owned()),
+                    ..shacl_arguments(None, PEOPLE_NT)
+                },
+                "takes no expected identity",
+            ),
+            (
+                ShaclAsyncOperation::ProductValidateToSarifExpecting,
+                ShaclArguments {
+                    product: product(),
+                    ..shacl_arguments(None, PEOPLE_NT)
+                },
+                "needs an expected identity",
+            ),
+            (
+                ShaclAsyncOperation::ProductValidateToSarifRebuild,
+                shacl_arguments(None, PEOPLE_NT),
+                "needs a product",
+            ),
+        ] {
+            let error = ShaclRequest::build(operation, arguments).expect_err("refused");
+            assert!(error.contains(refusal), "{operation:?}: {error}");
+            assert!(error.starts_with(operation.name()), "{error}");
+        }
+        // The valid neighbour of each shape of refusal.
+        for (operation, arguments) in [
+            (
+                ShaclAsyncOperation::ValidateToSarif,
+                shacl_arguments(shapes(), PEOPLE_NT),
+            ),
+            (
+                ShaclAsyncOperation::ValidateChangesToSarif,
+                ShaclArguments {
+                    added: Some(String::new()),
+                    removed: Some(String::new()),
+                    ..shacl_arguments(shapes(), PEOPLE_NT)
+                },
+            ),
+            (
+                ShaclAsyncOperation::ProductValidateToSarif,
+                ShaclArguments {
+                    product: product(),
+                    ..shacl_arguments(None, PEOPLE_NT)
+                },
+            ),
+            (
+                ShaclAsyncOperation::ProductValidateToSarifRebuildExpecting,
+                ShaclArguments {
+                    product: product(),
+                    expect_identity: Some("00".to_owned()),
+                    ..shacl_arguments(None, PEOPLE_NT)
+                },
+            ),
+        ] {
+            assert!(
+                ShaclRequest::build(operation, arguments).is_ok(),
+                "{operation:?}"
+            );
+        }
     }
 }

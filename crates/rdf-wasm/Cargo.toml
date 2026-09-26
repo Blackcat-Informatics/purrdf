@@ -62,6 +62,10 @@ purrdf-sparql-results = { workspace = true }
 # SHACL engine is reached through `purrdf-validate::validate_to_sarif_string`,
 # the shared validate→SARIF helper every language binding routes through.
 purrdf-validate = { workspace = true }
+# The SHACL engine's execution scope and ambient context: the asynchronous lane
+# installs a job's governors and SERVICE/LOAD sources around a validation, and swaps
+# the engine's per-thread scopes with its stack context at every suspension.
+purrdf-shapes = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # `queryRaw`'s provenance-namespace `query_hash`: a content hash of the query text,

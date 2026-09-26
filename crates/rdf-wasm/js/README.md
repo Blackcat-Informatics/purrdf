@@ -252,6 +252,14 @@ ownership, and all limits. Complete examples are in
   through SPARQL query text, no bounded footprint exists for it, the call fell
   back to a FULL validation, and an empty log means *the graph conforms*. Call
   `free()` when done.
+- SHACL evaluates SPARQL — `sh:SPARQLTarget` queries, SHACL-SPARQL constraints,
+  SHACL-AF node expressions and rules — so every SHACL entry that validates or entails
+  has a Promise-returning twin: `shaclValidateToSarifAsync`,
+  `shaclValidateChangesToSarifAsync`, `shaclEntailAsync` and the four
+  `shaclProductValidateToSarif…Async`. Each takes its synchronous twin's arguments and
+  then the host options, answers a `SERVICE` through the host, yields while it
+  validates and stops on its `signal`. See
+  [Asynchronous queries, federation and the Cloudflare adapter](#asynchronous-queries-federation-and-the-cloudflare-adapter).
 - `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
   materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /
   `"owl-rl"` / `"d"` / `"owl-direct"` / `"rif"` — none is refused), returning
@@ -303,11 +311,22 @@ clauses:
   `updateGovernedAsync` and `explainQueryAsync`, plus `queryGovernedNegotiatedAsync` (a
   governed query answered as a document in the format negotiated from an HTTP `Accept`
   header, which has no synchronous twin);
-- on `Dataset`: `queryAsync`.
+- on `Dataset`: `queryAsync`;
+- the SHACL functions: `shaclValidateToSarifAsync`, `shaclValidateChangesToSarifAsync`,
+  `shaclEntailAsync`, `shaclProductValidateToSarifAsync`,
+  `shaclProductValidateToSarifRebuildAsync`, `shaclProductValidateToSarifExpectingAsync`
+  and `shaclProductValidateToSarifRebuildExpectingAsync`.
 
 Each twin runs the same evaluator as its synchronous twin, over a snapshot of the
 dataset taken when the call starts, and resolves to exactly the shape the synchronous
-twin returns. It runs as a *job*: the job suspends while the host answers a `SERVICE`
+twin returns. A SHACL twin takes its synchronous twin's arguments, then the host options
+(and no ceiling, as no synchronous SHACL entry takes one; a deadline is a `signal`).
+Every query the validation runs reaches the host's `SERVICE` answer, and the `signal` is
+polled between focus nodes as well as inside queries, so a validation with no SPARQL in
+it still yields and stops. SHACL admits `SERVICE` only in a query that pre-binds nothing,
+such as a `sh:SPARQLTarget`: a constraint's query with `SERVICE` in it is refused while
+the shapes graph loads, on either lane. A refused product rejects with the same
+`ShaclProductRefusal` the synchronous twin throws. It runs as a *job*: the job suspends while the host answers a `SERVICE`
 or `LOAD`, and it gives the event loop back at regular intervals while it evaluates.
 The host does the I/O and owns its policy. PurRDF keeps the parsing, the evaluation,
 the joins, the `SILENT` semantics and the result encoding.
