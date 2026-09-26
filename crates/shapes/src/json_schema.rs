@@ -131,7 +131,7 @@
 //! vocabularies are deliberately OPEN in the live SHACL validator ("anchor, not a
 //! fence") and carry no `sh:in`; this derivation surfaces their anchor set as a
 //! closed `enum` for codegen / API consumers WITHOUT ever injecting `sh:in` or
-//! otherwise mutating the validating shape set. Members are `{"@id": curie}`
+//! otherwise mutating the validating shape set. Members are `{"@id": iri}`
 //! objects (the projector's encoding, so a projected instance validates); the flat
 //! `enum` keyword stays load-bearing in every case, with member symbol names and
 //! docs carried on the parallel `x-enum-varnames` / `x-enum-descriptions` arrays.
@@ -1139,7 +1139,7 @@ pub fn compile_schema(
 /// `V` marked as a value vocabulary (`V rdf:type <marker>`, the marker taken from
 /// [`ValueVocab`]) is projected to a standalone `{LocalName(V)}Enum` `$def` whose
 /// members are `V`'s named individuals — enumerated from the projection's ontology
-/// graph UNIONED with the shapes graph — encoded as `{"@id": curie}` objects (the
+/// graph UNIONED with the shapes graph — encoded as `{"@id": iri}` objects (the
 /// same encoding the instance projector emits, so a projected instance validates).
 /// The flat JSON-Schema `enum` keyword is always the load-bearing form; member
 /// symbol names and docs ride the parallel `x-enum-varnames` / `x-enum-descriptions`
@@ -5284,7 +5284,7 @@ fn lang_literal_schema(tags: &[String]) -> Value {
 ///
 /// Delegates to [`crate::instance::project_value`] — the single source of the
 /// value encoding — so an `sh:in` member and the projected instance value it
-/// constrains can never drift. In particular an IRI member is `{"@id": curie}`
+/// constrains can never drift. In particular an IRI member is `{"@id": iri}`
 /// (NOT a bare CURIE string): a projected node value is the object form, so a
 /// bare-string enum would reject the very data the shape accepts.
 fn term_enum_value(term: &Term, ns: &Namespaces) -> Value {
@@ -6392,7 +6392,7 @@ mod tests {
 
     #[test]
     fn sh_in_over_iris_uses_id_object_members() {
-        // Regression: a `sh:in` list of IRIs must project members as `{"@id":curie}`
+        // Regression: a `sh:in` list of IRIs must project members as `{"@id":iri}`
         // objects (the projector's encoding), NOT bare CURIE strings — otherwise a
         // projected instance value `{"@id":..}` fails the enum it should satisfy.
         let schema = schema_of(&compile_ttl(
@@ -8034,7 +8034,7 @@ mod tests {
     #[test]
     fn value_vocab_standalone_enum_def_even_when_unreferenced() {
         // A marked class with NO referencing property still projects a
-        // `{Local}Enum` $def whose members are its sorted `{"@id":curie}` individuals.
+        // `{Local}Enum` $def whose members are its sorted `{"@id":iri}` individuals.
         let schema = schema_of(&compile_vocab(
             r"
             logic:TermStability a logic:AbstractIndividualType .
@@ -8608,7 +8608,7 @@ mod tests {
         // Encoding AC: a projected instance carrying an ANCHOR individual validates
         // against the compiled enum $ref (both metadata-free and metadata-bearing —
         // the x-enum-* arrays are annotations and must not affect validation); a
-        // NON-anchor value is rejected. This proves members use the {"@id":curie}
+        // NON-anchor value is rejected. This proves members use the {"@id":iri}
         // encoding (not bare strings) on the real projector + validator surfaces.
         for member_meta in ["", r#"; rdfs:comment "A stable term.""#] {
             let compiled = compile_vocab(&format!(
