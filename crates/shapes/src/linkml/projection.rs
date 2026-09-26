@@ -1888,17 +1888,45 @@ impl Renderer<'_> {
                 .ok_or_else(|| LinkmlError::new(format!("{path}/{source} must be an array")))?;
             let mut expressions = Vec::with_capacity(branches.len());
             for (index, branch) in branches.iter().enumerate() {
+                let branch_path = format!("{path}/{source}/{index}");
+                let expression = self.render_slot_expression(branch, &branch_path)?;
                 expressions.push(Value::Object(
-                    self.render_slot_expression(branch, &format!("{path}/{source}/{index}"))?,
+                    self.anonymous_expression(expression, &branch_path),
                 ));
             }
             conjoin_expression(slot, target, expressions);
         }
         if let Some(negated) = object.get("not") {
             let expression = self.render_slot_expression(negated, &format!("{path}/not"))?;
+            let expression = self.anonymous_expression(expression, &format!("{path}/not"));
             conjoin_expression(slot, "none_of", vec![Value::Object(expression)]);
         }
         Ok(())
+    }
+
+    /// A branch rendered as a slot expression, restricted to the fields a
+    /// LinkML 1.11 anonymous slot expression has.
+    ///
+    /// `list_elements_ordered` and `list_elements_unique` are slot-definition
+    /// fields only. Order is no JSON Schema assertion (a JSON array is ordered),
+    /// so dropping it widens nothing; an array branch's `uniqueItems` has no
+    /// statement in the anonymous expression, and its loss is recorded.
+    fn anonymous_expression(
+        &mut self,
+        mut expression: Map<String, Value>,
+        path: &str,
+    ) -> Map<String, Value> {
+        expression.remove("list_elements_ordered");
+        if expression.remove("list_elements_unique") == Some(Value::Bool(true)) {
+            self.record(
+                "keyword-validation-dropped",
+                &format!("{path}/uniqueItems"),
+                "A LinkML 1.11 anonymous slot expression (a branch of any_of, exactly_one_of, \
+                 all_of or none_of) has no list_elements_unique field, so a branch array's \
+                 uniqueItems is not stated",
+            );
+        }
+        expression
     }
 
     fn ensure_inline_enum(&mut self, schema: &Value, path: &str) -> Result<String, LinkmlError> {

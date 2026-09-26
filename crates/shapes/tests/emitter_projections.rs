@@ -494,7 +494,7 @@ fn linkml_projects_min_list_length() {
     assert_eq!(
         holder,
         &json(
-            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
     assert_eq!(
@@ -620,7 +620,7 @@ fn linkml_projects_max_list_length() {
     assert_eq!(
         holder,
         &json(
-            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
     assert_eq!(
@@ -773,7 +773,7 @@ fn linkml_projects_unique_members() {
     assert_eq!(
         holder,
         &json(
-            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:other":{"alias":"ex:other","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExOtherAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExOtherAnyOf1Object"}],"required":false,"slot_uri":"ex:other"},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false},"ex:other":{"alias":"ex:other","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExOtherAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExOtherAnyOf1Object"}],"required":false,"slot_uri":"ex:other"},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
     assert_eq!(
@@ -911,7 +911,7 @@ fn linkml_projects_member_shape() {
     assert_eq!(
         holder,
         &json(
-            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
     assert_eq!(holder_losses(&emitted.linkml_losses), owned2(&[]));
@@ -1072,7 +1072,7 @@ fn linkml_projects_node_list() {
     assert_eq!(
         holder,
         &json(
-            r#"{"all_of":[{"any_of":[{"is_a":"InlineDefsHolderAllOf0AnyOf0Object"}]}],"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+            r#"{"all_of":[{"any_of":[{"is_a":"InlineDefsHolderAllOf0AnyOf0Object"}]}],"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
     assert_eq!(holder_losses(&emitted.linkml_losses), owned2(&[]));
@@ -1194,7 +1194,7 @@ fn linkml_projects_list_valued_class() {
     assert_eq!(
         holder,
         &json(
-            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"Cat"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf2Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf3Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"Cat"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf2Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf3Object"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
     assert_eq!(holder_losses(&emitted.linkml_losses), owned2(&[]));
@@ -1280,7 +1280,7 @@ fn linkml_projects_list_valued_datatype() {
     assert_eq!(
         holder,
         &json(
-            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"any_of":[{"range":"integer"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0AnyOf1Object"}]},{"range":"string"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+            r#"{"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"any_of":[{"range":"integer"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0AnyOf1Object"}]},{"range":"string"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
     assert_eq!(
@@ -1387,7 +1387,7 @@ fn linkml_projects_list_valued_node_kind() {
     assert_eq!(
         holder,
         &json(
-            r#"{"all_of":[{"is_a":"InlineDefsHolderAllOf0Object"}],"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf2Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf3Object"},{"range":"boolean"},{"range":"double"},{"range":"string"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
+            r#"{"all_of":[{"is_a":"InlineDefsHolderAllOf0Object"}],"attributes":{"@annotation":{"alias":"@annotation","inlined":true,"range":"Annotation","required":false},"@id":{"alias":"@id","range":"string","required":false},"@type":{"alias":"@type","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false},"ex:subject":{"alias":"ex:subject","any_of":[{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf0Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf1Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf2Object"},{"inlined":true,"range":"InlineDefsHolderPropertiesExSubjectAnyOf3Object"},{"range":"boolean"},{"range":"double"},{"range":"string"}],"required":false,"slot_uri":"ex:subject"}},"class_uri":"ex:Holder","extra_slots":{"allowed":true}}"#
         )
     );
     assert_eq!(
@@ -2123,7 +2123,7 @@ fn linkml_projects_some_value() {
     assert_eq!(
         holder["attributes"]["ex:subject"],
         json(
-            r#"{"alias":"ex:subject","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false,"slot_uri":"ex:subject"}"#
+            r#"{"alias":"ex:subject","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false,"slot_uri":"ex:subject"}"#
         )
     );
     assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
@@ -2902,7 +2902,7 @@ fn linkml_projects_debug_severity() {
     assert_eq!(
         holder["attributes"]["ex:subject"],
         json(
-            r#"{"alias":"ex:subject","any_of":[{"range":"string"},{"list_elements_ordered":true,"multivalued":true,"range":"string"}],"required":false,"slot_uri":"ex:subject"}"#
+            r#"{"alias":"ex:subject","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false,"slot_uri":"ex:subject"}"#
         )
     );
     assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
