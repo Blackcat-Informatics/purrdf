@@ -2846,7 +2846,7 @@ mod tests {
         assert_eq!(rdf_gts_loss_matrix_json(), rdf_gts_loss_matrix_json());
     }
 
-    /// The issue-named enumerator: the set of `(from, to)` pairs
+    /// The enumerator's completeness: the set of `(from, to)` pairs
     /// [`loss_matrix_json`] renders must equal `registered_pairs()` exactly —
     /// this is the executable proof that `loss_matrix_json()` enumerates
     /// precisely the registered pairs, no more and no fewer.

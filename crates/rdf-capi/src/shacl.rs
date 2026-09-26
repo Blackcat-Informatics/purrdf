@@ -1386,7 +1386,7 @@ mod tests {
         assert!(validate_to_sarif_bytes("@@@ not turtle", None, DATA, &[], &[]).is_err());
     }
 
-    /// The issue's reproducer across the C boundary: a shapes graph carrying the W3C
+    /// Across the C boundary, a shapes graph carrying the W3C
     /// SHACL 1.2 vocabulary's `sh:SPARQLExprExpression` declaration verbatim (the tools
     /// fixture, [`TOOLS_SHAPES`]) loads, and a property shape's `sh:values [
     /// sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ]` is evaluated natively: the

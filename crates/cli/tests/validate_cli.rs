@@ -2497,7 +2497,7 @@ ex:PersonShape a sh:NodeShape ;
   ] .
 "#;
 
-/// The issue's reproducer on the command line: a shapes graph carrying the vocabulary's
+/// On the command line, a shapes graph carrying the SHACL 1.2 vocabulary's
 /// own `sh:SPARQLExprExpression` declaration loads, and its `sh:sparqlExpr` +
 /// `sh:prefixes` expression is evaluated natively — each result's `sh:value` is the
 /// computed `<http://example.org/active>`, which only the prefix-expanded expression
