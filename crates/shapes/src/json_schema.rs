@@ -1040,6 +1040,10 @@ struct Ctx<'ns> {
     predicate_ranges: BTreeMap<String, Vec<String>>,
     /// The namespace table driving ALL compaction / keying decisions.
     ns: &'ns Namespaces,
+    /// The shapes whose value schema [`compile_member_schema`] is compiling, innermost
+    /// last: a shape reached again through its own value-position constraints is not
+    /// inlined a second time.
+    member_stack: Vec<Term>,
 }
 
 impl<'ns> Ctx<'ns> {
@@ -1056,7 +1060,14 @@ impl<'ns> Ctx<'ns> {
             value_vocab_enums,
             predicate_ranges,
             ns,
+            member_stack: Vec::new(),
         }
+    }
+
+    /// The number of losses recorded so far: a compilation that records none between
+    /// two readings projected everything it read.
+    fn loss_count(&self) -> usize {
+        self.ledger.entries().len()
     }
 
     /// Record one runtime loss (`code` = the SHACL construct that could not be
@@ -3271,6 +3282,13 @@ fn compile_property(
     let mut bounds: Vec<(Facet, &Term)> = Vec::new();
     let mut list = ListComponents::default();
     let admits = Admits::of(constraints);
+    // The value schemas of the shape-based constraints at value position
+    // (`sh:node`, `sh:and`, `sh:or`, `sh:xone`, `sh:not`): conjuncts every value
+    // meets.
+    let mut shape_conjuncts: Vec<Value> = Vec::new();
+    // The value schemas of `sh:someValue`: existential, so they constrain the
+    // values together — some value meets each.
+    let mut some_values: Vec<Value> = Vec::new();
 
     // Value-vocabulary precedence (E4): whether ANY `sh:class` was present, and
     // the enum key emitted by a vocab-resolving `sh:class` (if any). Drives
@@ -3432,18 +3450,52 @@ fn compile_property(
                      equivalent)"
                 ));
             }
-            Constraint::SomeValue(_) => {
-                ctx.record(
-                    "sh:someValue",
-                    shape_iri,
-                    "an at-least-one-value-conforms condition over a property's values has no \
-                     projection in this emitter",
-                );
-                comments.push(format!(
-                    "a sh:someValue constraint on property {key} was dropped (no projection in \
-                     this emitter)"
-                ));
+            // SHACL 1.2 Core §7.8.3: at least one value node conforms to the shape.
+            Constraint::SomeValue(inner) => {
+                some_values.push(compile_member_schema(inner, shape_iri, key, ctx));
             }
+            // Every value node conforms to the shape (§4.8.2) — or to every one
+            // of the shapes (§4.6.2).
+            Constraint::Node(inner) => {
+                shape_conjuncts.push(compile_member_schema(inner, shape_iri, key, ctx));
+            }
+            Constraint::And(members) => {
+                for member in members {
+                    shape_conjuncts.push(compile_member_schema(member, shape_iri, key, ctx));
+                }
+            }
+            // Every value node conforms to at least one of the shapes (§4.6.3). A
+            // member schema that accepts more than its shape does keeps `anyOf`
+            // accepting every conforming value.
+            Constraint::Or(members) => {
+                let alternatives: Vec<Value> = members
+                    .iter()
+                    .map(|member| compile_member_schema(member, shape_iri, key, ctx))
+                    .collect();
+                shape_conjuncts.push(json!({ "anyOf": alternatives }));
+            }
+            // Every value node conforms to exactly one of the shapes (§4.6.4) —
+            // `oneOf`'s exactly-one, but only over member schemas that accept
+            // exactly the values their shapes accept: a wider member could make a
+            // conforming value meet two, and `oneOf` reject it.
+            Constraint::Xone(members) => match exact_member_schemas(members, shape_iri, key, ctx) {
+                Some(alternatives) => {
+                    shape_conjuncts.push(json!({ "oneOf": alternatives }));
+                }
+                None => {
+                    ctx.record(
+                        "sh:xone",
+                        shape_iri,
+                        "a member shape's value schema accepts values the shape does not, \
+                             and exactly-one over a wider alternative can reject a conforming \
+                             value",
+                    );
+                    comments.push(format!(
+                        "a sh:xone constraint on property {key} was dropped (a member \
+                             shape has no exact value schema)"
+                    ));
+                }
+            },
             Constraint::In(terms) => {
                 in_lists.push(terms.iter().map(|t| term_enum_value(t, ctx.ns)).collect());
             }
@@ -3523,19 +3575,27 @@ fn compile_property(
                      Schema equivalent)"
                 ));
             }
-            Constraint::Not(_) => {
-                // A value-position `sh:not` has no lossless value-schema
-                // projection here. Surface it (never swallow it): emitting a
-                // negation off a base value schema would be vacuous, exactly the
-                // node-level bug this change removes.
-                ctx.record(
-                    "sh:not",
-                    shape_iri,
-                    "property-level sh:not has no lossless value-schema projection",
-                );
-                comments.push(format!(
-                    "a sh:not constraint on property {key} was dropped (no lossless value-schema projection)"
-                ));
+            // Every value node does not conform to the shape (§4.6.1) — `not` over
+            // the shape's value schema, which must accept exactly the values the
+            // shape does: under negation a wider schema rejects conforming values.
+            Constraint::Not(inner) => {
+                match exact_member_schemas(std::slice::from_ref(&**inner), shape_iri, key, ctx) {
+                    Some(mut negand) => {
+                        shape_conjuncts.push(json!({ "not": negand.remove(0) }));
+                    }
+                    None => {
+                        ctx.record(
+                            "sh:not",
+                            shape_iri,
+                            "the negated shape's value schema accepts values the shape does not, \
+                             and negating a wider schema rejects conforming values",
+                        );
+                        comments.push(format!(
+                            "a sh:not constraint on property {key} was dropped (its shape has no \
+                             exact value schema)"
+                        ));
+                    }
+                }
             }
             Constraint::Equals(path) => {
                 record_pair_loss(ctx, &mut comments, "sh:equals", path, shape_iri, Some(key));
@@ -3586,19 +3646,15 @@ fn compile_property(
             // `sh:uniqueLang false` checks nothing.
             Constraint::UniqueLang(false) => {}
             // A value node is projected as a node reference `{"@id": …}` (its own
-            // properties live on its separate `@graph` node) or a literal, so a
-            // shape-based constraint judging the value node against a shape — or
-            // the value node's own closed property set — has nothing in the value
-            // to judge; `sh:uniqueLang true` compares the language tags of several
-            // values, which a schema constraining each value alone cannot; and a
-            // custom constraint component's validator is a SPARQL query. Each is
-            // dropped, its loss recorded.
+            // properties live on its separate `@graph` node) or a literal, so the
+            // value node's own closed property set has nothing in the value to
+            // judge; a qualified count relates several values to a shape;
+            // `sh:uniqueLang true` compares the language tags of several values,
+            // which a schema constraining each value alone cannot; and a custom
+            // constraint component's validator is a SPARQL query. Each is dropped,
+            // its loss recorded.
             Constraint::UniqueLang(true)
             | Constraint::Closed { .. }
-            | Constraint::And(_)
-            | Constraint::Or(_)
-            | Constraint::Xone(_)
-            | Constraint::Node(_)
             | Constraint::QualifiedValueShape { .. }
             | Constraint::Component { .. } => {
                 let term = constraint_term(c);
@@ -3846,11 +3902,41 @@ fn compile_property(
         value.insert("$comment".to_owned(), json!(comments.join("; ")));
     }
 
+    if !shape_conjuncts.is_empty() {
+        let mut all = value
+            .get("allOf")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        all.extend(shape_conjuncts);
+        value.insert("allOf".to_owned(), Value::Array(all));
+    }
+
     // `sh:hasValue` is existential — some value is the term — so it constrains
     // the property's values together, never each one: a lone value must be the
-    // term, and an array of values must contain it.
+    // term, and an array of values must contain it. `sh:someValue` is the same
+    // quantifier over a shape: a lone value must meet its value schema, and an
+    // array must contain one that does.
     crate::term::sort_canonical(&mut has_values);
     has_values.dedup();
+    // Where one value is written unwrapped beside the array form of several (see
+    // below), the value schema must reject an array itself — see
+    // `rejects_arrays` — or an array of values would pass through the
+    // single-value alternative with no member judged.
+    let requires_value = !has_values.is_empty() || !some_values.is_empty();
+    let floor = u64::from(requires_value);
+    let single_beside_array =
+        max_count != Some(1) && min_count.map_or(floor, |n| n.max(floor)) <= 1;
+    // Only a value schema or an array form that judges something can be bypassed:
+    // an unconstrained value beside an unbounded array of unconstrained values
+    // accepts every array either way.
+    let judges = value.keys().any(|key| key != "$comment") || max_count.is_some() || requires_value;
+    if single_beside_array && judges && !rejects_arrays(&Value::Object(value.clone())) {
+        value.insert(
+            "type".to_owned(),
+            json!(["boolean", "number", "object", "string"]),
+        );
+    }
     let item = Value::Object(value.clone());
     match has_values.as_slice() {
         [] => {}
@@ -3870,11 +3956,21 @@ fn compile_property(
             });
         }
     }
+    if !some_values.is_empty() {
+        let mut all = value
+            .get("allOf")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        all.extend(some_values.iter().cloned());
+        value.insert("allOf".to_owned(), Value::Array(all));
+    }
     let single = Value::Object(value);
 
-    // `sh:hasValue` requires a value, so it implies `sh:minCount 1`, stated as
-    // such so that the schema reads back as the constraints it projects.
-    if !has_values.is_empty() {
+    // `sh:hasValue` and `sh:someValue` require a value, so each implies
+    // `sh:minCount 1`, stated as such so that the schema reads back as the
+    // constraints it projects.
+    if !has_values.is_empty() || !some_values.is_empty() {
         min_count = Some(min_count.map_or(1, |n| n.max(1)));
     }
     // Required iff minCount >= 1.
@@ -3901,10 +3997,12 @@ fn compile_property(
         let mut arr: Map<String, Value> = Map::new();
         arr.insert("type".to_owned(), json!("array"));
         arr.insert("items".to_owned(), item);
-        match has_values.as_slice() {
+        let mut contained: Vec<Value> = has_values.iter().map(|v| json!({ "const": v })).collect();
+        contained.extend(some_values);
+        match contained.as_slice() {
             [] => {}
             [only] => {
-                arr.insert("contains".to_owned(), json!({ "const": only }));
+                arr.insert("contains".to_owned(), only.clone());
             }
             several => {
                 arr.insert(
@@ -3912,7 +4010,7 @@ fn compile_property(
                     Value::Array(
                         several
                             .iter()
-                            .map(|v| json!({ "contains": { "const": v } }))
+                            .map(|schema| json!({ "contains": schema }))
                             .collect(),
                     ),
                 );
@@ -3938,6 +4036,58 @@ fn compile_property(
     };
 
     (schema, is_required)
+}
+
+/// Whether `schema` rejects every JSON array — conservatively: `false` whenever
+/// its keywords do not show it.
+///
+/// The projection writes one value unwrapped and several as an array (see
+/// [`compile_property`]), and a lone value is never itself an array — a list is an
+/// `{"@list": …}` object. A value schema that does not reject an array would let
+/// the single-value alternative accept an array of values without its `items`
+/// ever being judged: every keyword that tests only strings, numbers or objects
+/// (`pattern`, a length, `not`) passes an array vacuously.
+fn rejects_arrays(schema: &Value) -> bool {
+    let Some(object) = schema.as_object() else {
+        return schema == &Value::Bool(false);
+    };
+    let not_array = |value: &Value| !value.is_array();
+    if let Some(kind) = object.get("type") {
+        match kind {
+            Value::String(name) => return name != "array",
+            Value::Array(names) => return names.iter().all(|name| name != "array"),
+            _ => {}
+        }
+    }
+    // Every definition this compiler emits is an object schema or an enumeration
+    // of strings.
+    if object
+        .get("$ref")
+        .and_then(Value::as_str)
+        .is_some_and(|target| target.starts_with("#/$defs/"))
+    {
+        return true;
+    }
+    if object.get("const").is_some_and(not_array)
+        || object
+            .get("enum")
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.iter().all(not_array))
+    {
+        return true;
+    }
+    let every = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|branches| !branches.is_empty() && branches.iter().all(rejects_arrays))
+    };
+    every("anyOf")
+        || every("oneOf")
+        || object
+            .get("allOf")
+            .and_then(Value::as_array)
+            .is_some_and(|branches| branches.iter().any(rejects_arrays))
 }
 
 /// The ECMA-262 pattern a lexical form containing a line break matches: one of
@@ -5124,19 +5274,111 @@ impl<'s> ListComponents<'s> {
     }
 }
 
-/// The value schema a member of a list meets under `sh:memberShape`: the
-/// member shape's constraints, which judge the member itself, compiled as a
-/// property's single value is.
+/// The value schema one value node meets when it must conform to `shape` — a
+/// list member under `sh:memberShape`, a property's value under `sh:node`,
+/// `sh:and`, `sh:or`, `sh:xone`, `sh:not` or `sh:someValue`: the shape's
+/// constraints, which judge the value itself, compiled as a property's single
+/// value is.
 ///
-/// The member shape's own property shapes judge each member's properties,
-/// which a member's node reference does not carry (the same bound on what a
-/// keyword reaches as [`ListComponents::record_node_form_losses`] states), so
-/// they are recorded; `sh:minCount` and `sh:maxCount`, which are not
-/// well-formed on a node shape, are dropped with their loss recorded.
+/// The shape's own property shapes judge the value's properties, which a value's
+/// node reference does not carry (the same bound on what a keyword reaches as
+/// [`ListComponents::record_node_form_losses`] states), so they are recorded;
+/// `sh:minCount` and `sh:maxCount`, which are not well-formed on a node shape,
+/// are dropped with their loss recorded. A shape reached again through its own
+/// value-position constraints is inlined once: its inner occurrence accepts any
+/// value, recorded.
 fn compile_member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut Ctx<'_>) -> Value {
     if shape.deactivated {
         return json!({});
     }
+    if ctx.member_stack.contains(&shape.id) {
+        ctx.record(
+            "sh:node",
+            shape_iri,
+            &format!(
+                "the shape {} is reached again through its own value-position constraints; \
+                 a value schema cannot inline itself, so the inner occurrence accepts any value",
+                shape.id
+            ),
+        );
+        return json!({});
+    }
+    ctx.member_stack.push(shape.id.clone());
+    let schema = compile_member_schema_body(shape, shape_iri, key, ctx);
+    ctx.member_stack.pop();
+    schema
+}
+
+/// The value schemas of `shapes`, each of which accepts exactly the values its
+/// shape accepts — or `None` when one of them cannot.
+///
+/// Exact means: every constraint of the shape is one whose value schema is the
+/// constraint's own test of a single value ([`value_constraint_exact`]), the shape
+/// judges no properties of the value (which live on its own `@graph` node, see
+/// [`compile_member_schema`]), its results decide conformance, and compiling it
+/// records no loss. This is the precondition for `oneOf` and `not`, where a wider
+/// schema would reject a conforming value.
+fn exact_member_schemas(
+    shapes: &[Shape],
+    shape_iri: &str,
+    key: &str,
+    ctx: &mut Ctx<'_>,
+) -> Option<Vec<Value>> {
+    if !shapes.iter().all(value_shape_exact) {
+        return None;
+    }
+    let before = ctx.loss_count();
+    let schemas: Vec<Value> = shapes
+        .iter()
+        .map(|shape| compile_member_schema(shape, shape_iri, key, ctx))
+        .collect();
+    (ctx.loss_count() == before).then_some(schemas)
+}
+
+/// Whether `shape`, judging one value node, compiles to a value schema accepting
+/// exactly the values that conform to it (see [`exact_member_schemas`]).
+fn value_shape_exact(shape: &Shape) -> bool {
+    if shape.deactivated {
+        // Every node conforms, and the value schema is `{}`.
+        return true;
+    }
+    let disallowed = ConformanceDisallows::default();
+    disallowed.contains(&shape.severity)
+        && !undecisive_annotation(&shape.constraint_annotations, &disallowed)
+        && shape
+            .property_shapes
+            .iter()
+            .all(|nested| nested.deactivated)
+        && shape.constraints.iter().all(value_constraint_exact)
+}
+
+/// Whether a node-shape constraint's value schema is exactly its test of one value
+/// node: the value-type constraints `sh:datatype`, `sh:nodeKind`, `sh:in` and
+/// `sh:hasValue`, and the shape-based constraints over shapes that are themselves
+/// exact.
+fn value_constraint_exact(constraint: &Constraint) -> bool {
+    match constraint {
+        Constraint::Datatype(_)
+        | Constraint::NodeKind(_)
+        | Constraint::In(_)
+        | Constraint::HasValue(_) => true,
+        Constraint::Node(inner) | Constraint::Not(inner) | Constraint::SomeValue(inner) => {
+            value_shape_exact(inner)
+        }
+        Constraint::And(members) | Constraint::Or(members) | Constraint::Xone(members) => {
+            members.iter().all(value_shape_exact)
+        }
+        _ => false,
+    }
+}
+
+/// [`compile_member_schema`] for a shape not already being compiled.
+fn compile_member_schema_body(
+    shape: &Shape,
+    shape_iri: &str,
+    key: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
     let mut comments: Vec<String> = Vec::new();
     let enforced = enforced_constraints(
         &shape.constraints,
@@ -5157,11 +5399,11 @@ fn compile_member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut Ct
             ctx.record(
                 term,
                 shape_iri,
-                "a cardinality on a member shape (a node shape) is not well-formed and \
-                 constrains nothing a member's value schema states",
+                "a cardinality on a value shape (a node shape) is not well-formed and \
+                 constrains nothing a value's schema states",
             );
             comments.push(format!(
-                "a {term} constraint on the member shape of {key} was dropped"
+                "a {term} constraint on a value shape of {key} was dropped"
             ));
         } else {
             constraints.push(constraint.clone());
@@ -5175,11 +5417,11 @@ fn compile_member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut Ct
         ctx.record(
             "sh:property",
             shape_iri,
-            "a member shape's property shapes judge each member's own properties, which live \
-             on the member's own @graph node, beyond a JSON Schema keyword's reach from the list",
+            "a value shape's property shapes judge each value's own properties, which live on \
+             the value's own @graph node, beyond a JSON Schema keyword's reach from the value",
         );
         comments.push(format!(
-            "the property shapes of the member shape of {key} were dropped"
+            "the property shapes of a value shape of {key} were dropped"
         ));
     }
     constraints.push(Constraint::MaxCount(1));

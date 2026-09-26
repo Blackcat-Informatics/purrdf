@@ -1926,6 +1926,14 @@ impl ImportContext<'_> {
         path: &str,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
+        // Every kind a lone projected value can be, and no array: the compiler's
+        // statement that one value is not an array of values, which constrains no
+        // term.
+        if value == &serde_json::json!(["boolean", "number", "object", "string"])
+            && format.is_none()
+        {
+            return Ok(());
+        }
         let kinds = schema_types(value, &format!("{path}/type"))?;
         let format = format
             .map(|value| {

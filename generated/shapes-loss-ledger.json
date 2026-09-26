@@ -22,14 +22,6 @@
       "from": "shacl",
       "to": "json-schema",
       "intentional": true,
-      "note": "property-level sh:not has no lossless value-schema projection",
-      "location": "<unknown> subject=<https://example.org/GuardedShape>"
-    },
-    {
-      "code": "sh:not",
-      "from": "shacl",
-      "to": "json-schema",
-      "intentional": true,
       "note": "sh:not inner shape is not losslessly expressible in the object projection; omitted rather than emitting a base-negating (vacuous) not",
       "location": "<unknown> subject=<https://example.org/GuardedShape>"
     },

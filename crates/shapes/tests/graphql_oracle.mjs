@@ -361,7 +361,24 @@ assert.equal(
   manifest.temporal.probes.filter((probe) => !probe.sourceValid).length,
   "temporal fixture divergences drifted",
 );
-const outputCount = [manifest.exact, manifest.lossy, manifest.lists, manifest.temporal]
+// The value-position shape constraints over projected instances: each judged
+// property is the delegated custom scalar, so every non-conforming probe
+// diverges at its located delegation and every conforming one is accepted.
+const valueShapeResults = await executeFixture("value_shapes", manifest.value_shapes);
+assert.deepEqual(
+  valueShapeResults
+    .filter(({ probe, valid }) => valid !== probe.sourceValid)
+    .map(({ probe }) => probe.label),
+  manifest.value_shapes.probes.filter((probe) => !probe.sourceValid).map((probe) => probe.label),
+  "value-shape fixture divergences drifted",
+);
+const outputCount = [
+  manifest.exact,
+  manifest.lossy,
+  manifest.lists,
+  manifest.temporal,
+  manifest.value_shapes,
+]
   .flatMap((fixture) => fixture.probes)
   .filter((probe) => probe.output !== undefined).length;
 const codecCount = [...manifest.exact.probes, ...manifest.lossy.probes].filter(
@@ -376,5 +393,6 @@ console.log(
     `(${listDivergences.length} divergences); ` +
     `${outputCount} valid values serialize unchanged through output types and unions; ` +
     `${temporalResults.length} temporal range-bound probes agree or diverge at their located negation; ` +
+    `${valueShapeResults.length} SHACL value-shape probes agree or diverge at their delegated scalar; ` +
     "verified reverse SHACL import passes",
 );

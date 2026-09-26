@@ -255,6 +255,17 @@ def _purrdf_rejects(schema: Any, defs: Any) -> Callable[[Any], Any]:
     return reject
 
 
+def _purrdf_requires(schema: Any, defs: Any) -> Callable[[Any], Any]:
+    def require(value: Any) -> Any:
+        if not _purrdf_matches(schema, value, defs):
+            raise ValueError(
+                \"the value does not match a schema it must (JSON Schema allOf, oneOf or contains)\"
+            )
+        return value
+
+    return require
+
+
 ";
 
 /// Fixed generated-package dialect and reverse-loss source identifier.
@@ -702,6 +713,7 @@ pub fn emit_pydantic(
         model_paths
     };
 
+    renderer.finish_losses();
     Ok(PydanticPackage {
         dialect: PYDANTIC_DIALECT.to_owned(),
         artifacts: artifacts.finish(),
@@ -799,6 +811,13 @@ struct Renderer<'a> {
     helpers: Vec<(String, String)>,
     helper_by_path: BTreeMap<String, String>,
     used_names: BTreeSet<String>,
+    /// Losses the audit found in a composition (`allOf`, `oneOf`, `contains`) that the
+    /// runtime check may still enforce: `(code, path, note, enforcement key)`,
+    /// recorded by [`Self::finish_losses`] unless [`Self::resolve_type`] enforced it.
+    pending: Vec<(&'static str, String, &'static str, String)>,
+    /// The enforcement keys of the compositions [`Self::resolve_type`] attached a
+    /// runtime check for.
+    enforced: BTreeSet<String>,
 }
 
 impl<'a> Renderer<'a> {
@@ -817,6 +836,17 @@ impl<'a> Renderer<'a> {
             helpers: Vec::new(),
             helper_by_path: BTreeMap::new(),
             used_names,
+            pending: Vec::new(),
+            enforced: BTreeSet::new(),
+        }
+    }
+
+    /// Record every pending composition loss whose composition no field enforces.
+    fn finish_losses(&mut self) {
+        for (code, path, note, key) in std::mem::take(&mut self.pending) {
+            if !self.enforced.contains(&key) {
+                self.record(code, &path, note);
+            }
         }
     }
 
@@ -1034,7 +1064,7 @@ impl<'a> Renderer<'a> {
                 } else {
                     base
                 };
-                Ok(match object.get("not") {
+                let resolved = match object.get("not") {
                     Some(negand) if negation_supported(negand, self.defs, &mut BTreeSet::new()) => {
                         let negand = rewrite_references(negand, self.names)?;
                         format!(
@@ -1044,7 +1074,44 @@ impl<'a> Renderer<'a> {
                         )
                     }
                     _ => resolved,
-                })
+                };
+                // The compositions a Pydantic annotation cannot state — every branch
+                // of `allOf`, exactly one of `oneOf`, a member meeting `contains` —
+                // are the runtime check's, over the raw JSON input, when its closed
+                // keyword table evaluates them.
+                let required: Map<String, Value> =
+                    ["allOf", "oneOf", "contains", "minContains", "maxContains"]
+                        .into_iter()
+                        .filter_map(|key| {
+                            object.get(key).map(|value| (key.to_owned(), value.clone()))
+                        })
+                        .collect();
+                let required = Value::Object(required);
+                Ok(
+                    if required
+                        .as_object()
+                        .is_some_and(|required| !required.is_empty())
+                        && negation_supported(&required, self.defs, &mut BTreeSet::new())
+                    {
+                        for (key, marker) in [
+                            ("allOf", format!("{path}/allOf")),
+                            ("oneOf", format!("{path}/oneOf")),
+                            ("contains", format!("contains:{path}")),
+                        ] {
+                            if object.contains_key(key) {
+                                self.enforced.insert(marker);
+                            }
+                        }
+                        let required = rewrite_references(&required, self.names)?;
+                        format!(
+                            "Annotated[{resolved}, BeforeValidator(_purrdf_requires({}, \
+                             _PURRDF_DEFS))]",
+                            python_value(&required)
+                        )
+                    } else {
+                        resolved
+                    },
+                )
             }
             _ => Err(PydanticError::new(format!(
                 "{path} must be a JSON Schema object or boolean"
@@ -1326,12 +1393,13 @@ impl<'a> Renderer<'a> {
         };
 
         if object.contains_key("oneOf") {
-            self.record(
+            self.pending.push((
                 "one-of-validation-widened",
-                &format!("{path}/oneOf"),
+                format!("{path}/oneOf"),
                 "Pydantic's runtime union accepts any matching branch and cannot enforce \
                  exactly-one branch semantics",
-            );
+                format!("{path}/oneOf"),
+            ));
         }
         if object.contains_key("anyOf")
             && [
@@ -1354,11 +1422,12 @@ impl<'a> Renderer<'a> {
             );
         }
         if object.contains_key("allOf") {
-            self.record(
+            self.pending.push((
                 "intersection-validation-widened",
-                &format!("{path}/allOf"),
+                format!("{path}/allOf"),
                 "Pydantic annotations cannot express a general JSON Schema intersection",
-            );
+                format!("{path}/allOf"),
+            ));
         }
         if let Some(negand) = object.get("not")
             && !negation_supported(negand, self.defs, &mut BTreeSet::new())
@@ -1384,11 +1453,12 @@ impl<'a> Renderer<'a> {
             || object.contains_key("minContains")
             || object.contains_key("maxContains")
         {
-            self.record(
+            self.pending.push((
                 "array-contains-validation-dropped",
-                path,
+                path.to_owned(),
                 "Pydantic list annotations cannot enforce JSON Schema contains cardinality",
-            );
+                format!("contains:{path}"),
+            ));
         }
         if let Some(format) = object.get("format").and_then(Value::as_str) {
             let note = if matches!(format, "date-time" | "date" | "time") {
@@ -1981,6 +2051,7 @@ fn routed_runtime_names() -> &'static [&'static str] {
         "TypeAlias",
         "TypedDict",
         "_purrdf_rejects",
+        "_purrdf_requires",
         "_purrdf_temporal_input",
         "_purrdf_unique_items",
         "cast",
@@ -3401,6 +3472,49 @@ mod tests {
     }
 
     #[test]
+    fn enforces_every_composition_the_runtime_check_evaluates() {
+        let schema = json!({
+            "$defs": {
+                "Held": {
+                    "type": "object",
+                    "properties": {
+                        "ex:contains": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "contains": { "const": 1 }
+                        },
+                        "ex:intersection": {
+                            "allOf": [{ "type": "integer" }, { "type": "integer", "minimum": 1 }]
+                        },
+                        "ex:one": {
+                            "oneOf": [{ "type": "integer" }, { "enum": [1, "a"] }]
+                        }
+                    }
+                }
+            }
+        });
+        let out = emit_pydantic(&compiled(&schema), &config()).expect("emit");
+        assert!(
+            out.losses.entries().is_empty(),
+            "{}",
+            out.losses.render_json()
+        );
+        let models = String::from_utf8(out.artifacts["example_models/models.py"].clone())
+            .expect("UTF-8 models");
+        for required in [
+            r#"BeforeValidator(_purrdf_requires({"contains": {"const": 1}}, _PURRDF_DEFS))"#,
+            r#"BeforeValidator(_purrdf_requires({"allOf": [{"type": "integer"}, {"minimum": 1, "type": "integer"}]}, _PURRDF_DEFS))"#,
+            r#"BeforeValidator(_purrdf_requires({"oneOf": [{"type": "integer"}, {"enum": [1, "a"]}]}, _PURRDF_DEFS))"#,
+        ] {
+            assert!(
+                models.contains(required),
+                "{required} missing from:\n{models}"
+            );
+        }
+        assert!(models.contains("def _purrdf_requires(schema: Any, defs: Any)"));
+    }
+
+    #[test]
     fn records_every_unprojectable_runtime_construct_soundly() {
         let schema = json!({
             "$defs": {
@@ -3414,7 +3528,7 @@ mod tests {
                         "ex:contains": {
                             "type": "array",
                             "items": { "type": "integer" },
-                            "contains": { "const": 1 },
+                            "contains": { "propertyNames": { "maxLength": 1 } },
                             "minContains": 2
                         },
                         "ex:conjoined": {
@@ -3423,12 +3537,12 @@ mod tests {
                         },
                         "ex:format": { "type": "string", "format": "email" },
                         "ex:intersection": {
-                            "allOf": [{ "type": "integer" }, { "minimum": 1 }]
+                            "allOf": [{ "type": "integer" }, { "propertyNames": { "maxLength": 1 } }]
                         },
                         "ex:negated": { "not": { "propertyNames": { "maxLength": 1 } } },
                         "ex:odd": { "uniqueItems": true, "type": "array" },
                         "ex:one": {
-                            "oneOf": [{ "type": "integer" }, { "type": "number" }]
+                            "oneOf": [{ "type": "integer" }, { "propertyNames": { "maxLength": 1 } }]
                         },
                         "ex:temporal": {
                             "type": "string",

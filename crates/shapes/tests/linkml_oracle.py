@@ -477,6 +477,46 @@ def _assert_temporal(payload: dict[str, Any]) -> None:
             )
 
 
+def _assert_value_shapes(payload: dict[str, Any]) -> None:
+    """The value-position shape constraints through the official LinkML generator.
+
+    sh:node and sh:and are all_of, sh:or any_of, sh:xone exactly_one_of and
+    sh:not none_of, so the generated JSON Schema must agree with the SHACL
+    verdict of every projected instance but one: sh:someValue's contains, which
+    the official 1.11.1 generator states only for a has_member of scalar
+    constraints, not for the member expression a value schema is, and which is
+    recorded where it sits. The one probe it decides — an array with no
+    conforming member — must therefore diverge, and only it.
+    """
+    losses = payload["losses"]["losses"]
+    if not all(entry["intentional"] for entry in losses):
+        raise AssertionError("value-shape fixture contains an unregistered loss")
+    holder_losses = {
+        entry["code"] for entry in losses if "#/$defs/Holder" in entry["location"]
+    }
+    if "array-contains-validation-dropped" not in holder_losses:
+        raise AssertionError(f"the contains loss is not recorded: {sorted(holder_losses)}")
+    for code in ("one-of-validation-widened", "negation-validation-dropped"):
+        if code in holder_losses:
+            raise AssertionError(f"value-shape fixture recorded {code}")
+    schema = _load(payload["yaml"])
+    generated = _generate(schema)
+    _assert_reference_closure(generated)
+    holder = payload["element_names"]["Holder"]
+    for probe in payload["probes"]:
+        actual = _is_valid(generated, holder, probe["value"])
+        if probe["label"] == "some-none":
+            if actual is not True or probe["conforms"] is not False:
+                raise AssertionError("the located contains divergence drifted")
+            continue
+        if actual != probe["conforms"]:
+            raise AssertionError(
+                f"value-shape probe {probe['label']!r}: SHACL={probe['conforms']}, "
+                f"LinkML={actual}\n"
+                f"generated={json.dumps(generated['$defs'][holder], indent=2, sort_keys=True)}"
+            )
+
+
 def main() -> None:
     if importlib.metadata.version("linkml") != LINKML_PACKAGE_VERSION:
         raise AssertionError("linkml package version is not locked to 1.11.1")
@@ -489,12 +529,15 @@ def main() -> None:
     _assert_renamed(payload["renamed"])
     _assert_lists(payload["lists"])
     _assert_temporal(payload["temporal"])
+    _assert_value_shapes(payload["value_shapes"])
     print(
         "LinkML oracle: exact $defs and 16 instance probes agree; "
         "18 located losses, 7 verified slot renames, reverse SHACL imports, "
         "and representable widening probes pass; "
         f"{len(payload['lists']['probes'])} SHACL list-component probes agree; "
-        f"{len(payload['temporal']['probes'])} temporal range-bound probes agree"
+        f"{len(payload['temporal']['probes'])} temporal range-bound probes agree; "
+        f"{len(payload['value_shapes']['probes'])} SHACL value-shape probes agree "
+        "but for 1 located contains loss"
     )
 
 

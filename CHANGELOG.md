@@ -759,6 +759,18 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **shapes:** the JSON Schema compiler projects `sh:someValue`, `sh:node`,
+  `sh:and`, `sh:or`, `sh:xone` and `sh:not` on a property shape, instead of
+  dropping them. Each shape becomes one value's schema, combined with
+  `contains`, `allOf`, `anyOf`, `oneOf` or `not`. `sh:xone` and `sh:not` are
+  emitted only over shapes whose value schema is exact, and are recorded
+  otherwise. A shape's property shapes, which judge the value's own node, are
+  recorded. A multi-valued property's single-value alternative now rejects an
+  array, so an array of values can no longer bypass a per-value constraint
+  (`sh:pattern`, a length, `sh:not`) or `sh:maxCount`. The Pydantic emitter
+  enforces `allOf`, `oneOf` and `contains` with its runtime check (the new
+  `_purrdf_requires` helper) where that check evaluates them. Each emitter
+  oracle runs a value-shape fixture.
 - **validate, shapes, python, wasm, capi, cli:** a SPARQL 1.2 RL rule set's
   `IMPORTS` now resolve from the rules tool's import table on every host. The
   Python `apply_rules(srl=..., imports=...)`, WebAssembly `shaclApplyRules` and

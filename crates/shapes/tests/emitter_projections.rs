@@ -272,6 +272,31 @@ fn emit(body: &str) -> Emitted {
     }
 }
 
+/// `text` (compact JSON) as the emitted Python literal writes it: `", "` and
+/// `": "` separators.
+fn python_json(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for c in text.chars() {
+        out.push(c);
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+        } else if c == '"' {
+            in_string = true;
+        } else if c == ',' || c == ':' {
+            out.push(' ');
+        }
+    }
+    out
+}
+
 fn json(text: &str) -> Value {
     serde_json::from_str(text).expect("expected JSON")
 }
@@ -2141,102 +2166,127 @@ fn linkml_projects_root_class() {
     );
 }
 
+/// The IRI-or-`rdf:nil` value schema `sh:nodeKind sh:IRI` projects to.
+const IRI_VALUE: &str = r#"{"anyOf":[{"properties":{"@id":{"pattern":"^(?:[^_]|_(?:[^:]|$))","type":"string"}},"required":["@id"],"type":"object"},{"properties":{"@list":{"maxItems":0,"type":"array"}},"required":["@list"],"type":"object"}]}"#;
+
+/// `sh:someValue` on a property projects its shape's value schema: on a lone value
+/// (which must then be present), and as `contains` over an array of values —
+/// nothing recorded. See `observed::json_schema_some_value_agrees_with_validation`
+/// for the verdicts.
 #[test]
 fn json_schema_projects_some_value() {
     let emitted = emit(SOME_VALUE);
-    assert_eq!(
-        source_losses(&emitted),
-        owned3(&[(
-            "sh:someValue",
-            HOLDER,
-            "an at-least-one-value-conforms condition over a property's values has no projection in this emitter"
-        ),])
+    assert_eq!(source_losses(&emitted), owned3(&[]));
+    let subject = &emitted.schema["$defs"]["Holder"]["properties"]["ex:subject"];
+    let value = json(IRI_VALUE);
+    assert_eq!(subject["anyOf"][0]["allOf"], json(&format!("[{value}]")));
+    assert_eq!(subject["anyOf"][1]["contains"], value);
+    assert_eq!(subject["anyOf"][1]["minItems"], 1);
+    assert!(
+        emitted.schema["$defs"]["Holder"]["required"]
+            .as_array()
+            .expect("required")
+            .contains(&json(r#""ex:subject""#)),
+        "some value is required"
     );
-    let holder = &emitted.schema["$defs"]["Holder"];
-    assert_eq!(
-        holder["properties"]["ex:subject"],
-        json(
-            r#"{"anyOf":[{"$comment":"a sh:someValue constraint on property ex:subject was dropped (no projection in this emitter)"},{"items":{"$comment":"a sh:someValue constraint on property ex:subject was dropped (no projection in this emitter)"},"type":"array"}]}"#
-        )
-    );
-    assert_eq!(holder["$comment"], Value::Null);
 }
 
+/// TypeScript states the lone value's intersection and the array's element
+/// type; an array containing a matching member has no TypeScript type, so the
+/// `contains` is recorded where it sits.
 #[test]
 fn typescript_projects_some_value() {
     let emitted = emit(SOME_VALUE);
+    let declared = ts_type(&emitted.typescript, "Holder").expect("Holder");
+    assert!(declared.contains("readonly \"ex:subject\": "), "{declared}");
+    assert!(declared.contains("readonly \"@id\": string;"), "{declared}");
     assert_eq!(
-        ts_type(&emitted.typescript, "Holder").as_deref(),
-        Some(
-            "export type Holder = ({\n  readonly \"@annotation\"?: Annotation;\n  readonly \"@id\"?: string;\n  readonly \"@type\"?: (string | readonly (string)[]);\n  readonly \"ex:subject\"?: JsonValue;\n  readonly [key: string]: JsonValue;\n} & {\n    readonly \"@annotation\"?: Annotation;\n    readonly \"@id\"?: string;\n    readonly \"@type\"?: (string | readonly (string)[]);\n    readonly \"ex:name\": JsonValue;\n    readonly [key: string]: JsonValue;\n  });\n"
-        )
+        holder_losses(&emitted.typescript_losses),
+        owned2(&[
+            (
+                "array-contains-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/contains"
+            ),
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/0/allOf/0/anyOf/0/properties/@id/pattern"
+            ),
+            (
+                "string-validation-dropped",
+                "#/$defs/Holder/properties/ex:subject/anyOf/1/contains/anyOf/0/properties/@id/pattern"
+            ),
+        ])
     );
-    assert_eq!(holder_losses(&emitted.typescript_losses), owned2(&[]));
-    assert_eq!(source_codes(&emitted), owned2(&[("sh:someValue", HOLDER),]));
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
+/// Pydantic enforces the lone value's `allOf` and the array's `contains` with the
+/// runtime check over the raw input, so neither is recorded.
 #[test]
 fn pydantic_projects_some_value() {
     let emitted = emit(SOME_VALUE);
-    assert_eq!(
-        py_field(&emitted.pydantic, "ex:subject").as_deref(),
-        Some("    subject: Any | list[Any] = Field(default=None, alias=\"ex:subject\")")
+    let field = py_field(&emitted.pydantic, "ex:subject").expect("subject field");
+    assert!(
+        field.contains(&format!(
+            "BeforeValidator(_purrdf_requires({{\"allOf\": [{}]}}, _PURRDF_DEFS))",
+            python_json(IRI_VALUE)
+        )),
+        "{field}"
     );
-    assert_eq!(
-        holder_losses(&emitted.pydantic_losses),
-        owned2(&[("intersection-validation-widened", "#/$defs/Holder/allOf"),])
+    assert!(
+        field.contains(&format!(
+            "BeforeValidator(_purrdf_requires({{\"contains\": {}}}, _PURRDF_DEFS))",
+            python_json(IRI_VALUE)
+        )),
+        "{field}"
+    );
+    assert!(
+        holder_losses(&emitted.pydantic_losses)
+            .iter()
+            .all(|(_, pointer)| !pointer.starts_with("#/$defs/Holder/properties/ex:subject")),
+        "{:?}",
+        holder_losses(&emitted.pydantic_losses)
     );
     assert_pydantic_keeps_comments(&emitted);
-    assert_eq!(source_codes(&emitted), owned2(&[("sh:someValue", HOLDER),]));
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
+/// GraphQL carries the value as its custom scalar, whose validation is delegated,
+/// as for every value schema.
 #[test]
 fn graphql_projects_some_value() {
     let emitted = emit(SOME_VALUE);
     assert_eq!(gql_type(&emitted.graphql, "Holder").as_deref(), None);
-    assert_eq!(
-        holder_losses(&emitted.graphql_losses),
-        owned2(&[
-            ("custom-scalar-validation-delegated", "#/$defs/Holder"),
-            ("intersection-validation-delegated", "#/$defs/Holder/allOf"),
-        ])
+    assert!(
+        holder_losses(&emitted.graphql_losses).contains(&(
+            "custom-scalar-validation-delegated".to_owned(),
+            "#/$defs/Holder".to_owned()
+        )),
+        "{:?}",
+        holder_losses(&emitted.graphql_losses)
     );
-    assert_eq!(source_codes(&emitted), owned2(&[("sh:someValue", HOLDER),]));
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
+/// LinkML states the lone value's `all_of`; a `has_member` would carry the
+/// array's `contains` only as far as its scalar fields, which the member's value
+/// schema is not, so the `contains` is recorded where it sits.
 #[test]
 fn linkml_projects_some_value() {
     let emitted = emit(SOME_VALUE);
-    let holder = &emitted.linkml["classes"]["Holder"];
-    assert_eq!(
-        holder["attributes"]["ex:subject"],
-        json(
-            r#"{"alias":"ex:subject","any_of":[{"range":"string"},{"multivalued":true,"range":"string"}],"required":false,"slot_uri":"ex:subject"}"#
-        )
+    let subject = &emitted.linkml["classes"]["Holder"]["attributes"]["ex:subject"];
+    assert_eq!(subject["required"], true);
+    assert!(subject["any_of"][0]["all_of"].is_array(), "{subject}");
+    assert_eq!(subject["any_of"][1]["minimum_cardinality"], 1);
+    assert!(
+        holder_losses(&emitted.linkml_losses).contains(&(
+            "array-contains-validation-dropped".to_owned(),
+            "#/$defs/Holder/properties/ex:subject/anyOf/1/contains".to_owned()
+        )),
+        "{:?}",
+        holder_losses(&emitted.linkml_losses)
     );
-    assert_eq!(holder["extra_slots"], json(r#"{"allowed":true}"#));
-    assert_eq!(
-        holder_losses(&emitted.linkml_losses),
-        owned2(&[
-            (
-                "keyword-validation-dropped",
-                "#/$defs/Holder/allOf/0/properties/ex:name/anyOf/0"
-            ),
-            (
-                "keyword-validation-dropped",
-                "#/$defs/Holder/allOf/0/properties/ex:name/anyOf/1/items"
-            ),
-            (
-                "keyword-validation-dropped",
-                "#/$defs/Holder/properties/ex:subject/anyOf/0"
-            ),
-            (
-                "keyword-validation-dropped",
-                "#/$defs/Holder/properties/ex:subject/anyOf/1/items"
-            ),
-        ])
-    );
-    assert_eq!(source_codes(&emitted), owned2(&[("sh:someValue", HOLDER),]));
+    assert_eq!(source_codes(&emitted), owned2(&[]));
 }
 
 #[test]
@@ -3191,6 +3241,241 @@ mod observed {
         }
     }
 
+    /// The shapes graph whose one property shape carries `constraint` on `ex:subject`.
+    fn subject_shapes(constraint: &str) -> String {
+        format!(
+            "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+                sh:property [ sh:path ex:subject ; {constraint} ] ."
+        )
+    }
+
+    /// Several values project as an array, which the single-value alternative must
+    /// not accept: a per-value constraint whose keywords test only strings
+    /// (`sh:pattern`) judges every member of the array, and a value validation
+    /// rejects among several is rejected.
+    #[test]
+    fn json_schema_several_values_are_each_judged() {
+        let shapes = subject_shapes("sh:pattern \"^A\"");
+        agree(
+            &shapes,
+            &[
+                (r#""Ax""#, true),
+                (r#""Ax", "Ay""#, true),
+                (r#""Ax", "xyz""#, false),
+                (r#""xyz", "Ay""#, false),
+            ],
+        );
+    }
+
+    /// `sh:someValue` at value position: SOME value conforms to the shape —
+    /// `contains` over an array of values, the shape's value schema on a lone one,
+    /// and a value is required. Nothing is recorded.
+    #[test]
+    fn json_schema_some_value_agrees_with_validation() {
+        let shapes = subject_shapes("sh:someValue [ sh:datatype xsd:integer ]");
+        agree(
+            &shapes,
+            &[
+                ("1", true),
+                (r#""a""#, false),
+                (r#"1, "a""#, true),
+                (r#""a", 2"#, true),
+                (r#""a", "b""#, false),
+                ("ex:x", false),
+            ],
+        );
+        assert_eq!(judge(&shapes, "ex:h a ex:Holder ."), (false, false));
+        assert!(emit(&shapes).compiled.losses.is_empty());
+    }
+
+    /// `sh:node` at value position: EVERY value conforms to the shape, and a
+    /// property with no values conforms. Nothing is recorded.
+    #[test]
+    fn json_schema_node_agrees_with_validation() {
+        let shapes = subject_shapes("sh:node [ sh:datatype xsd:integer ]");
+        agree(
+            &shapes,
+            &[
+                ("1", true),
+                ("1, 2", true),
+                (r#""a""#, false),
+                (r#"1, "a""#, false),
+                ("ex:x", false),
+            ],
+        );
+        assert_eq!(judge(&shapes, "ex:h a ex:Holder ."), (true, true));
+        assert!(emit(&shapes).compiled.losses.is_empty());
+    }
+
+    /// A shape's property shapes judge the VALUE's own properties, which live on the
+    /// value's own `@graph` node, beyond any keyword's reach from `ex:h`: recorded,
+    /// and observed — the one part `sh:node` cannot project. The value-level part of
+    /// the same shape is still judged.
+    #[test]
+    fn json_schema_node_property_shapes_are_proven_unreachable() {
+        let shapes = subject_shapes(
+            "sh:node [ sh:nodeKind sh:IRI ; sh:property [ sh:path ex:name ; sh:minCount 1 ] ]",
+        );
+        assert_eq!(
+            judge(&shapes, "ex:h a ex:Holder ; ex:subject ex:v ."),
+            (true, false),
+            "ex:v has no ex:name, which no keyword on ex:h can see"
+        );
+        assert_eq!(
+            judge(
+                &shapes,
+                r#"ex:h a ex:Holder ; ex:subject ex:v . ex:v ex:name "n" ."#
+            ),
+            (true, true)
+        );
+        assert_eq!(
+            judge(&shapes, r#"ex:h a ex:Holder ; ex:subject "literal" ."#),
+            (false, false),
+            "the shape's value-level sh:nodeKind is judged"
+        );
+        assert_eq!(
+            source_codes(&emit(&shapes)),
+            owned2(&[("sh:property", HOLDER)])
+        );
+    }
+
+    /// `sh:and` at value position: every value conforms to every shape.
+    #[test]
+    fn json_schema_and_agrees_with_validation() {
+        let shapes =
+            subject_shapes("sh:and ( [ sh:datatype xsd:integer ] [ sh:in ( 1 2 \"a\" ) ] )");
+        agree(
+            &shapes,
+            &[
+                ("1", true),
+                ("1, 2", true),
+                ("3", false),
+                (r#""a""#, false),
+                ("1, 3", false),
+            ],
+        );
+        assert!(emit(&shapes).compiled.losses.is_empty());
+    }
+
+    /// `sh:or` at value position: every value conforms to at least one shape.
+    #[test]
+    fn json_schema_or_agrees_with_validation() {
+        let shapes = subject_shapes("sh:or ( [ sh:datatype xsd:integer ] [ sh:nodeKind sh:IRI ] )");
+        agree(
+            &shapes,
+            &[
+                ("1", true),
+                ("ex:x", true),
+                ("1, ex:x", true),
+                (r#""a""#, false),
+                ("[]", false),
+                (r#"1, "a""#, false),
+            ],
+        );
+        assert!(emit(&shapes).compiled.losses.is_empty());
+    }
+
+    /// `sh:xone` at value position: every value conforms to EXACTLY one shape —
+    /// `oneOf`, whose member schemas accept exactly what their shapes do. A value
+    /// conforming to both is rejected, as it is by validation.
+    #[test]
+    fn json_schema_xone_agrees_with_validation() {
+        let shapes =
+            subject_shapes("sh:xone ( [ sh:datatype xsd:integer ] [ sh:in ( 1 \"a\" ) ] )");
+        agree(
+            &shapes,
+            &[
+                ("1", false),
+                ("2", true),
+                (r#""a""#, true),
+                (r#""b""#, false),
+                (r#"2, "a""#, true),
+                ("2, 1", false),
+                (r#""x"^^xsd:integer"#, false),
+            ],
+        );
+        assert!(emit(&shapes).compiled.losses.is_empty());
+    }
+
+    /// `sh:not` at value position: every value does not conform to the shape. An
+    /// ill-typed `xsd:integer` literal does not conform to `sh:datatype
+    /// xsd:integer`, so it passes the negation — in the schema too.
+    #[test]
+    fn json_schema_not_agrees_with_validation() {
+        let shapes = subject_shapes("sh:not [ sh:datatype xsd:integer ]");
+        agree(
+            &shapes,
+            &[
+                ("1", false),
+                (r#""5"^^xsd:integer"#, false),
+                (r#""x"^^xsd:integer"#, true),
+                (r#""a""#, true),
+                (r#""a"@en"#, true),
+                ("ex:x", true),
+                ("[]", true),
+                (r#""a", 1"#, false),
+            ],
+        );
+        assert!(emit(&shapes).compiled.losses.is_empty());
+        let or = subject_shapes("sh:not [ sh:or ( [ sh:nodeKind sh:IRI ] [ sh:in ( \"a\" ) ] ) ]");
+        agree(
+            &or,
+            &[
+                ("ex:x", false),
+                (r#""a""#, false),
+                (r#""b""#, true),
+                ("1", true),
+            ],
+        );
+        assert!(emit(&or).compiled.losses.is_empty());
+    }
+
+    /// Under `sh:not` and `sh:xone` a member schema must accept exactly what its
+    /// shape does. `sh:class` accepts any node reference (the value's types live on
+    /// its own `@graph` node), so negating it would reject a value validation
+    /// accepts: each is dropped whole, recorded, and observed widening — never
+    /// narrowing.
+    #[test]
+    fn json_schema_not_and_xone_over_a_wider_shape_are_proven_inexpressible() {
+        let not = subject_shapes("sh:not [ sh:class ex:Cat ]");
+        assert_eq!(
+            judge(&not, "ex:h a ex:Holder ; ex:subject ex:c . ex:c a ex:Cat ."),
+            (true, false),
+            "the value's type is on its own node"
+        );
+        assert_eq!(
+            judge(&not, "ex:h a ex:Holder ; ex:subject ex:d ."),
+            (true, true),
+            "a conforming value is never rejected"
+        );
+        assert_eq!(source_codes(&emit(&not)), owned2(&[("sh:not", HOLDER)]));
+        let xone = subject_shapes("sh:xone ( [ sh:class ex:Cat ] [ sh:nodeKind sh:IRI ] )");
+        assert_eq!(
+            judge(
+                &xone,
+                "ex:h a ex:Holder ; ex:subject ex:c . ex:c a ex:Cat ."
+            ),
+            (true, false)
+        );
+        assert_eq!(
+            judge(&xone, "ex:h a ex:Holder ; ex:subject ex:d ."),
+            (true, true)
+        );
+        assert_eq!(source_codes(&emit(&xone)), owned2(&[("sh:xone", HOLDER)]));
+    }
+
+    /// A shape reached again through its own value-position constraints is not
+    /// inlined twice: the inner occurrence accepts any value, recorded — and the
+    /// outer occurrence is still judged.
+    #[test]
+    fn json_schema_a_recursive_value_shape_is_inlined_once() {
+        let shapes = "ex:HolderShape a sh:NodeShape ; sh:targetClass ex:Holder ;
+                sh:property [ sh:path ex:subject ; sh:node ex:IntShape ] .
+            ex:IntShape a sh:NodeShape ; sh:datatype xsd:integer ; sh:or ( ex:IntShape ) .";
+        agree(shapes, &[("1", true), (r#""a""#, false)]);
+        assert_eq!(source_codes(&emit(shapes)), owned2(&[("sh:node", HOLDER)]));
+    }
+
     /// The verdicts over each data value (one `ex:subject` value of `ex:h`).
     #[track_caller]
     fn agree(shapes: &str, cases: &[(&str, bool)]) {
@@ -3921,8 +4206,10 @@ mod observed {
 /// The constraints a property's value schema cannot judge — each value is a
 /// node reference or a literal — record their own codes and a `$comment`, as do
 /// a nested property shape, a reifier shape, `sh:reificationRequired` and a
-/// property shape on a path that is not one predicate. `sh:uniqueLang false`
-/// checks nothing and records nothing.
+/// property shape on a path that is not one predicate. `sh:node`, `sh:or`,
+/// `sh:and` and `sh:xone` project their shapes' value-level constraints and
+/// record only what a value cannot carry: `ex:Inner`'s property shape. `sh:uniqueLang
+/// false` checks nothing and records nothing.
 #[test]
 fn json_schema_records_shape_based_property_constraints() {
     let emitted = emit(
@@ -3950,24 +4237,21 @@ fn json_schema_records_shape_based_property_constraints() {
     assert_eq!(
         codes,
         [
-            "sh:and",
             "sh:closed",
-            "sh:node",
-            "sh:or",
             "sh:path",
+            "sh:property",
             "sh:property",
             "sh:qualifiedValueShape",
             "sh:reificationRequired",
             "sh:reifierShape",
             "sh:uniqueLang",
-            "sh:xone",
         ]
     );
     purrdf::loss::assert_ledger_sound(&emitted.compiled.losses, "shacl", "json-schema");
     let holder = &emitted.schema["$defs"]["Holder"];
     assert_eq!(
-        holder["properties"]["ex:subject"]["anyOf"][0]["$comment"],
-        "a sh:node constraint on property ex:subject was dropped (no projection in its value schema)"
+        holder["properties"]["ex:subject"]["anyOf"][0]["allOf"][0]["$comment"],
+        "the property shapes of a value shape of ex:subject were dropped"
     );
     assert!(
         !holder["properties"]["ex:quiet"]

@@ -378,6 +378,7 @@ try {
   const lossyResults = compileFixture("lossy", manifest.lossy, directory);
   const listResults = compileFixture("lists", manifest.lists, directory);
   const temporalResults = compileFixture("temporal", manifest.temporal, directory);
+  const valueShapeResults = compileFixture("value_shapes", manifest.value_shapes, directory);
   assertFixture("exact", manifest.exact, exactResults);
   assertFixture("lossy", manifest.lossy, lossyResults);
   // The SHACL list components over projected instances: every probe agrees
@@ -399,6 +400,16 @@ try {
     manifest.temporal.probes.filter((probe) => !probe.sourceValid).length,
     "temporal fixture divergences drifted",
   );
+  // The value-position shape constraints over projected instances: every probe
+  // agrees with the SHACL verdict but for the three located losses TypeScript's
+  // type system has no statement for (exactly one of overlapping types, a
+  // complement, an array containing a member of a type).
+  assertFixture("value_shapes", manifest.value_shapes, valueShapeResults);
+  assert.equal(
+    valueShapeResults.filter(({ probe, valid }) => valid !== probe.sourceValid).length,
+    3,
+    "value-shape fixture divergences drifted",
+  );
   const divergenceCount = lossyResults.filter(
     ({ probe, compilerOnly, valid }) => !compilerOnly && valid !== probe.sourceValid,
   ).length;
@@ -414,6 +425,7 @@ try {
       "distinct-sequence limit and the numeric, uniqueness and temporal losses hold; " +
       `${manifest.lists.probes.length} SHACL list-component probes agree but for 2 located losses; ` +
       `${manifest.temporal.probes.length} temporal range-bound probes agree or diverge at their located negation; ` +
+      `${manifest.value_shapes.probes.length} SHACL value-shape probes agree but for 3 located losses; ` +
       "verified reverse SHACL import passes",
   );
 } finally {

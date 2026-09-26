@@ -480,6 +480,31 @@ have no length or uniqueness constraint and its numeric types have no bound, so
 those are recorded where they stand. Each emitter oracle runs these components
 over projected instances of real data.
 
+A property shape that judges its values against shapes projects each shape as
+one value's schema, compiled as `sh:memberShape`'s is. `sh:node` and `sh:and`
+become `allOf`, `sh:or` becomes `anyOf`, `sh:xone` becomes `oneOf`, and
+`sh:not` becomes `not`. `sh:someValue` becomes `contains` over an array of
+values, and the value schema itself on a lone value, which it then requires.
+A shape's property shapes judge the value's own properties, which live on the
+value's own `@graph` node, so they are recorded. `oneOf` and `not` reject a
+value when a member schema accepts more than its shape does. They are
+therefore emitted only when every member shape is exact, that is, built from
+`sh:datatype`, `sh:nodeKind`, `sh:in`, `sh:hasValue` and further exact shapes,
+with nothing recorded. Otherwise the `sh:xone` or `sh:not` is recorded and
+left out. `sh:class` is not exact, because a value's types live on its own
+node. When one value is written unwrapped beside the array of several, the
+value schema also rejects an array, so every value of an array is judged.
+
+Pydantic enforces `allOf`, `oneOf`, `not` and `contains` with its runtime check
+over the raw JSON input, so it agrees with validation on each of these. LinkML
+states them as `all_of`, `any_of`, `exactly_one_of` and `none_of`. The
+official LinkML 1.11.1 generator honours `has_member` only for scalar
+constraints, not for a value schema, so `contains` is recorded. TypeScript
+states intersections and unions, and records `oneOf`, `not` and `contains`,
+which it has no type for. GraphQL delegates the composition to its custom
+scalar. Each emitter oracle runs these constraints over projected instances of
+real data.
+
 Each emitter oracle also runs the temporal bounds over projected instances.
 Pydantic and LinkML agree with validation on each of them. TypeScript and
 GraphQL record the bound's negation where it stands. Neither has a complement

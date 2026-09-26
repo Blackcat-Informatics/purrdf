@@ -10,6 +10,8 @@ use std::error::Error;
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
 mod shacl_temporal;
+#[path = "support/shacl_value_shapes.rs"]
+mod shacl_value_shapes;
 
 use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
@@ -1507,6 +1509,68 @@ fn temporal_fixture() -> Result<Fixture, Box<dyn Error>> {
     })
 }
 
+/// The value-position shape-constraint fixture (see
+/// `support/shacl_value_shapes.rs`): the projected instances of real data, whose
+/// verdicts are SHACL validation's. TypeScript states `sh:node`, `sh:and` and
+/// `sh:or` as intersections and unions; it has no type for exactly one of two
+/// overlapping types, for the complement of a type, or for an array that
+/// contains a member of a type, so exactly those three probes diverge, at their
+/// located losses.
+fn value_shapes_fixture() -> Result<Fixture, Box<dyn Error>> {
+    let compiled = shacl_value_shapes::compiled()?;
+    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let package = emit_typescript(&compiled, &config()?)?;
+    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
+    let expected_losses = [
+        (
+            "some-none",
+            (
+                "array-contains-validation-dropped",
+                "#/$defs/Holder/properties/ex:some/anyOf/1/contains",
+            ),
+        ),
+        (
+            "xone-both",
+            (
+                "one-of-validation-widened",
+                "#/$defs/Holder/properties/ex:xone/allOf/0/oneOf",
+            ),
+        ),
+        (
+            "not-integer",
+            (
+                "negation-validation-dropped",
+                "#/$defs/Holder/properties/ex:not/allOf/0/not",
+            ),
+        ),
+    ];
+    let mut probes = Vec::new();
+    for case in shacl_value_shapes::cases()? {
+        let expected_loss = expected_losses
+            .iter()
+            .find(|(label, _)| *label == case.label)
+            .map(|(_, loss)| *loss);
+        probes.push(probe(
+            &schema,
+            &package,
+            case.label,
+            "Holder",
+            case.value,
+            "variable",
+            case.conforms,
+            expected_loss,
+        )?);
+    }
+    Ok(Fixture {
+        declaration: declaration(&package)?,
+        type_names: package.type_names.clone(),
+        losses: ledger_json(&package)?,
+        probes,
+        compiler_probes: Vec::new(),
+        proofs: Vec::new(),
+    })
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
     let exact_schema = exact_schema();
@@ -1529,6 +1593,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "lossy": lossy_fixture(&lossy_schema, lossy_package)?,
         "lists": lists_fixture()?,
         "temporal": temporal_fixture()?,
+        "value_shapes": value_shapes_fixture()?,
         "reverse": reverse,
     });
     println!("{}", serde_json::to_string(&output)?);

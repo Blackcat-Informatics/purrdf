@@ -10,6 +10,8 @@ use std::error::Error;
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
 mod shacl_temporal;
+#[path = "support/shacl_value_shapes.rs"]
+mod shacl_value_shapes;
 
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
@@ -224,6 +226,37 @@ fn lists_fixture() -> Result<Value, Box<dyn Error>> {
         .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
         .collect::<Result<_, _>>()?;
     let probes = shacl_lists::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "artifacts": artifacts,
+        "model_paths": package.model_paths,
+        "losses": serde_json::from_str::<Value>(&package.losses.render_json())?,
+        "probes": probes,
+    }))
+}
+
+/// The value-position shape-constraint fixture (see
+/// `support/shacl_value_shapes.rs`) emitted as a package: `allOf`, `oneOf`,
+/// `not` and `contains` are enforced by the generated runtime check over the raw
+/// JSON input, so every probe must agree with its SHACL verdict.
+fn value_shapes_fixture() -> Result<Value, Box<dyn Error>> {
+    let compiled = shacl_value_shapes::compiled()?;
+    let package = emit_pydantic(
+        &compiled,
+        &PydanticConfig::new(
+            "shacl_value_shape_models",
+            "Caller-owned SHACL value-shape oracle package documentation.",
+            "Caller-owned SHACL value-shape oracle model documentation.",
+        )?,
+    )?;
+    let artifacts: BTreeMap<String, String> = package
+        .artifacts
+        .iter()
+        .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
+        .collect::<Result<_, _>>()?;
+    let probes = shacl_value_shapes::cases()?
         .into_iter()
         .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
         .collect::<Vec<_>>();
@@ -484,6 +517,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect::<BTreeMap<_, _>>();
     let output = json!({
         "lists": lists_fixture()?,
+        "value_shapes": value_shapes_fixture()?,
         "temporal": temporal_fixture()?,
         "artifacts": artifacts,
         "model_paths": package.model_paths,

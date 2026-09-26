@@ -10,6 +10,8 @@ use std::error::Error;
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
 mod shacl_temporal;
+#[path = "support/shacl_value_shapes.rs"]
+mod shacl_value_shapes;
 
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::CompiledSchema;
@@ -359,7 +361,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
         .collect::<Vec<_>>();
 
+    // The value-position shape-constraint fixture (see
+    // `support/shacl_value_shapes.rs`).
+    let value_shape_schema = shacl_value_shapes::compiled()?;
+    let value_shapes = emit_linkml(&value_shape_schema, &config)?;
+    check_ledger_sound(&value_shapes.losses, "json-schema", "linkml-1.11")?;
+    let value_shape_probes = shacl_value_shapes::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+
     let output = json!({
+        "value_shapes": {
+            "element_names": value_shapes.element_names,
+            "losses": serde_json::from_str::<Value>(&value_shapes.losses.render_json())?,
+            "probes": value_shape_probes,
+            "schema": serde_json::from_str::<Value>(&value_shape_schema.schema_json)?,
+            "yaml": value_shapes.yaml,
+        },
         "temporal": {
             "element_names": temporal.element_names,
             "losses": serde_json::from_str::<Value>(&temporal.losses.render_json())?,

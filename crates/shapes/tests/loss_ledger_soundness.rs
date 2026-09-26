@@ -112,16 +112,17 @@ fn sound_green_for_real_compile_output() {
     assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
 }
 
-/// The SHACL 1.2 constraints the value-schema projection drops — `sh:rootClass`
-/// and a property-level `sh:someValue` — each record their own code, as do the
+/// The SHACL 1.2 constraint the value-schema projection drops — `sh:rootClass` —
+/// records its own code, as do the
 /// list components for the one part they do not project (a list the instance
 /// projection keeps as linked `@graph` nodes), and every one of those codes is
 /// inside the declared profile; a `sh:TripleTerm` node kind is projected (the
 /// JSON-LD-star embedded node) and records nothing.
 ///
 /// The neighbours record nothing: `sh:singleLine true` is projected as a
-/// negated line-break pattern, `sh:singleLine false` checks nothing, and a
-/// node-level `sh:someValue` is projected as `sh:node` is. `sh:uniqueMembers
+/// negated line-break pattern, `sh:singleLine false` checks nothing, a node-level
+/// `sh:someValue` is projected as `sh:node` is, and a property-level
+/// `sh:someValue` over a value-level shape as `contains`. `sh:uniqueMembers
 /// false` requires a list, projected but for the linked-node part.
 #[test]
 fn shacl12_constraints_record_declared_codes() {
@@ -146,7 +147,6 @@ fn shacl12_constraints_record_declared_codes() {
             "sh:memberShape",
             "sh:minListLength",
             "sh:rootClass",
-            "sh:someValue",
             "sh:uniqueMembers",
         ]
     );

@@ -11,6 +11,8 @@ use std::error::Error;
 mod shacl_lists;
 #[path = "support/shacl_temporal.rs"]
 mod shacl_temporal;
+#[path = "support/shacl_value_shapes.rs"]
+mod shacl_value_shapes;
 
 use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
@@ -892,6 +894,41 @@ fn temporal_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
     fixture(&package, probes)
 }
 
+/// The value-position shape-constraint fixture (see
+/// `support/shacl_value_shapes.rs`): a property judged against shapes is the
+/// custom scalar, whose composition GraphQL delegates — it has no input type for
+/// an intersection, union, exactly-one, complement or containment of value
+/// types — so every non-conforming probe diverges at its property's delegated
+/// scalar, and every conforming one is accepted.
+fn value_shapes_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
+    let compiled = shacl_value_shapes::compiled()?;
+    let schema: Value = serde_json::from_str(&compiled.schema_json)?;
+    let package = emit_graphql(&compiled, config)?;
+    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
+    let mut probes = Vec::new();
+    for case in shacl_value_shapes::cases()? {
+        let property = shacl_value_shapes::VARIANTS
+            .iter()
+            .find(|(label, _, _)| *label == case.label)
+            .map(|(_, property, _)| *property)
+            .ok_or("every case is a variant")?;
+        let location = format!("#/$defs/Holder/properties/{property}");
+        let expected_loss =
+            (!case.conforms).then_some(("custom-scalar-validation-delegated", location.as_str()));
+        probes.push(probe(
+            &schema,
+            &package,
+            case.label,
+            "Holder",
+            case.value,
+            case.conforms,
+            None,
+            expected_loss,
+        )?);
+    }
+    fixture(&package, probes)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = config()?;
     let exact_schema = exact_schema();
@@ -915,6 +952,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "lossy": lossy_fixture(&lossy_schema, &lossy_package)?,
         "lists": lists_fixture(&config)?,
         "temporal": temporal_fixture(&config)?,
+        "value_shapes": value_shapes_fixture(&config)?,
         "reverse": reverse_evidence(&exact_package, &import_config()?)?,
     });
     println!("{}", serde_json::to_string(&output)?);

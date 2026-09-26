@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 
 REPO = Path(__file__).resolve().parents[3]
-FLAT_BASELINE_SHA256 = "2a4a0bb8eae019b6b410cb0ef39acc59226b6a3e4c6ae72ddb211418826d0e5e"
+FLAT_BASELINE_SHA256 = "6d30855141344a4bc9308182af7a7b969a92b381e6d2fca4c953e947876ce692"
 SCHEMA_MAP_KEYWORDS = (
     "$defs",
     "properties",
@@ -448,6 +448,7 @@ def main() -> None:
             payload["routed"]["artifacts"],
             payload["lists"]["artifacts"],
             payload["temporal"]["artifacts"],
+            payload["value_shapes"]["artifacts"],
         ]:
             for relative, text in artifacts.items():
                 destination = root / relative
@@ -474,6 +475,22 @@ def main() -> None:
                 for entry in payload["temporal"]["losses"]["losses"]
             ):
                 raise AssertionError("temporal package kept a negation loss")
+            # The value-position shape constraints: allOf, oneOf, not and contains
+            # are each enforced by the generated runtime check, so no probe
+            # diverges and none of their losses remains.
+            _assert_lists(payload["value_shapes"])
+            if any(
+                entry["code"]
+                in {
+                    "array-contains-validation-dropped",
+                    "intersection-validation-widened",
+                    "negation-validation-dropped",
+                    "one-of-validation-widened",
+                }
+                and "#/$defs/Holder" in entry["location"]
+                for entry in payload["value_shapes"]["losses"]["losses"]
+            ):
+                raise AssertionError("value-shape package kept a composition loss")
             routed_root = importlib.import_module("routed_oracle_models")
             if routed_root.__version__ != payload["routed"]["version"]:
                 raise AssertionError("routed package version export drifted")
@@ -485,7 +502,8 @@ def main() -> None:
         "agree; flat 6-model and routed 8-model packages pass strict typing, live schemas, "
         "validation/alias probes, metadata/version linkage, and verified reverse SHACL import; "
         f"{len(payload['lists']['probes'])} SHACL list-component probes agree; "
-        f"{len(payload['temporal']['probes'])} temporal range-bound probes agree"
+        f"{len(payload['temporal']['probes'])} temporal range-bound probes agree; "
+        f"{len(payload['value_shapes']['probes'])} SHACL value-shape probes agree"
     )
 
 
