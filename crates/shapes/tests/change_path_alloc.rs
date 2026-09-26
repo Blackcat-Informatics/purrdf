@@ -2352,7 +2352,7 @@ fn render_golden() -> String {
         writeln!(rendered, "### case {}", case.name).expect("writing to a String cannot fail");
         writeln!(rendered, "### results {}", report.results.len())
             .expect("writing to a String cannot fail");
-        rendered.push_str(&report.to_ntriples());
+        rendered.push_str(&carried_report_text(&report));
         rendered.push('\n');
     }
 
@@ -2372,9 +2372,39 @@ fn render_golden() -> String {
         .expect("writing to a String cannot fail");
     writeln!(rendered, "### results {}", report.results.len())
         .expect("writing to a String cannot fail");
-    rendered.push_str(&report.to_ntriples());
+    rendered.push_str(&carried_report_text(&report));
     rendered.push('\n');
     rendered
+}
+
+/// The report's N-Triples with every blank node it CARRIES written under the label its
+/// own graph gave it, the form the golden pins.
+///
+/// The report graph writes each source graph's blank nodes in their own label space
+/// (`_:dg{n}` for the data graph, `_:sg{n}` for the shapes graph — see
+/// `ValidationReport::with_report_blank_labels`), so that a shapes-graph node and a
+/// data-graph node sharing a label stay two nodes. That relabelling is a pure function of
+/// the results; this undoes it through the mapping the report itself returns, so the
+/// golden keeps pinning every result, value and path byte for byte, and a result the
+/// change path stopped producing still fails here.
+fn carried_report_text(report: &ValidationReport) -> String {
+    let (_, labels) = report.with_report_blank_labels();
+    let text = report.to_ntriples();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("_:") {
+        out.push_str(&rest[..at + 2]);
+        rest = &rest[at + 2..];
+        let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+        let label = &rest[..end];
+        match labels.source_of(label) {
+            Some((_, source)) => out.push_str(source),
+            None => out.push_str(label),
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 // ---------------------------------------------------------------------------

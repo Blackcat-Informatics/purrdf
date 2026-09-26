@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use purrdf_core::{RdfDiagnostic, RdfLocation, RdfSeverity, UnitInterner};
 use purrdf_rdf::SpanTable;
 use purrdf_shapes::engine::ValidationOptions;
-use purrdf_shapes::report::{Severity, ValidationReport, ValidationResult};
+use purrdf_shapes::report::{ReportBlankLabels, Severity, ValidationReport, ValidationResult};
 use purrdf_shapes::term::{Literal, Term};
 
 use crate::model::{
@@ -195,10 +195,14 @@ pub fn build_report_sarif_with(
     sources: &SarifSources<'_>,
 ) -> SarifLog {
     let base_id = source_root_base_id(options);
-    let mut results: Vec<SarifResult> = report
+    // Written from the report's own blank-node labels — each source graph's blank nodes
+    // in their own label space, exactly as the report graph writes them — while a focus
+    // node's source span is still looked up under the label its data graph gave it.
+    let (labelled, labels) = report.with_report_blank_labels();
+    let mut results: Vec<SarifResult> = labelled
         .results
         .iter()
-        .map(|r| result_to_sarif(r, sources, base_id))
+        .map(|r| result_to_sarif(r, &labels, sources, base_id))
         .collect();
 
     sort_results(&mut results);
@@ -315,6 +319,7 @@ impl SarifReport for ValidationReport {
 
 fn result_to_sarif(
     result: &ValidationResult,
+    labels: &ReportBlankLabels,
     sources: &SarifSources<'_>,
     base_id: Option<&str>,
 ) -> SarifResult {
@@ -385,7 +390,7 @@ fn result_to_sarif(
         }
     }
 
-    let physical = focus_physical_location(result, sources, base_id);
+    let physical = focus_physical_location(result, labels, sources, base_id);
     let primary = Location {
         physical_location: physical,
         logical_locations: logical,
@@ -403,7 +408,7 @@ fn result_to_sarif(
         }],
         message: Some(Message::text("shape defined here")),
     }];
-    push_detail_locations(result, sources, base_id, &mut related);
+    push_detail_locations(result, labels, sources, base_id, &mut related);
 
     SarifResult {
         rule_id: result.source_constraint_component.as_str().to_owned(),
@@ -429,6 +434,7 @@ fn result_to_sarif(
 /// so nothing a nested result says is lost.
 fn push_detail_locations(
     result: &ValidationResult,
+    labels: &ReportBlankLabels,
     sources: &SarifSources<'_>,
     base_id: Option<&str>,
     related: &mut Vec<Location>,
@@ -459,7 +465,7 @@ fn push_detail_locations(
         });
         let text = primary_message(&detail.messages).unwrap_or_else(|| synthesize_message(detail));
         related.push(Location {
-            physical_location: focus_physical_location(detail, sources, base_id),
+            physical_location: focus_physical_location(detail, labels, sources, base_id),
             logical_locations: logical,
             message: Some(Message::text(format!("sh:detail: {text}"))),
         });
@@ -472,12 +478,13 @@ fn push_detail_locations(
 /// otherwise `None` (the logical locations carry the result).
 fn focus_physical_location(
     result: &ValidationResult,
+    labels: &ReportBlankLabels,
     sources: &SarifSources<'_>,
     base_id: Option<&str>,
 ) -> Option<PhysicalLocation> {
     let uri = sources.artifact_uri?;
     let spans = sources.spans?;
-    let key = focus_span_key(&result.focus_node)?;
+    let key = focus_span_key(&result.focus_node, labels)?;
     let position = spans.position_for_subject(&key)?;
     Some(PhysicalLocation {
         artifact_location: ArtifactLocation {
@@ -494,11 +501,17 @@ fn focus_physical_location(
 }
 
 /// The span-table lookup key for a focus node: the bare IRI for a named node,
-/// `_:label` for a blank node (matching the parser's subject-key convention).
-fn focus_span_key(term: &Term) -> Option<String> {
+/// `_:label` for a blank node (matching the parser's subject-key convention), under the
+/// label the DATA graph gave it rather than the report's.
+fn focus_span_key(term: &Term, labels: &ReportBlankLabels) -> Option<String> {
     match term {
         Term::NamedNode(n) => Some(n.as_str().to_owned()),
-        Term::BlankNode(label) => Some(format!("_:{label}")),
+        Term::BlankNode(label) => {
+            let source = labels
+                .source_of(label)
+                .map_or(label.as_str(), |(_, source)| source);
+            Some(format!("_:{source}"))
+        }
         Term::Literal(_) | Term::Triple(_) => None,
     }
 }

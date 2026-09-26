@@ -917,12 +917,25 @@ list of tuples, each a property IRI and a value in N-Triples syntax.
 the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen
 `RdfDataset`, built straight from the report's own terms rather than through a
 `to_ntriples()` → `parse_dataset()` round-trip. The direct path carries every
-RDF 1.2 term the report holds (a triple-term focus node included) with the
-report's own blank-node labels, and the blank nodes the report *mints* (the
-report node, one per result, the interior nodes of a complex `sh:path`) are
-guaranteed distinct from every blank node the data graph *carries*. Rendering
+RDF 1.2 term the report holds (a triple-term focus node included). Rendering
 the report in any syntax is then `serialize_dataset(&report.to_dataset(), …)`,
 which is exactly what `purrdf validate --format` does.
+
+A report carries blank nodes from two graphs: a focus node, a value and an
+annotation value come from the data graph, and a source shape from the shapes
+graph. Blank-node labels are local to the graph that uses them, so the two
+documents often use the same label for different nodes. The report therefore
+writes each graph's blank nodes in its own label space: `_:dg0`, `_:dg1`, … for
+the data graph and `_:sg0`, `_:sg1`, … for the shapes graph, numbered in the
+order they first appear. Two different nodes never share a label, and one node
+keeps one label everywhere it appears, including in the SARIF projection. The
+labels do not depend on which parser read the documents, so the same shapes
+graph written in Turtle, TriG or RDF/XML gives the same report bytes.
+`ValidationReport::with_report_blank_labels()` returns the relabelled report
+with a `ReportBlankLabels` map from each report label back to its graph and
+original label. The in-memory `results` keep the original labels. The blank
+nodes the report *mints* (the report node, one per result, and the interior
+nodes of a complex `sh:path`) are distinct from both label spaces.
 
 ## SARIF output
 

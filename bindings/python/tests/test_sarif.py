@@ -65,3 +65,41 @@ def test_to_sarif_reports_the_violation() -> None:
 def test_to_sarif_is_byte_deterministic() -> None:
     report = _report()
     assert report.to_sarif() == report.to_sarif()
+
+
+# A property shape (a shapes-graph BLANK node) whose value is a data-graph BLANK node:
+# both documents label their first blank node alike, and the report must not fuse them.
+_BLANK_SHAPES = """@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+ex:S sh:targetNode ex:s ; sh:property [ sh:path ex:p ; sh:nodeKind sh:IRI ] .
+"""
+
+_BLANK_DATA = (
+    "<http://example.org/ns#s> <http://example.org/ns#p> _:b0 .\n"
+    '_:b0 <http://example.org/ns#q> "1" .\n'
+)
+
+
+def test_a_shapes_blank_and_a_data_blank_are_two_nodes_in_the_report() -> None:
+    report = purrdf.shapes.Shapes(_BLANK_SHAPES).validate_nt(_BLANK_DATA)
+    assert not report.conforms
+    lines = report.to_ntriples().splitlines()
+    shape = [ln for ln in lines if "<http://www.w3.org/ns/shacl#sourceShape>" in ln]
+    value = [ln for ln in lines if "<http://www.w3.org/ns/shacl#value>" in ln]
+    assert len(shape) == 1 and len(value) == 1
+    shape_node = shape[0].split()[2]
+    value_node = value[0].split()[2]
+    assert shape_node.startswith("_:") and value_node.startswith("_:")
+    assert shape_node != value_node, report.to_ntriples()
+
+    sarif = json.loads(report.to_sarif())
+    result = sarif["runs"][0]["results"][0]
+    related = [
+        loc["name"]
+        for location in result["relatedLocations"]
+        for loc in location["logicalLocations"]
+        if loc.get("kind") == "sourceShape"
+    ]
+    assert related == [shape_node]
+    assert value_node in result["message"]["text"]
+    assert shape_node in result["message"]["text"]

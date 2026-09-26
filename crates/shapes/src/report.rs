@@ -14,9 +14,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use ::purrdf::FastSet;
 use ::purrdf::RdfDatasetBuilder;
 use ::purrdf::provenance::Attribution;
+use ::purrdf::{FastMap, FastSet};
 use ::purrdf::{RdfQuad, RdfTerm, SerializeGraph, serialize_dataset};
 
 use ::purrdf::RdfDataset;
@@ -461,6 +461,107 @@ pub struct ValidationReport {
     pub conformance_disallows: ConformanceDisallows,
 }
 
+/// The graph a blank node a validation report carries was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlankOrigin {
+    /// The data graph: a focus node, a value, an annotation value.
+    DataGraph,
+    /// The shapes graph: a source shape, a blank result path that is not a complex path.
+    ShapesGraph,
+}
+
+impl BlankOrigin {
+    /// The label stem of this graph's label space in a report.
+    const fn stem(self) -> &'static str {
+        match self {
+            Self::DataGraph => "dg",
+            Self::ShapesGraph => "sg",
+        }
+    }
+}
+
+/// The relabelling [`ValidationReport::with_report_blank_labels`] applied: which report
+/// label stands for which blank node of which source graph.
+#[derive(Debug, Clone, Default)]
+pub struct ReportBlankLabels {
+    /// `(origin, source label)` → report label.
+    forward: FastMap<(BlankOrigin, String), String>,
+    /// Report label → `(origin, source label)`.
+    back: FastMap<String, (BlankOrigin, String)>,
+    /// The next counter of each graph's label space.
+    next: [usize; 2],
+}
+
+impl ReportBlankLabels {
+    /// The graph and source label a report label stands for, or `None` for a label the
+    /// relabelling did not assign.
+    #[must_use]
+    pub fn source_of(&self, report_label: &str) -> Option<(BlankOrigin, &str)> {
+        self.back
+            .get(report_label)
+            .map(|(origin, label)| (*origin, label.as_str()))
+    }
+
+    /// The report label of the `origin` blank node `label`, assigning the next one of
+    /// its graph's space on first sight.
+    fn label(&mut self, origin: BlankOrigin, label: &str) -> String {
+        let key = (origin, label.to_owned());
+        if let Some(assigned) = self.forward.get(&key) {
+            return assigned.clone();
+        }
+        let slot = match origin {
+            BlankOrigin::DataGraph => 0,
+            BlankOrigin::ShapesGraph => 1,
+        };
+        let assigned = format!("{}{}", origin.stem(), self.next[slot]);
+        self.next[slot] += 1;
+        self.back.insert(assigned.clone(), key.clone());
+        self.forward.insert(key, assigned.clone());
+        assigned
+    }
+
+    /// `term` with its blank nodes, triple terms included, relabelled as `origin`'s.
+    fn term(&mut self, origin: BlankOrigin, term: &Term) -> Term {
+        match term {
+            Term::BlankNode(label) => Term::BlankNode(self.label(origin, label)),
+            Term::Triple(triple) => Term::Triple(Box::new(crate::term::Triple {
+                subject: self.term(origin, &triple.subject),
+                predicate: triple.predicate.clone(),
+                object: self.term(origin, &triple.object),
+            })),
+            Term::NamedNode(_) | Term::Literal(_) => term.clone(),
+        }
+    }
+
+    /// `result` and its details with every carried blank node relabelled, visiting the
+    /// fields in the order [`ValidationReport::with_report_blank_labels`] documents.
+    fn relabel_result(&mut self, result: &ValidationResult) -> ValidationResult {
+        let mut out = result.clone();
+        out.focus_node = self.term(BlankOrigin::DataGraph, &result.focus_node);
+        out.source_shape = self.term(BlankOrigin::ShapesGraph, &result.source_shape);
+        // A blank result path paired with a path structure is a complex path the
+        // report MINTS, not a carried node; any other blank result path is carried.
+        if let (Some(path), None) = (&result.result_path, &result.path_structure) {
+            out.result_path = Some(self.term(BlankOrigin::ShapesGraph, path));
+        }
+        out.value = result
+            .value
+            .as_ref()
+            .map(|value| self.term(BlankOrigin::DataGraph, value));
+        out.annotations = result
+            .annotations
+            .iter()
+            .map(|(property, value)| (property.clone(), self.term(BlankOrigin::DataGraph, value)))
+            .collect();
+        out.details = result
+            .details
+            .iter()
+            .map(|detail| self.relabel_result(detail))
+            .collect();
+        out
+    }
+}
+
 /// The tuple type used for deterministic comparison of result sets.
 ///
 /// `(focus, path, value, component, source_shape, severity)`
@@ -520,8 +621,59 @@ impl ValidationReport {
     /// interior nodes of a complex `sh:path`) are guaranteed distinct from every
     /// blank node the report CARRIES: a data graph is free to contain `_:r0`, and
     /// the minted nodes step into a reserved label namespace when it does.
+    ///
+    /// # Blank nodes from two graphs
+    ///
+    /// A report carries blank nodes from TWO graphs: a focus node, a value and an
+    /// annotation value are data-graph nodes, a source shape (and a blank result path
+    /// that is not a complex path) a shapes-graph node. Each graph's labels are local
+    /// to that graph, so both routinely use the same one — and written into one report
+    /// graph as they were, a shapes-graph shape and a data-graph value would become one
+    /// node. The report is therefore written under [`Self::with_report_blank_labels`]:
+    /// every carried blank node relabelled into its OWN graph's label space, distinct
+    /// nodes distinct and the same node the same label everywhere it appears.
     #[must_use]
     pub fn to_dataset(&self) -> Arc<RdfDataset> {
+        self.with_report_blank_labels().0.dataset_as_carried()
+    }
+
+    /// This report with every blank node it CARRIES relabelled into the label space of
+    /// the graph it came from, and the [`ReportBlankLabels`] mapping back.
+    ///
+    /// A data-graph blank node becomes `_:dg{n}` and a shapes-graph blank node `_:sg{n}`,
+    /// `n` counting each graph's distinct nodes in their order of first appearance in
+    /// the report — the results in order, and within a result its focus node, source
+    /// shape, carried result path, value, annotation values and then its `sh:detail`
+    /// results. Two occurrences of one node keep one label; a data-graph node and a
+    /// shapes-graph node that shared a label in their own graphs get two. Blank nodes
+    /// inside a triple term are relabelled in the space of the term that holds them.
+    ///
+    /// Every report serialization — the report graph ([`Self::to_dataset`], so every RDF
+    /// syntax), and the SARIF projection — is written from this form, so a node has one
+    /// label across all of them, and the labels do not depend on which parser labelled
+    /// the documents. The in-memory [`Self::results`] keep the labels of the graphs they
+    /// were read from, which is what a caller joining a result back to its data needs.
+    #[must_use]
+    pub fn with_report_blank_labels(&self) -> (Self, ReportBlankLabels) {
+        let mut labels = ReportBlankLabels::default();
+        let results = self
+            .results
+            .iter()
+            .map(|result| labels.relabel_result(result))
+            .collect();
+        (
+            Self {
+                conforms: self.conforms,
+                results,
+                conformance_disallows: self.conformance_disallows.clone(),
+            },
+            labels,
+        )
+    }
+
+    /// The report graph with the carried blank-node labels exactly as the results hold
+    /// them: [`Self::to_dataset`] after relabelling.
+    fn dataset_as_carried(&self) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         // Complex-path structure roots already emitted (keyed by root label).
         let mut emitted_paths: FastSet<String> = FastSet::default();
@@ -1377,14 +1529,47 @@ mod tests {
             "re-parsed report must carry the emitted triples"
         );
 
+        // The report writes its own labels, never the data's hostile ones, and each
+        // maps back to the data node it stands for.
+        let (labelled, labels) = report.with_report_blank_labels();
+        for label in hostile_labels {
+            assert!(!nt.contains(label), "{nt}");
+        }
+        let mut sources: Vec<&str> = ["dg0", "dg1"]
+            .iter()
+            .map(|label| {
+                let (origin, source) = labels.source_of(label).expect("assigned");
+                assert_eq!(origin, BlankOrigin::DataGraph);
+                source
+            })
+            .collect();
+        sources.sort_unstable();
+        let mut expected = hostile_labels.to_vec();
+        expected.sort_unstable();
+        assert_eq!(sources, expected);
+
         // The result tuples must still round-trip identically through text.
         let parsed =
             tuples_from_ntriples(&nt).expect("N-Triples from to_ntriples() must parse cleanly");
         assert_eq!(
             parsed,
-            report.result_tuples(),
-            "round-trip tuples must match original tuples even with hostile blank labels"
+            labelled.result_tuples(),
+            "round-trip tuples must match the report's tuples even with hostile blank labels"
         );
+    }
+
+    /// The report graph as the emission layer writes it with the carried labels as the
+    /// results hold them — the layer [`ValidationReport::to_dataset`] writes through
+    /// after relabelling, whose own guarantees (escaping, minted-label separation) hold
+    /// for any label it is handed.
+    fn carried_ntriples(report: &ValidationReport) -> String {
+        let buf = serialize_dataset(
+            &report.dataset_as_carried(),
+            "application/n-quads",
+            SerializeGraph::DefaultGraph,
+        )
+        .expect("N-Triples serialisation of report quads");
+        String::from_utf8(buf).expect("UTF-8")
     }
 
     /// Every [`::purrdf::TermId`] in `dataset`'s dense term table.
@@ -1584,9 +1769,9 @@ mod tests {
         let mut report = hostile_report();
         report.results[1].focus_node = Term::blank("a\u{d7}b");
 
-        let direct = report.to_dataset();
+        let direct = report.dataset_as_carried();
         let round_tripped =
-            dataset_from_ntriples(&report.to_ntriples()).expect("escaped text must parse");
+            dataset_from_ntriples(&carried_ntriples(&report)).expect("escaped text must parse");
 
         // Same graph up to blank labelling…
         assert_eq!(
@@ -1600,7 +1785,13 @@ mod tests {
                 direct.resolve(id),
                 ::purrdf::TermRef::Blank { label, .. } if label == "a\u{d7}b"
             )),
-            "to_dataset() must carry the hostile blank label verbatim"
+            "the emission layer must carry the hostile blank label verbatim"
+        );
+        // …and the public report graph is the same graph under the report's labels.
+        assert_eq!(
+            ::purrdf::canonicalize(&direct).nquads,
+            ::purrdf::canonicalize(&report.to_dataset()).nquads,
+            "relabelling must not change the graph"
         );
     }
 
@@ -1620,7 +1811,7 @@ mod tests {
             };
             report.results[0].focus_node = Term::blank(hostile);
 
-            let dataset = report.to_dataset();
+            let dataset = report.dataset_as_carried();
             let focus = object_string(&dataset, &Term::blank(hostile), sh::FOCUS_NODE);
             assert!(
                 focus.is_none(),
@@ -1648,7 +1839,7 @@ mod tests {
 
             // The mark is grammar-legal: the minted labels reach the text
             // verbatim, never through the codec's escape envelope.
-            let nt = report.to_ntriples();
+            let nt = carried_ntriples(&report);
             assert!(
                 nt.contains("_:_report ") && nt.contains("_:_r0 "),
                 "minted labels must be written as-is under a `_` mark:\n{nt}"
@@ -1656,6 +1847,18 @@ mod tests {
             assert!(
                 !nt.contains("purrdfesc"),
                 "a `_`-marked label never needs escaping:\n{nt}"
+            );
+
+            // The public report never meets the collision: the carried focus node is
+            // written in the data graph's own label space.
+            let public = report.to_ntriples();
+            assert!(
+                public.contains("_:report ") && public.contains("_:r0 "),
+                "{public}"
+            );
+            assert!(
+                public.contains("<http://www.w3.org/ns/shacl#focusNode> _:dg0 ."),
+                "{public}"
             );
         }
     }
@@ -1697,7 +1900,7 @@ mod tests {
         let mint = mint_prefix(&report);
         assert_ne!(mint, "", "a carried root label must force a mint prefix");
 
-        let dataset = report.to_dataset();
+        let dataset = report.dataset_as_carried();
         // The carried nodes are still only focus nodes — never path structure.
         for carried in ["path0", "path0-1"] {
             assert!(
@@ -1710,9 +1913,65 @@ mod tests {
         assert_eq!(
             ::purrdf::canonicalize(&dataset).nquads,
             ::purrdf::canonicalize(
-                &dataset_from_ntriples(&report.to_ntriples()).expect("must parse")
+                &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse")
             )
             .nquads
+        );
+        assert_eq!(
+            ::purrdf::canonicalize(&dataset).nquads,
+            ::purrdf::canonicalize(&report.to_dataset()).nquads,
+            "relabelling must not change the graph"
+        );
+    }
+
+    /// A shapes-graph blank node and a data-graph blank node that carry the SAME label in
+    /// their own graphs are two nodes in the report — in the report graph and in its
+    /// relabelling — while one node reported twice keeps one label.
+    #[test]
+    fn a_shapes_blank_and_a_data_blank_sharing_a_label_stay_two_nodes() {
+        let mut first = make_result();
+        first.focus_node = Term::blank("b0");
+        first.source_shape = Term::blank("b0");
+        first.value = Some(Term::blank("b0"));
+        let mut second = make_result();
+        second.focus_node = Term::blank("b1");
+        second.source_shape = Term::blank("b0");
+        second.value = Some(Term::blank("b0"));
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![first, second],
+            conformance_disallows: ConformanceDisallows::default(),
+        };
+        let (labelled, labels) = report.with_report_blank_labels();
+        assert_eq!(labelled.results[0].focus_node, Term::blank("dg0"));
+        assert_eq!(labelled.results[0].source_shape, Term::blank("sg0"));
+        assert_eq!(labelled.results[0].value, Some(Term::blank("dg0")));
+        assert_eq!(labelled.results[1].focus_node, Term::blank("dg1"));
+        assert_eq!(labelled.results[1].source_shape, Term::blank("sg0"));
+        assert_eq!(labelled.results[1].value, Some(Term::blank("dg0")));
+        assert_eq!(
+            labels.source_of("sg0"),
+            Some((BlankOrigin::ShapesGraph, "b0"))
+        );
+        assert_eq!(
+            labels.source_of("dg0"),
+            Some((BlankOrigin::DataGraph, "b0"))
+        );
+
+        let nt = report.to_ntriples();
+        assert!(
+            nt.contains("<http://www.w3.org/ns/shacl#sourceShape> _:sg0 .")
+                && nt.contains("<http://www.w3.org/ns/shacl#value> _:dg0 ."),
+            "{nt}"
+        );
+        assert!(!nt.contains("_:b0"), "{nt}");
+        // The observing control: written with the labels as carried, the shapes node and
+        // the data node collapse into one — the defect relabelling removes.
+        let carried = carried_ntriples(&report);
+        assert!(
+            carried.contains("<http://www.w3.org/ns/shacl#sourceShape> _:b0 .")
+                && carried.contains("<http://www.w3.org/ns/shacl#value> _:b0 ."),
+            "{carried}"
         );
     }
 

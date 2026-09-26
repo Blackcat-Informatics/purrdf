@@ -2619,3 +2619,70 @@ fn cli_validate_conformance_disallows() {
     assert_eq!(code(&refused), 2, "a usage error: {}", stderr(&refused));
     assert!(stderr(&refused).contains("--conformance-disallows"));
 }
+
+/// A shapes-graph blank node (the property shape) and a data-graph blank node (the value
+/// that is not an IRI) are two nodes in the report and in its SARIF projection, although
+/// each document labels its first blank node alike; the one data node is one label in
+/// both.
+#[test]
+fn a_shapes_blank_and_a_data_blank_are_two_nodes_in_the_report() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "shapes.ttl",
+        "@prefix ex: <http://example.org/ns#> .\n\
+         @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         ex:S sh:targetNode ex:s ; sh:property [ sh:path ex:p ; sh:nodeKind sh:IRI ] .\n",
+    );
+    let data = write_file(
+        dir.path(),
+        "data.ttl",
+        "@prefix ex: <http://example.org/ns#> .\nex:s ex:p [ ex:q 1 ] .\n",
+    );
+    let out = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let report = stdout(&out);
+    let object_of = |predicate: &str| -> String {
+        let lines: Vec<&str> = report
+            .lines()
+            .filter(|line| line.contains(predicate))
+            .collect();
+        assert_eq!(lines.len(), 1, "{report}");
+        lines[0]
+            .split_whitespace()
+            .nth(2)
+            .expect("an object")
+            .to_owned()
+    };
+    let shape = object_of("<http://www.w3.org/ns/shacl#sourceShape>");
+    let value = object_of("<http://www.w3.org/ns/shacl#value>");
+    assert!(
+        shape.starts_with("_:") && value.starts_with("_:"),
+        "{report}"
+    );
+    assert_ne!(
+        shape, value,
+        "two graphs' nodes must stay two nodes:\n{report}"
+    );
+
+    let sarif = run(&["validate", "--shapes", &shapes, &data, "--format", "sarif"]);
+    assert_eq!(code(&sarif), 0, "{}", stderr(&sarif));
+    let log: serde_json::Value = serde_json::from_slice(&sarif.stdout).expect("SARIF is JSON");
+    let result = &log["runs"][0]["results"][0];
+    let text = result["message"]["text"].as_str().expect("message text");
+    assert!(text.contains(&value) && text.contains(&shape), "{text}");
+    let related: Vec<&str> = result["relatedLocations"]
+        .as_array()
+        .expect("related locations")
+        .iter()
+        .flat_map(|location| {
+            location["logicalLocations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .filter(|logical| logical["kind"] == "sourceShape")
+        .map(|logical| logical["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(related, [shape.as_str()]);
+}

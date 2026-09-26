@@ -759,6 +759,15 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **shapes, validate:** a validation report no longer fuses a shapes-graph
+  blank node with a data-graph blank node that has the same label in its own
+  document. The report graph (every RDF syntax) and the SARIF projection write
+  data-graph blank nodes as `_:dg{n}` and shapes-graph blank nodes as
+  `_:sg{n}`, so distinct nodes keep distinct labels and one node keeps one
+  label. The labels no longer depend on the parser that read the documents.
+  `ValidationReport::with_report_blank_labels` returns the relabelled report
+  and a `ReportBlankLabels` map back to each node's graph and original label.
+  Report bytes that carried blank nodes change.
 - **shapes:** a SELECT-based validator of a SPARQL-based constraint component
   on a node shape reports the focus node as `sh:value` when its solution does
   not bind `?value`, as for a SPARQL-based constraint ("The value node"); the
