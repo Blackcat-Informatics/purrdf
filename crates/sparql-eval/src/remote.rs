@@ -120,7 +120,8 @@ pub enum RemoteError {
     Denied(ServiceDenial),
     /// A [`ServiceResolver`] refused the service by its own policy, with **no catalog
     /// capability** to name as the cause — e.g. a host resolver's own rules (a rate
-    /// limit, an allowlist the host keeps outside any installed [`ServiceCatalog`], …)
+    /// limit, an allowlist the host keeps outside any installed
+    /// [`ServiceCatalog`](crate::service::ServiceCatalog), …)
     /// rather than a withheld [`ServiceCapability`](crate::service::ServiceCapability).
     ///
     /// Its own variant rather than folded into [`Self::Denied`], because [`Self::Denied`]
