@@ -1636,11 +1636,15 @@ fn write_file_without_following_symlink(
             .create_new(true)
             .open(&temp)
         {
-            Ok(mut file) => {
+            Ok(file) => {
                 let result = (|| {
-                    file.write_all(data)
-                        .map_err(|e| format!("write {temp:?}: {e}"))?;
-                    drop(file);
+                    // Scoped so the handle is closed before the rename replaces the
+                    // target.
+                    {
+                        let mut file = file;
+                        file.write_all(data)
+                            .map_err(|e| format!("write {temp:?}: {e}"))?;
+                    }
                     prepare_replace_target(target, archive_path)?;
                     fs::rename(&temp, target).map_err(|e| format!("replace {target:?}: {e}"))?;
                     Ok(())
