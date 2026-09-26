@@ -155,6 +155,13 @@ fn emitted_patterns_preserve_their_languages_in_unicode_ecmascript() {
         requests
             .push(json!({"pattern": emitted(source, "m"), "input": input, "positions": positions}));
     }
+    run_ecmascript_oracle(&requests);
+}
+
+/// Run every `{pattern, input, expected | positions}` row through Node's
+/// Unicode `RegExp` (the flags JSON Schema 2020-12 Core §6.4 recommends) and
+/// fail on the first row whose outcome differs.
+fn run_ecmascript_oracle(requests: &[Value]) {
     let script = r"
         const fs = require('node:fs');
         for (const row of JSON.parse(fs.readFileSync(0, 'utf8'))) {
@@ -179,7 +186,7 @@ fn emitted_patterns_preserve_their_languages_in_unicode_ecmascript() {
         .stdin
         .take()
         .expect("stdin")
-        .write_all(&serde_json::to_vec(&requests).expect("oracle input"))
+        .write_all(&serde_json::to_vec(requests).expect("oracle input"))
         .expect("write oracle input");
     let output = child.wait_with_output().expect("ECMAScript oracle");
     assert!(
@@ -189,30 +196,47 @@ fn emitted_patterns_preserve_their_languages_in_unicode_ecmascript() {
     );
 }
 
-/// A valid pattern whose `i` flag has XPath case-variant semantics, which
-/// simple case folding does not reproduce, has no ECMA-262 source with the same
-/// language: no pattern is emitted, the loss is recorded (the rest of the schema
-/// still compiles), and the flags that do translate emit their pattern with no
-/// loss.
+/// Every flag has an exact ECMA-262 rewrite, `i` included: XPath F&O 3.1
+/// §5.6.2 defines it by case variants (`fn:lower-case(C1) eq
+/// fn:lower-case(C2) or fn:upper-case(C1) eq fn:upper-case(C2)`), which the
+/// emitter writes into the source, so the pattern is emitted with no loss and
+/// the Unicode ECMAScript engine accepts exactly the XPath language — the
+/// specification's own examples, and the two places the relation differs from
+/// the simple case folding the Rust validator applies (dotless `ı`, and
+/// `\p{Lu}`, which `i` leaves unaffected).
 #[test]
-fn xpath_case_variant_flags_record_the_loss_instead_of_a_wrong_pattern() {
-    for flags in ["i", "iq", "qi", "im", "is", "ix", "imsxq", "qxmisi"] {
-        for source in ["^i$", "[I-[\\i-[ı]]]", "literal"] {
-            let compiled = compile_pattern(source, flags).expect("the schema still compiles");
-            let schema: Value = serde_json::from_str(&compiled.schema_json).expect("JSON Schema");
-            let code = &schema["$defs"]["Probe"]["properties"]["ex:code"];
-            assert_eq!(code["pattern"], Value::Null, "{source:?} {flags:?}: {code}");
-            let losses = compiled.losses.entries();
-            assert_eq!(losses.len(), 1, "{}", compiled.losses.render_json());
-            assert_eq!(losses[0].code, "sh:pattern");
-            assert!(
-                losses[0].note.contains("XPath case-variant semantics"),
-                "{}",
-                losses[0].note
-            );
-        }
+fn i_flag_patterns_carry_xpath_case_variants_in_unicode_ecmascript() {
+    // (source, flags, input, XPath outcome, whether the Rust validator agrees)
+    let cases = [
+        ("^z$", "i", "Z", true, true),
+        ("^[A-Z]+$", "i", "Kelvin\u{212a}", true, true),
+        ("^[A-Z-[IO]]$", "i", "b", true, true),
+        ("^[A-Z-[IO]]$", "i", "i", false, true),
+        ("^[A-Z-[IO]]$", "i", "O", false, true),
+        ("^[^Q]$", "i", "q", false, true),
+        ("^[^Q]$", "i", "r", true, true),
+        ("^i$", "i", "ı", true, false),
+        ("^i$", "i", "İ", false, true),
+        ("^\\p{Lu}$", "i", "a", false, false),
+        ("^[\\i-[ı]]$", "i", "i", false, false),
+        ("^[I-[\\i-[ı]]]$", "i", "I", true, false),
+        ("literal", "i", "LITERAL", true, true),
+        ("a.C", "qi", "xA.cx", true, true),
+        ("a.C", "qi", "xAbcx", false, true),
+        ("^ a b $", "ix", "AB", true, true),
+        ("^A.B$", "is", "a\nb", true, true),
+        ("^b$", "im", "a\nB\nc", true, true),
+    ];
+    let mut requests = Vec::new();
+    for (source, flags, input, expected, validator_agrees) in cases {
+        let pattern = emitted(source, flags);
+        let validator = xsd_regex::compile(source, flags).expect("source validator");
+        assert_eq!(
+            validator.as_regex().is_match(input) == expected,
+            validator_agrees,
+            "{source:?}/{flags:?} on {input:?}"
+        );
+        requests.push(json!({"pattern": pattern, "input": input, "expected": expected}));
     }
-    for flags in ["", "m", "s", "x", "q", "smx", "qsmx"] {
-        emitted("literal", flags);
-    }
+    run_ecmascript_oracle(&requests);
 }
