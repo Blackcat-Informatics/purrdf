@@ -91,7 +91,7 @@ const ENTRY_POINTS = {
 };
 
 for (const [name, call] of Object.entries(ENTRY_POINTS)) {
-  test(`${name} rejects an unresolved owl:imports with the typed ShaclImportError`, () => {
+  test(`wasm_shacl_import_unresolved: ${name} rejects an unresolved owl:imports with the typed ShaclImportError`, () => {
     let caught;
     try {
       call(undefined, undefined);
@@ -106,7 +106,7 @@ for (const [name, call] of Object.entries(ENTRY_POINTS)) {
   });
 }
 
-test("every entry point applies a supplied import", () => {
+test("wasm_shacl_import_supplied: every entry point applies a supplied import", () => {
   const iris = [LIB];
   const documents = [IMPORTED];
 
@@ -132,7 +132,7 @@ test("every entry point applies a supplied import", () => {
   assert.match(shaclProductValidateToSarif(product, PERSON), /MinCountConstraintComponent/);
 });
 
-test("an ontology declared in place resolves the import, and its neighbour does not", () => {
+test("wasm_shacl_import_declared_in_place: an ontology declared in place resolves the import, and its neighbour does not", () => {
   const merged = IMPORTER + IMPORTED;
   for (const declaration of [
     "<http://example.org/lib> a <http://www.w3.org/2002/07/owl#Ontology> .\n",
@@ -146,7 +146,7 @@ test("an ontology declared in place resolves the import, and its neighbour does 
   );
 });
 
-test("a table entry nothing imports is refused, and a reached one is not", () => {
+test("wasm_shacl_import_unreached_entry: a table entry nothing imports is refused, and a reached one is not", () => {
   const plain = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n<http://example.org/S> a sh:NodeShape .\n";
   assert.throws(
     () => shaclValidateToSarif(plain, PERSON, undefined, undefined, [LIB], [IMPORTED]),
@@ -158,7 +158,7 @@ test("a table entry nothing imports is refused, and a reached one is not", () =>
   );
 });
 
-test("import arrays of different lengths are refused, never truncated", () => {
+test("wasm_shacl_import_array_lengths: import arrays of different lengths are refused, never truncated", () => {
   assert.throws(
     () => shaclValidateToSarif(IMPORTER, PERSON, undefined, undefined, [LIB], []),
     /PAIR/,
@@ -189,7 +189,7 @@ const PREFIX_IDIOM_DATA =
   "<http://example.org/ns#Invalid> <http://example.org/ns#property> <http://example.org/test#Value> .\n" +
   "<http://example.org/ns#Valid> <http://example.org/ns#property> <http://example.org/test#Other> .\n";
 
-test("SHACL's prefix idiom resolves with no table, and a labelled target does not", () => {
+test("wasm_shacl_import_prefix_idiom: SHACL's prefix idiom resolves with no table, and a labelled target does not", () => {
   const sarif = JSON.parse(
     shaclValidateToSarif(
       prefixIdiom(
