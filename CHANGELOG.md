@@ -600,9 +600,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   are vendored byte-exact under `vectors/shacl12/` by `scripts/vendor-shacl12.py` and
   frozen by SHA-256 manifests. The new harness
   (`crates/shapes/tests/w3c12_conformance.rs`) runs every test type through the
-  library API and passes 547 of 547 with an empty expected-failure ledger; the matrix
-  gains a SHACL 1.2 row, and the prepared-product equivalence row now covers the
-  SHACL 1.2 `sht:Validate` entries (364 shapes graphs). Beside it,
+  library API. Of the 544 entries an upstream manifest lists, 537 pass as approved,
+  6 are upstream errata (non-canonical `xsd:decimal` expectations, graded exactly
+  against the XSD 1.1 canonical form) and 1 is an exact expected refusal of an
+  unresolvable import (`validator-001`, which imports DASH); the expected-failure
+  ledger is empty. The 3 entries of vendored files no manifest includes are graded
+  and reported apart. The matrix gains a SHACL 1.2 row and a row for the unlisted
+  files, and the prepared-product equivalence row now covers the SHACL 1.2
+  `sht:Validate` entries (362 shapes graphs). Beside it,
   `vocabulary_import_invariance.rs` proves that merging the vocabularies changes no
   report, `shacl_shacl_differential.rs` holds the parser's refusals to the verdicts
   of `shacl-shacl.ttl` over 375 shapes graphs and 683 generated mutants,

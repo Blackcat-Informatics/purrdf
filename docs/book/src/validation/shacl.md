@@ -105,9 +105,11 @@ Two terms the engine used to refuse are now evaluated:
 Every IRI the engine implements is defined by a W3C document; PurRDF mints
 none.
 
-The W3C SHACL 1.0 `data-shapes` suite passes clean (129/129, zero ledgered
-gaps at the time of writing), and so does the W3C SHACL 1.2 suite (547/547);
-the live numbers are in
+The W3C SHACL 1.0 `data-shapes` suite passes as approved (128/129, zero ledgered
+gaps at the time of writing; the other case is refused for an import no
+document can be supplied for), and so does the approved W3C SHACL 1.2 suite
+apart from its upstream errata and that same refused case (537/544); the live
+numbers are in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
 and [SHACL 1.2 conformance](#shacl-12-conformance) below says how to
 reproduce them.
@@ -303,17 +305,23 @@ built-in component as `superseded-by-native`. Those lines are never findings.
 The complete W3C `shacl12-test-suite` is vendored byte-exact under
 `vectors/shacl12/` and run through the library API: 547 tests, covering 174
 `sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 203
-SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. All
-547 pass, and the expected-failure ledger is empty. A negative SPARQL 1.2 RL
-test must fail at the stage its test type names, not at an earlier one.
+SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. An
+upstream manifest lists 544 of them. Of those, 537 pass as approved, 6 are
+upstream errata and 1 is refused for an unresolvable import, all described
+below, and the expected-failure ledger is empty. The other 3 are entries of
+vendored files that no manifest includes, and they are reported apart. A
+negative SPARQL 1.2 RL test must fail at the stage its test type names, not at
+an earlier one.
 Reproduce it with:
 
 ```bash
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
-The last line of the scoreboard it prints is
-`W3C12 TOTAL: passed 547, xfailed 0, ledger 0`.
+The last line of the approved suite's scoreboard is
+`W3C12 TOTAL: passed 537, upstream-errata 6, refused-unresolvable-import 1, xfailed 0, ledger 0`,
+and the unlisted files' own line is
+`W3C12 UNLISTED: passed 3, exact 2, with-delta 1, total 3`.
 
 Three vendored files carry test entries that no upstream manifest includes:
 `core/node/xone-002.ttl`, `core/node/xone-003.ttl` and

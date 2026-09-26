@@ -433,9 +433,10 @@ triple pattern.
   `purrdf-datalog`. The SHACL-AF 1.0 spellings parse to the same
   representation, and a shapes graph that merges the W3C SHACL 1.2
   vocabularies loads with every built-in bound to its native implementation.
-  **547/547 passing** on the vendored W3C SHACL 1.2 test suite and
-  **129/129 passing** on the vendored W3C SHACL 1.0 test suite, zero ledgered
-  in both. The answer is the W3C validation report as a frozen RDF dataset
+  **537/544 passing** on the vendored W3C SHACL 1.2 test suite (6 upstream
+  errata, 1 refused: unresolvable import) and **128/129 passing** on the
+  vendored W3C SHACL 1.0 test suite (1 refused: unresolvable import), zero
+  ledgered in both. The answer is the W3C validation report as a frozen RDF dataset
   (`ValidationReport::to_dataset()`), so any syntax — and the CLI's
   `validate --format` — is a serialization of that dataset rather than a text
   round-trip, with the report's minted blank nodes kept distinct from every
@@ -762,8 +763,8 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | --- | --- | --- |
 | ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,105 / 1,105** attempted, 0 xfail |
 | ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
-| SHACL | W3C data-shapes (`vectors/shacl/`) | **129 / 129**, 0 ledgered |
-| SHACL 1.2 | W3C shacl12-test-suite (`vectors/shacl12/`) | **547 / 547**, 0 ledgered |
+| SHACL | W3C data-shapes (`vectors/shacl/`) | **128 / 129** pass · 1 refused: unresolvable import · 0 ledgered |
+| SHACL 1.2 | W3C shacl12-test-suite (`vectors/shacl12/`) | **537 / 544** pass · 6 upstream errata · 1 refused: unresolvable import · 0 ledgered; 3 unlisted vendored files graded apart |
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **73 / 73** |
 | SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **19 / 19** |
 | Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |
