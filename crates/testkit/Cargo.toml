@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-testkit"
+description = "The workspace's shared test support: byte-exact golden files, temporary files and directories under the cargo target directory, self-hashing frozen differential vectors, and a libtest-compatible runner for harness = false targets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "testing", "golden", "harness"]
+categories = ["development-tools::testing"]
+publish = false
+
+[lints]
+workspace = true
+
+# The fixture the harness oracle runs as a real child process, so the exit
+# status and the exact console output are observed rather than modelled.
+[[bin]]
+name = "testkit-harness-fixture"
+path = "src/bin/harness_fixture.rs"
+test = false
+doc = false
+
+[dependencies]
+# SHA-256 for the frozen-vector tamper evidence. It is the only dependency, and
+# it must stay external: a `purrdf-*` dependency here would put a dev-dependency
+# cycle under every crate whose tests use this one.
+sha2 = { workspace = true }

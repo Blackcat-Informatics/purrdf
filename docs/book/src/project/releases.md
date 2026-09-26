@@ -72,20 +72,23 @@ bootstrap works: the lane publishes up to the first crate that depends on a
 new one and stops cleanly, the token creates the new crate's record, Trusted
 Publishing is enabled on it, and the same run is resumed.
 
-Seven workspace members are deliberately never published to crates.io:
+Eight workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
 `purrdf-sparql-conformance` (the test harness), `purrdf-cli` (the `purrdf`
 binary), `purrdf-envelope-probe` (the micro-hardware envelope capture tool),
 `purrdf-bench` (benchmark tooling), `purrdf-alloc-probe` (the shared counting
-allocator the allocation tests and benches measure with), and `purrdf-python`
-(the extension crate, which ships to PyPI via maturin instead).
+allocator the allocation tests and benches measure with), `purrdf-testkit` (the
+shared test support: goldens, temporary paths, frozen vectors and the
+`harness = false` runner), and `purrdf-python` (the extension crate, which ships
+to PyPI via maturin instead).
 
-`purrdf-alloc-probe` is the only one of the seven that published crates depend
-on, and it reaches them solely through `[dev-dependencies]`. Its root
-`[workspace.dependencies]` entry is therefore path-only, with no `version` key,
-which is what makes cargo drop it from the packaged manifest: an unpublished
-crate cannot be a versioned dependency of a published one, and `cargo publish`'s
-verification step resolves dev-dependencies too.
+`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eight that
+published crates depend on, and they reach them solely through
+`[dev-dependencies]`. Their root `[workspace.dependencies]` entries are
+therefore path-only, with no `version` key, which is what makes cargo drop them
+from the packaged manifest: an unpublished crate cannot be a versioned
+dependency of a published one, and `cargo publish`'s verification step resolves
+dev-dependencies too.
 
 ## Cutting a release
 

@@ -39,6 +39,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Byte-exact golden files for the scanner boundary sweep. Path-only and
+# unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 # Turtle parsing for the validation conformance harness only (the library
 # itself depends on the ring-fenced kernel, never the codec stack).
 purrdf-rdf = { workspace = true }

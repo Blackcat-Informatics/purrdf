@@ -3,12 +3,12 @@
 
 //! Acceptance tests for the phase-specific Merkle cache + SCC/profile
 //! composition ( §12 / §8, child S6a). All fixtures are hermetic
-//! (`tempfile`); no repository state is read.
+//! (`purrdf_testkit::TempDir`); no repository state is read.
 
 use std::fmt::Write as _;
 use std::path::Path;
 
-use tempfile::TempDir;
+use purrdf_testkit::TempDir;
 
 use crate::cache::{
     Phase, ToolchainContext, dependency_closure, link_units, product_unit, source_unit_key,
@@ -103,12 +103,12 @@ fn rename_invariance_all_phases() {
     let a_term = format!("{NS}Alpha");
 
     // Layout 1: slices/core/alpha
-    let t1 = TempDir::new().unwrap();
+    let t1 = TempDir::for_unit_test().unwrap();
     let core1 = t1.path().join("slices").join("core");
     write_slice(&core1, "alpha", &a_iri, &a_term, &[], "# comment v1\n");
 
     // Layout 2: a totally different group path — slices/zztop/renamed
-    let t2 = TempDir::new().unwrap();
+    let t2 = TempDir::for_unit_test().unwrap();
     let zz = t2.path().join("slices").join("zztop");
     write_slice(&zz, "renamed", &a_iri, &a_term, &[], "# comment v1\n");
 
@@ -140,7 +140,7 @@ fn comment_only_invariance_reasoning_key() {
     let a_iri = format!("{NS}slice/alpha");
     let a_term = format!("{NS}Alpha");
 
-    let t1 = TempDir::new().unwrap();
+    let t1 = TempDir::for_unit_test().unwrap();
     let core1 = t1.path().join("slices").join("core");
     write_slice(
         &core1,
@@ -151,7 +151,7 @@ fn comment_only_invariance_reasoning_key() {
         "# original comment\n",
     );
 
-    let t2 = TempDir::new().unwrap();
+    let t2 = TempDir::for_unit_test().unwrap();
     let core2 = t2.path().join("slices").join("core");
     write_slice(
         &core2,
@@ -192,7 +192,7 @@ fn scc_grouping_cycle_and_singleton() {
     let b_term = format!("{NS}Bbb");
     let c_term = format!("{NS}Ccc");
 
-    let t = TempDir::new().unwrap();
+    let t = TempDir::for_unit_test().unwrap();
     let core = t.path().join("slices").join("core");
     // A depends on B, B depends on A → cycle. C depends on A.
     write_slice(&core, "aaa", &a_iri, &a_term, &[(&b_iri, &b_term)], "# a\n");
@@ -254,7 +254,7 @@ fn self_dependency_is_a_cycle_and_an_independent_singleton_is_not() {
     let a_term = format!("{NS}Aaa");
     let b_term = format!("{NS}Bbb");
 
-    let t = TempDir::new().unwrap();
+    let t = TempDir::for_unit_test().unwrap();
     let core = t.path().join("slices").join("core");
     // Two independent slices on disk; the self-edge is supplied by the caller.
     write_slice(&core, "aaa", &a_iri, &a_term, &[], "# a\n");
@@ -302,7 +302,7 @@ fn self_edge_inside_a_multi_member_cycle_keeps_the_unit_intact() {
     let a_term = format!("{NS}Aaa");
     let b_term = format!("{NS}Bbb");
 
-    let t = TempDir::new().unwrap();
+    let t = TempDir::for_unit_test().unwrap();
     let core = t.path().join("slices").join("core");
     write_slice(&core, "aaa", &a_iri, &a_term, &[], "# a\n");
     write_slice(&core, "bbb", &b_iri, &b_term, &[], "# b\n");
@@ -334,7 +334,7 @@ fn profile_closure_transitive() {
     let b_term = format!("{NS}Bbb");
     let c_term = format!("{NS}Ccc");
 
-    let t = TempDir::new().unwrap();
+    let t = TempDir::for_unit_test().unwrap();
     let core = t.path().join("slices").join("core");
     // A → B → C (a transitive chain).
     write_slice(&core, "aaa", &a_iri, &a_term, &[(&b_iri, &b_term)], "# a\n");
@@ -373,7 +373,7 @@ fn dependency_change_invalidates_dependent_reasoning_key() {
     let b_term2 = format!("{NS}BbbExtra");
 
     // Baseline: A depends on B; B defines one term.
-    let t1 = TempDir::new().unwrap();
+    let t1 = TempDir::for_unit_test().unwrap();
     let core1 = t1.path().join("slices").join("core");
     write_slice(
         &core1,
@@ -386,7 +386,7 @@ fn dependency_change_invalidates_dependent_reasoning_key() {
     write_slice(&core1, "bbb", &b_iri, &b_term, &[], "# b\n");
 
     // Variant: B's module gains a real (canonical) triple defining an extra term.
-    let t2 = TempDir::new().unwrap();
+    let t2 = TempDir::for_unit_test().unwrap();
     let core2 = t2.path().join("slices").join("core");
     write_slice(
         &core2,
@@ -511,7 +511,7 @@ fn manifest_folds_into_semantic_phases() {
 "#
     );
 
-    let t_base = TempDir::new().unwrap();
+    let t_base = TempDir::for_unit_test().unwrap();
     write_slice_explicit_manifest(
         &t_base.path().join("slices").join("core"),
         "alpha",
@@ -519,7 +519,7 @@ fn manifest_folds_into_semantic_phases() {
         &a_term,
         &base_manifest,
     );
-    let t_comment = TempDir::new().unwrap();
+    let t_comment = TempDir::for_unit_test().unwrap();
     write_slice_explicit_manifest(
         &t_comment.path().join("slices").join("core"),
         "alpha",
@@ -527,7 +527,7 @@ fn manifest_folds_into_semantic_phases() {
         &a_term,
         &comment_only_manifest,
     );
-    let t_semantic = TempDir::new().unwrap();
+    let t_semantic = TempDir::for_unit_test().unwrap();
     write_slice_explicit_manifest(
         &t_semantic.path().join("slices").join("core"),
         "alpha",

@@ -3,12 +3,12 @@
 
 //! Hermetic acceptance tests for the native ownership + dependency analyzer
 //! ( §10 / S4). Each test builds minimal slice directories on disk
-//! under a `tempfile::TempDir`, discovers them via [`SliceCatalog::discover`],
+//! under a `purrdf_testkit::TempDir`, discovers them via [`SliceCatalog::discover`],
 //! and asserts on the [`OwnershipReport`].
 
 use std::path::Path;
 
-use tempfile::TempDir;
+use purrdf_testkit::temp_dir;
 
 use purrdf_slice::{
     EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus, ParserOptions,
@@ -63,7 +63,7 @@ fn nn(suffix: &str) -> NamedNode {
 
 #[test]
 fn single_validated_owner() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     // Slice A defines term T via rdfs:isDefinedBy → sliceA.
@@ -140,7 +140,7 @@ fn single_validated_owner() {
 
 #[test]
 fn ownership_conflict() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     // Both A and B claim isDefinedBy for term T.
@@ -197,7 +197,7 @@ fn ownership_conflict() {
 
 #[test]
 fn ownership_mismatch() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     // Slice A is the only physical slice, but its module declares term T as
@@ -244,7 +244,7 @@ fn ownership_mismatch() {
 
 #[test]
 fn parsed_not_textual_edges() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     // Slice A owns termT.
@@ -333,8 +333,8 @@ fn path_independence() {
         );
     }
 
-    let tmp1 = TempDir::new().unwrap();
-    let tmp2 = TempDir::new().unwrap();
+    let tmp1 = temp_dir!().unwrap();
+    let tmp2 = temp_dir!().unwrap();
     build(tmp1.path(), "core");
     build(tmp2.path(), "extensions/deeply/nested");
 
@@ -360,7 +360,7 @@ fn path_independence() {
 
 #[test]
 fn semantic_vs_nonsemantic() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     // Slice A owns termT.
@@ -467,7 +467,7 @@ fn semantic_vs_nonsemantic() {
 
 #[test]
 fn declared_but_unowned_term() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     // Slice A: termWithOwner has rdfs:isDefinedBy → sliceA (Validated).
@@ -555,7 +555,7 @@ fn group_aggregate_iri_reaches_dependency_walk() {
     // carry `heldIn` as evidence; before the fix it would not, and the query edge
     // might not even appear. (A vocab: IRI in call position must be a real purrdf
     // extension function; the walker reconstructs its IRI from the closed set.)
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     // Slice A defines the term that is referenced only inside the aggregate.
@@ -629,7 +629,7 @@ fn group_aggregate_iri_reaches_dependency_walk() {
 /// Returns the evidence terms on the sliceB → sliceA Query edge for a query that
 /// references `defined_term` (owned by sliceA). Panics if the edge is absent.
 fn query_edge_evidence(query_body: &str, defined_term: &str) -> Vec<NamedNode> {
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
     write(
         root,
@@ -771,7 +771,7 @@ fn property_function_relation_iri_is_excluded_from_dependency_walk_when_configur
     // (`with_parser_options`) the same predicate is recognized as a call and
     // excluded, while a genuinely ordinary predicate in the same query still
     // evidences as usual.
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     write(
@@ -884,7 +884,7 @@ fn malformed_artifact_hard_fails_analysis() {
     // travelled through the catalogue disguised as a non-RDF artifact and was only
     // complained about later, by a phase that could say no more than "none was computed".
     // Propagating it means a malformed ownership artifact cannot reach analysis at all.
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     write(
@@ -918,7 +918,7 @@ fn malformed_artifact_hard_fails_analysis() {
 /// failure.
 #[test]
 fn every_rdf_artifact_carries_a_semantic_digest_and_no_other_kind_does() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
     write(

@@ -41,7 +41,7 @@ fn write_fixture(dir: &Path, name: &str, contents: &str) -> String {
 
 #[test]
 fn convert_turtle_to_ntriples_produces_expected_triples() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let input = write_fixture(
         dir.path(),
         "in.ttl",
@@ -60,7 +60,7 @@ fn convert_turtle_to_ntriples_produces_expected_triples() {
 
 #[test]
 fn query_json_row_matches_between_turtle_and_pack() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let input = write_fixture(
         dir.path(),
         "in.ttl",
@@ -100,7 +100,7 @@ fn query_json_row_matches_between_turtle_and_pack() {
 
 #[test]
 fn reason_rdfs_infers_rdf_type() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let input = write_fixture(
         dir.path(),
         "sub.ttl",
@@ -129,7 +129,7 @@ fn reason_rdfs_infers_rdf_type() {
 
 #[test]
 fn reason_owl_direct_materializes() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let input = write_fixture(
         dir.path(),
         "sub.ttl",

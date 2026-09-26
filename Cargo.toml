@@ -33,6 +33,7 @@ members = [
     "crates/sparql-conformance",
     "crates/sparql-eval",
     "crates/sparql-results",
+    "crates/testkit",
     "crates/text",
     "crates/validate",
     "crates/xsd",
@@ -93,6 +94,12 @@ purrdf-slice = { path = "crates/slice", version = "2.0.2" }
 purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "2.0.2" }
 purrdf-sparql-eval = { path = "crates/sparql-eval", version = "2.0.2" }
 purrdf-sparql-results = { path = "crates/sparql-results", version = "2.0.2" }
+# DEV-ONLY test support (`publish = false`): goldens, temporary paths under the
+# target directory, frozen differential vectors and the `harness = false`
+# runner. PATH-ONLY with NO `version`, for the reason given for
+# `purrdf-alloc-probe` above. It depends on no `purrdf-*` crate, so any member's
+# tests may use it without closing a cycle.
+purrdf-testkit = { path = "crates/testkit" }
 purrdf-text = { path = "crates/text", version = "2.0.2" }
 purrdf-validate = { path = "crates/validate", version = "2.0.2" }
 purrdf-xsd = { path = "crates/xsd", version = "2.0.2" }
@@ -154,7 +161,12 @@ memchr = "2"
 # dev-dependency demonstrating the mmap seam. Not wasm32-relevant (mmap has no
 # meaning there); `make wasm` builds `--lib` only, so this never reaches it.
 memmap2 = "0.9"
-proptest = "1"
+# Default features OFF, then `std` and `bit-set` back on: that is the default
+# set minus `fork` and `timeout`, which run a case in a forked child process and
+# are never enabled by any test here (no config sets `fork` or `timeout`, no
+# job sets `PROPTEST_FORK`). Those two are what pulled a temporary-file crate
+# into the graph; the workspace's temporary paths come from `purrdf-testkit`.
+proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
 pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
 rayon = "1"
 regex = "1"
@@ -194,7 +206,6 @@ structured-zstd = "0.0.49"
 # FastCOVER reservoir sampling (which has no seed parameter) so pack dictionaries
 # are byte-reproducible. wasm32-unknown-unknown-clean.
 fastrand = "2"
-tempfile = "3"
 # Unicode normalization (Unicode Annex UAX 15). The text index normalizes every
 # literal BEFORE it segments it: a decomposed combining mark is its own scalar,
 # and the word-boundary rules of UAX 29 would otherwise split it off the base

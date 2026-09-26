@@ -425,10 +425,7 @@ fn parser_rejects_a_malformed_line() {
     // fixture and removing it, so the NEXT run fails on a leftover file for a
     // reason that has nothing to do with the parser. `TempDir` gives a unique
     // directory and removes the whole tree on drop, panic included.
-    let dir = tempfile::Builder::new()
-        .prefix("purrdf-xsd-regex-corpus-parse-")
-        .tempdir()
-        .expect("create temp dir");
+    let dir = purrdf_testkit::temp_dir!("purrdf-xsd-regex-corpus-parse-").expect("create temp dir");
 
     let cases = [
         ("three-fields.cases", "^a$\t-\tmatch\n"),

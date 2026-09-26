@@ -178,7 +178,7 @@ const IMPORTED_CONCLUSION: &str = "@prefix ex: <http://example.org/> .\nex:tom a
 /// terms of, and it is the only lane the closure of `purrdf reason` would have shown.
 #[test]
 fn the_rule_table_derives_a_conclusion_and_says_so() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
@@ -207,7 +207,7 @@ fn the_rule_table_derives_a_conclusion_and_says_so() {
 /// triple that was absent, so the operator learns WHICH half of a conjunction failed.
 #[test]
 fn a_conclusion_the_table_refutes_is_not_entailed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "never.ttl", REFUTED_CONCLUSION);
@@ -244,7 +244,7 @@ fn a_conclusion_the_table_refutes_is_not_entailed() {
 /// this premise does not contain this triple, and the answer is nonetheless `entailed`.
 #[test]
 fn a_negative_fact_is_entailed_by_refutation() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "disjoint.ttl", DISJOINT_PREMISE);
     let conclusion = write_file(dir, "different.ttl", DIFFERENT_CONCLUSION);
@@ -284,7 +284,7 @@ fn a_negative_fact_is_entailed_by_refutation() {
 /// constants the premise does not mention, re-runs the table, and reads the head.
 #[test]
 fn a_schema_axiom_is_entailed_by_freezing() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "three-lane.ttl", THREE_LANE_PREMISE);
     let conclusion = write_file(dir, "transitive.ttl", TRANSITIVE_CONCLUSION);
@@ -309,7 +309,7 @@ fn a_schema_axiom_is_entailed_by_freezing() {
 /// which lanes did the work, in the fixed cost order the fold tries them.
 #[test]
 fn a_conjunction_folds_into_a_composite_and_names_its_constituents() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "three-lane.ttl", THREE_LANE_PREMISE);
     let conclusion = write_file(dir, "composite.ttl", COMPOSITE_CONCLUSION);
@@ -341,7 +341,7 @@ fn a_conjunction_folds_into_a_composite_and_names_its_constituents() {
 /// `--verify` RE-DECIDES THE WARRANT without running a reasoner, and reports `verified true`.
 #[test]
 fn verify_re_decides_the_warrant() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
@@ -375,7 +375,7 @@ fn verify_re_decides_the_warrant() {
 /// distinction is the whole reason the two lines are separate.
 #[test]
 fn verify_without_a_warrant_is_not_applicable() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "never.ttl", REFUTED_CONCLUSION);
@@ -409,7 +409,7 @@ fn verify_without_a_warrant_is_not_applicable() {
 /// exhaustive, which is a claim rather than a silence.
 #[test]
 fn a_pattern_answers_with_its_certain_answers() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(
         dir,
@@ -466,7 +466,7 @@ fn a_pattern_answers_with_its_certain_answers() {
 /// same premise answered fine.
 #[test]
 fn a_pattern_projects_a_variable_in_predicate_position() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(
         dir,
@@ -551,7 +551,7 @@ fn a_pattern_projects_a_variable_in_predicate_position() {
 /// So `?s ?p ?o` cannot return that row, and the answer says why instead of looking complete.
 #[test]
 fn an_open_predicate_renders_the_limit_that_makes_the_answer_honest() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(
         dir,
@@ -625,7 +625,7 @@ fn an_open_predicate_renders_the_limit_that_makes_the_answer_honest() {
 /// SAME premise and conclusion, refused without the pair and entailed with it.
 #[test]
 fn an_import_pair_answers_a_premise_that_imports() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
     let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
@@ -687,7 +687,7 @@ fn an_import_pair_answers_a_premise_that_imports() {
 /// every host shares.
 #[test]
 fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
     let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
@@ -775,7 +775,7 @@ fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
 /// they asked for — and `purrdf reason` still materializes both.
 #[test]
 fn an_unserved_regime_is_refused_and_named() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
@@ -822,7 +822,7 @@ fn an_unserved_regime_is_refused_and_named() {
 /// A MALFORMED `--import` PAIR IS A USAGE ERROR, never a silently skipped import.
 #[test]
 fn a_malformed_import_pair_is_a_usage_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
@@ -864,7 +864,7 @@ fn a_malformed_import_pair_is_a_usage_error() {
 /// written and the offending half, and the premise is not mentioned as the culprit at all.
 #[test]
 fn a_relative_import_iri_blames_the_argument_not_the_premise() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
     let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
@@ -930,7 +930,7 @@ fn a_relative_import_iri_blames_the_argument_not_the_premise() {
 /// `purrdf_iri` code for what is wrong with it, still against the argument.
 #[test]
 fn a_malformed_import_iri_names_the_half_and_the_shared_code() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
     let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
@@ -967,7 +967,7 @@ fn a_malformed_import_iri_names_the_half_and_the_shared_code() {
 /// document part of one stream. The refusal names both flags.
 #[test]
 fn two_stdin_documents_are_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
 
@@ -1012,7 +1012,7 @@ fn two_stdin_documents_are_refused() {
 /// EXACTLY ONE QUESTION: `--conclusion` and `--pattern` conflict, and one is required.
 #[test]
 fn exactly_one_question_is_asked() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
@@ -1061,7 +1061,7 @@ fn exactly_one_question_is_asked() {
 /// refuses instead, and the refusal names the rule and the premise count.
 #[test]
 fn an_inconsistent_premise_is_refused_with_its_witness() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(
         dir,
@@ -1106,7 +1106,7 @@ fn an_inconsistent_premise_is_refused_with_its_witness() {
 /// rather than a text-only shortcut.
 #[test]
 fn every_input_syntax_reaches_the_boundary() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
@@ -1165,7 +1165,7 @@ fn every_input_syntax_reaches_the_boundary() {
 /// base it is handed) — refused by name instead, naming the specific document.
 #[test]
 fn base_with_a_pack_document_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
@@ -1208,7 +1208,7 @@ fn base_with_a_pack_document_is_refused_by_name() {
 /// premise's parse spends it, and a per-document test would have refused a flag doing work.
 #[test]
 fn base_is_refused_only_when_no_document_can_spend_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise_nt = write_file(
         dir,
@@ -1280,7 +1280,7 @@ fn base_is_refused_only_when_no_document_can_spend_it() {
 /// A PREMISE ON STDIN with `--from` is answered, and the verdict goes to stdout.
 #[test]
 fn a_stdin_premise_is_answered() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
 
@@ -1311,7 +1311,7 @@ fn a_stdin_premise_is_answered() {
 /// the answer off the run.
 #[test]
 fn the_answer_and_the_certificate_are_separate_outputs() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "disjoint.ttl", DISJOINT_PREMISE);
     let conclusion = write_file(dir, "different.ttl", DIFFERENT_CONCLUSION);
@@ -1374,7 +1374,7 @@ fn the_answer_and_the_certificate_are_separate_outputs() {
 /// quietly did nothing is precisely the shape this repository refuses.
 #[test]
 fn the_document_flags_are_refused_rather_than_ignored() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
@@ -1420,7 +1420,7 @@ fn the_document_flags_are_refused_rather_than_ignored() {
 /// included, which states no rule at all.
 #[test]
 fn every_served_regime_answers() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(

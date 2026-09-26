@@ -84,8 +84,9 @@ sha2 = { workspace = true }
 # does not provide). Path-only and unpublished, and this crate is never
 # published in any case.
 purrdf-alloc-probe = { workspace = true }
-# Isolated temp files/dirs for the integration tests that drive the built binary.
-tempfile = { workspace = true }
+# Isolated temporary files and directories, under the target directory, for the
+# integration tests that drive the built binary and for the unit tests.
+purrdf-testkit = { workspace = true }
 # Constructs the ONE test fixture the built binary cannot: a well-formed prepared
 # product carrying a stage id no build wrote, by repacking a real product's
 # sections (the same technique `purrdf-shapes`' own refusal-matrix tests use) so

@@ -224,7 +224,7 @@ mod tests {
     /// The `--report` file is written on the INCONSISTENT path, and carries the witness.
     #[test]
     fn an_inconsistent_run_still_writes_its_report() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("report.txt");
         let error = materialize_reported(
             &inconsistent(),

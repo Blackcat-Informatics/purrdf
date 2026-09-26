@@ -75,7 +75,7 @@ fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
 /// identical data yields byte-identical, non-vacuous results — file/pack query parity.
 #[test]
 fn select_file_and_pack_are_byte_identical_and_non_vacuous() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     let query = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o }";
@@ -120,7 +120,7 @@ fn select_file_and_pack_are_byte_identical_and_non_vacuous() {
 /// explicit acceptance criteria and are covered here alongside JSON and CSV.
 #[test]
 fn select_all_four_result_formats_are_non_vacuous_and_deterministic() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     let query = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o }";
@@ -152,7 +152,7 @@ fn select_all_four_result_formats_are_non_vacuous_and_deterministic() {
 /// `{"head":{},"boolean":true}` shape).
 #[test]
 fn ask_json_returns_a_boolean_shape() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -180,7 +180,7 @@ fn ask_json_returns_a_boolean_shape() {
 /// output (the graph → RDF-syntax half of the dispatch).
 #[test]
 fn construct_and_describe_to_turtle_surface_their_triples() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -232,7 +232,7 @@ fn construct_and_describe_to_turtle_surface_their_triples() {
 /// universal-sink invariant, identical to `convert`'s behavior.
 #[test]
 fn construct_reifier_to_rdfxml_records_the_loss_ledger_drop() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -278,7 +278,7 @@ fn construct_reifier_to_rdfxml_records_the_loss_ledger_drop() {
 /// boolean.
 #[test]
 fn shape_format_mismatches_are_hard_errors() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -342,7 +342,7 @@ fn shape_format_mismatches_are_hard_errors() {
 /// binds NOTHING without it.
 #[test]
 fn entailment_rdfs_reveals_a_binding_absent_without_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -397,7 +397,7 @@ fn entailment_rdfs_reveals_a_binding_absent_without_it() {
 /// resolved absolute IRI matches.
 #[test]
 fn base_resolves_relative_iris_in_the_data() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     // A relative-IRI subject resolved against `--base`.
     let ttl = write_file(dir, "rel.ttl", "<thing> <http://example.org/p> \"hit\" .\n");
@@ -428,7 +428,7 @@ fn base_resolves_relative_iris_in_the_data() {
 /// pack integrity verifier rejects it before any view is opened.
 #[test]
 fn corrupt_pack_fails_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let bad = write_file(dir, "bad.purrpck", "not a pack file at all — pure garbage");
 
@@ -460,7 +460,7 @@ fn corrupt_pack_fails_closed() {
 /// six take none, and passing one is a usage error rather than a discarded argument.
 #[test]
 fn every_entailment_regime_answers() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     let rules = write_file(dir, "data.rif", RIF_RULES);
@@ -500,7 +500,7 @@ fn every_entailment_regime_answers() {
 /// query path does not deadlock on a captured stdout pipe.
 #[test]
 fn select_writes_results_to_a_captured_stdout_pipe() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -532,7 +532,7 @@ fn select_writes_results_to_a_captured_stdout_pipe() {
 
 #[test]
 fn configured_jsonld_options_reach_graph_results_and_reject_select_results() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     let options = write_file(
@@ -607,7 +607,7 @@ const EQUIVALENT_CLASS_TTL: &str = concat!(
 /// every host. The lane routes through `purrdf::query_with_entailment` now.
 #[test]
 fn entailment_owl_direct_answers_through_the_combined_approach() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "onto.ttl", SOME_VALUES_FROM_TTL);
     let out = run(&[
@@ -659,7 +659,7 @@ fn entailment_owl_direct_answers_through_the_combined_approach() {
 /// `CONSTRUCT` template never emits the witness label. Both over the shipped binary.
 #[test]
 fn entailment_owl_direct_keeps_the_optional_row_and_constructs_no_witness() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "onto.ttl", SOME_VALUES_FROM_TTL);
     let ask = |format: &str, query: &str| {
@@ -749,7 +749,7 @@ fn entailment_owl_direct_keeps_the_optional_row_and_constructs_no_witness() {
 /// disclosure of which lane answered, not a refusal.
 #[test]
 fn entailment_owl_direct_reports_the_non_horn_tbox_boundary_on_the_fallback() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let equivalent = write_file(dir, "equivalent.ttl", EQUIVALENT_CLASS_TTL);
     let out = run(&[
@@ -808,7 +808,7 @@ fn entailment_owl_direct_reports_the_non_horn_tbox_boundary_on_the_fallback() {
 /// through the fallback's augmentation. Both halves on the shipped binary.
 #[test]
 fn a_sub_property_axiom_falls_back_and_still_answers() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -863,7 +863,7 @@ const NUMBERS_TTL: &str = concat!(
 /// was reachable only by embedding the Rust engine directly.
 #[test]
 fn aggregate_namespace_computes_median_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
@@ -898,7 +898,7 @@ fn aggregate_namespace_computes_median_through_the_cli() {
 /// is unchanged).
 #[test]
 fn omitted_aggregate_namespace_leaves_the_statistical_set_unregistered() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
@@ -921,7 +921,7 @@ fn omitted_aggregate_namespace_leaves_the_statistical_set_unregistered() {
 /// place SPARQL UPDATE's grammar admits an aggregate.
 #[test]
 fn aggregate_namespace_computes_median_through_a_cli_update() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let update = "PREFIX ex: <http://example.org/> \
@@ -961,7 +961,7 @@ fn aggregate_namespace_computes_median_through_a_cli_update() {
 /// combination was refused BY NAME rather than silently doing nothing; it now runs.
 #[test]
 fn aggregate_namespace_computes_median_under_entailment_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     const VALUES_WITH_DOMAIN_TTL: &str = concat!(
         "@prefix ex: <http://example.org/> .\n",
@@ -1027,7 +1027,7 @@ fn aggregate_namespace_computes_median_under_entailment_through_the_cli() {
 /// query's own `Custom` aggregate call was refused as unregistered.
 #[test]
 fn explain_with_aggregate_namespace_renders_the_aggregate_in_the_receipt() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let query = "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) \
@@ -1071,7 +1071,7 @@ fn explain_with_aggregate_namespace_renders_the_aggregate_in_the_receipt() {
 /// the "writer emits something nothing can read back" gap.
 #[test]
 fn provenance_namespace_populates_and_round_trips_through_json() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
@@ -1128,7 +1128,7 @@ fn provenance_namespace_populates_and_round_trips_through_json() {
 /// The same round trip through XML.
 #[test]
 fn provenance_namespace_populates_and_round_trips_through_xml() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
@@ -1167,7 +1167,7 @@ fn provenance_namespace_populates_and_round_trips_through_xml() {
 /// before the flag existed.
 #[test]
 fn omitting_provenance_namespace_emits_pure_w3c_output() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let query = "SELECT ?v WHERE { ?s <http://example.org/value> ?v } ORDER BY ?v";
@@ -1185,7 +1185,7 @@ fn omitting_provenance_namespace_emits_pure_w3c_output() {
 /// time, before the query even runs.
 #[test]
 fn malformed_provenance_namespace_is_a_usage_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
 
@@ -1210,7 +1210,7 @@ fn malformed_provenance_namespace_is_a_usage_error() {
 /// would anchor is never emitted.
 #[test]
 fn provenance_namespace_with_explain_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
 
@@ -1235,7 +1235,7 @@ fn provenance_namespace_with_explain_is_refused() {
 /// no SPARQL-results provenance extension to carry it.
 #[test]
 fn provenance_namespace_with_a_construct_result_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -1262,7 +1262,7 @@ fn provenance_namespace_with_a_construct_result_is_refused() {
 /// extension point at all, unlike JSON/XML.
 #[test]
 fn provenance_namespace_with_csv_or_tsv_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
 
@@ -1296,7 +1296,7 @@ fn provenance_namespace_with_csv_or_tsv_is_refused() {
 /// output for every choice); it is refused by name instead.
 #[test]
 fn results_format_with_explain_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
 
@@ -1328,7 +1328,7 @@ fn results_format_with_explain_is_refused() {
 /// name instead, and `--loss-ledger=PATH` leaves no file behind either.
 #[test]
 fn loss_ledger_with_explain_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let ledger_path = dir.join("ledger.json");
@@ -1373,7 +1373,7 @@ fn loss_ledger_with_explain_is_refused() {
 /// as if the flag had never been named. It is refused by name instead.
 #[test]
 fn jsonld_options_with_explain_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let options = write_file(
@@ -1406,7 +1406,7 @@ fn jsonld_options_with_explain_is_refused() {
 /// name instead.
 #[test]
 fn rules_without_entailment_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "numbers.ttl", NUMBERS_TTL);
     let rules = write_file(dir, "unused.rif", "<rdf:RDF xmlns:rdf=\"x\"></rdf:RDF>");
@@ -1491,7 +1491,7 @@ fn walk_query(order: &str) -> String {
 /// covers the term-level shape CSV cannot show.
 #[test]
 fn path_relation_binds_every_hop_of_a_multi_hop_chain() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
 
@@ -1531,7 +1531,7 @@ fn path_relation_binds_every_hop_of_a_multi_hop_chain() {
 /// documentation gives for recovering a whole walk without a list term.
 #[test]
 fn path_relation_path_id_groups_the_hops_of_one_walk() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
 
@@ -1572,7 +1572,7 @@ fn path_relation_path_id_groups_the_hops_of_one_walk() {
 /// renders it as `"type":"triple"` with the asserted subject/predicate/object.
 #[test]
 fn path_relation_binds_each_hop_to_an_rdf_12_statement_term() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
 
@@ -1612,7 +1612,7 @@ fn path_relation_binds_each_hop_to_an_rdf_12_statement_term() {
 /// rather than one relation with a runtime flag.
 #[test]
 fn path_relation_shortest_mode_yields_one_witness_per_pair_on_a_diamond() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "diamond.ttl", DIAMOND_TTL);
     let query = walk_query("?end ?len ?step");
@@ -1679,7 +1679,7 @@ fn path_relation_shortest_mode_yields_one_witness_per_pair_on_a_diamond() {
 /// nothing. Pinned rather than assumed: it is the difference the flag makes.
 #[test]
 fn without_the_flag_the_same_query_text_is_an_ordinary_triple_pattern() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
 
@@ -1716,7 +1716,7 @@ fn without_the_flag_the_same_query_text_is_an_ordinary_triple_pattern() {
 /// empty scan.
 #[test]
 fn only_the_registered_iri_becomes_a_call() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -1757,7 +1757,7 @@ fn only_the_registered_iri_becomes_a_call() {
 /// is one rule of the grammar and the substring the diagnostic must carry.
 #[test]
 fn a_malformed_path_relation_spec_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
     let query = walk_query("?len ?step");
@@ -1821,7 +1821,7 @@ fn a_malformed_path_relation_spec_is_refused_by_name() {
 /// would otherwise be.
 #[test]
 fn one_relation_iri_declared_twice_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
     let spec = walk_spec("walk");
@@ -1853,7 +1853,7 @@ fn one_relation_iri_declared_twice_is_refused() {
 /// the empty answer comes from the traversal rather than from a triple pattern.
 #[test]
 fn a_path_relation_over_an_edgeless_predicate_answers_nothing() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
 
@@ -1898,7 +1898,7 @@ fn a_path_relation_over_an_edgeless_predicate_answers_nothing() {
 /// were ignored and some other enumeration happened to produce rows, so both are run.
 #[test]
 fn an_inverse_step_walks_backwards_and_a_forward_one_from_the_same_seed_does_not() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
     let query = format!(
@@ -1987,7 +1987,7 @@ const SUBPROPERTY_TTL: &str = concat!(
 /// walk still follows the data rather than having been widened into always answering more.
 #[test]
 fn a_path_relation_under_entailment_walks_the_closure() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "subproperty.ttl", SUBPROPERTY_TTL);
     let spec = format!(
@@ -2105,7 +2105,7 @@ fn a_path_relation_under_entailment_walks_the_closure() {
 /// name, and these two runs are what says so.
 #[test]
 fn a_path_relation_is_refused_only_where_the_chase_minted_a_witness() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let minting = write_file(dir, "somevalues.ttl", SOME_VALUES_FROM_TTL);
     let mintless = write_file(
@@ -2224,7 +2224,7 @@ fn a_path_relation_is_refused_only_where_the_chase_minted_a_witness() {
 /// nothing — is no longer the only way to write one.
 #[test]
 fn a_predicate_containing_the_field_separator_is_expressible_when_escaped() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
         dir,
@@ -2309,7 +2309,7 @@ fn a_predicate_containing_the_field_separator_is_expressible_when_escaped() {
 /// names both the relation and the kernel's own diagnostic.
 #[test]
 fn a_path_relation_with_an_unbuildable_envelope_names_the_relation() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
 
@@ -2342,7 +2342,7 @@ fn a_path_relation_with_an_unbuildable_envelope_names_the_relation() {
 /// than reporting a short answer as complete.
 #[test]
 fn a_governed_query_over_a_path_relation_trips_on_an_answer_cap() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
 
@@ -2403,7 +2403,7 @@ fn a_governed_query_over_a_path_relation_trips_on_an_answer_cap() {
 /// admission control refuses against.
 #[test]
 fn explain_lists_the_registered_path_relation() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
 
@@ -2456,7 +2456,7 @@ fn explain_lists_the_registered_path_relation() {
 /// ambiguous — an update that never ran also fails to reach `ex:e`.
 #[test]
 fn update_registers_a_path_relation_for_its_where_clause() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "chain.ttl", CHAIN_TTL);
     let out_path = write_file(dir, "out.nt", "");
@@ -2554,7 +2554,7 @@ fn construct_graph_into(format: &str, query: &str, ttl: &str) -> Output {
 /// run exits 0.
 #[test]
 fn construct_graph_into_quad_capable_formats_emits_the_graph() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -2587,7 +2587,7 @@ fn construct_graph_into_quad_capable_formats_emits_the_graph() {
 /// ZERO bytes out, an EMPTY loss ledger, and exit 0.
 #[test]
 fn construct_graph_into_single_graph_formats_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -2629,7 +2629,7 @@ fn construct_graph_into_single_graph_formats_is_refused_by_name() {
 /// could differ between runs.
 #[test]
 fn a_multi_graph_template_refusal_names_every_graph_in_order() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -2663,7 +2663,7 @@ fn a_multi_graph_template_refusal_names_every_graph_in_order() {
 /// a partial answer reported as a complete one.
 #[test]
 fn a_mixed_default_and_named_template_is_still_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -2704,7 +2704,7 @@ fn a_mixed_default_and_named_template_is_still_refused() {
 /// serializer's output shows up here as a diff rather than as a passing test.
 #[test]
 fn a_plain_construct_still_serializes_to_every_single_graph_syntax() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     let query = "CONSTRUCT { ?s <http://example.org/friend> ?o } \
@@ -2766,7 +2766,7 @@ fn a_plain_construct_still_serializes_to_every_single_graph_syntax() {
 /// `DESCRIBE` over default-graph data carries no named graph, so it is untouched.
 #[test]
 fn describe_over_default_graph_data_is_never_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
 
@@ -2793,7 +2793,7 @@ fn describe_over_default_graph_data_is_never_refused() {
 /// truncation, and never an unbounded message.
 #[test]
 fn a_refusal_over_many_graphs_samples_deterministically_and_counts_the_tail() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
     // Ten graphs, declared in reverse alphabetical order so neither the sample nor its
@@ -2913,7 +2913,7 @@ fn sha3_row(out: &Output) -> serde_json::Map<String, serde_json::Value> {
 /// published FIPS 202 `"abc"` digests in the SPARQL-results JSON it writes.
 #[test]
 fn sha3_builtins_reach_their_published_digests_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
 
@@ -2948,7 +2948,7 @@ fn sha3_builtins_reach_their_published_digests_through_the_cli() {
 /// the proposal must reach the same digests through the same shipped binary.
 #[test]
 fn sha3_underscored_sep_spelling_reaches_the_same_digests_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
 
@@ -2976,7 +2976,7 @@ fn sha3_underscored_sep_spelling_reaches_the_same_digests_through_the_cli() {
 /// beside a SHA-3 call still subtracts.
 #[test]
 fn the_cli_reads_the_sha3_hyphen_as_part_of_the_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "sha3.ttl", SHA3_DATA_TTL);
 

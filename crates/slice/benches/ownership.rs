@@ -16,7 +16,7 @@ use std::path::Path;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_slice::{OwnershipAnalyzer, SliceCatalog, SliceVocab};
-use tempfile::TempDir;
+use purrdf_testkit::{TempDir, temp_dir};
 
 const NS: &str = "https://example.org/vocab/";
 const SLICE_COUNT: usize = 24;
@@ -28,7 +28,7 @@ fn write(path: &Path, content: &str) {
 }
 
 fn fixture() -> (TempDir, SliceCatalog) {
-    let temp = TempDir::new().expect("tempdir");
+    let temp = temp_dir!().expect("tempdir");
     for slice_index in 0..SLICE_COUNT {
         let dir = temp.path().join(format!("slice-{slice_index}"));
         let slice_iri = format!("{NS}slice-{slice_index}");

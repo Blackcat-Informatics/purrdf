@@ -139,7 +139,7 @@ const RELATIVE_INCONSISTENT_ONTOLOGY: &str = concat!(
 /// one-command reproduction the subcommand exists to give an operator.
 #[test]
 fn a_consistent_ontology_decides_true_and_is_fully_decided() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
     let out = run(&["consistency", &input]);
@@ -184,7 +184,7 @@ fn a_consistent_ontology_decides_true_and_is_fully_decided() {
 /// `query`.
 #[test]
 fn an_inconsistent_ontology_decides_false_and_still_exits_zero() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "inconsistent.ttl", INCONSISTENT_ONTOLOGY);
 
     let out = run(&["consistency", &input]);
@@ -217,7 +217,7 @@ fn an_inconsistent_ontology_decides_false_and_still_exits_zero() {
 /// `query` a caller-set ceiling cut short.
 #[test]
 fn a_narrow_step_cap_reports_unknown_and_exits_three() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
     let out = run(&["consistency", "--step-cap", "1", &input]);
@@ -252,7 +252,7 @@ fn a_narrow_step_cap_reports_unknown_and_exits_three() {
 /// four rendered budget lines are what distinguish them.
 #[test]
 fn a_narrow_work_cap_reports_unknown_and_exits_three() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
     let out = run(&["consistency", "--work-cap", "1", &input]);
@@ -286,7 +286,7 @@ fn a_narrow_work_cap_reports_unknown_and_exits_three() {
 /// answer above rather than an ontology that was always undecidable.
 #[test]
 fn the_same_ontology_decides_true_without_narrowing() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
     let out = run(&["consistency", "--step-cap", "0", "--work-cap", "0", &input]);
@@ -386,7 +386,7 @@ fn base_resolves_relative_iris_piped_via_stdin() {
 /// coverage, over the same ontology re-expressed as one graph.
 #[test]
 fn ntriples_input_is_inferred_from_the_extension() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(
         dir.path(),
         "a.nt",
@@ -409,7 +409,7 @@ fn ntriples_input_is_inferred_from_the_extension() {
 /// refused for below.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
     let pack = dir.path().join("ontology.purrpck");
     let pack_path = pack.to_str().expect("pack path");
@@ -445,7 +445,7 @@ fn base_with_pack_from_is_refused_by_name() {
 /// on that leg would ever resolve against it.
 #[test]
 fn base_with_a_relative_incapable_input_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(
         dir.path(),
         "a.nt",
@@ -474,7 +474,7 @@ fn base_with_a_relative_incapable_input_is_refused_by_name() {
 /// refuses everywhere else.
 #[test]
 fn loss_ledger_is_refused_rather_than_silently_ignored() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
     let out = run(&["--loss-ledger", "consistency", &input]);
@@ -489,7 +489,7 @@ fn loss_ledger_is_refused_rather_than_silently_ignored() {
 /// `--jsonld-options` is refused for the same reason: this subcommand runs no serializer.
 #[test]
 fn jsonld_options_is_refused_rather_than_silently_ignored() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
     let options = write_file(
         dir.path(),
@@ -516,7 +516,7 @@ fn jsonld_options_is_refused_rather_than_silently_ignored() {
 /// block, and a caller who does not pass it records nothing and pays nothing.
 #[test]
 fn the_proof_is_opt_in_and_changes_nothing_the_command_decides() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
 
     let bare = run(&["consistency", "--from", "turtle", &path]);
@@ -545,7 +545,7 @@ fn the_proof_is_opt_in_and_changes_nothing_the_command_decides() {
 /// A proof this command produced CHECKS through this command, against the same ontology.
 #[test]
 fn a_proof_this_command_produced_checks_through_this_command() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
     let bare = stdout(&run(&["consistency", "--from", "turtle", &path]));
     let proved = stdout(&run(&["consistency", "--proof", "--from", "turtle", &path]));
@@ -571,7 +571,7 @@ fn a_proof_this_command_produced_checks_through_this_command() {
 /// A proof for a DIFFERENT ontology is refused, and the refusal is a non-zero exit.
 #[test]
 fn a_proof_for_another_ontology_is_refused_by_the_command() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let mine = write_file(&dir.path().join(""), "mine.ttl", ORDINARY_ONTOLOGY);
     let theirs = write_file(&dir.path().join(""), "theirs.nt", OTHER_ONTOLOGY);
     let bare = stdout(&run(&["consistency", "--from", "turtle", &mine]));
@@ -601,7 +601,7 @@ fn a_proof_for_another_ontology_is_refused_by_the_command() {
 /// the opposite.
 #[test]
 fn an_absent_proof_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
     let absent = write_file(
         &dir.path().join(""),

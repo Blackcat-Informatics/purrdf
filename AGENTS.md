@@ -62,6 +62,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
 | `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
+| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, and the libtest-compatible `harness = false` runner; depends on no `purrdf-*` crate (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 
 ## 2. Hard constraints (violating these fails CI or review)
 
@@ -246,14 +247,15 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (25 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Seven members never reach
+is single-sourced in `[workspace.package]`. Eight members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,
-`purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`, and
-`purrdf-python` (PyPI via maturin instead). `purrdf-alloc-probe` is a
-dev-dependency of published crates, so its root `[workspace.dependencies]` entry
-is path-only with **no `version`** — cargo then strips it from the packaged
-manifest, which is the only way `cargo publish`'s dev-dependency-resolving
-verification step can succeed.
+`purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`,
+`purrdf-testkit`, and `purrdf-python` (PyPI via maturin instead).
+`purrdf-alloc-probe` and `purrdf-testkit` are dev-dependencies of published
+crates, so their root `[workspace.dependencies]` entries are path-only with
+**no `version`** — cargo then strips them from the packaged manifest, which is
+the only way `cargo publish`'s dev-dependency-resolving verification step can
+succeed.
 
 ## 7. Provenance
 

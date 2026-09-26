@@ -248,12 +248,13 @@ pub(crate) fn retrieval_base_iri(path: &str) -> Result<String, CliError> {
         })
 }
 
-/// [`retrieval_base_iri`] for a consumer outside this crate — the integration tests, which
-/// assert against the pipeline's OWN derivation rather than a second transcription of it.
+/// The crate-internal `retrieval_base_iri`, for a consumer outside this crate — the
+/// integration tests, which assert against the pipeline's OWN derivation rather than a
+/// second transcription of it.
 ///
 /// A second implementation in the test harness is exactly how a platform divergence hides:
 /// the tests agreed with themselves while the binary emitted something else. The error is
-/// flattened to a `String` because [`CliError`] is crate-internal.
+/// flattened to a `String` because `CliError` is crate-internal.
 ///
 /// # Errors
 ///

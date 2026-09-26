@@ -47,6 +47,9 @@ purrdf-cdt = { workspace = true }
 memchr = { workspace = true }
 
 [dev-dependencies]
+# Byte-exact golden files for the algebra snapshots. Path-only and unpublished,
+# so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 # Property tests (lexer round-trips, parser robustness).
 proptest = { workspace = true }
 # Tokenizer hot-path baselines (dev-dep only).
