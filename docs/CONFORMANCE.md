@@ -685,9 +685,11 @@ way the matrix stays honest:
   variants using equal full lower-case strings or equal full upper-case
   strings. Rust regex uses Unicode simple case folding. For example, both
   `i` and dotless `ı` uppercase to `I`, but the Rust validator's `^i$` under
-  `i` rejects `ı`. A unit test pins this existing validator difference.
-  The ECMA-262 emitter refuses the `i` flag with a typed error naming XPath
-  case-variant semantics.
+  `i` rejects `ı`. The validator also folds `\p{Lu}` under `i`, which XPath
+  leaves unaffected. Unit tests pin these existing validator differences. The
+  ECMA-262 emitter implements the exact XPath rule: it writes each normal
+  character's and character range's case variants into the pattern and leaves
+  every escape unaffected.
 
 ### SHACL pattern emission
 
@@ -702,8 +704,8 @@ expand XML-name escapes, Unicode categories and blocks, and subtraction into
 explicit scalar ranges. Wildcards and anchors retain XPath's meaning; `s`,
 `m`, `x`, and `q` are incorporated into the emitted source. Under `q`, `s`,
 `m`, and `x` have no effect, as XPath specifies. Every flag combination
-containing `i` is refused because simple case folding does not implement XPath
-case variants. Unknown flags also refuse. The emitter enforces the exact
+containing `i` is written into the source as XPath case variants, since simple
+case folding does not implement them. Unknown flags refuse. The emitter enforces the exact
 multiline anchor rules, including the final newline exclusion; the separately
 documented Rust-validator differences above remain specific to that validator. Source and output limits are hard errors.
 

@@ -464,7 +464,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf/tests/gts_certify.rs", "Task 5"),
         ("crates/rdf/tests/gts_certify.rs", "Task 6"),
         ("crates/rdf/tests/gts_certify.rs", "the plan's"),
-        ("crates/shapes/src/instance.rs", "Task 6"),
         # Surfaced by the clause-opening label rule (see ``LABEL_OPENING_RE``),
         # which reads the label's POSITION rather than the punctuation after it.
         # `F6:` in this same file was already registered; these are the same
