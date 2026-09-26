@@ -1139,3 +1139,65 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a ; ex:c true .
         "{error}"
     );
 }
+
+// ── 7. A component that is also a shape ──────────────────────────────────────
+
+/// A node may be both a custom constraint component and a shape (TOSH's
+/// `tosh:MemberShapeConstraintComponent` carries `sh:targetClass`). Its `sh:parameter`
+/// and `sh:validator` are read by the component registry, so they are not silently
+/// ignored and the shape is not refused for carrying them — and both roles run: the
+/// shape reports the `ex:Thing` without a label, the component reports the empty
+/// string.
+#[test]
+fn a_component_that_is_also_a_shape_plays_both_roles() {
+    let shapes = r#"
+ex:NonEmpty a sh:ConstraintComponent ;
+  sh:parameter [ sh:path ex:nonEmpty ] ;
+  sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (STRLEN(STR(?value)) > 0) }" ] ;
+  sh:targetClass ex:Thing ;
+  sh:property [ sh:path ex:label ; sh:minCount 1 ] .
+ex:S a sh:NodeShape ; sh:targetNode "", "x" ; ex:nonEmpty true .
+"#;
+    let report = validate(
+        shapes,
+        "ex:t a ex:Thing . ex:u a ex:Thing ; ex:label \"u\" .",
+    );
+    let mut seen: Vec<(String, String)> = report
+        .results
+        .iter()
+        .map(|r| {
+            (
+                r.focus_node.to_string(),
+                r.source_constraint_component.as_str().to_owned(),
+            )
+        })
+        .collect();
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec![
+            (
+                "\"\"".to_owned(),
+                "http://example.org/ns#NonEmpty".to_owned()
+            ),
+            (
+                "<http://example.org/ns#t>".to_owned(),
+                sh_iri("MinCountConstraintComponent")
+            ),
+        ]
+    );
+}
+
+/// The neighbour: a shape that is NOT a constraint component carrying `sh:validator`
+/// is still refused — nothing would read the validator there.
+#[test]
+fn a_validator_on_a_plain_shape_is_refused() {
+    let error = load_error(
+        r#"ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+             sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { }" ] ."#,
+    );
+    assert!(
+        error.contains("shacl#validator") && error.contains("not a property of a shape"),
+        "{error}"
+    );
+}

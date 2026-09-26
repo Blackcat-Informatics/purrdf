@@ -74,6 +74,16 @@ const SPARQL_VALIDATOR_TERMS: [&str; 6] = [
     sh::RESULT_ANNOTATION,
 ];
 
+/// The terms a constraint component's declaration carries that the component
+/// registry reads (SHACL 1.2 SPARQL Extensions, "Parameter Declarations" and
+/// "Validators"): its parameters and its validators.
+const COMPONENT_DECLARATION_TERMS: [&str; 4] = [
+    sh::PARAMETER_PROPERTY,
+    sh::VALIDATOR,
+    sh::NODE_VALIDATOR,
+    sh::PROPERTY_VALIDATOR,
+];
+
 /// The terms a `sh:SPARQLTarget` node carries (SHACL 1.2 SPARQL Extensions,
 /// "SPARQL-based Targets"): its SELECT query and its prefixes.
 const SPARQL_TARGET_TERMS: [&str; 2] = [sh::SELECT, sh::PREFIXES];
@@ -344,6 +354,20 @@ impl Parser<'_> {
                 )
                 .is_empty()
             });
+        // A shape may ALSO be a constraint component the registry has linked (TOSH's
+        // `tosh:MemberShapeConstraintComponent` carries `sh:targetClass`), and then it
+        // legitimately carries that component's declaration: the registry reads its
+        // parameters and validators, so none of them is silently ignored.
+        let is_component_declaration = match shape {
+            Term::NamedNode(iri) => {
+                self.component_registry
+                    .components
+                    .contains_key(iri.as_str())
+                    || (crate::spec::component(iri.as_str()).is_some()
+                        && self.has_type(shape, sh::CONSTRAINT_COMPONENT))
+            }
+            _ => false,
+        };
         let mut statements: Vec<(NamedNode, Term)> =
             native_quads(self.data, Some(shape), None, None, GraphFilter::AnyGraph)
                 .into_iter()
@@ -353,6 +377,9 @@ impl Parser<'_> {
         for (predicate, object) in &statements {
             let p = predicate.as_str();
             self.check_statement_annotations(shape, predicate, object, is_parameter)?;
+            if is_component_declaration && COMPONENT_DECLARATION_TERMS.contains(&p) {
+                continue;
+            }
             if p == rdf::TYPE {
                 self.check_shape_type(shape, object)?;
                 continue;
