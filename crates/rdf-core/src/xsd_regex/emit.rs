@@ -58,11 +58,134 @@ use super::scan::{Scanner, Token};
 /// `x` flag is set — the two operate on the same raw pattern text, and `x`'s
 /// removal has to happen first (its whitespace-exemption tracking is
 /// textual, not aware of any of the rewrites below).
+#[cfg(test)]
 pub(super) fn translate(
     pattern: &str,
     dot_all: bool,
     case_insensitive: bool,
 ) -> Result<String, XsdRegexError> {
+    translate_with(
+        pattern,
+        dot_all,
+        if case_insensitive {
+            CaseMode::EngineFold
+        } else {
+            CaseMode::Sensitive
+        },
+    )
+}
+
+/// How the `i` flag reaches the translated source.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CaseMode {
+    /// No `i` flag.
+    Sensitive,
+    /// The `i` flag, applied by the engine's own simple case folding
+    /// (`RegexBuilder::case_insensitive(true)`); see [`translate_with`].
+    EngineFold,
+    /// The `i` flag written into the source as XPath case variants (see
+    /// [`super::case_variants`]), for a caller that installs no case-insensitive
+    /// mode: every normal character used as an atom becomes the class of its
+    /// variants, and every character class gains, as one nested class, the
+    /// variants of the characters its normal members (characters and ranges)
+    /// match. Escapes (`\p{…}`, `\d`, `\i`, …) and `.` are left unchanged,
+    /// as F&O 3.1 §5.6.2 requires ("all other constructs are unaffected").
+    XPathVariants,
+}
+
+/// The empty character class, spliced into a class's normal-member mirror in
+/// place of an escape: it adds no member and, being a bracket expression like
+/// the escape's own translation, keeps every neighbouring `-` parsed as the
+/// engine parses it in the real class.
+const EMPTY_NESTED_CLASS: &str = "[^\\u{0}-\\u{10ffff}]";
+
+/// One character class open under [`CaseMode::XPathVariants`].
+struct VariantFrame {
+    /// Where the class's members begin in the output (after `[` or `[[^`).
+    start: usize,
+    /// The class's members as emitted, except that every escape is replaced by
+    /// [`EMPTY_NESTED_CLASS`]: parsed, it is exactly the set the normal
+    /// members (characters and character ranges) match.
+    normal: String,
+    /// Whether the variants are still to be inserted (they are once the
+    /// class's own members end, at its `]` or at the `-` of a subtraction).
+    open: bool,
+}
+
+/// Insert, at the head of `frame`'s members, the class of the case variants of
+/// the characters its normal members match.
+///
+/// The insertion follows any leading run of unescaped `-`: `regex-syntax`
+/// reads those as literal members only at the head of a class, so inserting
+/// before them would turn `--` into its difference operator. A nested class is
+/// never a range endpoint, so no following member changes meaning.
+fn insert_class_variants(out: &mut String, frame: &mut VariantFrame) {
+    frame.open = false;
+    let Ok(hir) = regex_syntax::ParserBuilder::new()
+        .build()
+        .parse(&format!("[{}]", frame.normal))
+    else {
+        // The class does not parse: the whole translation fails when the
+        // engine parses it, so there is nothing to extend.
+        return;
+    };
+    let ranges: Vec<(char, char)> = match hir.kind() {
+        regex_syntax::hir::HirKind::Class(regex_syntax::hir::Class::Unicode(class)) => class
+            .ranges()
+            .iter()
+            .map(|range| (range.start(), range.end()))
+            .collect(),
+        regex_syntax::hir::HirKind::Literal(literal) => std::str::from_utf8(&literal.0)
+            .map(|text| text.chars().map(|c| (c, c)).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let mut variants: Vec<char> = super::case_variants::table()
+        .iter()
+        .filter(|(c, _)| ranges.iter().any(|&(lo, hi)| lo <= *c && *c <= hi))
+        .flat_map(|(_, variants)| variants.iter().copied())
+        .collect();
+    if variants.is_empty() {
+        return;
+    }
+    variants.sort_unstable();
+    variants.dedup();
+    let mut nested = String::from("[");
+    push_char_ranges(&mut nested, &variants);
+    nested.push(']');
+    let dashes = out[frame.start..]
+        .bytes()
+        .take_while(|&byte| byte == b'-')
+        .count();
+    out.insert_str(frame.start + dashes, &nested);
+}
+
+/// Push sorted, de-duplicated characters as bracket-class members, coalescing
+/// consecutive code points into ranges.
+fn push_char_ranges(out: &mut String, chars: &[char]) {
+    let mut index = 0;
+    while index < chars.len() {
+        let lo = u32::from(chars[index]);
+        let mut hi = lo;
+        while index + 1 < chars.len() && u32::from(chars[index + 1]) == hi + 1 {
+            index += 1;
+            hi += 1;
+        }
+        push_hex_range(out, lo, hi);
+        index += 1;
+    }
+}
+
+/// Translate under an explicit [`CaseMode`] (see the documentation above,
+/// whose `case_insensitive` is [`CaseMode::EngineFold`]).
+pub(super) fn translate_with(
+    pattern: &str,
+    dot_all: bool,
+    case: CaseMode,
+) -> Result<String, XsdRegexError> {
+    let case_insensitive = case == CaseMode::EngineFold;
+    let variants = case == CaseMode::XPathVariants;
+    let mut frames: Vec<VariantFrame> = Vec::new();
     let mut out = String::with_capacity(pattern.len() + 16);
     let mut scanner = Scanner::new(pattern);
     // XSD's `\i`/`\c` (and their negations) are the only constructs whose `i`
@@ -88,7 +211,20 @@ pub(super) fn translate(
     // module doc) regardless of context, so there is no class-depth branch
     // here.
     while let Some(token) = scanner.next() {
-        match token? {
+        let token = token?;
+        if variants && let Some(frame) = frames.last_mut().filter(|frame| frame.open) {
+            mirror_normal_member(&mut frame.normal, &token);
+        }
+        match token {
+            Token::Literal(c) if variants && class_depth == 0 => {
+                if let Some(case_variants) = super::case_variants::of(c) {
+                    out.push('[');
+                    push_char_ranges(&mut out, case_variants);
+                    out.push(']');
+                } else {
+                    out.push(c);
+                }
+            }
             Token::Literal(c) => out.push(c),
             // `&` and `~` are ordinary members of an XSD character class
             // (`XmlCharIncDash ::= [^\#x5B#x5D]`), but `regex-syntax` reads an
@@ -191,8 +327,20 @@ pub(super) fn translate(
                 } else {
                     out.push('[');
                 }
+                if variants {
+                    frames.push(VariantFrame {
+                        start: out.len(),
+                        normal: String::new(),
+                        open: true,
+                    });
+                }
             }
             Token::Subtract => {
+                // The minuend's own members end here: F&O 3.1 §5.6.2 extends
+                // them (and, separately, the subtrahend's) with their variants.
+                if let Some(frame) = frames.last_mut().filter(|frame| frame.open) {
+                    insert_class_variants(&mut out, frame);
+                }
                 // XPath class subtraction `[...-[...]]` -> regex's own `--`
                 // difference operator. Close the inner negated group before
                 // the difference operator, so `--` subtracts from the
@@ -204,6 +352,11 @@ pub(super) fn translate(
             }
             Token::ClassClose => {
                 class_depth -= 1;
+                if let Some(mut frame) = frames.pop()
+                    && frame.open
+                {
+                    insert_class_variants(&mut out, &mut frame);
+                }
                 // The inner negated group's own `]` was already emitted by
                 // the `Subtract` arm above; only an unsubtracted negated
                 // group still owes one here.
@@ -236,6 +389,37 @@ pub(super) fn translate(
         });
     }
     Ok(out)
+}
+
+/// Append `token`'s contribution to a class's normal-member mirror (see
+/// [`VariantFrame::normal`]): a character or `-` exactly as the class itself
+/// receives it, a single-character escape as its character, and every
+/// multi-character escape as [`EMPTY_NESTED_CLASS`].
+fn mirror_normal_member(normal: &mut String, token: &Token) {
+    match token {
+        Token::Literal(c) => normal.push(*c),
+        Token::ClassMember(c) => {
+            normal.push('\\');
+            normal.push(*c);
+        }
+        Token::Escape('d' | 'D')
+        | Token::NameEscape { .. }
+        | Token::SpaceEscape { .. }
+        | Token::WordEscape { .. }
+        | Token::UnicodeProperty { .. } => normal.push_str(EMPTY_NESTED_CLASS),
+        Token::Escape(c) => {
+            normal.push('\\');
+            normal.push(*c);
+        }
+        // Structure, never a member of the open class's own set.
+        Token::Dot
+        | Token::ClassOpen { .. }
+        | Token::ClassClose
+        | Token::Subtract
+        | Token::GroupOpen { .. }
+        | Token::GroupClose
+        | Token::Backreference(_) => {}
+    }
 }
 
 /// The complete, closed `IsCategory` enumeration of XML Schema Part 2
