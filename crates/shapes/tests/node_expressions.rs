@@ -382,6 +382,64 @@ fn flat_map_defaults_its_input_to_the_focus_node() {
     assert_eq!(out, vec![ex("b"), ex("c")]);
 }
 
+/// SHACL Advanced Features 1.1, "Path Expressions": "For the path expression $expr
+/// that has the property path P as its value for sh:path and the node expression N as
+/// its value for sh:nodes (defaulting to the focus node expression if absent)", the
+/// output is "the list of values of all nodes produced by Eval(N, $this) for the
+/// property path P" — the path walked from EVERY input node, which is the SHACL 1.2
+/// flatMap of the path over N, with the same output. Two input nodes, so a form that
+/// read only one of them, or walked from the focus node instead, differs.
+#[test]
+fn an_af_path_expression_walks_from_each_of_its_sh_nodes() {
+    let data = "ex:a ex:dept ex:d1, ex:d2 . ex:d1 ex:revenue ex:r1 . ex:d2 ex:revenue ex:r2 .
+                ex:a ex:revenue ex:own .";
+    let af = outputs(
+        data,
+        "ex:S a sh:NodeShape ;
+             sh:expression [ sh:path ex:revenue ; sh:nodes [ sh:path ex:dept ] ] .",
+        "a",
+    );
+    let flat_map = outputs(
+        data,
+        "ex:S a sh:NodeShape ;
+             sh:expression [
+                 shnex:nodes [ shnex:pathValues ex:dept ] ;
+                 shnex:flatMap [ shnex:pathValues ex:revenue ] ;
+             ] .",
+        "a",
+    );
+    assert_eq!(af, vec![ex("r1"), ex("r2")]);
+    assert_eq!(af, flat_map);
+    // The neighbour without sh:nodes walks from the focus node.
+    let from_focus = outputs(
+        data,
+        "ex:S a sh:NodeShape ; sh:expression [ sh:path ex:revenue ] .",
+        "a",
+    );
+    assert_eq!(from_focus, vec![ex("own")]);
+}
+
+/// A path expression given both `sh:nodes` and `shnex:focusNode` names two sources
+/// for the nodes its path starts from, and is refused; each alone loads (above, and
+/// `path_values_walks_from_a_computed_focus`).
+#[test]
+fn a_path_expression_with_sh_nodes_and_a_focus_node_is_refused() {
+    let error = parse_shapes(
+        &format!(
+            "{PREFIXES}
+             ex:S a sh:NodeShape ;
+                 sh:expression [ sh:path ex:q ; sh:nodes [ sh:path ex:p ] ;
+                                 shnex:focusNode [ sh:path ex:p ] ] ."
+        ),
+        None,
+    )
+    .expect_err("two sources for the path's start nodes");
+    assert!(
+        error.to_string().contains("shnex:focusNode") && error.to_string().contains("sh:nodes"),
+        "{error}"
+    );
+}
+
 // ── §4.3.2 FindFirst expressions ────────────────────────────────────────────────
 
 /// §4.3.2: "the first node `n` in `N` that conforms to the shape `shape`, or an
