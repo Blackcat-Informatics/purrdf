@@ -428,14 +428,11 @@ fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
         PropertyPathExpression::Reverse(inner) | PropertyPathExpression::OneOrMore(inner) => {
             path_needs_an_edge(inner)
         }
-        // A sequence traverses BOTH sides, so one edge-requiring side suffices.
-        PropertyPathExpression::Sequence(left, right) => {
-            path_needs_an_edge(left) || path_needs_an_edge(right)
-        }
-        // An alternative traverses EITHER side, so both sides must require an edge.
-        PropertyPathExpression::Alternative(left, right) => {
-            path_needs_an_edge(left) && path_needs_an_edge(right)
-        }
+        // A sequence traverses EVERY element, so one edge-requiring element suffices.
+        PropertyPathExpression::Sequence(elements) => elements.iter().any(path_needs_an_edge),
+        // An alternative traverses ANY one element, so every element must require an
+        // edge (an alternative of none relates nothing, so it needs one vacuously).
+        PropertyPathExpression::Alternative(elements) => elements.iter().all(path_needs_an_edge),
         // A bounded repetition needs an edge only when it forbids zero repetitions.
         PropertyPathExpression::Range { inner, min, max: _ } => {
             *min >= 1 && path_needs_an_edge(inner)

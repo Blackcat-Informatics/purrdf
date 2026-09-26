@@ -320,9 +320,7 @@ impl HeapBytes for PropertyPathExpression {
                 min: _,
                 max: _,
             } => x.heap_bytes(depth),
-            Self::Sequence(a, b) | Self::Alternative(a, b) => {
-                sum([a.heap_bytes(depth), b.heap_bytes(depth)])
-            }
+            Self::Sequence(elements) | Self::Alternative(elements) => elements.heap_bytes(depth),
             Self::NegatedPropertySet(x) => x.heap_bytes(depth),
             Self::Wildcard { namespace } => namespace.heap_bytes(depth),
         }

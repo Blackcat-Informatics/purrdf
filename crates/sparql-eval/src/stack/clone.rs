@@ -274,11 +274,11 @@ pub(crate) fn path(node: &PropertyPathExpression) -> PropertyPathExpression {
         | PropertyPathExpression::NegatedPropertySet(_)
         | PropertyPathExpression::Wildcard { .. } => node.clone(),
         PropertyPathExpression::Reverse(inner) => PropertyPathExpression::Reverse(boxed(inner)),
-        PropertyPathExpression::Sequence(a, b) => {
-            PropertyPathExpression::Sequence(boxed(a), boxed(b))
+        PropertyPathExpression::Sequence(elements) => {
+            PropertyPathExpression::Sequence(elements.iter().map(path).collect())
         }
-        PropertyPathExpression::Alternative(a, b) => {
-            PropertyPathExpression::Alternative(boxed(a), boxed(b))
+        PropertyPathExpression::Alternative(elements) => {
+            PropertyPathExpression::Alternative(elements.iter().map(path).collect())
         }
         PropertyPathExpression::ZeroOrMore(inner) => {
             PropertyPathExpression::ZeroOrMore(boxed(inner))

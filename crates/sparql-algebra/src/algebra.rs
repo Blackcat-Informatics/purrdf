@@ -945,10 +945,38 @@ pub enum PropertyPathExpression {
     NamedNode(NamedNode),
     /// `^path` — inverse.
     Reverse(Box<Self>),
-    /// `p1 / p2` — sequence.
-    Sequence(Box<Self>, Box<Self>),
-    /// `p1 | p2` — alternative.
-    Alternative(Box<Self>, Box<Self>),
+    /// `p1 / p2 / …` — the sequence of its elements, in source order: `a/b/c` is one
+    /// node with three elements.
+    ///
+    /// The SPARQL operator is binary and a written chain nests to the left,
+    /// `Sequence(Sequence(a, b), c)`. Composition of path relations is associative,
+    /// and so is the unrolled join the operator denotes (§18.4: each `/` introduces
+    /// one fresh intermediate variable between its two sides), so one node over the
+    /// elements in that order denotes the same relation — with the same multiplicity
+    /// for every pair of endpoints, one per chain of matching triples, when the path
+    /// has no repetition operator. A chain of any length is one level of the tree.
+    ///
+    /// The parser always builds two or more elements. A constructed node with one
+    /// element denotes that element, and one with none the zero-length path (the
+    /// identity of composition); no SPARQL text spells the latter, so
+    /// [`crate::Query::validate`] refuses it. [`Self::sequence`] builds a chain the way
+    /// the parser does.
+    Sequence(Vec<Self>),
+    /// `p1 | p2 | …` — the alternative of its elements, in source order: `a|b|c` is
+    /// one node with three elements.
+    ///
+    /// The SPARQL operator is binary and a written chain nests to the left,
+    /// `Alternative(Alternative(a, b), c)`, whose relation is the bag union of its
+    /// sides, left then right. Bag union is associative, so one node over the
+    /// elements in that order denotes the same relation, each element contributing
+    /// its own pairs in turn. A chain of any length is one level of the tree.
+    ///
+    /// The parser always builds two or more elements. A constructed node with one
+    /// element denotes that element, and one with none the empty relation (the
+    /// identity of union); no SPARQL text spells the latter, so
+    /// [`crate::Query::validate`] refuses it. [`Self::alternative`] builds a chain
+    /// the way the parser does.
+    Alternative(Vec<Self>),
     /// `path*` — zero or more.
     ZeroOrMore(Box<Self>),
     /// `path+` — one or more.
@@ -993,23 +1021,24 @@ impl core::fmt::Display for PropertyPathExpression {
         match self {
             Self::NamedNode(n) => write!(f, "<{}>", n.as_str()),
             Self::Reverse(a) => write!(f, "^{}", PathElt(a)),
-            // `/` (this arm) binds TIGHTER than `|`, and both are
-            // left-associative: an `Alternative` operand on EITHER side needs
-            // parens (it would otherwise mis-group into the surrounding `|`
-            // on re-parse — `crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
-            // `property-path/path-p2.rq`/`path-p4.rq` findings, e.g.
-            // `(p1|p2)/(p3|p4)` rendered bare as `p1|p2/p3|p4` reparses as
-            // `(p1|(p2/p3))|p4`); a `Sequence` operand needs parens ONLY on
-            // the RIGHT (the left one reproduces via `/`'s own
-            // left-associativity — `a/b/c` IS `Sequence(Sequence(a,b),c)`
-            // already — but a RIGHT-nested `Sequence(a, Sequence(b,c))`
-            // rendered bare as `a/b/c` would reparse LEFT-nested instead).
-            Self::Sequence(a, b) => write!(f, "{}/{}", SeqLeft(a), SeqRight(b)),
-            // `|`'s own left operand never needs parens (lowest precedence,
-            // left-associative — any shape reproduces bare); the right
-            // operand needs them only for a nested `Alternative` (the same
-            // right-nesting-vs-left-associativity mismatch `Sequence` has).
-            Self::Alternative(a, b) => write!(f, "{a}|{}", AltRight(b)),
+            // `/` binds TIGHTER than `|`, and both are left-associative, so a chain is
+            // written flat, `a/b/c`, and re-parses into one node with the same
+            // elements. An `Alternative` element needs parens anywhere in a sequence
+            // (bare, `(p1|p2)/(p3|p4)` would mis-group as `p1|(p2/p3)|p4` —
+            // `crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
+            // `property-path/path-p2.rq`/`path-p4.rq` findings). A nested `Sequence`
+            // needs them everywhere but first: as the first element it is written as
+            // the leading elements of this chain, which the parser folds into the same
+            // node — composition is associative, so the relation is the same — while a
+            // later one bare would join this chain instead of staying one element.
+            Self::Sequence(elements) => fmt_path_chain(f, elements, '/', |i, e| {
+                matches!(e, Self::Alternative(_)) || (i > 0 && matches!(e, Self::Sequence(_)))
+            }),
+            // `|` has the lowest precedence, so only a nested `Alternative` needs parens,
+            // and only after the first element, for the same reason as a `Sequence`'s.
+            Self::Alternative(elements) => fmt_path_chain(f, elements, '|', |i, e| {
+                i > 0 && matches!(e, Self::Alternative(_))
+            }),
             Self::ZeroOrMore(a) => write!(f, "{}*", QuantifierOperand(a)),
             Self::OneOrMore(a) => write!(f, "{}+", QuantifierOperand(a)),
             Self::ZeroOrOne(a) => write!(f, "{}?", QuantifierOperand(a)),
@@ -1103,50 +1132,36 @@ impl core::fmt::Display for QuantifierOperand<'_> {
     }
 }
 
-/// The LEFT operand of `/` (`Sequence`): parens only for `Alternative` (lower
-/// precedence — see [`PropertyPathExpression`]'s `Display`'s `Sequence` arm
-/// for the full precedence argument). A nested `Sequence` reproduces bare via
-/// `/`'s own left-associativity.
-struct SeqLeft<'a>(&'a PropertyPathExpression);
-
-impl core::fmt::Display for SeqLeft<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.0 {
-            PropertyPathExpression::Alternative(..) => write!(f, "({})", self.0),
-            other => write!(f, "{other}"),
+/// Write a [`PropertyPathExpression::Sequence`] or `Alternative` chain as its elements
+/// joined by `op`, bracketing the element at index `i` when `parens(i, element)` says
+/// the bare text would re-parse differently.
+///
+/// The one-element chain the parser never builds is written as that element, which is
+/// what it denotes. The empty chain has no SPARQL spelling at all — the zero-length
+/// path and the empty relation are not expressible without a repetition operator or a
+/// fabricated predicate — so it is written as `()`, which the parser refuses loudly
+/// rather than reading as something else; [`crate::Query::validate`] refuses the
+/// algebra before it could reach a forwarded request.
+fn fmt_path_chain(
+    f: &mut core::fmt::Formatter<'_>,
+    elements: &[PropertyPathExpression],
+    op: char,
+    parens: impl Fn(usize, &PropertyPathExpression) -> bool,
+) -> core::fmt::Result {
+    if elements.is_empty() {
+        return f.write_str("()");
+    }
+    for (i, element) in elements.iter().enumerate() {
+        if i > 0 {
+            write!(f, "{op}")?;
+        }
+        if parens(i, element) {
+            write!(f, "({element})")?;
+        } else {
+            write!(f, "{element}")?;
         }
     }
-}
-
-/// The RIGHT operand of `/` (`Sequence`): parens for `Alternative` (lower
-/// precedence) AND for a nested `Sequence` (right-nesting does not survive
-/// `/`'s left-associative re-parse — see the `Sequence` `Display` arm).
-struct SeqRight<'a>(&'a PropertyPathExpression);
-
-impl core::fmt::Display for SeqRight<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.0 {
-            PropertyPathExpression::Alternative(..) | PropertyPathExpression::Sequence(..) => {
-                write!(f, "({})", self.0)
-            }
-            other => write!(f, "{other}"),
-        }
-    }
-}
-
-/// The RIGHT operand of `|` (`Alternative`): parens only for a nested
-/// `Alternative` (right-nesting does not survive `|`'s left-associative
-/// re-parse). `Sequence` binds tighter and never needs parens on either side
-/// of `|`.
-struct AltRight<'a>(&'a PropertyPathExpression);
-
-impl core::fmt::Display for AltRight<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.0 {
-            PropertyPathExpression::Alternative(..) => write!(f, "({})", self.0),
-            other => write!(f, "{other}"),
-        }
-    }
+    Ok(())
 }
 
 /// A SPARQL expression (filter/bind/having/order/select-expression position).
@@ -1301,6 +1316,35 @@ impl Expression {
                 Self::Arithmetic(first, steps)
             }
             left => Self::Arithmetic(Box::new(left), vec![(op, right)]),
+        }
+    }
+}
+
+impl PropertyPathExpression {
+    /// `left / right`, as the parser builds it: a `left` that is already a
+    /// [`Self::Sequence`] chain is extended by one element, so a written chain of any
+    /// length is one node. A `right` that is a `Sequence` stays one element, as the
+    /// bracketed `a/(b/c)` it came from.
+    #[must_use]
+    pub fn sequence(left: Self, right: Self) -> Self {
+        match left {
+            Self::Sequence(mut elements) => {
+                elements.push(right);
+                Self::Sequence(elements)
+            }
+            left => Self::Sequence(vec![left, right]),
+        }
+    }
+
+    /// `left | right`, as the parser builds it: see [`Self::sequence`].
+    #[must_use]
+    pub fn alternative(left: Self, right: Self) -> Self {
+        match left {
+            Self::Alternative(mut elements) => {
+                elements.push(right);
+                Self::Alternative(elements)
+            }
+            left => Self::Alternative(vec![left, right]),
         }
     }
 }

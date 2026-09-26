@@ -105,15 +105,16 @@ pub const MAX_GRAPH_PATTERN_DEPTH: usize = MAX_NESTING_DEPTH;
 ///
 /// Some levels are not recursion of the parser, so [`MAX_NESTING_DEPTH`] never sees
 /// them: a relational operator (`!=` and `NOT IN` are two levels), an operator
-/// chain, a path operator or modifier, and `NOT EXISTS`. Each is charged here instead,
-/// through [`Parser::charge_height`], because the tree's height is the recursion depth
-/// of every walk over it, including its own `Drop`. An expression operator chain
-/// (`a || b || …`, `a && b && …`, `a + b - …`, `a * b / …`) is ONE n-ary node, one
-/// level above its tallest operand however long it is, so a generated
-/// `?x = <a> || ?x = <b> || …` of ten thousand alternatives is two levels tall. A
-/// property-path chain (`p1 / p2 / …`, `p1 | p2 | …`) is still a binary tree one level
-/// taller per operator; unbounded, a 100 000-operator path chain aborted a 2 MiB
-/// native stack. These levels cost no parser stack, only the walkers' much smaller
+/// chain, a path chain, `^` or a path modifier, and `NOT EXISTS`. Each is charged here
+/// instead, through [`Parser::charge_height`], because the tree's height is the
+/// recursion depth of every walk over it, including its own `Drop`. An expression
+/// operator chain (`a || b || …`, `a && b && …`, `a + b - …`, `a * b / …`) and a
+/// property-path chain (`p1 / p2 / …`, `p1 | p2 | …`) are each ONE n-ary node, one
+/// level above their tallest operand however long they are, so a generated
+/// `?x = <a> || ?x = <b> || …` of ten thousand alternatives is two levels tall and a
+/// five-thousand-step `p1 / p2 / …` path is one. What the budget still counts is
+/// nesting: brackets, unary and relational operators, `^`, path modifiers and
+/// argument lists. These levels cost no parser stack, only the walkers' much smaller
 /// frames (the parse of a 512-tall tree needs 48 KiB natively and 6 KiB on wasm32),
 /// so the budget is wider than the recursion budget. Evaluating the tallest tree it
 /// admits takes about 0.92 KiB of wasm32 shadow stack per level, 479 KiB in all: half
@@ -987,9 +988,8 @@ impl<'a> Parser<'a, '_> {
     /// operand is a level of the tree, and a tree's height is the recursion depth of
     /// everything that walks it afterwards, its own `Drop` included. Every node the
     /// expression and property-path productions build above an operand they measured
-    /// is charged here before it is built: an n-ary expression chain as one level
-    /// above its tallest operand, a binary path operator as one level above both of
-    /// its operands.
+    /// is charged here before it is built: an n-ary expression or path chain as one
+    /// level above its tallest operand.
     fn charge_height(&mut self, construct: &'static str, height: usize) -> Result<()> {
         let reach = self.nesting_depth + height;
         if reach > MAX_EXPRESSION_HEIGHT {
@@ -3771,24 +3771,31 @@ impl<'a> Parser<'a, '_> {
         self.parse_path_alternative()
     }
 
+    // A path chain (`p1 / p2 / …`, `p1 | p2 | …`) is parsed by a loop into ONE n-ary
+    // node (`PropertyPathExpression::sequence`/`alternative`), so the node is one level
+    // above its tallest element however many operators the chain has: its height is
+    // charged once per element as `1 + max(element heights)`, never once per operator.
+    // Only what the grammar nests — a bracketed group, `^`, a postfix modifier — makes
+    // the tree taller.
+
     fn parse_path_alternative(&mut self) -> Result<PropertyPathExpression> {
-        let (mut left, mut height) = self.measured(Self::parse_path_sequence)?;
+        let (mut left, mut elements_height) = self.measured(Self::parse_path_sequence)?;
         while self.eat(&Token::Pipe) {
             let (right, right_height) = self.measured(Self::parse_path_sequence)?;
-            height = 1 + height.max(right_height);
-            self.charge_height("property path", height)?;
-            left = PropertyPathExpression::Alternative(Box::new(left), Box::new(right));
+            elements_height = elements_height.max(right_height);
+            self.charge_height("property path", 1 + elements_height)?;
+            left = PropertyPathExpression::alternative(left, right);
         }
         Ok(left)
     }
 
     fn parse_path_sequence(&mut self) -> Result<PropertyPathExpression> {
-        let (mut left, mut height) = self.measured(Self::parse_path_elt_or_inverse)?;
+        let (mut left, mut elements_height) = self.measured(Self::parse_path_elt_or_inverse)?;
         while self.eat(&Token::Slash) {
             let (right, right_height) = self.measured(Self::parse_path_elt_or_inverse)?;
-            height = 1 + height.max(right_height);
-            self.charge_height("property path", height)?;
-            left = PropertyPathExpression::Sequence(Box::new(left), Box::new(right));
+            elements_height = elements_height.max(right_height);
+            self.charge_height("property path", 1 + elements_height)?;
+            left = PropertyPathExpression::sequence(left, right);
         }
         Ok(left)
     }
@@ -6931,6 +6938,28 @@ mod tests {
                 marker: "OneOrMore(",
                 occurrences: |_| 1,
             },
+            // Each bracket holds a sequence inside an alternative, so the chains are
+            // real nesting here: the refusal is the bracket's, at the recursion budget.
+            NestingFamily {
+                name: "property-path group inside chains",
+                refused_as: "property path group",
+                enclosing: 1,
+                per_level: 1,
+                update: false,
+                text: |n| {
+                    format!(
+                        "SELECT * WHERE {{ ?s {} ?o }}",
+                        wrapped(
+                            "<http://example.org/p>/(",
+                            "<http://example.org/innermost>",
+                            ")|<http://example.org/q>",
+                            n
+                        )
+                    )
+                },
+                marker: "Alternative(",
+                occurrences: |n| n,
+            },
             NestingFamily {
                 name: "blank-node property list",
                 refused_as: "blank node property list",
@@ -7388,55 +7417,81 @@ mod tests {
         );
     }
 
-    /// A property-path operator chain (`p1 / p2 / …`, `p1 | p2 | …`) is still a binary
-    /// tree one level taller per operator: the tallest chain the height budget admits
-    /// parses with every operator present, and one operator more is the typed refusal,
-    /// as is a chain of a hundred thousand.
+    /// A property-path chain (`p1 / p2 / …`, `p1 | p2 | …`) is ONE n-ary node however
+    /// many operators it has: a hundred thousand `/` or `|` parse, with every element
+    /// present in source order. A chain is flat text, so charging a level per operator
+    /// refused a generated 512-step path although it nests nothing.
     #[test]
-    fn property_path_chains_are_bounded_by_the_height_budget() {
-        /// The request spelled `ops` operators long, and the `Debug` marker each
-        /// operator leaves in the algebra.
-        type Chain = (fn(usize) -> String, &'static str);
-        let chains: [Chain; 2] = [
-            (
-                |ops| {
-                    format!(
-                        "SELECT * WHERE {{ ?s {}{EX_P} ?o }}",
-                        format!("{EX_P}/").repeat(ops)
-                    )
-                },
-                "Sequence(",
-            ),
-            (
-                |ops| {
-                    format!(
-                        "SELECT * WHERE {{ ?s {}{EX_P} ?o }}",
-                        format!("{EX_P}|").repeat(ops)
-                    )
-                },
-                "Alternative(",
-            ),
-        ];
-        // The WHERE group is the first level; a chain of `ops` operators is `ops` tall.
-        let max = MAX_EXPRESSION_HEIGHT - 1;
-        for (text, marker) in chains {
-            let parsed = SparqlParser::new()
-                .parse_query(&text(max))
-                .unwrap_or_else(|error| panic!("{marker}: a {max}-operator chain parses: {error}"));
-            assert_eq!(format!("{parsed:?}").matches(marker).count(), max);
-            for ops in [max + 1, 100_000] {
-                let error = SparqlParser::new()
-                    .parse_query(&text(ops))
-                    .expect_err("a chain past the height budget is refused");
-                assert!(
-                    matches!(error, ParseError::Syntax { .. })
-                        && error.to_string().contains(&format!(
-                            "property path nesting exceeds the safety limit of {MAX_EXPRESSION_HEIGHT}"
-                        )),
-                    "{marker} x{ops}: {error}"
-                );
-            }
+    fn property_path_chains_of_any_length_are_one_node() {
+        const OPS: usize = 100_000;
+        let step = |i: usize| format!("<http://example.org/p{i}>");
+        let element = |i: usize| {
+            PropertyPathExpression::NamedNode(NamedNode::new_unchecked(format!(
+                "http://example.org/p{i}"
+            )))
+        };
+        for (op, is_sequence) in [('/', true), ('|', false)] {
+            let text = (0..=OPS)
+                .map(step)
+                .collect::<Vec<_>>()
+                .join(&op.to_string());
+            let path = path_of(&format!("SELECT * WHERE {{ ?s {text} ?o }}"));
+            let ((PropertyPathExpression::Sequence(elements), true)
+            | (PropertyPathExpression::Alternative(elements), false)) = (&path, is_sequence)
+            else {
+                panic!("expected one {op} chain");
+            };
+            assert_eq!(elements.len(), OPS + 1, "{op}");
+            assert!(
+                elements.iter().enumerate().all(|(i, e)| *e == element(i)),
+                "{op}: every element in source order"
+            );
         }
+    }
+
+    /// `/` binds tighter than `|`, so a mixed chain is an alternative of sequences; a
+    /// bracketed LEFT element of the same operator extends the chain (composition and
+    /// bag union are associative, so it is the same relation), and a bracketed later
+    /// one stays one element, as written.
+    #[test]
+    fn path_chains_keep_precedence_and_bracketing() {
+        use PropertyPathExpression::{Alternative as Alt, Sequence as Seq};
+        let p = |name: &str| {
+            PropertyPathExpression::NamedNode(NamedNode::new_unchecked(format!(
+                "http://example.org/{name}"
+            )))
+        };
+        let q = |path: &str| {
+            path_of(&format!(
+                "PREFIX ex: <http://example.org/> SELECT * WHERE {{ ?s {path} ?o }}"
+            ))
+        };
+        assert_eq!(
+            q("ex:a/ex:b|ex:c/ex:d|ex:e"),
+            Alt(vec![
+                Seq(vec![p("a"), p("b")]),
+                Seq(vec![p("c"), p("d")]),
+                p("e")
+            ])
+        );
+        assert_eq!(
+            q("(ex:a/ex:b)|ex:c/ex:d"),
+            Alt(vec![Seq(vec![p("a"), p("b")]), Seq(vec![p("c"), p("d")])])
+        );
+        assert_eq!(q("(ex:a/ex:b)/ex:c"), Seq(vec![p("a"), p("b"), p("c")]));
+        assert_eq!(
+            q("ex:a/(ex:b/ex:c)"),
+            Seq(vec![p("a"), Seq(vec![p("b"), p("c")])])
+        );
+        assert_eq!(q("(ex:a|ex:b)|ex:c"), Alt(vec![p("a"), p("b"), p("c")]));
+        assert_eq!(
+            q("ex:a|(ex:b|ex:c)"),
+            Alt(vec![p("a"), Alt(vec![p("b"), p("c")])])
+        );
+        assert_eq!(
+            q("(ex:a|ex:b)/ex:c"),
+            Seq(vec![Alt(vec![p("a"), p("b")]), p("c")])
+        );
     }
 
     /// What an expression really nests is still bounded by its total height. Each

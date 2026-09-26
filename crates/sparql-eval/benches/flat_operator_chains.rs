@@ -6,13 +6,16 @@
 #![allow(missing_docs)]
 
 //! Parsing and evaluating a flat operator chain: `?v = 0 || ?v = 1 || …`,
-//! `?v + 1 + 2.5 + …` and `{ … } UNION { … } UNION …`, each read into one n-ary
-//! algebra node, at 2, 100 and 10 000 terms.
+//! `?v + 1 + 2.5 + …`, `{ … } UNION { … } UNION …`, and the property paths
+//! `<next>/<next>/…` and `<q1>|<q2>|…|<next>`, each read into one n-ary algebra node,
+//! at 2, 100 and 10 000 terms.
 //!
 //! `parse/*` is the parser alone (`SparqlParser::parse_query`); `evaluate/*` is a
 //! whole cold request through [`NativeSparqlEngine::query`] with a fresh engine per
 //! sample, so the plan cache never answers it — parse, admission and evaluation over
-//! a 30-subject dataset. The 2-term cases are the common shape the change must not
+//! a 30-subject dataset — or, for the paths, a 10 000-hop `<next>` chain, which the
+//! sequence walks from its first node as far as it has steps and the alternative's
+//! last arm steps once. The 2-term cases are the common shape the change must not
 //! slow; the 100- and 10 000-term cases show how the cost grows with the chain.
 //! Report-only: no speedup is asserted, and none of these is a gate.
 
@@ -43,8 +46,21 @@ fn dataset() -> std::sync::Arc<RdfDataset> {
     builder.freeze().expect("the bench dataset")
 }
 
-/// The three chain shapes, `terms` long, as whole queries.
-fn queries(terms: usize) -> [(&'static str, String); 3] {
+/// `<c{i}> <next> <c{i+1}>` for `i` in `0..10 000`: the chain the path shapes walk.
+fn path_dataset() -> std::sync::Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let next = builder.intern_iri(&format!("{EX}next"));
+    let mut from = builder.intern_iri(&format!("{EX}c0"));
+    for i in 1..=10_000 {
+        let to = builder.intern_iri(&format!("{EX}c{i}"));
+        builder.push_quad(from, next, to, None);
+        from = to;
+    }
+    builder.freeze().expect("the path bench dataset")
+}
+
+/// The five chain shapes, `terms` long, as whole queries.
+fn queries(terms: usize) -> [(&'static str, String); 5] {
     let mut or = String::new();
     let mut sum = String::from("?v");
     for k in 0..terms {
@@ -60,6 +76,12 @@ fn queries(terms: usize) -> [(&'static str, String); 3] {
         .map(|k| format!("{{ ?s <{EX}p> ?v FILTER(?v = {}) }}", k % 30))
         .collect::<Vec<_>>()
         .join(" UNION ");
+    let sequence = vec![format!("<{EX}next>"); terms].join("/");
+    let alternative = (1..terms)
+        .map(|k| format!("<{EX}q{k}>"))
+        .chain([format!("<{EX}next>")])
+        .collect::<Vec<_>>()
+        .join("|");
     [
         (
             "or",
@@ -70,15 +92,29 @@ fn queries(terms: usize) -> [(&'static str, String); 3] {
             format!("SELECT ?s ?r WHERE {{ ?s <{EX}p> ?v BIND({sum} AS ?r) }}"),
         ),
         ("union", format!("SELECT ?s WHERE {{ {union} }}")),
+        (
+            "path_sequence",
+            format!("SELECT ?o WHERE {{ <{EX}c0> {sequence} ?o }}"),
+        ),
+        (
+            "path_alternative",
+            format!("SELECT ?o WHERE {{ <{EX}c0> {alternative} ?o }}"),
+        ),
     ]
 }
 
 fn bench_flat_chains(c: &mut Criterion) {
     let data = dataset();
+    let path_data = path_dataset();
     let mut group = c.benchmark_group("flat_operator_chains");
     group.sample_size(10);
     for terms in [2, 100, 10_000] {
         for (shape, query) in queries(terms) {
+            let data = if shape.starts_with("path_") {
+                &path_data
+            } else {
+                &data
+            };
             group.bench_function(format!("parse/{shape}/{terms}"), |b| {
                 b.iter(|| {
                     black_box(
@@ -93,7 +129,7 @@ fn bench_flat_chains(c: &mut Criterion) {
                     black_box(
                         NativeSparqlEngine::new()
                             .query(
-                                black_box(&data),
+                                black_box(data),
                                 SparqlRequest {
                                     query: &query,
                                     base_iri: None,

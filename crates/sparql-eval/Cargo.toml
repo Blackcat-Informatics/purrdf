@@ -158,9 +158,9 @@ name = "prepared_reuse"
 harness = false
 
 [[bench]]
-# Parse and cold evaluation of flat `||`, arithmetic and `UNION` chains of 2, 100
-# and 10 000 terms, each one n-ary algebra node. Report-only; `make bench` lane
-# only — excluded from `make check`.
+# Parse and cold evaluation of flat `||`, arithmetic, `UNION` and property-path
+# `/` and `|` chains of 2, 100 and 10 000 terms, each one n-ary algebra node.
+# Report-only; `make bench` lane only — excluded from `make check`.
 name = "flat_operator_chains"
 harness = false
 

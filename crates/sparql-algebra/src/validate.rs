@@ -39,7 +39,8 @@ impl Query {
     ///
     /// # Errors
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
-    /// collisions, malformed typed calls or ranges, and unsafe recursive nesting.
+    /// collisions, malformed typed calls or ranges, empty property-path chains, and
+    /// unsafe recursive nesting.
     pub fn validate(&self) -> Result<()> {
         let (pattern, dataset, base) = match self {
             Self::Select {
@@ -493,8 +494,15 @@ impl<'a> Node<'a> {
             P::Reverse(x) | P::ZeroOrMore(x) | P::OneOrMore(x) | P::ZeroOrOne(x) => {
                 stack.push((Self::Path(x), depth));
             }
-            P::Sequence(a, b) | P::Alternative(a, b) => {
-                stack.extend([(Self::Path(a), depth), (Self::Path(b), depth)]);
+            // The empty chain is the zero-length path or the empty relation, which no
+            // SPARQL text spells: it could be neither displayed nor forwarded.
+            P::Sequence(elements) | P::Alternative(elements) if elements.is_empty() => {
+                return Err(invalid(
+                    "an empty property-path sequence or alternative has no SPARQL form",
+                ));
+            }
+            P::Sequence(elements) | P::Alternative(elements) => {
+                stack.extend(elements.iter().map(|element| (Self::Path(element), depth)));
             }
             P::Range { inner, min, max } => {
                 if max.is_some_and(|max| *min > max) {

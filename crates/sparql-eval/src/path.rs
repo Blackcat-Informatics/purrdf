@@ -19,9 +19,11 @@
 //! Every operator is structural recursion over the path expression:
 //!
 //! - `^p` (`Reverse`) flips the direction flag.
-//! - `p/q` (`Sequence`) chains: `reach(q, ·)` over each `reach(p, node)` (and the
-//!   order swaps under backward evaluation so predecessors compose correctly).
-//! - `p|q` (`Alternative`) unions both sub-relations.
+//! - `p1/p2/…` (`Sequence`, one node however long the chain) steps a frontier through
+//!   each element in turn, `reach(p2, ·)` over each `reach(p1, node)` and so on (in
+//!   reverse element order under backward evaluation, so predecessors compose
+//!   correctly).
+//! - `p1|p2|…` (`Alternative`) unions every element's sub-relation, in source order.
 //! - `p?` (`ZeroOrOne`) adds the zero-length identity `{node}`.
 //! - `p*`/`p+` (`ZeroOrMore`/`OneOrMore`) take the transitive closure with a
 //!   **visited-set guard on the endpoint frontier**, so cyclic graphs terminate.
@@ -189,9 +191,10 @@ fn collect_negated<D: DatasetView + Sync>(
             collect_negated(i, dataset, cache);
         }
         P::Range { inner, .. } => collect_negated(inner, dataset, cache),
-        P::Sequence(a, b) | P::Alternative(a, b) => {
-            collect_negated(a, dataset, cache);
-            collect_negated(b, dataset, cache);
+        P::Sequence(elements) | P::Alternative(elements) => {
+            for element in elements {
+                collect_negated(element, dataset, cache);
+            }
         }
         P::NamedNode(_) | P::Wildcard { .. } => {}
     }
@@ -627,20 +630,12 @@ fn reach_uncached<D: DatasetView + Sync>(
         // Handled in `reach_cached` before the memo probe (shares `inner`'s `Rc`);
         // kept here only so the match stays exhaustive for a direct caller.
         P::Reverse(inner) => reach_cached(inner, node, !forward, ctx).as_ref().clone(),
-        P::Sequence(a, b) => {
-            // Forward: step `a` then `b`. Backward (predecessors): step `b` then `a`,
-            // each backward — so the composition order swaps with the direction.
-            let (first, second): (&P, &P) = if forward { (a, b) } else { (b, a) };
+        P::Sequence(elements) => sequence_reach(elements, node, forward, ctx),
+        P::Alternative(elements) => {
             let mut out = BTreeSet::new();
-            let first_reach = reach_cached(first, node, forward, ctx);
-            for mid in first_reach.iter().copied() {
-                out.extend(reach_cached(second, mid, forward, ctx).iter().copied());
+            for element in elements {
+                out.extend(reach_cached(element, node, forward, ctx).iter().copied());
             }
-            out
-        }
-        P::Alternative(a, b) => {
-            let mut out = reach_cached(a, node, forward, ctx).as_ref().clone();
-            out.extend(reach_cached(b, node, forward, ctx).iter().copied());
             out
         }
         P::ZeroOrOne(inner) => {
@@ -660,6 +655,43 @@ fn reach_uncached<D: DatasetView + Sync>(
     }
 }
 
+/// The set of nodes a [`PropertyPathExpression::Sequence`] reaches from `node`: the
+/// frontier `{node}` stepped through each element in turn, forward in source order and
+/// backward (predecessors) in reverse order.
+///
+/// This is the left-nested binary chain's reach exactly. `Sequence(Sequence(a, b), c)`
+/// reaches the union over `mid ∈ reach(Sequence(a, b), node)` of `reach(c, mid)`, and
+/// unfolding the inner node the same way leaves `a`, `b`, `c` applied in turn to the
+/// frontier each produced; backward, the binary arm stepped its right side first, which
+/// unfolds to the elements in reverse. The element reaches it asks for are the ones the
+/// binary tree asked for, through the same memo, so the graph is read and the budget
+/// charged exactly as before. What the chain no longer has is a memo entry per prefix
+/// node: a backward walk whose frontiers meet at the same node for two start nodes
+/// merges that node's memoized element sets again rather than reading one prefix set.
+/// That is set work over sets already in memory, never another graph read, and the
+/// whole chain's own entry still answers any start node it has seen.
+fn sequence_reach<D: DatasetView + Sync>(
+    elements: &[PropertyPathExpression],
+    node: D::Id,
+    forward: bool,
+    ctx: &PathCtx<'_, D>,
+) -> BTreeSet<D::Id> {
+    let mut frontier = BTreeSet::from([node]);
+    for k in 0..elements.len() {
+        // A frontier that died stays dead: no later element can reach anything from it.
+        if frontier.is_empty() {
+            break;
+        }
+        let element = &elements[if forward { k } else { elements.len() - 1 - k }];
+        let mut next = BTreeSet::new();
+        for mid in frontier {
+            next.extend(reach_cached(element, mid, forward, ctx).iter().copied());
+        }
+        frontier = next;
+    }
+    frontier
+}
+
 /// Whether `path` admits the zero-length identity, i.e. `reach(path, n, …)` always
 /// contains `n` itself regardless of the graph. Mirrors the identity-insertion in
 /// [`reach`] exactly:
@@ -668,9 +700,9 @@ fn reach_uncached<D: DatasetView + Sync>(
 /// - `Range { min, .. }` — `range_reach` starts `current = {node}` at k=0 and emits
 ///   `current` into `out` as soon as `k >= min`; so `node` enters `out` iff `min == 0`.
 /// - `Reverse(inner)` — only flips the direction flag; reflexivity is preserved.
-/// - `Sequence(a, b)` — the zero-length identity passes through both sides, so both
-///   must individually admit the identity.
-/// - `Alternative(a, b)` — either sub-path suffices.
+/// - `Sequence(elements)` — the zero-length identity passes through every element, so
+///   each must individually admit the identity.
+/// - `Alternative(elements)` — any one element suffices.
 /// - Everything else (`NamedNode`, `OneOrMore`, `NegatedPropertySet`, `Wildcard`) is
 ///   non-reflexive: `OneOrMore` returns `closure` only (node is included iff it cycles
 ///   back to itself, which is not a static guarantee).
@@ -683,8 +715,8 @@ fn path_is_reflexive(path: &PropertyPathExpression) -> bool {
         P::ZeroOrMore(_) | P::ZeroOrOne(_) => true,
         P::Range { min, .. } => *min == 0,
         P::Reverse(inner) => path_is_reflexive(inner),
-        P::Sequence(a, b) => path_is_reflexive(a) && path_is_reflexive(b),
-        P::Alternative(a, b) => path_is_reflexive(a) || path_is_reflexive(b),
+        P::Sequence(elements) => elements.iter().all(path_is_reflexive),
+        P::Alternative(elements) => elements.iter().any(path_is_reflexive),
         P::NamedNode(_) | P::OneOrMore(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => false,
     }
 }
@@ -727,8 +759,8 @@ fn path_has_repetition(path: &PropertyPathExpression) -> bool {
         P::ZeroOrMore(_) | P::OneOrMore(_) | P::ZeroOrOne(_) | P::Range { .. } => true,
         P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => false,
         P::Reverse(inner) => path_has_repetition(inner),
-        P::Sequence(a, b) | P::Alternative(a, b) => {
-            path_has_repetition(a) || path_has_repetition(b)
+        P::Sequence(elements) | P::Alternative(elements) => {
+            elements.iter().any(path_has_repetition)
         }
     }
 }
@@ -756,19 +788,35 @@ fn simple_reach_multiset<D: DatasetView + Sync>(
     match path {
         P::NamedNode(p) => step_predicate(p, node, forward, ctx).into_iter().collect(),
         P::Reverse(inner) => simple_reach_multiset(inner, node, !forward, ctx),
-        P::Sequence(a, b) => {
-            // Forward: step `a` then `b`. Backward: step `b` then `a`, each backward
-            // — same direction-swap `reach_uncached`'s `Sequence` arm applies.
-            let (first, second): (&P, &P) = if forward { (a, b) } else { (b, a) };
-            let mut out = Vec::new();
-            for mid in simple_reach_multiset(first, node, forward, ctx) {
-                out.extend(simple_reach_multiset(second, mid, forward, ctx));
+        P::Sequence(elements) => {
+            // The frontier `[node]` stepped through each element in turn — forward in
+            // source order, backward in reverse, the direction swap `sequence_reach`
+            // applies — keeping one entry per derivation. Stepping every entry of a
+            // frontier in order and concatenating what each reaches is the left-nested
+            // binary chain's nested loops unfolded: the same entries, with the same
+            // multiplicities, in the same order (each derivation ordered by its
+            // intermediate nodes, first hop first).
+            let mut frontier = vec![node];
+            for k in 0..elements.len() {
+                if frontier.is_empty() {
+                    break;
+                }
+                let element = &elements[if forward { k } else { elements.len() - 1 - k }];
+                let mut next = Vec::new();
+                for mid in frontier {
+                    next.extend(simple_reach_multiset(element, mid, forward, ctx));
+                }
+                frontier = next;
             }
-            out
+            frontier
         }
-        P::Alternative(a, b) => {
-            let mut out = simple_reach_multiset(a, node, forward, ctx);
-            out.extend(simple_reach_multiset(b, node, forward, ctx));
+        // Each element's derivations in turn, in source order: the left-nested chain's
+        // bag union, `(a ⊎ b) ⊎ c`, concatenated the same way.
+        P::Alternative(elements) => {
+            let mut out = Vec::new();
+            for element in elements {
+                out.extend(simple_reach_multiset(element, node, forward, ctx));
+            }
             out
         }
         P::NegatedPropertySet(elems) => step_negated(elems, node, forward, ctx)
@@ -1481,7 +1529,7 @@ mod tests {
     fn sequence_chains_two_predicates() {
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "b"), ("x", "q", "c")]);
         // :a :p/:q ?o → b, c
-        let seq = PropertyPathExpression::Sequence(Box::new(named("p")), Box::new(named("q")));
+        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
         let rows = run(&ds, &ground("a"), &seq, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
     }
@@ -1490,7 +1538,7 @@ mod tests {
     fn sequence_backward_from_object() {
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "b")]);
         // ?s :p/:q :b  → a
-        let seq = PropertyPathExpression::Sequence(Box::new(named("p")), Box::new(named("q")));
+        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
         let rows = run(&ds, &var("s"), &seq, &ground("b"), &["s"]);
         assert_eq!(rows, col1(&["a"]));
     }
@@ -1498,7 +1546,7 @@ mod tests {
     #[test]
     fn alternative_unions_both() {
         let ds = graph_of(&[("a", "p", "b"), ("a", "q", "c")]);
-        let alt = PropertyPathExpression::Alternative(Box::new(named("p")), Box::new(named("q")));
+        let alt = PropertyPathExpression::Alternative(vec![named("p"), named("q")]);
         let rows = run(&ds, &ground("a"), &alt, &var("o"), &["o"]);
         assert_eq!(rows, col1(&["b", "c"]));
     }
@@ -1551,7 +1599,7 @@ mod tests {
         // Cycle closed by a composite step: a -p-> x -q-> a. (p/q)+ from a must
         // terminate and report a (a reaches itself in one (p/q) application).
         let ds = graph_of(&[("a", "p", "x"), ("x", "q", "a")]);
-        let seq = PropertyPathExpression::Sequence(Box::new(named("p")), Box::new(named("q")));
+        let seq = PropertyPathExpression::Sequence(vec![named("p"), named("q")]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(seq.clone()));
         assert_eq!(reach_locals(&ds, &plus, "a", true), vec!["a"]);
         let star = PropertyPathExpression::ZeroOrMore(Box::new(seq));
@@ -2173,10 +2221,10 @@ mod tests {
         // Temporal-shaped: (:before | ^:after)+ — before-edges and reversed
         // after-edges, transitively. e1 before e2; e3 after e2 (so e2 ^after e3).
         let ds = graph_of(&[("e1", "before", "e2"), ("e3", "after", "e2")]);
-        let alt = PropertyPathExpression::Alternative(
-            Box::new(named("before")),
-            Box::new(PropertyPathExpression::Reverse(Box::new(named("after")))),
-        );
+        let alt = PropertyPathExpression::Alternative(vec![
+            named("before"),
+            PropertyPathExpression::Reverse(Box::new(named("after"))),
+        ]);
         let plus = PropertyPathExpression::OneOrMore(Box::new(alt));
         // From e1: e1 -before-> e2 -^after-> e3.
         assert_eq!(reach_locals(&ds, &plus, "e1", true), vec!["e2", "e3"]);
@@ -2196,13 +2244,10 @@ mod tests {
         ]);
         // :axiom :members/:rest*/:first ?x → A, B, C
         let rest_star = PropertyPathExpression::ZeroOrMore(Box::new(named("rest")));
-        let path = PropertyPathExpression::Sequence(
-            Box::new(named("members")),
-            Box::new(PropertyPathExpression::Sequence(
-                Box::new(rest_star),
-                Box::new(named("first")),
-            )),
-        );
+        let path = PropertyPathExpression::Sequence(vec![
+            named("members"),
+            PropertyPathExpression::Sequence(vec![rest_star, named("first")]),
+        ]);
         let rows = run(&ds, &ground("axiom"), &path, &var("x"), &["x"]);
         assert_eq!(rows, col1(&["A", "B", "C"]));
     }
@@ -2336,12 +2381,10 @@ mod tests {
         // compute) and a genuinely repeating one: both must answer `true` once the stack
         // is low, so the low-stack answer is not merely "whatever the real answer would
         // have been happens to already be `true`".
-        let repetition_free = PropertyPathExpression::Sequence(
-            Box::new(named("p")),
-            Box::new(PropertyPathExpression::NegatedPropertySet(vec![npe(
-                "q", false,
-            )])),
-        );
+        let repetition_free = PropertyPathExpression::Sequence(vec![
+            named("p"),
+            PropertyPathExpression::NegatedPropertySet(vec![npe("q", false)]),
+        ]);
         assert!(
             !path_has_repetition(&repetition_free),
             "sanity: with room to compute, this path truly has no repetition"

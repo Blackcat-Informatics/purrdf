@@ -124,10 +124,10 @@ mod platform;
 /// **The parser** checks at its one recursion guard, which every production that can
 /// reach itself again enters through, so what is left between two checks is one written
 /// level of one construct (at most a sub-`SELECT`'s 8.5 KiB), its leaves, and the walks
-/// over a finished property-path chain — which a loop builds at no stack cost, but whose
-/// validation and drop recurse once per operator (an expression operator chain is one
-/// n-ary node, so its walks recurse once whatever its length; the sweep below predates
-/// that and measured it as binary, the taller case). Swept the same way — the margin
+/// over a finished operator or property-path chain — which a loop builds at no stack
+/// cost, and which is one n-ary node, so its validation and drop recurse once whatever
+/// its length (the sweep below predates that and measured chains as binary trees that
+/// recursed once per operator, the taller case). Swept the same way — the margin
 /// lowered, the stack left for a parse stepped by 2 KiB from 20 KiB, over the deepest
 /// form of every recursive production and 380- to 511-operator expression and path
 /// chains at the top and 120 levels down — a 48 KiB margin aborted on a 510-step
@@ -160,8 +160,8 @@ pub const MARGIN_BYTES: usize = 128 * 1024;
 /// runs on the engine's own stack, not on this one. **The parser's** frames cost 0.37 to
 /// 0.45 of their native size on the shadow stack — at most 3.2 KiB for a written
 /// sub-`SELECT` level, 1.8 KiB for a built-in call — so its widest native interval, the
-/// walks over a 510-step path chain (between 48 and 64 KiB), comes to under 29 KiB at
-/// those ratios.
+/// walks over a 510-step path chain when chains were binary (between 48 and 64 KiB),
+/// comes to under 29 KiB at those ratios.
 ///
 /// 64 KiB is twelve times the measured interval. It leaves the synchronous lane 960 KiB
 /// of its 1 MiB — 63 nested `FILTER EXISTS`, which reached 96% of the stack before the

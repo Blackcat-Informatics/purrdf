@@ -45,6 +45,18 @@ fn query(shape: &str, terms: usize) -> String {
                 .collect::<Vec<_>>()
                 .join(" || ")
         ),
+        "sequence" | "alternative" => format!(
+            "SELECT ?s WHERE {{ ?s {} ?v }}",
+            (0..terms)
+                .map(|k| match k % 4 {
+                    0 => format!("<{EX}p{}>", k % 30),
+                    1 => format!("^<{EX}p{}>", k % 30),
+                    2 => format!("<{EX}p{}>*", k % 30),
+                    _ => format!("!(<{EX}p{}>|^<{EX}q>)", k % 30),
+                })
+                .collect::<Vec<_>>()
+                .join(if shape == "sequence" { "/" } else { "|" })
+        ),
         _ => format!(
             "SELECT ?s WHERE {{ ?s <{EX}p> ?v BIND(?v{} AS ?r) }}",
             [" + 1", " - 2.5", " * 3", " / 4.0E0"]
@@ -57,23 +69,25 @@ fn query(shape: &str, terms: usize) -> String {
     }
 }
 
-/// For a `UNION` chain (each arm a group with a triple and a `FILTER`), a `||` chain
-/// and an arithmetic chain mixing all four operators, the allocations and the bytes
+/// For a `UNION` chain (each arm a group with a triple and a `FILTER`), a `||` chain,
+/// an arithmetic chain mixing all four operators, and property-path `/` and `|`
+/// chains mixing plain, inverse, modified and negated steps, the allocations and the bytes
 /// requested for terms 4 000 to 8 000 are twice those for terms 2 000 to 4 000, to
 /// within the handful of reallocations a doubling vector makes — so no term costs
 /// more because terms came before it. Measured: 21 allocations an arm, 8 an `||`
-/// operand, under 5 an arithmetic step, each exactly constant across the three
-/// lengths. A second difference four times the first would be quadratic work.
+/// operand, under 5 an arithmetic step, 6.5 a path step of the mix, each exactly
+/// constant across the three lengths. A second difference four times the first would be quadratic work.
 ///
 /// What the allocator cannot see is work that re-reads the chain without
 /// allocating; the parser has none. Every per-term step of the three loops is
-/// constant time: `GraphPattern::union`, `Expression::or` and
-/// `Expression::arithmetic` push onto the chain's vector, the height and node
+/// constant time: `GraphPattern::union`, `Expression::or`,
+/// `Expression::arithmetic`, `PropertyPathExpression::sequence` and
+/// `PropertyPathExpression::alternative` push onto the chain's vector, the height and node
 /// budgets compare and assign one integer each, and the variables of a `UNION`
 /// chain are collected once, after its last arm.
 #[test]
 fn a_chain_s_parse_costs_the_same_per_term_at_every_length() {
-    for shape in ["union", "or", "sum"] {
+    for shape in ["union", "or", "sum", "sequence", "alternative"] {
         let [small, middle, large] =
             [2_000, 4_000, 8_000].map(|terms| parse_cost(&query(shape, terms)));
         let first = middle.allocations - small.allocations;

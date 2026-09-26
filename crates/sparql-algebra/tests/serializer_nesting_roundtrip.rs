@@ -19,8 +19,8 @@
 use proptest::prelude::*;
 use purrdf_sparql_algebra::{
     ArithmeticOperator, Expression, Function, GraphPattern, Literal, NamedNode, NamedNodePattern,
-    NegatedPathElement, PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern,
-    Variable, pattern_to_select_query,
+    NegatedPathElement, PropertyPathExpression, Query, QueryDataset, SparqlParser, TermPattern,
+    TriplePattern, Variable, pattern_to_select_query,
 };
 
 const EX: &str = "http://example.org/";
@@ -248,6 +248,113 @@ fn a_ten_thousand_arm_union_round_trips_flat() {
     assert_eq!(parsed.len(), 10_000);
     let text = assert_forwarded_roundtrip(&body);
     assert_eq!(text.matches(" UNION ").count(), 9_999);
+}
+
+/// A property-path chain is one node with one element per step, and forwards as the
+/// flat chain it was written as: 10 000-step sequences and alternatives, and a mixed
+/// chain of both with inverse, modified and negated steps, re-parse to the same node.
+#[test]
+fn a_ten_thousand_step_path_round_trips_flat() {
+    for op in ["/", "|"] {
+        let steps = (0..10_000)
+            .map(|i| format!("<{EX}p{i}>"))
+            .collect::<Vec<_>>()
+            .join(op);
+        let text = assert_query_roundtrip(&format!("SELECT * WHERE {{ ?s {steps} ?o }}"));
+        assert_eq!(
+            text.matches('(').count(),
+            0,
+            "a flat {op} chain needs no bracket"
+        );
+        assert_eq!(text.matches(&format!(">{op}<")).count(), 9_999);
+    }
+    let mixed = (0..2_000)
+        .map(|i| match i % 5 {
+            0 => format!("^<{EX}p{i}>"),
+            1 => format!("<{EX}p{i}>*"),
+            2 => format!("<{EX}p{i}>+|<{EX}q{i}>?"),
+            3 => format!("!(<{EX}p{i}>|^<{EX}q{i}>)"),
+            _ => format!("(<{EX}p{i}>|<{EX}q{i}>)"),
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_query_roundtrip(&format!("SELECT * WHERE {{ ?s {mixed} ?o }}"));
+}
+
+/// Mixed precedence forwards with only the brackets the grammar needs, and re-parses
+/// to the same algebra: `(a/b)|c/d` is an alternative of two sequences.
+#[test]
+fn a_mixed_precedence_path_round_trips() {
+    let (a, b, c, d) = (
+        format!("<{EX}a>"),
+        format!("<{EX}b>"),
+        format!("<{EX}c>"),
+        format!("<{EX}d>"),
+    );
+    assert_eq!(
+        rendered_path(&format!("({a}/{b})|{c}/{d}")),
+        format!("{a}/{b}|{c}/{d}")
+    );
+    assert_eq!(
+        rendered_path(&format!("({a}|{b})/({c}|{d})")),
+        format!("({a}|{b})/({c}|{d})")
+    );
+    assert_eq!(
+        rendered_path(&format!("{a}|({b}|{c})|{d}")),
+        format!("{a}|({b}|{c})|{d}")
+    );
+    assert_eq!(
+        rendered_path(&format!("(({a}/{b})/{c})/{d}")),
+        format!("{a}/{b}/{c}/{d}")
+    );
+}
+
+/// A path chain with fewer than two elements is a shape the parser never builds. One
+/// element forwards as that element, which is what it denotes. No element has no SPARQL
+/// spelling, and the validator refuses it — while the one-element neighbour, which
+/// denotes its element, is admitted.
+#[test]
+fn degenerate_constructed_path_chains() {
+    let p =
+        PropertyPathExpression::OneOrMore(Box::new(PropertyPathExpression::NamedNode(iri("a"))));
+    let body = |path: PropertyPathExpression| GraphPattern::Path {
+        subject: TermPattern::Variable(var("s")),
+        path,
+        object: TermPattern::Variable(var("o")),
+    };
+    let query = |path: PropertyPathExpression| Query::Select {
+        dataset: QueryDataset::default(),
+        pattern: body(path),
+        base_iri: None,
+        version: None,
+    };
+    for lone in [
+        PropertyPathExpression::Sequence(vec![p.clone()]),
+        PropertyPathExpression::Alternative(vec![p.clone()]),
+    ] {
+        let text = pattern_to_select_query(&body(lone.clone()));
+        assert_eq!(
+            unproject(try_select(&text).unwrap_or_else(|e| panic!("{e}: {text}"))),
+            body(p.clone())
+        );
+        query(lone)
+            .validate()
+            .expect("a one-element chain is admitted");
+    }
+    for empty in [
+        PropertyPathExpression::Sequence(vec![]),
+        PropertyPathExpression::Alternative(vec![]),
+    ] {
+        let error = query(empty.clone())
+            .validate()
+            .expect_err("an empty chain is refused");
+        assert!(error.to_string().contains("empty property-path"), "{error}");
+        let text = pattern_to_select_query(&body(empty));
+        assert!(
+            try_select(&text).is_err(),
+            "`()` is never read as a path: {text}"
+        );
+    }
 }
 
 /// The shapes the parser never builds — a chain or union with fewer than two
@@ -550,14 +657,9 @@ fn property_path_families_forward_at_their_deepest_admitted_body() {
         600,
     );
     assert_family_forwards(
-        "left-deep alternative chain",
-        &|n| {
-            format!(
-                "?s {a}{} ?o",
-                chain(n, |_| format!("|{a}")).replace(' ', "")
-            )
-        },
-        4096,
+        "right-nested alternative",
+        &|n| format!("?s {} ?o", nest(n, &a, |p| format!("{a}|({p})"))),
+        600,
     );
     assert_family_forwards(
         "nested inverse",
@@ -673,10 +775,14 @@ fn leaf_path() -> impl Strategy<Value = PropertyPathExpression> {
 fn path_tree() -> impl Strategy<Value = PropertyPathExpression> {
     leaf_path().prop_recursive(6, 48, 2, |inner| {
         prop_oneof![
-            (inner.clone(), inner.clone())
-                .prop_map(|(a, b)| { PropertyPathExpression::Sequence(Box::new(a), Box::new(b)) }),
-            (inner.clone(), inner.clone()).prop_map(|(a, b)| {
-                PropertyPathExpression::Alternative(Box::new(a), Box::new(b))
+            // Chains are built the way the parser builds them: a left element of the
+            // same operator extends the chain, a later one stays one element.
+            (inner.clone(), prop::collection::vec(inner.clone(), 1..4)).prop_map(|(a, rest)| {
+                rest.into_iter().fold(a, PropertyPathExpression::sequence)
+            }),
+            (inner.clone(), prop::collection::vec(inner.clone(), 1..4)).prop_map(|(a, rest)| {
+                rest.into_iter()
+                    .fold(a, PropertyPathExpression::alternative)
             }),
             inner
                 .clone()

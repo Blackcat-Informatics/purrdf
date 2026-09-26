@@ -895,9 +895,10 @@ fn walk_path(p: &purrdf_sparql_algebra::PropertyPathExpression, out: &mut BTreeS
         P::NamedNode(n) => insert_oxiri(n, out),
         P::Reverse(a) | P::ZeroOrMore(a) | P::OneOrMore(a) | P::ZeroOrOne(a) => walk_path(a, out),
         P::Range { inner, .. } => walk_path(inner, out),
-        P::Sequence(a, b) | P::Alternative(a, b) => {
-            walk_path(a, out);
-            walk_path(b, out);
+        P::Sequence(elements) | P::Alternative(elements) => {
+            for element in elements {
+                walk_path(element, out);
+            }
         }
         P::NegatedPropertySet(elems) => {
             for e in elems {

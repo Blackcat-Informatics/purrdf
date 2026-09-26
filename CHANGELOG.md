@@ -569,11 +569,11 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   typed parse error groups already produced. The guarded productions are groups,
   `EXISTS` bodies, bracketed expressions, unary operators, function, built-in and
   aggregate calls, `IN` lists, triple terms, reifiers, annotations, path groups,
-  blank-node property lists and collections. Property-path sequences and
-  alternatives are parsed by loops, so no recursion guard saw them, yet a
-  100 000-operator path exhausted the stack walking its tree. A path node's height
-  is now charged against a bound of 512, the height validation already admitted.
-  Expression operator chains and `UNION` chains are one node however long (see
+  blank-node property lists and collections. What loops build without recursion —
+  relational operators, `^`, path modifiers, `NOT EXISTS` — adds levels no recursion
+  guard saw, so every node's height is now charged against a bound of 512, the
+  height validation already admitted. Expression operator chains, `UNION` chains
+  and property-path sequences and alternatives are one node however long (see
   Changed), so their length costs no height. The parser also checks the stack it
   has left and refuses with `ParseError::StackExhausted` rather than overflowing.
 
@@ -2245,6 +2245,18 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   one is forwarded as text that re-parses. A left operand in brackets extends the
   chain: `(a + b) * c` is one node. A `UNION` of three or more arms is one plan
   node, so the `EXPLAIN` ledger lists fewer nodes for it.
+  `PropertyPathExpression::Sequence` and `PropertyPathExpression::Alternative`
+  hold their elements as a `Vec` in place of two boxed operands, and
+  `PropertyPathExpression::sequence` and `PropertyPathExpression::alternative`
+  extend a path chain the way the parser does. A sequence is the left-nested chain
+  of `/` it replaces: the same pairs, and on a path with no repetition operator the
+  same multiplicity for each, one per chain of matching triples. An alternative is
+  the bag union of its elements in order. Charged one level per operator, a
+  generated 512-step `p1/p2/…` path or a 512-way `p1|p2|…` alternative was refused
+  as nesting; a path chain of any length now parses and answers, and a `SERVICE`
+  body holding one is forwarded flat. A bracketed left element of the same operator
+  extends the chain: `(a/b)/c` is one node. A chain with no element has no SPARQL
+  spelling, and `Query::validate` refuses one built through the API.
 
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as
