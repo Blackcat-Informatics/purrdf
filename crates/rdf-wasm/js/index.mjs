@@ -36,13 +36,13 @@
 //     below drain them into ordinary JS objects and free the handles, exactly as
 //     `queryResultToObject` already does for an ungoverned result.
 //   * the asynchronous twins (`queryAsync`, `selectAsync`, …, `updateGovernedAsync`,
-//     `queryGovernedNegotiatedAsync`, `Dataset#queryAsync`) — each begins a job in Rust
-//     (`QueryEngine.beginAsync`), hands it to the scheduler in `./pkg/purrdf_jspi.mjs`
-//     with the host's `SERVICE` and `LOAD` handlers and its `AbortSignal`, and drains the
-//     finished job into the very shape its synchronous twin returns (the negotiated twin,
-//     which has no synchronous twin, into a governed outcome carrying a document). The
-//     scheduler is the same module instance the wasm glue imports its suspending
-//     function from.
+//     `explainQueryAsync`, `queryGovernedNegotiatedAsync`, `Dataset#queryAsync`) — each
+//     begins a job in Rust (`QueryEngine.beginAsync`), hands it to the scheduler in
+//     `./pkg/purrdf_jspi.mjs` with the host's `SERVICE` and `LOAD` handlers and its
+//     `AbortSignal`, and drains the finished job into the very shape its synchronous
+//     twin returns (the negotiated twin, which has no synchronous twin, into a governed
+//     outcome carrying a document). The scheduler is the same module instance the wasm
+//     glue imports its suspending function from.
 //
 // What this module deliberately does NOT do is decide anything about governors. It sets
 // no default ceiling, applies no fallback, and never converts a trip into a throw: the
@@ -672,6 +672,9 @@ const ASYNC_OPERATION_KEYS = {
   update: { keys: ["base"], governed: false },
   updateGoverned: { keys: GOVERNED_ASYNC_KEYS, governed: true },
   negotiated: { keys: [...GOVERNED_ASYNC_KEYS, "accept"], governed: true },
+  // EXPLAIN measures a run that is metered and never bounded, so it takes no ceiling:
+  // exactly `explainQuery`'s options.
+  explain: { keys: ["base"], governed: false },
 };
 
 function isPresent(value) {
@@ -1417,6 +1420,15 @@ export async function ready(wasmBytesOrUrl) {
           if (outcome.outcome !== undefined) outcome.outcome.evidence.async = evidence;
           return outcome;
         },
+      );
+    };
+    QueryEngine.prototype.explainQueryAsync = async function (dataset, sparql, options) {
+      assertAsyncQueries();
+      const o = normalizeAsyncOptions(options, "explain");
+      return driveAsyncJob(
+        o,
+        beginWith(this, dataset, AsyncOperationKind.Explain, sparql),
+        (job) => utf8.decode(job.takeRawBytes()),
       );
     };
     QueryEngine.prototype.updateAsync = async function (dataset, sparql, options) {

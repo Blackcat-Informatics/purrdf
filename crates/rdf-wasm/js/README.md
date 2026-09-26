@@ -232,6 +232,9 @@ ownership, and all limits. Complete examples are in
 - `QueryEngine.explainQuery(dataset, sparql, options?)` / `governorDimensions()` — the
   metered charge ledger a budget is sized from (join orders, plan estimates, per-node
   cost) and the engine's dimension vocabulary, which keys every `evidence` map.
+  EXPLAIN evaluates the query to measure it, so `explainQueryAsync` is its
+  Promise-returning twin: it explains a `SERVICE` query over the host's answer, yields
+  while it measures, and stops on its `signal`.
 - `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)` /
   `shaclEntail(shapesTtl, dataNt, shapesBase?)` — SHACL validation to a SARIF
   2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples. `shapesBase` is
@@ -296,10 +299,10 @@ clauses:
 
 - on `QueryEngine`: `queryAsync`, `selectAsync`, `askAsync`, `constructAsync`,
   `describeAsync`, `queryRawAsync`, `queryRawBytesAsync`, `queryRawWithContextAsync`,
-  `queryGovernedAsync`, `queryEntailmentGovernedAsync`, `updateAsync` and
-  `updateGovernedAsync`, plus `queryGovernedNegotiatedAsync` (a governed query answered
-  as a document in the format negotiated from an HTTP `Accept` header, which has no
-  synchronous twin);
+  `queryGovernedAsync`, `queryEntailmentGovernedAsync`, `updateAsync`,
+  `updateGovernedAsync` and `explainQueryAsync`, plus `queryGovernedNegotiatedAsync` (a
+  governed query answered as a document in the format negotiated from an HTTP `Accept`
+  header, which has no synchronous twin);
 - on `Dataset`: `queryAsync`.
 
 Each twin runs the same evaluator as its synchronous twin, over a snapshot of the

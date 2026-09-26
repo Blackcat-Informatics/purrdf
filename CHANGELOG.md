@@ -413,8 +413,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `QueryEngine` method has a Promise-returning twin: `queryAsync`, `selectAsync`,
   `askAsync`, `constructAsync`, `describeAsync`, `queryRawAsync`,
   `queryRawBytesAsync`, `queryRawWithContextAsync`, `queryGovernedAsync`,
-  `queryEntailmentGovernedAsync`, `updateAsync` and `updateGovernedAsync`, with
-  `Dataset.queryAsync` beside them. `queryGovernedNegotiatedAsync` answers a governed
+  `queryEntailmentGovernedAsync`, `updateAsync`, `updateGovernedAsync` and
+  `explainQueryAsync`, with `Dataset.queryAsync` beside them. EXPLAIN evaluates the
+  query it measures, so `explainQueryAsync` explains a `SERVICE` query over the host's
+  answer where `explainQuery` refuses it for want of a source, and it yields and stops
+  on its signal while it measures. `queryGovernedNegotiatedAsync` answers a governed
   query as a document in the format an HTTP `Accept` header negotiates. Each twin
   runs the same evaluator over a snapshot of the dataset, as a job on its own stack
   region that suspends through WebAssembly JavaScript Promise Integration (JSPI)
@@ -484,7 +487,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   offers an `ASK` result only JSON and XML, since CSV and TSV exist only for
   `SELECT`. `EvalError::StackExhausted` (`native-sparql-evaluation-stack-exhausted`)
   and `RemoteError::StackExhausted` report a request too deep for the stack that
-  evaluates it; see Fixed.
+  evaluates it; see Fixed. `NativeSparqlEngine::explain_query_with_stop_signal`
+  explains a query with a host stop signal polled by the measuring run, which is
+  still metered and never bounded; a signal that fires is reported on the
+  explanation's evidence as the stop it was.
 
 - **sparql-algebra:** `SparqlParser::parse_query_dataset_slot` returns a
   `QueryDatasetSlot`: where a query's dataset clause is, or where one would go.

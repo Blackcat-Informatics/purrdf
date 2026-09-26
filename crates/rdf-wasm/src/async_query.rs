@@ -20,9 +20,10 @@
 //! | `StopSignal::poll` (every governor charge point) | `Yield` = 3 | turns the event loop once, then resumes |
 //!
 //! Kind 4 is reserved for page faults of a paged dataset. The runner itself knows nothing
-//! about SPARQL: an [`Operation`] is a closure over a [`JobRun`], and the SPARQL query and
-//! update kinds are simply its first operations. SHACL validation, entailment closure and
-//! large parses can ride the same runner, the same effects and the same import.
+//! about SPARQL: an [`Operation`] is a closure over a [`JobRun`], and the SPARQL query,
+//! update and EXPLAIN kinds are simply its first operations. SHACL validation,
+//! entailment closure and large parses can ride the same runner, the same effects and the
+//! same import.
 //!
 //! Each effect call writes a *ticket* (a sequence number and a payload) into the job's
 //! slots and calls the one suspending import, `purrdf_jspi_suspend(job, ticket, out)`,
@@ -1475,6 +1476,10 @@ pub enum AsyncOperationKind {
     /// serialized in the format negotiated from an `Accept` header, once the result's
     /// shape is known. The asynchronous lane's own: a SPARQL Protocol endpoint's query.
     Negotiated = 7,
+    /// `explainQuery`: the rendered charge ledger, taken through
+    /// [`AsyncJob::take_raw_bytes`]. EXPLAIN evaluates the query to measure it, so its
+    /// measuring run suspends on `SERVICE`, yields and stops exactly as a query does.
+    Explain = 8,
 }
 
 impl AsyncOperationKind {
@@ -1488,6 +1493,7 @@ impl AsyncOperationKind {
             Self::Update => "update",
             Self::UpdateGoverned => "updateGoverned",
             Self::Negotiated => "negotiated",
+            Self::Explain => "explain",
         }
     }
 
@@ -1805,6 +1811,31 @@ impl OperationInput {
                     })
                     .map_err(|error| JobError::error(error.to_string()))?;
                 Ok(JobOutcome::Entailment(Box::new(outcome)))
+            }
+            AsyncOperationKind::Explain => {
+                // The synchronous twin's measuring run — metered, never bounded — with
+                // the job's sources installed and its signal polled at every charge point.
+                let explanation = run
+                    .evaluate(|| {
+                        engine.explain_query_with_stop_signal(
+                            &frozen,
+                            &sparql,
+                            base.as_deref(),
+                            run.options(QueryOptions::EMPTY.env),
+                            Arc::clone(&run.stop),
+                        )
+                    })
+                    .map_err(|diagnostic| JobError::error(diagnostic.to_string()))?;
+                // A stop cut the measuring run short, so its ledger describes a truncated
+                // run rather than the query: the stop is the job's error, as it is for
+                // every ungoverned operation. Any other trip is part of the explanation,
+                // exactly as the synchronous twin renders it.
+                if let Some(tripped @ TrippedGovernor::Stopped { .. }) =
+                    explanation.evidence().tripped
+                {
+                    return Err(JobError::stopped(tripped));
+                }
+                Ok(JobOutcome::Raw(explanation.render().into_bytes()))
             }
             AsyncOperationKind::Update => {
                 let governors = run.governors(QueryGovernors::METERED);
@@ -2471,14 +2502,18 @@ impl AsyncJob {
         query_result_from_sparql(result)
     }
 
-    /// A raw job's serialized bytes (UTF-8 text).
+    /// A raw job's serialized bytes, or an explain job's rendered ledger (UTF-8 text).
     #[wasm_bindgen(js_name = takeRawBytes)]
     pub fn take_raw_bytes(&self) -> Result<Vec<u8>, JsError> {
         match self
             .inner
             .take_outcome(
                 "takeRawBytes",
-                &[AsyncOperationKind::Raw, AsyncOperationKind::RawWithContext],
+                &[
+                    AsyncOperationKind::Raw,
+                    AsyncOperationKind::RawWithContext,
+                    AsyncOperationKind::Explain,
+                ],
             )
             .map_err(|message| js_error(&message))?
         {
@@ -4564,6 +4599,111 @@ mod tests {
         assert_eq!(job.error_kind().as_deref(), Some("cancelled"));
         assert_eq!(job.cancel(), DELIVERY_FINISHED);
         job.finish();
+    }
+
+    #[test]
+    fn an_explain_job_answers_what_the_synchronous_twin_answers() {
+        let engine = QueryEngine::new();
+        let dataset = seed();
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Explain,
+            SELECT,
+            &options(),
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let expected = engine
+            .explain_query(&dataset, SELECT, None)
+            .expect("sync twin");
+        assert_eq!(raw_text(&job), expected);
+        assert!(
+            job.take_evidence().polls() > 0.0,
+            "the measuring run polled the job's watch"
+        );
+        assert_eq!(
+            job.inner
+                .take_outcome("takeQueryResult", &[AsyncOperationKind::Query])
+                .expect_err("a take of the wrong kind is refused"),
+            "takeQueryResult is not available on a explain job"
+        );
+        job.finish();
+    }
+
+    #[test]
+    fn an_explain_job_measures_a_service_join_the_offline_lane_cannot() {
+        let engine = QueryEngine::new();
+        let dataset = seed();
+        let remote = Dataset::parse(REMOTE_NT, "ntriples", None).expect("remote parses");
+        let mut local = options();
+        local
+            .add_local_frozen(ENDPOINT.to_owned(), remote.view().freeze().expect("freeze"))
+            .expect("declared");
+        let query = format!(
+            "SELECT ?s ?x WHERE {{ ?s <http://example.org/p> ?o \
+             SERVICE <{ENDPOINT}> {{ ?o <http://example.org/q> ?x }} }}"
+        );
+        // The offline lane refuses it by name.
+        let frozen = dataset.view().freeze().expect("freeze");
+        let refused = NativeSparqlEngine::new()
+            .explain_query(&frozen, &query, None)
+            .expect_err("no SERVICE source offline")
+            .to_string();
+        assert!(
+            refused.contains("no remote query source configured"),
+            "{refused}"
+        );
+        // The job explains it, with the endpoint's row joined into the measured run.
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Explain,
+            &query,
+            &local,
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let text = raw_text(&job);
+        // One seed row joins the endpoint's one row: the SERVICE node materialised the
+        // endpoint's row and the projection the joined one.
+        let node = |label: &str| {
+            text.lines()
+                .find(|line| line.split_whitespace().nth(1) == Some(label))
+                .unwrap_or_else(|| panic!("the ledger has a {label} node: {text}"))
+                .to_owned()
+        };
+        assert!(node("Service").contains(" rows=1 "), "{text}");
+        assert!(node("Project").contains(" rows=1 "), "{text}");
+        job.finish();
+    }
+
+    #[test]
+    fn a_cancelled_explain_job_errors_as_cancelled() {
+        let engine = QueryEngine::new();
+        let dataset = seed();
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Explain,
+            SELECT,
+            &options(),
+        );
+        assert_eq!(job.cancel(), DELIVERY_ACCEPTED);
+        assert_eq!(run_job(job.id()), RUN_ERROR);
+        assert_eq!(job.error_kind().as_deref(), Some("cancelled"));
+        job.finish();
+    }
+
+    #[test]
+    fn an_explain_operation_refuses_a_ceiling_it_would_not_enforce() {
+        let mut ceiling = options();
+        ceiling.set_deadline_ms(Some(10));
+        assert!(
+            ceiling
+                .validate(AsyncOperationKind::Explain)
+                .expect_err("explain is metered, never bounded")
+                .contains("deadlineMs is an execution governor")
+        );
+        assert!(options().validate(AsyncOperationKind::Explain).is_ok());
     }
 
     #[test]

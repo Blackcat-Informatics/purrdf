@@ -1090,6 +1090,21 @@ export class QueryEngine {
     options?: AsyncEntailmentQueryOptions | null,
   ): Promise<AsyncEntailmentQueryOutcome>;
   /**
+   * The twin of `explainQuery`: resolves to the same rendered charge ledger. EXPLAIN
+   * evaluates the query to measure it, so the measuring run is a job like any other — it
+   * suspends on `resolveService`, yields to the event loop every `yieldEveryPolls` polls,
+   * and stops on `signal` — and a `SERVICE` clause the synchronous twin refuses for want
+   * of a source is explained over the host's answer. It takes no ceiling: the run is
+   * metered, never bounded, exactly as the synchronous twin's is. A deadline is a
+   * `signal` (`AbortSignal.timeout(ms)`), and a stop rejects rather than resolving to the
+   * ledger of a truncated run.
+   */
+  explainQueryAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<string>;
+  /**
    * The twin of `update`: resolves to `dataset` once the update is applied. Asynchronous
    * updates on one dataset run one at a time, in call order. The update reads a snapshot
    * and is applied only if `dataset` was not mutated while it ran; otherwise it rejects

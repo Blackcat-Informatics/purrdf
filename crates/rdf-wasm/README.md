@@ -136,7 +136,8 @@ the parsing, the evaluation, the joins, the `SILENT` semantics and the result en
 - **Twins** — `queryAsync`, `selectAsync`, `askAsync`, `constructAsync`, `describeAsync`,
   `queryRawAsync`, `queryRawBytesAsync`, `queryRawWithContextAsync`,
   `queryGovernedAsync`, `queryEntailmentGovernedAsync`, `updateAsync`,
-  `updateGovernedAsync`, `queryGovernedNegotiatedAsync` and `Dataset.queryAsync`. Each
+  `updateGovernedAsync`, `explainQueryAsync`, `queryGovernedNegotiatedAsync` and
+  `Dataset.queryAsync`. Each
   reads a snapshot of the dataset taken when it starts and resolves to its synchronous
   twin's shape.
 - **Host handlers** — `resolveService(request, ctx)` answers a `SERVICE` request with

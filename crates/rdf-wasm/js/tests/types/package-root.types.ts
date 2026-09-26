@@ -310,6 +310,11 @@ const asyncGoverned: AsyncQueryOutcome = await engine.queryGovernedAsync(
   "SELECT ?s WHERE { ?s ?p ?o }",
   { fuel: 100_000, deadlineMs: 250, maxRemoteRequests: 4, resolveService, signal: controller.signal },
 );
+const asyncExplained: Promise<string> = engine.explainQueryAsync(
+  matched,
+  "SELECT ?s WHERE { ?s ?p ?o }",
+  { base: "https://example.org/", resolveService, signal: controller.signal, yieldEveryPolls: 0 },
+);
 const asyncEvidence: AsyncEvidence = asyncGoverned.evidence.async;
 const stackHighWater: number = asyncEvidence.stackHighWaterBytes;
 const asyncEntailed: AsyncEntailmentQueryOutcome = await engine.queryEntailmentGovernedAsync(
@@ -395,6 +400,7 @@ void asyncDescribe;
 void asyncRaw;
 void asyncRawConfigured;
 void asyncRawBytes;
+void asyncExplained;
 void asyncRawWithContext;
 void stackHighWater;
 void entailedEvidence;

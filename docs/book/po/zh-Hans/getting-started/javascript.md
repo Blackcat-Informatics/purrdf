@@ -100,7 +100,9 @@ RDF/JS 映射的更多内容见 [JavaScript 中的 RDF/JS](../interop/rdfjs.md)�
 
 <!-- 此标题保留英文：本书其他页面以 #asynchronous-queries-and-federation 链接到这里，而锚点由标题文字生成。 -->
 
-同步方法是离线通道：它们不安装任何 `SERVICE` 或 `LOAD` 来源，因此非 `SILENT` 的 `SERVICE` 或 `LOAD` 会按名称失败。每个求值方法还有一个返回 Promise 的孪生方法——`QueryEngine` 上的 `queryAsync`、`selectAsync`、`askAsync`、`constructAsync`、`describeAsync`、`queryRawAsync`、`queryRawBytesAsync`、`queryRawWithContextAsync`、`queryGovernedAsync`、`queryEntailmentGovernedAsync`、`updateAsync` 与 `updateGovernedAsync`，以及 `Dataset.queryAsync`——此外还有 `queryGovernedNegotiatedAsync`，它把受 governor 管控的查询按 HTTP `Accept` 请求头协商出的格式作为文档返回。孪生方法在调用开始时为数据集拍下快照，并在快照上运行同一个求值器；它以作业的形式执行：宿主应答 `SERVICE` 或 `LOAD` 时作业挂起，求值期间作业把事件循环让出，最终兑现为与其同步孪生方法完全相同的返回值。I/O 由宿主完成，相应的策略也归宿主所有；解析、求值、连接、`SILENT` 语义与结果编码仍由 PurRDF 负责。
+同步方法是离线通道：它们不安装任何 `SERVICE` 或 `LOAD` 来源，因此非 `SILENT` 的 `SERVICE` 或 `LOAD` 会按名称失败。每个求值方法还有一个返回 Promise 的孪生方法——`QueryEngine` 上的 `queryAsync`、`selectAsync`、`askAsync`、`constructAsync`、`describeAsync`、`queryRawAsync`、`queryRawBytesAsync`、`queryRawWithContextAsync`、`queryGovernedAsync`、`queryEntailmentGovernedAsync`、`updateAsync`、`updateGovernedAsync` 与 `explainQueryAsync`，以及 `Dataset.queryAsync`——此外还有 `queryGovernedNegotiatedAsync`，它把受 governor 管控的查询按 HTTP `Accept` 请求头协商出的格式作为文档返回。孪生方法在调用开始时为数据集拍下快照，并在快照上运行同一个求值器；它以作业的形式执行：宿主应答 `SERVICE` 或 `LOAD` 时作业挂起，求值期间作业把事件循环让出，最终兑现为与其同步孪生方法完全相同的返回值。I/O 由宿主完成，相应的策略也归宿主所有；解析、求值、连接、`SILENT` 语义与结果编码仍由 PurRDF 负责。
+
+EXPLAIN 也是这类求值方法之一：它的计费台账是实际运行查询测得的，而不是根据查询文本预测的。因此，`explainQuery` 会因缺少来源而拒绝 `SERVICE` 查询，而 `explainQueryAsync` 则基于宿主的应答来解释它。它的测量运行与其他作业一样会让出事件循环，并在其 `signal` 触发时停止；它不接受任何上限，因为这次运行只计量、从不设限。
 
 孪生方法运行在 WebAssembly JavaScript Promise Integration（JSPI）之上，它在 Chrome 与 Edge 137+、Firefox 139+、Safari 27、Node 24.20+ 以及 Cloudflare Workers（workerd）中默认启用。`hasAsyncQueries()` 报告当前引擎是否支持 JSPI；在不支持的引擎上，每个孪生方法都会在触及 wasm 之前以同一个错误拒绝，而同步 API 照常工作。
 

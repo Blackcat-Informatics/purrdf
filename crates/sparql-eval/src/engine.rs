@@ -2049,6 +2049,48 @@ impl NativeSparqlEngine {
             options.functions,
             options.env,
             options.remote,
+            None,
+        )
+    }
+
+    /// [`Self::explain_query_with_options`] with a host stop signal attached to the
+    /// evaluation it measures.
+    ///
+    /// The evaluation still runs under [`QueryGovernors::METERED`] — every dimension
+    /// counted, none bounded — with `stop` polled at every charge point, exactly as a
+    /// governed query polls it. That is what lets a host that must stay responsive (a
+    /// cooperative scheduler, a request deadline, a user's cancel) explain a query at all:
+    /// the measuring run is as long as the query's own, and without a signal it is
+    /// uninterruptible.
+    ///
+    /// A signal that fires cuts the measuring run short. The explanation is still
+    /// returned, and says so: its [`QueryExplanation::evidence`] reports the
+    /// [`TrippedGovernor::Stopped`](purrdf_core::TrippedGovernor::Stopped) cause, and its
+    /// ledger holds what had been charged when the signal was observed. Those numbers
+    /// describe a truncated run, not the query, so a caller that wants the query's cost
+    /// reads the evidence first. A signal that never fires changes nothing: the
+    /// explanation is the one [`Self::explain_query_with_options`] returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`RdfDiagnostic`] if the query text does not parse, or if evaluating it
+    /// fails.
+    pub fn explain_query_with_stop_signal(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query_text: &str,
+        base_iri: Option<&str>,
+        options: QueryOptions<'_>,
+        stop: Arc<dyn crate::governor::StopSignal>,
+    ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_for(
+            &**dataset,
+            query_text,
+            base_iri,
+            options.functions,
+            options.env,
+            options.remote,
+            Some(stop),
         )
     }
 
@@ -2067,7 +2109,9 @@ impl NativeSparqlEngine {
     ///
     /// `remote` is the request's `SERVICE` source: the explanation is priced from a real
     /// evaluation, so a federated query is explained by evaluating it against the source
-    /// its evaluation would use, not refused for lacking one.
+    /// its evaluation would use, not refused for lacking one. `stop` is the host's stop
+    /// signal, polled by the measuring run (see [`Self::explain_query_with_stop_signal`]).
+    #[allow(clippy::too_many_arguments)] // the one body every explain entry funnels into
     fn explain_for<D: DatasetView + Sync>(
         &self,
         dataset: &D,
@@ -2076,6 +2120,7 @@ impl NativeSparqlEngine {
         functions: &crate::user_fn::BoundFunctionRegistry,
         env: &crate::extension_env::ExtensionEnv,
         remote: Option<&(dyn crate::remote::ServiceResolver + Sync)>,
+        stop: Option<Arc<dyn crate::governor::StopSignal>>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
         let relations = env.relations();
         let aggregates = env.aggregates();
@@ -2088,7 +2133,11 @@ impl NativeSparqlEngine {
             query_pattern(&prepared.query),
             &survey.estimates,
         ));
-        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let governors = match stop {
+            Some(signal) => QueryGovernors::METERED.with_stop_signal(signal),
+            None => QueryGovernors::METERED,
+        };
+        let state = Arc::new(GovernorState::new(&governors));
         let mut ctx = self
             .eval_ctx(dataset)
             .with_governors(Arc::clone(&state))
@@ -7417,6 +7466,39 @@ mod tests {
         let has_name = plan.iter().any(|s| s.contains("<http://ex/name>"));
         assert!(has_knows, "explain output missing knows pattern: {plan:?}");
         assert!(has_name, "explain output missing name pattern: {plan:?}");
+    }
+
+    /// A stop signal attached to an explain is polled by the measuring run: one that has
+    /// fired is reported on the explanation's evidence as the stop it was, and one that
+    /// never fires leaves the explanation byte-identical to the unsignalled one.
+    #[test]
+    fn explain_query_with_stop_signal_reports_a_fired_signal_and_is_inert_otherwise() {
+        let ds = social();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT ?o ?n WHERE { \
+                     <http://ex/a> <http://ex/knows> ?o . \
+                     <http://ex/a> <http://ex/name> ?n }";
+        let plain = engine.explain_query(&ds, query, None).expect("explain");
+        assert_eq!(plain.evidence().tripped, None);
+
+        let quiet = crate::governor::CancellationFlag::new();
+        let unfired = engine
+            .explain_query_with_stop_signal(&ds, query, None, QueryOptions::EMPTY, Arc::new(quiet))
+            .expect("explain under an unfired signal");
+        assert_eq!(unfired.evidence().tripped, None);
+        assert_eq!(unfired.render(), plain.render());
+
+        let fired = crate::governor::CancellationFlag::new();
+        fired.cancel();
+        let stopped = engine
+            .explain_query_with_stop_signal(&ds, query, None, QueryOptions::EMPTY, Arc::new(fired))
+            .expect("a stop is reported on the explanation, not as an error");
+        assert_eq!(
+            stopped.evidence().tripped,
+            Some(purrdf_core::TrippedGovernor::Stopped {
+                cause: purrdf_core::StopCause::Cancelled,
+            })
+        );
     }
 
     /// `explain_query` errors cleanly on malformed SPARQL.

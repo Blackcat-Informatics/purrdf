@@ -105,15 +105,22 @@ The synchronous methods are the offline lane: they install no `SERVICE` or
 evaluating method also has a Promise-returning twin — `queryAsync`,
 `selectAsync`, `askAsync`, `constructAsync`, `describeAsync`, `queryRawAsync`,
 `queryRawBytesAsync`, `queryRawWithContextAsync`, `queryGovernedAsync`,
-`queryEntailmentGovernedAsync`, `updateAsync` and `updateGovernedAsync` on
-`QueryEngine`, and `Dataset.queryAsync` — plus `queryGovernedNegotiatedAsync`,
-which answers a governed query as a document in the format an HTTP `Accept`
-header negotiates. A twin runs the same evaluator over a snapshot of the dataset
+`queryEntailmentGovernedAsync`, `updateAsync`, `updateGovernedAsync` and
+`explainQueryAsync` on `QueryEngine`, and `Dataset.queryAsync` — plus
+`queryGovernedNegotiatedAsync`, which answers a governed query as a document in
+the format an HTTP `Accept` header negotiates. A twin runs the same evaluator over a snapshot of the dataset
 taken when the call starts, as a job that suspends while the host answers a
 `SERVICE` or `LOAD` and gives the event loop back while it evaluates, and it
 resolves to exactly what its synchronous twin returns. The host does the I/O
 and owns its policy; PurRDF keeps the parsing, the evaluation, the joins, the
 `SILENT` semantics and the result encoding.
+
+EXPLAIN is one of these evaluating methods: its charge ledger is measured by
+running the query, not predicted from its text. `explainQuery` therefore refuses
+a `SERVICE` query for want of a source, while `explainQueryAsync` explains it
+over the host's answer. Its measuring run yields and stops on its `signal` like
+any other job, and it takes no ceiling, because the run is metered, never
+bounded.
 
 The twins run over WebAssembly JavaScript Promise Integration (JSPI), on by
 default in Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and
