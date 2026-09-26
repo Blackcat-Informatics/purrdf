@@ -364,8 +364,8 @@ impl fmt::Display for ContractHash {
 /// larger one. That limit is a caller parameter, so it is folded in as one —
 /// [`contract_hash_with`] takes the options in force, and this function is that recipe
 /// under [`EvalOptions::default`]. A guard-free program cannot be bound by the limit
-/// (see [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`](crate::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS)),
-/// so its contract hash leaves the limit out and is exactly what it has always been.
+/// (see [`TermGeneratingLimit`](crate::seminaive::TermGeneratingLimit)), so its contract
+/// hash leaves the limit out.
 pub fn contract_hash(rules: &[DlClause]) -> ContractHash {
     contract_hash_with(rules, &EvalOptions::default())
 }
@@ -387,9 +387,26 @@ pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> Contract
     let mut hasher = blake3::Hasher::new();
     frame_str(&mut hasher, CONTRACT_DIGEST_TAG);
     hasher.update(digest.digest());
-    hasher.update(&options.max_term_generating_rounds().to_le_bytes());
+    fold_term_generating_limit(&mut hasher, options);
     ContractHash {
         digest: *hasher.finalize().as_bytes(),
+    }
+}
+
+/// Fold the term-generating limit in force: a tag byte, then the fixed limit, or the
+/// horizon's floor and per-input-term factor — the whole rule the horizon is derived by,
+/// so a change to either is a change of calculus.
+fn fold_term_generating_limit(hasher: &mut blake3::Hasher, options: &EvalOptions) {
+    match options.term_generating_limit() {
+        crate::seminaive::TermGeneratingLimit::Fixed(rounds) => {
+            hasher.update(&[0]);
+            hasher.update(&rounds.to_le_bytes());
+        }
+        crate::seminaive::TermGeneratingLimit::Horizon => {
+            hasher.update(&[1]);
+            hasher.update(&crate::seminaive::TERM_GENERATING_HORIZON_FLOOR.to_le_bytes());
+            hasher.update(&crate::seminaive::TERM_GENERATING_ROUNDS_PER_INPUT_TERM.to_le_bytes());
+        }
     }
 }
 
@@ -413,7 +430,7 @@ pub fn scheduled_contract_hash(
     hasher.update(&MAX_JOIN_STEPS.to_le_bytes());
     hasher.update(&(MAX_STORED_FACTS as u64).to_le_bytes());
     hasher.update(&(MAX_TERM_ARENA_BYTES as u64).to_le_bytes());
-    hasher.update(&options.max_term_generating_rounds().to_le_bytes());
+    fold_term_generating_limit(&mut hasher, options);
     hasher.update(&canonical_rule_hash(rules));
     hasher.update(&(schedule.layers().len() as u64).to_le_bytes());
     for layer in schedule.layers() {

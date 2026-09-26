@@ -112,10 +112,10 @@ vendored suite does not exercise:
   literal: its one combination is ill-formed and skipped, not an error, while a
   control rule differing only in its IRI subject infers its triple.
 - **`err-diverging-fresh-term`** — an iterating rule minting a strictly longer IRI
-  every pass; `apply_rules` must refuse it with an evaluation-budget error rather
-  than loop forever. Under the default term-generating round limit the run is
-  stopped by one of the engine's fixed ceilings first, since every pass
-  re-executes the rule for every counter minted so far.
+  every pass; `apply_rules` must refuse it rather than loop forever. Under the
+  default term-generating limit it is refused as divergent once its term-generating
+  rounds pass the horizon its input grants (`max(256, 4 × N)` for `N` distinct
+  input terms), naming the rule.
 
 The `entail_dataset = apply_rules ∘ project_dataset` composition is pinned by a
 Rust test (`entail_dataset_composes_project_then_apply_rules`) in the harness.

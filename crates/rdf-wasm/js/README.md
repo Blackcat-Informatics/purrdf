@@ -237,10 +237,11 @@ ownership, and all limits. Complete examples are in
   `shapesTtl` or the SPARQL 1.2 RL rule set `srl`, and returns a
   `ShaclRulesInference`: `inferred` is the inference graph (the inferred triples
   only) as N-Triples, and `proof` is the proof of every inferred triple when
-  `explain` is set. `maxTermGeneratingRounds` (a `bigint`, default 65,536) bounds
-  the rounds that infer a new term; lower it for an untrusted rule set, which
-  otherwise reaches the engine's fixed ceilings only slowly. Call `free()` when
-  done.
+  `explain` is set. `maxTermGeneratingRounds` (a `bigint`) bounds the rounds that
+  infer a new term. Omitted, the limit is a divergence criterion derived from the
+  input, `max(256, 4 × N)` rounds for `N` distinct input terms, past which the rule
+  set is refused as divergent, naming its rules; a rule set bounded by a constant
+  past that horizon states its bound here. Call `free()` when done.
 - `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?,
   importIris?, importDocuments?, exprAt?, exprVia?, exprTurtle?)` — evaluates
   one node expression of the shapes graph against a focus node, with `scope` as

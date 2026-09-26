@@ -795,11 +795,16 @@ O .`, then `  rule R` and one `  premise S P O .` line for each fact the rule's
 body matched. A SPARQL 1.2 RL data-block triple has `  data-block` instead.
 
 Every host takes the same **term-generating round limit**. This bounds the
-evaluation rounds that infer a term the graph did not already hold, and one more
-round fails the run naming the limit. The default is 65,536 rounds. **A host
-running untrusted rule sets should lower it**: a rule set whose term generation
-diverges (an exponential one in particular) reaches the engine's fixed arena and
-join ceilings only slowly under the default.
+evaluation rounds that infer a term the graph did not already hold. The default
+is a divergence criterion derived from the input: at most `max(256, 4 × N)`
+such rounds, where `N` is the number of distinct terms in the data graph (and in
+a SPARQL 1.2 RL rule set's data blocks). A rule set whose new terms its data
+bounds, such as a depth counted along a chain, stays within that horizon. A rule
+set still inferring new terms past it is refused as divergent, and the error
+names the rules that inferred one in the last round. A rule set bounded by a
+constant past the horizon, such as a counter stepping to 10,000, terminates:
+state its bound as the limit. A stated limit is exact, and one more round fails
+the run naming it.
 
 ```python
 import purrdf

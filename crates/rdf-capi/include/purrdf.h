@@ -2778,12 +2778,12 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * non-NULL, is a `ParseError`. `shapes_base_iri` / `srl_base_iri` are the documents' base
  * IRIs and may be NULL (a C host has no retrieval IRI, so PurRDF invents none).
  *
- * `max_term_generating_rounds` may be NULL for the engine default (65,536); otherwise it
- * points at the limit on evaluation rounds that infer a term the graph did not hold, and
- * one more round fails the call naming the limit. A host running UNTRUSTED rule sets
- * should lower it: an exponential rule set reaches the engine's fixed arena and join
- * ceilings only slowly under the default, and the limit is what bounds the time it can
- * take.
+ * `max_term_generating_rounds` may be NULL for the engine default, a divergence criterion
+ * derived from the input: at most max(256, 4 × N) evaluation rounds that infer a term the
+ * graph did not hold, N the distinct input terms, past which the rule set is refused as
+ * divergent, naming its rules. Otherwise it points at an exact limit, and one more round
+ * fails the call naming the limit. A rule set bounded by a constant past the horizon
+ * terminates; its host passes the bound.
  *
  * `out_proof` asks for the proof: NULL skips it; non-NULL receives a buffer with the
  * proof of every inferred triple (`derived S P O .`, then `  rule R` and one

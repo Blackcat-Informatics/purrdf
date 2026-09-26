@@ -188,9 +188,9 @@ and C surfaces make:
 out = shapes.apply_rules(my_data, my_shapes, explain=True)
 out["inferred"], out["proof"]
 
-# An untrusted rule set: lower the term-generating round limit (default 65,536),
-# so a divergent rule set fails fast instead of running long.
-shapes.apply_rules(my_data, srl=untrusted_rules, max_term_generating_rounds=64)
+# A rule set bounded by a constant past the default horizon (max(256, 4 x the
+# input's distinct terms) term-generating rounds) states its bound.
+shapes.apply_rules(my_data, srl=counting_rules, max_term_generating_rounds=10_000)
 
 # Evaluate one node expression of a shapes graph against a focus node. The
 # expression is an IRI or "_:label"; the scope binds shnex:var names.

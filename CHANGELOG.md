@@ -10,6 +10,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **datalog, shapes:** a guarded rule set that keeps generating new terms is
+  refused as divergent after at most `max(256, 4 × N)` term-generating rounds,
+  `N` the distinct terms of the seeded store, instead of running until a fixed
+  ceiling (the previous default allowed 65,536 rounds). The refusal is typed —
+  `EvalError::TermGenerationDiverged`, `SrlError::Divergence` and
+  `purrdf_shapes::rules::Divergence` — and names the rules that generated a
+  term in the last round. A rule set whose new terms its data bounds stays
+  within the horizon. A rule set bounded by a constant past it states its
+  bound with `with_max_term_generating_rounds`, which sets an exact limit
+  (`TermGeneratingLimit::Fixed`). `EvalOptions::max_term_generating_rounds`,
+  `RuleOptions::max_term_generating_rounds` and
+  `DEFAULT_MAX_TERM_GENERATING_ROUNDS` give way to `term_generating_limit()`
+  and `TermGeneratingLimit`, and `srl::evaluate` returns `RulesError`.
 - **shapes:** a shapes graph that uses the SHACL JavaScript Extensions
   (`sh:js`, `sh:JSConstraint`, `sh:JSValidator`, `sh:JSRule`, …) is refused
   with the typed `ShapesError::ShaclJs(ShaclJsRefusal)`, which names the node

@@ -97,8 +97,12 @@ pub enum SrlError {
         /// The cycle, `rule -> depends_on -> … -> rule`, each rule named.
         cycle: Vec<String>,
     },
-    /// Evaluation failed: a guard error, a term-generating round limit passed, or an
-    /// inferred triple that is not an RDF triple.
+    /// The rule set diverged under the default term-generating limit
+    /// ([`crate::rules::TermGeneratingLimit::Horizon`]): it kept inferring new terms past
+    /// the horizon its input grants. Names the rules that inferred one in the last round.
+    Divergence(crate::rules::Divergence),
+    /// Evaluation failed: a guard error, a fixed term-generating round limit passed, or
+    /// an inferred triple that is not an RDF triple.
     Evaluation {
         /// Why.
         message: String,
@@ -141,6 +145,9 @@ impl fmt::Display for SrlError {
                  dependency in the dependency graph\")",
                 cycle.join(" -> ")
             ),
+            Self::Divergence(divergence) => {
+                write!(f, "SPARQL 1.2 RL evaluation failed: {divergence}")
+            }
             Self::Evaluation { message } => write!(f, "SPARQL 1.2 RL evaluation failed: {message}"),
         }
     }
@@ -262,38 +269,28 @@ pub fn parse_and_check(text: &str, base: Option<&str>) -> Result<RuleSetDocument
 }
 
 /// Options for [`infer`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct InferOptions {
     /// The limit on evaluation rounds that infer a term the evaluation graph did not
     /// hold.
-    max_term_generating_rounds: u64,
-}
-
-impl Default for InferOptions {
-    fn default() -> Self {
-        Self {
-            max_term_generating_rounds:
-                purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS,
-        }
-    }
+    term_generating_limit: crate::rules::TermGeneratingLimit,
 }
 
 impl InferOptions {
-    /// Bound the evaluation rounds that infer a term the evaluation graph did not hold. A
-    /// general rule builds no blank node and assigns nothing, but it can build a triple
-    /// term from a triple term it matched, every round; SPARQL 1.2 RL §C: "Applications
-    /// should take care to limit the amount of computation and memory usage that can be
-    /// caused by applying a SPARQL-RL rule set."
+    /// Permit exactly `rounds` evaluation rounds that infer a term the evaluation graph
+    /// did not hold. A general rule builds no blank node and assigns nothing, but it can
+    /// build a triple term from a triple term it matched, every round; SPARQL 1.2 RL §C:
+    /// "Applications should take care to limit the amount of computation and memory usage
+    /// that can be caused by applying a SPARQL-RL rule set."
     ///
-    /// The default is `purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS`
-    /// (65,536), which a trusted rule set that genuinely counts far needs. A host running
-    /// UNTRUSTED rule sets should LOWER it: a rule set whose term generation diverges —
-    /// an exponential one in particular — reaches the engine's fixed arena and join
-    /// ceilings only slowly under the default, and this limit is what bounds the time
-    /// such a rule set can take.
+    /// The DEFAULT ([`crate::rules::TermGeneratingLimit::Horizon`]) is a divergence
+    /// criterion derived from the input: at most `max(256, 4 × N)` such rounds, `N` the
+    /// distinct terms of the base graph and the data blocks, past which the rule set is
+    /// refused as [`SrlError::Divergence`]. A rule set bounded by a constant past that
+    /// horizon terminates; its caller states the bound here.
     #[must_use]
     pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
-        self.max_term_generating_rounds = rounds;
+        self.term_generating_limit = crate::rules::TermGeneratingLimit::Fixed(rounds);
         self
     }
 }
@@ -316,15 +313,25 @@ pub fn infer(
     let projected =
         crate::engine::project_dataset(base).map_err(|message| SrlError::Evaluation { message })?;
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
-    let rule_options =
-        RuleOptions::default().with_max_term_generating_rounds(options.max_term_generating_rounds);
+    let rule_options = match options.term_generating_limit {
+        crate::rules::TermGeneratingLimit::Fixed(rounds) => {
+            RuleOptions::default().with_max_term_generating_rounds(rounds)
+        }
+        crate::rules::TermGeneratingLimit::Horizon => RuleOptions::default(),
+    };
     eval::evaluate(
         &document.rule_set(),
         &data,
         &Shapes::default(),
         &rule_options,
     )
-    .map_err(|message| SrlError::Evaluation { message })
+    .map_err(|error| match error {
+        crate::rules::RulesError::Diverged(mut divergence) => {
+            divergence.rename(|index| document.rules.get(index).map(SrlRule::describe));
+            SrlError::Divergence(divergence)
+        }
+        crate::rules::RulesError::Failed(message) => SrlError::Evaluation { message },
+    })
 }
 
 impl RuleSetDocument {

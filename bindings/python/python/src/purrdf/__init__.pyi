@@ -1812,9 +1812,11 @@ class shapes:
     # and `srl` (a SPARQL 1.2 RL rule set); neither or both raises ValueError.
     #
     # `max_term_generating_rounds` bounds the rounds that infer a term the graph did
-    # not hold (default 65,536); one more raises ValueError naming the limit. Lower it
-    # for UNTRUSTED rule sets: an exponential rule set reaches the engine's fixed
-    # arena and join ceilings only slowly under the default.
+    # not hold; one more raises ValueError naming the limit. None keeps the default, a
+    # divergence criterion derived from the input: at most max(256, 4 x N) such rounds
+    # for N distinct input terms, past which the rule set is refused as divergent,
+    # naming its rules. A rule set bounded by a constant past that horizon states its
+    # bound.
     @staticmethod
     def apply_rules(
         data_nt: str,

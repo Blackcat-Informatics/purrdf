@@ -66,8 +66,7 @@
 //! `const`s. Exceeding one returns [`EvalError::BudgetExhausted`] carrying an accurate
 //! [`BudgetReport`] — never a panic, never a truncated answer presented as complete. See
 //! the crate docs for why a caller-supplied budget is not offered for them, and
-//! [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`] for the one limit that IS the caller's
-//! ([`EvalOptions`]).
+//! [`TermGeneratingLimit`] for the one limit that IS the caller's ([`EvalOptions`]).
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -123,19 +122,28 @@ pub const MAX_STORED_FACTS: usize = 1 << 17;
 /// term-minting extension can grow past it unobserved.
 pub const MAX_TERM_ARENA_BYTES: usize = 1 << 24;
 
-/// The DEFAULT limit on TERM-GENERATING rounds ([`EvalOptions`]): rounds that commit a
-/// term a guard ([`crate::guard`]) computed and the store had never interned.
+/// The floor of the default term-generating horizon ([`TermGeneratingLimit::Horizon`]).
+pub const TERM_GENERATING_HORIZON_FLOOR: u64 = 256;
+
+/// The term-generating rounds the default horizon grants per distinct term of the seeded
+/// store ([`TermGeneratingLimit::Horizon`]).
+pub const TERM_GENERATING_ROUNDS_PER_INPUT_TERM: u64 = 4;
+
+/// The limit on TERM-GENERATING rounds ([`EvalOptions`]): rounds that commit a term a
+/// guard ([`crate::guard`]) computed and the store had never interned.
 ///
 /// # Why rounds, and why only these
 ///
-/// The three ceilings above bound what a run HOLDS; none bounds how long a run that
+/// The three fixed ceilings bound what a run HOLDS; none bounds how long a run that
 /// holds little can keep going. A guard-free program cannot run away: every term it
 /// can commit is a body binding or one of its own finitely many constants, so its
 /// round count is bounded by its fact count. A guard can compute a NEW term each round
-/// — `?n + 1`, `CONCAT(?s, "x")`, a fresh blank node — and a rule that feeds such a
-/// term back into its own body derives one more fact per round, forever. The fact and
-/// arena ceilings would stop it, but only after a number of rounds whose total cost is
-/// super-linear in the ceiling; this limit stops it after a bounded number of ROUNDS.
+/// — `?n + 1`, `CONCAT(?s, "x")`, a triple term nesting its own match, a fresh blank
+/// node — and a rule that feeds such a term back into its own body derives one more
+/// fact per round, forever. The fact, arena and join ceilings stop it only after a
+/// number of rounds whose total cost is super-linear in the ceiling (a rule that
+/// re-reads everything it minted costs the square of the rounds); this limit stops it
+/// after a bounded number of ROUNDS.
 ///
 /// A round that commits only terms already interned is never counted: a
 /// value-preserving recursion (a transitive closure, a label propagated down a chain)
@@ -143,56 +151,92 @@ pub const MAX_TERM_ARENA_BYTES: usize = 1 << 24;
 /// limit cannot bind a guard-free program at all — its constants are interned the first
 /// time they are derived, and no guard exists to compute another.
 ///
-/// # Why this one is the caller's
-///
-/// Every other ceiling here is a constant, and this one is not, because no constant can
-/// be right: whether a guarded program terminates is undecidable, so ANY fixed round
-/// limit refuses some program that terminates — a counter stepping `?n + 1` up to a
-/// `FILTER (?n < N)` terminates after `N` term-generating rounds for every `N`. A hidden
-/// constant would make that refusal a property of this build rather than of the request.
-/// So the limit is a governor the caller sets on [`EvalOptions`], defaulting to this
-/// value, which is generous — a term-generating round of a semi-naive program costs its
-/// delta — and exists only to stop a true divergence in bounded time. It stays inside
-/// the crate's rules for a caller-settable number: it can only REFUSE, never truncate — a
+/// Whether a guarded program terminates is undecidable, so any limit refuses some
+/// program that terminates — a counter stepping `?n + 1` up to `FILTER (?n < N)`
+/// terminates after `N` term-generating rounds for every `N`. The default is therefore
+/// a DIVERGENCE criterion derived from the input, and the caller who knows a larger
+/// bound states it ([`Self::Fixed`]). The limit can only REFUSE, never truncate — a
 /// refused run returns no model, exactly as every other ceiling does — and it is part of
 /// the result's identity: [`contract_hash_with`](crate::cache::contract_hash_with) folds
 /// the limit in force into a guarded program's contract hash, so two runs under
 /// different limits never claim the same calculus.
-pub const DEFAULT_MAX_TERM_GENERATING_ROUNDS: u64 = 1 << 16;
-
-/// The caller's evaluation governors: today, the limit on term-generating rounds.
-///
-/// See [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`] for what the limit counts, why it is the
-/// caller's, and why it cannot change a guard-free program's answer. Construct with
-/// [`EvalOptions::default`] and raise or lower it with
-/// [`with_max_term_generating_rounds`](Self::with_max_term_generating_rounds).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EvalOptions {
-    /// The most term-generating rounds the evaluation may run before it is refused.
-    max_term_generating_rounds: u64,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TermGeneratingLimit {
+    /// The default divergence criterion. With `N` the distinct terms of the seeded store
+    /// (base facts, data blocks, and every predicate and graph name among them), a run is
+    /// refused as DIVERGENT — [`EvalError::TermGenerationDiverged`], naming the rules that
+    /// generated a term in the refused round — once it commits more than
+    ///
+    /// `max(TERM_GENERATING_HORIZON_FLOOR, TERM_GENERATING_ROUNDS_PER_INPUT_TERM × N)`
+    ///
+    /// term-generating rounds (256 and 4). The horizon is what a program whose term
+    /// generation is BOUNDED BY ITS DATA needs: a depth counted along a chain, a label
+    /// extended once per node or a value folded across a list derives each new term from
+    /// a step through the input, one step per input term, so its derivation chains of
+    /// generated terms — and so its term-generating rounds — are at most a small multiple
+    /// of `N`. The floor admits a small computation bounded by a constant (a counter to a
+    /// few hundred over a one-triple graph). A program still generating past the horizon
+    /// is computing terms its input does not bound — a counter with no bound, a string
+    /// extended every pass, a triple term nested every pass, a node minted from a node it
+    /// minted — and is refused after at most the horizon's rounds. A program bounded by a
+    /// constant past the horizon — a counter to 10,000 over one triple — terminates and
+    /// is refused under this default; its caller states the bound with
+    /// [`EvalOptions::with_max_term_generating_rounds`].
+    #[default]
+    Horizon,
+    /// Exactly this many term-generating rounds; one more is refused with
+    /// [`EvalError::BudgetExhausted`] naming [`BudgetResource::TermGeneratingRounds`].
+    Fixed(u64),
 }
 
-impl Default for EvalOptions {
-    fn default() -> Self {
-        Self {
-            max_term_generating_rounds: DEFAULT_MAX_TERM_GENERATING_ROUNDS,
+impl TermGeneratingLimit {
+    /// The term-generating rounds this limit permits a run whose seeded store holds
+    /// `input_terms` distinct terms.
+    #[must_use]
+    pub fn rounds_for(self, input_terms: usize) -> u64 {
+        match self {
+            Self::Horizon => TERM_GENERATING_HORIZON_FLOOR.max(
+                TERM_GENERATING_ROUNDS_PER_INPUT_TERM
+                    .saturating_mul(u64::try_from(input_terms).unwrap_or(u64::MAX)),
+            ),
+            Self::Fixed(rounds) => rounds,
         }
     }
 }
 
+/// The caller's evaluation governors: today, the limit on term-generating rounds.
+///
+/// See [`TermGeneratingLimit`] for what the limit counts, why its default is derived
+/// from the input, and why it cannot change a guard-free program's answer. Construct
+/// with [`EvalOptions::default`] and state a fixed limit with
+/// [`with_max_term_generating_rounds`](Self::with_max_term_generating_rounds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EvalOptions {
+    /// The term-generating round limit.
+    term_generating_limit: TermGeneratingLimit,
+}
+
 impl EvalOptions {
-    /// Permit at most `rounds` term-generating rounds; one more is refused with
-    /// [`EvalError::BudgetExhausted`] naming [`BudgetResource::TermGeneratingRounds`].
+    /// Permit exactly `rounds` term-generating rounds ([`TermGeneratingLimit::Fixed`]);
+    /// one more is refused with [`EvalError::BudgetExhausted`] naming
+    /// [`BudgetResource::TermGeneratingRounds`].
     #[must_use]
     pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
-        self.max_term_generating_rounds = rounds;
+        self.term_generating_limit = TermGeneratingLimit::Fixed(rounds);
+        self
+    }
+
+    /// Govern term-generating rounds by `limit`.
+    #[must_use]
+    pub fn with_term_generating_limit(mut self, limit: TermGeneratingLimit) -> Self {
+        self.term_generating_limit = limit;
         self
     }
 
     /// The term-generating round limit in force.
     #[must_use]
-    pub fn max_term_generating_rounds(&self) -> u64 {
-        self.max_term_generating_rounds
+    pub fn term_generating_limit(&self) -> TermGeneratingLimit {
+        self.term_generating_limit
     }
 }
 
@@ -247,7 +291,7 @@ impl BudgetReport {
             stored_facts,
             term_arena_bytes,
             term_generating_rounds: 0,
-            term_generating_round_limit: DEFAULT_MAX_TERM_GENERATING_ROUNDS,
+            term_generating_round_limit: TERM_GENERATING_HORIZON_FLOOR,
         }
     }
 
@@ -266,13 +310,14 @@ impl BudgetReport {
         self.term_arena_bytes
     }
 
-    /// Term-generating rounds run ([`DEFAULT_MAX_TERM_GENERATING_ROUNDS`]). Always zero
+    /// Term-generating rounds run ([`TermGeneratingLimit`]). Always zero
     /// for a guard-free program, which has no guard to compute a term.
     pub fn term_generating_rounds(self) -> u64 {
         self.term_generating_rounds
     }
 
-    /// The term-generating round limit the run was governed by ([`EvalOptions`]).
+    /// The term-generating round limit the run was governed by ([`EvalOptions`]): the
+    /// fixed limit, or the horizon derived from the seeded store.
     pub fn term_generating_round_limit(self) -> u64 {
         self.term_generating_round_limit
     }
@@ -288,8 +333,8 @@ pub enum BudgetResource {
     StoredFacts,
     /// [`MAX_TERM_ARENA_BYTES`] — too many interned term surface bytes.
     TermArenaBytes,
-    /// The caller's term-generating round limit ([`EvalOptions`]) — too many rounds
-    /// committed a guard-computed term.
+    /// The caller's fixed term-generating round limit ([`TermGeneratingLimit::Fixed`]) —
+    /// too many rounds committed a guard-computed term.
     TermGeneratingRounds,
 }
 
@@ -432,6 +477,23 @@ pub enum EvalError {
         /// Consumption of all three ceilings when evaluation stopped.
         report: BudgetReport,
     },
+    /// The run passed the default term-generating horizon ([`TermGeneratingLimit::Horizon`]):
+    /// it kept committing guard-computed terms for more rounds than a program whose term
+    /// generation is bounded by its input needs. Distinct from
+    /// [`Self::BudgetExhausted`], whose [`BudgetResource::TermGeneratingRounds`] is a
+    /// limit the caller stated, because this one is a verdict about the program: it
+    /// names the rules that generated a term in the refused round.
+    TermGenerationDiverged {
+        /// The rules whose derivations committed a guard-computed term in the refused
+        /// round, in authored program order.
+        rules: Vec<usize>,
+        /// The distinct terms of the seeded store the horizon was derived from.
+        input_terms: usize,
+        /// Consumption when evaluation stopped; its
+        /// [`term_generating_round_limit`](BudgetReport::term_generating_round_limit) is
+        /// the horizon.
+        report: BudgetReport,
+    },
     /// The caller's [`crate::stop::StopSignal`] fired at a round boundary.
     ///
     /// A refusal exactly as total as [`Self::BudgetExhausted`]: there is no partial least
@@ -534,6 +596,25 @@ impl fmt::Display for EvalError {
                  EvalOptions::with_max_term_generating_rounds",
                 report.term_generating_rounds, report.term_generating_round_limit
             ),
+            Self::TermGenerationDiverged {
+                rules,
+                input_terms,
+                report,
+            } => {
+                let rules: Vec<String> = rules.iter().map(ToString::to_string).collect();
+                write!(
+                    f,
+                    "evaluation diverged: {} rounds committed a term the store did not hold, \
+                     past the horizon of {} such rounds that the input's {input_terms} terms \
+                     grant (max({TERM_GENERATING_HORIZON_FLOOR}, \
+                     {TERM_GENERATING_ROUNDS_PER_INPUT_TERM} per input term)); rule(s) {} \
+                     generated a term in the last round; if the rule set terminates, state its \
+                     bound with EvalOptions::with_max_term_generating_rounds",
+                    report.term_generating_rounds,
+                    report.term_generating_round_limit,
+                    rules.join(", ")
+                )
+            }
             Self::BudgetExhausted { resource, report } => write!(
                 f,
                 "evaluation exceeded the fixed {} ceiling: {} observed, {} permitted",
@@ -2425,6 +2506,9 @@ pub(crate) struct RoundBuffer<'r> {
     /// Whether some entry carries a term a guard computed and the store never held — a
     /// TERM-GENERATING round ([`MAX_TERM_GENERATING_ROUNDS`]).
     generates_terms: bool,
+    /// The rules of the candidates that carry such a term, for a divergence refusal to
+    /// name ([`EvalError::TermGenerationDiverged`]).
+    generating_rules: BTreeSet<usize>,
     /// Rows already in the store that the snapshot marks as ASSUMED and a rule of this
     /// round derived again, each with the derivation that did — see
     /// [`RoundSnapshot::assumed`].
@@ -2438,6 +2522,7 @@ impl<'r> RoundBuffer<'r> {
             entries: BTreeMap::new(),
             join_steps: 0,
             generates_terms: false,
+            generating_rules: BTreeSet::new(),
             confirmed: Vec::new(),
         }
     }
@@ -2454,7 +2539,10 @@ impl<'r> RoundBuffer<'r> {
 
     /// Insert or quality-merge one candidate.
     fn insert(&mut self, key: HeadKey<'r>, candidate: Candidate, rel: &RelationStore) {
-        self.generates_terms |= key.terms().iter().any(|term| term.is_generated());
+        if key.terms().iter().any(|term| term.is_generated()) {
+            self.generates_terms = true;
+            self.generating_rules.insert(candidate.rule);
+        }
         match self.entries.get_mut(&key) {
             Some(existing) => {
                 if candidate.preferred_over(existing, rel) {
@@ -2804,21 +2892,33 @@ pub(crate) struct FixpointState {
     pub(crate) join_steps: u64,
     /// Term-generating rounds committed so far.
     pub(crate) term_generating_rounds: u64,
-    /// The caller's term-generating round limit.
+    /// The term-generating round limit in force: the caller's fixed limit, or the
+    /// horizon derived from the seeded store.
     pub(crate) term_generating_round_limit: u64,
+    /// Whether that limit is the default horizon, whose refusal is a divergence verdict.
+    horizon: bool,
+    /// The distinct terms of the seeded store.
+    input_terms: usize,
+    /// The rules that generated a term in the latest term-generating round.
+    generating_rules: BTreeSet<usize>,
 }
 
 impl FixpointState {
     /// A state over the seeded store `edb`, governed by `options`.
     pub(crate) fn seeded(edb: RelationStore, options: EvalOptions) -> Self {
         let depth = vec![0u32; edb.row_count()];
+        let input_terms = edb.interner().len();
+        let limit = options.term_generating_limit();
         Self {
             rel: edb,
             depth,
             derivations: Vec::new(),
             join_steps: 0,
             term_generating_rounds: 0,
-            term_generating_round_limit: options.max_term_generating_rounds,
+            term_generating_round_limit: limit.rounds_for(input_terms),
+            horizon: limit == TermGeneratingLimit::Horizon,
+            input_terms,
+            generating_rules: BTreeSet::new(),
         }
     }
 
@@ -2871,6 +2971,7 @@ impl FixpointState {
         }
         if round.generates_terms {
             self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
+            self.generating_rules.clone_from(&round.generating_rules);
         }
         commit_round(round, self);
         check_budget(self)
@@ -3045,6 +3146,13 @@ pub(crate) fn check_budget(state: &FixpointState) -> Result<(), EvalError> {
     if report.term_arena_bytes > MAX_TERM_ARENA_BYTES {
         return Err(EvalError::BudgetExhausted {
             resource: BudgetResource::TermArenaBytes,
+            report,
+        });
+    }
+    if report.term_generating_rounds > report.term_generating_round_limit && state.horizon {
+        return Err(EvalError::TermGenerationDiverged {
+            rules: state.generating_rules.iter().copied().collect(),
+            input_terms: state.input_terms,
             report,
         });
     }
@@ -4467,7 +4575,7 @@ mod tests {
                 stored_facts: 3,
                 term_arena_bytes: 4,
                 term_generating_rounds: 0,
-                term_generating_round_limit: DEFAULT_MAX_TERM_GENERATING_ROUNDS,
+                term_generating_round_limit: TERM_GENERATING_HORIZON_FLOOR,
             },
         };
         let rendered = error.to_string();

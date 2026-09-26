@@ -208,3 +208,12 @@ harness = false
 # `make bench` lane only — excluded from `make check`.
 name = "srl_closure"
 harness = false
+
+[[bench]]
+# Time to refusal of divergent rule sets under the default term-generating horizon —
+# a SHACL SPARQL rule minting a longer IRI, a string extended and a counter stepped
+# every pass, and a SPARQL 1.2 RL rule nesting a triple term every round — beside the
+# completion time of a counter bounded by its data, deeper than the horizon's floor.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "rules_divergence"
+harness = false
