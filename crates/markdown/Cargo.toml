@@ -39,6 +39,7 @@ purrdf-core.workspace = true
 criterion = { workspace = true }
 # The Turtle parser: every emitted claim must parse and canonicalize.
 purrdf-rdf.workspace = true
+purrdf-testkit.workspace = true
 
 [[bench]]
 # Slicer profiling harness over a generated document: `analyze` alone, the

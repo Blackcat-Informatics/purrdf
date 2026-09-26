@@ -1846,7 +1846,7 @@ mod tests {
         Ok(values)
     }
 
-    use crate::test_rng::mix;
+    use purrdf_testkit::rng::splitmix64_next as mix;
 
     /// A value whose eight bytes all differ, so a word written to the wrong
     /// slot, or with its bytes in the wrong order, changes the output.

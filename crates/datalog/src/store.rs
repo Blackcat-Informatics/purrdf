@@ -2152,8 +2152,8 @@ mod tests {
         let mut tail = Tail::default();
         let mut rows = Vec::with_capacity(len);
         for i in 0..len {
-            let s = TermId::from_index((crate::test_support::mix(state) % 24) as usize);
-            let o = TermId::from_index((crate::test_support::mix(state) % 24) as usize);
+            let s = TermId::from_index((purrdf_testkit::rng::splitmix64_next(state) % 24) as usize);
+            let o = TermId::from_index((purrdf_testkit::rng::splitmix64_next(state) % 24) as usize);
             let r = RowId::from_index(i);
             tail.push(s, o, r);
             rows.push((s, o, r));

@@ -1079,6 +1079,7 @@ version = "2.0.2"
 dependencies = [
  "criterion",
  "purrdf-core",
+ "purrdf-testkit",
  "structured-zstd",
 ]
 
@@ -1112,6 +1113,7 @@ dependencies = [
  "criterion",
  "hashbrown",
  "purrdf-core",
+ "purrdf-testkit",
  "rayon",
  "sha1",
  "smallvec",
@@ -1219,6 +1221,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-rdf",
  "purrdf-sparql-eval",
+ "purrdf-testkit",
  "wasm-bindgen-test",
 ]
 
@@ -1239,6 +1242,7 @@ dependencies = [
  "criterion",
  "purrdf-core",
  "purrdf-rdf",
+ "purrdf-testkit",
 ]
 
 [[package]]

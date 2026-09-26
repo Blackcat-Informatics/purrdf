@@ -16,83 +16,7 @@
 
 use std::fmt;
 
-/// SplitMix64 (Steele, Lea and Flood): a seed expander and a strong 64-bit
-/// finaliser.
-#[derive(Debug, Clone)]
-pub(crate) struct SplitMix64(u64);
-
-impl SplitMix64 {
-    pub(crate) const fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    pub(crate) const fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-}
-
-/// xoshiro256** (Blackman and Vigna), seeded through [`SplitMix64`] as its
-/// authors recommend so that no seed yields the all-zero state.
-#[derive(Debug, Clone)]
-pub(crate) struct Xoshiro256 {
-    s: [u64; 4],
-}
-
-impl Xoshiro256 {
-    pub(crate) const fn from_seed(seed: u64) -> Self {
-        let mut expander = SplitMix64::new(seed);
-        Self {
-            s: [
-                expander.next_u64(),
-                expander.next_u64(),
-                expander.next_u64(),
-                expander.next_u64(),
-            ],
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn from_state(s: [u64; 4]) -> Self {
-        Self { s }
-    }
-
-    pub(crate) const fn next_u64(&mut self) -> u64 {
-        let result = self.s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
-        let t = self.s[1] << 17;
-        self.s[2] ^= self.s[0];
-        self.s[3] ^= self.s[1];
-        self.s[1] ^= self.s[2];
-        self.s[0] ^= self.s[3];
-        self.s[2] ^= t;
-        self.s[3] = self.s[3].rotate_left(45);
-        result
-    }
-
-    /// A uniform value in `0..=max`, without modulo bias: draws below
-    /// `2^64 mod (max + 1)` are redrawn.
-    pub(crate) const fn up_to(&mut self, max: u64) -> u64 {
-        if max == u64::MAX {
-            return self.next_u64();
-        }
-        let range = max + 1;
-        let threshold = range.wrapping_neg() % range;
-        loop {
-            let value = self.next_u64();
-            if value >= threshold {
-                return value % range;
-            }
-        }
-    }
-
-    /// A uniform `f64` in `[0, 1)` from the top 53 bits.
-    pub(crate) fn unit(&mut self) -> f64 {
-        (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
-    }
-}
+use crate::rng::Xoshiro256;
 
 /// Why a generator could not produce a value from the choices it was given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,38 +338,7 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, HexError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Choices, SplitMix64, Xoshiro256, byte_width, decode_hex, encode_hex};
-
-    #[test]
-    fn splitmix64_matches_the_reference_outputs() {
-        // The first outputs of the reference implementation from seed 0.
-        let mut generator = SplitMix64::new(0);
-        assert_eq!(generator.next_u64(), 0xE220_A839_7B1D_CDAF);
-        assert_eq!(generator.next_u64(), 0x6E78_9E6A_A1B9_65F4);
-        assert_eq!(generator.next_u64(), 0x06C4_5D18_8009_454F);
-    }
-
-    #[test]
-    fn xoshiro256_starstar_matches_the_reference_output() {
-        // The reference implementation's first output from state [1, 2, 3, 4]
-        // is rotl(2 * 5, 7) * 9.
-        let mut generator = Xoshiro256::from_state([1, 2, 3, 4]);
-        assert_eq!(generator.next_u64(), 11_520);
-        assert_eq!(generator.next_u64(), 0);
-        assert_eq!(generator.next_u64(), 1_509_978_240);
-    }
-
-    #[test]
-    fn up_to_stays_in_bounds_and_reaches_both_ends() {
-        let mut generator = Xoshiro256::from_seed(7);
-        let mut seen = [false; 5];
-        for _ in 0..10_000 {
-            let value = generator.up_to(4);
-            seen[value as usize] = true;
-        }
-        assert_eq!(seen, [true; 5]);
-        assert_eq!(generator.up_to(0), 0);
-    }
+    use super::{Choices, byte_width, decode_hex, encode_hex};
 
     #[test]
     fn byte_width_is_the_fewest_bytes_holding_the_bound() {

@@ -8,8 +8,9 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
 
-use super::choices::{Choices, Invalid, SplitMix64, Xoshiro256};
+use super::choices::{Choices, Invalid};
 use super::strategy::Strategy;
+use crate::rng::{SplitMix64, Xoshiro256};
 
 /// The environment variable that replaces every property's default seed.
 pub const SEED_VARIABLE: &str = "PURRDF_PROP_SEED";

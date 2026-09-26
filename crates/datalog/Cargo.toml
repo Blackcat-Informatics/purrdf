@@ -62,6 +62,7 @@ smallvec = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+purrdf-testkit = { workspace = true }
 
 [[bench]]
 # Semi-naive join latency along the three axes a join's cost actually has: the

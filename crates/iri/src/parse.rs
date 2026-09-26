@@ -949,7 +949,7 @@ mod tests {
         ];
         let mut state = 0x01B1_C0DE_5EED_u64;
         let mut next = move || {
-            usize::try_from(crate::test_rng::splitmix64_next(&mut state) % 1_000_003)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut state) % 1_000_003)
                 .expect("small")
         };
         let mut verdicts = [0_usize; 3];

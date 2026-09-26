@@ -606,7 +606,7 @@ mod tests {
 
     impl Gen {
         fn next(&mut self) -> u64 {
-            crate::test_rng::splitmix64_next(&mut self.0)
+            purrdf_testkit::rng::splitmix64_next(&mut self.0)
         }
 
         fn below(&mut self, bound: u64) -> u64 {

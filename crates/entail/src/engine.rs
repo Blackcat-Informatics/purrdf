@@ -1452,7 +1452,7 @@ mod escape_tests {
 
     impl SplitMix {
         const fn next(&mut self) -> u64 {
-            crate::test_rng::splitmix64_next(&mut self.0)
+            purrdf_testkit::rng::splitmix64_next(&mut self.0)
         }
 
         fn below(&mut self, n: usize) -> usize {
