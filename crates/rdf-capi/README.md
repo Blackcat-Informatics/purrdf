@@ -167,12 +167,16 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
   NULL keeps the default of 65,536 rounds that infer a new term. A host running
   untrusted rule sets should pass a lower limit, because an exponential rule set
   reaches the engine's fixed arena and join ceilings only slowly under the default.
-- `purrdf_shacl_eval_node_expr(shapes_ttl, shapes_base_iri, data_nt, expr, focus,
-  scope, scope_count, import_iris, import_documents, import_count, out_terms,
-  out_error)` evaluates one node expression of the
-  shapes graph. `expr` is an IRI or `_:label`, `focus` an IRI or an N-Triples term,
-  and each `scope` entry a `NAME=TERM` binding. The output nodes come back one
-  N-Triples term per line, in sequence order.
+- `purrdf_shacl_eval_node_expr(shapes_ttl, shapes_base_iri, data_nt, expr,
+  expr_at, expr_via, expr_via_count, expr_turtle, focus, scope, scope_count,
+  import_iris, import_documents, import_count, out_terms, out_error)` evaluates
+  one node expression of the shapes graph. Exactly one selector is non-NULL:
+  `expr` is an IRI or `_:label`; `expr_at` with `expr_via` walks from a named
+  node, each predicate reaching exactly one value, to an anonymous `[ … ]`
+  expression; `expr_turtle` is the expression inline as Turtle, whose one root
+  blank node is the expression. `focus` is an IRI or an N-Triples term, and each
+  `scope` entry a `NAME=TERM` binding. The output nodes come back one N-Triples
+  term per line, in sequence order.
 - `purrdf_shacl_lint_shapes(shapes_ttl, shapes_base_iri, import_iris,
   import_documents, import_count, out_report, out_clean, out_findings, out_error)`
   certifies a shapes graph — its whole `owl:imports` closure: the loader's verdict, the

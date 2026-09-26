@@ -315,8 +315,15 @@ fn apply_rules(
 /// scope)` — returning its output nodes as N-Triples 1.2 terms, in the order the
 /// expression's sequence semantics define.
 ///
-/// `expr` is the expression node: an absolute IRI, or `"_:label"` for a blank node the
-/// shapes document labels so. `focus` is an absolute IRI or any N-Triples term. `scope`
+/// The expression is named exactly one way. `expr` is the expression node: an absolute
+/// IRI, or `"_:label"` for a blank node the shapes document labels so. Otherwise `expr` is
+/// `None` and either `expr_at` names a node and `expr_via` the predicates (absolute IRIs)
+/// a walk from it follows, each step reaching exactly one value — how an anonymous
+/// `[ … ]` expression is named — or `expr_turtle` gives the expression inline as a Turtle
+/// document, read under the shapes document's prefixes and base and merged into the
+/// shapes graph, whose one root blank node is the expression. None or several selectors,
+/// a walk step reaching no value or several, and an inline document without exactly one
+/// root raise `ValueError`. `focus` is an absolute IRI or any N-Triples term. `scope`
 /// maps each `shnex:var` name to a term spelled as `focus` is; the name `focusNode`
 /// (resolved to the focus node before the scope is searched) raises `ValueError`, as do a
 /// label the shapes document never wrote and any parse or evaluation failure.
@@ -324,19 +331,25 @@ fn apply_rules(
 /// `imports` is the shapes graph's `owl:imports` table — see the [module documentation](self); an
 /// imported document's functions and shapes are in scope.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, scope=None, shapes_base=None, imports=Vec::new()))]
+#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, expr_at=None, expr_via=Vec::new(), expr_turtle=None, scope=None, shapes_base=None, imports=Vec::new()))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn eval_node_expr(
     py: Python<'_>,
     shapes_ttl: &str,
     data_nt: &str,
-    expr: &str,
+    expr: Option<&str>,
     focus: &str,
+    expr_at: Option<&str>,
+    expr_via: Vec<String>,
+    expr_turtle: Option<&str>,
     scope: Option<std::collections::BTreeMap<String, String>>,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
 ) -> PyResult<Vec<String>> {
+    let via: Vec<&str> = expr_via.iter().map(String::as_str).collect();
+    let expr = purrdf_validate::ExprSelector::from_parts(expr, expr_at, &via, expr_turtle)
+        .map_err(|error| shapes_error(py, error.into()))?;
     let pairs = crate::py_entail::import_list(&imports);
     let scope = scope.unwrap_or_default();
     let bindings: Vec<(&str, &str)> = scope

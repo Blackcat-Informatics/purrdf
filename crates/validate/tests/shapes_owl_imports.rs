@@ -28,10 +28,10 @@ use purrdf_shapes::lint::lint;
 use purrdf_shapes::text_ingest::{parse_ntriples_to_dataset, parse_turtle_document};
 use purrdf_shapes::{ShapesError, ShapesImportError, ShapesImports};
 use purrdf_validate::{
-    NodeExprRequest, RulesRequest, SarifOptions, ShapesProductRefusal, ValidationOptions,
-    apply_rules_to_ntriples, entail_to_ntriples_string, eval_node_expr_to_terms, lint_shapes_ttl,
-    pack_shapes_product, validate_changes_to_sarif_string, validate_to_sarif_string,
-    validate_with_shapes_product,
+    ExprSelector, NodeExprRequest, RulesRequest, SarifOptions, ShapesProductRefusal,
+    ValidationOptions, apply_rules_to_ntriples, entail_to_ntriples_string, eval_node_expr_to_terms,
+    lint_shapes_ttl, pack_shapes_product, validate_changes_to_sarif_string,
+    validate_to_sarif_string, validate_with_shapes_product,
 };
 
 /// The imported ontology's IRI.
@@ -279,7 +279,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
             shapes_ttl: IMPORTER,
             shapes_base: None,
             data_nt: DATA,
-            expr: "http://example.org/Who",
+            expr: ExprSelector::Node("http://example.org/Who"),
             focus: "http://example.org/alice",
             scope: &[("who", "http://example.org/bob")],
             imports,

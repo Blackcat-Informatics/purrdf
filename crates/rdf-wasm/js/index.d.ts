@@ -1493,21 +1493,30 @@ export function shaclApplyRules(
  * focusNode, scope)` — returning its output nodes as N-Triples 1.2 terms, in the order the
  * expression's sequence semantics define.
  *
- * `expr` is an absolute IRI or `"_:label"` for a blank node the shapes document labels
- * so; `focus` is an absolute IRI or any N-Triples term; `scope` is an array of
- * `"NAME=TERM"` bindings read by `shnex:var "NAME"`. Throws on a label the shapes
- * document never wrote, a binding named `focusNode` or bound twice, and any parse or
- * evaluation failure.
+ * The expression is named exactly one way. `expr` is an absolute IRI or `"_:label"` for a
+ * blank node the shapes document labels so. Otherwise `expr` is `undefined` and either
+ * `exprAt` names a node and `exprVia` the predicate IRIs a walk from it follows, each
+ * step reaching exactly one value (how an anonymous `[ … ]` expression is named), or
+ * `exprTurtle` is the expression as a Turtle document, read under the shapes document's
+ * prefixes and base and merged into the shapes graph, whose one root blank node is the
+ * expression. `focus` is an absolute IRI or any N-Triples term; `scope` is an array of
+ * `"NAME=TERM"` bindings read by `shnex:var "NAME"`. Throws on none or several
+ * selectors, a walk step reaching no value or several, an inline document without
+ * exactly one root, a label the shapes document never wrote, a binding named
+ * `focusNode` or bound twice, and any parse or evaluation failure.
  */
 export function shaclEvalNodeExpr(
   shapesTtl: string,
   dataNt: string,
-  expr: string,
+  expr: string | undefined,
   focus: string,
   scope?: readonly string[],
   shapesBase?: string,
   importIris?: readonly string[],
   importDocuments?: readonly string[],
+  exprAt?: string,
+  exprVia?: readonly string[],
+  exprTurtle?: string,
 ): string[];
 
 /**

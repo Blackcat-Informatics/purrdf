@@ -408,6 +408,102 @@ fn cli_node_expr() {
     assert_eq!(code(&no_equals), 2, "{}", stderr(&no_equals));
 }
 
+/// `node-expr` names an ANONYMOUS expression two ways: by a walk from a named node (the
+/// rule's `sh:object` expression, reached from `ex:Tagger`), and inline as Turtle (whose
+/// `sh:prefixes ex:Prefixes` resolves in the shapes graph). Each refusal sits beside a
+/// valid neighbour: a walk step reaching two values beside one reaching one, an inline
+/// document with two roots beside one with one, and the selector flags' usage errors
+/// beside the spelling that runs.
+#[test]
+fn cli_node_expr_selectors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = shapes_file(dir.path(), TOOLS);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let node_expr = |selector: &[&str]| {
+        let mut args = vec!["node-expr", "--shapes", &shapes];
+        args.extend_from_slice(selector);
+        args.extend_from_slice(&["--focus", "http://example.org/ns#a", &data]);
+        run(&args)
+    };
+    const SH: &str = "http://www.w3.org/ns/shacl#";
+
+    let walked = node_expr(&[
+        "--expr-at",
+        "http://example.org/ns#Tagger",
+        "--expr-via",
+        &format!("{SH}rule"),
+        "--expr-via",
+        &format!("{SH}object"),
+    ]);
+    assert_eq!(code(&walked), 0, "{}", stderr(&walked));
+    assert_eq!(stdout(&walked), "<http://example.org/ns#yes>\n");
+
+    let one = node_expr(&[
+        "--expr-at",
+        &format!("{SH}SPARQLExprExpression"),
+        "--expr-via",
+        "http://www.w3.org/2000/01/rdf-schema#isDefinedBy",
+    ]);
+    assert_eq!(code(&one), 0, "{}", stderr(&one));
+    assert_eq!(stdout(&one), format!("<{SH}>\n"));
+    let two = node_expr(&[
+        "--expr-at",
+        &format!("{SH}SPARQLExprExpression"),
+        "--expr-via",
+        &format!("{SH}parameter"),
+    ]);
+    assert_eq!(code(&two), 1, "{}", stderr(&two));
+    assert!(
+        stderr(&two).contains("reaches 2 values"),
+        "{}",
+        stderr(&two)
+    );
+
+    let inline = node_expr(&[
+        "--expr-turtle",
+        "[ sh:sparqlExpr \"ex:yes\" ; sh:prefixes ex:Prefixes ] .",
+    ]);
+    assert_eq!(code(&inline), 0, "{}", stderr(&inline));
+    assert_eq!(stdout(&inline), "<http://example.org/ns#yes>\n");
+    let file = write_file(
+        dir.path(),
+        "expr.ttl",
+        "[ sh:sparqlExpr \"ex:yes\" ; sh:prefixes ex:Prefixes ] .\n",
+    );
+    let from_file = node_expr(&["--expr-turtle-file", &file]);
+    assert_eq!(code(&from_file), 0, "{}", stderr(&from_file));
+    assert_eq!(stdout(&from_file), "<http://example.org/ns#yes>\n");
+    let roots = node_expr(&[
+        "--expr-turtle",
+        "[ shnex:var \"a\" ] . [ shnex:var \"b\" ] .",
+    ]);
+    assert_eq!(code(&roots), 1, "{}", stderr(&roots));
+    assert!(
+        stderr(&roots).contains("has 2 root blank nodes"),
+        "{}",
+        stderr(&roots)
+    );
+
+    // Usage: two selectors, none, a walk with no predicate, a predicate with no walk,
+    // a relative walk start, and the inline file on stdin.
+    for selector in [
+        &[
+            "--expr",
+            "http://example.org/ns#Tag",
+            "--expr-turtle",
+            "[ shnex:var \"a\" ] .",
+        ][..],
+        &[][..],
+        &["--expr-at", "http://example.org/ns#Tagger"][..],
+        &["--expr-via", &format!("{SH}rule")][..],
+        &["--expr-at", "Tagger", "--expr-via", &format!("{SH}rule")][..],
+        &["--expr-turtle-file", "-"][..],
+    ] {
+        let out = node_expr(selector);
+        assert_eq!(code(&out), 2, "{selector:?}: {}", stderr(&out));
+    }
+}
+
 /// `shapes lint` certifies the declaration-bearing graph clean (exit 0), naming `sh:sparqlExpr`'s
 /// function as bound natively; a malformed neighbour is reported with findings (exit 1,
 /// the report still written); a graph `shacl-shacl.ttl` flags but SHACL 1.2 Core makes

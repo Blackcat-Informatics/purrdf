@@ -155,6 +155,41 @@ test("shaclEvalNodeExpr evaluates one expression node, natively and with a scope
   );
 });
 
+test("shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle", () => {
+  const SH = "http://www.w3.org/ns/shacl#";
+  const A = "http://example.org/ns#a";
+  const YES = ["<http://example.org/ns#yes>"];
+  const at = (node, via) =>
+    shaclEvalNodeExpr(SHAPES, DATA, undefined, A, undefined, undefined, undefined, undefined, node, via);
+  const inline = (turtle) =>
+    shaclEvalNodeExpr(SHAPES, DATA, undefined, A, undefined, undefined, undefined, undefined, undefined, undefined, turtle);
+  assert.deepEqual(at("http://example.org/ns#Tagger", [`${SH}rule`, `${SH}object`]), YES);
+  // One value beside two.
+  assert.deepEqual(
+    at(`${SH}SPARQLExprExpression`, ["http://www.w3.org/2000/01/rdf-schema#isDefinedBy"]),
+    [`<${SH}>`],
+  );
+  assert.throws(
+    () => at(`${SH}SPARQLExprExpression`, [`${SH}parameter`]),
+    (error) => error.message.includes("reaches 2 values"),
+  );
+  // One root beside two.
+  assert.deepEqual(inline('[ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] .'), YES);
+  assert.throws(
+    () => inline('[ shnex:var "a" ] . [ shnex:var "b" ] .'),
+    (error) => error.message.includes("has 2 root blank nodes"),
+  );
+  // One selector beside two.
+  assert.throws(
+    () =>
+      shaclEvalNodeExpr(
+        SHAPES, DATA, "http://example.org/ns#Tag", A, undefined, undefined, undefined, undefined,
+        undefined, undefined, '[ shnex:var "a" ] .',
+      ),
+    (error) => error.message.includes("2 of the expression node"),
+  );
+});
+
 test("shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one", () => {
   const clean = shaclLintShapes(SHAPES);
   assert.equal(clean.clean, true);

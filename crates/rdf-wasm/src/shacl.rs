@@ -538,8 +538,32 @@ pub fn shacl_apply_rules(
     })
 }
 
+/// The expression selector's four optional inputs, as `shaclEvalNodeExpr` receives them:
+/// `expr`, `exprAt`, `exprVia` and `exprTurtle`.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ExprInputs<'a> {
+    pub(crate) expr: Option<&'a str>,
+    pub(crate) at: Option<&'a str>,
+    pub(crate) via: &'a [String],
+    pub(crate) turtle: Option<&'a str>,
+}
+
+#[cfg(test)]
+impl<'a> ExprInputs<'a> {
+    /// `expr` alone — the node form.
+    const fn node(expr: &'a str) -> Self {
+        Self {
+            expr: Some(expr),
+            at: None,
+            via: &[],
+            turtle: None,
+        }
+    }
+}
+
 /// Evaluate one node expression. Native-testable core of [`shacl_eval_node_expr`]:
-/// `scope` holds `NAME=TERM` bindings.
+/// `scope` holds `NAME=TERM` bindings, and `expr` is mapped to the one selector it names
+/// by [`purrdf_validate::ExprSelector::from_parts`].
 #[allow(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct, independently-named input at the wasm boundary"
@@ -548,12 +572,14 @@ pub(crate) fn eval_node_expr_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
-    expr: &str,
+    expr: ExprInputs<'_>,
     focus: &str,
     scope: &[String],
     import_iris: &[String],
     import_documents: &[String],
 ) -> Result<Vec<String>, ShapesError> {
+    let via: Vec<&str> = expr.via.iter().map(String::as_str).collect();
+    let expr = purrdf_validate::ExprSelector::from_parts(expr.expr, expr.at, &via, expr.turtle)?;
     let imports = shapes_import_pairs(import_iris, import_documents)?;
     let bindings = scope
         .iter()
@@ -571,13 +597,20 @@ pub(crate) fn eval_node_expr_impl(
 }
 
 /// `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?, importIris?,
-/// importDocuments?)` → the output nodes, as an array of N-Triples 1.2 terms in the order
-/// the expression's sequence semantics define.
+/// importDocuments?, exprAt?, exprVia?, exprTurtle?)` → the output nodes, as an array of
+/// N-Triples 1.2 terms in the order the expression's sequence semantics define.
 ///
 /// Evaluates ONE node expression of the Turtle shapes graph — SHACL 1.2 Node Expressions'
 /// `evalExpr(expr, focusGraph, focusNode, scope)` — against a focus node of the
-/// N-Triples data graph. `expr` is an absolute IRI or `"_:label"` for a blank node the
-/// shapes document labels so; `focus` is an absolute IRI or any N-Triples term; `scope` is
+/// N-Triples data graph. The expression is named exactly one way: `expr` is an absolute
+/// IRI or `"_:label"` for a blank node the shapes document labels so; or `expr` is
+/// `undefined` and `exprAt` names a node and `exprVia` the predicate IRIs a walk from it
+/// follows, each step reaching exactly one value (how an anonymous `[ … ]` expression is
+/// named); or `expr` is `undefined` and `exprTurtle` is the expression as a Turtle
+/// document, read under the shapes document's prefixes and base, whose one root blank node
+/// is the expression. None or several selectors, a walk step reaching no value or several,
+/// and an inline document without exactly one root throw. `focus` is an absolute IRI or
+/// any N-Triples term; `scope` is
 /// an array of `"NAME=TERM"` bindings read by `shnex:var "NAME"`, the term spelled as
 /// `focus` is. Throws on a label the shapes document never wrote, a binding named
 /// `focusNode` or bound twice (neither could ever be read), and any parse or evaluation
@@ -592,18 +625,26 @@ pub(crate) fn eval_node_expr_impl(
 pub fn shacl_eval_node_expr(
     shapes_ttl: &str,
     data_nt: &str,
-    expr: &str,
+    expr: Option<String>,
     focus: &str,
     scope: Option<Vec<String>>,
     shapes_base: Option<String>,
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
+    expr_at: Option<String>,
+    expr_via: Option<Vec<String>>,
+    expr_turtle: Option<String>,
 ) -> Result<Vec<String>, JsValue> {
     eval_node_expr_impl(
         shapes_ttl,
         shapes_base.as_deref(),
         data_nt,
-        expr,
+        ExprInputs {
+            expr: expr.as_deref(),
+            at: expr_at.as_deref(),
+            via: expr_via.as_deref().unwrap_or_default(),
+            turtle: expr_turtle.as_deref(),
+        },
         focus,
         scope.as_deref().unwrap_or_default(),
         import_iris.as_deref().unwrap_or_default(),
@@ -1590,7 +1631,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 TOOLS_SHAPES,
                 None,
                 TOOLS_DATA,
-                "http://example.org/ns#Tag",
+                ExprInputs::node("http://example.org/ns#Tag"),
                 "http://example.org/ns#a",
                 &[],
                 &[],
@@ -1603,7 +1644,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 TOOLS_SHAPES,
                 None,
                 TOOLS_DATA,
-                "_:suffix",
+                ExprInputs::node("_:suffix"),
                 "http://example.org/ns#a",
                 &["suffix=\"!\"@en".to_owned()],
                 &[],
@@ -1615,7 +1656,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             TOOLS_SHAPES,
             None,
             TOOLS_DATA,
-            "_:nosuch",
+            ExprInputs::node("_:nosuch"),
             "http://example.org/ns#a",
             &[],
             &[],
@@ -1631,7 +1672,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             TOOLS_SHAPES,
             None,
             TOOLS_DATA,
-            "_:suffix",
+            ExprInputs::node("_:suffix"),
             "http://example.org/ns#a",
             &["suffix".to_owned()],
             &[],
@@ -1640,6 +1681,76 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         .expect_err("a binding with no `=`")
         .to_string();
         assert!(no_equals.contains("not NAME=TERM"), "{no_equals}");
+    }
+
+    /// An anonymous expression named by a walk and inline as Turtle, each refusal beside
+    /// a valid neighbour: a step reaching two values beside one reaching one, two roots
+    /// beside one, and two selectors beside one.
+    #[test]
+    fn wasm_eval_node_expr_selectors() {
+        const SH: &str = "http://www.w3.org/ns/shacl#";
+        let eval = |expr: ExprInputs<'_>| {
+            eval_node_expr_impl(
+                TOOLS_SHAPES,
+                None,
+                TOOLS_DATA,
+                expr,
+                "http://example.org/ns#a",
+                &[],
+                &[],
+                &[],
+            )
+            .map_err(|error| error.to_string())
+        };
+        let yes = Ok(vec!["<http://example.org/ns#yes>".to_owned()]);
+        let tagger_walk = [format!("{SH}rule"), format!("{SH}object")];
+        assert_eq!(
+            eval(ExprInputs {
+                at: Some("http://example.org/ns#Tagger"),
+                via: &tagger_walk,
+                ..ExprInputs::default()
+            }),
+            yes
+        );
+        let one = ["http://www.w3.org/2000/01/rdf-schema#isDefinedBy".to_owned()];
+        let parameter = format!("{SH}SPARQLExprExpression");
+        assert_eq!(
+            eval(ExprInputs {
+                at: Some(&parameter),
+                via: &one,
+                ..ExprInputs::default()
+            }),
+            Ok(vec![format!("<{SH}>")])
+        );
+        let two = [format!("{SH}parameter")];
+        let refused = eval(ExprInputs {
+            at: Some(&parameter),
+            via: &two,
+            ..ExprInputs::default()
+        })
+        .expect_err("two values");
+        assert!(refused.contains("reaches 2 values"), "{refused}");
+
+        assert_eq!(
+            eval(ExprInputs {
+                turtle: Some("[ sh:sparqlExpr \"ex:yes\" ; sh:prefixes ex:Prefixes ] ."),
+                ..ExprInputs::default()
+            }),
+            yes
+        );
+        let roots = eval(ExprInputs {
+            turtle: Some("[ shnex:var \"a\" ] . [ shnex:var \"b\" ] ."),
+            ..ExprInputs::default()
+        })
+        .expect_err("two roots");
+        assert!(roots.contains("has 2 root blank nodes"), "{roots}");
+        let both = eval(ExprInputs {
+            expr: Some("http://example.org/ns#Tag"),
+            turtle: Some("[ shnex:var \"a\" ] ."),
+            ..ExprInputs::default()
+        })
+        .expect_err("two selectors");
+        assert!(both.contains("2 of the expression node"), "{both}");
     }
 
     /// The lint entry point: the fixture certifies clean with `sh:sparqlExpr`'s function

@@ -42,6 +42,7 @@ use purrdf_shapes::text_ingest::{parse_ntriples_to_dataset, parse_turtle_documen
 use purrdf_shapes::{Inference, RuleOptions, ShapesError, ShapesImports, engine};
 
 use crate::ShapesImportList;
+use crate::expr_selector::ExprSelector;
 
 /// One rules run across the host boundary: the data graph and exactly ONE rule source —
 /// a SHACL shapes graph's rules, or a SPARQL 1.2 RL rule set.
@@ -163,9 +164,10 @@ pub struct NodeExprRequest<'a> {
     pub shapes_base: Option<&'a str>,
     /// The focus graph, as N-Triples.
     pub data_nt: &'a str,
-    /// The expression node: an absolute IRI, or `_:label` for a blank node the shapes
-    /// document labels (see [`free_expression::parse_term`]).
-    pub expr: &'a str,
+    /// Which node expression to evaluate: the node itself, the node a walk of
+    /// predicates reaches from a named node, or an inline Turtle expression (see
+    /// [`ExprSelector`]).
+    pub expr: ExprSelector<'a>,
     /// The focus node, as an absolute IRI or an N-Triples term.
     pub focus: &'a str,
     /// The scope's variable bindings, `(name, term)`, the term spelled as `focus` is.
@@ -177,13 +179,15 @@ pub struct NodeExprRequest<'a> {
 
 /// Evaluate one node expression and return its output nodes as N-Triples 1.2 terms, in
 /// the order the expression's sequence semantics define. See
-/// [`free_expression::evaluate`].
+/// [`free_expression::evaluate`], and [`ExprSelector`] for how the expression is named.
 ///
 /// # Errors
 ///
 /// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
 /// or its import table cannot be used; [`ShapesError::Invalid`] for a document that does
-/// not parse, a term that is not one, and anything else [`free_expression::evaluate`]
+/// not parse, a term that is not one, a selector that names no single expression (the
+/// [`crate::ExprSelectorError`] text: a walk step reaching no value or several, an inline
+/// expression without exactly one root), and anything else [`free_expression::evaluate`]
 /// refuses.
 pub fn eval_node_expr_to_terms(request: &NodeExprRequest<'_>) -> Result<Vec<String>, ShapesError> {
     let imports = ShapesImports::from_turtle(request.imports)?;
@@ -191,7 +195,7 @@ pub fn eval_node_expr_to_terms(request: &NodeExprRequest<'_>) -> Result<Vec<Stri
         .map_err(|errors| errors.join("\n"))?;
     let imports = read_under(imports, request.shapes_base, shapes.base.as_deref());
     let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
-    let root = free_expression::parse_term(request.expr).map_err(|e| format!("expr: {e}"))?;
+    let selector = request.expr.parse()?;
     let focus = free_expression::parse_term(request.focus).map_err(|e| format!("focus: {e}"))?;
     let scope = request
         .scope
@@ -202,10 +206,15 @@ pub fn eval_node_expr_to_terms(request: &NodeExprRequest<'_>) -> Result<Vec<Stri
                 .map_err(|e| format!("scope {name}: {e}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let selected = selector.select(
+        &shapes.dataset,
+        &shapes.prefixes,
+        shapes.base.as_deref().or(request.shapes_base),
+    )?;
     let outputs = free_expression::evaluate(&FreeExpression {
-        shapes: &shapes.dataset,
+        shapes: &selected.shapes,
         prefixes: &shapes.prefixes,
-        root: &root,
+        root: &selected.root,
         data: data.as_ref(),
         focus: &focus,
         scope: &scope,

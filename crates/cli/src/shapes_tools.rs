@@ -35,6 +35,7 @@ use purrdf::shapes::free_expression::{self, FreeExpression};
 use purrdf::shapes::srl::{self, InferOptions};
 use purrdf::shapes::{Inference, RuleOptions, engine, lint};
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
+use purrdf_validate::ExprSelector;
 
 use crate::cli::{CliRdfFormat, LedgerTarget, ReportTarget};
 use crate::error::CliError;
@@ -300,8 +301,9 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) shapes_base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable.
     pub(crate) imports: &'a [String],
-    /// `--expr`.
-    pub(crate) expr: &'a str,
+    /// The expression selector: `--expr`, `--expr-at`/`--expr-via`, `--expr-turtle` or
+    /// `--expr-turtle-file`.
+    pub(crate) expr: ExprFlags<'a>,
     /// `--focus`.
     pub(crate) focus: &'a str,
     /// `--scope NAME=TERM`, repeatable.
@@ -314,6 +316,41 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) input: &'a str,
     /// The output path `OUT`, or `-`.
     pub(crate) output: &'a str,
+}
+
+/// The `node-expr` expression-selector flags, of which clap admits exactly one form.
+pub(crate) struct ExprFlags<'a> {
+    /// `--expr`.
+    pub(crate) expr: Option<&'a str>,
+    /// `--expr-at`.
+    pub(crate) expr_at: Option<&'a str>,
+    /// `--expr-via`, repeatable, in order.
+    pub(crate) expr_via: &'a [String],
+    /// `--expr-turtle`.
+    pub(crate) expr_turtle: Option<&'a str>,
+    /// `--expr-turtle-file`.
+    pub(crate) expr_turtle_file: Option<&'a str>,
+}
+
+impl ExprFlags<'_> {
+    /// The flags as the operator wrote them, for a diagnostic's context.
+    fn spelled(&self) -> String {
+        if let Some(expr) = self.expr {
+            return format!("--expr {expr}");
+        }
+        if let Some(node) = self.expr_at {
+            let mut out = format!("--expr-at {node}");
+            for predicate in self.expr_via {
+                out.push_str(" --expr-via ");
+                out.push_str(predicate);
+            }
+            return out;
+        }
+        if let Some(path) = self.expr_turtle_file {
+            return format!("--expr-turtle-file {path}");
+        }
+        "--expr-turtle".to_owned()
+    }
 }
 
 /// Run the `node-expr` subcommand.
@@ -337,8 +374,29 @@ pub(crate) fn run_node_expr(
         crate::validate::shapes_document_base(options.shapes, shapes_format, options.shapes_base)?;
     // Every argv term is decided before a document is read: a malformed one is the command
     // line's fault.
-    let root = free_expression::parse_term(options.expr)
-        .map_err(|error| CliError::Usage(format!("--expr {error}")))?;
+    let context = options.expr.spelled();
+    let via: Vec<&str> = options.expr.expr_via.iter().map(String::as_str).collect();
+    let argv_selector = match (
+        options.expr.expr,
+        options.expr.expr_at,
+        options.expr.expr_turtle,
+    ) {
+        (Some(expr), _, _) => Some(ExprSelector::Node(expr)),
+        (None, Some(node), _) => Some(ExprSelector::At { node, via: &via }),
+        (None, None, Some(text)) => Some(ExprSelector::Turtle(text)),
+        (None, None, None) => None,
+    };
+    let argv_selector = argv_selector
+        .map(|selector| selector.parse())
+        .transpose()
+        .map_err(|error| CliError::Usage(format!("{context}: {error}")))?;
+    if options.expr.expr_turtle_file == Some("-") {
+        return Err(CliError::Usage(
+            "--expr-turtle-file -: stdin is IN's or --shapes'; write the expression to a \
+             file, or pass it with --expr-turtle"
+                .to_owned(),
+        ));
+    }
     let focus = free_expression::parse_term(options.focus)
         .map_err(|error| CliError::Usage(format!("--focus {error}")))?;
     let scope = options
@@ -361,23 +419,43 @@ pub(crate) fn run_node_expr(
     )?;
     let table = shapes_imports(&root_document, options.imports)?;
     let data = source::load_dataset(options.input, data_format, options.base)?;
+    let selector = match (argv_selector, options.expr.expr_turtle_file) {
+        (Some(selector), _) => selector,
+        (None, Some(path)) => {
+            let text = String::from_utf8(source::read_bytes(path)?).map_err(|error| {
+                CliError::Runtime(format!(
+                    "--expr-turtle-file {path}: not UTF-8 text: {error}"
+                ))
+            })?;
+            ExprSelector::Turtle(&text)
+                .parse()
+                .map_err(|error| CliError::Usage(format!("{context}: {error}")))?
+        }
+        (None, None) => {
+            return Err(CliError::Usage(
+                "name the expression with --expr, --expr-at, --expr-turtle or \
+                 --expr-turtle-file"
+                    .to_owned(),
+            ));
+        }
+    };
+    let selected = selector
+        .select(
+            &root_document.dataset,
+            &root_document.prefixes,
+            root_document.loaded.last().map(String::as_str),
+        )
+        .map_err(|error| CliError::Runtime(format!("{context}: {error}")))?;
     let outputs = free_expression::evaluate(&FreeExpression {
-        shapes: &root_document.dataset,
+        shapes: &selected.shapes,
         prefixes: &root_document.prefixes,
-        root: &root,
+        root: &selected.root,
         data: data.as_ref(),
         focus: &focus,
         scope: &scope,
         imports: &table,
     })
-    .map_err(|error| {
-        shapes_error(
-            error,
-            &format!("--expr {}", options.expr),
-            &root_document,
-            "--shapes-base",
-        )
-    })?;
+    .map_err(|error| shapes_error(error, &context, &root_document, "--shapes-base"))?;
     let mut text = String::new();
     for term in &outputs {
         text.push_str(&term.to_string());

@@ -67,6 +67,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   recorded. A pattern conjunct restates `"type": "string"`, so LinkML reads it
   with its string carrier. Every emitter oracle runs a temporal fixture over
   projected instances.
+- **validate:** every host names an ANONYMOUS node expression. A
+  `purrdf_validate::ExprSelector` names the expression in one of three ways:
+  the node itself (an IRI or `_:label`, as before); a walk from a named node
+  along one or more predicates, each step reaching exactly one value; or an
+  inline Turtle document. The Turtle document is read under the shapes
+  document's prefixes and base and merged into the shapes graph with its blank
+  nodes kept apart, and its one root blank node is the expression. A step
+  reaching no value or several, and a document with no root or several, are
+  typed `ExprSelectorError`s naming the count. `NodeExprRequest::expr` is now an
+  `ExprSelector`. The CLI's `node-expr` gains `--expr-at` / `--expr-via`,
+  `--expr-turtle` and `--expr-turtle-file` beside `--expr`, exactly one of them
+  required. Python's `eval_node_expr` takes `expr=None` with `expr_at`,
+  `expr_via` or `expr_turtle`. WASM's `shaclEvalNodeExpr` takes an optional
+  `expr` and trailing `exprAt`, `exprVia` and `exprTurtle`. The C ABI's
+  `purrdf_shacl_eval_node_expr` gains `expr_at`, `expr_via`, `expr_via_count`
+  and `expr_turtle` between `expr` and `focus`, with `expr` nullable. All 143
+  W3C SHACL 1.2 `sht:EvalNodeExpr` tests run through the `purrdf node-expr`
+  binary, each entry's expression named by the walk `mf:action` then
+  `sht:nodeExpr`. The six upstream errata are graded by the same table the
+  library harness applies.
 - **core:** `purrdf_core::xsd_regex::to_ecma_262` writes the `i` flag into the
   pattern as XPath case variants (F&O 3.1 section 5.6.2), instead of refusing
   it: each normal character and character range gains its variants, and every

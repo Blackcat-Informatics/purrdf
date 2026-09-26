@@ -60,6 +60,7 @@
 
 pub mod build;
 pub mod entail;
+pub mod expr_selector;
 pub mod model;
 pub mod path_syntax;
 pub mod product;
@@ -126,6 +127,7 @@ pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
 /// than a map because order is the caller's and this boundary's output is deterministic.
 /// See [`purrdf_shapes::imports`].
 pub type ShapesImportList<'a> = [(&'a str, &'a str)];
+pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, SelectedExpression};
 pub use shapes_tools::{
     NodeExprRequest, RulesOutcome, RulesRequest, apply_rules_to_ntriples, eval_node_expr_to_terms,
     lint_shapes_ttl, parse_scope_binding,

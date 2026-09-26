@@ -797,14 +797,54 @@ out = purrdf.shapes.apply_rules(data_nt, srl=srl_text)  # SPARQL 1.2 RL
 against a focus node of a data graph, as SHACL 1.2 Node Expressions'
 `evalExpr(expr, focusGraph, focusNode, scope)`. The expression is parsed by the
 shapes parser itself, so custom functions, shape references and `sh:prefixes`
-bind as they do inside a shape. The expression is named by IRI, or by `_:label`
-for a blank node the shapes document labels. Scope variables are bound by name
-and read by `shnex:var`. The output nodes come back as N-Triples terms in the
-order the expression's sequence semantics define.
+bind as they do inside a shape. Scope variables are bound by name and read by
+`shnex:var`. The output nodes come back as N-Triples terms in the order the
+expression's sequence semantics define.
+
+Every host names the expression in one of three ways:
+
+- **The node itself**: an IRI, or `_:label` for a blank node the shapes
+  document labels. An IRI that is the subject of no triple is a constant
+  expression and evaluates to itself.
+- **A walk from a named node**: a start node and one or more predicates,
+  followed in order. Each step must reach exactly one value; a step that
+  reaches none or several is refused, and the error names the step and the
+  count. This is how an anonymous `[ … ]` expression is named, which is how
+  most node expressions are written. `ex:Label` then `sh:values` is that
+  property shape's computed-values expression. A W3C `sht:EvalNodeExpr` test
+  entry's expression is the entry, then `mf:action`, then `sht:nodeExpr`. All
+  143 of the suite's node-expression tests run through `purrdf node-expr` this
+  way.
+- **Inline Turtle**: a Turtle document read under the shapes document's
+  prefixes and base, where its own directives take precedence. It is merged into
+  the shapes graph, so its shape references and function calls bind there, and
+  its blank nodes are kept apart from the shapes document's. The expression is
+  the document's one root: the blank node that is the subject of a triple and
+  the object of none. A document with no root or several is refused.
+
+| Host | Node | Walk | Inline Turtle |
+|---|---|---|---|
+| CLI | `--expr` | `--expr-at NODE --expr-via PREDICATE…` | `--expr-turtle`, `--expr-turtle-file` |
+| Python | `expr` | `expr_at=`, `expr_via=[…]` | `expr_turtle=` |
+| WebAssembly | `expr` | `exprAt`, `exprVia` | `exprTurtle` |
+| C ABI | `expr` | `expr_at`, `expr_via`, `expr_via_count` | `expr_turtle` |
+| Rust (`purrdf_validate`) | `ExprSelector::Node` | `ExprSelector::At` | `ExprSelector::Turtle` |
+
+Naming none of the three, or more than one, is refused.
 
 ```python
 purrdf.shapes.eval_node_expr(shapes_ttl, data_nt, "_:suffix",
                              "http://example.org/a", scope={"suffix": '"!"'})
+purrdf.shapes.eval_node_expr(shapes_ttl, data_nt, None, "http://example.org/a",
+                             expr_at="http://example.org/Label",
+                             expr_via=["http://www.w3.org/ns/shacl#values"])
+purrdf.shapes.eval_node_expr(shapes_ttl, data_nt, None, "http://example.org/a",
+                             expr_turtle="[ sh:path ex:name ] .")
+```
+
+```sh
+purrdf node-expr --shapes shapes.ttl --expr-turtle '[ sh:path ex:name ] .' \
+  --focus http://example.org/a data.ttl
 ```
 
 **Certifying a shapes graph.** Loading a shapes graph is the hot path: it

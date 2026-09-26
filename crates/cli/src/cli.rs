@@ -1267,11 +1267,30 @@ pub(crate) enum Command {
     /// they would inside a shape. The answer is the expression's output nodes, one
     /// N-Triples 1.2 term per line, in the order its sequence semantics define.
     ///
+    /// The expression is named exactly one way. `--expr` names the node itself.
+    /// `--expr-at NODE --expr-via PREDICATE…` names the node a walk reaches from a named
+    /// node, each step reaching exactly one value — how an anonymous `[ … ]` expression is
+    /// named: `--expr-at ex:S --expr-via sh:values` (IRIs written in full) is `ex:S`'s
+    /// `sh:values` expression, and a W3C `sht:EvalNodeExpr` entry's expression is
+    /// `--expr-at ENTRY --expr-via mf:action --expr-via sht:nodeExpr`. `--expr-turtle` and
+    /// `--expr-turtle-file` give the expression inline, as a Turtle document read under
+    /// the shapes document's prefixes and base and merged into the shapes graph; the
+    /// expression is its one root, the blank node that is the subject of a triple and the
+    /// object of none.
+    ///
     /// Exit codes: **0** when the expression evaluated, whether to nodes or to none.
     /// **1** for a malformed shapes graph or data graph, an expression that does not parse
-    /// or fails to evaluate, and an expression blank node the shapes document never
-    /// labelled. **2** for a usage error. The output count is always written to stderr as
-    /// `node-expr outputs N`.
+    /// or fails to evaluate, an expression blank node the shapes document never labelled,
+    /// a walk step reaching no value or several, and an inline expression that is not
+    /// Turtle or has no single root. **2** for a usage error, including a selector term
+    /// that is not one. The output count is always written to stderr as `node-expr
+    /// outputs N`.
+    #[command(group(
+        clap::ArgGroup::new("expression")
+            .required(true)
+            .multiple(false)
+            .args(["expr", "expr_at", "expr_turtle", "expr_turtle_file"])
+    ))]
     NodeExpr {
         /// The shapes graph `FILE` carrying the expression, or `-` for stdin (which
         /// requires `--shapes-from`).
@@ -1293,7 +1312,26 @@ pub(crate) enum Command {
         /// document labels `_:LABEL`. An IRI that is the subject of no triple is a constant
         /// expression, evaluating to itself; a label the document never wrote is refused.
         #[arg(long, value_name = "IRI|_:LABEL")]
-        expr: String,
+        expr: Option<String>,
+        /// Name the expression by a walk: start from this node (an absolute IRI, or
+        /// `_:LABEL`) and follow each `--expr-via` predicate in turn. Every step must reach
+        /// exactly one value of the shapes graph; none or several is refused, naming the
+        /// step and the count.
+        #[arg(long = "expr-at", value_name = "IRI|_:LABEL", requires = "expr_via")]
+        expr_at: Option<String>,
+        /// One predicate (an absolute IRI) of the `--expr-at` walk. Repeatable, followed
+        /// in the order given.
+        #[arg(long = "expr-via", value_name = "IRI", requires = "expr_at")]
+        expr_via: Vec<String>,
+        /// The expression, inline, as a Turtle document read under the shapes document's
+        /// prefixes and base (its own directives outrank them), e.g. `'[ sh:path ex:p ] .'`.
+        /// Its blank nodes are standardized apart from the shapes document's.
+        #[arg(long = "expr-turtle", value_name = "TURTLE")]
+        expr_turtle: Option<String>,
+        /// `--expr-turtle`, read from `FILE` (`-` is not accepted: stdin is `IN`'s or
+        /// `--shapes`').
+        #[arg(long = "expr-turtle-file", value_name = "FILE")]
+        expr_turtle_file: Option<String>,
         /// The focus node: an absolute IRI, or any N-Triples 1.2 term (`"-3"^^<…>`,
         /// `_:b`, …). A blank node names the node the data document labels so.
         #[arg(long, value_name = "TERM")]
