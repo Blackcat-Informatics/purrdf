@@ -108,12 +108,14 @@ tests) passes, 547/547 with an empty expected-failure ledger:
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
-Three approved tests contradict normative SHACL 1.2 Core text and are graded
-against the spec-corrected expectation, each amendment quoting its clause:
+One approved test contradicts normative SHACL 1.2 Core text and is graded
+against the spec-corrected expectation, the amendment quoting its clause:
 `core/node/xone-003` (6.7.2.2: a property shape's result carries its
-`sh:path` as `sh:resultPath`), and `core/property/reifierShape-001` and `-002`
-(7.8.5: `sh:value` is the non-conforming reifier, or the triple term when a
-required reification is missing). Six node-expression tests are graded
+`sh:path` as `sh:resultPath`). `sh:reifierShape` and `sh:reificationRequired`
+results carry the value node as `sh:value`, as the approved
+`core/property/reifierShape-001` and `-002` state (7.8.5's textual definition
+names both the triple term and the reifier `t`); a non-conforming reifier's own
+results ride along as `sh:detail`. Six node-expression tests are graded
 against the XSD 1.1 canonical `xsd:decimal` form, which PurRDF emits. SPARQL
 1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
 `data-shapes` suite and a 73-case first-party frozen corpus gate the crate as

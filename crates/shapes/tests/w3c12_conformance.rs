@@ -221,24 +221,8 @@ struct Amendment {
     graded: ResultTuple,
 }
 
-const REIFIER_SHAPE_COMPONENT: &str =
-    "<http://www.w3.org/ns/shacl#ReifierShapeConstraintComponent>";
-const VIOLATION: &str = "<http://www.w3.org/ns/shacl#Violation>";
-const INVALID_RESOURCE_1: &str = "<http://example.com/ns#InvalidResource1>";
-const PROPERTY_A: &str = "<http://example.com/ns#propertyA>";
-const TEST_SHAPE_PROPERTY_A: &str = "<http://example.com/ns#TestShape-propertyA>";
 const XONE_PROPERTY_SHAPE: &str =
     "<http://www.w3.org/ns/shacl-shacl#xoneSubjectsShapeXonePropertyShape>";
-
-/// The SHACL 1.2 Core §7.8.5 sentences the `sh:reifierShape` entries grade
-/// against, quoted from the Working Draft and the editor's draft, which agree
-/// word for word.
-const REIFIER_SHAPE_CLAUSE: &str = "SHACL 1.2 Core §7.8.5 sh:reifierShape: \"Let t be the triple \
-     term (focus node, $path, value node). […] For each reifier t that does not conform to \
-     $reifierShape, there is a validation result with t as sh:value.\"";
-const REIFICATION_REQUIRED_CLAUSE: &str = "SHACL 1.2 Core §7.8.5 sh:reificationRequired: \"If \
-     $reificationRequired is set to true and there is no reified statement for the triple term \
-     t in the data graph, there is a validation result with t as sh:value.\"";
 
 /// Approved W3C SHACL 1.2 expectations that contradict normative SHACL 1.2 Core
 /// text: `(test id, the normative sentence quoted with its section, the exact
@@ -258,92 +242,34 @@ const REIFICATION_REQUIRED_CLAUSE: &str = "SHACL 1.2 Core §7.8.5 sh:reification
 ///   is `sh:xone`, through `sh:minListLength`, whose definition states no
 ///   exception to §6.7.2.2. The approved report omits `sh:resultPath`; the
 ///   quoted sentence makes it the shape's `sh:path`.
-/// * `core/property/reifierShape-001` — `ex:InvalidResource1`'s statement has one
-///   reifier (the annotation's blank node), and it fails `ex:ReifyShape`. The
-///   approved report gives the VALUE NODE, `sh:value "invalid"`; the quoted
-///   sentence's `t` is bound by "for each reifier t", so `sh:value` is the
-///   reifier, a blank node (`_:` in the comparison).
-/// * `core/property/reifierShape-002` — `ex:InvalidResource1`'s statement has no
-///   reifier and `sh:reificationRequired true`. The approved report gives
-///   `sh:value "invalid"`; the quoted sentence's `t` is the triple term
-///   `<<( ex:InvalidResource1 ex:propertyA "invalid" )>>`, so that is `sh:value`.
-const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[
-    (
-        "core/node/xone-003",
-        "SHACL 1.2 Core §6.7.2.2: \"For results produced by a property shape, this SHACL \
+const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[(
+    "core/node/xone-003",
+    "SHACL 1.2 Core §6.7.2.2: \"For results produced by a property shape, this SHACL \
          property path is equivalent to the value of sh:path of the shape, unless stated \
          otherwise.\"",
-        &[Amendment {
-            approved: ResultTuple {
-                focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
-                path: None,
-                value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
-                component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
-                severity: "<http://www.w3.org/ns/shacl#Warning>",
-                source_shape: XONE_PROPERTY_SHAPE,
-            },
-            graded: ResultTuple {
-                focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
-                path: Some("<http://www.w3.org/ns/shacl#xone>"),
-                value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
-                component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
-                severity: "<http://www.w3.org/ns/shacl#Warning>",
-                source_shape: XONE_PROPERTY_SHAPE,
-            },
-        }],
-    ),
-    (
-        "core/property/reifierShape-001",
-        REIFIER_SHAPE_CLAUSE,
-        &[Amendment {
-            approved: ResultTuple {
-                focus: INVALID_RESOURCE_1,
-                path: Some(PROPERTY_A),
-                value: Some("\"invalid\""),
-                component: REIFIER_SHAPE_COMPONENT,
-                severity: VIOLATION,
-                source_shape: TEST_SHAPE_PROPERTY_A,
-            },
-            graded: ResultTuple {
-                focus: INVALID_RESOURCE_1,
-                path: Some(PROPERTY_A),
-                value: Some("_:"),
-                component: REIFIER_SHAPE_COMPONENT,
-                severity: VIOLATION,
-                source_shape: TEST_SHAPE_PROPERTY_A,
-            },
-        }],
-    ),
-    (
-        "core/property/reifierShape-002",
-        REIFICATION_REQUIRED_CLAUSE,
-        &[Amendment {
-            approved: ResultTuple {
-                focus: INVALID_RESOURCE_1,
-                path: Some(PROPERTY_A),
-                value: Some("\"invalid\""),
-                component: REIFIER_SHAPE_COMPONENT,
-                severity: VIOLATION,
-                source_shape: TEST_SHAPE_PROPERTY_A,
-            },
-            graded: ResultTuple {
-                focus: INVALID_RESOURCE_1,
-                path: Some(PROPERTY_A),
-                value: Some(
-                    "<<( <http://example.com/ns#InvalidResource1> \
-                     <http://example.com/ns#propertyA> \"invalid\" )>>",
-                ),
-                component: REIFIER_SHAPE_COMPONENT,
-                severity: VIOLATION,
-                source_shape: TEST_SHAPE_PROPERTY_A,
-            },
-        }],
-    ),
-];
+    &[Amendment {
+        approved: ResultTuple {
+            focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
+            path: None,
+            value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
+            component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
+            severity: "<http://www.w3.org/ns/shacl#Warning>",
+            source_shape: XONE_PROPERTY_SHAPE,
+        },
+        graded: ResultTuple {
+            focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
+            path: Some("<http://www.w3.org/ns/shacl#xone>"),
+            value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
+            component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
+            severity: "<http://www.w3.org/ns/shacl#Warning>",
+            source_shape: XONE_PROPERTY_SHAPE,
+        },
+    }],
+)];
 
 /// [`EXPECTATION_DEFECTS`] pinned by count, so an entry cannot be added or
 /// dropped without this number moving with it.
-const EXPECTATION_DEFECTS_COUNT: usize = 3;
+const EXPECTATION_DEFECTS_COUNT: usize = 1;
 
 /// The approved expected results of `id` with `deltas` applied. A delta whose
 /// approved result the approved report does not contain is a stale entry and an

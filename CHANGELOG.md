@@ -1457,10 +1457,12 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and datatype, and `rdf:HTML` messages are accepted.
 
 - **shapes:** `sh:reifierShape` reported the triple term as `sh:value`, once per
-  result of the inner shape. SHACL 1.2 Core 7.8.5 reports a non-conforming reifier
-  "with t as sh:value", where t is bound by "for each reifier t", so there is now one
-  result per non-conforming reifier carrying the reifier; `sh:reificationRequired`
-  keeps the triple term. `sh:uniqueLang` (7.4.6) groups values by language tag and
+  result of the inner shape, and `sh:reificationRequired` reported the triple term
+  too. SHACL 1.2 Core 7.8.5's textual definition names both the triple term and the
+  reifier `t`; the approved W3C tests `core/property/reifierShape-001` and `-002`
+  expect the value node, and both results now carry the value node as `sh:value`.
+  There is one result per non-conforming reifier, carrying the reifier's own
+  validation results (the reifier as focus node) as `sh:detail`. `sh:uniqueLang` (7.4.6) groups values by language tag and
   base direction, so `"1"@ar`, `"1"@ar--ltr` and `"1"@ar--rtl` no longer collide.
 
 - **entail, validate, cli:** an `owl:imports` of an ontology already in the graph was
@@ -3050,8 +3052,10 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 - **BREAKING** **shapes:** validation answers change. A shapes graph that relied on a
   silently dropped term is refused at load, on a SHACL-SPARQL constraint, validator
   or target node as on a shape; results of a SPARQL-based constraint or validator
-  that declares `sh:resultAnnotation` carry its annotations; `sh:reifierShape` results carry the
-  reifier as `sh:value`, one per non-conforming reifier; `sh:uniqueLang` no longer
+  that declares `sh:resultAnnotation` carry its annotations; `sh:reifierShape` and
+  `sh:reificationRequired` results carry the value node as `sh:value`, one
+  `sh:reifierShape` result per non-conforming reifier with the reifier's own results
+  as `sh:detail`; `sh:uniqueLang` no longer
   reports values that differ only in base direction; `sh:defaultValue` on a property
   shape now changes results; a node typed `rdfs:Class` only through its parameters no
   longer gets an implicit class target; and a SHACL-SPARQL query without

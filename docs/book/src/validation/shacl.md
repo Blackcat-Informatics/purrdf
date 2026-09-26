@@ -315,8 +315,8 @@ cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 The last line of the scoreboard it prints is
 `W3C12 TOTAL: passed 547, xfailed 0, ledger 0`.
 
-Three approved tests expect a report that the normative SHACL 1.2 Core text
-does not produce. The harness grades each against the expectation with exactly
+One approved test expects a report that the normative SHACL 1.2 Core text
+does not produce. The harness grades it against the expectation with exactly
 one result amended, quotes the clause beside the amendment, and proves that a
 report without the amendment, or with a different one, fails:
 
@@ -325,15 +325,19 @@ report without the amendment, or with a different one, fails:
   shape, this SHACL property path is equivalent to the value of sh:path of the
   shape, unless stated otherwise." The graded result carries the shape's
   `sh:path`.
-- `core/property/reifierShape-001` expects the value node as `sh:value`.
-  Section 7.8.5 says: "For each reifier t that does not conform to
-  $reifierShape, there is a validation result with t as sh:value." The graded
-  result carries the reifier.
-- `core/property/reifierShape-002` expects the value node as `sh:value` for a
-  missing reification. Section 7.8.5 says: "If $reificationRequired is set to
-  true and there is no reified statement for the triple term t in the data
-  graph, there is a validation result with t as sh:value." The graded result
-  carries the triple term.
+
+A `sh:reifierShape` or `sh:reificationRequired` result carries the value node
+as `sh:value`. The textual definition in SHACL 1.2 Core section 7.8.5 uses the
+name `t` for two things. It opens "Let t be the triple term (focus node, $path,
+value node)", then reports "For each reifier t that does not conform to
+$reifierShape, there is a validation result with t as sh:value" and, for a
+missing reification, "there is a validation result with t as sh:value". The
+approved tests `core/property/reifierShape-001` and `-002` both expect the value
+node, and PurRDF follows the approved test suite's reading. A result for a
+non-conforming reifier also carries the reifier's own validation results as
+`sh:detail`, each with the reifier as its focus node, so the report still names
+the reifier and says why it fails. A missing reification has no reifier and
+carries no details.
 
 Six node-expression tests expect an integer-valued `xsd:decimal` in a lexical
 form that is not canonical, such as `"4.0"` or `"00"`. XSD 1.1 Part 2 (section
