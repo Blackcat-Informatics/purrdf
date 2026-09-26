@@ -158,7 +158,7 @@ pub struct SparqlTestCase {
     /// The full test IRI (used for diagnostics and xfail matching).
     pub iri: String,
     /// The sentinel base IRI of the manifest that declared this case (see
-    /// [`BaseResolver`]), ending in `/`.
+    /// the private `BaseResolver`), ending in `/`.
     ///
     /// Carried on the case because the base is a PER-MANIFEST fact and every stage
     /// that resolves a relative IRI for this case must use the SAME one. A query
@@ -238,13 +238,13 @@ const MAX_MANIFESTS_PER_CLOSURE: usize = 512;
 ///
 /// > **A manifest whose file name is `manifest.ttl` may not declare `mf:include`.**
 ///
-/// The datatest harness in `tests/sparql_conformance.rs` discovers cases with the
-/// glob `.*/manifest\.ttl$`. If an aggregator were itself named `manifest.ttl`
-/// while its children were too, the glob would discover BOTH, and every child's
-/// cases would run twice — once directly and once through the aggregator —
-/// silently doubling the pass tally. Naming aggregators something the leaf glob
-/// does not match (`manifest-all.ttl`, as the SEP-0009 corpus does) makes the two
-/// roles disjoint by construction: the glob discovers group manifests only, and
+/// `tests/sparql_conformance.rs` runs one case per file named `manifest.ttl` below
+/// `suite/` ([`crate::paths::suite_manifests`]). If an aggregator were itself named
+/// `manifest.ttl` while its children were too, discovery would find BOTH, and every
+/// child's cases would run twice — once directly and once through the aggregator —
+/// silently doubling the pass tally. Naming aggregators something discovery does
+/// not match (`manifest-all.ttl`, as the SEP-0009 corpus does) makes the two roles
+/// disjoint by construction: discovery finds group manifests only, and
 /// an aggregator is only ever loaded because a `[[test]]` target names it. This
 /// used to hold by accident of one file's name; it is now enforced, so a future
 /// corpus cannot reintroduce the double count.
@@ -266,8 +266,8 @@ const MAX_MANIFESTS_PER_CLOSURE: usize = 512;
 /// * An include cycle, direct or transitive — the error names the whole chain.
 /// * The same manifest reached twice in one closure (a diamond, not a cycle) —
 ///   its cases would be counted twice.
-/// * Nesting deeper than [`MAX_INCLUDE_DEPTH`] or wider than
-///   [`MAX_MANIFESTS_PER_CLOSURE`].
+/// * Nesting deeper than the private `MAX_INCLUDE_DEPTH` or wider than
+///   the private `MAX_MANIFESTS_PER_CLOSURE`.
 /// * Two manifests in one closure minting the same test-case IRI — the ledger in
 ///   [`crate::xfail`] could not tell them apart.
 /// * Every per-manifest guarantee below (the declared-vs-loaded completeness
@@ -624,7 +624,7 @@ fn declares_property(
 /// Resolve this manifest's `mf:include` collection to local manifest paths.
 ///
 /// Also enforces the aggregator-naming rule documented on [`load`]: a file named
-/// `manifest.ttl` is what the datatest root glob discovers, so it may not itself
+/// `manifest.ttl` is what suite discovery finds, so it may not itself
 /// aggregate — otherwise its children (also `manifest.ttl`) would be run twice.
 fn load_includes(
     dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
@@ -655,11 +655,11 @@ fn load_includes(
 
     if manifest_path.file_name().and_then(|n| n.to_str()) == Some("manifest.ttl") {
         return Err(format!(
-            "{}: a manifest named 'manifest.ttl' may not declare mf:include. The datatest root \
-             glob in crates/sparql-conformance/tests/sparql_conformance.rs discovers every \
-             '*/manifest.ttl', so an aggregator with that name would be discovered ALONGSIDE the \
+            "{}: a manifest named 'manifest.ttl' may not declare mf:include. \
+             crates/sparql-conformance/tests/sparql_conformance.rs runs every \
+             'manifest.ttl' below suite/ as a case, so an aggregator with that name would be discovered ALONGSIDE the \
              'manifest.ttl' files it includes and every one of their cases would run twice, \
-             silently doubling the pass tally. Name an aggregator something the leaf glob does \
+             silently doubling the pass tally. Name an aggregator something discovery does \
              not match (the vendored SEP-0009 corpus uses 'manifest-all.ttl')",
             manifest_path.display()
         ));

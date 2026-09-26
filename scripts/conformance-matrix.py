@@ -408,8 +408,8 @@ def _suite_shex_validation() -> SuiteResult:
 
 
 def _suite_sparql() -> SuiteResult:
-    # The datatest harness writes each manifest tally to stderr.  Serialise its
-    # cases so libtest progress output cannot splice through those tally lines.
+    # Each manifest case writes its tally to stderr.  Serialise the cases so the
+    # runner's progress output cannot splice through those tally lines.
     cmd = [
         "cargo",
         "test",
@@ -1379,7 +1379,7 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
             _noise("running 1 test"),
             # One manifest tally, because the property under test is "no tally
             # at all is RED". A manifest that drops out entirely is caught by
-            # the datatest harness itself — its case fails and cargo goes
+            # the conformance harness itself — its case fails and cargo goes
             # non-zero — not by counting lines here, which would need this
             # script to hold a second copy of the manifest list.
             _board(

@@ -18,7 +18,7 @@
 # anything, so none of those has a triple-form twin.
 #
 # Run by `crates/sparql-conformance/tests/construct_corpus.rs`, NOT by the
-# datatest harness (which is rooted at `suite/`), so this corpus reports its own
+# `sparql_conformance` harness (which is rooted at `suite/`), so this corpus reports its own
 # row in the conformance matrix instead of folding into the full-corpus tally.
 
 @prefix mf:  <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .

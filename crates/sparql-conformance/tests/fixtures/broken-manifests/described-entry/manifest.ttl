@@ -11,8 +11,8 @@
 # a parse error) common to both fixtures.
 #
 # Deliberately placed OUTSIDE `suite/`, for the same reason as its sibling:
-# `crates/sparql-conformance/tests/sparql_conformance.rs`'s
-# `datatest_stable::harness!` only discovers `suite/**/manifest.ttl`, so this
+# `crates/sparql-conformance/tests/sparql_conformance.rs` only discovers
+# `suite/**/manifest.ttl`, so this
 # file is never picked up as a live conformance case — it exists ONLY to be
 # fed to `manifest::load` directly by `crates/sparql-conformance/tests/
 # suite_inventory.rs`'s `broken_manifest_with_a_described_entry_loads_cleanly`

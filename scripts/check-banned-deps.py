@@ -8,9 +8,10 @@ Two independent rules, matched to how each dependency was actually replaced:
 
 * **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``,
   ``petgraph``, ``tempfile``, ``proptest`` (with the random-number,
-  fork-mode and bit-set stack it alone pulled in) and ``boon`` (with the
-  URL, IDNA and ICU4X stack it alone pulled in) have a first-party
-  replacement good for every edge kind, so reappearing ANYWHERE in the resolved dependency graph — runtime, build,
+  fork-mode and bit-set stack it alone pulled in), ``boon`` (with the
+  URL, IDNA and ICU4X stack it alone pulled in) and ``datatest-stable``
+  (with the path, runner and regex stack it alone pulled in) have a
+  first-party replacement good for every edge kind, so reappearing ANYWHERE in the resolved dependency graph — runtime, build,
   dev/test, or transitive — is a failure. This is read from ``Cargo.lock``
   (never ``Cargo.toml``), which records the full resolved closure, so a
   reintroduction through a dev-dependency or a transitive edge is caught the
@@ -113,6 +114,18 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "wait-timeout": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
     "quick-error": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
     "fnv": "purrdf_testkit::prop (cases run in-process under catch_unwind)",
+    # Pulled in by proptest's bit-set strategies and by fancy-regex; with both
+    # gone nothing else in the graph resolves them.
+    "bit-set": "purrdf_testkit::prop (no bit-set strategies are needed)",
+    "bit-vec": "purrdf_testkit::prop (no bit-set strategies are needed)",
+    "datatest-stable": "purrdf_testkit::harness fed by purrdf_sparql_conformance::paths::suite_manifests",
+    # datatest-stable's own closure: its UTF-8 path type, its libtest runner,
+    # the runner's JSON string escaper, and the backtracking regex engine its
+    # file pattern was matched with. Nothing else in the graph pulled any of them in.
+    "camino": "std::path (case names are the UTF-8-checked, /-joined relative path)",
+    "libtest-mimic": "purrdf_testkit::harness (the libtest-compatible harness = false runner)",
+    "escape8259": "purrdf_testkit::harness (the libtest-compatible harness = false runner)",
+    "fancy-regex": "purrdf_sparql_conformance::paths::suite_manifests (an exact file-name match)",
     "boon": "purrdf-jsonschema (native JSON Schema 2020-12, 2019-09 and draft-07 validation)",
     # boon's own closure: its URL/IDNA stack (url, idna and the ICU4X Unicode
     # data it normalizes with), its URI parser and its append-only list. Nothing
@@ -158,11 +171,6 @@ BANNED_ANY_EDGE: dict[str, str] = {
 # transitive third-party use is out of scope (see module docstring).
 BANNED_DIRECT_ONLY: dict[str, str] = {
     "hex": 'core::fmt::LowerHex formatting (`format!("{digest:x}")`)',
-    # Left the graph as proptest's dependencies, but `fancy-regex` (under
-    # `datatest-stable`, a dev-dependency of the SPARQL conformance harness)
-    # still resolves them, so only a direct edge is refused.
-    "bit-set": "purrdf_testkit::prop (no bit-set strategies are needed)",
-    "bit-vec": "purrdf_testkit::prop (no bit-set strategies are needed)",
     # proptest's rand_core 0.9 left with it; rand_core 0.6 stays in Cargo.lock as
     # an optional dependency of `signature` (under ed25519-dalek), so only a
     # direct edge is refused.

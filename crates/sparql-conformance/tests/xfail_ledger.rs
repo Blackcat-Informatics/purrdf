@@ -18,13 +18,14 @@
 //! asked about. This target closes both over the WHOLE live suite by loading
 //! every `suite/**/manifest.ttl` and matching the ledger against the complete set
 //! of case IRIs. It uses the ordinary libtest harness, because
-//! `tests/sparql_conformance.rs` is `harness = false` and its
-//! `datatest_stable::harness!` expands to a `fn main` that would never call a
+//! `tests/sparql_conformance.rs` is `harness = false` and its `fn main` hands
+//! only the discovered manifests to its runner, so it would never call a
 //! `#[test]` written beside it.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use purrdf_sparql_conformance::paths::suite_manifests;
 use purrdf_sparql_conformance::xfail::{self, XFAIL};
 
 /// Every case IRI the live `suite/` tree declares.
@@ -50,32 +51,15 @@ fn all_live_case_iris() -> BTreeSet<String> {
     iris
 }
 
-/// Every `manifest.ttl` under `suite/`, i.e. exactly what the datatest root glob
-/// `.*/manifest\.ttl$` discovers.
+/// Every `manifest.ttl` under `suite/`: the very discovery `sparql_conformance.rs`
+/// runs its cases from, so the ledger is checked against exactly the live cases.
 fn live_manifests() -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    collect(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("suite"),
-        &mut found,
-    );
-    found.sort();
-    found
-}
-
-/// Recursively collect `manifest.ttl` files under `dir`.
-fn collect(dir: &Path, found: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
-    for entry in entries {
-        let path = entry
-            .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
-            .path();
-        if path.is_dir() {
-            collect(&path, found);
-        } else if path.file_name().and_then(|n| n.to_str()) == Some("manifest.ttl") {
-            found.push(path);
-        }
-    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite");
+    suite_manifests(&root)
+        .unwrap_or_else(|e| panic!("discovering {}: {e}", root.display()))
+        .into_iter()
+        .map(|manifest| manifest.path)
+        .collect()
 }
 
 /// Every ledger entry must govern EXACTLY ONE live case.
