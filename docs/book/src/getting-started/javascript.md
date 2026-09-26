@@ -101,7 +101,7 @@ More on the RDF/JS mapping in [RDF/JS in JavaScript](../interop/rdfjs.md).
 ## Asynchronous queries and federation
 
 The synchronous methods are the offline lane: they install no `SERVICE` or
-`LOAD` source, so a non-`SILENT` `SERVICE` or `LOAD` fails by name. Every
+`LOAD` source, so a `SERVICE` or `LOAD` fails by name, `SILENT` or not. Every
 evaluating method also has a Promise-returning twin — `queryAsync`,
 `selectAsync`, `askAsync`, `constructAsync`, `describeAsync`, `queryRawAsync`,
 `queryRawBytesAsync`, `queryRawWithContextAsync`, `queryGovernedAsync`,
@@ -224,7 +224,9 @@ evaluated on its own, and the left side supplies only the list of endpoints to
 ask. A left row whose endpoint answers nothing keeps its bindings under
 `OPTIONAL` and is not removed under `MINUS`. Under `SERVICE SILENT`, an endpoint
 that fails contributes one row binding only `?e`, so its own left rows survive
-unextended and no other endpoint's rows change. A clause for which no solution
+unextended and no other endpoint's rows change. An `?e` bound to a literal or
+a blank node names no endpoint and is refused, `SILENT` or not. A clause for
+which no solution
 binds `?e` — bound nowhere, bound in only some left solutions, or bound only
 outside a further `OPTIONAL` or `MINUS` right side, an `EXISTS`, a
 `LIMIT`/`OFFSET`, an aggregate not grouped by `?e`, or a sub-`SELECT` that does
@@ -354,7 +356,7 @@ is the complete reference for these contracts.
 
 - **In-memory only.** SPARQL queries run over the in-memory dataset. The
   synchronous methods install no `SERVICE` or `LOAD` source, so there a remote
-  `SERVICE` or `LOAD` fails explicitly unless it is written `SILENT`; the
+  `SERVICE` or `LOAD` fails explicitly, `SILENT` or not; the
   asynchronous twins reach remote endpoints only through the handlers the host
   passes them.
 - **Triple terms per format.** `serialize` is the writer-native lane: an

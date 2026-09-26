@@ -159,16 +159,14 @@ fn verdict_of(case: &SparqlTestCase) -> Verdict {
     if matches!(case.kind, manifest::TestKind::Unknown) {
         return Verdict::Unmodeled;
     }
-    // Federated cases (`qt:serviceData`) resolve `SERVICE` through an in-memory
-    // source mapping each endpoint IRI to its data file (offline, deterministic).
+    // Every case resolves `SERVICE` through an in-memory source mapping each
+    // `qt:serviceData` endpoint IRI to its data file and failing every other endpoint
+    // as unreachable (offline, deterministic).
     let remote = match service::build(case) {
         Ok(source) => source,
         Err(msg) => return Verdict::Fail(msg),
     };
-    let remote = remote
-        .as_ref()
-        .map(|s| s as &(dyn purrdf_sparql_eval::ServiceResolver + Sync));
-    match run::run(case, remote) {
+    match run::run(case, Some(&remote)) {
         Ok(outcome) => match compare::compare(case, &outcome) {
             Ok(()) => Verdict::Pass,
             Err(msg) => Verdict::Fail(msg),

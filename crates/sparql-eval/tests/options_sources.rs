@@ -196,15 +196,35 @@ fn options_remote_joins_remote_rows() {
         .expect("the federated join evaluates");
     assert_eq!(rows(&federated), joined());
 
-    // Neighbour: the same join with no source. `SERVICE SILENT` contributes the join
-    // identity, so both local subjects survive with `?n` unbound — a different answer,
-    // which is what makes the treatment's single named row evidence of federation.
+    // Neighbour: the same join through a source that cannot reach the endpoint. The
+    // endpoint fails, so `SERVICE SILENT` contributes the join identity and both local
+    // subjects survive with `?n` unbound — a different answer, which is what makes the
+    // treatment's single named row evidence of federation.
+    let unreachable = InProcessServiceResolver::new();
     let unfederated = engine
-        .query_with_options_view(&*local(), request(&join_query(true)), QueryOptions::EMPTY)
-        .expect("SERVICE SILENT without a source is the join identity");
+        .query_with_options_view(
+            &*local(),
+            request(&join_query(true)),
+            QueryOptions::new().with_remote(Some(&unreachable)),
+        )
+        .expect("SERVICE SILENT over an endpoint that fails is the join identity");
     let identity = BTreeSet::from([(Some(ex("a")), None), (Some(ex("b")), None)]);
     assert_eq!(rows(&unfederated), identity);
     assert_ne!(rows(&unfederated), rows(&federated));
+
+    // With no source at all the engine was given nowhere to send the request: no
+    // endpoint failed, so `SILENT` does not swallow it.
+    let err = engine
+        .query_with_options_view(&*local(), request(&join_query(true)), QueryOptions::EMPTY)
+        .expect_err("SERVICE SILENT without a source is refused");
+    assert_eq!(
+        err.message,
+        format!(
+            "SERVICE federation error: no remote query source configured for SERVICE \
+             <{ENDPOINT}>; SILENT does not apply: it tolerates an endpoint that fails, and \
+             no endpoint was reached — configure a remote query source for it"
+        )
+    );
 }
 
 #[test]
@@ -317,17 +337,32 @@ fn update_where_federates_through_options_remote() {
 }
 
 #[test]
-fn update_where_service_silent_without_a_source_inserts_nothing() {
-    let store = update(
+fn update_where_service_silent_without_a_source_is_a_hard_error_too() {
+    let err = update(
         &NativeSparqlEngine::new(),
         &federating_insert(true),
         QueryOptions::EMPTY,
     )
-    .expect("SERVICE SILENT without a source succeeds");
-    assert_eq!(quads(&store), local_triples());
+    .expect_err("SERVICE SILENT without a source is refused");
+    assert_eq!(err.code, "native-sparql-update-eval");
+    assert!(
+        err.message.contains(&format!(
+            "no remote query source configured for SERVICE <{ENDPOINT}>; SILENT does not apply"
+        )),
+        "{err:?}"
+    );
 
-    // Neighbour: the same SILENT request WITH a source inserts the remote rows, so the
-    // unchanged store above is the missing source's doing, not the request's.
+    // Neighbours: the same SILENT request through a source whose endpoint fails inserts
+    // nothing and succeeds, and WITH a source that answers it inserts the remote rows,
+    // so the unchanged store is the failing endpoint's doing, not the request's.
+    let unreachable = InProcessServiceResolver::new();
+    let store = update(
+        &NativeSparqlEngine::new(),
+        &federating_insert(true),
+        QueryOptions::new().with_remote(Some(&unreachable)),
+    )
+    .expect("SERVICE SILENT over an endpoint that fails succeeds");
+    assert_eq!(quads(&store), local_triples());
     let resolver = resolver();
     let federated = update(
         &NativeSparqlEngine::new(),

@@ -84,9 +84,9 @@ pub(crate) struct ExistsSite {
     /// ([`crate::parallel::is_parallel_safe_pattern`]).
     pub(crate) parallel_unsafe: bool,
     /// Every variable-endpoint `SERVICE ?v` in the body that no `SELECT` inside the body
-    /// hides, with its `SILENT` flag — what the endpoint analysis would have recorded for
-    /// it. Empty when the query has no variable-endpoint `SERVICE` at all.
-    pub(crate) service_uses: Vec<(Variable, bool)>,
+    /// hides — what the endpoint analysis would have recorded for it. Empty when the
+    /// query has no variable-endpoint `SERVICE` at all.
+    pub(crate) service_uses: Vec<Variable>,
     /// The preparation's nodes mapped one hop to the plan nodes the ledger indexes; empty
     /// without a ledger.
     pub(crate) plan_map: Arc<SubstitutionSourceMap>,
@@ -162,18 +162,19 @@ impl SubstitutionEnv {
     }
 
     /// Whether substituting this environment turns a `SERVICE ?variable` into something
-    /// that is no longer a variable endpoint: an IRI binding resolves it, and under
-    /// `SILENT` any binding does (a non-IRI one makes it the empty pattern). Layer by
-    /// layer, the first layer that does either decides, so "any layer" is the answer.
-    pub(crate) fn resolves_endpoint(&self, variable: &Variable, silent: bool) -> bool {
+    /// that is no longer a variable endpoint: an IRI binding resolves it. A binding to
+    /// any other term leaves it a variable endpoint, `SILENT` or not, which the endpoint
+    /// analysis then refuses: such a value names no endpoint. Layer by layer, the first
+    /// layer that resolves it decides, so "any layer" is the answer.
+    pub(crate) fn resolves_endpoint(&self, variable: &Variable) -> bool {
         let mut next = self.layers.as_deref();
         while let Some(layer) = next {
             let row = &layer.row;
-            let iri = row
+            if row
                 .expr
                 .iter()
-                .any(|(v, e)| v == variable && matches!(e, Expression::NamedNode(_)));
-            if iri || (silent && row.term.iter().any(|(v, _)| v == variable)) {
+                .any(|(v, e)| v == variable && matches!(e, Expression::NamedNode(_)))
+            {
                 return true;
             }
             next = layer.parent.as_deref();
@@ -501,7 +502,7 @@ fn to_plan(
 /// Every variable-endpoint `SERVICE ?v` in `body` that no `SELECT` inside `body` hides,
 /// with its `SILENT` flag. A `SERVICE` body is not entered: it is forwarded as text, and
 /// the analysis it stands in for does not enter it either.
-fn endpoint_uses(body: &GraphPattern) -> Vec<(Variable, bool)> {
+fn endpoint_uses(body: &GraphPattern) -> Vec<Variable> {
     enum Node<'p> {
         Pattern(&'p GraphPattern, usize),
         Expression(&'p Expression, usize),
@@ -518,11 +519,11 @@ fn endpoint_uses(body: &GraphPattern) -> Vec<(Variable, bool)> {
         }
         match node {
             Node::Pattern(pattern, scope) => match pattern {
-                GraphPattern::Service { name, silent, .. } => {
+                GraphPattern::Service { name, .. } => {
                     if let NamedNodePattern::Variable(v) = name
                         && visible(&scopes, &scope_of, scope, v)
                     {
-                        uses.push((v.clone(), *silent));
+                        uses.push(v.clone());
                     }
                 }
                 GraphPattern::Project { inner, variables } => {

@@ -219,23 +219,40 @@ fn a_service_target_answers_through_the_scope_and_its_violations_are_the_remote_
 }
 
 #[test]
-fn service_silent_without_a_source_is_the_join_identity_inside_and_outside_the_scope() {
-    // SILENT swallows the missing source to the join identity — one empty solution, which
-    // joined with the pre-bound `$this` selects every focus node. The scope changes
-    // nothing about that: SILENT's contract is the evaluator's, not the scope's.
+fn service_silent_without_a_source_is_refused_inside_and_outside_the_scope() {
+    // SILENT tolerates an endpoint that fails; with no source the evaluator was given
+    // nowhere to send the request, so the target's query is refused rather than
+    // swallowed to the join identity (which would select every focus node). The scope
+    // changes nothing about that: SILENT's contract is the evaluator's, not the scope's.
     let shapes = service_shapes(true);
     let data = people_nt();
-    let outside = validate_graphs(&data, &shapes, None).expect("SILENT swallows the failure");
+    let outside = validate_graphs(&data, &shapes, None).expect_err("no source to send to");
+    assert!(
+        outside.contains("no remote query source configured")
+            && outside.contains("SILENT does not apply"),
+        "{outside}"
+    );
     let (inside, _) = validate_in_scope(
         &shapes,
         &data,
         &QueryGovernors::METERED,
         QuerySources::default(),
     );
-    let inside = inside.expect("SILENT swallows the failure");
-    assert_eq!(focus_nodes(&inside), focus_nodes(&outside));
+    assert_eq!(inside.expect_err("no source to send to"), outside);
+    // The valid neighbour: a source whose endpoint fails. SILENT swallows that failure to
+    // the join identity — one empty solution, which joined with every person selects
+    // every focus node.
+    let (unreachable, _) = validate_in_scope(
+        &shapes,
+        &data,
+        &QueryGovernors::METERED,
+        QuerySources {
+            remote: Some(Arc::new(InProcessServiceResolver::new())),
+            load: None,
+        },
+    );
     assert_eq!(
-        focus_nodes(&outside),
+        focus_nodes(&unreachable.expect("SILENT swallows the endpoint's failure")),
         vec![format!("<{EX}alice>"), format!("<{EX}bob>")]
     );
     // The answered neighbour differs: a registry that bans Bob selects Bob alone.

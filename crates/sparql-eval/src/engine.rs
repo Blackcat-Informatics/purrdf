@@ -1745,7 +1745,8 @@ impl NativeSparqlEngine {
 
     /// Install a host `GraphResolver` so SPARQL `LOAD <iri>` can fetch its source.
     /// A request that names its own ([`QueryOptions::load`]) uses that one instead.
-    /// Without either, LOAD hard-fails (`native-sparql-load-no-resolver`) unless SILENT.
+    /// Without either, LOAD hard-fails (`native-sparql-load-no-resolver`), `SILENT` or
+    /// not: `SILENT` tolerates a source that fails, and none was reached.
     #[must_use]
     pub fn with_resolver(mut self, resolver: Arc<dyn GraphResolver>) -> Self {
         self.resolver = Some(resolver);
@@ -3197,8 +3198,8 @@ pub struct QueryOptions<'a> {
     ///
     /// `None` — the default — falls back to the engine's own resolver
     /// ([`NativeSparqlEngine::with_resolver`]), which is what every UPDATE did before
-    /// this field existed; with neither, a non-`SILENT` `LOAD` hard-fails
-    /// (`native-sparql-load-no-resolver`). When set it wins over the engine's
+    /// this field existed; with neither, a `LOAD` hard-fails
+    /// (`native-sparql-load-no-resolver`), `SILENT` or not. When set it wins over the engine's
     /// resolver for this request alone: the per-request source is the more specific
     /// statement of where this caller's documents come from, and a caller that went
     /// to the trouble of naming one did not mean "unless the engine already had one".
@@ -6159,12 +6160,62 @@ mod tests {
     }
 
     #[test]
-    fn load_silent_without_resolver_is_a_noop_ok() {
+    fn load_silent_without_resolver_is_a_hard_error_too() {
         let engine = NativeSparqlEngine::new();
         let mut ds = social();
-        let before = ds.quad_count();
+        let before = quad_set(&ds);
+        let err = engine
+            .update(
+                &mut ds,
+                SparqlRequest {
+                    query: "LOAD SILENT <http://ex/doc>",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "native-sparql-load-no-resolver");
+        assert!(
+            err.message.contains("SILENT does not apply"),
+            "{}",
+            err.message
+        );
+        assert_eq!(quad_set(&ds), before, "nothing was applied");
+    }
+
+    /// The valid neighbour: `SILENT` still swallows a source that fails — a resolver
+    /// that cannot reach the document — as the no-op the standard gives it, while the
+    /// same failure without `SILENT` fails the request.
+    #[test]
+    fn load_silent_with_a_failing_resolver_is_a_noop_ok() {
+        struct Unreachable;
+        impl GraphResolver for Unreachable {
+            fn resolve(
+                &self,
+                request: crate::update::GraphResolveRequest<'_>,
+            ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+                Err(RdfDiagnostic::error(
+                    "native-sparql-load-failed",
+                    format!("<{}> is unreachable", request.iri),
+                ))
+            }
+        }
+        let engine = NativeSparqlEngine::new().with_resolver(Arc::new(Unreachable));
+        let mut ds = social();
+        let before = quad_set(&ds);
         update(&engine, &mut ds, "LOAD SILENT <http://ex/doc>");
-        assert_eq!(ds.quad_count(), before, "silent load no-ops");
+        assert_eq!(quad_set(&ds), before, "silent load no-ops");
+        let err = engine
+            .update(
+                &mut ds,
+                SparqlRequest {
+                    query: "LOAD <http://ex/doc>",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+            )
+            .unwrap_err();
+        assert!(err.message.contains("is unreachable"), "{}", err.message);
     }
 
     #[test]

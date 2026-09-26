@@ -1402,9 +1402,9 @@ export type AsyncLoadResolver = (
 
 /** The options every asynchronous twin accepts beside its operation's own. */
 export interface AsyncHostOptions {
-  /** Answers each `SERVICE` effect. Without it a non-`SILENT` `SERVICE` fails as it does synchronously. */
+  /** Answers each `SERVICE` effect. Without it a `SERVICE` fails as it does synchronously, `SILENT` or not. */
   readonly resolveService?: AsyncServiceResolver | null;
-  /** Answers each `LOAD` effect. Without it a non-`SILENT` `LOAD` fails as it does synchronously. */
+  /** Answers each `LOAD` effect. Without it a `LOAD` fails as it does synchronously, `SILENT` or not. */
   readonly resolveLoad?: AsyncLoadResolver | null;
   /** Cancels the job; an already-aborted signal rejects before the job begins. */
   readonly signal?: AbortSignal | null;

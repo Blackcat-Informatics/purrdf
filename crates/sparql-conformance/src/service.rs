@@ -14,8 +14,17 @@ use purrdf_sparql_eval::InProcessServiceResolver;
 
 use crate::manifest::SparqlTestCase;
 
-/// Build an in-memory `SERVICE` source for `case`, if it declares any
-/// `qt:serviceData`. Returns `Ok(None)` when the case is not federated.
+/// Build the in-memory `SERVICE` source for `case`: each `qt:serviceData` endpoint
+/// answered from its data file, and every other endpoint unreachable.
+///
+/// Every case gets one, federated or not, because it stands in for the network the
+/// suite assumes. An endpoint the manifest declares no data for is one the test
+/// expects not to answer — `service7` sends `SERVICE SILENT` to
+/// `<http://invalid.endpoint.org/sparql>` and expects the join identity — so the source
+/// fails it at the transport layer ([`purrdf_sparql_eval::RemoteError::Transport`]),
+/// the endpoint failure `SILENT` tolerates. Running a case with no source at all would
+/// be a different claim: that the engine was given nowhere to send the request, which
+/// is a configuration fault `SILENT` does not swallow.
 ///
 /// Endpoint data is parsed against the case's OWN sentinel base
 /// ([`SparqlTestCase::base`]) — the same one the default-graph data and the query
@@ -26,10 +35,7 @@ use crate::manifest::SparqlTestCase;
 /// # Errors
 ///
 /// Returns a message if an endpoint's data file cannot be read or parsed.
-pub fn build(case: &SparqlTestCase) -> Result<Option<InProcessServiceResolver>, String> {
-    if case.service_data.is_empty() {
-        return Ok(None);
-    }
+pub fn build(case: &SparqlTestCase) -> Result<InProcessServiceResolver, String> {
     let mut source = InProcessServiceResolver::new();
     for (endpoint, path) in &case.service_data {
         let bytes = std::fs::read(path)
@@ -38,5 +44,5 @@ pub fn build(case: &SparqlTestCase) -> Result<Option<InProcessServiceResolver>, 
             .map_err(|e| format!("parse service data {}: {e}", path.display()))?;
         source = source.with_endpoint(endpoint.clone(), dataset);
     }
-    Ok(Some(source))
+    Ok(source)
 }

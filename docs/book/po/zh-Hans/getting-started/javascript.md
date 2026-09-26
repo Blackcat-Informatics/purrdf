@@ -100,7 +100,7 @@ RDF/JS 映射的更多内容见 [JavaScript 中的 RDF/JS](../interop/rdfjs.md)�
 
 <!-- 此标题保留英文：本书其他页面以 #asynchronous-queries-and-federation 链接到这里，而锚点由标题文字生成。 -->
 
-同步方法是离线通道：它们不安装任何 `SERVICE` 或 `LOAD` 来源，因此非 `SILENT` 的 `SERVICE` 或 `LOAD` 会按名称失败。每个求值方法还有一个返回 Promise 的孪生方法——`QueryEngine` 上的 `queryAsync`、`selectAsync`、`askAsync`、`constructAsync`、`describeAsync`、`queryRawAsync`、`queryRawBytesAsync`、`queryRawWithContextAsync`、`queryGovernedAsync`、`queryEntailmentGovernedAsync`、`updateAsync`、`updateGovernedAsync` 与 `explainQueryAsync`，以及 `Dataset.queryAsync`——此外还有 `queryGovernedNegotiatedAsync`，它把受 governor 管控的查询按 HTTP `Accept` 请求头协商出的格式作为文档返回。孪生方法在调用开始时为数据集拍下快照，并在快照上运行同一个求值器；它以作业的形式执行：宿主应答 `SERVICE` 或 `LOAD` 时作业挂起，求值期间作业把事件循环让出，最终兑现为与其同步孪生方法完全相同的返回值。I/O 由宿主完成，相应的策略也归宿主所有；解析、求值、连接、`SILENT` 语义与结果编码仍由 PurRDF 负责。
+同步方法是离线通道：它们不安装任何 `SERVICE` 或 `LOAD` 来源，因此无论是否写了 `SILENT`，`SERVICE` 或 `LOAD` 都会按名称失败。每个求值方法还有一个返回 Promise 的孪生方法——`QueryEngine` 上的 `queryAsync`、`selectAsync`、`askAsync`、`constructAsync`、`describeAsync`、`queryRawAsync`、`queryRawBytesAsync`、`queryRawWithContextAsync`、`queryGovernedAsync`、`queryEntailmentGovernedAsync`、`updateAsync`、`updateGovernedAsync` 与 `explainQueryAsync`，以及 `Dataset.queryAsync`——此外还有 `queryGovernedNegotiatedAsync`，它把受 governor 管控的查询按 HTTP `Accept` 请求头协商出的格式作为文档返回。孪生方法在调用开始时为数据集拍下快照，并在快照上运行同一个求值器；它以作业的形式执行：宿主应答 `SERVICE` 或 `LOAD` 时作业挂起，求值期间作业把事件循环让出，最终兑现为与其同步孪生方法完全相同的返回值。I/O 由宿主完成，相应的策略也归宿主所有；解析、求值、连接、`SILENT` 语义与结果编码仍由 PurRDF 负责。
 
 EXPLAIN 也是这类求值方法之一：它的计费台账是实际运行查询测得的，而不是根据查询文本预测的。因此，`explainQuery` 会因缺少来源而拒绝 `SERVICE` 查询，而 `explainQueryAsync` 则基于宿主的应答来解释它。它的测量运行与其他作业一样会让出事件循环，并在其 `signal` 触发时停止；它不接受任何上限，因为这次运行只计量、从不设限。
 
@@ -158,7 +158,7 @@ for (const row of rows) console.log(row.s.value, row.x.value);
 
 在浏览器中，由远程端点的 CORS 策略决定 `fetch` 能否读取其应答：不允许页面所在源的端点会表现为网络错误，上面的处理函数把它报告为传输失败。若某个端点可能不可达、且其结果行可有可无，请写 `SERVICE SILENT`。
 
-变量端点 `SERVICE ?e { … }` 会针对 `?e` 所绑定的每个不同 IRI 各调用一次 `resolveService`，某个端点应答的每一行都带有该 `?e`。到达该子句的每个解都必须绑定 `?e`：可以由同一组中位于其前的模式绑定（三元组模式、`VALUES`、`BIND`，或 `LATERAL { SERVICE ?e { … } }`），也可以由右侧包含该子句的 `OPTIONAL`、`MINUS` 或组连接（group join）的左侧绑定——例如 `?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`，换成 `MINUS` 或 `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }` 亦然。在这些情形下，右侧仍然独立求值，左侧只提供需要询问的端点列表。若某个左侧行的端点没有应答任何结果，该行在 `OPTIONAL` 下保留其原有绑定，在 `MINUS` 下也不会被移除。在 `SERVICE SILENT` 下，失败的端点只贡献一行、且只绑定 `?e`，因此该端点自己的左侧行原样保留、不被扩展，其他端点的结果行也不受影响。若没有任何解为某个子句绑定 `?e`——无处绑定、只在部分左侧解中绑定，或者只在包含该子句的另一个 `OPTIONAL` 或 `MINUS` 右侧、`EXISTS`、`LIMIT`/`OFFSET`、未按 `?e` 分组的聚合或未投影 `?e` 的子 `SELECT` 之外绑定——该子句即被拒绝，无论是否写了 `SILENT`：`SILENT` 容忍的是失败的端点，而不是一个根本没有指明任何端点的查询。错误消息会给出改写方式：在该子句之前绑定 `?e`，例如 `?s ex:endpoint ?e . SERVICE ?e { … }`。
+变量端点 `SERVICE ?e { … }` 会针对 `?e` 所绑定的每个不同 IRI 各调用一次 `resolveService`，某个端点应答的每一行都带有该 `?e`。到达该子句的每个解都必须绑定 `?e`：可以由同一组中位于其前的模式绑定（三元组模式、`VALUES`、`BIND`，或 `LATERAL { SERVICE ?e { … } }`），也可以由右侧包含该子句的 `OPTIONAL`、`MINUS` 或组连接（group join）的左侧绑定——例如 `?g ex:endpoint ?e OPTIONAL { SERVICE ?e { … } }`，换成 `MINUS` 或 `{ ?g ex:endpoint ?e } { SERVICE ?e { … } }` 亦然。在这些情形下，右侧仍然独立求值，左侧只提供需要询问的端点列表。若某个左侧行的端点没有应答任何结果，该行在 `OPTIONAL` 下保留其原有绑定，在 `MINUS` 下也不会被移除。在 `SERVICE SILENT` 下，失败的端点只贡献一行、且只绑定 `?e`，因此该端点自己的左侧行原样保留、不被扩展，其他端点的结果行也不受影响。若 `?e` 绑定到字面量或空节点，它并未指明任何端点，无论是否写了 `SILENT` 都会被拒绝。若没有任何解为某个子句绑定 `?e`——无处绑定、只在部分左侧解中绑定，或者只在包含该子句的另一个 `OPTIONAL` 或 `MINUS` 右侧、`EXISTS`、`LIMIT`/`OFFSET`、未按 `?e` 分组的聚合或未投影 `?e` 的子 `SELECT` 之外绑定——该子句即被拒绝，无论是否写了 `SILENT`：`SILENT` 容忍的是失败的端点，而不是一个根本没有指明任何端点的查询。错误消息会给出改写方式：在该子句之前绑定 `?e`，例如 `?s ex:endpoint ?e . SERVICE ?e { … }`。
 
 ### 让出、取消与并发
 
@@ -218,7 +218,7 @@ Workers 限制单次调用可以发出的子请求数量，而 `maxRemoteRequest
 
 ## 范围与当前限制
 
-- **仅限内存。** SPARQL 查询在内存数据集上运行。同步方法不安装任何 `SERVICE` 或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 除非写作 `SILENT`，否则会显式失败；异步孪生方法只能经由宿主传入的处理函数到达远程端点。
+- **仅限内存。** SPARQL 查询在内存数据集上运行。同步方法不安装任何 `SERVICE` 或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 会显式失败，无论是否写了 `SILENT`；异步孪生方法只能经由宿主传入的处理函数到达远程端点。
 - **各格式的三元组项。**`serialize` 是写入器原生通道：宾语位置的引用三元组项与 RDF 1.2 陈述层在 Turtle、N-Triples、N-Quads 与 TriG
   （写作 `<<( … )>>`）、RDF/XML（写作 `rdf:parseType="Triple"`）以及 JSON-LD /
   YAML-LD（写作 `@triple`）中都得以保留。TriX 与 HexTuples 不支持三元组项，因此把

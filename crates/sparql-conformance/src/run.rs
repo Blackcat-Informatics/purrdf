@@ -655,12 +655,39 @@ pub fn run(
                 base_iri: Some(&case.base),
                 substitutions: &[],
             };
+            let options = QueryOptions::new()
+                .with_env(&env)
+                .with_load(Some(&OfflineLoadResolver));
             engine
-                .update_with_options(&mut dataset, request, QueryOptions::new().with_env(&env))
+                .update_with_options(&mut dataset, request, options)
                 .map_err(|e| format!("apply update {}: {e}", case.iri))?;
             Ok(RunOutcome::Update(dataset))
         }
         TestKind::Unknown => Err(format!("unmodeled test type for {}", case.iri)),
+    }
+}
+
+/// The `LOAD` source every update case runs with: the network the suite assumes, in which
+/// no document can be fetched. The suite's `LOAD` cases name a source that does not
+/// exist (`load-silent` loads `somescheme://www.example.com/THIS-GRAPH-DOES-NOT-EXIST/`)
+/// and expect `LOAD SILENT` to succeed with nothing loaded, which is the source failing
+/// — `native-sparql-load-failed`, the failure `SILENT` tolerates. Running with no
+/// resolver at all would be a different claim, that the engine was given nowhere to
+/// fetch from, which `SILENT` does not swallow.
+struct OfflineLoadResolver;
+
+impl purrdf_sparql_eval::GraphResolver for OfflineLoadResolver {
+    fn resolve(
+        &self,
+        request: purrdf_sparql_eval::GraphResolveRequest<'_>,
+    ) -> Result<Arc<RdfDataset>, purrdf_core::RdfDiagnostic> {
+        Err(purrdf_core::RdfDiagnostic::error(
+            "native-sparql-load-failed",
+            format!(
+                "<{}> cannot be fetched: the conformance harness has no network",
+                request.iri
+            ),
+        ))
     }
 }
 

@@ -17,12 +17,13 @@
 //! rather than silently returning an empty or partial result: a synchronous call cannot
 //! wait for the network, and a false answer is worse than an error.
 //!
-//! The one exception is the caller's own: `SERVICE SILENT` and `LOAD SILENT` succeed
-//! with nothing fetched — the `SILENT` keyword is the query author writing "an
-//! unreachable endpoint is not an error" into the request, and SPARQL 1.1 §10 and
-//! §3.1.4 require it to be honoured. `SERVICE SILENT` contributes the join identity
-//! (so the surrounding pattern's own solutions come back, unaugmented) and
-//! `LOAD SILENT` leaves the dataset untouched. Drop `SILENT` to get the hard failure.
+//! `SERVICE SILENT` and `LOAD SILENT` hard-fail here too. `SILENT` is the query author
+//! writing "an endpoint (or document) that fails is not an error" into the request, and
+//! SPARQL 1.1 §10 and §3.1.4 honour it for an endpoint that was asked and did not answer.
+//! On this lane none is ever asked — no source is installed — so there is no failure
+//! for `SILENT` to tolerate, and answering the join identity (or a no-op `LOAD`) would
+//! claim one had been consulted. The refusal says why `SILENT` does not apply; the
+//! asynchronous twins, given a handler, honour `SILENT` for an endpoint that fails.
 //!
 //! The second lane is the `async_query` module: every evaluating method here has an
 //! asynchronous twin that runs the same evaluator as a job suspending through JSPI on
@@ -1698,9 +1699,8 @@ impl Dataset {
     /// byte-identical Turtle exactly as before; see `default_graph_format`.
     ///
     /// A parse error, an evaluation error, or a `SERVICE` / `LOAD` clause
-    /// (unresolvable in-browser) throws a JsError — never a silent empty result. The
-    /// `SILENT` forms are the caller's own opt-out and still succeed with nothing
-    /// fetched, as SPARQL 1.1 requires; see this module's federation note.
+    /// (unresolvable on this lane, `SILENT` or not) throws a JsError — never a silent
+    /// empty result; see this module's federation note.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsError> {

@@ -1465,8 +1465,9 @@ impl ServiceResolver for HostServiceSource {
 }
 
 /// The fallback for a job with local services but no host `SERVICE` handler: an endpoint
-/// that is not local fails exactly as the offline lane's missing source does —
-/// silenceable, and otherwise a hard error.
+/// that is not local fails exactly as the offline lane's missing source does — a hard
+/// error, under `SILENT` too ([`RemoteError::Unconfigured`]): the job was given nowhere
+/// to send the request, which is not an endpoint that failed.
 #[derive(Debug)]
 struct UnhandledServiceSource;
 
@@ -1475,7 +1476,7 @@ impl ServiceResolver for UnhandledServiceSource {
         if let Some(trip) = request.stop_trip() {
             return Err(trip);
         }
-        Err(RemoteError::Transport(
+        Err(RemoteError::Unconfigured(
             "no remote query source configured: the endpoint is not a local service and no \
              resolveService handler was supplied"
                 .to_owned(),
@@ -5119,7 +5120,7 @@ mod tests {
     }
 
     #[test]
-    fn service_without_a_handler_fails_like_the_offline_lane_unless_silent() {
+    fn service_without_a_handler_fails_like_the_offline_lane_silent_or_not() {
         let engine = QueryEngine::new();
         let dataset = seed();
         let query = format!("SELECT * WHERE {{ ?s ?p ?o SERVICE <{ENDPOINT}> {{ ?o ?q ?x }} }}");
@@ -5140,6 +5141,9 @@ mod tests {
         );
         job.finish();
 
+        // SILENT tolerates an endpoint that fails; a job with nowhere to send the request
+        // reached none, so it is the same refusal, saying why SILENT does not apply (the
+        // synchronous twin's, which `async.test.mjs` compares on the shipped artifact).
         let silent = query.replace("SERVICE <", "SERVICE SILENT <");
         let job = begin(
             &engine,
@@ -5148,14 +5152,14 @@ mod tests {
             &silent,
             &options(),
         );
-        assert_eq!(run_job(job.id()), RUN_OUTCOME);
-        let expected = engine
-            .query_raw(&dataset, &silent, None, None, None, None)
-            .expect("sync twin");
-        assert_eq!(
-            raw_text(&job),
-            expected,
-            "SILENT is the join identity on both lanes"
+        assert_eq!(run_job(job.id()), RUN_ERROR);
+        let error = job.take_error().expect("an error");
+        assert!(
+            error.contains(&format!(
+                "no remote query source configured for SERVICE <{ENDPOINT}>; SILENT does not \
+                 apply: it tolerates an endpoint that fails, and no endpoint was reached"
+            )),
+            "{error}"
         );
         job.finish();
     }
@@ -5198,9 +5202,30 @@ mod tests {
                 .contains("no remote query source configured")
         );
         job.finish();
+        // Under SILENT the unlisted endpoint is still refused, as offline: no handler
+        // reaches it, so no endpoint failed.
         let silent = unlisted.replace("SERVICE <", "SERVICE SILENT <");
         let job = begin(&engine, &dataset, AsyncOperationKind::Raw, &silent, &local);
-        assert_eq!(run_job(job.id()), RUN_OUTCOME, "silenceable, as offline");
+        assert_eq!(run_job(job.id()), RUN_ERROR);
+        let error = job.take_error().expect("an error");
+        assert!(
+            error.contains("no remote query source configured: the endpoint is not a local")
+                && error.contains("SILENT does not apply"),
+            "{error}"
+        );
+        job.finish();
+        // The valid neighbour: SILENT naming the listed endpoint answers with its row.
+        let silent_listed = query.replace("SERVICE <", "SERVICE SILENT <");
+        let job = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Raw,
+            &silent_listed,
+            &local,
+        );
+        assert_eq!(run_job(job.id()), RUN_OUTCOME);
+        let text = raw_text(&job);
+        assert!(text.contains("http://example.org/x"), "{text}");
         job.finish();
     }
 

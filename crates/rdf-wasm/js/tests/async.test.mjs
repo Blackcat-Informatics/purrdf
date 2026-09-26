@@ -397,6 +397,60 @@ test("an endpoint variable nothing binds is refused, under SILENT too", async ()
   }
 });
 
+// SILENT tolerates an endpoint that fails. It does not tolerate a query run with nowhere
+// to send the request (no source), nor a SERVICE whose endpoint value is not an IRI (it
+// names no endpoint): before, both answered the local rows joined with an identity no
+// endpoint produced. Both lanes refuse them, with the same message, and ask nobody.
+test("SERVICE SILENT with no source, or with an endpoint that is not an IRI, is refused on both lanes", async () => {
+  const engine = new QueryEngine();
+  // No source: the job has no resolveService, the synchronous lane never has one.
+  const noSource = joinQuery(true);
+  const asyncNoSource = await rejection(engine.queryAsync(local(), noSource));
+  assert.equal(
+    asyncNoSource.message,
+    `error native-sparql-query-eval: SERVICE federation error: no remote query source configured for SERVICE <${EX}sparql>; ` +
+      "SILENT does not apply: it tolerates an endpoint that fails, and no endpoint was reached — configure a remote query source for it",
+  );
+  assert.equal(syncThrow(() => engine.query(local(), noSource)).message, asyncNoSource.message);
+  // Local services and no handler: an unlisted endpoint has no source either.
+  const unlisted = await rejection(
+    engine.queryAsync(local(), noSource, { localServices: { [`${EX}elsewhere`]: local() } }),
+  );
+  assert.match(unlisted.message, /no remote query source configured: the endpoint is not a local service.*SILENT does not apply/);
+
+  // An endpoint value that is not an IRI, bound before the clause and on the left of an
+  // OPTIONAL.
+  for (const [shape, message] of [
+    [
+      `SELECT ?s ?e ?x WHERE { ?s <${EX}p> ?o . BIND("x" AS ?e) SERVICE SILENT ?e { ?a ?b ?x } }`,
+      /SERVICE \?e with no endpoint: \?e names the endpoint, but it is not bound to an IRI.*SILENT does not change this/,
+    ],
+    [
+      `SELECT ?s ?e ?x WHERE { ?s <${EX}p> ?o . VALUES ?e { "x" } OPTIONAL { SERVICE SILENT ?e { ?a ?b ?x } } }`,
+      /SERVICE \?e: \?e is bound to the literal "x", which is not an IRI, so there is no endpoint to send the request to; SILENT does not apply/,
+    ],
+  ]) {
+    const mock = recordingResolver(answerWithEndpointName);
+    const error = await rejection(engine.queryAsync(local(), shape, { resolveService: mock.resolveService }));
+    assert.match(error.message, message, shape);
+    assert.equal(syncThrow(() => engine.query(local(), shape)).message, error.message, shape);
+    assert.equal(mock.calls.length, 0, `${shape}: nobody is asked`);
+  }
+
+  // The valid neighbours: with a source whose endpoint fails, SILENT is the join identity
+  // (one call); with an IRI endpoint it answers from the endpoint (one call).
+  const failing = recordingResolver(async () => ({ kind: "transport", message: "the example.org host is down" }));
+  assert.deepEqual(rowsOf(await engine.queryAsync(local(), noSource, { resolveService: failing.resolveService })), IDENTITY);
+  assert.equal(failing.calls.length, 1);
+  const answering = recordingResolver(answerWithEndpointName);
+  const bound = `SELECT ?s ?e ?x WHERE { ?s <${EX}p> ?o . BIND(<${EX}e1> AS ?e) SERVICE SILENT ?e { ?a ?b ?x } }`;
+  assert.deepEqual(rowsOf(await engine.queryAsync(local(), bound, { resolveService: answering.resolveService })), [
+    `e=${EX}e1&s=${EX}a&x=answer-from-e1`,
+    `e=${EX}e1&s=${EX}b&x=answer-from-e1`,
+  ]);
+  assert.deepEqual([...new Set(answering.calls.map((call) => call.request.endpoint))], [`${EX}e1`]);
+});
+
 // A left side binding `?e` to endpoints: `ex:e1` twice, `ex:e2`, `ex:e3` (which answers
 // nothing) and `ex:down` (which fails at the transport).
 const ENDPOINTS_NT = [
@@ -525,20 +579,19 @@ graph <https://example.org/g> { ex:c ex:knows ex:a . }
     ),
   );
 
-  // SERVICE SILENT and LOAD SILENT succeed with nothing fetched.
+  // SERVICE SILENT and LOAD SILENT are refused too: the synchronous lane has no source,
+  // so no endpoint or document was reached for SILENT to tolerate.
   const ds = Dataset.parse("@prefix ex: <https://example.org/> . ex:a ex:p ex:b .", "turtle");
   assert.throws(() => ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://example.org/endpoint> { ?a ?b ?c } }"));
-  const json = JSON.parse(
-    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }"),
+  assert.throws(
+    () => ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }"),
+    /no remote query source configured for SERVICE <https:\/\/example\.org\/endpoint>; SILENT does not apply/,
   );
-  assert.equal(json.results.bindings.length, 1);
-  assert.equal("a" in json.results.bindings[0], false, "nothing remote may be bound");
-  assert.equal(json.results.bindings[0].s.value, "https://example.org/a");
   const engine = new QueryEngine();
   const before = ds.canonicalize();
   assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>"));
-  engine.update(ds, "LOAD SILENT <https://example.org/doc>");
-  assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
+  assert.throws(() => engine.update(ds, "LOAD SILENT <https://example.org/doc>"), /native-sparql-load-no-resolver: .*SILENT does not apply/);
+  assert.equal(ds.canonicalize(), before, "a refused LOAD SILENT leaves the dataset untouched");
 
   // A genuine query error still throws on the governed lane.
   const governed = Dataset.parse(TRIG, "trig");
@@ -1037,17 +1090,24 @@ test("LOAD resolves through resolveLoad", async () => {
   }
 });
 
-test("LOAD without resolveLoad fails unless SILENT", async () => {
+test("LOAD without resolveLoad fails, SILENT or not", async () => {
   const engine = new QueryEngine();
   const target = Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads");
   const before = target.canonicalize();
-  const error = await rejection(engine.updateAsync(target, `LOAD <${DOC}>`));
-  const syncError = syncThrow(() => engine.update(Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads"), `LOAD <${DOC}>`));
-  assert.equal(error.message, syncError.message);
+  for (const load of [`LOAD <${DOC}>`, `LOAD SILENT <${DOC}>`]) {
+    const error = await rejection(engine.updateAsync(target, load));
+    const syncError = syncThrow(() => engine.update(Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads"), load));
+    assert.equal(error.message, syncError.message, load);
+    assert.match(error.message, /^error native-sparql-load-no-resolver: /, load);
+    assert.equal(/SILENT does not apply/.test(error.message), load.includes("SILENT"), load);
+    assert.equal(target.canonicalize(), before);
+  }
+  // The neighbour: with a resolveLoad whose document cannot be fetched, LOAD SILENT
+  // succeeds with nothing fetched — the failure SILENT tolerates.
+  const resolveLoad = async () => ({ kind: "transport", message: "the example.org host is down" });
+  assert.equal(await engine.updateAsync(target, `LOAD SILENT <${DOC}>`, { resolveLoad }), target);
   assert.equal(target.canonicalize(), before);
-  // The neighbour: LOAD SILENT succeeds with nothing fetched.
-  assert.equal(await engine.updateAsync(target, `LOAD SILENT <${DOC}>`), target);
-  assert.equal(target.canonicalize(), before);
+  await rejection(engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad }));
 });
 
 test("LOAD: a host policy denial reads distinctly from a catalog capability denial, and neither is silenced", async () => {

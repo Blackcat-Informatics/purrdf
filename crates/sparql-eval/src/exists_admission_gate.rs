@@ -1793,21 +1793,17 @@ mod tests {
     #[test]
     fn exists_silent_service_swallow_point_parity() {
         // `EXISTS { ?s :tag ?w2 . SERVICE SILENT <http://example.org/remote> { ?x :p ?y } }`
-        // — no `ctx.remote` source is configured, so `crate::remote::eval_service`'s
-        // `silent_or_err` swallows the missing source into the JOIN IDENTITY (a single
-        // empty-binding row — `crate::remote::identity_seq`'s doc, "`Join(left,
-        // identity) == left`, so a swallowed `SERVICE SILENT` leaves the surrounding
-        // query unchanged"), uniformly, REGARDLESS of any row's bindings (the endpoint is
-        // a FIXED IRI here, not a variable — that per-row-resolution case is
+        // — no `ctx.remote` source is configured, so `crate::remote::eval_service` refuses
+        // the clause: `SILENT` tolerates an endpoint that fails, and with no source none
+        // was reached. The refusal is uniform, REGARDLESS of any row's bindings (the
+        // endpoint is a FIXED IRI here, not a variable — that per-row-resolution case is
         // `service_variable_inner_classifies_inadmissible`, pinned separately since it
-        // has no constructible divergence at all). Both strategies therefore compute the
-        // SAME always-identity right operand, so the correlated Join always reduces to
-        // its LEFT operand alone for every outer row — a genuine PARITY (not a
-        // divergence): the exclusion is still load-bearing in general (per
-        // `probe_admissible`'s doc, "a SILENT call can swallow a per-row failure that an
-        // evaluate-once pass would never see"), but THIS fixture's failure is uniform,
-        // not per-row, so no divergence is observable here — which is exactly what this
-        // test pins.
+        // has no constructible divergence at all). Both strategies therefore meet the
+        // SAME refusal for every outer row — a genuine PARITY (not a divergence): the
+        // exclusion is still load-bearing in general (per `probe_admissible`'s doc, "a
+        // SILENT call can swallow a per-row failure that an evaluate-once pass would
+        // never see"), but THIS fixture's outcome is uniform, not per-row, so no
+        // divergence is observable here — which is exactly what this test pins.
         let mut b = RdfDatasetBuilder::new();
         let tag = b.intern_iri(&format!("{EX}tag"));
         let anything = b.intern_literal(RdfLiteral::simple("x"));
@@ -1829,20 +1825,29 @@ mod tests {
 
         assert_classified_inadmissible(&outer, &inner);
 
-        let natural = natural_answers(&ds, &outer, &inner);
-        let probed = forced_answers(&ds, &outer, &inner, ForcedExistsStrategy::Probe);
+        let natural = exists_results(&ds, &outer, &inner, None);
+        let probed = {
+            let _guard = force_exists_strategy_for_test(ForcedExistsStrategy::Probe);
+            exists_results(&ds, &outer, &inner, None)
+        };
 
-        assert_eq!(
-            natural,
-            vec![true, true],
-            "with no remote source configured, SERVICE SILENT swallows to the join \
-             identity for every outer row, so the Join reduces to its LEFT operand alone \
-             (`?s :tag ?w2`, which both outer rows satisfy)"
-        );
+        assert_eq!(natural.len(), 2, "one answer per outer row");
+        for answer in &natural {
+            let error = answer.as_ref().expect_err(
+                "with no remote source configured, SERVICE SILENT is refused for every outer \
+                 row rather than swallowed to the join identity",
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("no remote query source configured for SERVICE <http://example.org/remote>; SILENT does not apply"),
+                "{error}"
+            );
+        }
         assert_eq!(
             natural, probed,
-            "both strategies must agree — the SILENT swallow is uniform, not per-row, in \
-             this fixture"
+            "both strategies must agree — the refusal is uniform, not per-row, in this \
+             fixture"
         );
     }
 

@@ -192,7 +192,7 @@ Worker, both executed by `js/tests/docs-worker-recipe.test.mjs`.
 - **In-memory only** — the oxigraph `Store` (RocksDB) and the logic engine do not
   compile to wasm and are excluded by design. SPARQL runs over the in-memory
   dataset. The synchronous methods install no `SERVICE` or `LOAD` source, so there a
-  remote `SERVICE` or `LOAD` fails explicitly unless it is written `SILENT`; the
+  remote `SERVICE` or `LOAD` fails explicitly, `SILENT` or not; the
   asynchronous twins reach remote endpoints only through the handlers the host
   passes them.
 - Text codecs ride purrdf's native codecs — no Store dependency and no

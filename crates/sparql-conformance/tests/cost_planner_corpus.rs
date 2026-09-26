@@ -52,8 +52,9 @@ fn make_engine(cost: bool) -> NativeSparqlEngine {
 }
 
 /// Evaluate `case` using a pre-built `engine`, a pre-loaded `dataset`, and the
-/// already-read `query_text`. The in-memory SERVICE `remote` source is reused when
-/// the case is federated, so fixture parsing is not repeated between planner runs.
+/// already-read `query_text`. The in-memory SERVICE `remote` source (every case has
+/// one; see `purrdf_sparql_conformance::service::build`) is reused, so fixture parsing
+/// is not repeated between planner runs.
 ///
 /// `case.aggregate_namespace` (see `crate::manifest::SparqlTestCase` and
 /// `crate::run::run`, whose per-case aggregate registration this mirrors) is
@@ -66,7 +67,7 @@ fn eval_case(
     case: &SparqlTestCase,
     dataset: &Arc<RdfDataset>,
     query_text: &str,
-    remote: Option<&InProcessServiceResolver>,
+    remote: &InProcessServiceResolver,
 ) -> Result<SparqlResult, String> {
     let request = SparqlRequest {
         query: query_text,
@@ -89,12 +90,9 @@ fn eval_case(
     )
     .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions::new().with_env(&env);
-    let result = match remote {
-        Some(source) => engine.query_with_source(dataset, request, source, options),
-        None => engine.query_with_options_view(&**dataset, request, options),
-    }
-    .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
-    Ok(result)
+    engine
+        .query_with_source(dataset, request, remote, options)
+        .map_err(|e| format!("evaluate {}: {e}", case.iri))
 }
 
 /// Whether `query_text` is a `SELECT` with a top-level `ORDER BY`, so row order
@@ -183,44 +181,32 @@ fn cost_and_structural_planner_produce_identical_results() {
                 continue;
             };
 
-            let cost_result =
-                match eval_case(&cost_engine, &case, &dataset, &query_text, remote.as_ref()) {
-                    Ok(r) => r,
-                    Err(msg) => {
-                        // If both planners error, the case is not a planner-differential
-                        // failure (e.g. an unsupported feature). Record a skip.
-                        match eval_case(
-                            &structural_engine,
-                            &case,
-                            &dataset,
-                            &query_text,
-                            remote.as_ref(),
-                        ) {
-                            Ok(_) => mismatches.push((
-                                case.iri,
-                                format!("cost planner errored while structural succeeded: {msg}"),
-                            )),
-                            Err(_) => skipped += 1,
-                        }
-                        continue;
-                    }
-                };
-            let structural_result = match eval_case(
-                &structural_engine,
-                &case,
-                &dataset,
-                &query_text,
-                remote.as_ref(),
-            ) {
+            let cost_result = match eval_case(&cost_engine, &case, &dataset, &query_text, &remote) {
                 Ok(r) => r,
                 Err(msg) => {
-                    mismatches.push((
-                        case.iri,
-                        format!("structural planner errored while cost succeeded: {msg}"),
-                    ));
+                    // If both planners error, the case is not a planner-differential
+                    // failure (e.g. an unsupported feature). Record a skip.
+                    match eval_case(&structural_engine, &case, &dataset, &query_text, &remote) {
+                        Ok(_) => mismatches.push((
+                            case.iri,
+                            format!("cost planner errored while structural succeeded: {msg}"),
+                        )),
+                        Err(_) => skipped += 1,
+                    }
                     continue;
                 }
             };
+            let structural_result =
+                match eval_case(&structural_engine, &case, &dataset, &query_text, &remote) {
+                    Ok(r) => r,
+                    Err(msg) => {
+                        mismatches.push((
+                            case.iri,
+                            format!("structural planner errored while cost succeeded: {msg}"),
+                        ));
+                        continue;
+                    }
+                };
 
             if let Err(msg) = purrdf_sparql_conformance::compare::compare_results(
                 &cost_result,

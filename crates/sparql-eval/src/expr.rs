@@ -2873,23 +2873,10 @@ fn substitute_pattern_impl(
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             };
-            // Bound, but to a term that is not an IRI: there is no endpoint to invoke,
-            // which is an endpoint failure, so under `SILENT` it is the single empty
-            // solution — the enclosing merge keeps the solution's own binding. Left as
-            // a variable otherwise, so a non-silent clause surfaces the refusal an
-            // unresolvable endpoint gets in `crate::service_endpoints`.
-            if *silent
-                && let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = &resolved_name
-                && row.term.iter().any(|(bound, _)| bound == v)
-            {
-                return boxed_and_mapped(
-                    GraphPattern::Bgp {
-                        patterns: Vec::new(),
-                    },
-                    pattern,
-                    map,
-                );
-            }
+            // Bound, but to a term that is not an IRI: it names no endpoint. Left as a
+            // variable, `SILENT` or not, so the clause surfaces the refusal an
+            // unresolvable endpoint gets in `crate::service_endpoints` — `SILENT`
+            // tolerates an endpoint that fails, not a value that names none.
             // The body is forwarded as text, so it is substituted in full: a placeholder
             // left in it would be sent to the endpoint in place of the body.
             defer.eager_depth += 1;

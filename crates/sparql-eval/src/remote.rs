@@ -106,6 +106,16 @@ pub enum RemoteError {
     Decode(String),
     /// Federation is disabled for this source.
     Disabled,
+    /// No source is configured that could reach this endpoint: the engine was given
+    /// nowhere to send the request — e.g. a host that answers some endpoints in process
+    /// and supplied no handler for the rest. Carries the host's explanation.
+    ///
+    /// **Not silenceable**: `SILENT` tolerates an endpoint that fails, and no endpoint
+    /// was reached. This is a fact about how the engine was configured, the same fault
+    /// as evaluating a `SERVICE` with no source at all, and swallowing it to the join
+    /// identity would answer as if an endpoint had been consulted and had imposed
+    /// nothing.
+    Unconfigured(String),
     /// A [`ServiceResolver`] refused the service because its per-service policy withheld
     /// a capability — see [`crate::service`].
     ///
@@ -191,6 +201,7 @@ impl core::fmt::Display for RemoteError {
             Self::Transport(m) => write!(f, "transport: {m}"),
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
+            Self::Unconfigured(m) => write!(f, "{m}"),
             Self::Denied(denial) => write!(f, "denied: {denial}"),
             Self::HostDenied { endpoint, message } => {
                 write!(f, "<{endpoint}>: the host denied the request: {message}")
@@ -979,11 +990,14 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
 
     // `Option<&dyn _>` is `Copy`, so this does NOT borrow `ctx` — leaving `&mut
     // ctx` free for interning the result below.
+    // No source: the engine was given nowhere to send the request. That is how the
+    // engine was configured, not an endpoint that failed, so it is refused under `SILENT`
+    // too — the join identity would claim an endpoint had been consulted.
     let Some(source) = ctx.remote else {
-        return silent_or_err(silent, || {
-            format!("no remote query source configured for SERVICE <{endpoint}>")
-        })
-        .map(Evaluated::Complete);
+        return Err(unconfigured(
+            silent,
+            format!("no remote query source configured for SERVICE <{endpoint}>"),
+        ));
     };
 
     // Poll the stop signal immediately before dispatch. The node-entry poll happens before
@@ -1112,6 +1126,14 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         Err(RemoteError::HostStackExhausted(construct)) => {
             return Err(EvalError::HostStackExhausted { construct });
         }
+        // The source has nothing that reaches this endpoint: the same configuration
+        // fault as no source at all, and refused under `SILENT` the same way.
+        Err(RemoteError::Unconfigured(message)) => {
+            return Err(unconfigured(
+                silent,
+                format!("SERVICE <{endpoint}>: {message}"),
+            ));
+        }
         Err(e) => {
             // A real endpoint failure outranks a simultaneous stop. Under SILENT the
             // endpoint failure is deliberately erased, so the stop becomes the surviving
@@ -1132,6 +1154,19 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
         None => Evaluated::Complete(seq),
         Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
     })
+}
+
+/// The refusal for a `SERVICE` the engine has no source to send to: [`EvalError::Remote`]
+/// with `message`, which under `SILENT` also says why `SILENT` does not apply.
+fn unconfigured(silent: bool, message: String) -> EvalError {
+    if silent {
+        EvalError::remote(format!(
+            "{message}; SILENT does not apply: it tolerates an endpoint that fails, and no \
+             endpoint was reached — configure a remote query source for it"
+        ))
+    } else {
+        EvalError::remote(message)
+    }
 }
 
 /// On `SILENT`, return the join identity (one empty row, a no-op for the

@@ -105,7 +105,7 @@ The package speaks the async RDF/JS Stream/Sink protocol over the
 - The engine is **in-memory**; there is no persistent store in the wasm
   build. SPARQL runs over the in-memory dataset. The synchronous methods
   install no `SERVICE` or `LOAD` source, so there a remote `SERVICE` or `LOAD`
-  fails explicitly unless it is written `SILENT`; the asynchronous twins reach
+  fails explicitly, `SILENT` or not; the asynchronous twins reach
   remote endpoints only through the handlers the host passes them (see
   [Asynchronous queries and federation](../getting-started/javascript.md#asynchronous-queries-and-federation)).
 - A quoted-triple term as a quad **object** round-trips through Turtle,

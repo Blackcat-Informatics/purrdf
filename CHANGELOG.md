@@ -721,8 +721,23 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   refusal is now an `EvalError::Unsupported` (`SERVICE ?e with no endpoint: …`)
   under `SILENT` too, because `SILENT` tolerates an endpoint that fails, not a query
   that names none. Its message names the shapes that evaluate and the rewrite.
-  `SERVICE SILENT ?e` with `?e` bound to a literal or blank node still yields the
-  identity for that solution, since there the endpoint is what fails.
+
+- **BREAKING** **sparql-eval:** `SILENT` no longer hides the engine's own missing
+  endpoint. `SERVICE SILENT <iri>` evaluated with no remote query source configured,
+  and `SERVICE SILENT ?e` with `?e` bound to a literal or a blank node, answered the
+  join identity having asked nobody; `LOAD SILENT` with no `GraphResolver` succeeded
+  having fetched nothing. Each is now the error its non-`SILENT` form raises
+  (`no remote query source configured for SERVICE <…>`, `?e is bound to …, which is
+  not an IRI`, `native-sparql-load-no-resolver`), ending with why `SILENT` does not
+  apply: it tolerates an endpoint or document that fails, and none was reached.
+  `RemoteError::Unconfigured` lets a source say it has nothing that reaches an
+  endpoint (the wasm package's job with local services and no `resolveService` does),
+  and is not silenceable either. With a source whose endpoint fails, `SILENT` is still
+  the join identity and a no-op `LOAD`. On the wasm package's synchronous lane, which
+  installs no source, `SERVICE SILENT` and `LOAD SILENT` are refused. The conformance
+  harness now runs every case with an in-memory source that fails undeclared
+  endpoints and an offline `LOAD` resolver, standing in for the network the W3C
+  suites assume (`service7`, `load-silent`, `load-into-silent` still pass).
 
 - **sparql-eval:** `SERVICE ?e` was refused wherever `?e` was bound by the left side
   of an `OPTIONAL`, a `MINUS` or a group join rather than by a pattern earlier in

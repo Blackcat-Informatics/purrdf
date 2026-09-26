@@ -71,7 +71,7 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
   调用方注册的聚合函数与属性函数（包括逐跳绑定遍历过程的路径见证（path witness））、带逐节点解释回执
   的受调控执行，以及一个 `SERVICE` 扩展点——一个宿主注入的、携带逐服务上下文的解析器；
   不附带 HTTP 客户端，也不附带解析器，因此在每个随库发布的接口上 `SERVICE` 与 `LOAD`
-  都会按名称失败，除非写作 `SILENT`——全部由 W3C 一致性套件把关。参见 [SPARQL](sparql/querying.md)。
+  都会按名称失败，无论是否写了 `SILENT`——全部由 W3C 一致性套件把关。参见 [SPARQL](sparql/querying.md)。
 - **核心之外的 SPARQL 扩展**——采用精确定点 BM25 的确定性全文检索
   （[全文检索](sparql/full-text.md)）、精确且无浮点的 GeoSPARQL 1.1
   （[GeoSPARQL](sparql/geosparql.md)），以及在 PURREMB 嵌入空间上的最近邻搜索

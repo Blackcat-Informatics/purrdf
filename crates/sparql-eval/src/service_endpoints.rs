@@ -310,8 +310,8 @@ fn classify_expression<'a>(
                 .and_then(|map| map.get(&(std::ptr::from_ref(pattern) as usize)))
             {
                 Some(slot) => {
-                    for (variable, silent) in &slot.site.service_uses {
-                        if !slot.env.resolves_endpoint(variable, *silent) {
+                    for variable in &slot.site.service_uses {
+                        if !slot.env.resolves_endpoint(variable) {
                             record(variable, false, scopes, uses);
                         }
                     }
@@ -516,6 +516,25 @@ pub(crate) fn unbound_endpoint(variable: &Variable, cause: &str) -> EvalError {
     ))
 }
 
+/// The refusal for a `SERVICE ?variable` whose variable is bound to a term that is not an
+/// IRI: it names no endpoint, so there is nothing to send the request to. Under `SILENT`
+/// the message says why `SILENT` does not apply.
+pub(crate) fn non_iri_endpoint(variable: &Variable, value: &TermValue, silent: bool) -> EvalError {
+    let v = variable.as_str();
+    let mut message = format!(
+        "SERVICE ?{v}: ?{v} is bound to {}, which is not an IRI, so there is no endpoint to \
+         send the request to",
+        describe_non_iri(value)
+    );
+    if silent {
+        message.push_str(
+            "; SILENT does not apply: it tolerates an endpoint that fails, not a value that \
+             names none",
+        );
+    }
+    EvalError::remote(message)
+}
+
 /// A short description of a non-IRI term, for the error naming it.
 fn describe_non_iri(value: &TermValue) -> String {
     match value {
@@ -540,24 +559,17 @@ fn eval_over_endpoints<D: DatasetView + Sync>(
     let key = VarSchema::from_vars([variable.clone()]);
     let mut blocks: EndpointBlocks<D::Id> = Vec::with_capacity(endpoints.len());
     let mut stopped = None;
+    // A value that is not an IRI names no endpoint. That is the query's own fault, not an
+    // endpoint that failed, so it is refused under `SILENT` too — the join identity would
+    // claim an endpoint had been consulted — and it is refused before any request goes
+    // out, so whether one does never depends on the order the endpoints are listed in.
     for &endpoint in endpoints {
         let value = ctx.scratch.value_of(ctx.dataset, endpoint);
         if !matches!(value, TermValue::Iri(_)) {
-            // There is no endpoint to invoke: the invocation fails, which is the
-            // endpoint failure `SILENT` exists for — the single empty solution, for this
-            // endpoint alone.
-            if silent {
-                blocks.push((endpoint, identity()));
-                continue;
-            }
-            return Err(EvalError::remote(format!(
-                "SERVICE ?{}: ?{} is bound to {}, which is not an IRI, so there is no \
-                 endpoint to send the request to",
-                variable.as_str(),
-                variable.as_str(),
-                describe_non_iri(&value)
-            )));
+            return Err(non_iri_endpoint(variable, &value, silent));
         }
+    }
+    for &endpoint in endpoints {
         // The same substitution a `LATERAL` makes for one solution: the IRI becomes the
         // clause's endpoint and is injected into its body wherever the body names it.
         let row = crate::expr::outer_bindings_for_substitution(&[Some(endpoint)], &key, ctx);
@@ -624,14 +636,6 @@ fn eval_over_endpoints<D: DatasetView + Sync>(
         None => Evaluated::Complete(seq),
         Some(certificate) => Evaluated::Truncated(Truncation::new(seq, certificate)),
     })
-}
-
-/// The single empty solution.
-fn identity<I: purrdf_core::ViewTermId>() -> SolutionSeq<I> {
-    SolutionSeq {
-        schema: VarSchema::empty_shared(),
-        rows: vec![smallvec::smallvec![]],
-    }
 }
 
 #[cfg(test)]
@@ -1025,31 +1029,58 @@ mod tests {
     }
 
     #[test]
-    fn an_endpoint_bound_to_a_literal_is_an_endpoint_failure() {
-        // SILENT: the single empty solution for that endpoint, on both routes.
-        for shape in [
-            "VALUES ?e { \"not-an-iri\" } OPTIONAL { SERVICE SILENT ?e { ?s ?p ?x } }",
-            "VALUES ?e { \"not-an-iri\" } SERVICE SILENT ?e { ?s ?p ?x }",
-        ] {
-            let source = Endpoints::default();
-            assert_eq!(
-                run(&source, &q(shape)).expect(shape),
-                ["e=not-an-iri"],
-                "{shape}"
-            );
-            assert_eq!(source.requests(), Vec::<String>::new(), "{shape}");
+    fn an_endpoint_bound_to_a_literal_is_refused_under_silent_too() {
+        // A literal names no endpoint: refused, SILENT or not, on the endpoint-list route
+        // (a VALUES or a pattern before the SERVICE) and the substitution route
+        // (LATERAL), with no request.
+        for silent in ["", "SILENT "] {
+            for shape in [
+                "VALUES ?e { \"not-an-iri\" } OPTIONAL { SERVICE SILENT ?e { ?s ?p ?x } }",
+                "VALUES ?e { \"not-an-iri\" } SERVICE SILENT ?e { ?s ?p ?x }",
+                "BIND(\"not-an-iri\" AS ?e) SERVICE SILENT ?e { ?s ?p ?x }",
+                "VALUES ?e { \"not-an-iri\" } LATERAL { SERVICE SILENT ?e { ?s ?p ?x } }",
+            ] {
+                let shape = shape.replace("SILENT ", silent);
+                let source = Endpoints::default();
+                let error = run(&source, &q(&shape)).expect_err(&shape);
+                let text = error.to_string();
+                assert!(
+                    text.contains("?e is bound to the literal \"not-an-iri\", which is not an IRI")
+                        || text.contains("?e names the endpoint, but it is not bound to an IRI"),
+                    "{shape}: {text}"
+                );
+                if !silent.is_empty() {
+                    assert!(
+                        text.contains("SILENT does not apply")
+                            || text.contains("SILENT does not change this"),
+                        "{shape}: {text}"
+                    );
+                }
+                assert_eq!(source.requests(), Vec::<String>::new(), "{shape}");
+            }
         }
-        // Not SILENT: an error, and no request.
+        // The valid neighbours: an IRI endpoint under SILENT answers, one request; and a
+        // listed endpoint that fails at the transport is the identity under SILENT, for
+        // that endpoint alone.
         let source = Endpoints::default();
-        let error = run(
-            &source,
-            &q("VALUES ?e { \"not-an-iri\" } OPTIONAL { SERVICE ?e { ?s ?p ?x } }"),
-        )
-        .expect_err("a literal is no endpoint");
-        assert!(
-            matches!(&error, EvalError::Remote(m) if m.contains("which is not an IRI")),
-            "{error}"
+        assert_eq!(
+            run(
+                &source,
+                &q("VALUES ?e { <http://example.org/e1> } SERVICE SILENT ?e { ?s ?p ?x }")
+            )
+            .expect("an IRI endpoint answers"),
+            ["e=e1&x=answer-from-e1"]
         );
-        assert_eq!(source.requests(), Vec::<String>::new());
+        assert_eq!(source.requests(), [format!("{EX}e1")]);
+        let source = Endpoints::default();
+        assert_eq!(
+            run(
+                &source,
+                &q("VALUES ?e { <http://example.org/down> } SERVICE SILENT ?e { ?s ?p ?x }")
+            )
+            .expect("a failing endpoint is the identity under SILENT"),
+            ["e=down"]
+        );
+        assert_eq!(source.requests(), [format!("{EX}down")]);
     }
 }

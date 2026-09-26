@@ -307,7 +307,7 @@ pub trait GraphResolver {
 /// [`RdfDiagnostic`] code on the boundary conditions (an unrecognized `VERSION`, `LOAD`
 /// with no resolver, a bad re-key destination, an internal eval error), or the
 /// [`TrippedGovernor`] that stopped the request. `resolver` supplies the `LOAD` host seam
-/// (see [`GraphResolver`]); pass `None` to make any non-`SILENT` `LOAD` a hard error.
+/// (see [`GraphResolver`]); pass `None` to make any `LOAD` a hard error, `SILENT` or not.
 ///
 /// On **either** abort, `m` is left in whatever state the operations reached and is
 /// expected to be dropped rather than frozen — that discard is the request's rollback, and
@@ -834,13 +834,21 @@ fn load(
     resolver: Option<&dyn GraphResolver>,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
+    // No resolver: the engine was given nowhere to fetch from. That is how it was
+    // configured, not a source that failed, so it is refused under `SILENT` too — a no-op
+    // success would claim the document had been sought and not found.
     let Some(resolver) = resolver else {
+        let mut message =
+            format!("LOAD <{source}> needs a GraphResolver host seam, none was provided");
         if silent {
-            return Ok(());
+            message.push_str(
+                "; SILENT does not apply: it tolerates a source that fails, and no source \
+                 was reached — configure a GraphResolver",
+            );
         }
         return Err(UpdateAbort::Failed(RdfDiagnostic::error(
             "native-sparql-load-no-resolver",
-            format!("LOAD <{source}> needs a GraphResolver host seam, none was provided"),
+            message,
         )));
     };
     check_stop(governors)?;
@@ -1785,12 +1793,17 @@ mod tests {
     }
 
     #[test]
-    fn load_silent_without_resolver_is_a_noop_ok() {
+    fn load_silent_without_resolver_is_a_hard_error_too() {
+        // SILENT tolerates a source that fails; with no resolver none was reached. The
+        // valid neighbour, a resolver that cannot reach the source under SILENT, is
+        // `load_silent_swallows_an_unreachable_source`.
         let mut m = mut_with(&[("a", "p", "b")]);
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
-        eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).expect("silent load no-ops");
-        assert_eq!(quad_set(&m).len(), 1, "unchanged");
+        let code = failure_code(
+            eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).unwrap_err(),
+        );
+        assert_eq!(code, "native-sparql-load-no-resolver");
     }
 
     /// A resolver that refuses every source with the diagnostic code it is given.

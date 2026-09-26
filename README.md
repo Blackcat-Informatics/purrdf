@@ -357,7 +357,7 @@ triple pattern.
   included). Where it stops: PurRDF ships no HTTP client — the exchange is an
   `HttpTransport` trait the Rust host implements. The CLI, Python and C surfaces
   install no resolver, and neither do the wasm package's synchronous methods, so
-  `SERVICE` and `LOAD` there fail by name unless written `SILENT`. The wasm
+  `SERVICE` and `LOAD` there fail by name, `SILENT` or not. The wasm
   package's asynchronous methods take host resolvers: JavaScript
   `resolveService`/`resolveLoad` handlers the job suspends on through JSPI, or
   the `fetch`-based ones its Cloudflare adapter builds. Federation is a host

@@ -46,12 +46,13 @@
 //! SPARQL 1.1 §10 says a `SERVICE SILENT` clause whose endpoint cannot be reached "will
 //! be considered to have matched with a single, empty, solution" — the join identity, so
 //! the surrounding query proceeds unchanged. This crate keeps that promise exactly, and
-//! confines it to what it is a promise *about*. Five outcomes, five answers:
+//! confines it to what it is a promise *about*. Six outcomes, six answers:
 //!
 //! | Outcome | Non-silent `SERVICE` | `SERVICE SILENT` |
 //! |---|---|---|
 //! | The endpoint is unreachable, or its response undecodable ([`RemoteError::Transport`], [`RemoteError::Decode`], [`RemoteError::Disabled`]) | [`EvalError::Remote`](crate::EvalError) | join identity |
 //! | A capability was denied ([`RemoteError::Denied`]) | [`EvalError::ServiceDenied`](crate::EvalError) | [`EvalError::ServiceDenied`](crate::EvalError) |
+//! | No source reaches the endpoint: none is configured, or the source answers [`RemoteError::Unconfigured`] | [`EvalError::Remote`](crate::EvalError) | [`EvalError::Remote`](crate::EvalError) |
 //! | An in-process source ran out of stack parsing or evaluating the body ([`RemoteError::StackExhausted`]) | [`EvalError::StackExhausted`](crate::EvalError) | [`EvalError::StackExhausted`](crate::EvalError) |
 //! | On `wasm32`, the body nests past the JavaScript engine's call-stack budget ([`RemoteError::HostStackExhausted`]) | [`EvalError::HostStackExhausted`](crate::EvalError) | [`EvalError::HostStackExhausted`](crate::EvalError) |
 //! | This engine's own governor tripped ([`RemoteError::Governed`], [`RemoteError::GovernedAfterCompletion`]) | truncation | truncation |
@@ -61,7 +62,7 @@
 //! a governor trip reached through a `SERVICE` clause propagates as a truncation whether
 //! or not `SILENT` is written (see [`crate::remote`]).
 //!
-//! **The middle row is decided by that same principle, and it is not configurable.** A
+//! **The denial row is decided by that same principle, and it is not configurable.** A
 //! capability denial is a decision taken on *this* side of the seam — by the host running
 //! this engine, deterministically, before any endpoint was consulted. It is therefore
 //! exactly like a governor trip and nothing like an unreachable endpoint, and `SILENT`

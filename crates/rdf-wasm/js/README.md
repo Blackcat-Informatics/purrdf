@@ -301,7 +301,8 @@ discarding the same underlying model.
 ## Asynchronous queries, federation and the Cloudflare adapter
 
 The synchronous methods are the offline lane: they install no `SERVICE` or `LOAD`
-source, so a non-`SILENT` `SERVICE` or `LOAD` fails by name. Every evaluating method
+source, so a `SERVICE` or `LOAD` fails by name, `SILENT` or not (`SILENT` tolerates an
+endpoint or document that fails, and none was reached). Every evaluating method
 also has a Promise-returning twin that takes the host's handlers for those two
 clauses:
 
@@ -459,8 +460,8 @@ that reaches the clause, by one of:
 Under `SERVICE SILENT` an endpoint that fails contributes one row binding only `?e`, so
 its own left rows survive unextended and no other endpoint's rows change. Under `MINUS`
 that row removes its endpoint's left rows, exactly as `FILTER NOT EXISTS { SERVICE SILENT
-?e { … } }` would. An `?e` bound to a literal or a blank node names no endpoint: that is
-the endpoint's failure, an error unless the clause is `SILENT`.
+?e { … } }` would. An `?e` bound to a literal or a blank node names no endpoint, and is
+refused, `SILENT` or not, before any request is made.
 
 A clause for which no solution binds `?e` is refused, `SILENT` or not: `SILENT` tolerates
 an endpoint that fails, not a query that names none, and an empty answer would look
@@ -719,7 +720,8 @@ reports while the query still answers from the remote.
 
 In-memory only, by design: no persistent store and no network I/O inside the
 wasm module. The synchronous methods install no `SERVICE` or `LOAD` source, so
-there a remote `SERVICE` or `LOAD` fails explicitly unless it is written `SILENT`.
+there a remote `SERVICE` or `LOAD` fails explicitly, even when it is written `SILENT`:
+`SILENT` tolerates an endpoint or document that fails, and none was reached.
 The asynchronous twins reach remote endpoints only through the handlers the host
 passes them (`resolveService`, `resolveLoad`), or through the Cloudflare adapter's
 `fetch`-based handlers. For the container transport (GTS), native APIs, and the

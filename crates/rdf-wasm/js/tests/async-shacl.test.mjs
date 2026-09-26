@@ -391,8 +391,12 @@ test("SERVICE SILENT in a target with a failing resolver is the join identity, e
   } finally {
     data.free();
   }
-  // And it is the synchronous twin's SILENT answer with no source at all.
-  assert.equal(report, shaclValidateToSarif(shapes, ALICE_AND_BOB));
+  // The synchronous twin has no source at all: no endpoint was reached, so it refuses the
+  // SILENT target rather than answering the identity.
+  assert.match(
+    syncThrow(() => shaclValidateToSarif(shapes, ALICE_AND_BOB)).message,
+    /no remote query source configured.*SILENT does not apply/,
+  );
 
   // The answered neighbour differs: a registry banning Bob targets Bob alone.
   const answered = await shaclValidateToSarifAsync(shapes, ALICE_AND_BOB, null, { resolveService: async () => registryAnswer("bob") });
