@@ -2706,8 +2706,11 @@ fn verdict_lines(out: &Output) -> String {
     stderr(out)
         .lines()
         .filter(|line| !line.starts_with("shacl shapes-provenance "))
-        .map(|line| format!("{line}\n"))
-        .collect()
+        .fold(String::new(), |mut out, line| {
+            out.push_str(line);
+            out.push('\n');
+            out
+        })
 }
 
 /// Validate `data` against the same shapes graph written as Turtle, TriG and RDF/XML, on

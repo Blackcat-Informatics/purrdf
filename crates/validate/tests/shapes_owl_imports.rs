@@ -257,7 +257,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
         apply_rules_to_ntriples(&RulesRequest {
             data_nt: DATA,
             shapes_ttl: Some(IMPORTER),
-            imports: imports,
+            imports,
             ..RulesRequest::default()
         })
     };
