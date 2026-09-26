@@ -546,10 +546,16 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                     None => (path_term.clone(), path_structure.clone()),
                 };
 
+            // SHACL 1.2 SPARQL Extensions, "Validation with SPARQL-based Constraint
+            // Components": "The production rules for the validation results are
+            // identical to those for SPARQL-based constraints", whose `sh:value` is
+            // "The binding for the variable value", else "The value node". A node
+            // shape's one value node is its focus node.
             let value = value_index
                 .and_then(|i| solutions.cell(row, i))
                 .as_ref()
-                .map(term_value_to_native);
+                .map(term_value_to_native)
+                .or_else(|| path.is_none().then(|| focus.clone()));
 
             let messages = if messages.is_empty() {
                 Vec::new()
