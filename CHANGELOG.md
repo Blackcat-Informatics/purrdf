@@ -1540,6 +1540,11 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   is SHACL 1.2's `shnex:flatMap` of the path over N. One that also carries
   `shnex:focusNode` is refused.
 
+- **shapes:** a custom constraint component that is also a shape (it carries a
+  target, for example) was refused for carrying `sh:parameter` and its validators,
+  which the component registry reads. Both roles now load and run; a shape that is
+  not a component still may not carry them.
+
 - **sparql-eval:** The forked row loop's per-chunk harvest no longer allocates below
   the parallel threshold. Harvesting a worker's relation witness came back as a `Vec`
   of one element on the sequential path — a heap allocation per `FILTER` or `BIND`
