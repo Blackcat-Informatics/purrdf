@@ -29,24 +29,24 @@
 //! followed transitively, each IRI read once, an import no entry supplies refused by name,
 //! and an entry the closure never names refused as unused.
 //!
-//! # The term-generating round limit
+//! # The rule-evaluation limits
 //!
-//! [`RulesRequest::max_term_generating_rounds`] is the host's knob over
-//! [`purrdf_shapes::RuleOptions::with_max_term_generating_rounds`] and
-//! [`purrdf_shapes::srl::InferOptions::with_max_term_generating_rounds`]: at most that many
-//! evaluation rounds may infer a term the evaluation graph did not hold, and one more is a
-//! failure naming the limit. `None` keeps the engine default
-//! ([`purrdf_shapes::rules::TermGeneratingLimit::Horizon`]), a divergence criterion
-//! derived from the input: at most `max(256, 4 × N)` such rounds, `N` the distinct input
-//! terms, past which the rule set is refused as divergent, naming its rules. A rule set
-//! bounded by a constant past that horizon terminates; its host states the bound.
+//! [`RulesRequest::max_term_generating_rounds`] and [`RulesRequest::max_generated_terms`]
+//! are the host's knobs over [`purrdf_shapes::RuleOptions::with_max_term_generating_rounds`]
+//! and [`purrdf_shapes::RuleOptions::with_max_generated_terms`] (and their
+//! [`purrdf_shapes::srl::InferOptions`] twins): at most that many evaluation rounds may
+//! infer a term the evaluation graph did not hold, and at most that many terms may be
+//! inferred beyond the input's. `None` keeps the engine default — 16,384 rounds, and
+//! `max(65,536, 4 × N)` terms for `N` distinct input terms. A run past either is a
+//! failure naming the limit, the numbers, the rules that inferred a new term last, and
+//! the knob that raises it in the calling host's own terms ([`RulesRequest::host`]).
 
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::free_expression::{self, FreeExpression};
 use purrdf_shapes::lint::{self, LintReport};
 use purrdf_shapes::srl::{self, InferOptions};
 use purrdf_shapes::text_ingest::{parse_ntriples_to_dataset, parse_turtle_document};
-use purrdf_shapes::{Inference, RuleOptions, ShapesError, ShapesImports, engine};
+use purrdf_shapes::{Inference, LimitKnobs, RuleOptions, ShapesError, ShapesImports, engine};
 
 use crate::ShapesImportList;
 use crate::expr_selector::ExprSelector;
@@ -76,6 +76,52 @@ pub struct RulesRequest<'a> {
     /// The term-generating round limit, or `None` for the engine default. See the
     /// [module docs](self): hosts running untrusted rule sets should lower it.
     pub max_term_generating_rounds: Option<u64>,
+    /// The generated-term budget, or `None` for the engine default. See the
+    /// [module docs](self).
+    pub max_generated_terms: Option<u64>,
+    /// The host calling, whose names for the two limits' knobs a refusal gives.
+    pub host: RulesHost,
+}
+
+/// The host a [`RulesRequest`] comes from: it decides how a refusal for a passed
+/// rule-evaluation limit names the knob that raises it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RulesHost {
+    /// A Rust caller of this boundary: [`RulesRequest`]'s fields.
+    #[default]
+    Rust,
+    /// The Python `purrdf.shapes.apply_rules` keyword arguments.
+    Python,
+    /// The WebAssembly `shaclApplyRules` arguments.
+    Wasm,
+    /// The C ABI `purrdf_shacl_apply_rules` parameters.
+    CAbi,
+}
+
+impl RulesHost {
+    /// The host's names for the term-generating round limit and the generated-term
+    /// budget.
+    #[must_use]
+    pub fn limit_knobs(self) -> LimitKnobs {
+        match self {
+            Self::Rust => LimitKnobs::new(
+                "RulesRequest::max_term_generating_rounds",
+                "RulesRequest::max_generated_terms",
+            ),
+            Self::Python => LimitKnobs::new(
+                "apply_rules(max_term_generating_rounds=...)",
+                "apply_rules(max_generated_terms=...)",
+            ),
+            Self::Wasm => LimitKnobs::new(
+                "shaclApplyRules's maxTermGeneratingRounds",
+                "shaclApplyRules's maxGeneratedTerms",
+            ),
+            Self::CAbi => LimitKnobs::new(
+                "purrdf_shacl_apply_rules's max_term_generating_rounds",
+                "purrdf_shacl_apply_rules's max_generated_terms",
+            ),
+        }
+    }
 }
 
 /// What a rules run produced.
@@ -102,8 +148,8 @@ pub struct RulesOutcome {
 /// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand
 /// or its import table cannot be used. Otherwise [`ShapesError::Invalid`]: neither or
 /// both rule sources named; a document that does not parse; a rule set that is
-/// ill-formed, unstratifiable or fails during execution; the term-generating round
-/// limit passed; a SPARQL 1.2 RL `IMPORTS` the import table does not supply, or a table
+/// ill-formed, unstratifiable or fails during execution; a rule-evaluation limit
+/// passed; a SPARQL 1.2 RL `IMPORTS` the import table does not supply, or a table
 /// entry its import closure never names.
 pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
     let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
@@ -117,9 +163,12 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
             )?;
             let projected = engine::project_dataset(data.as_ref())?;
             let holder = ShaclData::new(std::sync::Arc::clone(&projected), projected, None);
-            let mut options = RuleOptions::default();
+            let mut options = RuleOptions::default().with_limit_knobs(request.host.limit_knobs());
             if let Some(rounds) = request.max_term_generating_rounds {
                 options = options.with_max_term_generating_rounds(rounds);
+            }
+            if let Some(terms) = request.max_generated_terms {
+                options = options.with_max_generated_terms(terms);
             }
             purrdf_shapes::infer(&holder, &shapes, &options)?
         }
@@ -127,9 +176,12 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
             let document = srl::parse_and_check(text, request.srl_base)
                 .and_then(|document| document.resolve_import_table(request.imports))
                 .map_err(|e| e.to_string())?;
-            let mut options = InferOptions::default();
+            let mut options = InferOptions::default().with_limit_knobs(request.host.limit_knobs());
             if let Some(rounds) = request.max_term_generating_rounds {
                 options = options.with_max_term_generating_rounds(rounds);
+            }
+            if let Some(terms) = request.max_generated_terms {
+                options = options.with_max_generated_terms(terms);
             }
             srl::infer(&document, data.as_ref(), &options).map_err(|e| e.to_string())?
         }

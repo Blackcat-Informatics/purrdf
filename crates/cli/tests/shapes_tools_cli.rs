@@ -201,11 +201,48 @@ fn cli_rules() {
     ]);
     assert_eq!(code(&refused), 1, "{}", stderr(&refused));
     assert!(
-        stderr(&refused).contains("past the limit of 3"),
+        stderr(&refused).contains("past the limit of 3 (the caller's limit)"),
         "{}",
         stderr(&refused)
     );
+    assert!(
+        stderr(&refused)
+            .trim_end()
+            .ends_with("raise the limit with --max-term-generating-rounds"),
+        "the refusal names this command's flag: {}",
+        stderr(&refused)
+    );
     assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
+    // The generated-term budget: the rule set adds six terms.
+    let budget = |terms: &str| {
+        run(&[
+            "rules",
+            "--shapes",
+            &shapes,
+            "--max-generated-terms",
+            terms,
+            "--to",
+            "ntriples",
+            &data,
+        ])
+    };
+    let tight = budget("5");
+    assert_eq!(code(&tight), 1, "{}", stderr(&tight));
+    assert!(
+        stderr(&tight).contains("past the budget of 5 (the caller's budget)"),
+        "{}",
+        stderr(&tight)
+    );
+    assert!(
+        stderr(&tight)
+            .trim_end()
+            .ends_with("raise the budget with --max-generated-terms"),
+        "{}",
+        stderr(&tight)
+    );
+    let roomy = budget("6");
+    assert_eq!(code(&roomy), 0, "{}", stderr(&roomy));
+    assert_eq!(stdout(&roomy), expected_inference());
     let enough = run(&[
         "rules",
         "--shapes",

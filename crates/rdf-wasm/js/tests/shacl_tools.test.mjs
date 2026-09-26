@@ -92,16 +92,53 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
   assert.equal(explained.proof.split("derived ").length - 1, 5);
   explained.free();
 
+  // A passed limit names the limit, the numbers and this host's own argument.
   assert.throws(
     () => shaclApplyRules(DATA, SHAPES, undefined, undefined, undefined, false, 3n),
     (error) =>
-      error.message ===
-      "SHACL rules did not complete: 4 rounds inferred a term the evaluation graph " +
-        "did not hold, past the limit of 3 such rounds (SHACL 1.2 Inference Rules: " +
-        '"Rule engines MAY also report a failure after a pre-configured maximum ' +
-        'iteration count has been exceeded"); if the rule set terminates, raise the ' +
-        "limit with RuleOptions::with_max_term_generating_rounds",
+      error.message.startsWith(
+        "SHACL rules did not complete: the rules exceeded the term-generating round " +
+          "limit: 4 rounds inferred a term the evaluation graph did not hold, past the " +
+          "limit of 3 (the caller's limit); rule ",
+      ) &&
+      error.message.endsWith(
+        "if the rule set terminates, raise the limit with shaclApplyRules's " +
+          "maxTermGeneratingRounds",
+      ),
   );
+  assert.throws(
+    () =>
+      shaclApplyRules(
+        DATA,
+        SHAPES,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        5n,
+      ),
+    (error) =>
+      error.message.includes("exceeded the generated-term budget") &&
+      error.message.includes("past the budget of 5 (the caller's budget)") &&
+      error.message.endsWith("raise the budget with shaclApplyRules's maxGeneratedTerms"),
+  );
+  const roomy = shaclApplyRules(
+    DATA,
+    SHAPES,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    6n,
+  );
+  assert.equal(roomy.inferred, INFERRED);
+  roomy.free();
   const enough = shaclApplyRules(DATA, SHAPES, undefined, undefined, undefined, false, 4n);
   assert.equal(enough.inferred, INFERRED);
   enough.free();

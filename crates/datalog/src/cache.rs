@@ -357,22 +357,22 @@ impl fmt::Display for ContractHash {
 /// to producing identical relations by a differential test, so which one ran is not
 /// something a result's identity should record.
 ///
-/// # The caller's term-generating round limit
+/// # The caller's term limits
 ///
-/// A GUARDED program's answer also depends on the term-generating round limit it runs
-/// under ([`EvalOptions`]): the same program refused under one limit completes under a
-/// larger one. That limit is a caller parameter, so it is folded in as one —
-/// [`contract_hash_with`] takes the options in force, and this function is that recipe
-/// under [`EvalOptions::default`]. A guard-free program cannot be bound by the limit
-/// (see [`TermGeneratingLimit`](crate::seminaive::TermGeneratingLimit)), so its contract
-/// hash leaves the limit out.
+/// A GUARDED program's answer also depends on the term limits it runs under
+/// ([`EvalOptions`]: the term-generating round limit and the generated-term budget): the
+/// same program refused under one limit completes under a larger one. They are caller
+/// parameters, so they are folded in as such — [`contract_hash_with`] takes the options
+/// in force, and this function is that recipe under [`EvalOptions::default`]. A
+/// guard-free program cannot be bound by either (see [`EvalOptions`]), so its contract
+/// hash leaves them out.
 pub fn contract_hash(rules: &[DlClause]) -> ContractHash {
     contract_hash_with(rules, &EvalOptions::default())
 }
 
-/// [`contract_hash`] under the caller's `options`: the term-generating round limit in
-/// force is folded into a GUARDED program's hash; a guard-free program's hash is
-/// independent of `options`.
+/// [`contract_hash`] under the caller's `options`: the term limits in force are folded
+/// into a GUARDED program's hash; a guard-free program's hash is independent of
+/// `options`.
 pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> ContractHash {
     let digest = contract_digest(
         rules,
@@ -393,19 +393,29 @@ pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> Contract
     }
 }
 
-/// Fold the term-generating limit in force: a tag byte, then the fixed limit, or the
-/// horizon's floor and per-input-term factor — the whole rule the horizon is derived by,
-/// so a change to either is a change of calculus.
+/// Fold the term limits in force: each a tag byte, then the caller's value, or the rule
+/// its default is derived by — the default round limit, and the generated-term budget's
+/// floor and per-input-term factor — so a change to either is a change of calculus.
 fn fold_term_generating_limit(hasher: &mut blake3::Hasher, options: &EvalOptions) {
-    match options.term_generating_limit() {
-        crate::seminaive::TermGeneratingLimit::Fixed(rounds) => {
+    match options.stated_max_term_generating_rounds() {
+        Some(rounds) => {
             hasher.update(&[0]);
             hasher.update(&rounds.to_le_bytes());
         }
-        crate::seminaive::TermGeneratingLimit::Horizon => {
+        None => {
             hasher.update(&[1]);
-            hasher.update(&crate::seminaive::TERM_GENERATING_HORIZON_FLOOR.to_le_bytes());
-            hasher.update(&crate::seminaive::TERM_GENERATING_ROUNDS_PER_INPUT_TERM.to_le_bytes());
+            hasher.update(&crate::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS.to_le_bytes());
+        }
+    }
+    match options.stated_max_generated_terms() {
+        Some(terms) => {
+            hasher.update(&[2]);
+            hasher.update(&terms.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[3]);
+            hasher.update(&crate::seminaive::GENERATED_TERM_BUDGET_FLOOR.to_le_bytes());
+            hasher.update(&crate::seminaive::GENERATED_TERMS_PER_INPUT_TERM.to_le_bytes());
         }
     }
 }
@@ -413,7 +423,7 @@ fn fold_term_generating_limit(hasher: &mut blake3::Hasher, options: &EvalOptions
 /// The identity of the calculus a program compiled for the ORDERED schedule
 /// ([`crate::schedule`]) is evaluated under.
 ///
-/// Everything [`contract_hash_with`] covers, the caller's term-generating round limit
+/// Everything [`contract_hash_with`] covers, the caller's term limits
 /// included whether or not the program is guarded, and the SCHEDULE: the layers, and in each its run-once and
 /// iterating groups with their rule indices, in order. Two programs whose clauses agree
 /// but whose schedules differ can derive different facts — a negation decided before or

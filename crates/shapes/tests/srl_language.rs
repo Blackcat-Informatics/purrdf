@@ -404,30 +404,15 @@ fn numeric_and_boolean_terms() {
     );
 }
 
-// ── divergence ────────────────────────────────────────────────────────────────────
+// ── rule-evaluation limits ────────────────────────────────────────────────────────
 
 /// A general rule that nests the triple term it matched inside a new one every round
-/// never terminates. Under the default term-generating horizon — one base triple grants
-/// the 256-round floor — it is refused with the typed [`SrlError::Divergence`], naming
-/// the rule by its document position.
+/// never terminates. Under a caller's round limit it is refused with the typed
+/// [`SrlError::LimitExceeded`], naming the limit, the numbers and the rule by its
+/// document position; under the defaults it is refused too, by name, never as
+/// "divergent".
 #[test]
-fn a_rule_nesting_triple_terms_every_round_is_refused_as_divergent() {
-    let err = infer(
-        "RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }",
-        ":a :p :b .",
-    )
-    .expect_err("the nesting never ends");
-    let SrlError::Divergence(divergence) = &err else {
-        panic!("expected a typed divergence, got {err}");
-    };
-    assert_eq!(divergence.horizon(), 256);
-    assert_eq!(divergence.rounds(), 257);
-    assert_eq!(divergence.rules().len(), 1);
-    assert!(
-        divergence.rules()[0].starts_with(&format!("rule <{EX}nest>")),
-        "{divergence}"
-    );
-    // A stated bound is the caller's: under a fixed limit the refusal is the budget error.
+fn a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit() {
     let document = srl::parse_and_check(
         &rules("RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }"),
         None,
@@ -439,15 +424,39 @@ fn a_rule_nesting_triple_terms_every_round_is_refused_as_divergent() {
         &InferOptions::default().with_max_term_generating_rounds(8),
     )
     .expect_err("past the stated limit");
+    let SrlError::LimitExceeded(limit) = &fixed else {
+        panic!("expected a typed limit refusal, got {fixed}");
+    };
+    assert_eq!(
+        limit.limit(),
+        purrdf_shapes::RuleLimit::TermGeneratingRounds
+    );
+    assert_eq!(limit.observed(), 9);
+    assert_eq!(limit.permitted(), 8);
+    assert!(limit.stated());
+    assert_eq!(limit.rules().len(), 1);
     assert!(
-        matches!(&fixed, SrlError::Evaluation { message } if message.contains("past the limit of 8")),
+        limit.rules()[0].starts_with(&format!("rule <{EX}nest>")),
+        "{limit}"
+    );
+    assert!(
+        fixed
+            .to_string()
+            .ends_with("raise the limit with InferOptions::with_max_term_generating_rounds"),
         "{fixed}"
     );
+    let default = infer(
+        "RULE :nest { ?x :p <<( ?x :p ?y )>> } WHERE { ?x :p ?y }",
+        ":a :p :b .",
+    )
+    .expect_err("the nesting never ends");
+    assert!(!default.to_string().contains("diverge"), "{default}");
+    assert!(default.to_string().contains("exceeded the"), "{default}");
 }
 
-/// The neighbour: a recursive rule over a chain longer than the horizon's floor infers
-/// no term the store did not hold — every `:connected` object is a chain node — so the
-/// divergence criterion never counts a round, and the closure completes in full.
+/// The neighbour: a recursive rule over a long chain infers no term the store did not
+/// hold — every `:connected` object is a chain node — so no term-generating round is
+/// counted, and the closure completes in full.
 #[test]
 fn a_closure_deeper_than_the_floor_completes() {
     const LENGTH: usize = 300;

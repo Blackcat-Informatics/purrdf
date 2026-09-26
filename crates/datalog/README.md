@@ -66,15 +66,17 @@ and SPARQL 1.2 RL rule sets run on this crate's ordered schedule.
   two callers with the same input always get the same answer. Nothing numeric is
   caller-settable here: a settable ceiling drags a charge schedule behind it, and
   a reasoner's step count is an artifact of the plan, so pinning one would pin the
-  planner and make a caller's *model* move when the join order does. The one
-  exception is the limit on TERM-GENERATING rounds of a guarded program: whether
+  planner and make a caller's *model* move when the join order does. The two
+  exceptions are the limits on term generation by a guarded program: whether
   such a program terminates is undecidable, so any fixed limit refuses some
-  program that terminates, and the limit is the caller's (`EvalOptions`). Its
-  default is a divergence criterion derived from the input, `max(256, 4 × N)`
-  rounds for `N` distinct seeded terms, refused as `TermGenerationDiverged`
-  naming the rules that generated a term in the last round. It counts rounds
-  rather than pricing work, only ever refuses, cannot bind a guard-free program,
-  and is folded into the program's contract hash.
+  program that terminates, and the limits are the caller's (`EvalOptions`). The
+  TERM-GENERATING ROUND limit defaults to `DEFAULT_MAX_TERM_GENERATING_ROUNDS`
+  (16,384). The GENERATED-TERM budget, the terms added beyond the seeded store's
+  `N`, defaults to `max(65,536, 4 × N)`. A run past either is refused as
+  `EvalError::TermLimitExceeded`, naming the limit, the numbers and the rules
+  that generated a term in the last round, and never as divergent. The limits
+  count rounds and terms rather than pricing work, only ever refuse, cannot bind
+  a guard-free program, and are folded into the program's contract hash.
 * **A stop signal is admitted, because it is answer-blind.** `StopSignal` is a
   two-line trait polled at round boundaries the fixpoint was going to reach
   anyway. It carries no number and cannot be asked *where* to stop, only whether

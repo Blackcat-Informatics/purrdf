@@ -845,17 +845,35 @@ proof of every inferred triple. The proof is one block per triple: `derived S P
 O .`, then `  rule R` and one `  premise S P O .` line for each fact the rule's
 body matched. A SPARQL 1.2 RL data-block triple has `  data-block` instead.
 
-Every host takes the same **term-generating round limit**. This bounds the
-evaluation rounds that infer a term the graph did not already hold. The default
-is a divergence criterion derived from the input: at most `max(256, 4 × N)`
-such rounds, where `N` is the number of distinct terms in the data graph (and in
-a SPARQL 1.2 RL rule set's data blocks). A rule set whose new terms its data
-bounds, such as a depth counted along a chain, stays within that horizon. A rule
-set still inferring new terms past it is refused as divergent, and the error
-names the rules that inferred one in the last round. A rule set bounded by a
-constant past the horizon, such as a counter stepping to 10,000, terminates:
-state its bound as the limit. A stated limit is exact, and one more round fails
-the run naming it.
+Every host takes the same two **rule-evaluation limits**:
+
+- The **term-generating round limit** bounds the evaluation rounds that infer a
+  term the graph did not already hold. The default is 16384 rounds. A counter
+  stepping to 10,000 completes. A counter with no bound infers one new term per
+  round and is refused in well under a second.
+- The **generated-term budget** bounds the terms inferred beyond the input's.
+  The default is `max(65536, 4 × N)`, where `N` is the number of distinct terms
+  in the data graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set
+  whose new terms double every iteration reaches it within a few iterations,
+  long before the round limit.
+
+A run past either limit is refused. The error names the limit, the numbers, the
+rules that inferred a new term in the last iteration, and the knob that raises
+the limit, spelled the way the calling host spells it: `--max-term-generating-rounds`
+and `--max-generated-terms` on the command line, the `max_term_generating_rounds`
+and `max_generated_terms` keyword arguments in Python, `maxTermGeneratingRounds`
+and `maxGeneratedTerms` in WebAssembly, and the `max_term_generating_rounds` and
+`max_generated_terms` parameters in C. Whether a rule set that keeps inferring
+new terms would stop is undecidable, so the error never calls it divergent. A
+stated limit is exact.
+
+A global SPARQL rule whose query is a conjunctive pattern (triple patterns,
+`FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or graph
+access) runs as rule elements. An iteration then costs only what is new, instead
+of a pass over the whole evaluation graph, and infers the same triples. This is
+why a 10,000-step countdown completes in well under a second. A `BIND` variable
+must appear in every template triple, and a template must have no blank node.
+Otherwise the rule runs as a producer over the whole graph, as before.
 
 ```python
 import purrdf

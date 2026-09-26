@@ -2778,12 +2778,12 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * non-NULL, is a `ParseError`. `shapes_base_iri` / `srl_base_iri` are the documents' base
  * IRIs and may be NULL (a C host has no retrieval IRI, so PurRDF invents none).
  *
- * `max_term_generating_rounds` may be NULL for the engine default, a divergence criterion
- * derived from the input: at most max(256, 4 × N) evaluation rounds that infer a term the
- * graph did not hold, N the distinct input terms, past which the rule set is refused as
- * divergent, naming its rules. Otherwise it points at an exact limit, and one more round
- * fails the call naming the limit. A rule set bounded by a constant past the horizon
- * terminates; its host passes the bound.
+ * `max_term_generating_rounds` bounds the evaluation rounds that infer a term the graph
+ * did not hold, and `max_generated_terms` the terms inferred beyond the input's. Each may
+ * be NULL for the engine default — 16384 rounds, and max(65536, 4 × N) terms for N
+ * distinct input terms — or point at an exact limit. A run past either fails the call
+ * naming the limit, the numbers, the rules that inferred a new term last, and the
+ * parameter that raises it.
  *
  * `out_proof` asks for the proof: NULL skips it; non-NULL receives a buffer with the
  * proof of every inferred triple (`derived S P O .`, then `  rule R` and one
@@ -2800,7 +2800,7 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
  * # Safety
  * `data_nt` must be a non-null NUL-terminated C string; `shapes_ttl`, `shapes_base_iri`,
  * `srl` and `srl_base_iri` must each be null or a NUL-terminated C string;
- * `max_term_generating_rounds` must be null or readable; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+ * `max_term_generating_rounds` and `max_generated_terms` must each be null or readable; when `import_count` is non-zero, `import_iris` and `import_documents` must each
  * address that many NUL-terminated C strings; `out_inferred`
  * must be writable; `out_proof` and `out_error` must each be null or writable.
  */
@@ -2810,6 +2810,7 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  const char *srl,
                                  const char *srl_base_iri,
                                  const uint64_t *max_term_generating_rounds,
+                                 const uint64_t *max_generated_terms,
                                  const char *const *import_iris,
                                  const char *const *import_documents,
                                  size_t import_count,

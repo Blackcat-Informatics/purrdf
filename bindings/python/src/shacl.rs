@@ -253,10 +253,10 @@ fn entail(
 /// raises `ValueError`. `shapes_base` / `srl_base` are the documents' base IRIs.
 ///
 /// `max_term_generating_rounds` bounds the evaluation rounds that infer a term the graph
-/// did not hold; one more raises `ValueError` naming the limit. `None` keeps the engine
-/// default, a divergence criterion derived from the input: at most max(256, 4 × N) such
-/// rounds for N distinct input terms, past which the rule set is refused as divergent,
-/// naming its rules. A rule set bounded by a constant past that horizon states its bound.
+/// did not hold (default 16384), and `max_generated_terms` the terms inferred beyond the
+/// input's (default max(65536, 4 × N) for N distinct input terms). A run past either
+/// raises `ValueError` naming the limit, the numbers, the rules that inferred a new term
+/// last, and the keyword argument that raises it. A rule set that needs more states it.
 ///
 /// `imports` is the rule source's import table of `(IRI, text)` pairs: for `shapes_ttl`
 /// the shapes graph's `owl:imports` table (Turtle documents — see the
@@ -276,6 +276,7 @@ fn entail(
     srl_base=None,
     explain=false,
     max_term_generating_rounds=None,
+    max_generated_terms=None,
     imports=Vec::new(),
 ))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
@@ -289,6 +290,7 @@ fn apply_rules(
     srl_base: Option<&str>,
     explain: bool,
     max_term_generating_rounds: Option<u64>,
+    max_generated_terms: Option<u64>,
     imports: Vec<(String, String)>,
 ) -> PyResult<Py<PyAny>> {
     let pairs = crate::py_entail::import_list(&imports);
@@ -303,6 +305,8 @@ fn apply_rules(
                 srl_base,
                 explain,
                 max_term_generating_rounds,
+                max_generated_terms,
+                host: purrdf_validate::RulesHost::Python,
             })
         })
         .map_err(|error| shapes_error(py, error))?;

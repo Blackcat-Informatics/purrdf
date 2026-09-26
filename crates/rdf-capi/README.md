@@ -158,17 +158,17 @@ Beside validation, three entry points reach the same engine every other PurRDF h
 does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
 
 - `purrdf_shacl_apply_rules(data_nt, shapes_ttl, shapes_base_iri, srl, srl_base_iri,
-  max_term_generating_rounds, import_iris, import_documents, import_count,
-  out_inferred, out_proof, out_error)` runs exactly one
+  max_term_generating_rounds, max_generated_terms, import_iris, import_documents,
+  import_count, out_inferred, out_proof, out_error)` runs exactly one
   rule source — the SHACL 1.2 rules of `shapes_ttl`, or the SPARQL 1.2 RL rule set
   `srl` — and writes the **inference graph** (the inferred triples only, never the
   data graph) as canonical N-Triples. A non-NULL `out_proof` also receives the proof
-  of every inferred triple. `max_term_generating_rounds` is a nullable `uint64_t *`:
-  NULL keeps the default, a divergence criterion derived from the input: at most
-  `max(256, 4 × N)` rounds that infer a new term, `N` the distinct terms of the
-  data graph (and of an SRL rule set's data blocks), past which the rule set is
-  refused as divergent, naming its rules. A rule set bounded by a constant past
-  that horizon terminates; pass its bound.
+  of every inferred triple. `max_term_generating_rounds` and `max_generated_terms`
+  are nullable `uint64_t *` limits on the rounds that infer a new term and on the
+  terms inferred beyond the input's. NULL keeps the default: 16384 rounds, and
+  `max(65536, 4 × N)` terms for `N` distinct input terms. A run past either fails
+  naming the limit, the numbers, the rules that inferred a new term last, and the
+  parameter that raises it.
 - `purrdf_shacl_eval_node_expr(shapes_ttl, shapes_base_iri, data_nt, expr,
   expr_at, expr_via, expr_via_count, expr_turtle, focus, scope, scope_count,
   import_iris, import_documents, import_count, out_terms, out_error)` evaluates

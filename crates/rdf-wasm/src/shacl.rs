@@ -479,7 +479,8 @@ pub(crate) fn apply_rules_impl(
 }
 
 /// `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
-/// maxTermGeneratingRounds?, importIris?, importDocuments?)` → a `ShaclRulesInference`.
+/// maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?)` → a
+/// `ShaclRulesInference`.
 ///
 /// Runs exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
 /// Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
@@ -487,10 +488,10 @@ pub(crate) fn apply_rules_impl(
 /// IRIs — a guest has no retrieval IRI to derive one from.
 ///
 /// `maxTermGeneratingRounds` (a `bigint`) bounds the evaluation rounds that infer a term
-/// the graph did not hold; one more throws naming the limit. Omitted, the limit is a
-/// divergence criterion derived from the input — at most max(256, 4 × N) such rounds for
-/// N distinct input terms — past which the rule set is refused as divergent, naming its
-/// rules. A rule set bounded by a constant past that horizon states its bound here.
+/// the graph did not hold (default 16384), and `maxGeneratedTerms` (a `bigint`) the terms
+/// inferred beyond the input's (default max(65536, 4 × N) for N distinct input terms). A
+/// run past either throws naming the limit, the numbers, the rules that inferred a new
+/// term last, and the argument that raises it.
 ///
 /// `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
 /// `owl:imports` table (Turtle documents, see [`ShaclImportError`]) beside `shapesTtl`, the
@@ -518,6 +519,7 @@ pub fn shacl_apply_rules(
     max_term_generating_rounds: Option<u64>,
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
+    max_generated_terms: Option<u64>,
 ) -> Result<ShaclRulesInference, JsValue> {
     let imports = shapes_import_pairs(
         import_iris.as_deref().unwrap_or_default(),
@@ -533,6 +535,8 @@ pub fn shacl_apply_rules(
         srl_base: srl_base.as_deref(),
         explain: explain.unwrap_or(false),
         max_term_generating_rounds,
+        max_generated_terms,
+        host: purrdf_validate::RulesHost::Wasm,
     })
     .map_err(shapes_rejection)?;
     Ok(ShaclRulesInference {
@@ -1622,6 +1626,53 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             .is_err(),
             "no rule source"
         );
+    }
+
+    /// A passed rule-evaluation limit names this host's own argument, and the
+    /// generated-term budget is exact: the tools rule set adds six terms (the counter's
+    /// four steps, `ex:tagged` and `ex:yes`), so a budget of 6 admits it and 5 does not.
+    #[test]
+    fn wasm_apply_rules_names_its_own_limit_arguments() {
+        let request = purrdf_validate::RulesRequest {
+            data_nt: TOOLS_DATA,
+            shapes_ttl: Some(TOOLS_SHAPES),
+            host: purrdf_validate::RulesHost::Wasm,
+            ..purrdf_validate::RulesRequest::default()
+        };
+        let rounds = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_term_generating_rounds: Some(3),
+            ..request
+        })
+        .expect_err("three rounds are too few")
+        .to_string();
+        assert!(
+            rounds.ends_with("raise the limit with shaclApplyRules's maxTermGeneratingRounds"),
+            "{rounds}"
+        );
+        let terms = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_generated_terms: Some(5),
+            ..request
+        })
+        .expect_err("five terms are too few")
+        .to_string();
+        assert!(
+            terms.contains("6 terms were inferred beyond the input's"),
+            "{terms}"
+        );
+        assert!(
+            terms.contains("past the budget of 5 (the caller's budget)"),
+            "{terms}"
+        );
+        assert!(
+            terms.ends_with("raise the budget with shaclApplyRules's maxGeneratedTerms"),
+            "{terms}"
+        );
+        let enough = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_generated_terms: Some(6),
+            ..request
+        })
+        .expect("six terms suffice");
+        assert_eq!(enough.inferred_ntriples, tools_inference());
     }
 
     /// A SPARQL 1.2 RL rule set's `IMPORTS` resolve from the import table: the imported

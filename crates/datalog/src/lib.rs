@@ -31,18 +31,20 @@
 //! arriving through a parameter instead. **That rule holds for every ceiling that prices
 //! work — steps, facts, arena bytes — and none of them is caller-settable.**
 //!
-//! ## The one caller-set limit: term-generating rounds
+//! ## The two caller-set limits: term-generating rounds and generated terms
 //!
 //! A guard ([`guard`]) can compute a new term every round, and whether a program that
 //! does so terminates is undecidable, so every FIXED limit on such rounds refuses some
 //! program that terminates. A limit this crate hard-coded would make that refusal a
-//! property of the build instead of the request, so the term-generating round limit is
-//! the caller's, on [`EvalOptions`](seminaive::EvalOptions), with a generous default. It
-//! counts rounds, not work, so it drags no charge schedule behind it; it only ever
-//! REFUSES — a refused run returns no model, as every ceiling's does; it cannot bind a
-//! guard-free program at all; and the limit in force is folded into a guarded program's
-//! contract hash ([`cache::contract_hash_with`]), so two runs under different limits
-//! never claim one calculus.
+//! property of the build instead of the request, so the two limits on term generation —
+//! the rounds that commit a new term, and the terms added beyond the input's — are the
+//! caller's, on [`EvalOptions`](seminaive::EvalOptions), with generous defaults. They
+//! count rounds and terms, not work, so they drag no charge schedule behind them; they
+//! only ever REFUSE — a refused run returns no model, as every ceiling's does — and say
+//! which limit a run passed, never that it diverges; they cannot bind a guard-free
+//! program at all; and the limits in force are folded into a guarded program's contract
+//! hash ([`cache::contract_hash_with`]), so two runs under different limits never claim
+//! one calculus.
 //!
 //! ## What the rule is actually about: a charge schedule, not a stop
 //!

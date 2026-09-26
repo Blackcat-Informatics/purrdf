@@ -99,10 +99,24 @@ def test_py_apply_rules() -> None:
         "<http://example.org/ns#yes> .\n  rule _:" in proof
     )
 
-    # The round limit: four term-generating rounds are needed.
-    with pytest.raises(ValueError, match="past the limit of 3"):
+    # The round limit: four term-generating rounds are needed. A passed limit names
+    # this host's own keyword argument.
+    with pytest.raises(ValueError) as rounds:
         purrdf.shapes.apply_rules(_DATA, _SHAPES, max_term_generating_rounds=3)
+    assert "past the limit of 3 (the caller's limit)" in str(rounds.value)
+    assert str(rounds.value).endswith(
+        "raise the limit with apply_rules(max_term_generating_rounds=...)"
+    )
     assert purrdf.shapes.apply_rules(_DATA, _SHAPES, max_term_generating_rounds=4)["inferred"] == _INFERRED
+
+    # The generated-term budget: the rule set adds six terms.
+    with pytest.raises(ValueError) as terms:
+        purrdf.shapes.apply_rules(_DATA, _SHAPES, max_generated_terms=5)
+    assert "past the budget of 5 (the caller's budget)" in str(terms.value)
+    assert str(terms.value).endswith(
+        "raise the budget with apply_rules(max_generated_terms=...)"
+    )
+    assert purrdf.shapes.apply_rules(_DATA, _SHAPES, max_generated_terms=6)["inferred"] == _INFERRED
 
     # SPARQL 1.2 RL text through the same function.
     srl = (

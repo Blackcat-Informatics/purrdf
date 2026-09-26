@@ -62,6 +62,8 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) explain: ReportTarget,
     /// `--max-term-generating-rounds`.
     pub(crate) max_term_generating_rounds: Option<u64>,
+    /// `--max-generated-terms`.
+    pub(crate) max_generated_terms: Option<u64>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--to`: the output format override.
@@ -172,9 +174,12 @@ pub(crate) fn run_rules(
             })?;
             let projected = engine::project_dataset(data.as_ref()).map_err(CliError::Runtime)?;
             let holder = ShaclData::new(Arc::clone(&projected), projected, None);
-            let mut rule_options = RuleOptions::default();
+            let mut rule_options = RuleOptions::default().with_limit_knobs(cli_limit_knobs());
             if let Some(rounds) = options.max_term_generating_rounds {
                 rule_options = rule_options.with_max_term_generating_rounds(rounds);
+            }
+            if let Some(terms) = options.max_generated_terms {
+                rule_options = rule_options.with_max_generated_terms(terms);
             }
             purrdf::shapes::infer(&holder, &shapes, &rule_options)
                 .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))?
@@ -184,9 +189,12 @@ pub(crate) fn run_rules(
             let document = srl::parse_and_check(&text, base.as_deref())
                 .map_err(|error| CliError::Runtime(format!("--srl {path}: {error}")))?;
             let document = resolve_srl_imports(&document, &srl_pairs, path)?;
-            let mut infer_options = InferOptions::default();
+            let mut infer_options = InferOptions::default().with_limit_knobs(cli_limit_knobs());
             if let Some(rounds) = options.max_term_generating_rounds {
                 infer_options = infer_options.with_max_term_generating_rounds(rounds);
+            }
+            if let Some(terms) = options.max_generated_terms {
+                infer_options = infer_options.with_max_generated_terms(terms);
             }
             srl::infer(&document, data.as_ref(), &infer_options)
                 .map_err(|error| CliError::Runtime(format!("--srl {path}: {error}")))?
@@ -207,6 +215,11 @@ pub(crate) fn run_rules(
         report::surface_rendered(&options.explain, &inference.proof_text())?;
     }
     ledger::surface(ledger_target, &ledger)
+}
+
+/// The rule-evaluation limits' knobs, as this command spells them.
+fn cli_limit_knobs() -> purrdf::shapes::LimitKnobs {
+    purrdf::shapes::LimitKnobs::new("--max-term-generating-rounds", "--max-generated-terms")
 }
 
 /// Read `path` (or stdin) as UTF-8 text.

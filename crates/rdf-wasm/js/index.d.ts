@@ -1471,10 +1471,10 @@ export class ShaclRulesInference {
  * IRIs.
  *
  * `maxTermGeneratingRounds` bounds the evaluation rounds that infer a term the graph did
- * not hold; one more throws naming the limit. Omitted, the limit is a divergence
- * criterion derived from the input — at most max(256, 4 × N) such rounds for N distinct
- * input terms — past which the rule set is refused as divergent, naming its rules. A
- * rule set bounded by a constant past that horizon states its bound here.
+ * not hold (default 16384), and `maxGeneratedTerms` the terms inferred beyond the input's
+ * (default max(65536, 4 × N) for N distinct input terms). A run past either throws naming
+ * the limit, the numbers, the rules that inferred a new term last, and the argument that
+ * raises it.
  *
  * `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
  * `owl:imports` table (Turtle documents, see `ShaclImportError`) beside `shapesTtl`, the
@@ -1492,6 +1492,7 @@ export function shaclApplyRules(
   maxTermGeneratingRounds?: bigint,
   importIris?: readonly string[],
   importDocuments?: readonly string[],
+  maxGeneratedTerms?: bigint,
 ): ShaclRulesInference;
 
 /**

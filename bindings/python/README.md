@@ -188,9 +188,10 @@ and C surfaces make:
 out = shapes.apply_rules(my_data, my_shapes, explain=True)
 out["inferred"], out["proof"]
 
-# A rule set bounded by a constant past the default horizon (max(256, 4 x the
-# input's distinct terms) term-generating rounds) states its bound.
-shapes.apply_rules(my_data, srl=counting_rules, max_term_generating_rounds=10_000)
+# Two limits stop a rule set that keeps inferring new terms: 16384 term-generating
+# rounds, and max(65536, 4 x the input's distinct terms) generated terms. A rule set
+# that needs more states it; a run past either raises ValueError naming the limit.
+shapes.apply_rules(my_data, srl=counting_rules, max_term_generating_rounds=50_000)
 
 # Evaluate one node expression of a shapes graph against a focus node. The
 # expression is an IRI or "_:label"; the scope binds shnex:var names.

@@ -103,10 +103,10 @@ pub enum SrlError {
         /// The cycle, `rule -> depends_on -> … -> rule`, each rule named.
         cycle: Vec<String>,
     },
-    /// The rule set diverged under the default term-generating limit
-    /// ([`crate::rules::TermGeneratingLimit::Horizon`]): it kept inferring new terms past
-    /// the horizon its input grants. Names the rules that inferred one in the last round.
-    Divergence(crate::rules::Divergence),
+    /// The rule set passed a rule-evaluation limit ([`InferOptions`]): the
+    /// term-generating round limit or the generated-term budget. Names the limit, the
+    /// numbers and the rules that inferred a new term in the last round.
+    LimitExceeded(crate::rules::RuleLimitExceeded),
     /// Evaluation failed: a guard error, a fixed term-generating round limit passed, or
     /// an inferred triple that is not an RDF triple.
     Evaluation {
@@ -162,8 +162,8 @@ impl fmt::Display for SrlError {
                  dependency in the dependency graph\")",
                 cycle.join(" -> ")
             ),
-            Self::Divergence(divergence) => {
-                write!(f, "SPARQL 1.2 RL evaluation failed: {divergence}")
+            Self::LimitExceeded(limit) => {
+                write!(f, "SPARQL 1.2 RL evaluation failed: {limit}")
             }
             Self::Evaluation { message } => write!(f, "SPARQL 1.2 RL evaluation failed: {message}"),
         }
@@ -285,12 +285,23 @@ pub fn parse_and_check(text: &str, base: Option<&str>) -> Result<RuleSetDocument
     Ok(document)
 }
 
-/// Options for [`infer`].
-#[derive(Debug, Clone, Default)]
+/// Options for [`infer`]: the two rule-evaluation limits, and how the host names their
+/// knobs.
+#[derive(Debug, Clone)]
 pub struct InferOptions {
-    /// The limit on evaluation rounds that infer a term the evaluation graph did not
-    /// hold.
-    term_generating_limit: crate::rules::TermGeneratingLimit,
+    /// The limits, as the rules engine takes them.
+    rules: RuleOptions,
+}
+
+impl Default for InferOptions {
+    fn default() -> Self {
+        Self {
+            rules: RuleOptions::default().with_limit_knobs(crate::rules::LimitKnobs::new(
+                "InferOptions::with_max_term_generating_rounds",
+                "InferOptions::with_max_generated_terms",
+            )),
+        }
+    }
 }
 
 impl InferOptions {
@@ -300,14 +311,29 @@ impl InferOptions {
     /// "Applications should take care to limit the amount of computation and memory usage
     /// that can be caused by applying a SPARQL-RL rule set."
     ///
-    /// The DEFAULT ([`crate::rules::TermGeneratingLimit::Horizon`]) is a divergence
-    /// criterion derived from the input: at most `max(256, 4 × N)` such rounds, `N` the
-    /// distinct terms of the base graph and the data blocks, past which the rule set is
-    /// refused as [`SrlError::Divergence`]. A rule set bounded by a constant past that
-    /// horizon terminates; its caller states the bound here.
+    /// The default and its reasoning are
+    /// [`RuleOptions::with_max_term_generating_rounds`]'s; a run past the limit is
+    /// refused as [`SrlError::LimitExceeded`].
     #[must_use]
     pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
-        self.term_generating_limit = crate::rules::TermGeneratingLimit::Fixed(rounds);
+        self.rules = self.rules.with_max_term_generating_rounds(rounds);
+        self
+    }
+
+    /// Permit exactly `terms` terms inferred beyond the input's; the default and its
+    /// reasoning are [`RuleOptions::with_max_generated_terms`]'s, and a run past the
+    /// budget is refused as [`SrlError::LimitExceeded`].
+    #[must_use]
+    pub fn with_max_generated_terms(mut self, terms: u64) -> Self {
+        self.rules = self.rules.with_max_generated_terms(terms);
+        self
+    }
+
+    /// Name the two limits' knobs as the host exposes them (see
+    /// [`RuleOptions::with_limit_knobs`]).
+    #[must_use]
+    pub fn with_limit_knobs(mut self, knobs: crate::rules::LimitKnobs) -> Self {
+        self.rules = self.rules.with_limit_knobs(knobs);
         self
     }
 }
@@ -319,7 +345,7 @@ impl InferOptions {
 /// # Errors
 ///
 /// [`SrlError::Import`] for unresolved imports, [`SrlError::WellFormedness`],
-/// [`SrlError::Stratification`], [`SrlError::Evaluation`].
+/// [`SrlError::Stratification`], [`SrlError::LimitExceeded`], [`SrlError::Evaluation`].
 pub fn infer(
     document: &RuleSetDocument,
     base: &RdfDataset,
@@ -330,22 +356,16 @@ pub fn infer(
     let projected =
         crate::engine::project_dataset(base).map_err(|message| SrlError::Evaluation { message })?;
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
-    let rule_options = match options.term_generating_limit {
-        crate::rules::TermGeneratingLimit::Fixed(rounds) => {
-            RuleOptions::default().with_max_term_generating_rounds(rounds)
-        }
-        crate::rules::TermGeneratingLimit::Horizon => RuleOptions::default(),
-    };
     eval::evaluate(
         &document.rule_set(),
         &data,
         &Shapes::default(),
-        &rule_options,
+        &options.rules,
     )
     .map_err(|error| match error {
-        crate::rules::RulesError::Diverged(mut divergence) => {
-            divergence.rename(|index| document.rules.get(index).map(SrlRule::describe));
-            SrlError::Divergence(divergence)
+        crate::rules::RulesError::LimitExceeded(mut limit) => {
+            limit.rename(|index| document.rules.get(index).map(SrlRule::describe));
+            SrlError::LimitExceeded(limit)
         }
         crate::rules::RulesError::Failed(message) => SrlError::Evaluation { message },
     })

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use purrdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
-use purrdf_shapes::rules::{RuleOptions, RuleProcessor, TermGeneratingLimit, infer};
+use purrdf_shapes::rules::{RuleOptions, RuleProcessor, infer};
 use purrdf_shapes::shapes::Shapes;
 use purrdf_shapes::srl::{
     self,
@@ -430,40 +430,6 @@ fn a_class_condition_brings_its_superclasses() {
 
 // ── Termination ─────────────────────────────────────────────────────────────────
 
-/// A rule computing a new term from its own output every pass never terminates. Under
-/// the DEFAULT limit it is refused as a divergence naming the rule, after the horizon's
-/// rounds; the bounded neighbour, whose FILTER stops it, terminates with every step.
-#[test]
-fn a_diverging_term_generating_rule_is_refused_and_a_bounded_one_terminates() {
-    let rule = |filter: &str| {
-        format!(
-            r#"ex:grow a sh:SPARQLRule ; sh:construct
-                 "CONSTRUCT {{ ?s ex:name ?m }} WHERE {{ ?s ex:name ?n {filter} BIND (CONCAT(?n, 'x') AS ?m) }}" ."#
-        )
-    };
-    let err =
-        run(r#"ex:a ex:name "s" ."#, &rule(""), &RuleOptions::default()).expect_err("diverges");
-    assert!(
-        err.contains("SHACL rules did not complete: the rules diverged"),
-        "{err}"
-    );
-    assert!(
-        err.contains("257 rounds"),
-        "one past the floor of the horizon: {err}"
-    );
-    assert!(
-        err.contains("rule <http://example.org/ns#grow> inferred a new term"),
-        "the refusal names the rule: {err}"
-    );
-    let bounded = run(
-        r#"ex:a ex:name "s" ."#,
-        &rule("FILTER (STRLEN(?n) < 4)"),
-        &RuleOptions::default(),
-    )
-    .expect("terminates");
-    assert_eq!(bounded.len(), 3, "sx, sxx, sxxx: {bounded:?}");
-}
-
 /// A counter stepping `ex:n` from 0 to `bound`: one term-generating round per step.
 fn counter(bound: u32) -> String {
     format!(
@@ -472,62 +438,205 @@ fn counter(bound: u32) -> String {
     )
 }
 
-/// A counter bounded by a CONSTANT past the default horizon terminates, and is refused
-/// by default: one triple grants the 256-round floor, and 1000 steps need 1000 rounds.
-/// Its caller states the bound: under a fixed limit of 1000 it completes with every step;
-/// under 500 it is refused with an error naming 500 and the option that raises it; and
-/// 500 admits a counter that needs fewer rounds.
+/// A countdown stepping `ex:n` down to 0 from the value in the data. `optional` adds an
+/// `OPTIONAL` that matches nothing, which keeps the rule a PRODUCER — run over the whole
+/// evaluation graph each iteration — rather than its semi-naive element reading.
+fn countdown(optional: bool) -> String {
+    let optional = if optional {
+        "OPTIONAL { ?s ex:never ?z } "
+    } else {
+        ""
+    };
+    format!(
+        r#"ex:count a sh:SPARQLRule ; sh:construct
+             "CONSTRUCT {{ ?s ex:n ?m }} WHERE {{ ?s ex:n ?n {optional}FILTER (?n > 0) BIND (?n - 1 AS ?m) }}" ."#
+    )
+}
+
+/// A countdown from 300, and one from 10,000, complete under the DEFAULT limits with
+/// every step — deep, terminating rule sets are not refused. The 300 countdown reaches
+/// the same inference graph as its producer twin, which the engine runs by executing
+/// the CONSTRUCT over the whole graph each iteration.
+#[test]
+fn deep_countdowns_complete_under_the_default_limits() {
+    let short = run(
+        "ex:a ex:n 300 .",
+        &countdown(false),
+        &RuleOptions::default(),
+    )
+    .expect("300 steps terminate under the default limits");
+    assert_eq!(short.len(), 300, "ex:n 299 down to 0");
+    assert!(has(&short, "a", "n", &int(0)));
+    assert!(
+        !has(&short, "a", "n", &int(-1)),
+        "and no step past the FILTER"
+    );
+    let producer = run("ex:a ex:n 300 .", &countdown(true), &RuleOptions::default())
+        .expect("the producer twin terminates too");
+    assert_eq!(short, producer, "one inference graph, either way");
+
+    let long = run(
+        "ex:a ex:n 10000 .",
+        &countdown(false),
+        &RuleOptions::default(),
+    )
+    .expect("10,000 steps terminate under the default limits");
+    assert_eq!(long.len(), 10_000, "ex:n 9999 down to 0");
+    assert!(has(&long, "a", "n", &int(0)));
+    assert!(has(&long, "a", "n", &int(5000)));
+}
+
+/// Rules read as elements infer exactly what their producer twins do — a join, a
+/// recursive closure, a filter, a computed literal feeding a later iteration, a
+/// language-tagged and a typed constant — the twin kept a producer by an `OPTIONAL`
+/// that matches nothing.
+#[test]
+fn element_readings_infer_what_their_producers_do() {
+    let rules = |optional: &str| {
+        format!(
+            r#"ex:grand a sh:SPARQLRule ; sh:construct
+                 "CONSTRUCT {{ ?x ex:ancestor ?z }} WHERE {{ ?x ex:parent ?y . ?y ex:parent ?z {optional}}}" .
+               ex:closure a sh:SPARQLRule ; sh:construct
+                 "CONSTRUCT {{ ?x ex:ancestor ?z }} WHERE {{ ?x ex:ancestor ?y . ?y ex:ancestor ?z {optional}}}" .
+               ex:adult a sh:SPARQLRule ; sh:construct
+                 "CONSTRUCT {{ ?x a ex:Adult ; ex:label 'adult'@en }} WHERE {{ ?x ex:age ?a {optional}FILTER (?a >= 18) }}" .
+               ex:next a sh:SPARQLRule ; sh:construct
+                 "CONSTRUCT {{ ?x ex:age ?b }} WHERE {{ ?x ex:age ?a {optional}FILTER (?a < 20) BIND (?a + 1 AS ?b) }}" ."#
+        )
+    };
+    let data_ttl = "ex:a ex:parent ex:b . ex:b ex:parent ex:c . ex:c ex:parent ex:d .
+        ex:a ex:age 16 . ex:b ex:age \"7\"^^<http://www.w3.org/2001/XMLSchema#integer> .";
+    let elements = run(data_ttl, &rules(""), &RuleOptions::default()).expect("runs");
+    let producers = run(
+        data_ttl,
+        &rules("OPTIONAL { ?x ex:never ?z } "),
+        &RuleOptions::default(),
+    )
+    .expect("runs");
+    assert_eq!(elements, producers);
+    assert!(has(&elements, "a", "ancestor", &iri("c")));
+    assert!(
+        elements
+            .iter()
+            .any(|(s, _, o)| s.ends_with("#a>") && o.ends_with("#Adult>")),
+        "the counter's later steps reach the adult rule: {elements:?}"
+    );
+    assert!(has(&elements, "a", "age", &int(20)));
+    assert!(!has(&elements, "a", "age", &int(21)));
+}
+
+/// A counter with no bound infers one new term per iteration forever: it is refused at
+/// the DEFAULT round limit, naming the limit, the numbers, the rule and the knob — and
+/// never called divergent, which no limit proves. Its bounded neighbour terminates.
+#[test]
+fn an_unbounded_counter_is_refused_at_the_round_limit() {
+    let unbounded = r#"ex:count a sh:SPARQLRule ; sh:construct
+             "CONSTRUCT { ?s ex:n ?m } WHERE { ?s ex:n ?n BIND (?n + 1 AS ?m) }" ."#;
+    let err = run("ex:a ex:n 0 .", unbounded, &RuleOptions::default()).expect_err("never stops");
+    assert!(
+        err.starts_with(
+            "SHACL rules did not complete: the rules exceeded the term-generating round \
+             limit: 16385 rounds inferred a term the evaluation graph did not hold, past the \
+             limit of 16384 (the default); rule <http://example.org/ns#count> inferred a new \
+             term in the last iteration"
+        ),
+        "{err}"
+    );
+    assert!(
+        err.ends_with("raise the limit with RuleOptions::with_max_term_generating_rounds"),
+        "{err}"
+    );
+    assert!(!err.contains("diverge"), "{err}");
+    let bounded = run("ex:a ex:n 0 .", &counter(1000), &RuleOptions::default())
+        .expect("the bounded neighbour terminates");
+    assert_eq!(bounded.len(), 1000);
+}
+
+/// Two rules each extending every string by one letter double the strings every
+/// iteration: the run is refused at the DEFAULT generated-term budget within a few
+/// iterations, naming the budget, the numbers and both rules. The same rules bounded to
+/// strings of eight letters (510 strings) complete under the default.
+#[test]
+fn an_exponential_rule_set_is_refused_at_the_generated_term_budget() {
+    let rules = |filter: &str| {
+        format!(
+            r#"ex:a a sh:SPARQLRule ; sh:construct
+                 "CONSTRUCT {{ ?s ex:name ?m }} WHERE {{ ?s ex:name ?n {filter} BIND (CONCAT(?n, 'a') AS ?m) }}" .
+               ex:b a sh:SPARQLRule ; sh:construct
+                 "CONSTRUCT {{ ?s ex:name ?m }} WHERE {{ ?s ex:name ?n {filter} BIND (CONCAT(?n, 'b') AS ?m) }}" ."#
+        )
+    };
+    let err = run(r#"ex:s ex:name "" ."#, &rules(""), &RuleOptions::default())
+        .expect_err("the strings double every iteration");
+    assert!(
+        err.starts_with(
+            "SHACL rules did not complete: the rules exceeded the generated-term budget: "
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("past the budget of 65536 (the default, max(65536, 4 per input term))"),
+        "{err}"
+    );
+    assert!(
+        err.contains(
+            "rule <http://example.org/ns#a>, rule <http://example.org/ns#b> inferred a new term"
+        ),
+        "{err}"
+    );
+    assert!(
+        err.ends_with("raise the budget with RuleOptions::with_max_generated_terms"),
+        "{err}"
+    );
+    assert!(!err.contains("diverge"), "{err}");
+    let bounded = run(
+        r#"ex:s ex:name "" ."#,
+        &rules("FILTER (STRLEN(?n) < 8)"),
+        &RuleOptions::default(),
+    )
+    .expect("bounded strings terminate");
+    assert_eq!(bounded.len(), 510, "every string of one to eight letters");
+    let tight = RuleOptions::default().with_max_generated_terms(100);
+    let err = run(
+        r#"ex:s ex:name "" ."#,
+        &rules("FILTER (STRLEN(?n) < 8)"),
+        &tight,
+    )
+    .expect_err("the caller's smaller budget refuses it");
+    assert!(
+        err.contains("past the budget of 100 (the caller's budget)"),
+        "{err}"
+    );
+}
+
+/// A caller's round limit is exact: under 500 a 1000-step counter is refused naming 500
+/// as the caller's, and a counter needing 400 completes; the refusal names the host's
+/// own knob when the host names it.
 #[test]
 fn the_term_generating_round_limit_is_the_callers() {
     let data_ttl = "ex:a ex:n 0 .";
-    let err = run(data_ttl, &counter(1000), &RuleOptions::default())
-        .expect_err("1000 rounds pass the horizon of a one-triple graph");
-    assert!(err.contains("the rules diverged"), "{err}");
-    assert!(err.contains("rule <http://example.org/ns#count>"), "{err}");
+    let limited = RuleOptions::default().with_max_term_generating_rounds(500);
+    let err = run(data_ttl, &counter(1000), &limited).expect_err("past the limit");
     assert!(
-        err.contains("state its bound with RuleOptions::with_max_term_generating_rounds"),
+        err.contains("501 rounds inferred a term the evaluation graph did not hold, past the limit of 500 (the caller's limit)"),
         "{err}"
     );
-    assert_eq!(
-        RuleOptions::default().term_generating_limit(),
-        TermGeneratingLimit::Horizon
-    );
-
-    let stated = RuleOptions::default().with_max_term_generating_rounds(1000);
-    let done = run(data_ttl, &counter(1000), &stated).expect("terminates within its bound");
-    assert_eq!(done.len(), 1000, "ex:n 1 through 1000");
-    assert!(
-        has(&done, "a", "n", &int(1000)),
-        "the last step is inferred"
-    );
-    assert!(
-        !has(&done, "a", "n", &int(1001)),
-        "and no step past the FILTER"
-    );
-
-    let limited = RuleOptions::default().with_max_term_generating_rounds(500);
-    assert_eq!(
-        limited.term_generating_limit(),
-        TermGeneratingLimit::Fixed(500)
-    );
-    let err = run(data_ttl, &counter(1000), &limited).expect_err("past the limit");
-    assert!(err.contains("501 rounds"), "{err}");
-    assert!(err.contains("past the limit of 500 such rounds"), "{err}");
     assert!(
         err.contains("raise the limit with RuleOptions::with_max_term_generating_rounds"),
         "{err}"
     );
-    // The same limit admits a counter that needs fewer rounds than it permits.
     let short = run(data_ttl, &counter(400), &limited).expect("within the limit");
     assert_eq!(short.len(), 400, "ex:n 1 through 400");
+    let named = limited.with_limit_knobs(purrdf_shapes::LimitKnobs::new("--rounds", "--terms"));
+    let err = run(data_ttl, &counter(1000), &named).expect_err("past the limit");
+    assert!(err.ends_with("raise the limit with --rounds"), "{err}");
 }
 
-/// The neighbour the default horizon must not refuse: a counter bounded by its DATA,
-/// deeper than the horizon's floor. The depth of every node of a 400-edge chain is one
-/// more than its predecessor's — 400 term-generating rounds, past the 256 floor and
-/// within the horizon the chain's terms grant — and it completes with every depth.
+/// A counter bounded by its DATA: the depth of every node of a 400-edge chain is one
+/// more than its predecessor's — 400 term-generating rounds — and it completes under the
+/// default limits with every depth.
 #[test]
-fn a_data_bounded_counter_deeper_than_the_floor_completes_under_the_default() {
+fn a_data_bounded_counter_completes_under_the_default() {
     const LENGTH: usize = 400;
     let mut data_ttl = String::from("ex:n0 ex:depth 0 .\n");
     for index in 0..LENGTH {
@@ -536,7 +645,7 @@ fn a_data_bounded_counter_deeper_than_the_floor_completes_under_the_default() {
     let depth = r#"ex:depth a sh:SPARQLRule ; sh:construct
         "CONSTRUCT { ?y ex:depth ?e } WHERE { ?x ex:depth ?d . ?x ex:next ?y BIND (?d + 1 AS ?e) }" ."#;
     let inferred = run(&data_ttl, depth, &RuleOptions::default())
-        .expect("a data-bounded counter completes under the default horizon");
+        .expect("a data-bounded counter completes under the default limits");
     assert_eq!(inferred.len(), LENGTH, "one depth per node past n0");
     assert!(has(
         &inferred,
@@ -546,15 +655,12 @@ fn a_data_bounded_counter_deeper_than_the_floor_completes_under_the_default() {
     ));
 }
 
-/// An iterating rule that mints a fresh blank node on every pass generates a new term
-/// every round and never terminates; it is refused with the typed term-generating
-/// error. Its `sh:runOnce` neighbour fires once and terminates.
-///
-/// Every minted blank is itself an `ex:Counter`, so each pass mints one blank per
-/// counter and the counters double every round: a limit of 8 rounds stops the run at a
-/// few hundred counters, long before the fixed term-arena ceiling would.
+/// An iterating shape rule that mints a fresh blank node on every pass never terminates,
+/// and every minted blank is itself an `ex:Counter`, so the counters double every
+/// iteration: a caller's round limit of 8 refuses it at a few hundred counters, by name.
+/// Its `sh:runOnce` neighbour fires once and terminates.
 #[test]
-fn an_iterating_blank_minting_rule_reports_the_term_generating_limit() {
+fn an_iterating_blank_minting_rule_reports_its_limit() {
     let shapes_body = |once: &str| {
         format!(
             r#"ex:S a sh:NodeShape ; sh:targetClass ex:Counter ;
@@ -565,7 +671,10 @@ fn an_iterating_blank_minting_rule_reports_the_term_generating_limit() {
     let limited = RuleOptions::default().with_max_term_generating_rounds(8);
     let err =
         run("ex:c0 a ex:Counter .", &shapes_body(""), &limited).expect_err("mints every pass");
-    assert!(err.contains("past the limit of 8 such rounds"), "{err}");
+    assert!(
+        err.contains("past the limit of 8 (the caller's limit)"),
+        "{err}"
+    );
     let once = run(
         "ex:c0 a ex:Counter .",
         &shapes_body("sh:runOnce true ;"),

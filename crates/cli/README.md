@@ -744,19 +744,25 @@ derived <http://example.org/d> <http://example.org/q> "2"^^<http://www.w3.org/20
 
 Each block opens with `derived` and the conclusion. `rule` names the rule that
 derived it, followed by one `premise` line for each fact its body matched, in
-body order. A SHACL rule runs as one producer over the whole graph, so it lists
-no premises. A SPARQL 1.2 RL data-block triple has `data-block` instead. Terms
+body order. A SHACL rule that runs as one producer over the whole graph lists no
+premises. A global SPARQL rule whose query is a conjunctive pattern runs as rule
+elements, and lists the facts its triple patterns matched. A SPARQL 1.2 RL data-block triple has `data-block` instead. Terms
 are N-Triples 1.2 and keep the blank-node labels of the evaluation.
 
 **`--max-term-generating-rounds <N>`** bounds the evaluation rounds that infer a
-term the graph did not already hold, such as a computed literal. One round more
-fails the run naming the limit, and no graph is written. Omitted, the limit is a
-divergence criterion derived from the input: at most `max(256, 4 × N)` such
-rounds, `N` the distinct terms of the data graph (and of a SPARQL 1.2 RL rule
-set's data blocks). A rule set still inferring new terms past that horizon is
-refused as divergent, naming the rules that did. A rule set bounded by a
-constant past the horizon, such as a counter stepping to 10,000, terminates:
-state its bound with this option.
+term the graph did not already hold, such as a computed literal. Omitted, the
+limit is 16384 rounds. A counter stepping to 10,000 completes, and a counter with
+no bound is refused in well under a second.
+
+**`--max-generated-terms <N>`** bounds the terms inferred beyond the input's.
+Omitted, the budget is `max(65536, 4 × N)` for `N` distinct terms in the data
+graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set whose new terms
+double every iteration reaches it within a few iterations.
+
+A run past either limit fails, and no graph is written. The error names the
+limit, the numbers, the rules that inferred a new term in the last iteration,
+and the flag that raises the limit. PurRDF cannot prove that a rule set
+diverges, so the error only says which limit it passed.
 
 **`--import <IRI>=<FILE>`** resolves the rule source's imports to local
 documents: an `owl:imports` of the shapes graph (exactly as `validate --import`

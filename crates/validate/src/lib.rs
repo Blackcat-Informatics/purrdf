@@ -129,6 +129,6 @@ pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
 pub type ShapesImportList<'a> = [(&'a str, &'a str)];
 pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, SelectedExpression};
 pub use shapes_tools::{
-    NodeExprRequest, RulesOutcome, RulesRequest, apply_rules_to_ntriples, eval_node_expr_to_terms,
-    lint_shapes_ttl, parse_scope_binding,
+    NodeExprRequest, RulesHost, RulesOutcome, RulesRequest, apply_rules_to_ntriples,
+    eval_node_expr_to_terms, lint_shapes_ttl, parse_scope_binding,
 };

@@ -5,18 +5,23 @@
 // which would otherwise trip the workspace `missing_docs` lint.
 #![allow(missing_docs)]
 
-//! Time to refusal of divergent rule sets under the default term-generating horizon
-//! (`purrdf_shapes::rules::TermGeneratingLimit::Horizon`), and the completion time of
-//! the convergent neighbour the horizon must admit.
+//! Time to refusal of runaway rule sets under the DEFAULT rule-evaluation limits
+//! (`purrdf_shapes::RuleOptions`: 16,384 term-generating rounds, and a generated-term
+//! budget of `max(65,536, 4 × N)`), and the completion time of the deep, terminating
+//! neighbours the defaults must admit.
 //!
 //! * `refuse/fresh_iri` — the first-party `err-diverging-fresh-term` case: a SHACL
 //!   SPARQL rule minting a strictly longer `ex:Counter` IRI every pass.
 //! * `refuse/concat` — a SHACL SPARQL rule extending a string every pass.
-//! * `refuse/counter` — a SHACL SPARQL rule stepping an unbounded counter.
+//! * `refuse/counter` — a SHACL SPARQL rule stepping an unbounded counter: the round
+//!   limit, reached one new term per round.
+//! * `refuse/doubling` — two SHACL SPARQL rules extending every string by one of two
+//!   letters: the generated-term budget, reached as the strings double.
 //! * `refuse/srl_nest` — a SPARQL 1.2 RL rule nesting its matched triple term every
 //!   round.
 //! * `complete/depth/<n>` — a SHACL SPARQL rule counting depth along an `n`-edge chain:
-//!   a counter bounded by its data, deeper than the horizon's 256-round floor.
+//!   a counter bounded by its data.
+//! * `complete/countdown/<n>` — a SHACL SPARQL rule counting down from `n` to 0.
 //!
 //! Report-only, `cargo bench -p purrdf-shapes --bench rules_divergence` (the `make
 //! bench` lane) — excluded from `make check`. No timing is asserted.
@@ -48,10 +53,22 @@ const COUNTER: &str = r#"ex:a ex:n 0 .
 ex:count a sh:SPARQLRule ; sh:construct
   "CONSTRUCT { ?s ex:n ?m } WHERE { ?s ex:n ?n BIND (?n + 1 AS ?m) }" ."#;
 
+const DOUBLING: &str = r#"ex:s ex:name "" .
+ex:a a sh:SPARQLRule ; sh:construct
+  "CONSTRUCT { ?s ex:name ?m } WHERE { ?s ex:name ?n BIND (CONCAT(?n, 'a') AS ?m) }" .
+ex:b a sh:SPARQLRule ; sh:construct
+  "CONSTRUCT { ?s ex:name ?m } WHERE { ?s ex:name ?n BIND (CONCAT(?n, 'b') AS ?m) }" ."#;
+
+const COUNTDOWN_RULE: &str = r#"ex:count a sh:SPARQLRule ; sh:construct
+  "CONSTRUCT { ?s ex:n ?m } WHERE { ?s ex:n ?n FILTER (?n > 0) BIND (?n - 1 AS ?m) }" ."#;
+
+/// Countdown starts for the deep terminating neighbour.
+const COUNTDOWNS: &[usize] = &[300, 10_000];
+
 const DEPTH_RULE: &str = r#"ex:depth a sh:SPARQLRule ; sh:construct
   "CONSTRUCT { ?y ex:depth ?e } WHERE { ?x ex:depth ?d . ?x ex:next ?y BIND (?d + 1 AS ?e) }" ."#;
 
-/// Chain lengths for the convergent neighbour, each past the 256-round floor.
+/// Chain lengths for the data-bounded neighbour.
 const DEPTHS: &[usize] = &[300, 400];
 
 /// The shapes graph and the rule-evaluation data of one self-contained document.
@@ -72,6 +89,7 @@ fn bench_refuse(c: &mut Criterion) {
         ("fresh_iri", FRESH_IRI.to_owned()),
         ("concat", format!("{PREFIXES}{CONCAT}")),
         ("counter", format!("{PREFIXES}{COUNTER}")),
+        ("doubling", format!("{PREFIXES}{DOUBLING}")),
     ]
     .into_iter()
     .map(|(name, ttl)| (name, load(&ttl)))
@@ -93,19 +111,20 @@ fn bench_refuse(c: &mut Criterion) {
     for (name, (shapes, data)) in &loaded {
         refuse.bench_function(*name, |b| {
             b.iter(|| {
-                infer(black_box(data), shapes, &RuleOptions::default()).expect_err("diverges")
+                infer(black_box(data), shapes, &RuleOptions::default()).expect_err("passes a limit")
             });
         });
     }
     refuse.bench_function("srl_nest", |b| {
         b.iter(|| {
-            srl::infer(&document, black_box(&base), &InferOptions::default()).expect_err("diverges")
+            srl::infer(&document, black_box(&base), &InferOptions::default())
+                .expect_err("passes a limit")
         });
     });
     refuse.finish();
 }
 
-/// Completion of the convergent neighbour: a data-bounded counter deeper than the floor.
+/// Completion of a data-bounded counter.
 fn bench_complete(c: &mut Criterion) {
     let loaded: Vec<(usize, (Shapes, ShaclData))> = DEPTHS
         .iter()
@@ -134,5 +153,34 @@ fn bench_complete(c: &mut Criterion) {
     complete.finish();
 }
 
-criterion_group!(benches, bench_refuse, bench_complete);
+/// Completion of a countdown bounded by a constant.
+fn bench_countdown(c: &mut Criterion) {
+    let countdowns: Vec<(usize, (Shapes, ShaclData))> = COUNTDOWNS
+        .iter()
+        .map(|&start| {
+            (
+                start,
+                load(&format!(
+                    "{PREFIXES}{COUNTDOWN_RULE}\nex:a ex:n {start} .\n"
+                )),
+            )
+        })
+        .collect();
+    let mut countdown = c.benchmark_group("rules_divergence/complete/countdown");
+    countdown.sample_size(10);
+    for (start, (shapes, data)) in &countdowns {
+        let start = *start;
+        countdown.bench_with_input(BenchmarkId::from_parameter(start), data, |b, data| {
+            b.iter(|| {
+                let inference = infer(black_box(data), shapes, &RuleOptions::default())
+                    .expect("a countdown completes");
+                assert_eq!(inference.inferred().len(), start);
+                inference
+            });
+        });
+    }
+    countdown.finish();
+}
+
+criterion_group!(benches, bench_refuse, bench_complete, bench_countdown);
 criterion_main!(benches);

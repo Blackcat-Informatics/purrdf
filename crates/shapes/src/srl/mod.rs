@@ -28,6 +28,7 @@ mod depend;
 mod document;
 mod eval;
 mod lower;
+pub(crate) mod sparql_rule;
 mod syntax;
 
 pub use document::{

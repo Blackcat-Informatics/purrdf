@@ -830,7 +830,8 @@ mod tests {
     use crate::clause::HeadDisjunct;
     use crate::guard::{Guard, GuardCall, GuardReads};
     use crate::seminaive::{
-        BudgetResource, EvalOptions, TERM_GENERATING_HORIZON_FLOOR, compile, evaluate_guarded,
+        BudgetResource, DEFAULT_MAX_TERM_GENERATING_ROUNDS, EvalOptions,
+        GENERATED_TERM_BUDGET_FLOOR, compile, evaluate_guarded,
     };
 
     const EX: &str = "https://example.org/";
@@ -864,8 +865,10 @@ mod tests {
     }
 
     /// A test guard evaluator: `gt:N` keeps an integer literal input above `N`,
-    /// `succ` answers the next integer, `cat` appends `x` to a string literal, `fresh`
-    /// mints a counter-numbered blank, `count:p` counts the `p` facts of the model.
+    /// `succ` answers the next integer, `cat` appends `x` to a string literal, `fork`
+    /// answers the string extended by `a` and by `b` (`fork-below:N` only while it is
+    /// shorter than `N`), `fresh` mints a counter-numbered blank, `count:p` counts the
+    /// `p` facts of the model.
     #[derive(Default)]
     struct Guards {
         minted: std::cell::Cell<u32>,
@@ -886,6 +889,19 @@ mod tests {
                 } else {
                     Vec::new()
                 });
+            }
+            if let Some(fork) = name.strip_prefix("fork") {
+                let inner = call.inputs[0].trim_matches('"');
+                if let Some(limit) = fork.strip_prefix("-below:") {
+                    let limit: usize = limit.parse().map_err(|_| "bad limit".to_owned())?;
+                    if inner.len() >= limit {
+                        return Ok(Vec::new());
+                    }
+                }
+                return Ok(vec![
+                    vec![format!("\"{inner}a\"")],
+                    vec![format!("\"{inner}b\"")],
+                ]);
             }
             if let Some(limit) = name.strip_prefix("succ-below:") {
                 let limit: i64 = limit.parse().map_err(|_| "bad limit".to_owned())?;
@@ -1047,77 +1063,78 @@ mod tests {
         assert!(has(model.facts(), "a", "count", "\"2\""));
     }
 
-    /// A counter stepping `?n + 1` to 1000 over one fact terminates after 1000
-    /// term-generating rounds — past the default horizon its three input terms grant
-    /// (the 256 floor), so the default refuses it as divergent, naming the rule; the
-    /// caller who knows the bound states it, and under a fixed limit of 1000 it
-    /// completes, under 500 it is refused with the typed budget error naming 500.
+    /// A counter stepping `?n + 1` to 10,000 over one fact terminates after 10,000
+    /// term-generating rounds, which the default round limit admits; a caller's smaller
+    /// limit refuses it by name with the numbers, and a limit the counter fits in admits
+    /// it.
     #[test]
-    fn a_constant_bounded_counter_past_the_horizon_needs_its_bound_stated() {
+    fn a_deep_constant_bounded_counter_completes_under_the_default_limits() {
         let counter = || {
             let rule = DlClause::datalog(
                 atom(v("?x"), "value", v("?m")),
                 vec![atom(v("?x"), "value", v("?n"))],
             )
             .with_guards(vec![Guard::assign(
-                "succ-below:1001",
+                "succ-below:10001",
                 vec!["?n".to_owned()],
                 "?m",
             )]);
             compile(vec![rule]).expect("compiles")
         };
         let seed = || store(&[("a", "value", "\"0\"")]);
-        let error = evaluate_guarded(
+        let model = evaluate_guarded(
             &counter(),
             seed(),
             &Guards::default(),
             &EvalOptions::default(),
             None,
         )
-        .expect_err("1000 generating rounds pass the horizon of a three-term input");
-        let rendered = error.to_string();
-        let EvalError::TermGenerationDiverged { rules, report, .. } = error else {
-            panic!("expected a divergence refusal, got {error}");
-        };
-        assert_eq!(rules, [0]);
+        .expect("the 10,000-step counter terminates under the default limits");
+        assert!(has(model.facts(), "a", "value", "\"10000\""));
+        assert!(!has(model.facts(), "a", "value", "\"10001\""));
+        assert_eq!(model.budget().term_generating_rounds(), 10_000);
         assert_eq!(
-            report.term_generating_round_limit(),
-            TERM_GENERATING_HORIZON_FLOOR
+            model.budget().term_generating_round_limit(),
+            DEFAULT_MAX_TERM_GENERATING_ROUNDS
         );
-        assert_eq!(
-            report.term_generating_rounds(),
-            TERM_GENERATING_HORIZON_FLOOR + 1
-        );
-        assert!(rendered.contains("rule(s) 0"), "{rendered}");
-        assert!(
-            rendered.contains("with_max_term_generating_rounds"),
-            "{rendered}"
-        );
-
-        let stated = EvalOptions::default().with_max_term_generating_rounds(1000);
-        let model = evaluate_guarded(&counter(), seed(), &Guards::default(), &stated, None)
-            .expect("the 1000-step counter terminates under its stated bound");
-        assert!(has(model.facts(), "a", "value", "\"1000\""));
-        assert_eq!(model.budget().term_generating_rounds(), 1000);
-        assert_eq!(model.budget().term_generating_round_limit(), 1000);
 
         let limited = EvalOptions::default().with_max_term_generating_rounds(500);
         let error = evaluate_guarded(&counter(), seed(), &Guards::default(), &limited, None)
             .expect_err("the same counter is refused under a limit of 500");
         let rendered = error.to_string();
-        let EvalError::BudgetExhausted { resource, report } = error else {
-            panic!("expected a budget refusal, got {error}");
+        let EvalError::TermLimitExceeded {
+            resource,
+            rules,
+            report,
+        } = error
+        else {
+            panic!("expected a term-limit refusal, got {error}");
         };
         assert_eq!(resource, BudgetResource::TermGeneratingRounds);
+        assert_eq!(rules, [0]);
         assert_eq!(report.term_generating_round_limit(), 500);
         assert_eq!(report.term_generating_rounds(), 501);
-        assert!(rendered.contains("500 permitted"), "{rendered}");
+        assert!(
+            rendered.contains(
+                "exceeded the term-generating round limit: 501 rounds committed a term the \
+                 store did not hold, past the limit of 500 (the caller's limit)"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("diverge"), "{rendered}");
+        assert!(rendered.contains("rule(s) 0"), "{rendered}");
+        assert!(
+            rendered.contains("EvalOptions::with_max_term_generating_rounds"),
+            "{rendered}"
+        );
+        let fits = EvalOptions::default().with_max_term_generating_rounds(10_000);
+        evaluate_guarded(&counter(), seed(), &Guards::default(), &fits, None)
+            .expect("a limit the counter fits in admits it");
     }
 
-    /// The neighbour the horizon must not refuse: a counter bounded by its DATA. The
-    /// depth of every node of a 600-edge chain is one more than its predecessor's — 600
-    /// term-generating rounds, far past the floor, and within the horizon the chain's
-    /// terms grant — so it completes under the default with every depth.
+    /// A counter bounded by its DATA: the depth of every node of a 600-edge chain is one
+    /// more than its predecessor's — 600 term-generating rounds — so it completes under
+    /// the default limits with every depth.
     #[test]
     fn a_data_bounded_counter_deeper_than_the_floor_completes() {
         const LENGTH: usize = 600;
@@ -1146,7 +1163,7 @@ mod tests {
             RelationStore::DEFAULT_GRAPH,
         );
         let model = evaluate_guarded(&exe, edb, &Guards::default(), &EvalOptions::default(), None)
-            .expect("a data-bounded counter completes under the default horizon");
+            .expect("a data-bounded counter completes under the default limits");
         assert!(has(
             model.facts(),
             &format!("n{LENGTH}"),
@@ -1157,31 +1174,120 @@ mod tests {
         assert!(model.budget().term_generating_round_limit() >= LENGTH as u64);
     }
 
-    /// A rule appending to a string every round, with no bound, is refused as divergent
-    /// under the default after the horizon's rounds, naming the rule.
+    /// A rule appending to a string every round, with no bound, generates one term per
+    /// round: it is refused at the default ROUND limit, named, with the numbers — and never
+    /// called divergent, which no limit proves.
     #[test]
-    fn an_unbounded_string_growing_rule_is_refused_as_divergent() {
+    fn an_unbounded_linear_generator_passes_the_default_round_limit() {
         let growing = DlClause::datalog(
             atom(v("?x"), "name", v("?m")),
             vec![atom(v("?x"), "name", v("?n"))],
         )
-        .with_guards(vec![Guard::assign("cat", vec!["?n".to_owned()], "?m")]);
+        .with_guards(vec![Guard::assign("succ", vec!["?n".to_owned()], "?m")]);
         let exe = compile(vec![growing]).expect("compiles");
         let error = evaluate_guarded(
             &exe,
-            store(&[("a", "name", "\"s\"")]),
+            store(&[("a", "name", "\"0\"")]),
             &Guards::default(),
             &EvalOptions::default(),
             None,
         )
-        .expect_err("an unbounded string-growing rule diverges");
-        let EvalError::TermGenerationDiverged { rules, report, .. } = error else {
-            panic!("a divergence is a typed divergence refusal: {error}");
+        .expect_err("an unbounded counter passes the round limit");
+        let rendered = error.to_string();
+        let EvalError::TermLimitExceeded {
+            resource,
+            rules,
+            report,
+        } = error
+        else {
+            panic!("a term-limit refusal: {error}");
         };
+        assert_eq!(resource, BudgetResource::TermGeneratingRounds);
         assert_eq!(rules, [0]);
         assert_eq!(
             report.term_generating_rounds(),
-            TERM_GENERATING_HORIZON_FLOOR + 1
+            DEFAULT_MAX_TERM_GENERATING_ROUNDS + 1
+        );
+        assert!(report.generated_terms() < report.generated_term_budget());
+        assert!(rendered.contains("(the default)"), "{rendered}");
+        assert!(!rendered.contains("diverge"), "{rendered}");
+    }
+
+    /// A rule whose terms double every round reaches the generated-term BUDGET within a
+    /// few rounds — long before any round limit — and is refused by name with the
+    /// numbers; the same rule bounded to strings of ten characters (2,046 terms) completes
+    /// under the default budget.
+    #[test]
+    fn an_exponential_generator_passes_the_default_generated_term_budget() {
+        let forking = |guard: &str| {
+            let rule = DlClause::datalog(
+                atom(v("?x"), "name", v("?m")),
+                vec![atom(v("?x"), "name", v("?n"))],
+            )
+            .with_guards(vec![Guard::assign(guard, vec!["?n".to_owned()], "?m")]);
+            compile(vec![rule]).expect("compiles")
+        };
+        let seed = || store(&[("a", "name", "\"\"")]);
+        let error = evaluate_guarded(
+            &forking("fork"),
+            seed(),
+            &Guards::default(),
+            &EvalOptions::default(),
+            None,
+        )
+        .expect_err("a doubling generator passes the budget");
+        let rendered = error.to_string();
+        let EvalError::TermLimitExceeded {
+            resource, report, ..
+        } = error
+        else {
+            panic!("a term-limit refusal: {error}");
+        };
+        assert_eq!(resource, BudgetResource::GeneratedTerms);
+        assert_eq!(report.generated_term_budget(), GENERATED_TERM_BUDGET_FLOOR);
+        assert!(report.generated_terms() > GENERATED_TERM_BUDGET_FLOOR);
+        assert!(report.term_generating_rounds() < 20, "{rendered}");
+        assert!(
+            rendered.contains("exceeded the generated-term budget"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!(
+                "past the budget of {GENERATED_TERM_BUDGET_FLOOR} (the default, max(65536, 4 \
+                 per input term))"
+            )),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("EvalOptions::with_max_generated_terms"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("diverge"), "{rendered}");
+
+        let bounded = evaluate_guarded(
+            &forking("fork-below:10"),
+            seed(),
+            &Guards::default(),
+            &EvalOptions::default(),
+            None,
+        )
+        .expect("a bounded fork completes under the default budget");
+        assert!(has(bounded.facts(), "a", "name", "\"ababababab\""));
+        assert_eq!(bounded.budget().generated_terms(), 2_046);
+        let tight = EvalOptions::default().with_max_generated_terms(1_000);
+        let error = evaluate_guarded(
+            &forking("fork-below:10"),
+            seed(),
+            &Guards::default(),
+            &tight,
+            None,
+        )
+        .expect_err("the caller's smaller budget refuses it");
+        assert!(
+            error
+                .to_string()
+                .contains("past the budget of 1000 (the caller's budget)"),
+            "{error}"
         );
     }
 
@@ -1326,7 +1432,14 @@ mod tests {
         )
         .expect_err("never converges");
         assert!(
-            matches!(error, EvalError::TermGenerationDiverged { ref rules, .. } if rules == &[0]),
+            matches!(
+                error,
+                EvalError::TermLimitExceeded {
+                    resource: BudgetResource::TermGeneratingRounds,
+                    ref rules,
+                    ..
+                } if rules == &[0]
+            ),
             "{error}"
         );
         let error = evaluate_scheduled(
@@ -1338,8 +1451,11 @@ mod tests {
             None,
         )
         .expect_err("never converges");
-        let EvalError::BudgetExhausted { resource, report } = error else {
-            panic!("expected a budget refusal, got {error}");
+        let EvalError::TermLimitExceeded {
+            resource, report, ..
+        } = error
+        else {
+            panic!("expected a term-limit refusal, got {error}");
         };
         assert_eq!(resource, BudgetResource::TermGeneratingRounds);
         assert_eq!(report.term_generating_round_limit(), 100);

@@ -1175,9 +1175,9 @@ pub(crate) enum Command {
     /// or not. **1** for a malformed data graph, shapes graph or rule set; a rule set that is
     /// ill-formed or cannot be stratified; a `sh:ruleProcessor` this engine does not handle;
     /// a rule that fails during execution; and a rule set that passes
-    /// `--max-term-generating-rounds` — SHACL 1.2 Inference Rules lets an engine "report a
-    /// failure after a pre-configured maximum iteration count has been exceeded", and this
-    /// one does, writing no graph. **2** for a usage error.
+    /// `--max-term-generating-rounds` or `--max-generated-terms` — SHACL 1.2 Inference Rules
+    /// lets an engine "report a failure after a pre-configured maximum iteration count has
+    /// been exceeded", and this one does, writing no graph. **2** for a usage error.
     ///
     /// The count of inferred triples is always written to stderr as `rules inferred N`.
     Rules {
@@ -1229,20 +1229,27 @@ pub(crate) enum Command {
         /// Write the PROOF of every inferred triple: bare writes it to stderr,
         /// `--explain=PATH` writes it to PATH. One block per inferred triple, in the
         /// output's order — `derived S P O .`, then `  rule R` and one `  premise S P O .`
-        /// per fact the rule's body matched (a SHACL rule, executed as one producer over
-        /// the whole graph, lists none), or `  data-block` for a SPARQL 1.2 RL data-block
+        /// per fact the rule's body matched (a SHACL rule executed as one producer over the
+        /// whole graph — every rule but a global SPARQL rule whose query is a conjunctive
+        /// pattern — lists none), or `  data-block` for a SPARQL 1.2 RL data-block
         /// triple. Terms are N-Triples 1.2, with the blank-node labels of the evaluation.
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         explain: Option<Option<PathBuf>>,
         /// Permit exactly `N` evaluation rounds that infer a term the evaluation graph did
-        /// not hold; one more fails the run naming the limit. Omitted, the limit is a
-        /// divergence criterion derived from the input — at most max(256, 4 × N) such
-        /// rounds for N distinct input terms — past which the rule set is refused as
-        /// divergent, naming its rules. A rule set bounded by a constant past that
-        /// horizon terminates; state its bound here.
+        /// not hold; one more fails the run naming the limit, the numbers and the rules
+        /// that inferred a new term last. Omitted, the limit is 16384 rounds: a rule
+        /// stepping a value to 10,000 completes, and one counting with no bound is refused
+        /// in well under a second. A rule set that needs more states it here.
         #[arg(long = "max-term-generating-rounds", value_name = "N")]
         max_term_generating_rounds: Option<u64>,
+        /// Permit exactly `N` terms inferred beyond the input's; one more fails the run
+        /// naming the budget and the numbers. Omitted, the budget is max(65536, 4 × T)
+        /// for T distinct input terms: a rule set whose new terms multiply every
+        /// iteration is refused within a few iterations. A rule set that needs more
+        /// states it here.
+        #[arg(long = "max-generated-terms", value_name = "N")]
+        max_generated_terms: Option<u64>,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,

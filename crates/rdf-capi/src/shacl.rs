@@ -495,12 +495,12 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 /// non-NULL, is a `ParseError`. `shapes_base_iri` / `srl_base_iri` are the documents' base
 /// IRIs and may be NULL (a C host has no retrieval IRI, so PurRDF invents none).
 ///
-/// `max_term_generating_rounds` may be NULL for the engine default, a divergence criterion
-/// derived from the input: at most max(256, 4 × N) evaluation rounds that infer a term the
-/// graph did not hold, N the distinct input terms, past which the rule set is refused as
-/// divergent, naming its rules. Otherwise it points at an exact limit, and one more round
-/// fails the call naming the limit. A rule set bounded by a constant past the horizon
-/// terminates; its host passes the bound.
+/// `max_term_generating_rounds` bounds the evaluation rounds that infer a term the graph
+/// did not hold, and `max_generated_terms` the terms inferred beyond the input's. Each may
+/// be NULL for the engine default — 16384 rounds, and max(65536, 4 × N) terms for N
+/// distinct input terms — or point at an exact limit. A run past either fails the call
+/// naming the limit, the numbers, the rules that inferred a new term last, and the
+/// parameter that raises it.
 ///
 /// `out_proof` asks for the proof: NULL skips it; non-NULL receives a buffer with the
 /// proof of every inferred triple (`derived S P O .`, then `  rule R` and one
@@ -517,7 +517,7 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 /// # Safety
 /// `data_nt` must be a non-null NUL-terminated C string; `shapes_ttl`, `shapes_base_iri`,
 /// `srl` and `srl_base_iri` must each be null or a NUL-terminated C string;
-/// `max_term_generating_rounds` must be null or readable; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+/// `max_term_generating_rounds` and `max_generated_terms` must each be null or readable; when `import_count` is non-zero, `import_iris` and `import_documents` must each
 /// address that many NUL-terminated C strings; `out_inferred`
 /// must be writable; `out_proof` and `out_error` must each be null or writable.
 #[unsafe(no_mangle)]
@@ -528,6 +528,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     srl: *const c_char,
     srl_base_iri: *const c_char,
     max_term_generating_rounds: *const u64,
+    max_generated_terms: *const u64,
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
     import_count: usize,
@@ -559,6 +560,9 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
                 explain: !out_proof.is_null(),
                 // SAFETY: the caller's contract — null or readable.
                 max_term_generating_rounds: max_term_generating_rounds.as_ref().copied(),
+                // SAFETY: the caller's contract — null or readable.
+                max_generated_terms: max_generated_terms.as_ref().copied(),
+                host: purrdf_validate::RulesHost::CAbi,
             };
             let outcome = apply_rules_outcome(&request).map_err(PurrdfError::shapes)?;
             if let Some(proof) = outcome.proof {
@@ -2147,6 +2151,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     limit_ptr,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     0,
                     &raw mut inferred,
                     if explain {
@@ -2171,6 +2176,12 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         let refused = run(shapes.as_ptr(), std::ptr::null(), Some(3), false)
             .expect_err("three rounds are too few");
         assert!(refused.contains("past the limit of 3"), "{refused}");
+        assert!(
+            refused.ends_with(
+                "raise the limit with purrdf_shacl_apply_rules's max_term_generating_rounds"
+            ),
+            "{refused}"
+        );
         let (graph, _) = run(shapes.as_ptr(), std::ptr::null(), Some(4), false).expect("runs");
         assert_eq!(graph, tools_inference());
 
@@ -2190,6 +2201,55 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         assert!(proof.expect("asked for").contains("  data-block\n"));
         let both = run(shapes.as_ptr(), srl.as_ptr(), None, false).expect_err("two sources");
         assert!(both.contains("two rule sources"), "{both}");
+    }
+
+    /// The generated-term budget crosses the C boundary as its own nullable parameter:
+    /// the tools rule set adds six terms, so 5 is refused naming this ABI's parameter
+    /// and 6 admits it.
+    #[test]
+    fn capi_apply_rules_takes_a_generated_term_budget() {
+        use std::ffi::CString;
+
+        let data = CString::new(TOOLS_DATA).expect("no NUL");
+        let shapes = CString::new(TOOLS_SHAPES).expect("no NUL");
+        let run = |budget: u64| -> Result<String, String> {
+            let mut inferred: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, NULL, a readable local, or a
+            // writable local.
+            unsafe {
+                let status = purrdf_shacl_apply_rules(
+                    data.as_ptr(),
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &raw const budget,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut inferred,
+                    std::ptr::null_mut(),
+                    &raw mut error,
+                );
+                if status != PurrdfStatus::Ok as i32 {
+                    return Err(take_error(error));
+                }
+                Ok(take_text(inferred))
+            }
+        };
+        let refused = run(5).expect_err("five terms are too few");
+        assert!(
+            refused.contains("past the budget of 5 (the caller's budget)"),
+            "{refused}"
+        );
+        assert!(
+            refused
+                .ends_with("raise the budget with purrdf_shacl_apply_rules's max_generated_terms"),
+            "{refused}"
+        );
+        assert_eq!(run(6).expect("six terms suffice"), tools_inference());
     }
 
     /// A SPARQL 1.2 RL rule set's `IMPORTS` resolve from the import table across the C
@@ -2227,6 +2287,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     srl.as_ptr(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     iris.as_ptr(),
@@ -2716,6 +2777,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 let status = purrdf_shacl_apply_rules(
                     data.as_ptr(),
                     shapes.as_ptr(),
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),

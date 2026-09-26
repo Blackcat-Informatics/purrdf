@@ -40,12 +40,13 @@
 //! two executions never share a minted blank — "some rules may produce fresh blank nodes
 //! with each execution and therefore cause infinite iterations", which is exactly what
 //! `sh:runOnce` exists to prevent. A rule that mints on every pass without `sh:runOnce`
-//! is stopped by the term-generating round limit, as the specification allows: "Rule
-//! engines MAY also report a failure after a pre-configured maximum iteration count has
-//! been exceeded". By default that limit is a divergence criterion derived from the base
-//! graph ([`TermGeneratingLimit::Horizon`]), refused as a [`Divergence`] naming the
-//! rules that kept inferring new terms; a host that knows its rule set's bound states it
-//! with [`RuleOptions::with_max_term_generating_rounds`].
+//! is stopped by a term limit, as the specification allows: "Rule engines MAY also report
+//! a failure after a pre-configured maximum iteration count has been exceeded". Two limits
+//! apply ([`RuleOptions`]): the term-generating ROUND limit, which a rule inferring a few
+//! new terms per iteration reaches, and the GENERATED-TERM budget, which a rule whose new
+//! terms multiply reaches within a few iterations. A run past either is refused as a
+//! [`RuleLimitExceeded`] naming the limit, the numbers and the rules that inferred a new
+//! term in the last iteration; a host whose rule set needs more states it.
 //!
 //! # Ill-formed triples are skipped
 //!
@@ -259,7 +260,7 @@ pub enum RuleProcessor {
 }
 
 /// A host's rule-execution request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RuleOptions {
     /// The `sh:ruleProcessor` values the host handles, and how.
     processors: Vec<(Term, RuleProcessor)>,
@@ -267,19 +268,12 @@ pub struct RuleOptions {
     rule_set: Option<NamedNode>,
     /// Whether to track each inferred triple's rule with `sh:sourceRule`.
     source_rules: bool,
-    /// The limit on term-generating rounds ([`Self::with_max_term_generating_rounds`]).
-    term_generating_limit: TermGeneratingLimit,
-}
-
-impl Default for RuleOptions {
-    fn default() -> Self {
-        Self {
-            processors: Vec::new(),
-            rule_set: None,
-            source_rules: false,
-            term_generating_limit: TermGeneratingLimit::Horizon,
-        }
-    }
+    /// The caller's term-generating round limit ([`Self::with_max_term_generating_rounds`]).
+    max_term_generating_rounds: Option<u64>,
+    /// The caller's generated-term budget ([`Self::with_max_generated_terms`]).
+    max_generated_terms: Option<u64>,
+    /// How the host names the two limits' knobs, for a refusal to name them.
+    knobs: LimitKnobs,
 }
 
 impl RuleOptions {
@@ -315,28 +309,61 @@ impl RuleOptions {
 
     /// Permit exactly `rounds` TERM-GENERATING rounds: rounds that infer a term the
     /// evaluation graph did not hold — a computed literal, a longer IRI, a fresh blank
-    /// node. One more is refused with an error naming the limit.
+    /// node. One more is refused with a [`RuleLimitExceeded`] naming the limit.
     ///
     /// SHACL 1.2 Inference Rules: "Rule engines MAY also report a failure after a
-    /// pre-configured maximum iteration count has been exceeded". Whether a rule set
-    /// that keeps computing new terms terminates is undecidable. The DEFAULT
-    /// ([`TermGeneratingLimit::Horizon`]) is a divergence criterion: at most
-    /// `max(256, 4 × N)` such rounds, `N` the distinct terms of the base graph (and of a
-    /// SPARQL 1.2 RL document's data blocks), which a rule set whose new terms are bounded
-    /// by its data needs — a depth counted along a chain inferred to its end — and past
-    /// which a rule set is refused as a [`Divergence`] naming the rules that inferred a
-    /// new term in the refused round. A rule set bounded by a constant past that horizon
-    /// — a counter stepping to 10,000 — terminates; its host states the bound here.
+    /// pre-configured maximum iteration count has been exceeded". Whether a rule set that
+    /// keeps computing new terms terminates is undecidable, so the limit states a bound,
+    /// never a verdict. The DEFAULT is
+    /// [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`](purrdf_datalog::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS)
+    /// (16,384): a counter stepping to 10,000 completes under it, and a counter with no
+    /// bound is refused in well under a second.
     #[must_use]
     pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
-        self.term_generating_limit = TermGeneratingLimit::Fixed(rounds);
+        self.max_term_generating_rounds = Some(rounds);
         self
     }
 
-    /// The term-generating round limit in force.
+    /// Permit exactly `terms` GENERATED terms: terms the evaluation added beyond the
+    /// input's. One more is refused with a [`RuleLimitExceeded`] naming the budget.
+    ///
+    /// The DEFAULT is `max(65,536, 4 × N)`, `N` the distinct terms of the base graph (and
+    /// of a SPARQL 1.2 RL rule set's data blocks)
+    /// ([`EvalOptions::generated_term_budget`](purrdf_datalog::seminaive::EvalOptions::generated_term_budget)):
+    /// a rule set whose new terms double every iteration is refused within a few
+    /// iterations, long before the round limit, while one whose new terms its data bounds
+    /// stays well within it.
     #[must_use]
-    pub fn term_generating_limit(&self) -> TermGeneratingLimit {
-        self.term_generating_limit
+    pub fn with_max_generated_terms(mut self, terms: u64) -> Self {
+        self.max_generated_terms = Some(terms);
+        self
+    }
+
+    /// Name the two limits' knobs as the host exposes them, so a refusal tells its caller
+    /// what to change in the caller's own terms. The default names this type's methods.
+    #[must_use]
+    pub fn with_limit_knobs(mut self, knobs: LimitKnobs) -> Self {
+        self.knobs = knobs;
+        self
+    }
+
+    /// The datalog governors these options state.
+    #[must_use]
+    pub fn eval_options(&self) -> purrdf_datalog::seminaive::EvalOptions {
+        let mut options = purrdf_datalog::seminaive::EvalOptions::default();
+        if let Some(rounds) = self.max_term_generating_rounds {
+            options = options.with_max_term_generating_rounds(rounds);
+        }
+        if let Some(terms) = self.max_generated_terms {
+            options = options.with_max_generated_terms(terms);
+        }
+        options
+    }
+
+    /// How the host names the two limits' knobs.
+    #[must_use]
+    pub fn limit_knobs(&self) -> &LimitKnobs {
+        &self.knobs
     }
 
     /// How the host handles `value`, if it does.
@@ -361,28 +388,82 @@ impl RuleOptions {
     }
 }
 
-pub use purrdf_datalog::seminaive::TermGeneratingLimit;
-
-/// A rule set refused as DIVERGENT: under the default term-generating limit
-/// ([`TermGeneratingLimit::Horizon`]) it kept inferring terms the evaluation graph did
-/// not hold for more rounds than the horizon its input grants.
-///
-/// The criterion, exactly: with `N` the distinct terms of the evaluation's seeded
-/// store — the base graph's terms, and a SPARQL 1.2 RL document's data-block terms —
-/// the run is refused once more than `max(256, 4 × N)` rounds have each inferred at
-/// least one term the store did not hold. See [`TermGeneratingLimit::Horizon`] for why
-/// that horizon admits a rule set whose new terms its data bounds.
+/// How a host names the knobs of the two rule-evaluation limits, so a
+/// [`RuleLimitExceeded`] tells its caller what to change in the caller's own terms: a
+/// command-line flag, a keyword argument, an option, a parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Divergence {
+pub struct LimitKnobs {
+    /// The term-generating round limit's knob.
+    rounds: String,
+    /// The generated-term budget's knob.
+    generated_terms: String,
+}
+
+impl LimitKnobs {
+    /// Knobs named `rounds` and `generated_terms`.
+    #[must_use]
+    pub fn new(rounds: impl Into<String>, generated_terms: impl Into<String>) -> Self {
+        Self {
+            rounds: rounds.into(),
+            generated_terms: generated_terms.into(),
+        }
+    }
+
+    /// The term-generating round limit's knob.
+    #[must_use]
+    pub fn rounds(&self) -> &str {
+        &self.rounds
+    }
+
+    /// The generated-term budget's knob.
+    #[must_use]
+    pub fn generated_terms(&self) -> &str {
+        &self.generated_terms
+    }
+}
+
+impl Default for LimitKnobs {
+    /// The Rust API's knobs: [`RuleOptions::with_max_term_generating_rounds`] and
+    /// [`RuleOptions::with_max_generated_terms`].
+    fn default() -> Self {
+        Self::new(
+            "RuleOptions::with_max_term_generating_rounds",
+            "RuleOptions::with_max_generated_terms",
+        )
+    }
+}
+
+/// Which rule-evaluation limit a run passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleLimit {
+    /// The term-generating round limit ([`RuleOptions::with_max_term_generating_rounds`]).
+    TermGeneratingRounds,
+    /// The generated-term budget ([`RuleOptions::with_max_generated_terms`]).
+    GeneratedTerms,
+}
+
+/// A rule set refused for passing a rule-evaluation limit ([`RuleOptions`]).
+///
+/// It states the limit, how far past it the run went and the rules that inferred a new
+/// term in the last iteration. It is never a verdict that the rule set diverges: whether
+/// it would have terminated is undecidable, and a rule set that needs more states it with
+/// the knob this names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleLimitExceeded {
+    limit: RuleLimit,
+    observed: u64,
+    permitted: u64,
+    /// Whether the limit was the caller's rather than the default.
+    stated: bool,
+    input_terms: usize,
     rules: Vec<String>,
     /// The same rules, as indices into the evaluated rule set.
     indices: Vec<usize>,
-    rounds: u64,
-    horizon: u64,
-    input_terms: usize,
+    /// The knob that raises the limit, as the host names it.
+    knob: String,
 }
 
-impl Divergence {
+impl RuleLimitExceeded {
     /// Rename the rules by their index into the evaluated rule set.
     pub(crate) fn rename(&mut self, name: impl Fn(usize) -> Option<String>) {
         for (slot, &index) in self.rules.iter_mut().zip(&self.indices) {
@@ -392,78 +473,144 @@ impl Divergence {
         }
     }
 
-    /// The rules that inferred a new term in the refused round, as the rule set names
+    /// The limit passed.
+    #[must_use]
+    pub fn limit(&self) -> RuleLimit {
+        self.limit
+    }
+
+    /// What the run reached: term-generating rounds, or generated terms.
+    #[must_use]
+    pub fn observed(&self) -> u64 {
+        self.observed
+    }
+
+    /// The limit in force.
+    #[must_use]
+    pub fn permitted(&self) -> u64 {
+        self.permitted
+    }
+
+    /// Whether the limit was the caller's rather than the default.
+    #[must_use]
+    pub fn stated(&self) -> bool {
+        self.stated
+    }
+
+    /// The distinct terms of the evaluation's input.
+    #[must_use]
+    pub fn input_terms(&self) -> usize {
+        self.input_terms
+    }
+
+    /// The rules that inferred a new term in the last iteration, as the rule set names
     /// them, in rule order.
     #[must_use]
     pub fn rules(&self) -> &[String] {
         &self.rules
     }
 
-    /// The term-generating rounds run: one past the horizon.
+    /// The knob that raises the limit, as the host names it.
     #[must_use]
-    pub fn rounds(&self) -> u64 {
-        self.rounds
-    }
-
-    /// The horizon, `max(256, 4 × input_terms)`.
-    #[must_use]
-    pub fn horizon(&self) -> u64 {
-        self.horizon
-    }
-
-    /// The distinct terms of the seeded store the horizon was derived from.
-    #[must_use]
-    pub fn input_terms(&self) -> usize {
-        self.input_terms
+    pub fn knob(&self) -> &str {
+        &self.knob
     }
 }
 
-impl std::fmt::Display for Divergence {
+impl std::fmt::Display for RuleLimitExceeded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "the rules diverged: {} rounds inferred a term the evaluation graph did not hold, \
-             past the horizon of {} such rounds that the input's {} terms grant (max({}, {} \
-             per input term)); {} inferred a new term in the last round (SHACL 1.2 Inference \
-             Rules: \"Rule engines MAY also report a failure after a pre-configured maximum \
-             iteration count has been exceeded\"); if the rule set terminates, state its bound \
-             with RuleOptions::with_max_term_generating_rounds",
-            self.rounds,
-            self.horizon,
-            self.input_terms,
-            purrdf_datalog::seminaive::TERM_GENERATING_HORIZON_FLOOR,
-            purrdf_datalog::seminaive::TERM_GENERATING_ROUNDS_PER_INPUT_TERM,
-            self.rules.join(", "),
-        )
+        let rules = if self.rules.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} inferred a new term in the last iteration",
+                self.rules.join(", ")
+            )
+        };
+        match self.limit {
+            RuleLimit::TermGeneratingRounds => write!(
+                f,
+                "the rules exceeded the term-generating round limit: {} rounds inferred a \
+                 term the evaluation graph did not hold, past the limit of {} ({}){rules} \
+                 (SHACL 1.2 Inference Rules: \"Rule engines MAY also report a failure after a \
+                 pre-configured maximum iteration count has been exceeded\"); if the rule set \
+                 terminates, raise the limit with {}",
+                self.observed,
+                self.permitted,
+                if self.stated {
+                    "the caller's limit"
+                } else {
+                    "the default"
+                },
+                self.knob,
+            ),
+            RuleLimit::GeneratedTerms => write!(
+                f,
+                "the rules exceeded the generated-term budget: {} terms were inferred beyond \
+                 the input's {} terms, past the budget of {} ({}){rules}; if the rule set \
+                 terminates, raise the budget with {}",
+                self.observed,
+                self.input_terms,
+                self.permitted,
+                if self.stated {
+                    "the caller's budget".to_owned()
+                } else {
+                    format!(
+                        "the default, max({}, {} per input term)",
+                        purrdf_datalog::seminaive::GENERATED_TERM_BUDGET_FLOOR,
+                        purrdf_datalog::seminaive::GENERATED_TERMS_PER_INPUT_TERM
+                    )
+                },
+                self.knob,
+            ),
+        }
     }
 }
 
-impl std::error::Error for Divergence {}
+impl std::error::Error for RuleLimitExceeded {}
 
-/// Why [`crate::srl::evaluate`] refused: a [`Divergence`], or any other failure, as the
-/// engine's diagnostic.
+/// Why [`crate::srl::evaluate`] refused: a passed rule-evaluation limit, or any other
+/// failure, as the engine's diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RulesError {
-    /// The rule set diverged under the default term-generating limit.
-    Diverged(Divergence),
+    /// The rule set passed a rule-evaluation limit ([`RuleOptions`]).
+    LimitExceeded(RuleLimitExceeded),
     /// Any other failure.
     Failed(String),
 }
 
 impl RulesError {
-    pub(crate) fn diverged(
+    /// A passed limit, from the datalog report of the refused run.
+    pub(crate) fn limit_exceeded(
+        limit: RuleLimit,
         rules: Vec<(usize, String)>,
-        rounds: u64,
-        horizon: u64,
-        input_terms: usize,
+        report: purrdf_datalog::seminaive::BudgetReport,
+        knobs: &LimitKnobs,
     ) -> Self {
         let (indices, rules) = rules.into_iter().unzip();
-        Self::Diverged(Divergence {
+        let (observed, permitted, stated, knob) = match limit {
+            RuleLimit::TermGeneratingRounds => (
+                report.term_generating_rounds(),
+                report.term_generating_round_limit(),
+                report.term_generating_round_limit_stated(),
+                knobs.rounds(),
+            ),
+            RuleLimit::GeneratedTerms => (
+                report.generated_terms(),
+                report.generated_term_budget(),
+                report.generated_term_budget_stated(),
+                knobs.generated_terms(),
+            ),
+        };
+        Self::LimitExceeded(RuleLimitExceeded {
+            limit,
+            observed,
+            permitted,
+            stated,
+            input_terms: report.input_terms(),
             rules,
             indices,
-            rounds,
-            horizon,
-            input_terms,
+            knob: knob.to_owned(),
         })
     }
 }
@@ -471,7 +618,7 @@ impl RulesError {
 impl std::fmt::Display for RulesError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Diverged(divergence) => write!(f, "SHACL rules did not complete: {divergence}"),
+            Self::LimitExceeded(limit) => write!(f, "SHACL rules did not complete: {limit}"),
             Self::Failed(message) => f.write_str(message),
         }
     }
@@ -516,8 +663,8 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
 /// A failure the specification makes one: a `sh:ruleProcessor` value the host has not
 /// registered, on a rule or on any rule set; a requested rule set the shapes graph does
 /// not declare; a rule or expression that fails during execution; a rule set that keeps
-/// inferring new terms past its term-generating limit — a [`Divergence`] under the
-/// default; and a rule set that passes one of the engine's fixed ceilings.
+/// inferring new terms past a rule-evaluation limit ([`RuleLimitExceeded`]); and a rule set
+/// that passes one of the engine's fixed ceilings.
 pub fn infer(
     data: &ShaclData,
     shapes: &Shapes,
@@ -652,10 +799,23 @@ fn check_rule_processors(rule: &Rule, options: &RuleOptions) -> Result<(), Strin
 }
 
 /// The IR rule of a SHACL rule linked from `shapes` (none for a global rule).
+///
+/// A global SPARQL rule whose CONSTRUCT is a conjunctive pattern is its element reading
+/// ([`srl::sparql_rule`]), evaluated semi-naively; every other rule is a producer.
 fn ir_rule<'a>(rule: &'a Rule, shapes: Vec<&'a Shape>) -> srl::ir::IrRule<'a> {
+    let elements = match &rule.body {
+        RuleBody::Sparql {
+            construct,
+            parameters,
+        } if shapes.is_empty() && parameters.is_empty() => srl::sparql_rule::elements(construct),
+        _ => None,
+    };
     srl::ir::IrRule {
         id: rule.id.clone(),
-        body: srl::ir::IrRuleBody::Shacl(srl::ir::ShaclProducer { rule, shapes }),
+        body: elements.map_or_else(
+            || srl::ir::IrRuleBody::Shacl(srl::ir::ShaclProducer { rule, shapes }),
+            srl::ir::IrRuleBody::Elements,
+        ),
         schedule: srl::ir::DeclaredSchedule {
             layer: rule.layer_value(),
             order: rule.order_value(),
@@ -2785,9 +2945,9 @@ mod tests {
             &options,
         )
         .map(|_| ())
-        .expect_err("a rule minting a longer IRI every pass diverges");
+        .expect_err("a rule minting a longer IRI every pass passes the limit");
         assert!(
-            err.contains("past the limit of 64 such rounds"),
+            err.contains("past the limit of 64 (the caller's limit)"),
             "got: {err}"
         );
         assert!(err.contains("65 rounds"), "got: {err}");

@@ -10,19 +10,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
-- **datalog, shapes:** a guarded rule set that keeps generating new terms is
-  refused as divergent after at most `max(256, 4 × N)` term-generating rounds,
-  `N` the distinct terms of the seeded store, instead of running until a fixed
-  ceiling (the previous default allowed 65,536 rounds). The refusal is typed —
-  `EvalError::TermGenerationDiverged`, `SrlError::Divergence` and
-  `purrdf_shapes::rules::Divergence` — and names the rules that generated a
-  term in the last round. A rule set whose new terms its data bounds stays
-  within the horizon. A rule set bounded by a constant past it states its
-  bound with `with_max_term_generating_rounds`, which sets an exact limit
-  (`TermGeneratingLimit::Fixed`). `EvalOptions::max_term_generating_rounds`,
-  `RuleOptions::max_term_generating_rounds` and
-  `DEFAULT_MAX_TERM_GENERATING_ROUNDS` give way to `term_generating_limit()`
-  and `TermGeneratingLimit`, and `srl::evaluate` returns `RulesError`.
+- **datalog, shapes, validate, cli, python, wasm, capi:** a guarded rule set
+  that keeps generating new terms is stopped by two limits, each the caller's.
+  The term-generating round limit defaults to 16,384 rounds
+  (`DEFAULT_MAX_TERM_GENERATING_ROUNDS`), so a 10,000-step countdown completes
+  and a counter with no bound is refused in well under a second. The new
+  generated-term budget bounds the terms inferred beyond the input's and
+  defaults to `max(65,536, 4 × N)` for `N` distinct input terms, so a rule set
+  whose terms double every iteration is refused within a few iterations. A run
+  past either limit is refused as `EvalError::TermLimitExceeded`,
+  `RulesError::LimitExceeded` or `SrlError::LimitExceeded`, carrying a
+  `RuleLimitExceeded`. The error names the limit, the observed numbers and the
+  rules that generated a term last, and never calls the rule set divergent.
+  It names the knob that raises the limit in the calling host's terms
+  (`RuleOptions::with_limit_knobs`, `LimitKnobs`, `RulesRequest::host`):
+  `--max-term-generating-rounds` and the new `--max-generated-terms` flag;
+  Python `apply_rules(max_generated_terms=...)`; WebAssembly
+  `shaclApplyRules(..., maxGeneratedTerms)`; and C
+  `purrdf_shacl_apply_rules(..., max_term_generating_rounds,
+  max_generated_terms, ...)`. The C parameter is new, so it is an ABI change.
+  `EvalOptions`, `RuleOptions` and `InferOptions` gain
+  `with_max_generated_terms`, and `srl::evaluate` returns `RulesError`.
+- **shapes:** a global SPARQL rule whose CONSTRUCT is a conjunctive pattern
+  (triple patterns, `FILTER` and `BIND`) runs as rule elements, evaluated
+  semi-naively. It infers the same triples as the producer did, but an
+  iteration now costs what is new instead of a pass over the whole graph. A
+  10,000-step countdown takes well under a second instead of hitting the
+  fixed join-step ceiling. `--explain` lists the premises of such a rule's
+  inferences.
 - **shapes:** a shapes graph that uses the SHACL JavaScript Extensions
   (`sh:js`, `sh:JSConstraint`, `sh:JSValidator`, `sh:JSRule`, …) is refused
   with the typed `ShapesError::ShaclJs(ShaclJsRefusal)`, which names the node

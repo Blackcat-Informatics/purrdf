@@ -30,7 +30,7 @@ use std::sync::Arc;
 use ::purrdf::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder};
 use purrdf_datalog::guard::{GuardCall, GuardEvaluator, GuardSite};
 use purrdf_datalog::schedule::{self, Layer, LayerHooks, Schedule};
-use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions};
+use purrdf_datalog::seminaive::{BudgetResource, EvalError};
 use purrdf_datalog::store::{Fact, RelationStore};
 
 use super::ir::{IrRuleBody, RuleSet, Scheduling};
@@ -48,8 +48,9 @@ pub struct Explanation {
     /// The rule that derived the triple.
     rule: Term,
     /// The facts the rule's triple patterns matched, in authored body order. A SHACL rule
-    /// is evaluated as one producer over the whole evaluation graph, so it has none: its
-    /// explanation is the rule alone.
+    /// evaluated as one producer over the whole evaluation graph has none: its
+    /// explanation is the rule alone. A global SPARQL rule read as rule elements
+    /// ([`super::sparql_rule`]) has its triple patterns' matches.
     premises: Vec<[Term; 3]>,
 }
 
@@ -153,7 +154,7 @@ impl Inference {
     /// `derived` names the conclusion in N-Triples 1.2 term syntax. `rule` names the rule
     /// that derived it ([`Explanation::rule`]), followed by one `premise` line per fact
     /// its body matched, in authored body order ([`Explanation::premises`]); a SHACL rule
-    /// is executed as one producer over the whole evaluation graph, so it lists none. A
+    /// executed as one producer over the whole evaluation graph lists none. A
     /// triple no rule derived — a SPARQL 1.2 RL data-block triple — carries the single
     /// line `  data-block` instead. Every line ends in `\n`; nothing depends on hash
     /// order, so the text is a pure function of the evaluation.
@@ -193,8 +194,7 @@ pub fn evaluate(
     options: &rules::RuleOptions,
 ) -> Result<Inference, rules::RulesError> {
     let source_rules = options.source_rules();
-    let governors =
-        EvalOptions::default().with_term_generating_limit(options.term_generating_limit());
+    let governors = options.eval_options();
     for rule in &set.rules {
         if let IrRuleBody::Elements(element_rule) = &rule.body {
             element_rule
@@ -295,7 +295,7 @@ pub fn evaluate(
         &governors,
         None,
     )
-    .map_err(|e| refusal(&e, set))?;
+    .map_err(|e| refusal(&e, set, options.limit_knobs()))?;
 
     // The inference graph: every default-graph fact that is not a base triple.
     let facts = engine.model_facts(evaluation.facts())?;
@@ -470,15 +470,19 @@ fn register_constants(codec: &Codec, rule: &super::ir::ElementRule) {
     elements(codec, &rule.body);
 }
 
-/// An evaluation refusal: a [`rules::Divergence`] naming its rules, or the described
-/// error.
-fn refusal(error: &EvalError, set: &RuleSet<'_>) -> rules::RulesError {
+/// An evaluation refusal: a passed rule-evaluation limit naming its rules and the host's
+/// knob, or the described error.
+fn refusal(error: &EvalError, set: &RuleSet<'_>, knobs: &rules::LimitKnobs) -> rules::RulesError {
     match error {
-        EvalError::TermGenerationDiverged {
+        EvalError::TermLimitExceeded {
+            resource,
             rules: indices,
-            input_terms,
             report,
-        } => rules::RulesError::diverged(
+        } => rules::RulesError::limit_exceeded(
+            match resource {
+                BudgetResource::GeneratedTerms => rules::RuleLimit::GeneratedTerms,
+                _ => rules::RuleLimit::TermGeneratingRounds,
+            },
             indices
                 .iter()
                 .map(|&index| {
@@ -489,9 +493,8 @@ fn refusal(error: &EvalError, set: &RuleSet<'_>) -> rules::RulesError {
                     (index, name)
                 })
                 .collect(),
-            report.term_generating_rounds(),
-            report.term_generating_round_limit(),
-            *input_terms,
+            *report,
+            knobs,
         ),
         other => describe(other, set).into(),
     }
@@ -530,18 +533,6 @@ fn describe(error: &EvalError, set: &RuleSet<'_>) -> String {
         } => format!(
             "{} failed during execution ({guard}): {message}",
             name(*rule)
-        ),
-        EvalError::BudgetExhausted {
-            resource: BudgetResource::TermGeneratingRounds,
-            report,
-        } => format!(
-            "SHACL rules did not complete: {} rounds inferred a term the evaluation graph \
-             did not hold, past the limit of {} such rounds (SHACL 1.2 Inference Rules: \
-             \"Rule engines MAY also report a failure after a pre-configured maximum \
-             iteration count has been exceeded\"); if the rule set terminates, raise the \
-             limit with RuleOptions::with_max_term_generating_rounds",
-            report.term_generating_rounds(),
-            report.term_generating_round_limit()
         ),
         other => format!("SHACL rules did not complete: {other}"),
     }

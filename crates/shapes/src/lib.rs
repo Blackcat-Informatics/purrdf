@@ -95,7 +95,10 @@ pub use pydantic::{
     PydanticPackage, PydanticPackageTopology, PydanticVersionStamp, emit_pydantic,
     import_pydantic_package,
 };
-pub use rules::{RuleOptions, RuleProcessor, apply_rules, entail_dataset, infer};
+pub use rules::{
+    LimitKnobs, RuleLimit, RuleLimitExceeded, RuleOptions, RuleProcessor, apply_rules,
+    entail_dataset, infer,
+};
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,
     import_compiled_schema, import_json_schema,
