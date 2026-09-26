@@ -11,8 +11,8 @@
 //! * **`sht:Validate`** — [`shacl_corpora::report_grading::run_validate_case`],
 //!   the grader the SHACL 1.0 harness uses, so both suites mean the same thing by
 //!   "the report agrees": `sh:conforms` plus the multiset of
-//!   `(focusNode, resultPath, value, sourceConstraintComponent, severity)`
-//!   tuples, blank nodes normalized, every `sh:resultMessage` the expected report
+//!   `(focusNode, resultPath, value, sourceConstraintComponent, severity,
+//!   sourceShape)` tuples, blank nodes normalized, every `sh:resultMessage` the expected report
 //!   mentions, and — where the expected report states `sh:conformanceDisallows`
 //!   — validation under exactly that set, echoed back in the report. `sht:Failure` expects an error at load or
 //!   validation. The only departure from the approved expectation is
@@ -195,6 +195,7 @@ struct ResultTuple {
     value: Option<&'static str>,
     component: &'static str,
     severity: &'static str,
+    source_shape: &'static str,
 }
 
 impl ResultTuple {
@@ -206,6 +207,7 @@ impl ResultTuple {
             self.value.map(ToOwned::to_owned),
             self.component.to_owned(),
             self.severity.to_owned(),
+            self.source_shape.to_owned(),
         )
     }
 }
@@ -224,6 +226,9 @@ const REIFIER_SHAPE_COMPONENT: &str =
 const VIOLATION: &str = "<http://www.w3.org/ns/shacl#Violation>";
 const INVALID_RESOURCE_1: &str = "<http://example.com/ns#InvalidResource1>";
 const PROPERTY_A: &str = "<http://example.com/ns#propertyA>";
+const TEST_SHAPE_PROPERTY_A: &str = "<http://example.com/ns#TestShape-propertyA>";
+const XONE_PROPERTY_SHAPE: &str =
+    "<http://www.w3.org/ns/shacl-shacl#xoneSubjectsShapeXonePropertyShape>";
 
 /// The SHACL 1.2 Core §7.8.5 sentences the `sh:reifierShape` entries grade
 /// against, quoted from the Working Draft and the editor's draft, which agree
@@ -275,6 +280,7 @@ const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[
                 value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
                 component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
                 severity: "<http://www.w3.org/ns/shacl#Warning>",
+                source_shape: XONE_PROPERTY_SHAPE,
             },
             graded: ResultTuple {
                 focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
@@ -282,6 +288,7 @@ const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[
                 value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
                 component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
                 severity: "<http://www.w3.org/ns/shacl#Warning>",
+                source_shape: XONE_PROPERTY_SHAPE,
             },
         }],
     ),
@@ -295,6 +302,7 @@ const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[
                 value: Some("\"invalid\""),
                 component: REIFIER_SHAPE_COMPONENT,
                 severity: VIOLATION,
+                source_shape: TEST_SHAPE_PROPERTY_A,
             },
             graded: ResultTuple {
                 focus: INVALID_RESOURCE_1,
@@ -302,6 +310,7 @@ const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[
                 value: Some("_:"),
                 component: REIFIER_SHAPE_COMPONENT,
                 severity: VIOLATION,
+                source_shape: TEST_SHAPE_PROPERTY_A,
             },
         }],
     ),
@@ -315,6 +324,7 @@ const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[
                 value: Some("\"invalid\""),
                 component: REIFIER_SHAPE_COMPONENT,
                 severity: VIOLATION,
+                source_shape: TEST_SHAPE_PROPERTY_A,
             },
             graded: ResultTuple {
                 focus: INVALID_RESOURCE_1,
@@ -325,6 +335,7 @@ const EXPECTATION_DEFECTS: &[(&str, &str, &[Amendment])] = &[
                 ),
                 component: REIFIER_SHAPE_COMPONENT,
                 severity: VIOLATION,
+                source_shape: TEST_SHAPE_PROPERTY_A,
             },
         }],
     ),
@@ -1106,7 +1117,8 @@ fn non_canonical_expectations_are_really_non_canonical() {
 /// * a report carrying a DIFFERENT delta — the same result, every field the
 ///   delta changes given another value — fails;
 /// * a report carrying the delta plus a difference in any field the delta holds
-///   (focus node, path, value, component or severity, one at a time) fails;
+///   (focus node, path, value, component, severity or source shape, one at a
+///   time) fails;
 /// * a report carrying the delta PLUS an extra, different amendment of another
 ///   result fails.
 #[test]
@@ -1215,6 +1227,7 @@ fn expectation_defects_are_exact() {
                 None,
                 "<http://www.w3.org/ns/shacl#MinCountConstraintComponent>".to_owned(),
                 "<http://www.w3.org/ns/shacl#Violation>".to_owned(),
+                "<http://example.org/ns#extra-shape>".to_owned(),
             ))
             .or_insert(0) += 1;
         assert!(
@@ -1254,6 +1267,11 @@ fn other_in_delta_fields(delta: &Amendment) -> ResultTuple {
         },
         severity: if approved.severity == graded.severity {
             graded.severity
+        } else {
+            ELSEWHERE
+        },
+        source_shape: if approved.source_shape == graded.source_shape {
+            graded.source_shape
         } else {
             ELSEWHERE
         },
@@ -1310,6 +1328,15 @@ fn held_field_variants(delta: &Amendment) -> Vec<(&'static str, ResultTuple)> {
             },
         ));
     }
+    if approved.source_shape == graded.source_shape {
+        variants.push((
+            "source shape",
+            ResultTuple {
+                source_shape: ELSEWHERE,
+                ..graded
+            },
+        ));
+    }
     variants
 }
 
@@ -1327,6 +1354,7 @@ fn a_stale_expectation_defect_is_refused() {
         value: None,
         component,
         severity,
+        source_shape: "<http://example.org/ns#shape>",
     };
     let mut results = Multiset::new();
     results.insert(approved.key(), 1);
@@ -1510,5 +1538,51 @@ fn the_grader_grades_result_annotations_both_ways() {
     assert!(
         shacl_corpora::report_grading::run_validate_case(case).is_err(),
         "a wrong expected annotation value must fail the case"
+    );
+}
+
+/// The shared grader grades `sh:sourceShape`: the first-party annotation case passes
+/// as written (its expected result names `ex:S`), and fails once the expected
+/// result names another shape with every other field held — so an engine that
+/// attributed a result to the wrong shape could not pass a suite case.
+#[test]
+fn the_grader_grades_the_source_shape_both_ways() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/result-annotation-grading.ttl");
+    let root = fixture
+        .parent()
+        .expect("the fixture has a directory")
+        .to_path_buf();
+    let mut cases: Vec<W3cCase> = Vec::new();
+    shacl_corpora::walk_manifest(&fixture, &mut |g, entry, manifest_path| {
+        cases.extend(shacl_corpora::parse_entry(g, entry, manifest_path, &root));
+    });
+    let [case] = cases.as_mut_slice() else {
+        panic!("the fixture holds exactly one sht:Validate case");
+    };
+    shacl_corpora::report_grading::run_validate_case(case)
+        .expect("the engine names the expected source shape");
+
+    let Expected::Report { results, .. } = &mut case.expected else {
+        panic!("the fixture expects a report");
+    };
+    let (tuple, count) = results.pop_first().expect("the fixture expects one result");
+    assert_eq!(
+        tuple.5, "<http://example.org/ns#S>",
+        "the expected source shape"
+    );
+    let mut elsewhere = tuple.clone();
+    elsewhere.5 = ELSEWHERE.to_owned();
+    results.insert(elsewhere, count);
+    // The annotation claim is keyed by the same tuple; move it with the result so
+    // only the source shape differs.
+    for (claimed, _) in &mut case.expected_annotations {
+        if *claimed == tuple {
+            claimed.5 = ELSEWHERE.to_owned();
+        }
+    }
+    assert!(
+        shacl_corpora::report_grading::run_validate_case(case).is_err(),
+        "a different expected source shape must fail the case"
     );
 }

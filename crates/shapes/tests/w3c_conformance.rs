@@ -16,20 +16,19 @@
 //!
 //! ## Comparison contract (caveats)
 //!
-//! The expected `sh:ValidationReport` graphs in the suite carry more detail
-//! than the engine emits. The harness therefore compares on the SHARED tuple
-//! subset, as a MULTISET:
+//! Each expected `sh:ValidationReport` is compared, as a MULTISET, on the tuple
 //!
-//!   `(focusNode, resultPath, value, sourceConstraintComponent, severity)`
+//!   `(focusNode, resultPath, value, sourceConstraintComponent, severity,
+//!   sourceShape)`
 //!
 //! with these normalizations:
 //!
-//! - **blank nodes** (focus/value/path) normalize to the placeholder `_:` —
-//!   expected reports use their own bnode labels which cannot match the
-//!   engine's; complex `sh:resultPath` structures (inverse/sequence/alternative
-//!   path bnodes) normalize the same way, so only a *simple* (IRI) result path
-//!   is compared by identity;
-//! - **`sh:sourceShape` is NOT compared** — many suite shapes are blank nodes;
+//! - **blank nodes** (focus/value/path/source shape) normalize to the
+//!   placeholder `_:` — expected reports use their own bnode labels which cannot
+//!   match the engine's; complex `sh:resultPath` structures
+//!   (inverse/sequence/alternative path bnodes) normalize the same way, so only a
+//!   *simple* (IRI) result path is compared by identity, and a blank-node source
+//!   shape is compared as "a blank node";
 //! - **`sh:resultMessage` is compared only where the expected report states
 //!   one** — the suite asks a harness "to preserve all sh:resultMessage triples
 //!   that are mentioned in the 'expected' results graph", so a produced result
