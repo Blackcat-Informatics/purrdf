@@ -346,12 +346,10 @@ impl Gregorian {
 /// (max `~9.2e18`) but is comfortably inside `i128::MAX` (`~1.7e38`) — over sixteen
 /// orders of magnitude of headroom, so no `i128` operation in this function is
 /// reachably close to its own overflow boundary and none of them are `checked_*`.
-/// This is the fix for a real, reachable defect (not a hypothetical one): the prior
-/// `i64` version's unchecked `era * 146_097` multiply wrapped silently in a release
-/// build and panicked in a debug/overflow-checks build for well-formed large-year
-/// input reachable straight from the public arithmetic surface — e.g.
-/// `"<huge-year>-01-01"^^xsd:date + "P1D"` (`op:add-dayTimeDuration-to-date`, via
-/// [`add_seconds_decimal`]) with no `gMonthDay`/duration exotica involved at all.
+/// An `i64` computation would wrap in a release build (and panic under overflow
+/// checks) for well-formed large-year input reachable from the public arithmetic
+/// surface, e.g. `"<huge-year>-01-01"^^xsd:date + "P1D"`
+/// (`op:add-dayTimeDuration-to-date`).
 ///
 /// Callers that need an `i64` (to populate a `DateTime`/`Date`/`Gregorian` field)
 /// narrow the *final* day-count arithmetic with a checked conversion at the point
