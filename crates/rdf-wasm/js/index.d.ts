@@ -1400,15 +1400,48 @@ export function entailVerifyEntailment(
 ): ReasoningAnswer;
 
 /**
+ * A shapes graph's `owl:imports` closure is not in hand, or the import table cannot be
+ * used — the one refusal every shapes-graph function throws, on every PurRDF host alike.
+ *
+ * Every function that takes a Turtle shapes graph takes the caller's `owl:imports` table
+ * as two trailing parallel arrays, `importIris` and `importDocuments`: entry `i` declares
+ * that `importIris[i]` names the Turtle document `importDocuments[i]`, parsed with that
+ * IRI as its base. An `owl:imports` is resolved by a table entry, by `shapesBase` (or the
+ * document's own `@base`) naming the imported document, or by the closure declaring the
+ * ontology (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is `<X>`).
+ * Anything else throws this class rather than validating a smaller shapes graph than the
+ * one named. PurRDF fetches nothing; omitted arrays are an empty table, which still
+ * enforces the rule.
+ *
+ * `kind` is the matchable half: `"unresolved-import"` (pass the named documents),
+ * `"unreached-import"` (a table entry no import names) or `"invalid-import"` (a key that
+ * is not an absolute IRI, a key named twice, or a document that is not Turtle). `iris`
+ * are the IRIs it names. `message` is prose; do not match on it. Like every other class
+ * in this package the instance owns wasm memory — call `free()` when done.
+ */
+export class ShaclImportError {
+  readonly kind: "unresolved-import" | "unreached-import" | "invalid-import";
+  readonly iris: string[];
+  readonly message: string;
+  toString(): string;
+  free(): void;
+}
+
+/**
  * `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
  * against. A browser or Node host has no retrieval IRI of its own, so PurRDF will not
  * invent one: omit it and a relative reference throws rather than being mis-parsed.
  * `dataNt` needs no counterpart — N-Triples admits no relative IRI by grammar.
+ *
+ * `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+ * `ShaclImportError`): an imported document's rules run.
  */
 export function shaclEntail(
   shapesTtl: string,
   dataNt: string,
   shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
 ): string;
 
 /**
@@ -1449,6 +1482,8 @@ export function shaclApplyRules(
   srlBase?: string,
   explain?: boolean,
   maxTermGeneratingRounds?: bigint,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
 ): ShaclRulesInference;
 
 /**
@@ -1470,6 +1505,8 @@ export function shaclEvalNodeExpr(
   focus: string,
   scope?: readonly string[],
   shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
 ): string[];
 
 /**
@@ -1496,11 +1533,18 @@ export class ShaclLintReport {
 }
 
 /**
- * Certify a Turtle shapes graph COLD: the loader's verdict, every result of validating it
- * against the W3C `shacl-shacl.ttl`, and which implementation every node-expression
- * function call binds to. Throws only when the document is not Turtle.
+ * Certify a Turtle shapes graph COLD — its whole `owl:imports` closure: the loader's
+ * verdict, every result of validating it against the W3C `shacl-shacl.ttl`, and which
+ * implementation every node-expression function call binds to. Throws a
+ * `ShaclImportError` when the closure is not in hand — never a report about the
+ * importing document alone — and otherwise only when the document is not Turtle.
  */
-export function shaclLintShapes(shapesTtl: string, shapesBase?: string): ShaclLintReport;
+export function shaclLintShapes(
+  shapesTtl: string,
+  shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+): ShaclLintReport;
 /**
  * A SHACL severity IRI. The five built-in levels SHACL 1.2 Core names, most severe
  * first; any other IRI is a custom severity and is carried verbatim.
@@ -1544,6 +1588,8 @@ export function shaclValidateToSarif(
   dataNt: string,
   shapesBase?: string,
   conformanceDisallows?: readonly ShaclSeverity[],
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
 ): string;
 
 /**
@@ -1601,6 +1647,8 @@ export function shaclValidateChangesToSarif(
   addedNt?: string,
   removedNt?: string,
   shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
 ): ShaclChangeValidation;
 
 /**
@@ -1634,11 +1682,18 @@ export class ShaclProductRefusal {
  * identical inputs produce identical bytes, so a content-addressed cache key over
  * the result is stable.
  *
- * Throws a `ShaclProductRefusal`.
+ * `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+ * `ShaclImportError`); the product carries the merged closure, so a restore needs no
+ * documents.
+ *
+ * Throws a `ShaclImportError` when the shapes graph's `owl:imports` closure is not in
+ * hand, and a `ShaclProductRefusal` otherwise.
  */
 export function shaclPackProduct(
   shapesTtl: string,
   shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
 ): Uint8Array;
 
 /**

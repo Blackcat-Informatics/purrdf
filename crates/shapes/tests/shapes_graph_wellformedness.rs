@@ -40,7 +40,7 @@ const PREFIXES: &str = "
 ";
 
 fn load(shapes_ttl: &str) -> Result<Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
 }
 
 #[track_caller]
@@ -668,8 +668,10 @@ fn a_literal_box_role_is_refused_and_an_iri_role_loads() {
         ),
         None,
         vocab(),
+        &purrdf_shapes::ShapesImports::new(),
     )
-    .expect_err("a literal role is refused");
+    .expect_err("a literal role is refused")
+    .to_string();
     assert!(refused_role.contains("graphBoxRole"), "{refused_role}");
     parse_shapes_with_config(
         &format!(
@@ -677,6 +679,7 @@ fn a_literal_box_role_is_refused_and_an_iri_role_loads() {
         ),
         None,
         vocab(),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .expect("an IRI role loads");
 }

@@ -53,6 +53,7 @@ fn native_singletons_reject_multiple_distinct_values() {
         let Err(error) = parse_shapes(&ttl, None) else {
             panic!("sh:{parameter} must reject multiple values");
         };
+        let error = error.to_string();
         assert!(error.contains("<http://example.org/Shape>"), "{error}");
         assert!(
             error.contains(&format!("<http://www.w3.org/ns/shacl#{parameter}>")),
@@ -70,7 +71,9 @@ fn malformed_parameter_path_cannot_hide_an_extra_value() {
          ex:Component a sh:ConstraintComponent; sh:parameter ex:Parameter .
          ex:Parameter sh:path ex:p, 42 ."
     );
-    let error = parse_shapes(&ttl, None).expect_err("two sh:path values");
+    let error = parse_shapes(&ttl, None)
+        .expect_err("two sh:path values")
+        .to_string();
     assert!(error.contains("<http://example.org/Parameter>"), "{error}");
     assert!(
         error.contains("<http://www.w3.org/ns/shacl#path>"),
@@ -105,7 +108,8 @@ fn declaration_singletons_are_checked_before_activation() {
     ];
     for (parameter, declaration) in declarations {
         let error = parse_shapes(&format!("{PREFIXES}{declaration}"), None)
-            .expect_err("malformed unused declaration must fail at load");
+            .expect_err("malformed unused declaration must fail at load")
+            .to_string();
         assert!(
             error.contains(&format!("<http://www.w3.org/ns/shacl#{parameter}>")),
             "{error}"
@@ -138,7 +142,9 @@ fn optional_requires_a_boolean_term_in_every_declaration_kind() {
                 "{PREFIXES}{declaration}
                  ex:P sh:path ex:p; sh:keyParameter true; sh:optional {invalid} ."
             );
-            let error = parse_shapes(&ttl, None).expect_err("invalid optional boolean");
+            let error = parse_shapes(&ttl, None)
+                .expect_err("invalid optional boolean")
+                .to_string();
             assert!(error.contains("sh:optional"), "{declaration}: {error}");
             assert!(error.contains("xsd:boolean"), "{declaration}: {error}");
         }
@@ -184,7 +190,8 @@ fn inherited_and_list_referenced_roles_enforce_metadata() {
     ];
     for declaration in declarations {
         let error = parse_shapes(&format!("{PREFIXES}{declaration}"), None)
-            .expect_err("metadata conflict on a recognized SHACL role");
+            .expect_err("metadata conflict on a recognized SHACL role")
+            .to_string();
         assert!(error.contains("distinct value"), "{error}");
     }
 }
@@ -283,7 +290,9 @@ fn distinct_lexical_terms_are_not_merged_by_value_equality() {
          ex:Shape a sh:PropertyShape; sh:targetNode ex:n; sh:path ex:p;
              sh:minCount \"1\"^^xsd:integer, \"01\"^^xsd:integer ."
     );
-    let error = parse_shapes(&ttl, None).expect_err("distinct RDF terms");
+    let error = parse_shapes(&ttl, None)
+        .expect_err("distinct RDF terms")
+        .to_string();
     assert!(
         error.contains("<http://www.w3.org/ns/shacl#minCount>"),
         "{error}"
@@ -302,12 +311,14 @@ fn cardinality_diagnostic_is_independent_of_statement_order() {
         &format!("{PREFIXES}{}{}", declarations[0], declarations[1]),
         None,
     )
-    .expect_err("multiple conflicts");
+    .expect_err("multiple conflicts")
+    .to_string();
     let reversed = parse_shapes(
         &format!("{PREFIXES}{}{}", declarations[1], declarations[0]),
         None,
     )
-    .expect_err("multiple conflicts");
+    .expect_err("multiple conflicts")
+    .to_string();
     assert_eq!(forward, reversed);
     assert!(forward.contains("<http://example.org/A>"), "{forward}");
 }

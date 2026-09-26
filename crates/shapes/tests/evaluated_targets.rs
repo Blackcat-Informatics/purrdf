@@ -425,7 +425,8 @@ fn an_ill_formed_node_expression_target_is_refused_and_the_well_formed_one_targe
         ),
         None,
     )
-    .expect_err("an unparsable SPARQL target expression is refused");
+    .expect_err("an unparsable SPARQL target expression is refused")
+    .to_string();
     assert!(error.contains("sh:targetNode"), "{error}");
     let report = validate(
         "ex:S a sh:NodeShape ;

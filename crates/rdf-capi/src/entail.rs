@@ -756,10 +756,12 @@ pub unsafe extern "C" fn purrdf_entail_explain_conclusion(
 // would compile, link and ship — and never appear in the committed header, which is the
 // definition of a dark capability on this host.
 
-/// Read the caller's `owl:imports` table out of two parallel C arrays.
+/// Read the caller's `owl:imports` table out of two parallel C arrays — the one reader
+/// every entry point of this ABI that takes an import table shares, the reasoning
+/// services here and the shapes-graph entry points alike.
 ///
-/// Entry `i` declares that the ontology IRI `import_iris[i]` denotes the N-Quads document
-/// `import_documents[i]`. Two arrays rather than an array of structs because a struct
+/// Entry `i` declares that the ontology IRI `import_iris[i]` denotes the document
+/// `import_documents[i]` (N-Quads for a reasoning service, Turtle for a shapes graph). Two arrays rather than an array of structs because a struct
 /// crossing this ABI is a layout the caller has to reproduce; two `const char *const *`
 /// and a count are what a C caller already knows how to build, and the ORDER is the
 /// caller's — the boundary's table is a list rather than a map precisely so the same input
@@ -774,7 +776,7 @@ pub unsafe extern "C" fn purrdf_entail_explain_conclusion(
 /// When `count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `count` readable `*const c_char`, every one of which is null (refused here) or a
 /// NUL-terminated C string that outlives the returned borrows.
-unsafe fn import_pairs<'a>(
+pub(crate) unsafe fn import_pairs<'a>(
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
     count: usize,

@@ -1272,6 +1272,7 @@ mod tests {
     fn parse_shapes_err(body: &str) -> String {
         crate::engine::parse_shapes(&format!("{PREFIXES}\n{body}"), None)
             .expect_err("shapes must fail to parse")
+            .to_string()
     }
 
     fn entail(data_ttl: &str, shapes_body: &str) -> Arc<RdfDataset> {

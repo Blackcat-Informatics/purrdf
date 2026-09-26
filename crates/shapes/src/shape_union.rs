@@ -22,6 +22,7 @@ use std::sync::Arc;
 use ::purrdf::{ParseOptions, parse_dataset_with};
 use ::purrdf::{RdfDataset, RdfDatasetBuilder};
 
+use crate::imports::ShapesImports;
 use crate::shapes::{self, Shapes};
 
 /// Shape files excluded from the data-graph union (DSL / manifest lints).
@@ -99,12 +100,15 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 /// # Errors
 ///
 /// Returns `Err` when a file cannot be read, has no derivable retrieval IRI, fails to
-/// parse as Turtle, or when [`shapes::from_dataset_with_prefixes`] rejects an unsupported
-/// SHACL construct.
+/// parse as Turtle, or when [`shapes::from_dataset_with_base`] rejects the union — an
+/// `owl:imports` no member file resolves, or an unsupported SHACL construct.
 pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String> {
     let files = shape_files(repo_root)?;
     let mut prefix_map: BTreeMap<String, String> = BTreeMap::new();
     let mut per_file: Vec<Arc<RdfDataset>> = Vec::with_capacity(files.len());
+    // Every file's own IRI is a document this union was read from, so an `owl:imports`
+    // of one names a document in hand (see `crate::imports`).
+    let mut imports = ShapesImports::new();
     for file in &files {
         let bytes = std::fs::read(file)
             .map_err(|e| format!("failed to read shape file {}: {e}", file.display()))?;
@@ -112,6 +116,7 @@ pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String
         // (`purrdf_slice::retrieval_base_iri`) rather than a second copy of it here.
         let base = purrdf_slice::retrieval_base_iri(file)
             .map_err(|e| format!("shape file {}: {e}", file.display()))?;
+        imports.declare_loaded(base.as_str());
         // Parse via the native codecs. The frozen IR keeps no prefix map, so the
         // per-file `@prefix` map comes back from the same parse — the codec's own
         // record of the directives it read (see the doc comment above).
@@ -137,7 +142,8 @@ pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String
         Arc::new(RdfDataset::union(&refs))
     };
     let doc_prefixes: Vec<(String, String)> = prefix_map.into_iter().collect();
-    let shapes = shapes::from_dataset_with_prefixes(&merged, &doc_prefixes)?;
+    let shapes =
+        shapes::from_dataset_with_base(&merged, None, &doc_prefixes, None, None, &imports)?;
     Ok((merged, shapes))
 }
 

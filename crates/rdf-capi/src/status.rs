@@ -47,6 +47,13 @@ pub enum PurrdfStatus {
     /// was prepared against" are three different actions and this one status cannot
     /// distinguish them.
     ShapesProductError = 11,
+    /// A shapes graph's `owl:imports` closure is not in hand, or the import table the
+    /// caller passed cannot be used — the one refusal every shapes-graph entry point
+    /// raises, on every PurRDF host alike. The error carries the refusal's KIND
+    /// (`purrdf_shapes_import_error_kind`: `unresolved-import`, `unreached-import` or
+    /// `invalid-import`) and the IRIs it names (`purrdf_shapes_import_error_iri_count`,
+    /// `purrdf_shapes_import_error_iri`).
+    ShapesImportError = 12,
     /// A panic was caught at the FFI boundary (should never reach the caller in
     /// normal operation).
     Panic = 100,

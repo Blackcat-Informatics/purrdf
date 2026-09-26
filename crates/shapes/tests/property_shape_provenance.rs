@@ -83,6 +83,7 @@ fn nested_property_source_preserves_ancestor_box_roles() {
         &shapes,
         None,
         Some(BoxRoleVocab::for_namespace("http://example.org/meta/")),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .expect("nested validation");
     assert_eq!(report.results.len(), 1);

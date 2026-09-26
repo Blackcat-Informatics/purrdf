@@ -720,7 +720,8 @@ fn both_spellings_of_one_kind_on_one_node_is_ambiguous() {
         ),
         None,
     )
-    .expect_err("two spellings of one kind must hard-fail");
+    .expect_err("two spellings of one kind must hard-fail")
+    .to_string();
     assert!(err.contains("ambiguous node expression"), "got: {err}");
 }
 
@@ -736,7 +737,8 @@ fn two_different_kinds_on_one_node_is_ambiguous() {
         ),
         None,
     )
-    .expect_err("two kinds on one node must hard-fail");
+    .expect_err("two kinds on one node must hard-fail")
+    .to_string();
     assert!(err.contains("ambiguous node expression"), "got: {err}");
 }
 
@@ -752,6 +754,7 @@ fn bool_lit(b: bool) -> String {
 fn load_error(shapes_ttl: &str) -> String {
     parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
         .expect_err("this shapes graph must fail to load")
+        .to_string()
 }
 
 /// Parse `shapes_ttl` and assert it LOADS, returning nothing but the proof.

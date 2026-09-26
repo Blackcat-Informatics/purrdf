@@ -80,6 +80,7 @@ fn outputs(data_ttl: &str, shapes_ttl: &str, focus: &str) -> Vec<String> {
 fn load_error(shapes_ttl: &str) -> String {
     parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
         .expect_err("the fixture must be refused at shapes-load")
+        .to_string()
 }
 
 /// The canonical rendering of `ex:<local>`.

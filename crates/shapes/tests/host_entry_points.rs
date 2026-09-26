@@ -92,7 +92,14 @@ fn document(body: &str) -> TurtleDocument {
 
 fn linted(body: &str) -> LintReport {
     let doc = document(body);
-    lint(&doc.dataset, &doc.prefixes, None, None).expect("shacl-shacl.ttl loads and validates")
+    lint(
+        &doc.dataset,
+        &doc.prefixes,
+        None,
+        None,
+        &purrdf_shapes::ShapesImports::new(),
+    )
+    .expect("shacl-shacl.ttl loads and validates")
 }
 
 fn data() -> Arc<RdfDataset> {
@@ -209,8 +216,10 @@ fn eval(root: &str, focus: &str, scope: &[(&str, &str)]) -> Result<Vec<String>, 
         data: data.as_ref(),
         focus: &focus,
         scope: &scope,
+        imports: &purrdf_shapes::ShapesImports::new(),
     })
     .map(|terms| terms.iter().map(ToString::to_string).collect())
+    .map_err(String::from)
 }
 
 #[test]

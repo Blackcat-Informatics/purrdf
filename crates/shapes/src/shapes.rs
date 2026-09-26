@@ -21,7 +21,9 @@ use purrdf_sparql_eval::{AggregateRegistry, UserFunctionRegistry};
 
 use crate::components::{ComponentRegistry, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
+use crate::error::ShapesError;
 use crate::expression::NodeExpr;
+use crate::imports::{ShapesImports, resolve_shapes_imports};
 use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::provenance::ParseProvenance;
 use crate::report::Severity;
@@ -943,11 +945,16 @@ impl Default for Shapes {
 /// Identifies node shapes, parses all their targets, constraints, and property
 /// shapes.  Unsupported SHACL features return `Err` immediately (hard-fail).
 ///
+/// The shapes graph's `owl:imports` closure must already be in `dataset` (see
+/// [`crate::imports`]); a shapes graph that imports a document it does not hold is refused.
+/// [`from_dataset_with_base`] is the constructor that takes an import table.
+///
 /// # Errors
 ///
-/// Returns `Err(String)` when an unsupported SHACL construct is encountered or
-/// when required structural data (e.g. `sh:path`) is missing.
-pub fn from_dataset(dataset: &Arc<RdfDataset>) -> Result<Shapes, String> {
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in hand;
+/// [`ShapesError::Invalid`] when an unsupported SHACL construct is encountered or when
+/// required structural data (e.g. `sh:path`) is missing.
+pub fn from_dataset(dataset: &Arc<RdfDataset>) -> Result<Shapes, ShapesError> {
     from_dataset_with_prefixes(dataset, &[])
 }
 
@@ -1027,12 +1034,11 @@ pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarat
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` on any unsupported SHACL construct or missing
-/// structural data — see [`from_dataset`].
+/// Everything [`from_dataset`] refuses.
 pub fn from_dataset_with_prefixes(
     dataset: &Arc<RdfDataset>,
     doc_prefixes: &[(String, String)],
-) -> Result<Shapes, String> {
+) -> Result<Shapes, ShapesError> {
     from_dataset_with_config(dataset, doc_prefixes, None)
 }
 
@@ -1047,13 +1053,12 @@ pub fn from_dataset_with_prefixes(
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` on any unsupported SHACL construct or missing
-/// structural data — see [`from_dataset`].
+/// Everything [`from_dataset`] refuses.
 pub fn from_dataset_with_config(
     dataset: &Arc<RdfDataset>,
     doc_prefixes: &[(String, String)],
     box_role_vocab: Option<BoxRoleVocab>,
-) -> Result<Shapes, String> {
+) -> Result<Shapes, ShapesError> {
     from_dataset_with_config_and_graph(dataset, doc_prefixes, box_role_vocab, None)
 }
 
@@ -1061,13 +1066,24 @@ pub fn from_dataset_with_config(
 /// explicit shapes-graph IRI. The original `dataset` is retained as
 /// `Shapes::shapes_dataset` so the validation engine can expose it as a
 /// named graph to SHACL-SPARQL queries.
+///
+/// # Errors
+///
+/// Everything [`from_dataset`] refuses.
 pub fn from_dataset_with_config_and_graph(
     dataset: &Arc<RdfDataset>,
     doc_prefixes: &[(String, String)],
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
-) -> Result<Shapes, String> {
-    from_dataset_with_base(dataset, None, doc_prefixes, box_role_vocab, shapes_graph)
+) -> Result<Shapes, ShapesError> {
+    from_dataset_with_base(
+        dataset,
+        None,
+        doc_prefixes,
+        box_role_vocab,
+        shapes_graph,
+        &ShapesImports::new(),
+    )
 }
 
 /// [`from_dataset_with_config_and_graph`] plus the base the source document's
@@ -1090,11 +1106,49 @@ pub fn from_dataset_with_config_and_graph(
 /// everywhere else. A caller with no base to give still has every narrower
 /// overload above, each of which spends `None` on this parameter for it.
 ///
+/// # The shapes graph's `owl:imports` closure
+///
+/// `imports` supplies the documents the shapes graph's `owl:imports` name, and `base` —
+/// the IRI the shapes document was read under — is declared loaded, so an import of the
+/// document's own IRI names the document in hand. The closure is resolved by
+/// [`resolve_shapes_imports`] before a single shape is read and the parse runs over the
+/// merged graph, so an imported document's shapes are shapes of the result and its
+/// `@prefix` map joins the document prefix fallback after `doc_prefixes`. An import nothing
+/// in hand resolves, or a table entry nothing imports, is refused. Every narrower
+/// constructor above spends an EMPTY table here, which still refuses an unresolved import.
+///
 /// # Errors
 ///
-/// Returns `Err(String)` on any unsupported SHACL construct or missing
-/// structural data — see [`from_dataset`].
+/// [`ShapesError::Imports`] when the closure is not in hand or the table cannot be used;
+/// [`ShapesError::Invalid`] on any unsupported SHACL construct or missing structural data.
 pub fn from_dataset_with_base(
+    dataset: &Arc<RdfDataset>,
+    base: Option<&str>,
+    doc_prefixes: &[(String, String)],
+    box_role_vocab: Option<BoxRoleVocab>,
+    shapes_graph: Option<String>,
+    imports: &ShapesImports,
+) -> Result<Shapes, ShapesError> {
+    let loaded: Vec<&str> = base.into_iter().collect();
+    let resolved = resolve_shapes_imports(dataset, doc_prefixes, &loaded, imports)?;
+    from_resolved_dataset(
+        &resolved.dataset,
+        base,
+        &resolved.prefixes,
+        box_role_vocab,
+        shapes_graph,
+    )
+    .map_err(ShapesError::Invalid)
+}
+
+/// Parse a shapes graph whose `owl:imports` closure is ALREADY folded in, without
+/// resolving it again.
+///
+/// Only a prepared product's rebuild reaches this: the dataset a product carries is the
+/// merged closure its packer resolved through [`from_dataset_with_base`], and resolving the
+/// merged graph a second time would ask for documents that are already in it. Every other
+/// constructor resolves first.
+pub(crate) fn from_resolved_dataset(
     dataset: &Arc<RdfDataset>,
     base: Option<&str>,
     doc_prefixes: &[(String, String)],
@@ -1134,23 +1188,33 @@ pub fn from_dataset_with_base(
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` on anything [`from_dataset_with_config_and_graph`]
-/// refuses, and when any root is not a well-formed node expression.
+/// `imports` is the shapes graph's import table, resolved exactly as
+/// [`from_dataset_with_base`] resolves it. The shapes graph's own blank nodes keep their
+/// labels through the merge, so a root spelled `_:e` names the same node it did before.
+///
+/// # Errors
+///
+/// Anything [`from_dataset_with_base`] refuses, and [`ShapesError::Invalid`] when any root
+/// is not a well-formed node expression.
 pub fn from_dataset_with_node_expressions(
     dataset: &Arc<RdfDataset>,
     doc_prefixes: &[(String, String)],
     shapes_graph: Option<String>,
     roots: &[Term],
-) -> Result<(Shapes, Vec<NodeExpr>), String> {
+    imports: &ShapesImports,
+) -> Result<(Shapes, Vec<NodeExpr>), ShapesError> {
+    let resolved = resolve_shapes_imports(dataset, doc_prefixes, &[], imports)?;
     let mut parser = Parser::new(
-        dataset.as_ref(),
+        resolved.dataset.as_ref(),
         None,
-        doc_prefixes,
+        &resolved.prefixes,
         None,
-        Arc::clone(dataset),
+        Arc::clone(&resolved.dataset),
         shapes_graph,
     );
-    parser.parse_with_expressions(roots)
+    parser
+        .parse_with_expressions(roots)
+        .map_err(ShapesError::Invalid)
 }
 
 // ── Internal parser ────────────────────────────────────────────────────────────
@@ -2642,7 +2706,7 @@ mod tests {
 
     /// Parse shapes from a test dataset (shim over [`from_dataset`]).
     fn from_store(dataset: &Arc<RdfDataset>) -> Result<Shapes, String> {
-        from_dataset(dataset)
+        from_dataset(dataset).map_err(String::from)
     }
 
     const PREFIXES: &str = r"

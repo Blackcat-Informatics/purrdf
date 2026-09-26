@@ -41,7 +41,7 @@ use purrdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
-use purrdf_shapes::shapes::{__linked_declarations, Shapes, from_dataset_with_config_and_graph};
+use purrdf_shapes::shapes::{__linked_declarations, Shapes, from_dataset_with_base};
 use purrdf_shapes::text_ingest::{
     parse_ntriples_to_dataset, parse_turtle_document, parse_turtle_to_dataset,
 };
@@ -162,11 +162,13 @@ fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String>
     let prefixes = parse_turtle_document(&input.shapes_text, input.base.as_deref())
         .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?
         .prefixes;
-    let shapes = from_dataset_with_config_and_graph(
+    let shapes = from_dataset_with_base(
         &dataset,
+        None,
         &prefixes,
         input.box_role_vocab.clone(),
         input.shapes_graph.clone(),
+        &shacl_corpora::w3c_case_imports(&dataset),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     Ok((dataset, shapes))

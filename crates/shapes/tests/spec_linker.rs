@@ -51,7 +51,7 @@ const SPARQL_NS: &str = "http://www.w3.org/ns/sparql#";
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn load(shapes_ttl: &str) -> Result<purrdf_shapes::shapes::Shapes, String> {
-    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None)
+    parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)
 }
 
 fn load_error(shapes_ttl: &str) -> String {

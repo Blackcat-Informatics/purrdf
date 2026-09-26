@@ -39,7 +39,7 @@ use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use crate::cli::{CliRdfFormat, LedgerTarget, ReportTarget};
 use crate::error::CliError;
 use crate::shapes_source::{
-    ShapesDocument, fold_shapes_imports, read_shapes_document, resolve_shapes_graph,
+    read_shapes_document, resolve_shapes_graph, shapes_error, shapes_imports,
 };
 use crate::{format, ledger, report, sink, source};
 
@@ -157,13 +157,18 @@ pub(crate) fn run_rules(
     let inference: Inference = match &rule_source {
         RuleSource::Shapes { path, format, base } => {
             let root = read_shapes_document(path, *format, base.as_deref(), "--shapes")?;
-            let folded = fold_shapes_imports(root, options.imports, "--shapes-base")?;
-            let shapes = purrdf::shapes::shapes::from_dataset_with_config(
-                &folded.dataset,
-                &folded.prefixes,
+            let table = shapes_imports(&root, options.imports)?;
+            let shapes = purrdf::shapes::shapes::from_dataset_with_base(
+                &root.dataset,
                 None,
+                &root.prefixes,
+                None,
+                None,
+                &table,
             )
-            .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))?;
+            .map_err(|error| {
+                shapes_error(error, &format!("--shapes {path}"), &root, "--shapes-base")
+            })?;
             let projected = engine::project_dataset(data.as_ref()).map_err(CliError::Runtime)?;
             let holder = ShaclData::new(Arc::clone(&projected), projected, None);
             let mut rule_options = RuleOptions::default();
@@ -354,17 +359,25 @@ pub(crate) fn run_node_expr(
         shapes_base.as_deref(),
         "--shapes",
     )?;
-    let shapes = fold_shapes_imports(root_document, options.imports, "--shapes-base")?;
+    let table = shapes_imports(&root_document, options.imports)?;
     let data = source::load_dataset(options.input, data_format, options.base)?;
     let outputs = free_expression::evaluate(&FreeExpression {
-        shapes: &shapes.dataset,
-        prefixes: &shapes.prefixes,
+        shapes: &root_document.dataset,
+        prefixes: &root_document.prefixes,
         root: &root,
         data: data.as_ref(),
         focus: &focus,
         scope: &scope,
+        imports: &table,
     })
-    .map_err(|error| CliError::Runtime(format!("--expr {}: {error}", options.expr)))?;
+    .map_err(|error| {
+        shapes_error(
+            error,
+            &format!("--expr {}", options.expr),
+            &root_document,
+            "--shapes-base",
+        )
+    })?;
     let mut text = String::new();
     for term in &outputs {
         text.push_str(&term.to_string());
@@ -419,16 +432,17 @@ pub(crate) fn run_lint(
     };
     let shapes_graph = resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
     let root = read_shapes_document(options.input, format, base.as_deref(), "shapes lint")?;
-    let folded: ShapesDocument = fold_shapes_imports(root, options.imports, "--base")?;
+    let table = shapes_imports(&root, options.imports)?;
     let report = lint::lint(
-        &folded.dataset,
-        &folded.prefixes,
+        &root.dataset,
+        &root.prefixes,
         options
             .box_role_vocab
             .map(purrdf::shapes::model::BoxRoleVocab::for_namespace),
         shapes_graph,
+        &table,
     )
-    .map_err(CliError::Runtime)?;
+    .map_err(|error| shapes_error(error, "shapes lint", &root, "--base"))?;
     sink::write_out(options.output, report.render().as_bytes())?;
     eprintln!("shapes lint clean {}", report.is_clean());
     eprintln!("shapes lint findings {}", report.findings());

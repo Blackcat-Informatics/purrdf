@@ -336,6 +336,7 @@ mod shacl12_subset {
                 data: dataset,
                 focus: &focus,
                 scope: &[],
+                imports: &purrdf_shapes::ShapesImports::new(),
             })
             .unwrap_or_else(|e| panic!("{entry}: evaluates on this target: {e}"));
             let expected = list(

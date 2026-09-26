@@ -108,7 +108,24 @@ pub use purrdf_shapes::engine::ValidationOptions;
 /// it without depending on the engine crate.
 pub use purrdf_shapes::lint::LintReport;
 pub use purrdf_shapes::report::ConformanceDisallows;
+/// The shapes-graph error every entry point on this boundary returns, and the typed
+/// `owl:imports` refusal it carries, re-exported so a host binding names them without
+/// depending on the engine crate.
+pub use purrdf_shapes::{ShapesError, ShapesImportError};
 pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};
+
+/// A host's `owl:imports` table for a shapes graph: ORDERED `(ontology IRI, document)`
+/// pairs, each document Turtle text parsed with its ontology IRI as its base.
+///
+/// Every shapes-graph entry point on this boundary takes one, and every host spells it
+/// its own way — Python `imports=[(iri, turtle), ...]`, JavaScript `importIris` /
+/// `importDocuments`, C `import_iris` / `import_documents` / `import_count` — and hands
+/// it over here unchanged. The empty list is the ordinary "imports nothing" case, and it
+/// still enforces the rule: a shapes graph that imports a document the list does not
+/// supply is refused with [`ShapesError::Imports`], on every host alike. A list rather
+/// than a map because order is the caller's and this boundary's output is deterministic.
+/// See [`purrdf_shapes::imports`].
+pub type ShapesImportList<'a> = [(&'a str, &'a str)];
 pub use shapes_tools::{
     NodeExprRequest, RulesOutcome, RulesRequest, apply_rules_to_ntriples, eval_node_expr_to_terms,
     lint_shapes_ttl, parse_scope_binding,

@@ -153,7 +153,9 @@ fn repeated_target_parameter_values_are_errors_even_on_inactive_instances() {
     ] {
         for reverse in [false, true] {
             let shapes = target_shapes("sh:optional true ;", values, reverse);
-            let error = parse_shapes(&shapes, None).expect_err("target parameters remain max-one");
+            let error = parse_shapes(&shapes, None)
+                .expect_err("target parameters remain max-one")
+                .to_string();
             assert!(error.contains("only one"), "{error}");
             assert!(
                 error.contains(&format!("http://example.org/{predicate}")),
@@ -172,7 +174,9 @@ fn target_optional_metadata_requires_one_boolean() {
         "sh:optional ex:true ;",
     ] {
         let shapes = target_shapes(optional, "ex:kind ex:Kind", false);
-        let error = parse_shapes(&shapes, None).expect_err("malformed optional metadata");
+        let error = parse_shapes(&shapes, None)
+            .expect_err("malformed optional metadata")
+            .to_string();
         assert!(error.contains("optional"), "{error}");
     }
 }
@@ -185,7 +189,9 @@ fn target_parameter_values_cannot_be_blank_nodes() {
         ("ex:label _:label", "label"),
     ] {
         let shapes = target_shapes("sh:optional true ;", values, false);
-        let error = parse_shapes(&shapes, None).expect_err("blank target values are malformed");
+        let error = parse_shapes(&shapes, None)
+            .expect_err("blank target values are malformed")
+            .to_string();
         assert!(error.contains("blank node"), "{error}");
         assert!(
             error.contains(&format!("http://example.org/{predicate}")),

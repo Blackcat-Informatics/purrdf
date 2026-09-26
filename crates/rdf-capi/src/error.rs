@@ -29,6 +29,20 @@ pub struct PurrdfError {
     /// "this refusal names no dimension" rather than an empty string a caller could
     /// mistake for a label.
     pub(crate) dimension: Option<CString>,
+    /// The shapes-graph `owl:imports` refusal this error is, when it is one: its kind
+    /// label and the IRIs it names. `None` for every other error, and the
+    /// `purrdf_shapes_import_error_*` accessors answer NULL / 0 for those.
+    pub(crate) import: Option<ImportRefusal>,
+}
+
+/// The typed half of a [`PurrdfStatus::ShapesImportError`], kept as C strings so the
+/// accessors can hand out borrows valid until `purrdf_error_free`.
+#[derive(Debug)]
+pub(crate) struct ImportRefusal {
+    /// `unresolved-import`, `unreached-import` or `invalid-import`.
+    pub(crate) kind: CString,
+    /// The IRIs the refusal names, in the engine's order.
+    pub(crate) iris: Vec<CString>,
 }
 
 impl PurrdfError {
@@ -40,6 +54,32 @@ impl PurrdfError {
             code,
             message: sanitized(&message.into()),
             dimension: None,
+            import: None,
+        }
+    }
+
+    /// Map a shapes-graph entry point's error onto the C error channel: the
+    /// `owl:imports` refusal as [`PurrdfStatus::ShapesImportError`] carrying its kind and
+    /// IRIs, and anything else as a `ParseError` with the engine's message.
+    pub(crate) fn shapes(error: purrdf_validate::ShapesError) -> Self {
+        match error {
+            purrdf_validate::ShapesError::Imports(error) => Self::shapes_import(&error),
+            purrdf_validate::ShapesError::Invalid(message) => {
+                Self::new(PurrdfStatus::ParseError, message)
+            }
+        }
+    }
+
+    /// The [`PurrdfStatus::ShapesImportError`] for `error`.
+    pub(crate) fn shapes_import(error: &purrdf_validate::ShapesImportError) -> Self {
+        Self {
+            code: PurrdfStatus::ShapesImportError,
+            message: sanitized(&error.to_string()),
+            dimension: None,
+            import: Some(ImportRefusal {
+                kind: sanitized(error.kind()),
+                iris: error.iris().into_iter().map(sanitized).collect(),
+            }),
         }
     }
 
@@ -54,6 +94,7 @@ impl PurrdfError {
             code: PurrdfStatus::ShapesProductError,
             message: sanitized(&message.into()),
             dimension: dimension.map(sanitized),
+            import: None,
         }
     }
 

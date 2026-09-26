@@ -129,11 +129,11 @@
 //! The SHAPES graph is read through [`load_shapes`], in two steps that
 //! [`purrdf_shapes::engine::parse_shapes`] performs as one:
 //! [`crate::shapes_source::read_shapes_document`] freezes the document into a graph, and
-//! only then is that graph asked to be `Shapes`. That read-then-fold seam lives in
-//! [`crate::shapes_source`] rather than here, because `shacl pack` needs the identical
-//! sequence — a product packed with an `--import` table must fold the same closure
-//! `validate --shapes --import` does, or the two commands would disagree about what the
-//! shapes graph even is. Turtle
+//! only then is that graph asked to be `Shapes`. That read seam, and the `--import` table
+//! beside it, live in [`crate::shapes_source`] rather than here, because `shacl pack` needs
+//! the identical sequence — a product packed with an `--import` table must resolve the same
+//! closure `validate --shapes --import` does, or the two commands would disagree about what
+//! the shapes graph even is. Turtle
 //! additionally carries its own `@prefix`/`PREFIX` map, recovered from the source text, as the
 //! fallback prefix environment for SHACL-AF `sh:select` queries. Every other syntax is parsed
 //! by the native codec into the same IR and carries no such fallback, because the fallback is
@@ -147,12 +147,12 @@
 //! `parse_shapes` that took no base at all, so the one document in this command that
 //! could not resolve a relative IRI was the one describing the constraints.
 //!
-//! Splitting the read from the parse is what makes `owl:imports` resolvable at all: the
-//! imports have to be read off the GRAPH, and the imported documents merged as graphs, before
-//! anything is asked to be a shape. [`crate::shapes_source::fold_shapes_imports`] walks that
-//! closure against the `--import IRI=FILE` table — PurRDF fetches nothing — and a shapes
-//! graph with no imports composes to exactly the `Shapes` `parse_shapes` produced before the
-//! seam existed.
+//! `owl:imports` are resolved by the engine, not here: [`crate::shapes_source::shapes_imports`]
+//! reads the `--import IRI=FILE` documents into the shapes graph's import table — PurRDF
+//! fetches nothing — and the `Shapes` constructor resolves the closure against it through the
+//! one helper every host shares (`purrdf_shapes::imports::resolve_shapes_imports`), refusing
+//! an import nothing resolves. A shapes graph with no imports composes to exactly the
+//! `Shapes` `parse_shapes` produces.
 //!
 //! # `--shapes-graph` is command-line text, and its refusal says so
 //!
@@ -229,8 +229,8 @@ pub(crate) struct ValidateOptions<'a> {
     /// [`shapes_document_base`].
     pub(crate) shapes_base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable: the local documents that resolve the shapes graph's
-    /// `owl:imports`. Empty means the operator named none, which is the pre-flag behaviour
-    /// plus a diagnostic — see [`crate::shapes_source::fold_shapes_imports`].
+    /// `owl:imports`. Empty means the operator named none, and an import nothing else
+    /// resolves is then refused — see [`crate::shapes_source::shapes_imports`].
     pub(crate) imports: &'a [String],
     /// `--box-role-vocab`: the caller-supplied graph-box role vocabulary NAMESPACE, or
     /// `None` to leave the box-role annotation feature inactive. Threaded to
@@ -763,16 +763,26 @@ fn load_shapes(
     base: Option<&str>,
 ) -> Result<Shapes, CliError> {
     let root = crate::shapes_source::read_shapes_document(path, format, base, "--shapes")?;
-    let folded = crate::shapes_source::fold_shapes_imports(root, options.imports, "--shapes-base")?;
+    let table = crate::shapes_source::shapes_imports(&root, options.imports)?;
     let box_role_vocab = options
         .box_role_vocab
         .map(purrdf::shapes::model::BoxRoleVocab::for_namespace);
-    purrdf::shapes::shapes::from_dataset_with_config(
-        &folded.dataset,
-        &folded.prefixes,
+    purrdf::shapes::shapes::from_dataset_with_base(
+        &root.dataset,
+        None,
+        &root.prefixes,
         box_role_vocab,
+        None,
+        &table,
     )
-    .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))
+    .map_err(|error| {
+        crate::shapes_source::shapes_error(
+            error,
+            &format!("--shapes {path}"),
+            &root,
+            "--shapes-base",
+        )
+    })
 }
 
 /// Everything DECIDED about the shapes side of this run, before either document is read.

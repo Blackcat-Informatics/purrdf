@@ -461,11 +461,13 @@ fn load_w3c(case: &shacl_corpora::W3cCase) -> Result<Loaded, String> {
         Some(&file_iri(&case.shapes_path)),
     )
     .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    let shapes = purrdf_shapes::shapes::from_dataset_with_config_and_graph(
+    let shapes = purrdf_shapes::shapes::from_dataset_with_base(
         &shapes_dataset,
+        None,
         &doc_prefixes,
         None,
         case.shapes_graph_iri.clone(),
+        &shacl_corpora::w3c_case_imports(&shapes_dataset),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
 
@@ -498,6 +500,7 @@ fn load_first_party(case: &shacl_corpora::FirstPartyCase) -> Result<Loaded, Stri
         &shapes_ttl,
         None,
         Some(first_party_box_role_vocab()),
+        &purrdf_shapes::ShapesImports::new(),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&data_nt)
