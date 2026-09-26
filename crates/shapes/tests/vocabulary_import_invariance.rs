@@ -76,66 +76,25 @@ const TOTAL_CASES: usize = 376;
 /// refused at load: the harness asserts that every case not compared on a report
 /// is a declared refusal.
 ///
-/// Moved from 335 to 338 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
-/// became evaluated: `singleLine-001`, `rootClass-001` and `someValue-001` now
-/// load, so their reports are compared too, and the refused-at-load entries went
-/// from 28 to 25.
+/// # Why the merge changes no answer where the vocabulary names a case's term
 ///
-/// Moved from 338 to 344 when the property-pair components took any SHACL
-/// property path and `sh:subsetOf` became evaluated: `equals-002`,
-/// `disjoint-002`, `lessThan-003`, `lessThanOrEquals-002`, `subsetOf-001` and
-/// `subsetOf-002` now load, so their reports are compared too, and the
-/// refused-at-load entries went from 25 to 19.
+/// * The merged vocabulary adds `sh:ShapeClass rdfs:subClassOf sh:NodeShape,
+///   rdfs:Class` to the shapes graph; the engine honours those two axioms whether
+///   or not the graph asserts them, so `targetClassImplicit-002` answers the same.
+/// * It declares `sh:defaultValue` itself (and no `sh:values`), never as a
+///   statement about a shape, so `property-select-001` and
+///   `property-sparqlExpr-001` compute the same value nodes.
+/// * It declares `shnex:InstancesOfExpression` as a function, never as a statement
+///   about `sparql/functions/instanceCount-example`'s custom function, so the
+///   count is the same.
+/// * It declares `sh:RulesEntailment` and `sh:entailment`, never as a statement
+///   about `inference-rules/rules-entailment-validation`'s shapes graph, so the
+///   merge changes no rule and no validation result.
 ///
-/// Moved from 344 to 349 when `sh:uniqueValuesFor` became evaluated:
-/// `uniqueValuesFor-001` to `-005` now load, so their reports are compared too,
-/// and the refused-at-load entries went from 19 to 14.
-///
-/// Moved from 349 to 351 when `sh:closed sh:ByTypes` became evaluated:
-/// `closed-003` and `closed-004` now load, so their reports are compared too,
-/// and the refused-at-load entries went from 14 to 12.
-///
-/// Moved from 351 to 356 when per-constraint reifier annotations and the
-/// `sh:Debug` / `sh:Trace` severities became evaluated: `deactivated-003`,
-/// `severity-003`, `severity-004`, `severity-005` and `message-002` now load, so
-/// their reports are compared too, and the refused-at-load entries went from 12
-/// to 7.
-///
-/// Moved from 356 to 359 when implicit class targets, `sh:ShapeClass`,
-/// `sh:targetWhere` and node-expression `sh:targetNode` values became evaluated:
-/// `targetClassImplicit-002`, `targetWhere-001` and `targetNode-select-001` now
-/// load, so their reports are compared too, and the refused-at-load entries went
-/// from 7 to 4. Merging the vocabulary adds `sh:ShapeClass rdfs:subClassOf
-/// sh:NodeShape, rdfs:Class` to the shapes graph; the engine already honours those
-/// two axioms whether or not the graph asserts them, so the merge changes no
-/// answer here either.
-///
-/// Moved from 359 to 361 when `sh:values` and `sh:defaultValue` became evaluated:
-/// `property-select-001` and `property-sparqlExpr-001` now load, so their reports
-/// are compared too, and the refused-at-load entries went from 4 to 2. The merged
-/// vocabulary declares `sh:defaultValue` itself (and no `sh:values`), never as a
-/// statement about a shape, so the merge changes no computed value node.
-///
-/// Moved from 361 to 362 when `shnex:instancesOf` took a node-expression
-/// argument: `sparql/functions/instanceCount-example` now loads, so its report is
-/// compared too, and the refused-at-load entries went from 2 to 1. The merged
-/// vocabulary declares `shnex:InstancesOfExpression` as a function, never as a
-/// statement about the case's custom function, so the merge changes no count.
-///
-/// Moved from 362 to 363 when the first-party corpus gained
-/// `73-expr-if-list-true`, whose report is compared too.
-///
-/// Moved from 363 to 364 when the rules engine came to support the
-/// `sh:RulesEntailment` regime: `inference-rules/rules-entailment-validation`
-/// declares it and now loads, so its report is compared too. The merged vocabulary
-/// declares `sh:RulesEntailment` and `sh:entailment`, never as a statement about the
-/// case's shapes graph, so the merge changes no rule and no validation result.
-///
-/// Moved from 364 to 362 when `sparql/component/validator-001`, once in each
-/// vendored suite, stopped loading against a fabricated stand-in for the DASH
-/// document it imports: it is an expected refusal of an unresolvable import
-/// (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`), compared on an identical load
-/// error (see [`DECLARED_REFUSAL_CASES`]).
+/// `sparql/component/validator-001`, once in each vendored suite, is an expected
+/// refusal of an unresolvable import (`shacl_corpora::REFUSED_UNRESOLVABLE_IMPORT`):
+/// the DASH document it imports is not supplied, so it is compared on an identical
+/// load error (see [`DECLARED_REFUSAL_CASES`]).
 const COMPARED_ON_REPORT: usize = 362;
 
 /// The inputs among [`TOTAL_CASES`] that must be refused at load: the 12 declared

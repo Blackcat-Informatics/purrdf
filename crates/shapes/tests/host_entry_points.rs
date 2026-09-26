@@ -8,7 +8,8 @@
 //! ([`purrdf_shapes::Inference`]).
 //!
 //! Every shapes graph here carries the W3C SHACL 1.2 declaration of
-//! `sh:SPARQLExprExpression` verbatim — the declaration that used to be refused as a
+//! `sh:SPARQLExprExpression` verbatim — a built-in declared as a
+//! `sh:NamedParameterExpressionFunction` with no `sh:bodyExpression`, which is not a
 //! bodiless custom function — beside shapes that call `sh:sparqlExpr` with
 //! `sh:prefixes`. Every refusal is paired with a valid neighbour that differs from it
 //! in exactly the refused respect.

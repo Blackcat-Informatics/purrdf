@@ -4,10 +4,10 @@
 //! Shapes-graph well-formedness: every shape node, checked against the census.
 //!
 //! The parser reads the constraint parameters it knows off the shapes it reaches.
-//! Everything else a shape node carries used to be walked past — an unknown
-//! `sh:` predicate, a term this engine does not evaluate, a literal where SHACL
-//! requires an IRI — and the shapes graph loaded green while checking less than
-//! it said. This pass closes that, once, before any shape is parsed:
+//! Everything else a shape node carries — an unknown `sh:` predicate, a term this
+//! engine does not evaluate, a literal where SHACL requires an IRI — would
+//! otherwise be walked past, and the shapes graph would load green while checking
+//! less than it said. This pass checks it, once, before any shape is parsed:
 //!
 //! * The nodes checked are the SHAPES of the shapes graph as SHACL 1.2 Core §2.1
 //!   defines them — "s is a SHACL instance of sh:NodeShape or sh:PropertyShape;

@@ -168,8 +168,10 @@ const W3C12_DECLARED_FAILURES: usize = 5;
 /// about them. The ledger runs both ways: an entry whose shapes graph starts
 /// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
 ///
-/// Empty since the `sh:RulesEntailment` regime became supported: its one entry,
-/// `inference-rules/rules-entailment-validation`, now loads, packs and agrees.
+/// It is empty: every SHACL 1.2 `sht:Validate` shapes graph that is not a declared
+/// failure or an unresolvable import loads, packs and agrees — including
+/// `inference-rules/rules-entailment-validation`, whose `sh:RulesEntailment`
+/// regime runs the rules before validation.
 const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[];
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
@@ -206,80 +208,17 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// than a floor for the reason every count in this repository's conformance
 /// harnesses is exact: a floor absorbs a corpus that quietly shrank, and a lane
 /// that started erroring on a case it used to report on would slide under one.
-/// Moved from 192 when the first-party corpus gained its relation-reaching
-/// `sh:SPARQLFunction` case; see [`AGREED_WITH_RESULTS_CASES`] for why that case's
-/// arrival is visible in two counts rather than one.
 ///
-/// Moved from 193 to 338 when two things arrived together: the first-party case
-/// whose shapes graph carries the W3C vocabulary's own declarations of three
-/// built-ins (+1), and the 144 `sht:Validate` entries of the W3C SHACL 1.2 suite
-/// whose shapes graphs load (+144 — its 174 entries minus the 5 declared failures
-/// and the 25 [`W3C12_REFUSED_AT_LOAD`] entries). Every one of them agreed on a
-/// report, including the two whose custom list function is called only from
-/// SPARQL text and which the product writer used to refuse, because the model does
-/// not carry an uncalled declaration and the restore did not re-derive it.
+/// # What it counts
 ///
-/// Moved from 338 to 335 when the shapes-graph census reached the loader: the ten
-/// SHACL 1.2 list-component cases now load and agree (+10), and thirteen cases now
-/// stop at load on a term the engine does not evaluate (−13), so
-/// [`W3C12_REFUSED_AT_LOAD`] went from 25 entries to 28.
-///
-/// Moved from 335 to 338 when `sh:singleLine`, `sh:rootClass` and `sh:someValue`
-/// became evaluated components: `singleLine-001`, `rootClass-001` and
-/// `someValue-001` now load and agree on a report (+3), and
-/// [`W3C12_REFUSED_AT_LOAD`] went from 28 entries to 25.
-///
-/// Moved from 338 to 344 when the property-pair components took any SHACL
-/// property path and `sh:subsetOf` became evaluated: `equals-002`,
-/// `disjoint-002`, `lessThan-003`, `lessThanOrEquals-002`, `subsetOf-001` and
-/// `subsetOf-002` now load and agree on a report (+6), and
-/// [`W3C12_REFUSED_AT_LOAD`] went from 25 entries to 19.
-///
-/// Moved from 344 to 349 when `sh:uniqueValuesFor` became evaluated:
-/// `uniqueValuesFor-001` to `-005` now load and agree on a report (+5), and
-/// [`W3C12_REFUSED_AT_LOAD`] went from 19 entries to 14.
-///
-/// Moved from 349 to 351 when `sh:closed sh:ByTypes` became evaluated:
-/// `closed-003` and `closed-004` now load and agree on a report (+2), and
-/// [`W3C12_REFUSED_AT_LOAD`] went from 14 entries to 12.
-///
-/// Moved from 351 to 356 when per-constraint reifier annotations and the
-/// `sh:Debug` / `sh:Trace` severities became evaluated: `deactivated-003`,
-/// `severity-003`, `severity-004`, `severity-005` and `message-002` now load and
-/// agree on a report (+5) — the annotation list and the two new severities travel
-/// in the product — and [`W3C12_REFUSED_AT_LOAD`] went from 12 entries to 7.
-///
-/// Moved from 356 to 359 when implicit class targets, `sh:ShapeClass`,
-/// `sh:targetWhere` and node-expression `sh:targetNode` values became evaluated:
-/// `targetClassImplicit-002`, `targetWhere-001` and `targetNode-select-001` now
-/// load and agree on a report (+3) — the two new target kinds travel in the
-/// product — and [`W3C12_REFUSED_AT_LOAD`] went from 7 entries to 4.
-///
-/// Moved from 359 to 361 when `sh:values` and `sh:defaultValue` became evaluated:
-/// `property-select-001` and `property-sparqlExpr-001` now load and agree on a
-/// report (+2) — a property shape's two node expressions travel in the product —
-/// and [`W3C12_REFUSED_AT_LOAD`] went from 4 entries to 2.
-///
-/// Moved from 361 to 362 when `shnex:instancesOf` took a node-expression
-/// argument, as SHACL 1.2 Node Expressions §4.5.1 declares it:
-/// `sparql/functions/instanceCount-example`, whose custom function body reads its
-/// class from `[ shnex:arg 0 ]`, now loads and agrees on a report (+1) — the
-/// expression operand travels in the product — and [`W3C12_REFUSED_AT_LOAD`] went
-/// from 2 entries to 1.
-///
-/// Moved from 362 to 363 when the first-party corpus gained
-/// `73-expr-if-list-true`, which pins SHACL 1.2 Node Expressions §4.1.6 — `then`
-/// only for the condition list `( true )` — and agrees on a report (+1).
-///
-/// Moved from 363 to 364 when the `sh:RulesEntailment` regime became supported:
-/// `inference-rules/rules-entailment-validation` now loads, packs, and its three
-/// lanes agree on a report — validation after the regime ran the rules.
-///
-/// Moved from 364 to 362 when `sparql/component/validator-001` (in each of the
-/// two vendored suites) stopped loading against a fabricated stand-in for the
-/// DASH document it imports: no document is supplied for DASH, the load refuses
-/// the unresolved import, and both conformance harnesses grade exactly that
-/// refusal (−2; see [`REFUSED_IMPORT_CASES`]).
+/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report: 168 of the
+/// suite's 174 — all but its [`W3C12_DECLARED_FAILURES`] and `validator-001`,
+/// whose unresolvable import is graded as a refusal (see
+/// [`REFUSED_IMPORT_CASES`]). The other 194 come from the SHACL 1.0 suite and the
+/// first-party corpus. Among them are the first-party case whose shapes graph
+/// carries the W3C vocabulary's own declarations of three built-ins, and the two
+/// SHACL 1.2 cases whose custom list function is called only from SPARQL text,
+/// which the product round trip carries without refusing the function.
 const AGREED_ON_REPORT_CASES: usize = 362;
 
 /// The exact number of agreed cases whose shared report carries at least one
@@ -291,114 +230,36 @@ const AGREED_ON_REPORT_CASES: usize = 362;
 /// focus nodes; the remaining agreed cases are the ones the corpus expects to
 /// conform.
 ///
-/// # Why it moved from 179
+/// # Cases the count separates from an empty agreement
 ///
-/// The first-party corpus gained a case whose `sh:SPARQLFunction` body reaches the
-/// host-registered corpus relation, and this harness now installs that relation for
-/// the whole run.
+/// * The first-party case whose `sh:SPARQLFunction` body reaches the
+///   host-registered corpus relation counts here because this harness installs
+///   that relation for the whole run. Without it the call lowers to an ordinary
+///   triple pattern, matches nothing, and all three lanes agree on an EMPTY
+///   report — the answer a resolved relation never gives. That agreement counts
+///   toward [`AGREED_ON_REPORT_CASES`] and not toward this count, which is the
+///   difference this count exists to expose.
+/// * `shape-001`: the data graph's `sh:shape` declarations select its two focus
+///   nodes, and the lanes agree on the violation the suite expects. A lane that
+///   selected no focus node would agree on an empty report instead.
+/// * `sparql/node/prefixes-002`: the document prefix map is the Turtle codec's own
+///   record, and the first constraint takes `test:` from the `sh:ShapesGraph`'s
+///   implicit `sh:declare`, so its `FILTER (?value = test:Value)` matches and the
+///   lanes agree on the expected violation. Reading the `PREFIX test:` line quoted
+///   inside the SECOND constraint's `sh:select` as a document prefix would rebind
+///   `test:` and agree on an empty report.
+/// * `sparql/functions/instanceCount-example` reports the `sh:Warning` result
+///   carrying the computed instance count 2, its class read from `[ shnex:arg 0 ]`
+///   as SHACL 1.2 Node Expressions §4.5.1 declares `shnex:instancesOf`.
+/// * `73-expr-if-list-true` pins SHACL 1.2 Node Expressions §4.1.6 — `then` only
+///   for the condition list `( true )`: its `xsd:integer` condition `1` takes
+///   `shnex:else` and the lanes agree on that one violation, and on none for the
+///   `true` control.
 ///
-/// The move IS the evidence. Before the relation was installed, the case still
-/// AGREED across all three lanes — on an empty report, because the call lowered to an
-/// ordinary triple pattern, matched nothing, and every focus node scored the same.
-/// Three lanes agreeing on the answer a resolved relation would never give is exactly
-/// the failure this count exists to catch, and the count is what caught it: the case
-/// counted toward `AGREED_ON_REPORT_CASES` and not toward this one. It now counts
-/// toward both, because the relation resolved and produced the violation the corpus
-/// expects.
-///
-/// # Why it moved from 180 to 310
-///
-/// The same two arrivals as [`AGREED_ON_REPORT_CASES`]: the first-party
-/// built-in-declarations case reports three violations (+1), and 129 of the 144
-/// loadable SHACL 1.2 `sht:Validate` entries expect at least one result (+129) —
-/// the other 15 expect conformance and are agreed on as empty reports, which is
-/// why the two counts moved by different amounts.
-///
-/// # Why it moved from 310 to 316
-///
-/// The shapes-graph census reached the loader. The ten SHACL 1.2 list-component
-/// cases (`sh:minListLength`, `sh:maxListLength`, `sh:uniqueMembers`,
-/// `sh:memberShape`, and the two that reach `sh:minListLength` through their
-/// shacl-shacl property shapes) now load, and every one of them reports results
-/// (+10); thirteen other cases now stop at load on a term the engine does not
-/// evaluate (see [`W3C12_REFUSED_AT_LOAD`]), and four of those had agreed on a
-/// report carrying a result (−4).
-///
-/// # Why it moved from 316 to 319
-///
-/// `singleLine-001`, `rootClass-001` and `someValue-001` load now that their
-/// components are evaluated, and each expects — and reports — violations (+3).
-///
-/// # Why it moved from 319 to 325
-///
-/// `equals-002`, `disjoint-002`, `lessThan-003`, `lessThanOrEquals-002`,
-/// `subsetOf-001` and `subsetOf-002` load now that a property pair takes any
-/// SHACL property path and `sh:subsetOf` is evaluated, and each expects — and
-/// reports — violations (+6).
-///
-/// # Why it moved from 325 to 329
-///
-/// `uniqueValuesFor-001`, `-002`, `-003` and `-005` load now that the component
-/// is evaluated, and each expects — and reports — violations (+4);
-/// `uniqueValuesFor-004` expects conformance and is agreed on as an empty report.
-///
-/// # Why it moved from 329 to 331
-///
-/// `closed-003` and `closed-004` load now that `sh:closed sh:ByTypes` is
-/// evaluated, and each expects — and reports — a violation (+2).
-///
-/// # Why it moved from 331 to 335
-///
-/// `severity-003` (a `sh:Warning` result from a reifier `sh:severity`),
-/// `severity-004` (a `sh:Debug` result), `severity-005` (a `sh:Trace` result) and
-/// `message-002` (a violation carrying the reifier `sh:message`) load now and each
-/// reports its result (+4); `deactivated-003`, whose only constraints a reifier
-/// deactivates, is agreed on as an empty report.
-///
-/// # Why it moved from 335 to 339
-///
-/// `targetClassImplicit-002`, `targetWhere-001` and `targetNode-select-001` load
-/// now that their targets are evaluated, and each expects — and reports — a
-/// violation (+3). `shape-001` loaded before, and every lane agreed on an EMPTY
-/// report, because the data graph's `sh:shape` declarations selected no focus
-/// node; they select its two focus nodes now, and the lanes agree on the
-/// violation the suite expects (+1).
-///
-/// # Why it moved from 339 to 340
-///
-/// `property-sparqlExpr-001` loads now that `sh:values` is evaluated, and its
-/// computed URI length fails `sh:hasValue 27` at `ex:Invalid` — the violation the
-/// suite expects (+1). `property-select-001` loads too and is agreed on as an
-/// empty report: its computed full name satisfies `sh:hasValue "John Muir"`.
-///
-/// # Why it moved from 340 to 341
-///
-/// `sparql/node/prefixes-002` loaded before, and every lane agreed on an EMPTY
-/// report: a `PREFIX test:` line quoted inside a SECOND constraint's `sh:select`
-/// was read as a document prefix and rebound `test:` for the first constraint too,
-/// so its `FILTER (?value = test:Value)` matched nothing. The document prefix map
-/// is now the Turtle codec's own record, and the first constraint takes `test:` from
-/// the `sh:ShapesGraph`'s implicit `sh:declare`; the lanes agree on the violation
-/// the suite expects (+1).
-///
-/// # Why it moved from 341 to 342
-///
-/// `sparql/functions/instanceCount-example` loads now that `shnex:instancesOf`
-/// takes a node-expression argument, and its `sh:select` constraint reports the
-/// `sh:Warning` result carrying the computed instance count 2 that the suite
-/// expects (+1).
-///
-/// # Why it moved from 342 to 343
-///
-/// The first-party corpus gained `73-expr-if-list-true`, whose `xsd:integer`
-/// condition `1` is not the list `( true )` and so takes `shnex:else`: the lanes
-/// agree on that one violation, and on none for the `true` control (+1).
-///
-/// # Why it moved from 343 to 341
-///
-/// `sparql/component/validator-001`, once in each vendored suite, no longer loads:
-/// the DASH document it imports is not supplied, and each had agreed on its one
-/// expected violation (−2; see [`REFUSED_IMPORT_CASES`]).
+/// Agreed cases outside this count expect conformance — among them
+/// `uniqueValuesFor-004`, `deactivated-003` (whose only constraints a reifier
+/// deactivates) and `property-select-001` (whose computed full name satisfies
+/// `sh:hasValue "John Muir"`).
 const AGREED_WITH_RESULTS_CASES: usize = 341;
 
 // ── One case ──────────────────────────────────────────────────────────────────
