@@ -20,9 +20,6 @@
 //! exact substrings, while these snapshots pin the WHOLE document for each
 //! format against the W3C format specs.
 
-#[path = "support/golden.rs"]
-mod golden;
-
 use purrdf_core::{
     BlankScope, RdfAnnotation, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfReifier, RdfTerm,
     RdfTextDirection, RdfTriple, TermValue,
@@ -152,7 +149,7 @@ fn text(
 
 #[test]
 fn select_books_json() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/select_books_json.json",
         &text(
             &books(),
@@ -165,7 +162,7 @@ fn select_books_json() {
 
 #[test]
 fn select_books_xml() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/select_books_xml.xml",
         &text(
             &books(),
@@ -193,7 +190,7 @@ fn select_books_csv() {
         raw.contains("\r\n") && !raw.contains("\n\n") && !raw.replace("\r\n", "").contains('\n'),
         "CSV records must be CRLF-terminated (RFC 4180): {raw:?}"
     );
-    golden::assert_golden("results_corpus/select_books_csv.csv", &raw);
+    purrdf_testkit::assert_golden!("results_corpus/select_books_csv.csv", &raw);
 }
 
 #[test]
@@ -213,7 +210,7 @@ fn select_books_tsv() {
         "TSV must use bare LF line ends, no CR: {raw:?}"
     );
     assert!(raw.starts_with("?book\t?title\n"), "TSV header: {raw:?}");
-    golden::assert_golden("results_corpus/select_books_tsv.tsv", &raw);
+    purrdf_testkit::assert_golden!("results_corpus/select_books_tsv.tsv", &raw);
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +221,7 @@ fn select_books_tsv() {
 
 #[test]
 fn ask_true_json() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/ask_true_json.json",
         &text(
             &SparqlResult::Boolean(true),
@@ -237,7 +234,7 @@ fn ask_true_json() {
 
 #[test]
 fn ask_true_xml() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/ask_true_xml.xml",
         &text(
             &SparqlResult::Boolean(true),
@@ -316,7 +313,7 @@ fn starred_graph() -> SparqlResult {
 
 #[test]
 fn construct_starred_graph_json() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/construct_starred_graph_json.json",
         &text(
             &starred_graph(),
@@ -334,7 +331,7 @@ fn construct_starred_graph_json() {
 
 #[test]
 fn select_books_json_with_provenance() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/select_books_json_with_provenance.json",
         &text(
             &books(),
@@ -347,7 +344,7 @@ fn select_books_json_with_provenance() {
 
 #[test]
 fn select_books_xml_with_provenance() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/select_books_xml_with_provenance.xml",
         &text(
             &books(),
@@ -473,7 +470,7 @@ fn edge_cases() -> SparqlResult {
 
 #[test]
 fn edge_cases_json() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/edge_cases_json.json",
         &text(
             &edge_cases(),
@@ -486,7 +483,7 @@ fn edge_cases_json() {
 
 #[test]
 fn edge_cases_xml() {
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "results_corpus/edge_cases_xml.xml",
         &text(
             &edge_cases(),
@@ -513,7 +510,7 @@ fn edge_cases_csv() {
         raw.contains("\r\n") && !raw.replace("\r\n", "").contains('\n'),
         "edge-case CSV must use exclusive CRLF line endings (RFC 4180): {raw:?}"
     );
-    golden::assert_golden("results_corpus/edge_cases_csv.csv", &raw);
+    purrdf_testkit::assert_golden!("results_corpus/edge_cases_csv.csv", &raw);
 }
 
 #[test]
@@ -536,5 +533,5 @@ fn edge_cases_tsv() {
         raw.contains("--rtl") || raw.contains("--ltr"),
         "TSV must carry direction suffix from the serializer kernel: {raw:?}"
     );
-    golden::assert_golden("results_corpus/edge_cases_tsv.tsv", &raw);
+    purrdf_testkit::assert_golden!("results_corpus/edge_cases_tsv.tsv", &raw);
 }

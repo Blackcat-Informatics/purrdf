@@ -524,7 +524,7 @@ mod tests {
 <https://example.org/slice/alpha> a vocab:Slice .
 <https://example.org/slice/beta>  a vocab:Slice .
 ";
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("manifest.ttl");
         std::fs::write(&path, ttl).expect("write the manifest");
         let ds = parse_manifest(ttl.as_bytes(), &path).expect("should parse without error");
@@ -560,7 +560,7 @@ ex:subject ex:predicate ex:object .
 ";
         let nt_bytes = b"<https://example.org/subject> <https://example.org/predicate> <https://example.org/object> .\n";
 
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let ttl_path = dir.path().join("data.ttl");
         let nt_path = dir.path().join("data.nt");
         std::fs::write(&ttl_path, turtle_bytes).expect("write the Turtle artifact");
@@ -590,7 +590,7 @@ ex:subject ex:predicate ex:object .
     /// with `iri-relative-no-base` while that IRI sits unused in `path`.
     #[test]
     fn compute_semantic_digest_resolves_relative_iris_against_the_artifact() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("module.ttl");
         let relative = b"<> <https://example.org/declares> <thing> .\n";
         std::fs::write(&path, relative).expect("write the artifact");
@@ -625,7 +625,7 @@ ex:subject ex:predicate ex:object .
         let absolute =
             b"<https://example.org/a> <https://example.org/p> <https://example.org/b> .\n";
         let digest_at = |name: &str| {
-            let dir = tempfile::tempdir().expect("tempdir");
+            let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
             let path = dir.path().join(name);
             std::fs::write(&path, absolute).expect("write");
             compute_semantic_digest(absolute, &path).expect("digest")

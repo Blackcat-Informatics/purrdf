@@ -6,8 +6,10 @@
 
 Two independent rules, matched to how each dependency was actually replaced:
 
-* **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``, and
-  ``petgraph`` have a first-party replacement good for every edge kind, so
+* **Any-edge ban** (``BANNED_ANY_EDGE``): the ox-family, ``oxilangtag``,
+  ``petgraph`` and ``tempfile`` have a first-party replacement good for every
+  edge kind, and proptest's fork-mode stack (``rusty-fork``, ``wait-timeout``,
+  ``quick-error``, ``fnv``) left with the feature no test used, so
   reappearing ANYWHERE in the resolved dependency graph — runtime, build,
   dev/test, or transitive — is a failure. This is read from ``Cargo.lock``
   (never ``Cargo.toml``), which records the full resolved closure, so a
@@ -98,6 +100,12 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "oxrdf": "purrdf-core",
     "oxigraph": "the native purrdf engine",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
+    "tempfile": "purrdf_testkit::{TempDir, NamedTempFile} (temp_dir!/temp_file!, for_unit_test)",
+    # Pulled in only by proptest's `fork`/`timeout` features, which no test used.
+    "rusty-fork": "proptest without its `fork` feature (no test forks a case)",
+    "wait-timeout": "proptest without its `timeout` feature (no test sets a case timeout)",
+    "quick-error": "proptest without its `fork` feature (only rusty-fork used it)",
+    "fnv": "proptest without its `fork` feature (only rusty-fork used it)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency

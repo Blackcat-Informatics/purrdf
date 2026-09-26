@@ -10,9 +10,6 @@
 //! `Query` lock the algebra shape for representative in-scope features. A
 //! `proptest` additionally pins the no-panic contract on arbitrary input.
 
-#[path = "support/golden.rs"]
-mod golden;
-
 use proptest::prelude::*;
 use purrdf_sparql_algebra::SparqlParser;
 
@@ -35,7 +32,7 @@ fn parse_update(body: &str) -> impl std::fmt::Debug + use<> {
 #[test]
 fn snapshot_quoted_triple_paren() {
     // RDF 1.2 quoted-triple term → TermPattern::Triple (codec shape).
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "algebra_snapshots/snapshot_quoted_triple_paren.txt",
         &format!(
             "{:#?}",
@@ -50,7 +47,7 @@ fn snapshot_quoted_triple_bare() {
     // mints a fresh reifier `_:b`, emits `_:b rdf:reifies <<( s p o )>>`, and the
     // reifier stands in object position. This is distinct from the paren triple-term
     // form `<<( s p o )>>` (a value), which lowers to a single triple.
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "algebra_snapshots/snapshot_quoted_triple_bare.txt",
         &format!(
             "{:#?}",
@@ -62,7 +59,7 @@ fn snapshot_quoted_triple_bare() {
 #[test]
 fn snapshot_aggregate_group_by() {
     // COUNT lifts into Group; the projection references the synthetic agg var.
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "algebra_snapshots/snapshot_aggregate_group_by.txt",
         &format!(
             "{:#?}",
@@ -74,7 +71,7 @@ fn snapshot_aggregate_group_by() {
 #[test]
 fn snapshot_property_path() {
     // `/` + `*` property path → Path with a Sequence/ZeroOrMore expression.
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "algebra_snapshots/snapshot_property_path.txt",
         &format!(
             "{:#?}",
@@ -86,7 +83,7 @@ fn snapshot_property_path() {
 #[test]
 fn snapshot_optional_union_bind() {
     // OPTIONAL → LeftJoin, UNION → Union, BIND → Extend in one query.
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "algebra_snapshots/snapshot_optional_union_bind.txt",
         &format!(
             "{:#?}",
@@ -100,7 +97,7 @@ fn snapshot_optional_union_bind() {
 #[test]
 fn snapshot_update_insert_data() {
     // INSERT DATA lowers to ground quads (one default-graph, one GRAPH-scoped).
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "algebra_snapshots/snapshot_update_insert_data.txt",
         &format!(
             "{:#?}",
@@ -114,7 +111,7 @@ fn snapshot_update_insert_data() {
 #[test]
 fn snapshot_update_delete_insert_modify() {
     // DELETE/INSERT modify: templates + the shared WHERE pattern.
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "algebra_snapshots/snapshot_update_delete_insert_modify.txt",
         &format!(
             "{:#?}",

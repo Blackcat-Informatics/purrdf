@@ -128,7 +128,7 @@ const PACK_IMPORT_DATA: &str = concat!(
 /// product that validated `conforms true / results 0` against no shapes.
 #[test]
 fn packing_with_import_agrees_byte_for_byte_with_validating_the_document_with_import() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", PACK_IMPORT_ROOT);
     let lib = write_file(dir.path(), "lib.ttl", PACK_IMPORT_LIB);
     let data = write_file(dir.path(), "data.ttl", PACK_IMPORT_DATA);
@@ -197,7 +197,7 @@ fn packing_with_import_agrees_byte_for_byte_with_validating_the_document_with_im
 /// valid.
 #[test]
 fn packing_an_unresolved_import_emits_a_warning_and_still_packs() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let root = write_file(dir.path(), "root.ttl", PACK_IMPORT_ROOT);
     let data = write_file(dir.path(), "data.ttl", PACK_IMPORT_DATA);
     let product = dir.path().join("root.purrshp");
@@ -237,7 +237,7 @@ fn packing_an_unresolved_import_emits_a_warning_and_still_packs() {
 /// document never described.
 #[test]
 fn an_import_pair_that_resolves_nothing_is_a_usage_error_at_pack_time() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     // `SHAPES` has no `owl:imports` at all.
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let lib = write_file(dir.path(), "lib.ttl", PACK_IMPORT_LIB);
@@ -278,7 +278,7 @@ fn an_import_pair_that_resolves_nothing_is_a_usage_error_at_pack_time() {
 /// with a case that must still succeed.
 #[test]
 fn valid_import_configurations_still_pack_and_round_trip() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
 
     // 1. A shapes graph with NO imports at all packs exactly as it always did — `--import`
     //    existing as a flag must not change the zero-import path.
@@ -391,7 +391,7 @@ const SPARQL_FN_DATA_FLIPPED: &str = concat!(
 /// decides the verdict, and on data where it decides it the other way.
 #[test]
 fn packing_a_sparql_function_agrees_byte_for_byte_with_validating_the_document() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SPARQL_FN_SHAPES);
     let data = write_file(dir.path(), "data.ttl", SPARQL_FN_DATA);
     let flipped = write_file(dir.path(), "flipped.ttl", SPARQL_FN_DATA_FLIPPED);
@@ -449,7 +449,7 @@ fn packing_a_sparql_function_agrees_byte_for_byte_with_validating_the_document()
 
 #[test]
 fn a_packed_product_verifies_explains_and_validates_identically() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = dir.path().join("shapes.ttl");
     let data = dir.path().join("data.ttl");
     let product = dir.path().join("shapes.purrshp");
@@ -549,7 +549,7 @@ fn a_packed_product_verifies_explains_and_validates_identically() {
 
 #[test]
 fn a_corrupt_product_is_refused_with_its_dimension() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = dir.path().join("shapes.ttl");
     let data = dir.path().join("data.ttl");
     let product = dir.path().join("shapes.purrshp");
@@ -606,7 +606,7 @@ fn a_corrupt_product_is_refused_with_its_dimension() {
 
 #[test]
 fn the_shapes_parse_flags_are_refused_against_a_product() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = dir.path().join("shapes.ttl");
     let data = dir.path().join("data.ttl");
     let product = dir.path().join("shapes.purrshp");
@@ -716,7 +716,7 @@ fn explained_identity(product: &str) -> String {
 /// this command line is indistinguishable from the right one, and exits 0 with a report.
 #[test]
 fn validating_a_product_that_is_not_the_expected_one_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let a = pack(dir.path(), "a.purrshp", SHAPES);
     let b = pack(dir.path(), "b.purrshp", OTHER_SHAPES);
@@ -762,7 +762,7 @@ fn validating_a_product_that_is_not_the_expected_one_is_refused() {
 /// the answer.
 #[test]
 fn validating_a_product_against_its_own_identity_changes_nothing() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let a = pack(dir.path(), "a.purrshp", SHAPES);
     let own = explained_identity(&a);
@@ -800,7 +800,7 @@ fn validating_a_product_against_its_own_identity_changes_nothing() {
 /// A selector nobody can read off the artifact is not a mechanism.
 #[test]
 fn the_identity_explain_prints_is_the_identity_expect_identity_accepts() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let a = pack(dir.path(), "a.purrshp", SHAPES);
 
@@ -841,7 +841,7 @@ fn the_identity_explain_prints_is_the_identity_expect_identity_accepts() {
 /// silently did nothing.
 #[test]
 fn a_selector_that_names_nothing_is_a_usage_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let a = pack(dir.path(), "a.purrshp", SHAPES);
@@ -947,7 +947,7 @@ const SHAPES_GRAPH_IRI: &str = "http://example.org/sg";
 /// fires it.
 #[test]
 fn packing_with_shapes_graph_agrees_byte_for_byte_with_validating_the_document_with_shapes_graph() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
     let data = write_file(dir.path(), "data.ttl", SHAPES_GRAPH_DATA);
     let product = dir.path().join("shapes.purrshp");
@@ -1029,7 +1029,7 @@ fn packing_with_shapes_graph_agrees_byte_for_byte_with_validating_the_document_w
 /// that no shipped tool could ever populate before this flag existed.
 #[test]
 fn explain_reports_the_shapes_graph_pack_recorded() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
     let product = dir.path().join("shapes.purrshp");
     let product_path = product.to_str().expect("utf8 path");
@@ -1069,7 +1069,7 @@ fn explain_reports_the_shapes_graph_pack_recorded() {
 /// it was before this flag existed.
 #[test]
 fn accepts_pack_without_shapes_graph_neighbour() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
     let data = write_file(dir.path(), "data.ttl", SHAPES_GRAPH_DATA);
     let product = dir.path().join("shapes.purrshp");
@@ -1154,7 +1154,7 @@ const BOX_ROLE_DATA: &str = concat!(
 /// as anything but `0x00` from any shipped command line before this flag existed.
 #[test]
 fn explain_reports_the_box_role_vocab_pack_recorded() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
     let product = dir.path().join("shapes.purrshp");
     let product_path = product.to_str().expect("utf8 path");
@@ -1192,7 +1192,7 @@ fn explain_reports_the_box_role_vocab_pack_recorded() {
 /// has been on every CLI-produced product until now).
 #[test]
 fn accepts_pack_without_box_role_vocab_neighbour() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
     let product = dir.path().join("shapes.purrshp");
     let product_path = product.to_str().expect("utf8 path");
@@ -1216,7 +1216,7 @@ fn accepts_pack_without_box_role_vocab_neighbour() {
 /// that silently claims to be the right one.
 #[test]
 fn different_box_role_vocab_namespaces_pack_to_different_identities() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
     let a = dir.path().join("a.purrshp");
     let a_path = a.to_str().expect("utf8 path");
@@ -1274,7 +1274,7 @@ fn different_box_role_vocab_namespaces_pack_to_different_identities() {
 /// --shapes` directly, which is exactly what makes the two lanes agree at all.
 #[test]
 fn packing_with_box_role_vocab_agrees_with_validating_the_document_with_box_role_vocab() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
     let data = write_file(dir.path(), "data.nt", BOX_ROLE_DATA);
     let product = dir.path().join("shapes.purrshp");
@@ -1421,7 +1421,7 @@ fn foreign_stage_product(shapes_ttl: &str) -> Vec<u8> {
 /// rather than merely non-crashing.
 #[test]
 fn rebuild_rescues_a_product_whose_stage_id_this_build_does_not_know() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes_path = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data_path = write_file(dir.path(), "data.ttl", DATA);
     let product = dir.path().join("foreign.purrshp");
@@ -1480,7 +1480,7 @@ fn rebuild_rescues_a_product_whose_stage_id_this_build_does_not_know() {
 /// silently disagrees with the first.
 #[test]
 fn rebuild_on_a_current_product_matches_admit() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data_path = write_file(dir.path(), "data.ttl", DATA);
     let product_path = pack(dir.path(), "shapes.purrshp", SHAPES);
 
@@ -1539,7 +1539,7 @@ fn rebuild_on_a_current_product_matches_admit() {
 /// silently rebuilt into a report about a shapes graph nobody asked about.
 #[test]
 fn rebuild_still_honours_expect_identity() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data_path = write_file(dir.path(), "data.ttl", DATA);
     let a = pack(dir.path(), "a.purrshp", SHAPES);
     let b = pack(dir.path(), "b.purrshp", OTHER_SHAPES);
@@ -1598,7 +1598,7 @@ fn rebuild_still_honours_expect_identity() {
 /// same flag against `--shapes-product` — still succeeds.
 #[test]
 fn rebuild_is_refused_against_a_shapes_document() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes_path = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data_path = write_file(dir.path(), "data.ttl", DATA);
     let product_path = pack(dir.path(), "shapes.purrshp", SHAPES);
@@ -1648,7 +1648,7 @@ fn rebuild_is_refused_against_a_shapes_document() {
 /// receipt is that the value on it can be handed straight back to `--expect-identity`.
 #[test]
 fn a_validate_run_says_where_its_shapes_came_from() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes_path = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data_path = write_file(dir.path(), "data.ttl", DATA);
     let product = dir.path().join("shapes.purrshp");
@@ -1771,7 +1771,7 @@ fn pack_twice(
 /// would be exactly as useless as running `explain` twice and comparing by eye.
 #[test]
 fn diff_names_exactly_the_one_component_that_differs() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let (plain, with_vocab) =
         pack_twice(dir.path(), SHAPES, &[], &["--box-role-vocab", BOX_ROLE_NS]);
 
@@ -1808,7 +1808,7 @@ fn diff_names_exactly_the_one_component_that_differs() {
 /// certifies.
 #[test]
 fn diff_of_identical_products_reports_nothing_and_exits_zero() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let (a, b) = pack_twice(dir.path(), SHAPES, &[], &[]);
 
     let diff = run(&["shacl", "diff", &a, &b]);
@@ -1830,7 +1830,7 @@ fn diff_of_identical_products_reports_nothing_and_exits_zero() {
 /// at all — that lives in the product's separate preparation memo) are identical.
 #[test]
 fn diff_works_on_a_product_with_an_unrecognized_stage_id() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data_path = write_file(dir.path(), "data.ttl", DATA);
     // The GENUINE twin of `foreign_stage_product(SHAPES)`, parsed under the identical
     // `base = None` — not `pack(dir.path(), …, SHAPES)`, which would derive its base
@@ -1889,7 +1889,7 @@ fn diff_refuses_two_stdins() {
 /// added after the cache existed is exactly where that would first show.
 #[test]
 fn a_restored_product_reaches_the_same_change_verdict_as_a_parsed_document() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     // A conforming base, so everything reported below came out of the CHANGE.
     let base = write_file(

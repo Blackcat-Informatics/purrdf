@@ -41,6 +41,9 @@ purrdf-core = { workspace = true }
 purrdf-iri = { workspace = true }
 
 [dev-dependencies]
+# Byte-exact golden files for the results corpus, CRLF record ends included.
+# Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 # The workspace counting allocator. A bounded-egress claim about the CONSTRUCT
 # arm is a claim about RESIDENCY, and residency is invisible to a test that
 # watches writes: an intermediate String drains through the sink in bounded

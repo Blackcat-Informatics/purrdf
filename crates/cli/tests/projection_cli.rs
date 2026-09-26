@@ -110,7 +110,7 @@ fn attached_research_source() -> Vec<u8> {
 
 #[test]
 fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("input.ttl"), TURTLE);
     let config = write(&dir.path().join("config.json"), lpg_config());
     let first = dir.path().join("first.tar");
@@ -197,7 +197,7 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
 /// by name instead.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("input.ttl"), TURTLE);
     let config = write(&dir.path().join("config.json"), lpg_config());
     let pack = dir.path().join("input.purrpck");
@@ -240,7 +240,7 @@ fn base_with_pack_from_is_refused_by_name() {
 
 #[test]
 fn stdin_stdout_paths_keep_binary_and_rdf_streams_clean() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let config = write(&dir.path().join("config.json"), lpg_config());
     let projected = run_with_stdin(
         &[
@@ -296,7 +296,7 @@ fn stdin_stdout_paths_keep_binary_and_rdf_streams_clean() {
 /// for it to go, and accepting it would be a flag read by nothing.
 #[test]
 fn a_base_neither_leg_can_spend_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("input.ttl"), TURTLE);
     let config = write(&dir.path().join("config.json"), lpg_config());
     let archive = dir.path().join("carrier.tar");
@@ -382,7 +382,7 @@ fn a_base_neither_leg_can_spend_is_refused_by_name() {
 /// and the relativization against it.
 #[test]
 fn lift_base_is_written_as_the_output_documents_base_and_relativizes() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("input.ttl"), TURTLE);
     let config = write(&dir.path().join("config.json"), lpg_config());
     let archive = dir.path().join("carrier.tar");
@@ -457,7 +457,7 @@ fn lift_base_is_written_as_the_output_documents_base_and_relativizes() {
 
 #[test]
 fn configured_jsonld_options_reach_lift_and_are_rejected_by_project() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let config = write(&dir.path().join("config.json"), lpg_config());
     let options = write(
         &dir.path().join("jsonld-options.json"),
@@ -519,7 +519,7 @@ fn configured_jsonld_options_reach_lift_and_are_rejected_by_project() {
 
 #[test]
 fn malformed_config_archive_and_double_stdin_fail_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("input.ttl"), TURTLE);
     let bad_config = write(
         &dir.path().join("bad.json"),
@@ -574,7 +574,7 @@ fn malformed_config_archive_and_double_stdin_fail_closed() {
 
 #[test]
 fn all_research_object_profiles_project_lift_and_repeat_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("research.ttl"), RESEARCH_SOURCE);
     for &(profile, config_bytes) in RESEARCH_CONFIGS {
         let config = write(&dir.path().join(format!("{profile}.json")), config_bytes);
@@ -632,7 +632,7 @@ fn all_research_object_profiles_project_lift_and_repeat_through_the_cli() {
 
 #[test]
 fn dcat_rdf_projects_deterministically_and_remains_write_only_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("source.ttl"), TURTLE);
     let config = write(&dir.path().join("dcat-rdf.json"), DCAT_RDF_CONFIG);
     let first = dir.path().join("first.tar");
@@ -676,7 +676,7 @@ fn dcat_rdf_projects_deterministically_and_remains_write_only_through_the_cli() 
 
 #[test]
 fn void_projects_deterministically_and_remains_write_only_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("source.trig"), VOID_SOURCE);
     let config = write(&dir.path().join("void.json"), VOID_CONFIG);
     let first = dir.path().join("first.tar");
@@ -722,7 +722,7 @@ fn void_projects_deterministically_and_remains_write_only_through_the_cli() {
 
 #[test]
 fn attached_ro_crate_carries_payload_and_preview_through_the_cli() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let config_bytes = attached_ro_crate_config();
     let parsed = ProjectionConfig::from_json(&config_bytes).expect("attached configuration");
     let input = write(
@@ -789,7 +789,7 @@ fn attached_ro_crate_carries_payload_and_preview_through_the_cli() {
 
 #[test]
 fn curated_csvw_terms_projects_deterministically_and_is_absent_from_lift() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(
         &dir.path().join("terms.ttl"),
         b"<https://example.org/term> <https://example.org/label> \"Term\" .\n",
@@ -832,7 +832,7 @@ fn curated_csvw_terms_projects_deterministically_and_is_absent_from_lift() {
 
 #[test]
 fn curated_okf_terms_projects_the_shared_exact_bundle_and_is_absent_from_lift() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("okf-terms.trig"), OKF_TERMS_SOURCE);
     let config = write(&dir.path().join("okf-terms.json"), OKF_TERMS_CONFIG);
     let first = dir.path().join("okf-first.tar");

@@ -98,9 +98,6 @@
 //! disagreed", which says nothing about *why* the boundary sits there; the named
 //! vectors carry that reasoning, and the sweep carries the coverage.
 
-#[path = "support/golden.rs"]
-mod golden;
-
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
@@ -580,7 +577,7 @@ fn the_locally_transcribed_ranges_are_the_snapshotted_ones() {
             .expect("writing to a String cannot fail");
         }
     }
-    golden::assert_golden(
+    purrdf_testkit::assert_golden!(
         "scanner_boundary_sweep/the_locally_transcribed_ranges_are_the_snapshotted_ones.txt",
         &rendered,
     );

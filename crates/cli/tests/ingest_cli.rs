@@ -193,7 +193,7 @@ fn two_segment_gts() -> Vec<u8> {
 /// from the extension alone.
 #[test]
 fn gts_input_is_admitted_and_inferred_from_its_extension() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let gts = write_bytes(dir, "in.gts", &two_segment_gts());
     let out = path(dir, "out.nq");
@@ -218,7 +218,7 @@ fn gts_input_is_admitted_and_inferred_from_its_extension() {
 /// two into one node; this is the test that says the CLI does not use it.
 #[test]
 fn gts_per_segment_blank_node_scope_is_preserved() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let gts = write_bytes(dir, "in.gts", &two_segment_gts());
     let out = path(dir, "out.nq");
@@ -249,7 +249,7 @@ fn gts_per_segment_blank_node_scope_is_preserved() {
 /// `bnode-scope-flatten` code is NOT among them, because that loss did not occur.
 #[test]
 fn gts_envelope_is_surfaced_in_the_loss_ledger_with_exact_counts() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let gts = write_bytes(dir, "in.gts", &two_segment_gts());
     let out = path(dir, "out.nq");
@@ -300,7 +300,7 @@ fn gts_envelope_is_surfaced_in_the_loss_ledger_with_exact_counts() {
 /// reason, rather than accepted and written as something else.
 #[test]
 fn gts_is_refused_as_an_output_target_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seed.nt", SEED_LEFT);
     let out = path(dir, "out.gts");
@@ -331,7 +331,7 @@ fn gts_is_refused_as_an_output_target_by_name() {
 /// diagnostic, and no partial output is written.
 #[test]
 fn corrupt_gts_input_fails_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let mut damaged = two_segment_gts();
     // Corrupt the middle of the first segment's frame chain.
@@ -379,7 +379,7 @@ fn a_gts_bundle_is_admitted_on_stdin_plain_and_compressed() {
 /// containers store fully-resolved terms and have no relative-IRI syntax.
 #[test]
 fn base_with_a_gts_source_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let gts = write_bytes(dir, "in.gts", &two_segment_gts());
     let out = path(dir, "out.nq");
@@ -399,7 +399,7 @@ fn base_with_a_gts_source_is_refused_by_name() {
 /// its own scope.
 #[test]
 fn two_sources_merge_with_dedup_and_per_source_blank_scopes() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let left = write_file(dir, "left.nt", SEED_LEFT);
     let right = write_file(dir, "right.nt", SEED_RIGHT);
@@ -446,7 +446,7 @@ fn two_sources_merge_with_dedup_and_per_source_blank_scopes() {
 /// byte-identical, and the two orderings canonicalize to the same document.
 #[test]
 fn the_union_is_deterministic_and_order_independent() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let left = write_file(dir, "left.nt", SEED_LEFT);
     let right = write_file(dir, "right.nt", SEED_RIGHT);
@@ -474,7 +474,7 @@ fn the_union_is_deterministic_and_order_independent() {
 /// classified from their own extensions, all merged.
 #[test]
 fn a_mixed_format_source_list_is_admitted() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let left = write_file(dir, "left.nt", SEED_LEFT);
     let third = write_file(dir, "third.trig", SEED_THIRD_TRIG);
@@ -515,7 +515,7 @@ fn a_mixed_format_source_list_is_admitted() {
 /// A GTS source inside a MULTI-source list still reports its envelope.
 #[test]
 fn a_gts_source_in_a_list_still_reports_its_envelope() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let left = write_file(dir, "left.nt", SEED_LEFT);
     let gts = write_bytes(dir, "in.gts", &two_segment_gts());
@@ -537,7 +537,7 @@ fn a_gts_source_in_a_list_still_reports_its_envelope() {
 /// label the source wrote is the blank label the output carries.
 #[test]
 fn a_single_source_convert_is_not_routed_through_the_union() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "left.nt", SEED_LEFT);
     let out = path(dir, "out.nq");
@@ -557,7 +557,7 @@ fn a_single_source_convert_is_not_routed_through_the_union() {
 /// a per-source override would need a per-source flag.
 #[test]
 fn an_explicit_from_applies_to_every_source_in_the_list() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     // Both files hold N-Triples under a misleading extension; `--from` decides both.
     let left = write_file(dir, "left.data", SEED_LEFT);
@@ -599,7 +599,7 @@ fn stdin_named_twice_in_a_source_list_is_refused() {
 /// fails the run rather than writing a partial merge of the first two.
 #[test]
 fn an_unclassifiable_source_in_a_list_fails_before_anything_is_written() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let left = write_file(dir, "left.nt", SEED_LEFT);
     let mystery = write_file(dir, "mystery.unknown", SEED_RIGHT);
@@ -622,7 +622,7 @@ fn an_unclassifiable_source_in_a_list_fails_before_anything_is_written() {
 /// `left.nt.gz` is N-Triples, not an unknown `gz` format.
 #[test]
 fn a_gzip_file_is_detected_decoded_and_classified_by_its_payload_extension() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let gz = write_bytes(dir, "left.nt.gz", &gzip(SEED_LEFT.as_bytes()));
     let out = path(dir, "out.nq");
@@ -636,7 +636,7 @@ fn a_gzip_file_is_detected_decoded_and_classified_by_its_payload_extension() {
 /// The same for zstd.
 #[test]
 fn a_zstd_file_is_detected_decoded_and_classified_by_its_payload_extension() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let zst = write_bytes(dir, "left.nt.zst", &zstd(SEED_LEFT.as_bytes()));
     let out = path(dir, "out.nq");
@@ -671,7 +671,7 @@ fn compressed_stdin_is_detected_from_its_leading_bytes() {
 /// and no output file is written.
 #[test]
 fn a_truncated_compressed_stream_fails_closed_without_partial_output() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
 
     for (name, framed) in [
@@ -699,7 +699,7 @@ fn a_truncated_compressed_stream_fails_closed_without_partial_output() {
 /// A stream whose bytes are garbage inside an intact-looking wrapper also fails closed.
 #[test]
 fn a_corrupt_compressed_stream_fails_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let mut framed = gzip(SEED_LEFT.as_bytes());
     let midpoint = framed.len() / 2;
@@ -716,7 +716,7 @@ fn a_corrupt_compressed_stream_fails_closed() {
 /// than silently falling back to the sniff, and `none` reads the bytes verbatim.
 #[test]
 fn transport_is_explicitly_selectable_and_a_mismatch_hard_fails() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let gz = write_bytes(dir, "left.nt.gz", &gzip(SEED_LEFT.as_bytes()));
     let plain = write_file(dir, "plain.nt", SEED_LEFT);
@@ -788,7 +788,7 @@ fn transport_is_explicitly_selectable_and_a_mismatch_hard_fails() {
 /// A compressed source inside a MIXED multi-source list is decoded like any other.
 #[test]
 fn a_compressed_source_in_a_mixed_list_is_decoded() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let plain = write_file(dir, "left.nt", SEED_LEFT);
     let gz = write_bytes(dir, "right.nt.gz", &gzip(SEED_RIGHT.as_bytes()));
@@ -808,7 +808,7 @@ fn a_compressed_source_in_a_mixed_list_is_decoded() {
 /// whose name lies about its contents.
 #[test]
 fn a_transport_suffixed_output_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "left.nt", SEED_LEFT);
 
@@ -831,7 +831,7 @@ fn a_transport_suffixed_output_is_refused_by_name() {
 /// it into a fresh buffer would discard exactly that guarantee.
 #[test]
 fn a_compressed_pack_source_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "left.nt", SEED_LEFT);
     let pack = path(dir, "in.purrpck");
@@ -862,7 +862,7 @@ fn a_compressed_pack_source_is_refused_by_name() {
 /// reaches the transport decoder, so the flag would be accepted and never read.
 #[test]
 fn transport_against_a_pack_source_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "left.nt", SEED_LEFT);
     let pack = path(dir, "in.purrpck");
@@ -905,7 +905,7 @@ fn transport_against_a_pack_source_is_refused_by_name() {
 /// `--base` is threaded into EVERY source of a list, not just the first.
 #[test]
 fn the_base_iri_is_threaded_into_every_source() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let one = write_file(dir, "one.ttl", "<a> <http://example.org/p> \"one\" .\n");
     let two = write_file(dir, "two.ttl", "<b> <http://example.org/p> \"two\" .\n");
@@ -930,7 +930,7 @@ fn the_base_iri_is_threaded_into_every_source() {
 /// source, and the merged canonical form is stable.
 #[test]
 fn the_transform_lane_runs_over_the_whole_source_list() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let schema = write_file(
         dir,
@@ -1037,7 +1037,7 @@ fn streamable_nquads(rows: usize) -> String {
 /// canonical output is an isomorphism proof that streaming changed nothing.
 #[test]
 fn a_streamed_line_source_and_a_buffered_source_agree() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
 
     // TriG is a superset of N-Quads' default-graph statements for this fixture's
@@ -1064,7 +1064,7 @@ fn a_streamed_line_source_and_a_buffered_source_agree() {
 /// STDIN — the two open different streams and neither buffers the document.
 #[test]
 fn a_large_line_source_streams_identically_from_a_file_and_from_stdin() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let body = streamable_nquads(12_000);
     assert!(
@@ -1105,7 +1105,7 @@ fn a_large_line_source_streams_identically_from_a_file_and_from_stdin() {
 /// no seeking back — is sniffed from its leading bytes and decoded incrementally.
 #[test]
 fn a_compressed_line_source_streams_through_the_decoder_on_stdin() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let body = streamable_nquads(4_000);
     let plain_out = path(dir, "plain.nq");
@@ -1143,7 +1143,7 @@ fn a_compressed_line_source_streams_through_the_decoder_on_stdin() {
 /// approximating it.
 #[test]
 fn crlf_and_a_missing_final_newline_survive_streaming() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let lf = concat!(
         "# comment\n",
@@ -1181,7 +1181,7 @@ fn crlf_and_a_missing_final_newline_survive_streaming() {
 /// leaves no partial output: streaming does not turn a hard failure into a short read.
 #[test]
 fn invalid_utf8_in_a_streamed_source_fails_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let mut bytes = b"<http://example.org/s> <http://example.org/p> \"a\" .\n".to_vec();
     bytes.extend_from_slice(b"<http://example.org/s> <http://example.org/q> \"");
@@ -1205,7 +1205,7 @@ fn invalid_utf8_in_a_streamed_source_fails_closed() {
 /// lane, because they all share one source seam.
 #[test]
 fn the_streaming_lane_is_shared_by_every_reading_verb() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let input = write_file(dir, "seed.nq", &streamable_nquads(2_000));
 

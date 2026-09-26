@@ -1451,7 +1451,7 @@ mod tests {
     /// IRI sits unused in the caller's hand (RFC-3986 §5.1.3).
     #[test]
     fn parse_file_resolves_relative_iris_against_the_retrieval_iri() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("module.ttl");
         // `<>` is the document itself; `<thing>` is a sibling of it.
         std::fs::write(&path, b"<> <urn:example:declares> <thing> .\n").expect("write");

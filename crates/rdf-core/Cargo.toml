@@ -97,8 +97,10 @@ criterion = { workspace = true }
 # this crate; excluded from the wasm32 build by the test file's
 # `#![cfg(not(target_arch = "wasm32"))]` gate.
 memmap2 = { workspace = true }
-# Writes the built pack bytes to a real temp file for `pack_mmap.rs` to mmap.
-tempfile = { workspace = true }
+# Writes the built pack bytes to a real temporary file for `pack_mmap.rs` to
+# mmap, and scratch directories for the other integration tests. Path-only and
+# unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 
 [[bench]]
 # IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
